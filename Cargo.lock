@@ -66,6 +66,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata_audio"
+version = "0.1.0"
+dependencies = [
+ "strata_primitives",
+]
+
+[[package]]
 name = "strata_cli"
 version = "0.1.0"
 dependencies = [
@@ -118,6 +125,14 @@ version = "0.1.0"
 name = "strata_gpu_path"
 version = "0.1.0"
 dependencies = [
+ "strata_primitives",
+]
+
+[[package]]
+name = "strata_hot_reload"
+version = "0.1.0"
+dependencies = [
+ "strata_dom",
  "strata_primitives",
 ]
 
@@ -194,6 +209,14 @@ name = "strata_platform"
 version = "0.1.0"
 dependencies = [
  "strata_render",
+]
+
+[[package]]
+name = "strata_plugin_runtime"
+version = "0.1.0"
+dependencies = [
+ "strata_dom",
+ "strata_primitives",
 ]
 
 [[package]]
