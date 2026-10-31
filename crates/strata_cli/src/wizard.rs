@@ -3,7 +3,7 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use crate::args::{BuildTarget, TemplateKind};
-use crate::prompt::{ConfirmPrompt, SelectPrompt, Terminal, TextPrompt};
+use crate::prompt::{ConfirmPrompt, MultiSelectPrompt, SelectPrompt, Terminal, TextPrompt};
 
 /// Configuration options selected via the interactive setup wizard.
 #[derive(Debug, Clone)]
@@ -11,6 +11,7 @@ pub struct WizardConfig {
     pub name: String,
     pub template: TemplateKind,
     pub target: BuildTarget,
+    pub targets: Vec<BuildTarget>,
     pub enable_tailwind: bool,
     pub enable_canvas_3d: bool,
     pub enable_bitcask_storage: bool,
@@ -103,30 +104,35 @@ impl ProjectWizard {
             .with_default_index(0)
             .run(reader, writer, is_interactive)?;
 
-        // 3. Select Target Platform
-        let target = SelectPrompt::new("Which target platform do you want to target?")
+        // 3. Select Target Platform(s)
+        let targets = MultiSelectPrompt::new("Which target platform do you want to target?")
             .item(
                 BuildTarget::Desktop,
                 "Desktop",
                 Some("Native Vulkan / Metal / DirectX hardware swapchain"),
+                true,
             )
             .item(
                 BuildTarget::WebWasm,
                 "Web",
                 Some("Dual WebAssembly canvas + pure JS ESM runtime"),
+                false,
             )
             .item(
                 BuildTarget::Android,
                 "Mobile",
                 Some("Android Vulkan + iOS Metal NDK runtime"),
+                false,
             )
             .item(
                 BuildTarget::Desktop,
                 "Universal",
                 Some("All platform targets"),
+                false,
             )
-            .with_default_index(0)
             .run(reader, writer, is_interactive)?;
+
+        let primary_target = targets.first().copied().unwrap_or(BuildTarget::Desktop);
 
         // 4. Optional Add-ons
         let enable_tailwind = ConfirmPrompt::new("Would you like to use Tailwind CSS?")
@@ -159,10 +165,17 @@ impl ProjectWizard {
             template.as_str()
         )
         .map_err(|e| e.to_string())?;
+
+        let targets_display = if targets.is_empty() {
+            "desktop".to_string()
+        } else {
+            let names: Vec<&str> = targets.iter().map(|t| t.as_str()).collect();
+            names.join(", ")
+        };
         writeln!(
             writer,
             "  \x1b[90m•\x1b[0m Target:      \x1b[37m{}\x1b[0m",
-            target.as_str()
+            targets_display
         )
         .map_err(|e| e.to_string())?;
         writeln!(
@@ -206,7 +219,8 @@ impl ProjectWizard {
         Ok(WizardConfig {
             name,
             template,
-            target,
+            target: primary_target,
+            targets,
             enable_tailwind,
             enable_canvas_3d,
             enable_bitcask_storage,

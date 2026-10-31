@@ -229,3 +229,44 @@ fn test_zero_emoji_in_prompt_outputs() {
         );
     }
 }
+
+#[test]
+fn test_multiselect_prompt_space_toggle_and_arrows() {
+    let prompt = MultiSelectPrompt::new("Which target platform do you want to target?")
+        .item(BuildTarget::Desktop, "Desktop", Some("Native"), true)
+        .item(BuildTarget::WebWasm, "Web", Some("Wasm"), false)
+        .item(BuildTarget::Android, "Mobile", Some("NDK"), false);
+
+    // Sequence: Down arrow (\x1b[B) to Web, Space to toggle [x], Enter (\r)
+    let input_bytes = b"\x1b[B \r";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+
+    let result = prompt.run(&mut reader, &mut writer, true).unwrap();
+    assert_eq!(result, vec![BuildTarget::Desktop, BuildTarget::WebWasm]);
+
+    let output = String::from_utf8(writer).unwrap();
+    let clean = strip_ansi(&output);
+    assert!(clean.contains("√ Which target platform do you want to target? › Desktop, Web"));
+}
+
+#[test]
+fn test_multiselect_prompt_digit_toggle_and_stream() {
+    let prompt = MultiSelectPrompt::new("Which target platform do you want to target?")
+        .item(BuildTarget::Desktop, "Desktop", None::<String>, true)
+        .item(BuildTarget::WebWasm, "Web", None::<String>, false)
+        .item(BuildTarget::Android, "Mobile", None::<String>, false);
+
+    // Stream mode with "2,3\n"
+    let input_bytes = b"2,3\n";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+
+    let result = prompt.run(&mut reader, &mut writer, false).unwrap();
+    assert_eq!(result, vec![BuildTarget::WebWasm, BuildTarget::Android]);
+
+    let output = String::from_utf8(writer).unwrap();
+    let clean = strip_ansi(&output);
+    assert!(clean.contains("√ Which target platform do you want to target? › Web, Mobile"));
+}
+

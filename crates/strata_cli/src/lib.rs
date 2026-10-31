@@ -15,7 +15,8 @@ pub use dev_server::{DevServer, DevServerConfig, HmrSession};
 pub use packager::{PackageReport, Packager};
 pub use parity::{ParityHarness, ParityReport, ParityTestCase};
 pub use prompt::{
-    ConfirmPrompt, Key, PromptTheme, RawModeGuard, SelectItem, SelectPrompt, Terminal, TextPrompt,
+    ConfirmPrompt, Key, MultiSelectItem, MultiSelectModal, MultiSelectPrompt, OptionModal,
+    PromptTheme, RawModeGuard, SelectItem, SelectPrompt, Terminal, TextPrompt,
 };
 pub use scaffold::{ProjectScaffolder, ScaffoldReport};
 pub use wizard::{ProjectWizard, WizardConfig};
@@ -28,8 +29,8 @@ pub mod prelude {
     pub use super::packager::{PackageReport, Packager};
     pub use super::parity::{ParityHarness, ParityReport, ParityTestCase};
     pub use super::prompt::{
-        ConfirmPrompt, Key, PromptTheme, RawModeGuard, SelectItem, SelectPrompt, Terminal,
-        TextPrompt,
+        ConfirmPrompt, Key, MultiSelectItem, MultiSelectModal, MultiSelectPrompt, OptionModal,
+        PromptTheme, RawModeGuard, SelectItem, SelectPrompt, Terminal, TextPrompt,
     };
     pub use super::scaffold::{ProjectScaffolder, ScaffoldReport};
     pub use super::wizard::{ProjectWizard, WizardConfig};

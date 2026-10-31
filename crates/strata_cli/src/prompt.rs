@@ -822,3 +822,402 @@ impl ConfirmPrompt {
         Ok(chosen)
     }
 }
+
+/// An individual selectable item within a `MultiSelectPrompt`.
+#[derive(Debug, Clone)]
+pub struct MultiSelectItem<T: Clone> {
+    pub value: T,
+    pub label: String,
+    pub description: Option<String>,
+    pub selected: bool,
+}
+
+impl<T: Clone> MultiSelectItem<T> {
+    /// Creates a new multi-select item with initial selection state.
+    pub fn new(value: T, label: impl Into<String>, selected: bool) -> Self {
+        Self {
+            value,
+            label: label.into(),
+            description: None,
+            selected,
+        }
+    }
+
+    /// Creates a new multi-select item with initial selection state and description.
+    pub fn with_description(
+        value: T,
+        label: impl Into<String>,
+        description: impl Into<String>,
+        selected: bool,
+    ) -> Self {
+        Self {
+            value,
+            label: label.into(),
+            description: Some(description.into()),
+            selected,
+        }
+    }
+}
+
+/// An interactive multi-selection prompt modal with [x] / [ ] checkboxes,
+/// spacebar toggling, arrow navigation, and dynamic in-place question collapsing.
+pub struct MultiSelectPrompt<T: Clone> {
+    pub message: String,
+    pub items: Vec<MultiSelectItem<T>>,
+    pub required: bool,
+}
+
+impl<T: Clone> MultiSelectPrompt<T> {
+    /// Creates a new multi-select prompt with a question message.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            items: Vec::new(),
+            required: true,
+        }
+    }
+
+    /// Appends an item to the multi-select choice list.
+    pub fn item(
+        mut self,
+        value: T,
+        label: impl Into<String>,
+        description: Option<impl Into<String>>,
+        selected: bool,
+    ) -> Self {
+        self.items.push(MultiSelectItem {
+            value,
+            label: label.into(),
+            description: description.map(|d| d.into()),
+            selected,
+        });
+        self
+    }
+
+    /// Sets the list of items.
+    pub fn items(mut self, items: Vec<MultiSelectItem<T>>) -> Self {
+        self.items = items;
+        self
+    }
+
+    /// Sets whether at least one selection is required.
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
+
+    /// Executes the multi-select prompt.
+    pub fn run<R: BufRead, W: Write>(
+        &self,
+        reader: &mut R,
+        writer: &mut W,
+        is_interactive: bool,
+    ) -> Result<Vec<T>, String> {
+        if self.items.is_empty() {
+            return Err("MultiSelectPrompt requires at least one item".to_string());
+        }
+        if is_interactive {
+            self.run_interactive(reader, writer)
+        } else {
+            self.run_stream(reader, writer)
+        }
+    }
+
+    fn run_stream<R: BufRead, W: Write>(
+        &self,
+        reader: &mut R,
+        writer: &mut W,
+    ) -> Result<Vec<T>, String> {
+        let max_label_len = self.items.iter().map(|it| it.label.len()).max().unwrap_or(0);
+
+        writeln!(
+            writer,
+            "\n{} \x1b[1m{}\x1b[0m",
+            PromptTheme::question_prefix(),
+            self.message
+        )
+        .map_err(|e| e.to_string())?;
+
+        for (idx, item) in self.items.iter().enumerate() {
+            let num = idx + 1;
+            let check = if item.selected {
+                "\x1b[32m[x]\x1b[0m"
+            } else {
+                "\x1b[90m[ ]\x1b[0m"
+            };
+            let desc_str = match &item.description {
+                Some(d) => format!(" \x1b[90m({})\x1b[0m", d),
+                None => String::new(),
+            };
+            writeln!(
+                writer,
+                "  {} \x1b[36m{})\x1b[0m {:width$}{}",
+                check,
+                num,
+                item.label,
+                desc_str,
+                width = max_label_len + 3
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        let default_nums: Vec<String> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| it.selected)
+            .map(|(i, _)| (i + 1).to_string())
+            .collect();
+        let default_hint = if default_nums.is_empty() {
+            "1".to_string()
+        } else {
+            default_nums.join(",")
+        };
+
+        write!(
+            writer,
+            "  \x1b[90m› Enter choices (comma-separated, default: {}):\x1b[0m ",
+            default_hint
+        )
+        .map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+
+        let mut line = String::new();
+        reader.read_line(&mut line).map_err(|e| e.to_string())?;
+        let trimmed = line.trim();
+
+        let mut items = self.items.clone();
+
+        if trimmed.is_empty() {
+            if !items.iter().any(|it| it.selected) && !items.is_empty() {
+                items[0].selected = true;
+            }
+        } else if trimmed.eq_ignore_ascii_case("all") || trimmed.eq_ignore_ascii_case("universal") {
+            for it in &mut items {
+                it.selected = true;
+            }
+        } else {
+            for it in &mut items {
+                it.selected = false;
+            }
+            for part in trimmed.split(|c| c == ',' || c == ' ') {
+                let part = part.trim();
+                if part.is_empty() {
+                    continue;
+                }
+                if let Ok(num) = part.parse::<usize>() {
+                    if num >= 1 && num <= items.len() {
+                        let idx = num - 1;
+                        items[idx].selected = true;
+                        if items[idx].label.eq_ignore_ascii_case("universal") {
+                            for it in &mut items {
+                                it.selected = true;
+                            }
+                        }
+                    }
+                } else {
+                    let lower = part.to_lowercase();
+                    for it in &mut items {
+                        if it.label.to_lowercase().contains(&lower) {
+                            it.selected = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        let selected_items: Vec<_> = items.iter().filter(|it| it.selected).collect();
+        let summary_labels: Vec<_> = selected_items.iter().map(|it| it.label.as_str()).collect();
+        let summary_str = if summary_labels.is_empty() {
+            "None".to_string()
+        } else {
+            summary_labels.join(", ")
+        };
+
+        writeln!(
+            writer,
+            "{} \x1b[1m{}\x1b[0m {} \x1b[36m{}\x1b[0m",
+            PromptTheme::success_prefix(),
+            self.message,
+            PromptTheme::delimiter(),
+            summary_str
+        )
+        .map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+
+        Ok(selected_items.into_iter().map(|it| it.value.clone()).collect())
+    }
+
+    fn run_interactive<R: Read, W: Write>(
+        &self,
+        reader: &mut R,
+        writer: &mut W,
+    ) -> Result<Vec<T>, String> {
+        let n = self.items.len();
+        let mut cursor = 0;
+        let mut items = self.items.clone();
+        let max_label_len = items.iter().map(|it| it.label.len()).max().unwrap_or(0);
+
+        // Hide cursor during interactive option selection
+        write!(writer, "\x1b[?25l").map_err(|e| e.to_string())?;
+
+        // Print header question
+        writeln!(
+            writer,
+            "\n{} \x1b[1m{}\x1b[0m \x1b[90m(Space to toggle, Enter to confirm)\x1b[0m",
+            PromptTheme::question_prefix(),
+            self.message
+        )
+        .map_err(|e| e.to_string())?;
+
+        let render_row = |i: usize, active: bool, item: &MultiSelectItem<T>| -> String {
+            let num = i + 1;
+            let ptr = if active {
+                PromptTheme::pointer()
+            } else {
+                " "
+            };
+            let check_box = if item.selected {
+                "\x1b[32m[x]\x1b[0m"
+            } else {
+                "\x1b[90m[ ]\x1b[0m"
+            };
+            let num_str = if active {
+                format!("\x1b[36m{})\x1b[0m", num)
+            } else {
+                format!("\x1b[90m{})\x1b[0m", num)
+            };
+            let label_str = if item.selected {
+                format!(
+                    "\x1b[1;36m{:width$}\x1b[0m",
+                    item.label,
+                    width = max_label_len + 3
+                )
+            } else {
+                format!(
+                    "\x1b[37m{:width$}\x1b[0m",
+                    item.label,
+                    width = max_label_len + 3
+                )
+            };
+            let desc_str = match &item.description {
+                Some(d) => format!(" \x1b[90m({})\x1b[0m", d),
+                None => String::new(),
+            };
+            format!("  {} {} {} {}{}", ptr, check_box, num_str, label_str, desc_str)
+        };
+
+        for (i, item) in items.iter().enumerate() {
+            let row = render_row(i, i == cursor, item);
+            let nl = if i + 1 < n { "\n" } else { "" };
+            write!(writer, "{}{}", row, nl).map_err(|e| e.to_string())?;
+        }
+        writer.flush().map_err(|e| e.to_string())?;
+
+        loop {
+            match read_key(reader) {
+                Ok(Some(Key::Up)) | Ok(Some(Key::Char('k'))) => {
+                    cursor = if cursor == 0 { n - 1 } else { cursor - 1 };
+                }
+                Ok(Some(Key::Down)) | Ok(Some(Key::Char('j'))) => {
+                    cursor = (cursor + 1) % n;
+                }
+                Ok(Some(Key::Char(' '))) => {
+                    items[cursor].selected = !items[cursor].selected;
+                    if items[cursor].label.eq_ignore_ascii_case("universal") {
+                        let state = items[cursor].selected;
+                        for it in &mut items {
+                            it.selected = state;
+                        }
+                    }
+                }
+                Ok(Some(Key::Char(c @ '1'..='9'))) => {
+                    let idx = (c as usize) - ('1' as usize);
+                    if idx < n {
+                        items[idx].selected = !items[idx].selected;
+                        cursor = idx;
+                        if items[idx].label.eq_ignore_ascii_case("universal") {
+                            let state = items[idx].selected;
+                            for it in &mut items {
+                                it.selected = state;
+                            }
+                        }
+                    }
+                }
+                Ok(Some(Key::Char('a' | 'A'))) => {
+                    let all_selected = items.iter().all(|it| it.selected);
+                    let new_state = !all_selected;
+                    for it in &mut items {
+                        it.selected = new_state;
+                    }
+                }
+                Ok(Some(Key::Enter)) => {
+                    let count_selected = items.iter().filter(|it| it.selected).count();
+                    if count_selected == 0 && self.required {
+                        items[cursor].selected = true;
+                    }
+                    break;
+                }
+                Ok(Some(Key::Esc)) => {
+                    let _ = write!(writer, "\x1b[?25h");
+                    let _ = writer.flush();
+                    return Err("Multi-selection cancelled by user".to_string());
+                }
+                Ok(None) => {
+                    let _ = write!(writer, "\x1b[?25h");
+                    let _ = writer.flush();
+                    return Err("Unexpected EOF while selecting items".to_string());
+                }
+                _ => continue,
+            }
+
+            if n > 1 {
+                write!(writer, "\x1b[{}A\r", n - 1).map_err(|e| e.to_string())?;
+            } else {
+                write!(writer, "\r").map_err(|e| e.to_string())?;
+            }
+
+            for (i, item) in items.iter().enumerate() {
+                let row = render_row(i, i == cursor, item);
+                let nl = if i + 1 < n { "\n" } else { "" };
+                write!(writer, "\x1b[2K{}{}", row, nl).map_err(|e| e.to_string())?;
+            }
+            writer.flush().map_err(|e| e.to_string())?;
+        }
+
+        // On Enter: Erase all option lines + prompt header line in-place
+        write!(writer, "\x1b[{}A\r\x1b[J", n).map_err(|e| e.to_string())?;
+
+        let selected_items: Vec<_> = items.iter().filter(|it| it.selected).collect();
+        let summary_labels: Vec<_> = selected_items.iter().map(|it| it.label.as_str()).collect();
+        let summary_str = if summary_labels.is_empty() {
+            "None".to_string()
+        } else {
+            summary_labels.join(", ")
+        };
+
+        // Print collapsed single line
+        writeln!(
+            writer,
+            "{} \x1b[1m{}\x1b[0m {} \x1b[36m{}\x1b[0m",
+            PromptTheme::success_prefix(),
+            self.message,
+            PromptTheme::delimiter(),
+            summary_str
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Restore cursor
+        write!(writer, "\x1b[?25h").map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+
+        Ok(selected_items.into_iter().map(|it| it.value.clone()).collect())
+    }
+}
+
+/// Type alias for single-selection option modal.
+pub type OptionModal<T> = SelectPrompt<T>;
+
+/// Type alias for multi-selection option modal.
+pub type MultiSelectModal<T> = MultiSelectPrompt<T>;
+
