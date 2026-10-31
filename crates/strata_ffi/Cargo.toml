@@ -1,0 +1,15 @@
+[package]
+name = "strata_ffi"
+version = "0.1.0"
+edition = "2021"
+authors = ["larvance <64753457+larvance@users.noreply.github.com>"]
+description = "Universal C-compatible Foreign Function Interface (FFI) and embeddable dynamic library for Strata"
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+strata = { path = "../strata" }
+strata_dom = { path = "../strata_dom" }
+strata_style = { path = "../strata_style" }
+strata_render = { path = "../strata_render" }

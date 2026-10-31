@@ -26,11 +26,13 @@ pub use strata_sim as sim;
 
 pub mod runtime;
 pub mod benchmarks;
+pub mod low_level;
 pub use runtime::{
     app, AppFrameInfo, AppLifecycleHooks, AppRuntime, launch, launch_headless, launch_window,
     StrataApp, StrataAppBuilder,
 };
 pub use benchmarks::{BenchmarkHarness, BenchmarkReport};
+pub use low_level::{LowLevelRenderer, OffscreenBuffer, RawSurfaceHandle};
 
 pub mod prelude {
     pub use strata_dom;

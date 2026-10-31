@@ -93,6 +93,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata_benchmark"
+version = "0.1.0"
+dependencies = [
+ "strata_dom",
+ "strata_layout",
+ "strata_primitives",
+ "strata_render",
+ "strata_style",
+]
+
+[[package]]
+name = "strata_build"
+version = "0.1.0"
+
+[[package]]
 name = "strata_cli"
 version = "0.1.0"
 dependencies = [
@@ -140,6 +155,16 @@ dependencies = [
 [[package]]
 name = "strata_dom"
 version = "0.1.0"
+
+[[package]]
+name = "strata_ffi"
+version = "0.1.0"
+dependencies = [
+ "strata",
+ "strata_dom",
+ "strata_render",
+ "strata_style",
+]
 
 [[package]]
 name = "strata_gpu_path"

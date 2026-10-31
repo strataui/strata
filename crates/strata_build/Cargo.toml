@@ -1,0 +1,8 @@
+[package]
+name = "strata_build"
+version = "0.1.0"
+edition = "2021"
+authors = ["larvance <64753457+larvance@users.noreply.github.com>"]
+description = "Universal configuration loader, multi-format YAML/TOML engine, and dynamic build plugin pipeline for Strata"
+
+[dependencies]
