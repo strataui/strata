@@ -35,6 +35,7 @@ members = [
     "examples/saas_dashboard",
     "examples/ecommerce_storefront",
     "examples/creative_studio",
+    "examples/eda_studio",
 ]
 
 [workspace.package]

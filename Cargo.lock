@@ -17,6 +17,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "eda_studio"
+version = "0.1.0"
+dependencies = [
+ "strata",
+ "strata_audio",
+ "strata_dom",
+ "strata_gpu_path",
+ "strata_icons",
+ "strata_layout",
+ "strata_macro",
+ "strata_platform",
+ "strata_primitives",
+ "strata_render",
+ "strata_storage",
+ "strata_style",
+ "strata_tui",
+ "strata_ui",
+]
+
+[[package]]
 name = "saas_dashboard"
 version = "0.1.0"
 dependencies = [
