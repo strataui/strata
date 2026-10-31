@@ -38,7 +38,7 @@ pub fn ProductGrid(state: StoreState) -> View {
                             }}
 
                             <div class="w-32 h-32 rounded-2xl bg-neutral-800/80 border border-neutral-700/50 flex items-center justify-center text-4xl shadow-2xl group-hover:scale-110 transition-transform duration-500">
-                                {"⚡"}
+                                {"[*]"}
                             </div>
 
                             <button
@@ -56,7 +56,7 @@ pub fn ProductGrid(state: StoreState) -> View {
                                 <div class="flex items-center justify-between text-xs text-neutral-400 mb-2">
                                     <span>{product.category}</span>
                                     <span class="flex items-center gap-1 text-amber-400 font-mono">
-                                        {"★"} {format!("{:.1}", product.rating)}
+                                        {"*"} {format!("{:.1}", product.rating)}
                                         <span class="text-neutral-500 font-sans">{format!("({})", product.review_count)}</span>
                                     </span>
                                 </div>

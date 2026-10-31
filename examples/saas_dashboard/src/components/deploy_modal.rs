@@ -31,7 +31,7 @@ pub fn DeployModal(state: DashboardState) -> View {
                         class="text-neutral-400 hover:text-white text-lg font-bold p-1"
                         onclick={move |_| close_state_1.is_deploy_modal_open.set(false)}
                     >
-                        {"✕"}
+                        {"x"}
                     </button>
                 </div>
 
@@ -102,7 +102,7 @@ pub fn DeployModal(state: DashboardState) -> View {
                     <button
                         class="px-5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-sm font-medium shadow-lg shadow-indigo-600/30 transition-all"
                         onclick={move |_| {
-                            println!("🚀 Provisioning model endpoint...");
+                            println!("[>] Provisioning model endpoint...");
                             close_state_3.is_deploy_modal_open.set(false);
                         }}
                     >

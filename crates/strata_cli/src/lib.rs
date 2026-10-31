@@ -6,6 +6,7 @@ pub mod dev_server;
 pub mod packager;
 pub mod parity;
 pub mod scaffold;
+pub mod wizard;
 
 pub use args::{BuildTarget, CliArgs, CliCommand, PackageFormat, TemplateKind};
 pub use builder::{BuildReport, BuildRunner};
@@ -13,6 +14,7 @@ pub use dev_server::{DevServer, DevServerConfig, HmrSession};
 pub use packager::{PackageReport, Packager};
 pub use parity::{ParityHarness, ParityReport, ParityTestCase};
 pub use scaffold::{ProjectScaffolder, ScaffoldReport};
+pub use wizard::{ProjectWizard, WizardConfig};
 
 /// CLI Toolchain prelude.
 pub mod prelude {
@@ -22,4 +24,5 @@ pub mod prelude {
     pub use super::packager::{PackageReport, Packager};
     pub use super::parity::{ParityHarness, ParityReport, ParityTestCase};
     pub use super::scaffold::{ProjectScaffolder, ScaffoldReport};
+    pub use super::wizard::{ProjectWizard, WizardConfig};
 }

@@ -33,7 +33,7 @@ pub fn CartDrawer(state: StoreState) -> View {
                         class="text-neutral-400 hover:text-white text-lg font-bold p-1"
                         onclick={move |_| close_state.is_cart_open.set(false)}
                     >
-                        {"✕"}
+                        {"x"}
                     </button>
                 </div>
 
@@ -41,7 +41,7 @@ pub fn CartDrawer(state: StoreState) -> View {
                     {if items.is_empty() {
                         rsx! {
                             <div class="flex flex-col items-center justify-center h-64 text-center">
-                                <span class="text-4xl mb-3">{"🛒"}</span>
+                                <span class="text-4xl mb-3">{"[Bag]"}</span>
                                 <p class="text-sm text-neutral-400">{"Your shopping bag is currently empty."}</p>
                             </div>
                         }
@@ -55,7 +55,7 @@ pub fn CartDrawer(state: StoreState) -> View {
                                     rsx! {
                                         <div class="flex items-center gap-4 py-3">
                                             <div class="w-16 h-16 rounded-xl bg-neutral-950 border border-neutral-800 flex items-center justify-center text-xl">
-                                                {"⚡"}
+                                                {"[*]"}
                                             </div>
                                             <div class="flex-1">
                                                 <h4 class="text-xs font-semibold text-white">{item.product.name}</h4>
@@ -147,7 +147,7 @@ pub fn CartDrawer(state: StoreState) -> View {
 
                     <button
                         class="w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold text-sm shadow-xl shadow-indigo-600/30 transition-all"
-                        onclick={move |_| println!("💳 Initializing secure checkout...")}
+                        onclick={move |_| println!("[Pay] Initializing secure checkout...")}
                     >
                         {"Checkout Now"}
                     </button>

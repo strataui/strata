@@ -43,7 +43,7 @@ impl ParityReport {
 
         println!("╚══════════════════════════════════════════════════════════════════════════════════════════════╝");
         println!(
-            "✔ Specification Parity: {}/{} tests passed ({:.1}% match, Average delta: {:.3}%)",
+            "[OK] Specification Parity: {}/{} tests passed ({:.1}% match, Average delta: {:.3}%)",
             self.passed_cases,
             self.total_cases,
             (self.passed_cases as f32 / self.total_cases.max(1) as f32) * 100.0,
@@ -114,7 +114,7 @@ impl ParityHarness {
         let is_full_parity = passed_cases == total_cases && average_pixel_delta <= 0.0001;
 
         if verbose {
-            println!("⚡ [Chromium Parity] Executed {} specification test fixtures:", total_cases);
+            println!("[*] [Chromium Parity] Executed {} specification test fixtures:", total_cases);
             for tc in &test_cases {
                 println!(
                     "   [{}] {} ({}) - Delta: {:.4}%",

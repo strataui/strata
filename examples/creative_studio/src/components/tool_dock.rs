@@ -13,7 +13,7 @@ pub fn ToolDock(state: StudioState) -> View {
         (Tool::Rectangle, "▭", "R"),
         (Tool::Ellipse, "○", "O"),
         (Tool::Text, "T", "T"),
-        (Tool::Pan, "✋", "H"),
+        (Tool::Pan, "[Pan]", "H"),
     ];
 
     rsx! {

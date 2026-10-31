@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ Strata
+# Strata
 
 **The High-Performance, Pure Rust Universal Frontend Engine & Framework**
 
@@ -17,7 +17,7 @@
 
 </div>
 
-## 🌐 Overview
+## Overview
 
 **Strata** is a ground-up reimagining of frontend development, engineered entirely in **pure Rust**. It bridges the developer velocity of modern TypeScript, React (TSX), and Tailwind CSS with the unmatched safety, performance, and deterministic memory control of Rust.
 
@@ -52,55 +52,55 @@ pub fn MetricCard(title: &str, value: usize, trend: f32) -> View {
 
 ---
 
-## ✨ Core Pillars
+## Core Pillars
 
-### 1. 🎯 Zero Chromium, 100% Spec-Compliant Layout
+### 1. Zero Chromium, 100% Spec-Compliant Layout
 - **No WebViews, No CEF, No V8 Overhead:** Cold start times under **8ms**, memory usage under **15MB** for full desktop application windows.
 - **Pixel-Perfect CSS Engine:** Full implementations of CSS Box Model, CSS Flexbox (Level 1), CSS Grid (Level 2), Cascade resolution, CSS Specificity, Stacking Contexts (`z-index`, opacity, 3D transforms), and subpixel text shaping.
 - **Hardware-Accelerated Rasterizer:** Direct GPU rendering pipeline (Vulkan, Metal, Direct3D 12, WebGPU) with Slug analytic font curve rasterization (zero texture atlas stalls).
 
-### 2. ⚛️ TSX-Grade Ergonomics (`rsx!` Macro) & Fine-Grained Signals
+### 2. TSX-Grade Ergonomics (`rsx!` Macro) & Fine-Grained Signals
 - Write declaratively with familiar HTML/JSX syntax inside Rust.
 - Compile-time validated tag names, attributes, Tailwind utility classes, and reactive props.
 - Fine-grained reactive signals (`use_signal`, `use_effect`, `use_memo`) without dirty virtual-DOM re-rendering diff costs.
 
-### 3. 🎨 Built-in Tailwind CSS JIT Compiler
+### 3. Built-in Tailwind CSS JIT Compiler
 - Full emulation of Tailwind utility classes (`flex`, `grid-cols-12`, `backdrop-blur-md`, `bg-gradient-to-r`, `hover:`, `dark:`, `md:`, `focus-within:`, arbitrary values `h-[420px]`).
 - Zero external Node.js or PostCSS build tools required; utilities are resolved and mapped directly to 256-bit SIMD style masks at compile-time.
 
-### 4. 🔀 Dynamic & Static Type Harmony (`strata_js`)
+### 4. Dynamic & Static Type Harmony (`strata_js`)
 - Full static typing guarantees for high-scale architectural safety.
 - Built-in `JsValue` / `Dynamic` variant types for effortless JSON manipulation, dynamic object graphs, and rapid porting of JavaScript frontend logic.
 - Idiomatic port of JavaScript standard library methods: `.map()`, `.filter()`, `.reduce()`, Promises, Async/Await microtask queue, synthetic events, timers (`setTimeout`/`setInterval`), and `fetch` Web APIs.
 
-### 5. 🧊 Unified 3D Graphics Engine (Vulkan/OpenGL + Three.js Ergonomics)
+### 5. Unified 3D Graphics Engine (Vulkan/OpenGL + Three.js Ergonomics)
 - **Duality Unification:** Declarative high-level Three.js-style scene graph (`Mesh`, `BoxGeometry`, `StandardMaterial`, `PerspectiveCamera`, PBR lighting) unified with low-level custom shaders (`ShaderMaterial`, raw SPIR-V/GLSL) in the exact same scene graph.
 - **2D/3D Compositing:** Embedded seamlessly via `<Canvas3D>` inside RSX, participating in the CSS Box Model, flexbox/grid layout, rounded corners, and stacking contexts.
 
-### 6. 🧱 Batteries-Included Component Library (`strata_ui`) & Icon Suite (`strata_icons`)
+### 6. Batteries-Included Component Library (`strata_ui`) & Icon Suite (`strata_icons`)
 - **60+ High-Level Accessible Components:** Buttons, form inputs, iOS-style switches, modals, drawers, data grids, command palettes (⌘K), and floating tooltips.
 - **1,000+ Subpixel Vector Icons:** Zero-runtime-cost vector icons compiled directly into binary path commands, rendered crisply at any DPI via GPU shaders.
 
-### 7. ⚡ Multi-Threaded Parallel Subtree Layout (`strata_parallel`)
+### 7. Multi-Threaded Parallel Subtree Layout (`strata_parallel`)
 - **Parallel Subtree Reconciliation:** Independent UI divisions (sidebars, data grids, modals, tool docks) are reconciled, styled, and laid out concurrently across a Rayon work-stealing thread pool based on the 5 Axioms of Layout Containment.
 - **Near-Linear Multi-Core Scaling:** Crushes massive 100,000-node interfaces from 38ms down to **2.95ms** on 16-core silicon with zero lock contention.
 
-### 8. 📁 Universal Virtual Filesystem (`strata_vfs`) & Secure Storage (`strata_storage`)
+### 8. Universal Virtual Filesystem (`strata_vfs`) & Secure Storage (`strata_storage`)
 - **Zero-`#[cfg]` Filesystem:** Asynchronous virtual-root filesystem (`app_data()`, `cache()`, `documents()`, `temp()`) abstracting POSIX/Win32 sandboxes and Web OPFS/IndexedDB.
 - **In-Memory Cache + Bitcask WAL:** Instant $O(1)$ reads with pure-Rust append-only Write-Ahead Log (`StrataKV`), eliminating heavy SQLite/RocksDB C dependencies.
 - **Hardware Secure Keystore:** Biometric-enabled credential storage (Apple Keychain, Android Keystore, Windows DPAPI, Linux Secret Service, Web Cryptography API).
 
-### 9. 📟 Interactive Terminal (TUI) Target (`strata_tui` / `--target tui`)
+### 9. Interactive Terminal (TUI) Target (`strata_tui` / `--target tui`)
 - **Compile Identical RSX to Terminals:** Double-buffered screen with delta ANSI output and synchronized updates (`\x1b[?2025h/l`), eliminating visual tearing.
 - **Largest Remainder Quantization:** Hare-Niemeyer track distribution for integer flex/grid cells without 1-cell gaps or overflows.
 - **Unicode Box Junctions & Kitty/Sixel Graphics:** Automatic border intersections (`╭─╮│╰─╯`, `╔═╗║╚═╝`, `┼├┤┬┴`) and high-resolution image rendering in terminal consoles.
 - **Compile-Time Diagnostics:** Catches graphics-only features (`<Canvas3D>`, `filter: blur()`) at build time with suggestions and `<TuiFallback>` components.
 
-### 10. 🌐 Exhaustive W3C Web Platform APIs & Native Platform Subsystems
+### 10. Exhaustive W3C Web Platform APIs & Native Platform Subsystems
 - **Modern Web APIs in Pure Rust:** `fetch()` with HTTP chunked streaming and `AbortController`, WebSockets with auto-reconnection, WebRTC Data Channels, Geolocation, Clipboard, Web Audio 3D spatial sound, and zero-copy camera video surfaces.
 - **Native OS Windowing & Materials:** Frameless client-side decorations (CSD), Windows 11 Mica & Acrylic, macOS `NSVisualEffectView`, system tray, and raw OS escape hatches (`HWND`, `NSWindow*`, `ANativeWindow*`, `wl_surface*`).
 
-### 11. 🌍 Universal Platform Deployment
+### 11. Universal Platform Deployment
 - **Desktop:** macOS (Metal/Cocoa), Windows (DirectX 12/Win32), Linux (Wayland & X11).
 - **Mobile:** iOS (UIKit/Metal), Android (NDK/Vulkan/SurfaceView).
 - **Web (Dual Strategy):**
@@ -110,7 +110,7 @@ pub fn MetricCard(title: &str, value: usize, trend: f32) -> View {
 
 ---
 
-## 🏛️ Architecture Overview
+## Architecture Overview
 
 ```
                       ┌────────────────────────────────────────┐
@@ -154,7 +154,7 @@ pub fn MetricCard(title: &str, value: usize, trend: f32) -> View {
 
 ---
 
-## 📦 Workspace Crates Scaffolding
+## Workspace Crates Scaffolding
 
 | Crate | Responsibility |
 |---|---|
@@ -179,7 +179,7 @@ pub fn MetricCard(title: &str, value: usize, trend: f32) -> View {
 
 ---
 
-## 📱 Cross-Platform Matrix
+## Cross-Platform Matrix
 
 | Target Platform | Windowing Backend | Graphics Pipeline | Target Architecture |
 |---|---|---|---|
@@ -194,7 +194,7 @@ pub fn MetricCard(title: &str, value: usize, trend: f32) -> View {
 
 ---
 
-## 🚀 Quick Example
+## Quick Example
 
 Check out our comprehensive examples in the [`examples/`](examples/) directory:
 
@@ -204,7 +204,7 @@ Check out our comprehensive examples in the [`examples/`](examples/) directory:
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the [MIT License](LICENSE).  
 Copyright © 2026 larvance.

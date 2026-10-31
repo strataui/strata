@@ -43,8 +43,8 @@ pub fn LayersPanel(state: StudioState) -> View {
                                     <span class="truncate">{shape.name}</span>
                                 </div>
                                 <div class="flex items-center gap-1.5 opacity-60 hover:opacity-100">
-                                    <span>{if shape.is_visible { "👁" } else { "⊘" }}</span>
-                                    <span>{if shape.is_locked { "🔒" } else { "" }}</span>
+                                    <span>{if shape.is_visible { "[V]" } else { "[-]" }}</span>
+                                    <span>{if shape.is_locked { "[L]" } else { "" }}</span>
                                 </div>
                             </div>
                         }

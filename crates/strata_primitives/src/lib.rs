@@ -168,7 +168,7 @@ mod tests {
         let reset_duration = reset_start.elapsed();
 
         println!(
-            "⚡ 10,000 Rect allocations: {:?}, O(1) bulk reset: {:?}",
+            "[*] 10,000 Rect allocations: {:?}, O(1) bulk reset: {:?}",
             alloc_duration, reset_duration
         );
         assert_eq!(arena.allocated_bytes(), 0);

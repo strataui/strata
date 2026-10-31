@@ -1,4 +1,4 @@
-//! Zero-dependency CLI argument parser, command models, and help printer.
+//! Zero-dependency CLI argument parser, command models, and command-specific help printer.
 
 use std::path::PathBuf;
 
@@ -82,7 +82,7 @@ impl TemplateKind {
     }
 }
 
-/// Native installer and store packaging format options.
+/// Native installer and store packaging format options across OSes and Linux distros.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackageFormat {
     Apk,
@@ -90,10 +90,13 @@ pub enum PackageFormat {
     Ipa,
     Dmg,
     App,
+    Pkg,
     Msi,
     Exe,
     AppImage,
     Deb,
+    Rpm,
+    PkgBuild,
     TarGz,
 }
 
@@ -105,13 +108,16 @@ impl PackageFormat {
             "ipa" => Ok(Self::Ipa),
             "dmg" => Ok(Self::Dmg),
             "app" => Ok(Self::App),
+            "pkg" => Ok(Self::Pkg),
             "msi" => Ok(Self::Msi),
             "exe" => Ok(Self::Exe),
             "appimage" => Ok(Self::AppImage),
             "deb" => Ok(Self::Deb),
+            "rpm" => Ok(Self::Rpm),
+            "pkgbuild" | "arch" => Ok(Self::PkgBuild),
             "tar.gz" | "targz" | "tar" => Ok(Self::TarGz),
             unknown => Err(format!(
-                "Invalid packaging format '{}'. Valid options: apk, aab, ipa, dmg, app, msi, exe, appimage, deb, tar.gz",
+                "Invalid packaging format '{}'. Valid options: apk, aab, ipa, dmg, app, pkg, msi, exe, appimage, deb, rpm, pkgbuild, tar.gz",
                 unknown
             )),
         }
@@ -143,10 +149,13 @@ impl PackageFormat {
             Self::Ipa => "ipa",
             Self::Dmg => "dmg",
             Self::App => "app",
+            Self::Pkg => "pkg",
             Self::Msi => "msi",
             Self::Exe => "exe",
             Self::AppImage => "AppImage",
             Self::Deb => "deb",
+            Self::Rpm => "rpm",
+            Self::PkgBuild => "PKGBUILD",
             Self::TarGz => "tar.gz",
         }
     }
@@ -156,9 +165,10 @@ impl PackageFormat {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
     New {
-        name: String,
-        template: TemplateKind,
+        name: Option<String>,
+        template: Option<TemplateKind>,
         target_dir: Option<PathBuf>,
+        interactive: bool,
     },
     Dev {
         target: BuildTarget,
@@ -185,7 +195,7 @@ pub enum CliCommand {
     Sim {
         device: Option<String>,
     },
-    Help,
+    Help(Option<String>),
     Version,
 }
 
@@ -194,24 +204,106 @@ pub struct CliArgs;
 
 impl CliArgs {
     pub fn print_banner() {
-        println!("\x1b[1;38;5;99m⚡ Strata Universal Frontend Engine & Toolchain v0.1.0\x1b[0m");
-        println!("\x1b[90m   Zero Chromium. Pure Rust. Pixel-Perfect CSS & Flexbox/Grid.\x1b[0m\n");
+        println!("\x1b[1;36m▲ Strata Universal Frontend Engine & Toolchain\x1b[0m \x1b[90mv0.1.0\x1b[0m");
+        println!("\x1b[90m  Zero Chromium. Pure Rust. Pixel-Perfect CSS & Flexbox/Grid.\x1b[0m\n");
+    }
+
+    pub fn help_text(subcmd: Option<&str>) -> String {
+        match subcmd {
+            Some("new") => {
+                "Usage: strata new [NAME] [OPTIONS]\n\n\
+                 Scaffolds a new Strata application. If NAME is omitted, an interactive setup wizard will guide you through configuration.\n\n\
+                 Arguments:\n\
+                   [NAME]                          Project name (e.g. my-app)\n\n\
+                 Options:\n\
+                   -t, --template <TEMPLATE>       Project template: blank, saas, ecommerce, studio\n\
+                   -d, --dir <PATH>                Target destination directory\n\
+                   -h, --help                      Print this help message\n\n\
+                 Examples:\n\
+                   strata new                      Launch interactive project setup wizard\n\
+                   strata new my-app               Create a new app with default template\n\
+                   strata new shop --template saas Create a SaaS dashboard application\n".to_string()
+            }
+            Some("dev") => {
+                "Usage: strata dev [OPTIONS]\n\n\
+                 Starts the local development server with live signal graph HMR, file watching, and swapchain presentation.\n\n\
+                 Options:\n\
+                   -t, --target <TARGET>           Target platform: desktop, android, ios, macos, windows, linux, web-wasm, web-js (default: desktop)\n\
+                   -p, --port <PORT>               Local HTTP/HMR port (default: 3000)\n\
+                       --no-watch                  Disable background filesystem watcher\n\
+                   -h, --help                      Print this help message\n\n\
+                 Interactive Controls (while running):\n\
+                   [r]                             Trigger manual HMR state reload\n\
+                   [c]                             Clear terminal screen\n\
+                   [h]                             Display keyboard shortcuts\n\
+                   [q]                             Quit dev server\n".to_string()
+            }
+            Some("build") => {
+                "Usage: strata build [OPTIONS]\n\n\
+                 Compiles the application for production or debugging.\n\n\
+                 Options:\n\
+                   -t, --target <TARGET>           Target platform: desktop, android, ios, macos, windows, linux, web-wasm, web-js (default: desktop)\n\
+                   -r, --release                   Compile with release optimizations\n\
+                   -o, --out-dir <DIR>             Output directory for artifacts\n\
+                   -h, --help                      Print this help message\n".to_string()
+            }
+            Some("package") => {
+                "Usage: strata package [OPTIONS]\n\n\
+                 Packages application into native OS installers, packages, or standalone portable bundles.\n\n\
+                 Options:\n\
+                   -t, --target <TARGET>           Target platform: desktop, android, ios, macos, windows, linux, web-wasm, web-js (default: desktop)\n\
+                   -f, --format <FORMAT>           Package format:\n\
+                                                     Windows: msi, exe\n\
+                                                     Linux:   deb, rpm, appimage, pkgbuild, tar.gz\n\
+                                                     macOS:   dmg, pkg, app\n\
+                                                     Mobile:  apk, aab, ipa\n\
+                   -o, --out-dir <DIR>             Output directory for generated packages\n\
+                   -h, --help                      Print this help message\n".to_string()
+            }
+            Some("test") => {
+                "Usage: strata test [OPTIONS]\n\n\
+                 Runs automated regression, layout parity, and mobile emulator testing.\n\n\
+                 Options:\n\
+                       --parity [ENGINE]           Run W3C WPT layout parity tests against Chromium (default: chromium)\n\
+                   -v, --verbose                   Print detailed per-fixture scorecards\n\
+                       --android                   Run automated headless Android emulator test suite\n\
+                       --ios                       Run automated iOS simulator test suite\n\
+                       --mock-ios                  Run Strata high-fidelity iOS mock runner\n\
+                   -h, --help                      Print this help message\n".to_string()
+            }
+            Some("sim") | Some("simulator") => {
+                "Usage: strata sim [OPTIONS]\n\n\
+                 Launches the dogfooded Strata Native Mobile Device Simulator and virtual phone OS.\n\n\
+                 Options:\n\
+                   -d, --device <PRESET>           Device profile preset: iphone-16-pro, s24-ultra, pixel-9, z-fold-6, z-flip-6, duo-2\n\
+                   -h, --help                      Print this help message\n".to_string()
+            }
+            _ => {
+                "▲ Strata Universal Frontend Engine & Toolchain v0.1.0\n\
+                 Zero Chromium. Pure Rust. Pixel-Perfect CSS & Flexbox/Grid.\n\n\
+                 Usage: strata <COMMAND> [OPTIONS]\n\n\
+                 Commands:\n\
+                   new [name]                      Scaffold a new project (interactive wizard if name omitted)\n\
+                   dev [OPTIONS]                   Start local dev server with state-preserving HMR\n\
+                   build [OPTIONS]                 Compile optimized binary for target platform\n\
+                   package [OPTIONS]               Package application into native OS installer or bundle\n\
+                   test [OPTIONS]                  Run visual parity and mobile integration tests\n\
+                   sim [OPTIONS]                   Launch native dogfooded mobile device simulator\n\
+                   help [command]                  Display general help or help for a specific command\n\
+                   version                         Display version information\n\n\
+                 Run 'strata <COMMAND> --help' for detailed usage of any command.\n\n\
+                 Supported Targets:\n\
+                   desktop (default), android, ios, macos, windows, linux, web-wasm, web-js\n".to_string()
+            }
+        }
     }
 
     pub fn print_help() {
-        Self::print_banner();
-        println!("Usage: strata <COMMAND> [OPTIONS]\n");
-        println!("Commands:");
-        println!("  new <name> [--template <tpl>]   Scaffold a new Strata project (blank, saas, ecommerce, studio)");
-        println!("  dev [--target <target>]         Start local dev server with state-preserving HMR");
-        println!("  build [--target <target>]       Compile optimized binary (desktop, android, ios, macos, windows, linux, web-wasm, web-js)");
-        println!("  package [--format <fmt>]        Package into native installer (apk, aab, ipa, dmg, msi, appimage, tar.gz)");
-        println!("  test [--parity chromium]        Run automated Chromium pixel-parity visual diff suite");
-        println!("  sim [--device <name>]           Launch native mobile simulator (iphone-16-pro, s24-ultra, pixel-9, z-fold-6, z-flip-6, duo-2)");
-        println!("  help                            Print this help message");
-        println!("  version                         Print version information\n");
-        println!("Targets:");
-        println!("  desktop (default), android, ios, macos, windows, linux, web-wasm, web-js\n");
+        print!("{}", Self::help_text(None));
+    }
+
+    pub fn print_help_for(subcmd: &str) {
+        print!("{}", Self::help_text(Some(subcmd)));
     }
 
     pub fn parse() -> Result<CliCommand, String> {
@@ -225,7 +317,7 @@ impl CliArgs {
     {
         let raw_args: Vec<String> = iter.into_iter().map(|s| s.as_ref().to_string()).collect();
         if raw_args.len() < 2 {
-            return Ok(CliCommand::Help);
+            return Ok(CliCommand::Help(None));
         }
 
         let subcommand = &raw_args[1];
@@ -238,49 +330,64 @@ impl CliArgs {
             "package" => Self::parse_package(sub_args),
             "test" => Self::parse_test(sub_args),
             "sim" | "simulator" => Self::parse_sim(sub_args),
-            "help" | "--help" | "-h" => Ok(CliCommand::Help),
+            "help" => {
+                let topic = sub_args.first().cloned();
+                Ok(CliCommand::Help(topic))
+            }
+            "--help" | "-h" => Ok(CliCommand::Help(None)),
             "version" | "--version" | "-v" => Ok(CliCommand::Version),
             unknown => Err(format!(
-                "Unknown command: '{}'. Run 'strata help' for available commands.",
+                "Unknown command: '{}'. Run 'strata --help' for available commands.",
                 unknown
             )),
         }
     }
 
     fn parse_new(args: &[String]) -> Result<CliCommand, String> {
-        let mut name = String::new();
-        let mut template = TemplateKind::default();
+        let mut name = None;
+        let mut template = None;
         let mut target_dir = None;
 
         let mut i = 0;
         while i < args.len() {
             let arg = &args[i];
-            if arg == "--template" || arg == "-t" {
+            if arg == "--help" || arg == "-h" {
+                return Ok(CliCommand::Help(Some("new".to_string())));
+            } else if arg == "--template" || arg == "-t" {
                 i += 1;
                 if i >= args.len() {
-                    return Err("Expected template name after '--template'".to_string());
+                    return Err("Expected template name after '--template'. Run 'strata new --help' for usage.".to_string());
                 }
-                template = TemplateKind::parse(&args[i])?;
+                template = Some(TemplateKind::parse(&args[i])?);
             } else if arg == "--dir" || arg == "-d" {
                 i += 1;
                 if i >= args.len() {
-                    return Err("Expected path after '--dir'".to_string());
+                    return Err("Expected path after '--dir'. Run 'strata new --help' for usage.".to_string());
                 }
                 target_dir = Some(PathBuf::from(&args[i]));
-            } else if !arg.starts_with('-') && name.is_empty() {
-                name = arg.clone();
+            } else if arg.starts_with('-') {
+                return Err(format!(
+                    "Unrecognized option '{}' for command 'new'. Run 'strata new --help' for usage.",
+                    arg
+                ));
+            } else if name.is_none() {
+                name = Some(arg.clone());
+            } else {
+                return Err(format!(
+                    "Unexpected argument '{}'. Run 'strata new --help' for usage.",
+                    arg
+                ));
             }
             i += 1;
         }
 
-        if name.is_empty() {
-            name = "my-strata-app".to_string();
-        }
+        let interactive = name.is_none();
 
         Ok(CliCommand::New {
             name,
             template,
             target_dir,
+            interactive,
         })
     }
 
@@ -292,20 +399,32 @@ impl CliArgs {
         let mut i = 0;
         while i < args.len() {
             let arg = &args[i];
-            if arg == "--target" || arg == "-t" {
+            if arg == "--help" || arg == "-h" {
+                return Ok(CliCommand::Help(Some("dev".to_string())));
+            } else if arg == "--target" || arg == "-t" {
                 i += 1;
                 if i >= args.len() {
-                    return Err("Expected target after '--target'".to_string());
+                    return Err("Expected target after '--target'. Run 'strata dev --help' for usage.".to_string());
                 }
                 target = BuildTarget::parse(&args[i])?;
             } else if arg == "--port" || arg == "-p" {
                 i += 1;
                 if i >= args.len() {
-                    return Err("Expected port after '--port'".to_string());
+                    return Err("Expected port after '--port'. Run 'strata dev --help' for usage.".to_string());
                 }
-                port = args[i].parse::<u16>().map_err(|_| "Invalid port number")?;
+                port = args[i].parse::<u16>().map_err(|_| "Invalid port number. Must be between 1 and 65535.")?;
             } else if arg == "--no-watch" {
                 watch = false;
+            } else if arg.starts_with('-') {
+                return Err(format!(
+                    "Unrecognized option '{}' for command 'dev'. Run 'strata dev --help' for usage.",
+                    arg
+                ));
+            } else {
+                return Err(format!(
+                    "Unexpected argument '{}'. Run 'strata dev --help' for usage.",
+                    arg
+                ));
             }
             i += 1;
         }
@@ -325,20 +444,32 @@ impl CliArgs {
         let mut i = 0;
         while i < args.len() {
             let arg = &args[i];
-            if arg == "--target" || arg == "-t" {
+            if arg == "--help" || arg == "-h" {
+                return Ok(CliCommand::Help(Some("build".to_string())));
+            } else if arg == "--target" || arg == "-t" {
                 i += 1;
                 if i >= args.len() {
-                    return Err("Expected target after '--target'".to_string());
+                    return Err("Expected target after '--target'. Run 'strata build --help' for usage.".to_string());
                 }
                 target = BuildTarget::parse(&args[i])?;
             } else if arg == "--release" || arg == "-r" {
                 release = true;
-            } else if arg == "--out-dir" || arg == "-o" {
+            } else if arg == "--out-dir" || arg == "--out" || arg == "-o" {
                 i += 1;
                 if i >= args.len() {
-                    return Err("Expected output directory after '--out-dir'".to_string());
+                    return Err("Expected directory after '--out-dir'. Run 'strata build --help' for usage.".to_string());
                 }
                 out_dir = Some(PathBuf::from(&args[i]));
+            } else if arg.starts_with('-') {
+                return Err(format!(
+                    "Unrecognized option '{}' for command 'build'. Run 'strata build --help' for usage.",
+                    arg
+                ));
+            } else {
+                return Err(format!(
+                    "Unexpected argument '{}'. Run 'strata build --help' for usage.",
+                    arg
+                ));
             }
             i += 1;
         }
@@ -358,24 +489,36 @@ impl CliArgs {
         let mut i = 0;
         while i < args.len() {
             let arg = &args[i];
-            if arg == "--target" || arg == "-t" {
+            if arg == "--help" || arg == "-h" {
+                return Ok(CliCommand::Help(Some("package".to_string())));
+            } else if arg == "--target" || arg == "-t" {
                 i += 1;
                 if i >= args.len() {
-                    return Err("Expected target after '--target'".to_string());
+                    return Err("Expected target after '--target'. Run 'strata package --help' for usage.".to_string());
                 }
                 target = BuildTarget::parse(&args[i])?;
             } else if arg == "--format" || arg == "-f" {
                 i += 1;
                 if i >= args.len() {
-                    return Err("Expected format after '--format'".to_string());
+                    return Err("Expected format after '--format'. Run 'strata package --help' for usage.".to_string());
                 }
                 format = Some(PackageFormat::parse(&args[i])?);
-            } else if arg == "--out-dir" || arg == "-o" {
+            } else if arg == "--out-dir" || arg == "--out" || arg == "-o" {
                 i += 1;
                 if i >= args.len() {
-                    return Err("Expected output directory after '--out-dir'".to_string());
+                    return Err("Expected directory after '--out-dir'. Run 'strata package --help' for usage.".to_string());
                 }
                 out_dir = Some(PathBuf::from(&args[i]));
+            } else if arg.starts_with('-') {
+                return Err(format!(
+                    "Unrecognized option '{}' for command 'package'. Run 'strata package --help' for usage.",
+                    arg
+                ));
+            } else {
+                return Err(format!(
+                    "Unexpected argument '{}'. Run 'strata package --help' for usage.",
+                    arg
+                ));
             }
             i += 1;
         }
@@ -397,7 +540,9 @@ impl CliArgs {
         let mut i = 0;
         while i < args.len() {
             let arg = &args[i];
-            if arg == "--parity" {
+            if arg == "--help" || arg == "-h" {
+                return Ok(CliCommand::Help(Some("test".to_string())));
+            } else if arg == "--parity" {
                 parity = true;
                 if i + 1 < args.len() && !args[i + 1].starts_with('-') {
                     i += 1; // optional value e.g. "chromium"
@@ -410,6 +555,16 @@ impl CliArgs {
                 ios = true;
             } else if arg == "--mock-ios" {
                 mock_ios = true;
+            } else if arg.starts_with('-') {
+                return Err(format!(
+                    "Unrecognized option '{}' for command 'test'. Run 'strata test --help' for usage.",
+                    arg
+                ));
+            } else {
+                return Err(format!(
+                    "Unexpected argument '{}'. Run 'strata test --help' for usage.",
+                    arg
+                ));
             }
             i += 1;
         }
@@ -428,12 +583,24 @@ impl CliArgs {
         let mut i = 0;
         while i < args.len() {
             let arg = &args[i];
-            if arg == "--device" || arg == "-d" {
+            if arg == "--help" || arg == "-h" {
+                return Ok(CliCommand::Help(Some("sim".to_string())));
+            } else if arg == "--device" || arg == "-d" {
                 i += 1;
                 if i >= args.len() {
-                    return Err("Expected device preset name after '--device'".to_string());
+                    return Err("Expected device preset name after '--device'. Run 'strata sim --help' for usage.".to_string());
                 }
                 device = Some(args[i].clone());
+            } else if arg.starts_with('-') {
+                return Err(format!(
+                    "Unrecognized option '{}' for command 'sim'. Run 'strata sim --help' for usage.",
+                    arg
+                ));
+            } else {
+                return Err(format!(
+                    "Unexpected argument '{}'. Run 'strata sim --help' for usage.",
+                    arg
+                ));
             }
             i += 1;
         }
@@ -441,4 +608,3 @@ impl CliArgs {
         Ok(CliCommand::Sim { device })
     }
 }
-

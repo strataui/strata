@@ -10,7 +10,7 @@ use app::App;
 use strata::prelude::*;
 
 fn main() {
-    println!("⚡ Starting Strata Creative Studio in Pure Rust...");
+    println!("[*] Starting Strata Creative Studio in Pure Rust...");
 
     strata::launch(|| {
         App()

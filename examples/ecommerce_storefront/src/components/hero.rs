@@ -7,7 +7,7 @@ pub fn Hero() -> View {
     rsx! {
         <section class="relative w-full py-20 px-8 bg-gradient-to-b from-neutral-900 to-neutral-950 border-b border-neutral-800 flex flex-col items-center justify-center text-center overflow-hidden">
             <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-xs font-mono mb-6">
-                <span>{"⚡ FW26 AEROTECH COLLECTION DROPPED"}</span>
+                <span>{"[*] FW26 AEROTECH COLLECTION DROPPED"}</span>
             </div>
 
             <h1 class="text-5xl md:text-7xl font-extrabold tracking-tight text-white max-w-4xl leading-tight">

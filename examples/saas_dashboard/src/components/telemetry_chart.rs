@@ -38,7 +38,7 @@ pub fn TelemetryChart() -> View {
 
                 <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
                     <span class="text-xs font-mono text-indigo-400/80 bg-neutral-900/90 px-3 py-1 rounded border border-indigo-500/30 shadow-lg">
-                        {"⚡ Telemetry Live: Mean 14.8ms | Stable"}
+                        {"[*] Telemetry Live: Mean 14.8ms | Stable"}
                     </span>
                 </div>
             </div>

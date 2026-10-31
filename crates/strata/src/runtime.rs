@@ -249,11 +249,11 @@ pub fn launch<F>(root: F)
 where
     F: FnOnce() -> View + 'static,
 {
-    println!("⚡ Initializing Strata Universal Frontend Runtime...");
+    println!("[+] Initializing Strata Universal Frontend Runtime...");
     let view = root();
     let runtime = AppRuntime::new(view, 1280.0, 800.0, 1.0);
     println!(
-        "✔ Strata Runtime active: viewport {}x{}, rendered {} display commands.",
+        "[OK] Strata Runtime active: viewport {}x{}, rendered {} display commands.",
         runtime.viewport_width,
         runtime.viewport_height,
         runtime.display_list.commands.len()
@@ -274,7 +274,7 @@ pub fn launch_window<F>(root: F, config: WindowConfig) -> (AppRuntime, LivePlatf
 where
     F: FnOnce() -> View + 'static,
 {
-    println!("⚡ Launching Strata Live Native Window: \"{}\"...", config.title);
+    println!("[+] Launching Strata Live Native Window: \"{}\"...", config.title);
     let view = root();
     let width = config.width as f32;
     let height = config.height as f32;
@@ -287,7 +287,7 @@ where
     let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
 
     println!(
-        "✔ Strata Live Window active: {}x{} physical pixels, {} commands presented.",
+        "[OK] Strata Live Window active: {}x{} physical pixels, {} commands presented.",
         presenter.width,
         presenter.height,
         runtime.display_list.commands.len()

@@ -8,8 +8,9 @@ fn test_cli_args_parsing_commands() {
     assert_eq!(
         cmd,
         CliCommand::New {
-            name: "my-app".to_string(),
-            template: TemplateKind::Saas,
+            name: Some("my-app".to_string()),
+            template: Some(TemplateKind::Saas),
+            interactive: false,
             target_dir: None,
         }
     );
@@ -82,7 +83,7 @@ fn test_cli_args_parsing_commands() {
     );
 
     // 7. Help & Version
-    assert_eq!(CliArgs::parse_from(&["strata", "help"]).unwrap(), CliCommand::Help);
+    assert_eq!(CliArgs::parse_from(&["strata", "help"]).unwrap(), CliCommand::Help(None));
     assert_eq!(CliArgs::parse_from(&["strata", "--version"]).unwrap(), CliCommand::Version);
 }
 

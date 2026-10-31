@@ -10,7 +10,7 @@ use app::App;
 use strata::prelude::*;
 
 fn main() {
-    println!("⚡ Starting Apex Athletics Storefront in Pure Rust...");
+    println!("[*] Starting Apex Athletics Storefront in Pure Rust...");
 
     strata::launch(|| {
         App()

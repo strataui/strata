@@ -10,7 +10,7 @@ use app::App;
 use strata::prelude::*;
 
 fn main() {
-    println!("⚡ Starting Strata Cloud Enterprise Dashboard...");
+    println!("[*] Starting Strata Cloud Enterprise Dashboard...");
 
     strata::launch(|| {
         App()

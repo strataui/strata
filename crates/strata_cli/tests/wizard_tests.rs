@@ -1,0 +1,98 @@
+use std::io::Cursor;
+use std::path::Path;
+use strata_cli::prelude::*;
+
+#[test]
+fn test_wizard_default_answers() {
+    // All empty inputs simulate user pressing Enter on all prompts
+    let input_bytes = b"\n\n\n\n\n\n";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+    let base_dir = Path::new("/tmp/strata_test_workspace");
+
+    let config = ProjectWizard::prompt_with_io(&mut reader, &mut writer, base_dir).unwrap();
+    assert_eq!(config.name, "strata-app");
+    assert_eq!(config.template, TemplateKind::Blank);
+    assert_eq!(config.target, BuildTarget::Desktop);
+    assert!(config.enable_tailwind);
+    assert!(config.enable_canvas_3d);
+    assert!(config.enable_bitcask_storage);
+    assert_eq!(config.target_dir, base_dir.join("strata-app"));
+
+    let output_str = String::from_utf8(writer).unwrap();
+    assert!(output_str.contains("Strata"));
+    assert!(output_str.contains("What is your project named?"));
+    assert!(output_str.contains("Configuration confirmed"));
+    // Ensure no emojis in wizard output
+    assert!(!output_str.contains('⚡'));
+    assert!(!output_str.contains('🚀'));
+    assert!(!output_str.contains('✔'));
+}
+
+#[test]
+fn test_wizard_custom_answers() {
+    // Custom name: enterprise-hub
+    // Template: 2 (SaaS Dashboard)
+    // Target: 2 (Web)
+    // Tailwind: y
+    // 3D Engine: n
+    // Bitcask: n
+    let input_bytes = b"enterprise-hub\n2\n2\ny\nn\nn\n";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+    let base_dir = Path::new("/tmp/strata_test_workspace");
+
+    let config = ProjectWizard::prompt_with_io(&mut reader, &mut writer, base_dir).unwrap();
+    assert_eq!(config.name, "enterprise-hub");
+    assert_eq!(config.template, TemplateKind::Saas);
+    assert_eq!(config.target, BuildTarget::WebWasm);
+    assert!(config.enable_tailwind);
+    assert!(!config.enable_canvas_3d);
+    assert!(!config.enable_bitcask_storage);
+    assert_eq!(config.target_dir, base_dir.join("enterprise-hub"));
+}
+
+#[test]
+fn test_wizard_studio_and_mobile_answers() {
+    // Custom name: creative_canvas
+    // Template: 4 (Studio)
+    // Target: 3 (Mobile)
+    // Tailwind: y
+    // 3D Engine: y
+    // Bitcask: y
+    let input_bytes = b"creative_canvas\n4\n3\ny\ny\ny\n";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+    let base_dir = Path::new("/tmp/strata_test_workspace");
+
+    let config = ProjectWizard::prompt_with_io(&mut reader, &mut writer, base_dir).unwrap();
+    assert_eq!(config.name, "creative_canvas");
+    assert_eq!(config.template, TemplateKind::Studio);
+    assert_eq!(config.target, BuildTarget::Android);
+    assert!(config.enable_tailwind);
+    assert!(config.enable_canvas_3d);
+    assert!(config.enable_bitcask_storage);
+}
+
+#[test]
+fn test_wizard_invalid_name_rejection() {
+    // Spaces in name
+    let input_bytes = b"my project with spaces\n";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+    let base_dir = Path::new("/tmp/strata_test_workspace");
+
+    let res = ProjectWizard::prompt_with_io(&mut reader, &mut writer, base_dir);
+    assert!(res.is_err());
+    let err_msg = res.unwrap_err();
+    assert!(err_msg.contains("Invalid project name"));
+
+    // Special characters in name
+    let input_bytes = b"app#name@bad!\n";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+
+    let res = ProjectWizard::prompt_with_io(&mut reader, &mut writer, base_dir);
+    assert!(res.is_err());
+    assert!(res.unwrap_err().contains("Invalid project name"));
+}
