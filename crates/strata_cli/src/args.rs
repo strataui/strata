@@ -182,11 +182,13 @@ pub enum CliCommand {
         target: BuildTarget,
         release: bool,
         out_dir: Option<PathBuf>,
+        env: Option<String>,
     },
     Package {
         target: BuildTarget,
         format: Option<PackageFormat>,
         out_dir: Option<PathBuf>,
+        env: Option<String>,
     },
     Test {
         parity: bool,
@@ -247,6 +249,7 @@ impl CliArgs {
                  Options:\n\
                    -t, --target <TARGET>           Target platform: desktop, android, ios, macos, windows, linux, web-wasm, web-js (default: desktop)\n\
                    -r, --release                   Compile with release optimizations\n\
+                   -e, --env <ENV>                 Environment profile (development, production, staging, custom)\n\
                    -o, --out-dir <DIR>             Output directory for artifacts\n\
                    -h, --help                      Print this help message\n".to_string()
             }
@@ -260,6 +263,7 @@ impl CliArgs {
                                                      Linux:   deb, rpm, appimage, pkgbuild, tar.gz\n\
                                                      macOS:   dmg, pkg, app\n\
                                                      Mobile:  apk, aab, ipa\n\
+                   -e, --env <ENV>                 Environment profile (development, production, staging, custom)\n\
                    -o, --out-dir <DIR>             Output directory for generated packages\n\
                    -h, --help                      Print this help message\n".to_string()
             }
@@ -443,6 +447,7 @@ impl CliArgs {
         let mut target = BuildTarget::Desktop;
         let mut release = false;
         let mut out_dir = None;
+        let mut env = None;
 
         let mut i = 0;
         while i < args.len() {
@@ -457,6 +462,12 @@ impl CliArgs {
                 target = BuildTarget::parse(&args[i])?;
             } else if arg == "--release" || arg == "-r" {
                 release = true;
+            } else if arg == "--env" || arg == "-e" {
+                i += 1;
+                if i >= args.len() {
+                    return Err("Expected environment after '--env'. Run 'strata build --help' for usage.".to_string());
+                }
+                env = Some(args[i].clone());
             } else if arg == "--out-dir" || arg == "--out" || arg == "-o" {
                 i += 1;
                 if i >= args.len() {
@@ -481,6 +492,7 @@ impl CliArgs {
             target,
             release,
             out_dir,
+            env,
         })
     }
 
@@ -488,6 +500,7 @@ impl CliArgs {
         let mut target = BuildTarget::Desktop;
         let mut format = None;
         let mut out_dir = None;
+        let mut env = None;
 
         let mut i = 0;
         while i < args.len() {
@@ -506,6 +519,12 @@ impl CliArgs {
                     return Err("Expected format after '--format'. Run 'strata package --help' for usage.".to_string());
                 }
                 format = Some(PackageFormat::parse(&args[i])?);
+            } else if arg == "--env" || arg == "-e" {
+                i += 1;
+                if i >= args.len() {
+                    return Err("Expected environment after '--env'. Run 'strata package --help' for usage.".to_string());
+                }
+                env = Some(args[i].clone());
             } else if arg == "--out-dir" || arg == "--out" || arg == "-o" {
                 i += 1;
                 if i >= args.len() {
@@ -530,6 +549,7 @@ impl CliArgs {
             target,
             format,
             out_dir,
+            env,
         })
     }
 

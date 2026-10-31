@@ -26,7 +26,10 @@ pub use strata_sim as sim;
 
 pub mod runtime;
 pub mod benchmarks;
-pub use runtime::{AppRuntime, launch, launch_headless, launch_window};
+pub use runtime::{
+    app, AppFrameInfo, AppLifecycleHooks, AppRuntime, launch, launch_headless, launch_window,
+    StrataApp, StrataAppBuilder,
+};
 pub use benchmarks::{BenchmarkHarness, BenchmarkReport};
 
 pub mod prelude {
@@ -72,7 +75,10 @@ pub mod prelude {
         FoldableState, GeometrySolver, MobileSimulatorWorkspace, MultiAppSandbox, NavAction,
         ScreenProfile, ThreeButtonNavBar, VirtualHalBus,
     };
-    pub use crate::runtime::{AppRuntime, launch, launch_headless, launch_window};
+    pub use crate::runtime::{
+        app, AppFrameInfo, AppLifecycleHooks, AppRuntime, launch, launch_headless, launch_window,
+        StrataApp, StrataAppBuilder,
+    };
     pub use crate::benchmarks::{BenchmarkHarness, BenchmarkReport};
 }
 

@@ -34,6 +34,18 @@ fn test_cli_args_parsing_commands() {
             target: BuildTarget::WebJs,
             release: true,
             out_dir: None,
+            env: None,
+        }
+    );
+
+    let cmd = CliArgs::parse_from(&["strata", "build", "--target", "desktop", "-e", "staging"]).unwrap();
+    assert_eq!(
+        cmd,
+        CliCommand::Build {
+            target: BuildTarget::Desktop,
+            release: false,
+            out_dir: None,
+            env: Some("staging".to_string()),
         }
     );
 
@@ -45,6 +57,7 @@ fn test_cli_args_parsing_commands() {
             target: BuildTarget::Android,
             format: Some(PackageFormat::Apk),
             out_dir: None,
+            env: None,
         }
     );
 
@@ -192,4 +205,47 @@ fn test_chromium_parity_harness_execution() {
     assert_eq!(report.passed_cases, report.total_cases);
     assert_eq!(report.average_pixel_delta, 0.0);
     assert!(report.is_full_parity);
+}
+
+#[test]
+fn test_scaffold_rejects_existing_non_empty_directory() {
+    let temp_dir = std::env::temp_dir().join(format!("strata_non_empty_test_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    // Create a dummy file inside
+    let dummy_file = temp_dir.join("existing_file.txt");
+    fs::write(&dummy_file, b"content").unwrap();
+
+    let result = ProjectScaffolder::scaffold(
+        temp_dir.file_name().unwrap().to_str().unwrap(),
+        TemplateKind::Saas,
+        temp_dir.parent().unwrap(),
+    );
+
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err();
+    assert!(
+        err_msg.contains("already exists and is not empty"),
+        "Unexpected error message: {}",
+        err_msg
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_scaffold_allows_existing_empty_directory() {
+    let temp_dir = std::env::temp_dir().join(format!("strata_empty_test_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let result = ProjectScaffolder::scaffold(
+        temp_dir.file_name().unwrap().to_str().unwrap(),
+        TemplateKind::Blank,
+        temp_dir.parent().unwrap(),
+    );
+
+    assert!(result.is_ok());
+    let _ = fs::remove_dir_all(&temp_dir);
 }

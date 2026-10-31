@@ -33,6 +33,19 @@ impl ProjectScaffolder {
         } else {
             (target_dir.join(name), name.to_string())
         };
+
+        if project_root.exists() {
+            let is_not_empty = fs::read_dir(&project_root)
+                .map(|mut entries| entries.next().is_some())
+                .unwrap_or(false);
+            if is_not_empty {
+                return Err(format!(
+                    "Target directory '{}' already exists and is not empty. Please choose a different project name or empty the directory.",
+                    project_root.display()
+                ));
+            }
+        }
+
         let src_dir = project_root.join("src");
 
         fs::create_dir_all(&src_dir)

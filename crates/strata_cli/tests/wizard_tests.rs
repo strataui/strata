@@ -25,9 +25,9 @@ fn test_wizard_default_answers() {
     assert!(output_str.contains("What is your project named?"));
     assert!(output_str.contains("Configuration confirmed"));
     // Ensure no emojis in wizard output
-    assert!(!output_str.contains('⚡'));
-    assert!(!output_str.contains('🚀'));
-    assert!(!output_str.contains('✔'));
+    assert!(!output_str.contains('\u{26A1}'));
+    assert!(!output_str.contains('\u{1F680}'));
+    assert!(!output_str.contains('\u{2714}'));
 }
 
 #[test]
@@ -107,4 +107,30 @@ fn test_wizard_invalid_name_rejection() {
     let res = ProjectWizard::prompt_with_io(&mut reader, &mut writer, base_dir);
     assert!(res.is_err());
     assert!(res.unwrap_err().contains("Invalid project name"));
+}
+
+#[test]
+fn test_wizard_rejects_existing_non_empty_dir() {
+    let temp_dir = std::env::temp_dir().join(format!("strata_wiz_non_empty_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let existing_project = temp_dir.join("already_exists");
+    std::fs::create_dir_all(&existing_project).unwrap();
+    std::fs::write(existing_project.join("data.txt"), b"some data").unwrap();
+
+    let input_bytes = b"already_exists\n";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+
+    let res = ProjectWizard::prompt_with_io(&mut reader, &mut writer, &temp_dir);
+    assert!(res.is_err());
+    let err_msg = res.unwrap_err();
+    assert!(
+        err_msg.contains("already exists and is not empty"),
+        "Unexpected error: {}",
+        err_msg
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }

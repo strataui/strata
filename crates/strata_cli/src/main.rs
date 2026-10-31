@@ -76,15 +76,17 @@ fn main() {
             target,
             release,
             out_dir,
+            env,
         } => {
             CliArgs::print_banner();
             let base_dir = out_dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
             println!(
-                "  \x1b[36m›\x1b[0m Compiling \x1b[1m{}\x1b[0m bundle for target: \x1b[1m{}\x1b[0m...",
+                "  \x1b[36m›\x1b[0m Compiling \x1b[1m{}\x1b[0m bundle for target: \x1b[1m{}\x1b[0m (env: \x1b[37m{}\x1b[0m)...",
                 if release { "release" } else { "debug" },
-                target.as_str()
+                target.as_str(),
+                env.as_deref().unwrap_or(if release { "production" } else { "development" })
             );
-            match BuildRunner::build(target, release, &base_dir) {
+            match BuildRunner::build_with_env(target, release, &base_dir, env.as_deref()) {
                 Ok(report) => {
                     println!("  \x1b[32m√\x1b[0m Build complete! Emitted {} artifacts.", report.artifacts.len());
                     for art in report.artifacts {
@@ -102,11 +104,16 @@ fn main() {
             target,
             format,
             out_dir,
+            env,
         } => {
             CliArgs::print_banner();
             let base_dir = out_dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-            println!("  \x1b[36m›\x1b[0m Packaging production distribution for target: \x1b[1m{}\x1b[0m...", target.as_str());
-            match Packager::package(target, format, &base_dir) {
+            println!(
+                "  \x1b[36m›\x1b[0m Packaging production distribution for target: \x1b[1m{}\x1b[0m (env: \x1b[37m{}\x1b[0m)...",
+                target.as_str(),
+                env.as_deref().unwrap_or("production")
+            );
+            match Packager::package_with_env(target, format, &base_dir, env.as_deref()) {
                 Ok(report) => {
                     println!(
                         "  \x1b[32m√\x1b[0m Created \x1b[36m{}\x1b[0m installer at \x1b[90m{:?}\x1b[0m",

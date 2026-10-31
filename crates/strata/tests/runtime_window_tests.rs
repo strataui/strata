@@ -88,3 +88,79 @@ fn test_app_runtime_run_with_window_event_loop() {
     assert_eq!(runtime.viewport_height, 768.0);
     assert!(presenter.presented_frames >= 2); // Initial frame + resize frame
 }
+
+#[test]
+fn test_strata_low_level_app_builder_and_lifecycle_hooks() {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    let started = Arc::new(AtomicBool::new(false));
+    let frame_counter = Arc::new(AtomicU64::new(0));
+    let event_intercepted = Arc::new(AtomicBool::new(false));
+    let draw_injected = Arc::new(AtomicBool::new(false));
+    let exited = Arc::new(AtomicBool::new(false));
+
+    let started_clone = Arc::clone(&started);
+    let frame_counter_clone = Arc::clone(&frame_counter);
+    let event_intercepted_clone = Arc::clone(&event_intercepted);
+    let draw_injected_clone = Arc::clone(&draw_injected);
+    let exited_clone = Arc::clone(&exited);
+
+    let mut app = StrataApp::builder()
+        .with_window(WindowConfig {
+            title: "Low-Level Custom Studio".to_string(),
+            width: 1440,
+            height: 900,
+            resizable: true,
+            transparent: false,
+            ..Default::default()
+        })
+        .with_dpr(1.5)
+        .on_start(move |_runtime| {
+            started_clone.store(true, Ordering::SeqCst);
+        })
+        .on_event(move |event, _ctrl, _runtime| {
+            if matches!(event, PlatformEvent::WindowResized { .. }) {
+                event_intercepted_clone.store(true, Ordering::SeqCst);
+            }
+        })
+        .on_draw(move |display_list| {
+            draw_injected_clone.store(true, Ordering::SeqCst);
+            display_list.push(strata_render::compositor::DrawCommand::DrawRect {
+                bounds: strata_layout::Rect::new(0.0, 0.0, 50.0, 50.0),
+                color: strata_style::types::Color::rgba(255, 0, 0, 255),
+            });
+        })
+        .on_frame(move |_frame_info, _runtime| {
+            frame_counter_clone.fetch_add(1, Ordering::SeqCst);
+        })
+        .on_exit(move |_runtime| {
+            exited_clone.store(true, Ordering::SeqCst);
+        })
+        .build(TestWindowApp);
+
+    assert_eq!(app.window_config.title, "Low-Level Custom Studio");
+    assert_eq!(app.runtime.dpr, 1.5);
+
+    // 1. Test step_frame and on_draw hook
+    let dl = app.step_frame();
+    assert!(draw_injected.load(Ordering::SeqCst));
+    assert!(dl.commands.len() > 0);
+
+    // 2. Test event dispatching and on_event hook
+    let resized = PlatformEvent::WindowResized { width: 1600, height: 1000 };
+    app.dispatch_event(&resized);
+    assert!(event_intercepted.load(Ordering::SeqCst));
+    assert_eq!(app.runtime.viewport_width, 1600.0);
+
+    // 3. Test render_to_buffer
+    let buffer = app.render_to_buffer().unwrap();
+    assert_eq!(buffer.len(), (1440 * 900 * 4) as usize);
+
+    // 4. Test run_headless
+    let frames = app.run_headless(5);
+    assert_eq!(frames.len(), 5);
+    assert!(started.load(Ordering::SeqCst));
+    assert_eq!(frame_counter.load(Ordering::SeqCst), 5);
+    assert!(exited.load(Ordering::SeqCst));
+}

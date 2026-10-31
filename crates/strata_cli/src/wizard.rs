@@ -65,17 +65,29 @@ impl ProjectWizard {
         .map_err(|e| e.to_string())?;
 
         // 1. Project Name
+        let base_dir_buf = base_dir.to_path_buf();
         let name = TextPrompt::new("What is your project named?")
             .with_default("strata-app")
-            .with_validator(|n| {
+            .with_validator(move |n| {
                 if !n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-                    Err(format!(
+                    return Err(format!(
                         "Invalid project name '{}'. Use only letters, numbers, hyphens, and underscores.",
                         n
-                    ))
-                } else {
-                    Ok(())
+                    ));
                 }
+                let target_path = base_dir_buf.join(n);
+                if target_path.exists() {
+                    let is_not_empty = std::fs::read_dir(&target_path)
+                        .map(|mut entries| entries.next().is_some())
+                        .unwrap_or(false);
+                    if is_not_empty {
+                        return Err(format!(
+                            "Directory '{}' already exists and is not empty.",
+                            n
+                        ));
+                    }
+                }
+                Ok(())
             })
             .run(reader, writer, is_interactive)?;
 

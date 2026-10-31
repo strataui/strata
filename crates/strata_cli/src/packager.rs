@@ -3,6 +3,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use crate::args::{BuildTarget, PackageFormat};
+use crate::config::StrataConfig;
+use crate::plugin::{PluginContext, PluginEngine};
 
 /// Summary report of a completed packaging operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +25,16 @@ impl Packager {
         requested_format: Option<PackageFormat>,
         out_dir: &Path,
     ) -> Result<PackageReport, String> {
+        Self::package_with_env(target, requested_format, out_dir, None)
+    }
+
+    /// Packages compiled application binaries with an optional environment override and plugin execution.
+    pub fn package_with_env(
+        target: BuildTarget,
+        requested_format: Option<PackageFormat>,
+        out_dir: &Path,
+        env: Option<&str>,
+    ) -> Result<PackageReport, String> {
         let format = requested_format.unwrap_or_else(|| PackageFormat::default_for_target(target));
 
         // Format compatibility check
@@ -32,14 +44,31 @@ impl Packager {
         fs::create_dir_all(&dist_dir)
             .map_err(|e| format!("Failed to create package directory: {}", e))?;
 
-        let package_file_name = format!("strata_app_{}.{}", target.as_str(), format.extension());
+        // 1. Load project configuration and run plugin transformations
+        let mut strata_cfg = StrataConfig::load_from_dir(out_dir).unwrap_or_default();
+        let mut ctx = PluginContext::new(target, true, out_dir, &dist_dir);
+        if let Some(e) = env {
+            ctx.environment = e.to_string();
+        }
+        let _ = PluginEngine::run_config_transformations(&mut strata_cfg, &ctx);
+
+        let app_name = strata_cfg.app.name.clone();
+        let app_version = strata_cfg.app.version.clone();
+        let app_desc = strata_cfg.app.description.clone();
+        let window_title = strata_cfg.window.title.clone();
+
+        let package_file_name = format!("{}_{}.{}", app_name, target.as_str(), format.extension());
         let package_path = dist_dir.join(&package_file_name);
         let mut generated_files = Vec::new();
 
         match format {
             PackageFormat::Deb => {
                 // Debian / Ubuntu package structure: DEBIAN/control, usr/bin, usr/share/applications
-                let deb_root = dist_dir.join("strata-deb-pkg");
+                let deb_root = if app_name == "strata-app" {
+                    dist_dir.join("strata-deb-pkg")
+                } else {
+                    dist_dir.join(format!("{}-deb-pkg", app_name))
+                };
                 let debian_meta = deb_root.join("DEBIAN");
                 let usr_bin = deb_root.join("usr").join("bin");
                 let usr_apps = deb_root.join("usr").join("share").join("applications");
@@ -48,48 +77,57 @@ impl Packager {
                 fs::create_dir_all(&usr_bin).map_err(|e| e.to_string())?;
                 fs::create_dir_all(&usr_apps).map_err(|e| e.to_string())?;
 
-                let control_content = "Package: strata-app\n\
-                                       Version: 0.1.0\n\
-                                       Section: utils\n\
-                                       Priority: optional\n\
-                                       Architecture: amd64\n\
-                                       Maintainer: Strata Team <support@larvance.com>\n\
-                                       Description: High-performance pure Rust frontend application (Zero Chromium)\n";
+                let control_content = format!(
+                    "Package: {}\n\
+                     Version: {}\n\
+                     Section: utils\n\
+                     Priority: optional\n\
+                     Architecture: amd64\n\
+                     Maintainer: Strata Team <support@larvance.com>\n\
+                     Description: {}\n",
+                    app_name, app_version, app_desc
+                );
                 let control_file = debian_meta.join("control");
                 fs::write(&control_file, control_content).map_err(|e| e.to_string())?;
                 generated_files.push(control_file);
 
-                let desktop_content = "[Desktop Entry]\n\
-                                       Name=Strata Application\n\
-                                       Exec=/usr/bin/strata-app\n\
-                                       Type=Application\n\
-                                       Terminal=false\n\
-                                       Categories=Utility;\n";
-                let desktop_file = usr_apps.join("strata-app.desktop");
+                let desktop_content = format!(
+                    "[Desktop Entry]\n\
+                     Name={}\n\
+                     Exec=/usr/bin/{}\n\
+                     Type=Application\n\
+                     Terminal=false\n\
+                     Categories=Utility;\n",
+                    window_title, app_name
+                );
+                let desktop_file = usr_apps.join(format!("{}.desktop", app_name));
                 fs::write(&desktop_file, desktop_content).map_err(|e| e.to_string())?;
                 generated_files.push(desktop_file);
 
-                fs::write(&package_path, b"!<arch>\ndebian-binary   0.1.0\n")
+                fs::write(&package_path, format!("!<arch>\ndebian-binary   {}\n", app_version).as_bytes())
                     .map_err(|e| e.to_string())?;
                 generated_files.push(package_path.clone());
             }
 
             PackageFormat::Rpm => {
                 // RPM .spec file
-                let spec_path = dist_dir.join("strata-app.spec");
-                let spec_content = "Name:           strata-app\n\
-                                    Version:        0.1.0\n\
-                                    Release:        1%{?dist}\n\
-                                    Summary:        High-performance pure Rust frontend application\n\
-                                    License:        MIT\n\
-                                    URL:            https://strata.dev\n\n\
-                                    %description\n\
-                                    Universal zero-chromium native frontend application.\n\n\
-                                    %install\n\
-                                    mkdir -p %{buildroot}/usr/bin\n\
-                                    cp strata-app %{buildroot}/usr/bin/\n\n\
-                                    %files\n\
-                                    /usr/bin/strata-app\n";
+                let spec_path = dist_dir.join(format!("{}.spec", app_name));
+                let spec_content = format!(
+                    "Name:           {}\n\
+                     Version:        {}\n\
+                     Release:        1%{{?dist}}\n\
+                     Summary:        {}\n\
+                     License:        MIT\n\
+                     URL:            https://strata.dev\n\n\
+                     %description\n\
+                     {}\n\n\
+                     %install\n\
+                     mkdir -p %{{buildroot}}/usr/bin\n\
+                     cp {} %{{buildroot}}/usr/bin/\n\n\
+                     %files\n\
+                     /usr/bin/{}\n",
+                    app_name, app_version, window_title, app_desc, app_name, app_name
+                );
                 fs::write(&spec_path, spec_content).map_err(|e| e.to_string())?;
                 generated_files.push(spec_path);
                 fs::write(&package_path, b"RPM-PKG-BINARY-HEADER").map_err(|e| e.to_string())?;
@@ -98,23 +136,29 @@ impl Packager {
 
             PackageFormat::AppImage => {
                 // AppDir structure with AppRun script and desktop entry
-                let appdir = dist_dir.join("strata-app.AppDir");
+                let appdir = dist_dir.join(format!("{}.AppDir", app_name));
                 fs::create_dir_all(&appdir).map_err(|e| e.to_string())?;
 
                 let apprun_path = appdir.join("AppRun");
-                let apprun_content = "#!/bin/sh\n\
-                                      HERE=\"$(dirname \"$(readlink -f \"${0}\")\")\"\n\
-                                      exec \"${HERE}/usr/bin/strata-app\" \"$@\"\n";
+                let apprun_content = format!(
+                    "#!/bin/sh\n\
+                     HERE=\"$(dirname \"$(readlink -f \"${{0}}\")\")\"\n\
+                     exec \"${{HERE}}/usr/bin/{}\" \"$@\"\n",
+                    app_name
+                );
                 fs::write(&apprun_path, apprun_content).map_err(|e| e.to_string())?;
                 generated_files.push(apprun_path);
 
-                let desktop_path = appdir.join("strata-app.desktop");
-                let desktop_content = "[Desktop Entry]\n\
-                                       Name=Strata Application\n\
-                                       Exec=strata-app\n\
-                                       Icon=strata\n\
-                                       Type=Application\n\
-                                       Categories=Utility;\n";
+                let desktop_path = appdir.join(format!("{}.desktop", app_name));
+                let desktop_content = format!(
+                    "[Desktop Entry]\n\
+                     Name={}\n\
+                     Exec={}\n\
+                     Icon=strata\n\
+                     Type=Application\n\
+                     Categories=Utility;\n",
+                    window_title, app_name
+                );
                 fs::write(&desktop_path, desktop_content).map_err(|e| e.to_string())?;
                 generated_files.push(desktop_path);
 
@@ -125,16 +169,19 @@ impl Packager {
             PackageFormat::PkgBuild => {
                 // Arch Linux PKGBUILD recipe
                 let pkgbuild_path = dist_dir.join("PKGBUILD");
-                let pkgbuild_content = "pkgname=strata-app\n\
-                                        pkgver=0.1.0\n\
-                                        pkgrel=1\n\
-                                        pkgdesc=\"Universal frontend application in pure Rust\"\n\
-                                        arch=('x86_64')\n\
-                                        license=('MIT')\n\n\
-                                        package() {\n\
-                                          install -Dm755 strata-app \"${pkgdir}/usr/bin/strata-app\"\n\
-                                        }\n";
-                fs::write(&pkgbuild_path, pkgbuild_content).map_err(|e| e.to_string())?;
+                let pkgbuild_content = format!(
+                    "pkgname={}\n\
+                     pkgver={}\n\
+                     pkgrel=1\n\
+                     pkgdesc=\"{}\"\n\
+                     arch=('x86_64')\n\
+                     license=('MIT')\n\n\
+                     package() {{\n\
+                       install -Dm755 {} \"${{pkgdir}}/usr/bin/{}\"\n\
+                     }}\n",
+                    app_name, app_version, window_title, app_name, app_name
+                );
+                fs::write(&pkgbuild_path, &pkgbuild_content).map_err(|e| e.to_string())?;
                 generated_files.push(pkgbuild_path);
                 fs::write(&package_path, pkgbuild_content).map_err(|e| e.to_string())?;
                 generated_files.push(package_path.clone());
@@ -143,18 +190,21 @@ impl Packager {
             PackageFormat::Msi => {
                 // WiX XML configuration (Product.wxs)
                 let wxs_path = dist_dir.join("Product.wxs");
-                let wxs_content = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-                                   <Wix xmlns=\"http://schemas.microsoft.com/wix/2006/wi\">\n\
-                                     <Product Id=\"*\" Name=\"Strata App\" Language=\"1033\" Version=\"0.1.0.0\" Manufacturer=\"Strata\" UpgradeCode=\"98765432-1234-5678-9abc-def012345678\">\n\
-                                       <Package InstallerVersion=\"200\" Compressed=\"yes\" InstallScope=\"perMachine\" />\n\
-                                       <MediaTemplate EmbedCab=\"yes\" />\n\
-                                       <Directory Id=\"TARGETDIR\" Name=\"SourceDir\">\n\
-                                         <Directory Id=\"ProgramFilesFolder\">\n\
-                                           <Directory Id=\"INSTALLFOLDER\" Name=\"Strata App\" />\n\
-                                         </Directory>\n\
-                                       </Directory>\n\
-                                     </Product>\n\
-                                   </Wix>\n";
+                let wxs_content = format!(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                     <Wix xmlns=\"http://schemas.microsoft.com/wix/2006/wi\">\n\
+                       <Product Id=\"*\" Name=\"{}\" Language=\"1033\" Version=\"{}.0\" Manufacturer=\"Strata\" UpgradeCode=\"98765432-1234-5678-9abc-def012345678\">\n\
+                         <Package InstallerVersion=\"200\" Compressed=\"yes\" InstallScope=\"perMachine\" />\n\
+                         <MediaTemplate EmbedCab=\"yes\" />\n\
+                         <Directory Id=\"TARGETDIR\" Name=\"SourceDir\">\n\
+                           <Directory Id=\"ProgramFilesFolder\">\n\
+                             <Directory Id=\"INSTALLFOLDER\" Name=\"{}\" />\n\
+                           </Directory>\n\
+                         </Directory>\n\
+                       </Product>\n\
+                     </Wix>\n",
+                    window_title, app_version, window_title
+                );
                 fs::write(&wxs_path, wxs_content).map_err(|e| e.to_string())?;
                 generated_files.push(wxs_path);
                 fs::write(&package_path, b"\xD0\xCF\x11\xE0MSI-OLE-CONTAINER").map_err(|e| e.to_string())?;
@@ -164,14 +214,17 @@ impl Packager {
             PackageFormat::Exe => {
                 // NSIS installer script and standalone PE executable stub
                 let nsi_path = dist_dir.join("installer.nsi");
-                let nsi_content = "!define PRODUCT_NAME \"Strata App\"\n\
-                                   !define PRODUCT_VERSION \"0.1.0\"\n\
-                                   OutFile \"strata_setup.exe\"\n\
-                                   InstallDir \"$PROGRAMFILES\\Strata App\"\n\
-                                   Section \"MainSection\" SEC01\n\
-                                     SetOutPath \"$INSTDIR\"\n\
-                                     File \"strata-app.exe\"\n\
-                                   SectionEnd\n";
+                let nsi_content = format!(
+                    "!define PRODUCT_NAME \"{}\"\n\
+                     !define PRODUCT_VERSION \"{}\"\n\
+                     OutFile \"{}_setup.exe\"\n\
+                     InstallDir \"$PROGRAMFILES\\{}\"\n\
+                     Section \"MainSection\" SEC01\n\
+                       SetOutPath \"$INSTDIR\"\n\
+                       File \"{}.exe\"\n\
+                     SectionEnd\n",
+                    window_title, app_version, app_name, window_title, app_name
+                );
                 fs::write(&nsi_path, nsi_content).map_err(|e| e.to_string())?;
                 generated_files.push(nsi_path);
                 fs::write(&package_path, b"MZ\x90\x00PE-EXECUTABLE-STUB").map_err(|e| e.to_string())?;
@@ -180,22 +233,25 @@ impl Packager {
 
             PackageFormat::App => {
                 // macOS Application bundle: Contents/Info.plist, MacOS/
-                let app_bundle = dist_dir.join("strata-app.app");
+                let app_bundle = dist_dir.join(format!("{}.app", app_name));
                 let contents_dir = app_bundle.join("Contents");
                 let macos_dir = contents_dir.join("MacOS");
                 fs::create_dir_all(&macos_dir).map_err(|e| e.to_string())?;
 
                 let plist_path = contents_dir.join("Info.plist");
-                let plist_content = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-                                     <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
-                                     <plist version=\"1.0\">\n\
-                                     <dict>\n\
-                                       <key>CFBundleExecutable</key><string>strata-app</string>\n\
-                                       <key>CFBundleIdentifier</key><string>dev.strata.app</string>\n\
-                                       <key>CFBundleName</key><string>Strata App</string>\n\
-                                       <key>CFBundlePackageType</key><string>APPL</string>\n\
-                                     </dict>\n\
-                                     </plist>\n";
+                let plist_content = format!(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                     <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+                     <plist version=\"1.0\">\n\
+                     <dict>\n\
+                       <key>CFBundleExecutable</key><string>{}</string>\n\
+                       <key>CFBundleIdentifier</key><string>dev.strata.{}</string>\n\
+                       <key>CFBundleName</key><string>{}</string>\n\
+                       <key>CFBundlePackageType</key><string>APPL</string>\n\
+                     </dict>\n\
+                     </plist>\n",
+                    app_name, app_name, window_title
+                );
                 fs::write(&plist_path, plist_content).map_err(|e| e.to_string())?;
                 generated_files.push(plist_path);
                 fs::write(&package_path, b"APPL-MACOS-BUNDLE").map_err(|e| e.to_string())?;
@@ -204,7 +260,10 @@ impl Packager {
 
             PackageFormat::Dmg => {
                 let dmg_manifest = dist_dir.join("dmg_layout.json");
-                let manifest_content = r#"{"title": "Strata App", "icon-size": 128, "applications_link": true}"#;
+                let manifest_content = format!(
+                    r#"{{"title": "{}", "app_name": "{}", "icon-size": 128, "applications_link": true}}"#,
+                    window_title, app_name
+                );
                 fs::write(&dmg_manifest, manifest_content).map_err(|e| e.to_string())?;
                 generated_files.push(dmg_manifest);
                 fs::write(&package_path, b"kolyDMG-VOLUME-HEADER").map_err(|e| e.to_string())?;
@@ -213,16 +272,19 @@ impl Packager {
 
             PackageFormat::Pkg => {
                 let dist_xml = dist_dir.join("Distribution.xml");
-                let xml_content = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
-                                   <installer-gui-script minSpecVersion=\"1\">\n\
-                                     <title>Strata App</title>\n\
-                                     <choices-outline>\n\
-                                       <line choice=\"default\"/>\n\
-                                     </choices-outline>\n\
-                                     <choice id=\"default\" title=\"Strata App\">\n\
-                                       <pkg-ref id=\"dev.strata.app\"/>\n\
-                                     </choice>\n\
-                                   </installer-gui-script>\n";
+                let xml_content = format!(
+                    "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                     <installer-gui-script minSpecVersion=\"1\">\n\
+                       <title>{}</title>\n\
+                       <choices-outline>\n\
+                         <line choice=\"default\"/>\n\
+                       </choices-outline>\n\
+                       <choice id=\"default\" title=\"{}\">\n\
+                         <pkg-ref id=\"dev.strata.{}\"/>\n\
+                       </choice>\n\
+                     </installer-gui-script>\n",
+                    window_title, window_title, app_name
+                );
                 fs::write(&dist_xml, xml_content).map_err(|e| e.to_string())?;
                 generated_files.push(dist_xml);
                 fs::write(&package_path, b"xar!PKG-ARCHIVE-HEADER").map_err(|e| e.to_string())?;
@@ -231,8 +293,8 @@ impl Packager {
 
             PackageFormat::TarGz => {
                 let tar_metadata = format!(
-                    r#"{{"target": "{}", "format": "tar.gz", "archive": "strata_portable_cli"}}"#,
-                    target.as_str()
+                    r#"{{"app": "{}", "version": "{}", "target": "{}", "format": "tar.gz", "archive": "strata_portable_cli"}}"#,
+                    app_name, app_version, target.as_str()
                 );
                 fs::write(&package_path, tar_metadata).map_err(|e| e.to_string())?;
                 generated_files.push(package_path.clone());
@@ -240,15 +302,18 @@ impl Packager {
 
             PackageFormat::Apk | PackageFormat::Aab => {
                 let apk_metadata = format!(
-                    r#"{{"package": "dev.strata.app", "format": "{}", "version": "0.1.0"}}"#,
-                    format.extension()
+                    r#"{{"package": "dev.strata.{}", "app_name": "{}", "format": "{}", "version": "{}"}}"#,
+                    app_name, app_name, format.extension(), app_version
                 );
                 fs::write(&package_path, apk_metadata).map_err(|e| e.to_string())?;
                 generated_files.push(package_path.clone());
             }
 
             PackageFormat::Ipa => {
-                let ipa_metadata = r#"{"bundle_id": "dev.strata.app", "format": "ipa", "version": "0.1.0"}"#;
+                let ipa_metadata = format!(
+                    r#"{{"bundle_id": "dev.strata.{}", "app_name": "{}", "format": "ipa", "version": "{}"}}"#,
+                    app_name, app_name, app_version
+                );
                 fs::write(&package_path, ipa_metadata).map_err(|e| e.to_string())?;
                 generated_files.push(package_path.clone());
             }
