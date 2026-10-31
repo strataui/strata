@@ -353,7 +353,7 @@ impl TextPrompt {
 
                     if let Some(validator) = &self.validator {
                         if let Err(err) = validator(&final_val) {
-                            writeln!(writer, "\n\x1b[31m✕ {}\x1b[0m", err)
+                            writeln!(writer, "\n\x1b[31m[!] {}\x1b[0m", err)
                                 .map_err(|e| e.to_string())?;
                             buffer.clear();
                             continue;
