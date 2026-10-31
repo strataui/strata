@@ -109,6 +109,13 @@ fn test_project_scaffolding_templates() {
     let main_rs = fs::read_to_string(report.root_path.join("src/main.rs")).unwrap();
     assert!(main_rs.contains("MetricCard"));
 
+    let report_wb = ProjectScaffolder::scaffold("test_workbench_app", TemplateKind::Workbench, &temp_dir).unwrap();
+    assert_eq!(report_wb.name, "test_workbench_app");
+    assert_eq!(report_wb.template, TemplateKind::Workbench);
+    let wb_main_rs = fs::read_to_string(report_wb.root_path.join("src/main.rs")).unwrap();
+    assert!(wb_main_rs.contains("Workbench"));
+    assert!(wb_main_rs.contains("Ctrl+K"));
+
     let _ = fs::remove_dir_all(&temp_dir);
 }
 

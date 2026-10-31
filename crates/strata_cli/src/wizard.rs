@@ -3,7 +3,7 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use crate::args::{BuildTarget, TemplateKind};
-use crate::prompt::{ConfirmPrompt, MultiSelectPrompt, SelectPrompt, Terminal, TextPrompt};
+use crate::prompt::{MultiSelectPrompt, SelectPrompt, Terminal, TextPrompt};
 
 /// Configuration options selected via the interactive setup wizard.
 #[derive(Debug, Clone)]
@@ -92,14 +92,14 @@ impl ProjectWizard {
                 Some("AI Cloud & telemetry infrastructure portal"),
             )
             .item(
-                TemplateKind::Ecommerce,
-                "E-Commerce",
-                Some("Storefront catalog, cart drawer & checkout"),
+                TemplateKind::Workbench,
+                "Developer Workbench",
+                Some("Multi-pane desktop workspace with command palette & tabs"),
             )
             .item(
                 TemplateKind::Studio,
                 "Creative Studio",
-                Some("Vector canvas & node properties editor"),
+                Some("Vector canvas & node properties editor with 3D PBR"),
             )
             .with_default_index(0)
             .run(reader, writer, is_interactive)?;
@@ -134,18 +134,10 @@ impl ProjectWizard {
 
         let primary_target = targets.first().copied().unwrap_or(BuildTarget::Desktop);
 
-        // 4. Optional Add-ons
-        let enable_tailwind = ConfirmPrompt::new("Would you like to use Tailwind CSS?")
-            .with_default(true)
-            .run(reader, writer, is_interactive)?;
-
-        let enable_canvas_3d = ConfirmPrompt::new("Include 3D Viewport & PBR shaders?")
-            .with_default(true)
-            .run(reader, writer, is_interactive)?;
-
-        let enable_bitcask_storage = ConfirmPrompt::new("Include persistent Bitcask storage?")
-            .with_default(true)
-            .run(reader, writer, is_interactive)?;
+        // Standard built-in engine capabilities (enabled by default)
+        let enable_tailwind = true;
+        let enable_canvas_3d = true;
+        let enable_bitcask_storage = true;
 
         writeln!(
             writer,
@@ -186,36 +178,6 @@ impl ProjectWizard {
             writer,
             "  \x1b[90m•\x1b[0m Target:      \x1b[37m{}\x1b[0m",
             targets_display
-        )
-        .map_err(|e| e.to_string())?;
-        writeln!(
-            writer,
-            "  \x1b[90m•\x1b[0m Tailwind:    {}",
-            if enable_tailwind {
-                "\x1b[32mYes\x1b[0m"
-            } else {
-                "\x1b[90mNo\x1b[0m"
-            }
-        )
-        .map_err(|e| e.to_string())?;
-        writeln!(
-            writer,
-            "  \x1b[90m•\x1b[0m 3D Engine:   {}",
-            if enable_canvas_3d {
-                "\x1b[32mYes\x1b[0m"
-            } else {
-                "\x1b[90mNo\x1b[0m"
-            }
-        )
-        .map_err(|e| e.to_string())?;
-        writeln!(
-            writer,
-            "  \x1b[90m•\x1b[0m Bitcask:     {}",
-            if enable_bitcask_storage {
-                "\x1b[32mYes\x1b[0m"
-            } else {
-                "\x1b[90mNo\x1b[0m"
-            }
         )
         .map_err(|e| e.to_string())?;
         writeln!(

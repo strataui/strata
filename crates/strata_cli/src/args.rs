@@ -54,19 +54,21 @@ pub enum TemplateKind {
     #[default]
     Blank,
     Saas,
-    Ecommerce,
+    Workbench,
     Studio,
+    Ecommerce,
 }
 
 impl TemplateKind {
     pub fn parse(s: &str) -> Result<Self, String> {
         match s.to_ascii_lowercase().as_str() {
-            "blank" => Ok(Self::Blank),
-            "saas" => Ok(Self::Saas),
-            "ecommerce" => Ok(Self::Ecommerce),
-            "studio" => Ok(Self::Studio),
+            "blank" | "minimal" => Ok(Self::Blank),
+            "saas" | "dashboard" => Ok(Self::Saas),
+            "workbench" | "tool" | "editor" | "desktop" => Ok(Self::Workbench),
+            "studio" | "creative" | "canvas" => Ok(Self::Studio),
+            "ecommerce" | "commerce" => Ok(Self::Ecommerce),
             unknown => Err(format!(
-                "Invalid template '{}'. Valid options: blank, saas, ecommerce, studio",
+                "Invalid template '{}'. Valid options: blank, saas, workbench, studio",
                 unknown
             )),
         }
@@ -76,8 +78,9 @@ impl TemplateKind {
         match self {
             Self::Blank => "blank",
             Self::Saas => "saas",
-            Self::Ecommerce => "ecommerce",
+            Self::Workbench => "workbench",
             Self::Studio => "studio",
+            Self::Ecommerce => "ecommerce",
         }
     }
 }
@@ -216,7 +219,7 @@ impl CliArgs {
                  Arguments:\n\
                    [NAME]                          Project name (e.g. my-app)\n\n\
                  Options:\n\
-                   -t, --template <TEMPLATE>       Project template: blank, saas, ecommerce, studio\n\
+                   -t, --template <TEMPLATE>       Project template: blank, saas, workbench, studio\n\
                    -d, --dir <PATH>                Target destination directory\n\
                    -h, --help                      Print this help message\n\n\
                  Examples:\n\

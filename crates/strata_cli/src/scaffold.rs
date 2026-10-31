@@ -174,6 +174,100 @@ fn main() {
 }
 "#.to_string(),
 
+            TemplateKind::Workbench => r#"use strata::prelude::*;
+
+#[component]
+fn FileTreeItem(name: String, is_active: bool) -> View {
+    let bg = if is_active { "bg-zinc-800 text-white" } else { "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900" };
+    rsx! {
+        <li class={format!("px-2 py-1.5 rounded text-xs font-mono cursor-pointer transition flex items-center justify-between {}", bg)}>
+            <span>{name}</span>
+        </li>
+    }
+}
+
+#[component]
+fn App() -> View {
+    rsx! {
+        <div class="flex flex-col h-screen bg-[#09090b] text-zinc-100 font-sans select-none">
+            <!-- Top Command Ribbon / Header -->
+            <header class="h-10 border-b border-zinc-800 px-4 flex items-center justify-between bg-zinc-950">
+                <div class="flex items-center space-x-3 text-xs">
+                    <span class="font-bold text-cyan-400">{"STRATA"}</span>
+                    <span class="text-zinc-600">{"/"}</span>
+                    <span class="text-zinc-300 font-medium">{"Workbench"}</span>
+                </div>
+                <div class="px-3 py-1 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-400 flex items-center space-x-2">
+                    <span>{"Search or run command..."}</span>
+                    <kbd class="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-[10px] text-zinc-300 font-mono">{"Ctrl+K"}</kbd>
+                </div>
+            </header>
+
+            <!-- Main Work Area -->
+            <div class="flex flex-1 overflow-hidden">
+                <!-- Sidebar File Explorer -->
+                <aside class="w-60 border-r border-zinc-800 bg-zinc-950/80 p-3 flex flex-col justify-between">
+                    <div>
+                        <div class="text-[11px] font-bold text-zinc-500 uppercase tracking-wider mb-2">{"Explorer"}</div>
+                        <ul class="space-y-0.5">
+                            <FileTreeItem name="src/main.rs".into() is_active=true />
+                            <FileTreeItem name="src/components.rs".into() is_active=false />
+                            <FileTreeItem name="strata.toml".into() is_active=false />
+                            <FileTreeItem name="Cargo.toml".into() is_active=false />
+                        </ul>
+                    </div>
+                    <div class="text-[11px] text-zinc-600 border-t border-zinc-900 pt-2 flex items-center justify-between">
+                        <span>{"Rust 2021"}</span>
+                        <span>{"UTF-8"}</span>
+                    </div>
+                </aside>
+
+                <!-- Center Tabbed Workspace & Document Body -->
+                <main class="flex-1 flex flex-col bg-[#0d0d10]">
+                    <!-- Tabs -->
+                    <div class="h-9 border-b border-zinc-800 flex items-center px-2 space-x-1 bg-zinc-950/40">
+                        <div class="px-3 py-1.5 bg-[#0d0d10] border-t-2 border-cyan-400 text-xs font-mono text-white flex items-center space-x-2">
+                            <span>{"src/main.rs"}</span>
+                        </div>
+                    </div>
+
+                    <!-- Editor Body -->
+                    <div class="flex-1 p-6 font-mono text-sm leading-relaxed overflow-auto text-zinc-300">
+                        <div class="text-zinc-600 mb-2">{"// Reactive Developer Workbench initialized"}</div>
+                        <div><span class="text-cyan-400">{"use"}</span> {" strata::prelude::*;"}</div>
+                        <div class="mt-4"><span class="text-purple-400">{"fn"}</span> <span class="text-blue-400">{"main"}</span>{"() {"}</div>
+                        <div class="pl-4"><span class="text-zinc-400">{"println!(\"Running at 120 FPS\");"}</span></div>
+                        <div>{"}"}</div>
+                    </div>
+
+                    <!-- Bottom Diagnostic Console Drawer -->
+                    <div class="h-32 border-t border-zinc-800 bg-black/60 p-3 font-mono text-xs">
+                        <div class="text-zinc-500 text-[11px] uppercase tracking-wider mb-1">{"Diagnostics & Output"}</div>
+                        <div class="text-emerald-400">{"[ok] GPU Pipeline: Direct Hardware Swapchain active"}</div>
+                        <div class="text-zinc-400">{"[info] Frame reconcile: 1 µs | Cold start: 14 µs"}</div>
+                    </div>
+                </main>
+            </div>
+
+            <!-- Status Bar -->
+            <footer class="h-6 border-t border-zinc-800 bg-zinc-950 px-3 flex items-center justify-between text-[11px] text-zinc-400 font-mono">
+                <div class="flex items-center space-x-4">
+                    <span>{"git:(main)"}</span>
+                    <span>{"0 errors, 0 warnings"}</span>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <span class="text-cyan-400">{"Strata Engine v0.1.0"}</span>
+                </div>
+            </footer>
+        </div>
+    }
+}
+
+fn main() {
+    strata::launch(App);
+}
+"#.to_string(),
+
             TemplateKind::Ecommerce => r#"use strata::prelude::*;
 
 #[component]
