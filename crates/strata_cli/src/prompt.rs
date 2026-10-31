@@ -938,8 +938,7 @@ impl<T: Clone> MultiSelectPrompt<T> {
         )
         .map_err(|e| e.to_string())?;
 
-        for (idx, item) in self.items.iter().enumerate() {
-            let num = idx + 1;
+        for item in &self.items {
             let check = if item.selected {
                 "\x1b[32m[x]\x1b[0m"
             } else {
@@ -951,9 +950,8 @@ impl<T: Clone> MultiSelectPrompt<T> {
             };
             writeln!(
                 writer,
-                "  {} \x1b[36m{})\x1b[0m {:width$}{}",
+                "  {} {:width$}{}",
                 check,
-                num,
                 item.label,
                 desc_str,
                 width = max_label_len + 3
@@ -1027,11 +1025,21 @@ impl<T: Clone> MultiSelectPrompt<T> {
         }
 
         let selected_items: Vec<_> = items.iter().filter(|it| it.selected).collect();
-        let summary_labels: Vec<_> = selected_items.iter().map(|it| it.label.as_str()).collect();
-        let summary_str = if summary_labels.is_empty() {
+        let has_universal = selected_items.iter().any(|it| it.label.eq_ignore_ascii_case("universal"));
+        let non_universal_count = items.iter().filter(|it| !it.label.eq_ignore_ascii_case("universal")).count();
+        let selected_non_universal = selected_items.iter().filter(|it| !it.label.eq_ignore_ascii_case("universal")).count();
+        let is_all = has_universal || (non_universal_count > 0 && selected_non_universal == non_universal_count);
+
+        let summary_str = if is_all {
+            "Universal".to_string()
+        } else if selected_items.is_empty() {
             "None".to_string()
         } else {
-            summary_labels.join(", ")
+            selected_items
+                .iter()
+                .map(|it| it.label.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         };
 
         writeln!(
@@ -1061,17 +1069,16 @@ impl<T: Clone> MultiSelectPrompt<T> {
         // Hide cursor during interactive option selection
         write!(writer, "\x1b[?25l").map_err(|e| e.to_string())?;
 
-        // Print header question
+        // Print header question (clean and short so it never line-wraps on window resize)
         writeln!(
             writer,
-            "\n{} \x1b[1m{}\x1b[0m \x1b[90m(Space to toggle, Enter to confirm)\x1b[0m",
+            "\n{} \x1b[1m{}\x1b[0m",
             PromptTheme::question_prefix(),
             self.message
         )
         .map_err(|e| e.to_string())?;
 
-        let render_row = |i: usize, active: bool, item: &MultiSelectItem<T>| -> String {
-            let num = i + 1;
+        let render_row = |active: bool, item: &MultiSelectItem<T>| -> String {
             let ptr = if active {
                 PromptTheme::pointer()
             } else {
@@ -1081,11 +1088,6 @@ impl<T: Clone> MultiSelectPrompt<T> {
                 "\x1b[32m[x]\x1b[0m"
             } else {
                 "\x1b[90m[ ]\x1b[0m"
-            };
-            let num_str = if active {
-                format!("\x1b[36m{})\x1b[0m", num)
-            } else {
-                format!("\x1b[90m{})\x1b[0m", num)
             };
             let label_str = if item.selected {
                 format!(
@@ -1104,11 +1106,11 @@ impl<T: Clone> MultiSelectPrompt<T> {
                 Some(d) => format!(" \x1b[90m({})\x1b[0m", d),
                 None => String::new(),
             };
-            format!("  {} {} {} {}{}", ptr, check_box, num_str, label_str, desc_str)
+            format!("  {} {} {}{}", ptr, check_box, label_str, desc_str)
         };
 
         for (i, item) in items.iter().enumerate() {
-            let row = render_row(i, i == cursor, item);
+            let row = render_row(i == cursor, item);
             let nl = if i + 1 < n { "\n" } else { "" };
             write!(writer, "{}{}", row, nl).map_err(|e| e.to_string())?;
         }
@@ -1178,7 +1180,7 @@ impl<T: Clone> MultiSelectPrompt<T> {
             }
 
             for (i, item) in items.iter().enumerate() {
-                let row = render_row(i, i == cursor, item);
+                let row = render_row(i == cursor, item);
                 let nl = if i + 1 < n { "\n" } else { "" };
                 write!(writer, "\x1b[2K{}{}", row, nl).map_err(|e| e.to_string())?;
             }
@@ -1189,11 +1191,21 @@ impl<T: Clone> MultiSelectPrompt<T> {
         write!(writer, "\x1b[{}A\r\x1b[J", n).map_err(|e| e.to_string())?;
 
         let selected_items: Vec<_> = items.iter().filter(|it| it.selected).collect();
-        let summary_labels: Vec<_> = selected_items.iter().map(|it| it.label.as_str()).collect();
-        let summary_str = if summary_labels.is_empty() {
+        let has_universal = selected_items.iter().any(|it| it.label.eq_ignore_ascii_case("universal"));
+        let non_universal_count = items.iter().filter(|it| !it.label.eq_ignore_ascii_case("universal")).count();
+        let selected_non_universal = selected_items.iter().filter(|it| !it.label.eq_ignore_ascii_case("universal")).count();
+        let is_all = has_universal || (non_universal_count > 0 && selected_non_universal == non_universal_count);
+
+        let summary_str = if is_all {
+            "Universal".to_string()
+        } else if selected_items.is_empty() {
             "None".to_string()
         } else {
-            summary_labels.join(", ")
+            selected_items
+                .iter()
+                .map(|it| it.label.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         };
 
         // Print collapsed single line

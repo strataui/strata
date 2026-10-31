@@ -166,10 +166,20 @@ impl ProjectWizard {
         )
         .map_err(|e| e.to_string())?;
 
-        let targets_display = if targets.is_empty() {
-            "desktop".to_string()
+        let targets_display = if targets.len() >= 3 {
+            "Universal".to_string()
+        } else if targets.is_empty() {
+            "Desktop".to_string()
         } else {
-            let names: Vec<&str> = targets.iter().map(|t| t.as_str()).collect();
+            let names: Vec<&str> = targets
+                .iter()
+                .map(|t| match t {
+                    BuildTarget::Desktop => "Desktop",
+                    BuildTarget::WebWasm => "Web",
+                    BuildTarget::Android => "Mobile",
+                    _ => t.as_str(),
+                })
+                .collect();
             names.join(", ")
         };
         writeln!(

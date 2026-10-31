@@ -270,3 +270,25 @@ fn test_multiselect_prompt_digit_toggle_and_stream() {
     assert!(clean.contains("√ Which target platform do you want to target? › Web, Mobile"));
 }
 
+#[test]
+fn test_multiselect_prompt_universal_selection() {
+    let prompt = MultiSelectPrompt::new("Which target platform do you want to target?")
+        .item(BuildTarget::Desktop, "Desktop", None::<String>, true)
+        .item(BuildTarget::WebWasm, "Web", None::<String>, false)
+        .item(BuildTarget::Android, "Mobile", None::<String>, false)
+        .item(BuildTarget::Desktop, "Universal", None::<String>, false);
+
+    // Press '4' (toggles Universal), then Enter
+    let input_bytes = b"4\r";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+
+    let result = prompt.run(&mut reader, &mut writer, true).unwrap();
+    assert_eq!(result.len(), 4);
+
+    let output = String::from_utf8(writer).unwrap();
+    let clean = strip_ansi(&output);
+    assert!(clean.contains("√ Which target platform do you want to target? › Universal"));
+    assert!(!clean.contains("Desktop, Web, Mobile, Universal"));
+}
+
