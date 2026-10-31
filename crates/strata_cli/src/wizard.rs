@@ -96,22 +96,22 @@ impl ProjectWizard {
             .item(
                 TemplateKind::Blank,
                 "Blank Canvas",
-                Some("Minimal zero-dependency reactive canvas"),
+                Some("Minimal reactive canvas"),
             )
             .item(
                 TemplateKind::Saas,
                 "SaaS Dashboard",
-                Some("AI Cloud & telemetry infrastructure portal"),
+                Some("Cloud & telemetry portal"),
             )
             .item(
                 TemplateKind::Workbench,
                 "Developer Workbench",
-                Some("Multi-pane desktop workspace with command palette & tabs"),
+                Some("Multi-pane desktop workspace"),
             )
             .item(
                 TemplateKind::Studio,
                 "Creative Studio",
-                Some("Vector canvas & node properties editor with 3D PBR"),
+                Some("Vector canvas & 3D PBR editor"),
             )
             .with_default_index(0)
             .run(reader, writer, is_interactive)?;
@@ -121,19 +121,19 @@ impl ProjectWizard {
             .item(
                 BuildTarget::Desktop,
                 "Desktop",
-                Some("Native Vulkan / Metal / DirectX hardware swapchain"),
+                Some("Native Vulkan, Metal & DirectX"),
                 true,
             )
             .item(
                 BuildTarget::WebWasm,
                 "Web",
-                Some("Dual WebAssembly canvas + pure JS ESM runtime"),
+                Some("Dual WASM canvas & JS runtime"),
                 false,
             )
             .item(
                 BuildTarget::Android,
                 "Mobile",
-                Some("Android Vulkan + iOS Metal NDK runtime"),
+                Some("Android Vulkan & iOS Metal NDK"),
                 false,
             )
             .item(

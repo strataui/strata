@@ -44,22 +44,22 @@ fn test_select_prompt_arrow_navigation() {
         .item(
             TemplateKind::Blank,
             "Blank Canvas",
-            Some("Minimal zero-dependency reactive canvas"),
+            Some("Minimal reactive canvas"),
         )
         .item(
             TemplateKind::Saas,
             "SaaS Dashboard",
-            Some("AI Cloud & telemetry infrastructure portal"),
+            Some("Cloud & telemetry portal"),
         )
         .item(
             TemplateKind::Ecommerce,
             "E-Commerce",
-            Some("Storefront catalog, cart drawer & checkout"),
+            Some("Storefront & cart drawer"),
         )
         .item(
             TemplateKind::Studio,
             "Creative Studio",
-            Some("Vector canvas & node properties editor"),
+            Some("Vector canvas & 3D PBR editor"),
         );
 
     // Sequence: Down arrow (\x1b[B) -> 1, Down arrow (\x1b[B) -> 2, Up arrow (\x1b[A) -> 1, Enter (\r)
@@ -207,12 +207,12 @@ fn test_zero_emoji_in_prompt_outputs() {
         .item(
             TemplateKind::Blank,
             "Blank Canvas",
-            Some("Minimal zero-dependency reactive canvas"),
+            Some("Minimal reactive canvas"),
         )
         .item(
             TemplateKind::Saas,
             "SaaS Dashboard",
-            Some("AI Cloud & telemetry infrastructure portal"),
+            Some("Cloud & telemetry portal"),
         );
 
     let mut reader = Cursor::new(b"\r");
