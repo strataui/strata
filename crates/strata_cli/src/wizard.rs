@@ -53,6 +53,8 @@ impl ProjectWizard {
         base_dir: &Path,
         is_interactive: bool,
     ) -> Result<WizardConfig, String> {
+        let _ = write!(writer, "\x1b[?25h");
+        let _ = writer.flush();
         writeln!(
             writer,
             "\x1b[1;36m▲ Strata\x1b[0m \x1b[90mv0.1.0 (Zero Chromium Pure Rust Engine)\x1b[0m"

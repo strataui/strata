@@ -4,6 +4,8 @@ use std::process;
 use strata_cli::prelude::*;
 
 fn main() {
+    Terminal::restore_cursor();
+
     let command = match CliArgs::parse() {
         Ok(cmd) => cmd,
         Err(err) => {
@@ -25,6 +27,11 @@ fn main() {
                 match ProjectWizard::prompt_interactive(&base_dir) {
                     Ok(cfg) => (cfg.name, cfg.template),
                     Err(e) => {
+                        Terminal::restore_cursor();
+                        if e.contains("cancelled by user") || e.contains("Cancelled") {
+                            println!("\n  \x1b[90mCancelled.\x1b[0m\n");
+                            process::exit(130);
+                        }
                         eprintln!("\x1b[1;31merror:\x1b[0m Project setup aborted: {}", e);
                         process::exit(1);
                     }

@@ -14,6 +14,9 @@ mod sys {
         pub fn isatty(fd: i32) -> i32;
         pub fn tcgetattr(fd: i32, termios_p: *mut Termios) -> i32;
         pub fn tcsetattr(fd: i32, optional_actions: i32, termios_p: *const Termios) -> i32;
+        pub fn write(fd: i32, buf: *const u8, count: usize) -> isize;
+        pub fn _exit(status: i32) -> !;
+        pub fn signal(signum: i32, handler: extern "C" fn(i32)) -> usize;
     }
 
     #[repr(C)]
@@ -32,6 +35,30 @@ mod sys {
     pub const TCSANOW: i32 = 0;
     pub const ICANON: u32 = 0o000002;
     pub const ECHO: u32 = 0o000010;
+    pub const ISIG: u32 = 0o000001;
+    pub const SIGINT: i32 = 2;
+    pub const SIGTERM: i32 = 15;
+}
+
+#[cfg(unix)]
+static mut SAVED_TERMIOS: Option<sys::Termios> = None;
+#[cfg(unix)]
+static RAW_MODE_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn sigint_handler(_sig: i32) {
+    unsafe {
+        let msg = b"\x1b[?25h\r\n";
+        let _ = sys::write(1, msg.as_ptr(), msg.len());
+
+        if RAW_MODE_ACTIVE.load(std::sync::atomic::Ordering::SeqCst) {
+            if let Some(ref orig) = SAVED_TERMIOS {
+                let _ = sys::tcsetattr(0, sys::TCSANOW, orig);
+            }
+        }
+
+        sys::_exit(130);
+    }
 }
 
 /// RAII Guard that puts standard input in raw mode and restores canonical mode on drop.
@@ -44,11 +71,11 @@ impl Drop for RawModeGuard {
     fn drop(&mut self) {
         #[cfg(unix)]
         unsafe {
+            RAW_MODE_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
             sys::tcsetattr(0, sys::TCSANOW, &self.orig_termios);
         }
         // Always restore cursor visibility on drop
-        let _ = std::io::stdout().write_all(b"\x1b[?25h");
-        let _ = std::io::stdout().flush();
+        Terminal::restore_cursor();
     }
 }
 
@@ -56,6 +83,12 @@ impl Drop for RawModeGuard {
 pub struct Terminal;
 
 impl Terminal {
+    /// Restores terminal cursor visibility and flushes stdout.
+    pub fn restore_cursor() {
+        let _ = std::io::stdout().write_all(b"\x1b[?25h");
+        let _ = std::io::stdout().flush();
+    }
+
     /// Returns true if both standard input and standard output are connected to a TTY.
     pub fn is_interactive() -> bool {
         #[cfg(unix)]
@@ -79,9 +112,15 @@ impl Terminal {
             if sys::tcgetattr(0, &mut orig) != 0 {
                 return None;
             }
+            SAVED_TERMIOS = Some(orig);
+            RAW_MODE_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
+
+            sys::signal(sys::SIGINT, sigint_handler);
+            sys::signal(sys::SIGTERM, sigint_handler);
+
             let mut raw = orig;
-            // Disable canonical mode and local echo, keep ISIG for Ctrl-C
-            raw.c_lflag &= !(sys::ICANON | sys::ECHO);
+            // Disable canonical mode, local echo, and ISIG so Ctrl-C is intercepted
+            raw.c_lflag &= !(sys::ICANON | sys::ECHO | sys::ISIG);
             // Minimum number of characters for noncanonical read
             raw.c_cc[6] = 1; // VMIN
             raw.c_cc[5] = 0; // VTIME
@@ -109,6 +148,8 @@ pub enum Key {
     Backspace,
     Tab,
     Esc,
+    CtrlC,
+    CtrlD,
     Unknown,
 }
 
@@ -124,6 +165,8 @@ pub fn read_key<R: Read>(reader: &mut R) -> std::io::Result<Option<Key>> {
         return Ok(None);
     }
     match buf[0] {
+        b'\x03' => Ok(Some(Key::CtrlC)),
+        b'\x04' => Ok(Some(Key::CtrlD)),
         b'\r' | b'\n' => Ok(Some(Key::Enter)),
         b'\x7f' | b'\x08' => Ok(Some(Key::Backspace)),
         b'\t' => Ok(Some(Key::Tab)),
@@ -338,10 +381,12 @@ impl TextPrompt {
                         buffer.push(c);
                     }
                 }
-                Ok(Some(Key::Esc)) => {
+                Ok(Some(Key::Esc)) | Ok(Some(Key::CtrlC)) | Ok(Some(Key::CtrlD)) => {
+                    Terminal::restore_cursor();
                     return Err("Input cancelled by user".to_string());
                 }
                 Ok(None) => {
+                    Terminal::restore_cursor();
                     return Err("Unexpected EOF while reading input".to_string());
                 }
                 _ => {}
@@ -577,10 +622,10 @@ impl<T: Clone> SelectPrompt<T> {
                 Some(d) => format!(" \x1b[90m({})\x1b[0m", d),
                 None => String::new(),
             };
-            let nl = if i + 1 < n { "\n" } else { "" };
+            let nl = if i + 1 < n { "\r\n" } else { "" };
             write!(
                 writer,
-                "  {} {} {}{}{}",
+                "\r\x1b[2K  {} {} {}{}{}",
                 ptr, num_str, label_str, desc_str, nl
             )
             .map_err(|e| e.to_string())?;
@@ -604,14 +649,12 @@ impl<T: Clone> SelectPrompt<T> {
                 Ok(Some(Key::Enter)) => {
                     break;
                 }
-                Ok(Some(Key::Esc)) => {
-                    let _ = write!(writer, "\x1b[?25h");
-                    let _ = writer.flush();
+                Ok(Some(Key::Esc)) | Ok(Some(Key::CtrlC)) | Ok(Some(Key::CtrlD)) => {
+                    Terminal::restore_cursor();
                     return Err("Selection cancelled by user".to_string());
                 }
                 Ok(None) => {
-                    let _ = write!(writer, "\x1b[?25h");
-                    let _ = writer.flush();
+                    Terminal::restore_cursor();
                     return Err("Unexpected EOF while selecting item".to_string());
                 }
                 _ => continue,
@@ -654,10 +697,10 @@ impl<T: Clone> SelectPrompt<T> {
                     Some(d) => format!(" \x1b[90m({})\x1b[0m", d),
                     None => String::new(),
                 };
-                let nl = if i + 1 < n { "\n" } else { "" };
+                let nl = if i + 1 < n { "\r\n" } else { "" };
                 write!(
                     writer,
-                    "\x1b[2K  {} {} {}{}{}",
+                    "\r\x1b[2K  {} {} {}{}{}",
                     ptr, num_str, label_str, desc_str, nl
                 )
                 .map_err(|e| e.to_string())?;
@@ -682,7 +725,7 @@ impl<T: Clone> SelectPrompt<T> {
         .map_err(|e| e.to_string())?;
 
         // Restore cursor
-        write!(writer, "\x1b[?25h").map_err(|e| e.to_string())?;
+        Terminal::restore_cursor();
         writer.flush().map_err(|e| e.to_string())?;
 
         Ok(selected.value.clone())
@@ -792,10 +835,12 @@ impl ConfirmPrompt {
                 Ok(Some(Key::Enter)) => break self.default,
                 Ok(Some(Key::Char('y' | 'Y'))) => break true,
                 Ok(Some(Key::Char('n' | 'N'))) => break false,
-                Ok(Some(Key::Esc)) => {
+                Ok(Some(Key::Esc)) | Ok(Some(Key::CtrlC)) | Ok(Some(Key::CtrlD)) => {
+                    Terminal::restore_cursor();
                     return Err("Confirmation cancelled by user".to_string());
                 }
                 Ok(None) => {
+                    Terminal::restore_cursor();
                     return Err("Unexpected EOF while reading confirmation".to_string());
                 }
                 _ => continue,
@@ -1156,8 +1201,8 @@ impl<T: Clone> MultiSelectPrompt<T> {
 
         for (i, item) in items.iter().enumerate() {
             let row = render_row(i == cursor, item);
-            let nl = if i + 1 < n { "\n" } else { "" };
-            write!(writer, "{}{}", row, nl).map_err(|e| e.to_string())?;
+            let nl = if i + 1 < n { "\r\n" } else { "" };
+            write!(writer, "\r\x1b[2K{}{}", row, nl).map_err(|e| e.to_string())?;
         }
         writer.flush().map_err(|e| e.to_string())?;
 
@@ -1214,14 +1259,12 @@ impl<T: Clone> MultiSelectPrompt<T> {
                     }
                     break;
                 }
-                Ok(Some(Key::Esc)) => {
-                    let _ = write!(writer, "\x1b[?25h");
-                    let _ = writer.flush();
+                Ok(Some(Key::Esc)) | Ok(Some(Key::CtrlC)) | Ok(Some(Key::CtrlD)) => {
+                    Terminal::restore_cursor();
                     return Err("Multi-selection cancelled by user".to_string());
                 }
                 Ok(None) => {
-                    let _ = write!(writer, "\x1b[?25h");
-                    let _ = writer.flush();
+                    Terminal::restore_cursor();
                     return Err("Unexpected EOF while selecting items".to_string());
                 }
                 _ => continue,
@@ -1235,8 +1278,8 @@ impl<T: Clone> MultiSelectPrompt<T> {
 
             for (i, item) in items.iter().enumerate() {
                 let row = render_row(i == cursor, item);
-                let nl = if i + 1 < n { "\n" } else { "" };
-                write!(writer, "\x1b[2K{}{}", row, nl).map_err(|e| e.to_string())?;
+                let nl = if i + 1 < n { "\r\n" } else { "" };
+                write!(writer, "\r\x1b[2K{}{}", row, nl).map_err(|e| e.to_string())?;
             }
             writer.flush().map_err(|e| e.to_string())?;
         }
@@ -1275,7 +1318,7 @@ impl<T: Clone> MultiSelectPrompt<T> {
         .map_err(|e| e.to_string())?;
 
         // Restore cursor
-        write!(writer, "\x1b[?25h").map_err(|e| e.to_string())?;
+        Terminal::restore_cursor();
         writer.flush().map_err(|e| e.to_string())?;
 
         let returned_items: Vec<_> = if is_all {

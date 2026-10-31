@@ -353,3 +353,59 @@ fn test_multiselect_selecting_all_items_selects_universal() {
     assert!(clean.contains("√ Which target platform do you want to target? › Universal"));
 }
 
+#[test]
+fn test_select_prompt_ctrl_c_cancellation() {
+    let prompt = SelectPrompt::new("Which template would you like to start with?")
+        .item(TemplateKind::Blank, "Blank Canvas", None::<String>)
+        .item(TemplateKind::Saas, "SaaS Dashboard", None::<String>);
+
+    // Send Ctrl+C (byte 0x03)
+    let input_bytes = b"\x03";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+
+    let err = prompt.run(&mut reader, &mut writer, true).unwrap_err();
+    assert!(err.contains("cancelled by user"));
+}
+
+#[test]
+fn test_text_prompt_ctrl_c_cancellation() {
+    let prompt = TextPrompt::new("What is your project named?")
+        .with_default("strata-app");
+
+    // Send Ctrl+C (byte 0x03)
+    let input_bytes = b"\x03";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+
+    let err = prompt.run(&mut reader, &mut writer, true).unwrap_err();
+    assert!(err.contains("cancelled by user"));
+}
+
+#[test]
+fn test_multiselect_prompt_ctrl_c_cancellation() {
+    let prompt = MultiSelectPrompt::new("Which target platform do you want to target?")
+        .item(BuildTarget::Desktop, "Desktop", None::<String>, true);
+
+    // Send Ctrl+C (byte 0x03)
+    let input_bytes = b"\x03";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+
+    let err = prompt.run(&mut reader, &mut writer, true).unwrap_err();
+    assert!(err.contains("cancelled by user"));
+}
+
+#[test]
+fn test_confirm_prompt_ctrl_c_cancellation() {
+    let prompt = ConfirmPrompt::new("Proceed with operation?");
+
+    // Send Ctrl+C (byte 0x03)
+    let input_bytes = b"\x03";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+
+    let err = prompt.run(&mut reader, &mut writer, true).unwrap_err();
+    assert!(err.contains("cancelled by user"));
+}
+
