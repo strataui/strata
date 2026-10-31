@@ -1,0 +1,9 @@
+[package]
+name = "strata_charts"
+version = "0.1.0"
+edition = "2021"
+description = "Declarative SVG & GPU Data Visualization Charts for Strata"
+
+[dependencies]
+strata_dom = { path = "../strata_dom" }
+strata_primitives = { path = "../strata_primitives" }

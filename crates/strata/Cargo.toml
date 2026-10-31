@@ -7,6 +7,7 @@ license.workspace = true
 description = "Universal frontend framework in pure Rust with pixel-perfect CSS emulation and React/TSX ergonomics"
 
 [dependencies]
+# Core mandatory primitives & runtime
 strata_dom = { path = "../strata_dom" }
 strata_macro = { path = "../strata_macro" }
 strata_style = { path = "../strata_style" }
@@ -14,17 +15,95 @@ strata_layout = { path = "../strata_layout" }
 strata_render = { path = "../strata_render" }
 strata_js = { path = "../strata_js" }
 strata_platform = { path = "../strata_platform" }
-strata_device = { path = "../strata_device" }
-strata_icons = { path = "../strata_icons" }
-strata_ui = { path = "../strata_ui" }
 strata_primitives = { path = "../strata_primitives" }
 strata_vfs = { path = "../strata_vfs" }
 strata_storage = { path = "../strata_storage" }
 strata_web_api = { path = "../strata_web_api" }
-strata_parallel = { path = "../strata_parallel" }
-strata_tui = { path = "../strata_tui" }
-strata_codegen_js = { path = "../strata_codegen_js" }
-strata_devtools = { path = "../strata_devtools" }
-strata_mobile_test = { path = "../strata_mobile_test" }
-strata_sim = { path = "../strata_sim" }
 
+# Decoupled optional ecosystem crates
+strata_ui = { path = "../strata_ui", optional = true }
+strata_icons = { path = "../strata_icons", optional = true }
+strata_device = { path = "../strata_device", optional = true }
+strata_parallel = { path = "../strata_parallel", optional = true }
+strata_tui = { path = "../strata_tui", optional = true }
+strata_codegen_js = { path = "../strata_codegen_js", optional = true }
+strata_devtools = { path = "../strata_devtools", optional = true }
+strata_mobile_test = { path = "../strata_mobile_test", optional = true }
+strata_sim = { path = "../strata_sim", optional = true }
+strata_a11y = { path = "../strata_a11y", optional = true }
+strata_audio = { path = "../strata_audio", optional = true }
+strata_crdt = { path = "../strata_crdt", optional = true }
+strata_agent_ui = { path = "../strata_agent_ui", optional = true }
+strata_i18n = { path = "../strata_i18n", optional = true }
+strata_router = { path = "../strata_router", optional = true }
+strata_form = { path = "../strata_form", optional = true }
+strata_query = { path = "../strata_query", optional = true }
+strata_virtual = { path = "../strata_virtual", optional = true }
+strata_aria = { path = "../strata_aria", optional = true }
+strata_store = { path = "../strata_store", optional = true }
+strata_toast = { path = "../strata_toast", optional = true }
+strata_motion = { path = "../strata_motion", optional = true }
+strata_table = { path = "../strata_table", optional = true }
+strata_charts = { path = "../strata_charts", optional = true }
+strata_editor = { path = "../strata_editor", optional = true }
+
+[features]
+default = ["tailwind", "device"]
+tailwind = []
+ui = ["dep:strata_ui"]
+icons = ["dep:strata_icons"]
+i18n = ["dep:strata_i18n"]
+router = ["dep:strata_router"]
+form = ["dep:strata_form"]
+query = ["dep:strata_query"]
+virtual = ["dep:strata_virtual"]
+aria = ["dep:strata_aria"]
+store = ["dep:strata_store"]
+toast = ["dep:strata_toast"]
+motion = ["dep:strata_motion"]
+table = ["dep:strata_table"]
+charts = ["dep:strata_charts"]
+editor = ["dep:strata_editor"]
+device = ["dep:strata_device"]
+parallel = ["dep:strata_parallel"]
+tui = ["dep:strata_tui"]
+codegen-js = ["dep:strata_codegen_js"]
+devtools = ["dep:strata_devtools"]
+mobile-test = ["dep:strata_mobile_test"]
+sim = ["dep:strata_sim"]
+a11y = ["dep:strata_a11y"]
+audio = ["dep:strata_audio"]
+crdt = ["dep:strata_crdt"]
+agent-ui = ["dep:strata_agent_ui"]
+full = [
+    "ui",
+    "icons",
+    "i18n",
+    "router",
+    "form",
+    "query",
+    "virtual",
+    "aria",
+    "store",
+    "toast",
+    "motion",
+    "table",
+    "charts",
+    "editor",
+    "device",
+    "parallel",
+    "tui",
+    "codegen-js",
+    "devtools",
+    "mobile-test",
+    "sim",
+    "a11y",
+    "audio",
+    "crdt",
+    "agent-ui",
+]
+
+[dev-dependencies]
+strata_ui = { path = "../strata_ui" }
+strata_icons = { path = "../strata_icons" }
+strata_device = { path = "../strata_device" }

@@ -7,4 +7,6 @@ license.workspace = true
 description = "High-performance Technical Apparel E-Commerce Storefront in Strata"
 
 [dependencies]
-strata = { path = "../../crates/strata" }
+strata = { path = "../../crates/strata", features = ["ui", "icons"] }
+strata_ui = { path = "../../crates/strata_ui" }
+strata_icons = { path = "../../crates/strata_icons" }

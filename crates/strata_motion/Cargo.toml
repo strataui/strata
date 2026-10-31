@@ -1,0 +1,9 @@
+[package]
+name = "strata_motion"
+version = "0.1.0"
+edition = "2021"
+description = "Spring Physics, Layout Transitions & Morphing Animation Engine for Strata"
+
+[dependencies]
+strata_dom = { path = "../strata_dom" }
+strata_primitives = { path = "../strata_primitives" }
