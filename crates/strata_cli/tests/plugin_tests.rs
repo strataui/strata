@@ -1,10 +1,15 @@
 //! Tests for PluginEngine and dynamic build/package lifecycle mutations.
 
 use std::fs;
+use std::sync::Mutex;
 use strata_cli::prelude::*;
+
+static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 #[test]
 fn test_plugin_dynamic_app_name_mutation() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    PluginEngine::clear_in_memory_plugins();
     let temp_dir = std::env::temp_dir().join(format!("strata_plugin_test_{}", std::process::id()));
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
@@ -57,6 +62,8 @@ plugins:
 
 #[test]
 fn test_plugin_declarative_action_methods() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    PluginEngine::clear_in_memory_plugins();
     let temp_dir = std::env::temp_dir().join(format!("strata_action_test_{}", std::process::id()));
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
@@ -90,6 +97,8 @@ action = "bump_patch"
 
 #[test]
 fn test_plugin_environment_conditional_execution() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    PluginEngine::clear_in_memory_plugins();
     let temp_dir = std::env::temp_dir().join(format!("strata_env_plugin_test_{}", std::process::id()));
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
@@ -142,11 +151,12 @@ impl StrataBuildPlugin for CustomInMemPlugin {
 
 #[test]
 fn test_in_memory_plugin_registration() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    PluginEngine::clear_in_memory_plugins();
     let temp_dir = std::env::temp_dir().join(format!("strata_in_mem_{}", std::process::id()));
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
 
-    PluginEngine::clear_in_memory_plugins();
     PluginEngine::register_in_memory_plugin(Box::new(CustomInMemPlugin));
 
     let report = Packager::package(BuildTarget::Desktop, None, &temp_dir).unwrap();
