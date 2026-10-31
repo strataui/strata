@@ -30,3 +30,8 @@ pkg/
 
 # OS specific files
 Thumbs.db
+
+# Node.js and VitePress documentation build artifacts
+node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
