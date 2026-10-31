@@ -1,0 +1,9 @@
+# Helix editor language server configuration for Strata
+
+[[language]]
+name = "rust"
+language-servers = ["rust-analyzer", "strata-lsp"]
+
+[language-server.strata-lsp]
+command = "strata-lsp"
+args = []

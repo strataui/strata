@@ -23,6 +23,8 @@ members = [
     "crates/strata_tui",
     "crates/strata_mobile_test",
     "crates/strata_sim",
+    "crates/strata_lsp",
+    "crates/strata_mdbook",
     "examples/saas_dashboard",
     "examples/ecommerce_storefront",
     "examples/creative_studio",

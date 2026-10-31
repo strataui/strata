@@ -73,7 +73,7 @@ fn test_dev_server_http_status_listener() {
     assert!(response.contains("HTTP/1.1 200 OK"));
     assert!(response.contains("Strata Universal Frontend Engine"));
     assert!(response.contains(&format!("{}", test_port)));
-    assert!(!response.contains('⚡'));
+    assert!(!response.contains('\u{26A1}'));
 
     // Cleanly signal server stop and join thread
     stopper.store(false, Ordering::SeqCst);

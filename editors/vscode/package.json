@@ -1,0 +1,57 @@
+{
+  "name": "strata-vscode",
+  "displayName": "Strata Universal Frontend Engine",
+  "description": "Language support, RSX diagnostics, Tailwind JIT autocomplete, and live dev tools for Strata",
+  "version": "0.1.0",
+  "publisher": "larvance",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Snippets"
+  ],
+  "activationEvents": [
+    "onLanguage:rust"
+  ],
+  "main": "./client/out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "strata-rsx",
+        "aliases": ["Strata RSX", "rsx"],
+        "extensions": [".rsx"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "strata-rsx",
+        "scopeName": "source.strata.rsx",
+        "path": "./syntaxes/strata.tmLanguage.json"
+      },
+      {
+        "scopeName": "strata.rsx.injection",
+        "path": "./syntaxes/strata.tmLanguage.json",
+        "injectTo": ["source.rust"]
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Strata",
+      "properties": {
+        "strata.lsp.serverPath": {
+          "type": "string",
+          "default": "strata-lsp",
+          "description": "Path to the strata-lsp binary"
+        },
+        "strata.tailwind.autocomplete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable in-memory Tailwind CSS JIT autocomplete"
+        }
+      }
+    }
+  }
+}

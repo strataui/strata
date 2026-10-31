@@ -1,0 +1,96 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Strata RSX",
+  "scopeName": "source.strata.rsx",
+  "patterns": [
+    { "include": "#rsx-macro" },
+    { "include": "#tags" },
+    { "include": "#comments" }
+  ],
+  "repository": {
+    "rsx-macro": {
+      "begin": "\\b(rsx!)\\s*(\\{)",
+      "beginCaptures": {
+        "1": { "name": "keyword.other.macro.rust" },
+        "2": { "name": "punctuation.section.block.rust" }
+      },
+      "end": "(\\})",
+      "endCaptures": {
+        "1": { "name": "punctuation.section.block.rust" }
+      },
+      "patterns": [
+        { "include": "#tags" },
+        { "include": "#comments" },
+        { "include": "#interpolations" }
+      ]
+    },
+    "tags": {
+      "patterns": [
+        {
+          "name": "meta.tag.strata.rsx",
+          "begin": "(<)(/?)([a-zA-Z_][a-zA-Z0-9_\\-:]*)",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.tag.begin.rsx" },
+            "2": { "name": "punctuation.definition.tag.slash.rsx" },
+            "3": { "name": "entity.name.tag.rsx" }
+          },
+          "end": "(/?>)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.tag.end.rsx" }
+          },
+          "patterns": [
+            { "include": "#attributes" },
+            { "include": "#comments" }
+          ]
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "entity.other.attribute-name.rsx",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_\\-:]*)(?=\\s*(=|/?>|\\s))"
+        },
+        {
+          "name": "string.quoted.double.rsx",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "include": "#tailwind-classes" }
+          ]
+        },
+        { "include": "#interpolations" }
+      ]
+    },
+    "tailwind-classes": {
+      "patterns": [
+        {
+          "name": "support.class.tailwind.rsx",
+          "match": "\\b([a-zA-Z0-9_\\-:#\\[\\]]+)"
+        }
+      ]
+    },
+    "interpolations": {
+      "begin": "(\\{)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.section.embedded.begin.rust" }
+      },
+      "end": "(\\})",
+      "endCaptures": {
+        "1": { "name": "punctuation.section.embedded.end.rust" }
+      },
+      "patterns": [
+        { "include": "source.rust" }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.rsx",
+          "begin": "\\{/\\*",
+          "end": "\\*/\\}"
+        }
+      ]
+    }
+  }
+}

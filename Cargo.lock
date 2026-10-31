@@ -113,11 +113,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata_lsp"
+version = "0.1.0"
+dependencies = [
+ "strata_js",
+ "strata_primitives",
+ "strata_style",
+ "strata_ui",
+]
+
+[[package]]
 name = "strata_macro"
 version = "0.1.0"
 dependencies = [
  "strata_dom",
  "strata_js",
+]
+
+[[package]]
+name = "strata_mdbook"
+version = "0.1.0"
+dependencies = [
+ "strata_codegen_js",
+ "strata_js",
+ "strata_style",
 ]
 
 [[package]]

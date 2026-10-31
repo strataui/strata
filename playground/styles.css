@@ -1,0 +1,57 @@
+/* Strata Playground Enterprise Dark Theme */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --bg-canvas: #08090a;
+    --bg-surface-1: #0f1012;
+    --bg-surface-2: #15171a;
+    --bg-surface-3: #1c1e22;
+
+    --border-subtle: rgba(255, 255, 255, 0.07);
+    --border-hover: rgba(255, 255, 255, 0.16);
+
+    --accent-primary: #5e6ad2;
+    --accent-cyan: #38bdf8;
+    --accent-emerald: #10b981;
+    --accent-amber: #f59e0b;
+
+    --text-primary: #f7f8f8;
+    --text-secondary: #a1a1aa;
+    --text-muted: #71717a;
+}
+
+body {
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: #08090a;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #1c1e22;
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #27272a;
+}
+
+textarea#codeEditor {
+    tab-size: 4;
+    white-space: pre;
+    line-height: 1.6;
+}

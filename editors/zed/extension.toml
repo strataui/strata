@@ -1,0 +1,17 @@
+id = "strata"
+name = "Strata"
+version = "0.1.0"
+schema_version = 1
+authors = ["larvance <64753457+larvance@users.noreply.github.com>"]
+description = "Strata Language Server Protocol and RSX integration for Zed"
+repository = "https://github.com/larvance/strata"
+
+[grammars.strata]
+repository = "https://github.com/larvance/strata"
+commit = "HEAD"
+path = "editors/tree-sitter-strata"
+
+[language_servers.strata-lsp]
+name = "strata-lsp"
+language = "rust"
+command = "strata-lsp"

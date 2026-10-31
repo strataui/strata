@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Strata Studio: In-Browser Live RSX & Tailwind Playground</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="bg-[#08090a] text-[#f7f8f8] font-mono h-screen w-screen flex flex-col overflow-hidden select-none">
+    <!-- Top Global Header -->
+    <header class="h-14 px-6 bg-[#08090a] border-b border-[rgba(255,255,255,0.07)] flex items-center justify-between z-20">
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-sm bg-[#5e6ad2]"></span>
+                <span class="font-bold text-sm tracking-wider text-[#f7f8f8]">STRATA PLAYGROUND.</span>
+            </div>
+            <span class="text-[#71717a]">//</span>
+            <span class="text-xs text-[#a1a1aa]">Pure Rust Engine · Dual Web Compilation Engine</span>
+        </div>
+
+        <div class="flex items-center gap-3">
+            <select id="templateSelect" class="px-3 py-1.5 rounded bg-[#0f1012] border border-[rgba(255,255,255,0.15)] text-xs text-[#f7f8f8] focus:outline-none focus:border-[#38bdf8]">
+                <option value="counter">Template: Reactive Signal Counter</option>
+                <option value="saas">Template: SaaS Infrastructure Portal</option>
+                <option value="horizon">Template: Horizon C2 Drone Telemetry</option>
+                <option value="waveform">Template: IEEE Logic Waveform Analyzer</option>
+            </select>
+
+            <button id="runBtn" class="px-3 py-1.5 rounded bg-[#10b981]/20 hover:bg-[#10b981]/30 text-[#10b981] border border-[#10b981]/40 text-xs font-bold transition-colors">
+                › RUN (Ctrl+Enter)
+            </button>
+
+            <button id="exportBtn" class="px-3 py-1.5 rounded bg-[#5e6ad2]/20 hover:bg-[#5e6ad2]/30 text-[#5e6ad2] border border-[#5e6ad2]/40 text-xs font-bold transition-colors">
+                EXPORT PROJECT
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Workspace Split Pane -->
+    <main class="flex-1 flex overflow-hidden">
+        <!-- Left Pane: Code Editor -->
+        <section class="w-1/2 h-full flex flex-col border-r border-[rgba(255,255,255,0.07)] bg-[#0a0b0e]">
+            <div class="h-9 px-4 bg-[#0f1012] border-b border-[rgba(255,255,255,0.07)] flex items-center justify-between text-xs text-[#71717a]">
+                <span>src/main.rs (Declarative RSX)</span>
+                <span class="text-[#38bdf8]">LSP 3.17 Active · 0 Errors</span>
+            </div>
+            <textarea id="codeEditor" spellcheck="false" class="flex-1 p-4 bg-transparent text-[#f7f8f8] font-mono text-xs leading-relaxed resize-none focus:outline-none select-text"></textarea>
+        </section>
+
+        <!-- Right Pane: Live Reactive Preview Canvas -->
+        <section class="w-1/2 h-full flex flex-col bg-[#08090a]">
+            <div class="h-9 px-4 bg-[#0f1012] border-b border-[rgba(255,255,255,0.07)] flex items-center justify-between text-xs text-[#71717a]">
+                <div class="flex items-center gap-3">
+                    <span class="w-2 h-2 rounded-full bg-[#10b981]"></span>
+                    <span class="text-[#f7f8f8] font-semibold">Live Preview Canvas</span>
+                </div>
+                <div class="flex items-center gap-4 text-[11px]">
+                    <span class="text-[#10b981]">120 FPS PRESENTATION</span>
+                    <span>SUB-MS RECONCILE</span>
+                </div>
+            </div>
+
+            <div class="flex-1 p-6 flex items-center justify-center overflow-auto bg-[#090a0d]">
+                <div id="previewContainer" class="w-full h-full rounded-lg border border-[rgba(255,255,255,0.08)] bg-[#08090a] overflow-hidden flex flex-col relative shadow-2xl">
+                    <!-- Dynamic Component Render Target -->
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Bottom Status Bar -->
+    <footer class="h-8 px-6 bg-[#08090a] border-t border-[rgba(255,255,255,0.07)] flex items-center justify-between text-[11px] text-[#71717a]">
+        <div class="flex items-center gap-4">
+            <span>▲ STRATA WEB ENGINE</span>
+            <span>·</span>
+            <span>MEMORY: 1.8 MB</span>
+            <span>·</span>
+            <span>REACTIVE DAG: 0 CYCLES</span>
+        </div>
+        <div>
+            <span>Press Shift+Tab for Tailwind Autocomplete</span>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+[package]
+name = "strata_lsp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Strata Language Server Protocol (LSP 3.17) implementation in pure Rust"
+
+[[bin]]
+name = "strata-lsp"
+path = "src/main.rs"
+
+[lib]
+name = "strata_lsp"
+path = "src/lib.rs"
+
+[dependencies]
+strata_style = { path = "../strata_style" }
+strata_ui = { path = "../strata_ui" }
+strata_primitives = { path = "../strata_primitives" }
+strata_js = { path = "../strata_js" }
