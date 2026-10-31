@@ -3,6 +3,7 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use crate::args::{BuildTarget, TemplateKind};
+use crate::prompt::{ConfirmPrompt, SelectPrompt, Terminal, TextPrompt};
 
 /// Configuration options selected via the interactive setup wizard.
 #[derive(Debug, Clone)]
@@ -22,11 +23,17 @@ pub struct ProjectWizard;
 impl ProjectWizard {
     /// Runs the interactive project setup wizard using standard input/output.
     pub fn prompt_interactive(base_dir: &Path) -> Result<WizardConfig, String> {
+        let is_interactive = Terminal::is_interactive();
+        let _raw_guard = if is_interactive {
+            Terminal::enable_raw_mode()
+        } else {
+            None
+        };
         let stdin = std::io::stdin();
         let mut reader = stdin.lock();
         let stdout = std::io::stdout();
         let mut writer = stdout.lock();
-        Self::prompt_with_io(&mut reader, &mut writer, base_dir)
+        Self::prompt_impl(&mut reader, &mut writer, base_dir, is_interactive)
     }
 
     /// Parameterized interactive prompt taking generic reader/writer for determinism in unit tests.
@@ -34,6 +41,16 @@ impl ProjectWizard {
         reader: &mut R,
         writer: &mut W,
         base_dir: &Path,
+    ) -> Result<WizardConfig, String> {
+        Self::prompt_impl(reader, writer, base_dir, false)
+    }
+
+    /// Internal parameterized prompt implementation supporting both interactive TTY and stream execution.
+    pub fn prompt_impl<R: BufRead, W: Write>(
+        reader: &mut R,
+        writer: &mut W,
+        base_dir: &Path,
+        is_interactive: bool,
     ) -> Result<WizardConfig, String> {
         writeln!(
             writer,
@@ -47,135 +64,82 @@ impl ProjectWizard {
         .map_err(|e| e.to_string())?;
 
         // 1. Project Name
-        write!(
-            writer,
-            "\x1b[1;36m?\x1b[0m \x1b[1mWhat is your project named?\x1b[0m \x1b[90m›\x1b[0m \x1b[90m(strata-app)\x1b[0m "
-        )
-        .map_err(|e| e.to_string())?;
-        writer.flush().map_err(|e| e.to_string())?;
-        let mut name_input = String::new();
-        reader.read_line(&mut name_input).map_err(|e| e.to_string())?;
-        let mut name = name_input.trim().to_string();
-        if name.is_empty() {
-            name = "strata-app".to_string();
-        }
-
-        // Validate project name syntax (only alphanumeric, hyphens, underscores)
-        if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-            return Err(format!(
-                "Invalid project name '{}'. Use only letters, numbers, hyphens, and underscores.",
-                name
-            ));
-        }
+        let name = TextPrompt::new("What is your project named?")
+            .with_default("strata-app")
+            .with_validator(|n| {
+                if !n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                    Err(format!(
+                        "Invalid project name '{}'. Use only letters, numbers, hyphens, and underscores.",
+                        n
+                    ))
+                } else {
+                    Ok(())
+                }
+            })
+            .run(reader, writer, is_interactive)?;
 
         // 2. Select Template
-        writeln!(
-            writer,
-            "\n\x1b[1;36m?\x1b[0m \x1b[1mWhich template would you like to start with?\x1b[0m"
-        )
-        .map_err(|e| e.to_string())?;
-        writeln!(
-            writer,
-            "  \x1b[36m1)\x1b[0m Blank Canvas       \x1b[90m(Minimal zero-dependency reactive canvas)\x1b[0m"
-        )
-        .map_err(|e| e.to_string())?;
-        writeln!(
-            writer,
-            "  \x1b[36m2)\x1b[0m SaaS Dashboard     \x1b[90m(AI Cloud & telemetry infrastructure portal)\x1b[0m"
-        )
-        .map_err(|e| e.to_string())?;
-        writeln!(
-            writer,
-            "  \x1b[36m3)\x1b[0m E-Commerce         \x1b[90m(Storefront catalog, cart drawer & checkout)\x1b[0m"
-        )
-        .map_err(|e| e.to_string())?;
-        writeln!(
-            writer,
-            "  \x1b[36m4)\x1b[0m Creative Studio    \x1b[90m(Vector canvas & node properties editor)\x1b[0m"
-        )
-        .map_err(|e| e.to_string())?;
-        write!(writer, "  \x1b[90m› Enter choice [1-4] (default: 1):\x1b[0m ")
-            .map_err(|e| e.to_string())?;
-        writer.flush().map_err(|e| e.to_string())?;
-
-        let mut tpl_input = String::new();
-        reader.read_line(&mut tpl_input).map_err(|e| e.to_string())?;
-        let template = match tpl_input.trim() {
-            "2" | "saas" => TemplateKind::Saas,
-            "3" | "ecommerce" | "commerce" => TemplateKind::Ecommerce,
-            "4" | "studio" | "creative" => TemplateKind::Studio,
-            _ => TemplateKind::Blank,
-        };
+        let template = SelectPrompt::new("Which template would you like to start with?")
+            .item(
+                TemplateKind::Blank,
+                "Blank Canvas",
+                Some("Minimal zero-dependency reactive canvas"),
+            )
+            .item(
+                TemplateKind::Saas,
+                "SaaS Dashboard",
+                Some("AI Cloud & telemetry infrastructure portal"),
+            )
+            .item(
+                TemplateKind::Ecommerce,
+                "E-Commerce",
+                Some("Storefront catalog, cart drawer & checkout"),
+            )
+            .item(
+                TemplateKind::Studio,
+                "Creative Studio",
+                Some("Vector canvas & node properties editor"),
+            )
+            .with_default_index(0)
+            .run(reader, writer, is_interactive)?;
 
         // 3. Select Target Platform
-        writeln!(
-            writer,
-            "\n\x1b[1;36m?\x1b[0m \x1b[1mWhich target platform do you want to target?\x1b[0m"
-        )
-        .map_err(|e| e.to_string())?;
-        writeln!(
-            writer,
-            "  \x1b[36m1)\x1b[0m Desktop            \x1b[90m(Native Vulkan / Metal / DirectX hardware swapchain)\x1b[0m"
-        )
-        .map_err(|e| e.to_string())?;
-        writeln!(
-            writer,
-            "  \x1b[36m2)\x1b[0m Web                \x1b[90m(Dual WebAssembly canvas + pure JS ESM runtime)\x1b[0m"
-        )
-        .map_err(|e| e.to_string())?;
-        writeln!(
-            writer,
-            "  \x1b[36m3)\x1b[0m Mobile             \x1b[90m(Android Vulkan + iOS Metal NDK runtime)\x1b[0m"
-        )
-        .map_err(|e| e.to_string())?;
-        writeln!(
-            writer,
-            "  \x1b[36m4)\x1b[0m Universal          \x1b[90m(All platform targets)\x1b[0m"
-        )
-        .map_err(|e| e.to_string())?;
-        write!(writer, "  \x1b[90m› Enter choice [1-4] (default: 1):\x1b[0m ")
-            .map_err(|e| e.to_string())?;
-        writer.flush().map_err(|e| e.to_string())?;
-
-        let mut target_input = String::new();
-        reader.read_line(&mut target_input).map_err(|e| e.to_string())?;
-        let target = match target_input.trim() {
-            "2" | "web" => BuildTarget::WebWasm,
-            "3" | "mobile" => BuildTarget::Android,
-            "4" | "universal" => BuildTarget::Desktop,
-            _ => BuildTarget::Desktop,
-        };
+        let target = SelectPrompt::new("Which target platform do you want to target?")
+            .item(
+                BuildTarget::Desktop,
+                "Desktop",
+                Some("Native Vulkan / Metal / DirectX hardware swapchain"),
+            )
+            .item(
+                BuildTarget::WebWasm,
+                "Web",
+                Some("Dual WebAssembly canvas + pure JS ESM runtime"),
+            )
+            .item(
+                BuildTarget::Android,
+                "Mobile",
+                Some("Android Vulkan + iOS Metal NDK runtime"),
+            )
+            .item(
+                BuildTarget::Desktop,
+                "Universal",
+                Some("All platform targets"),
+            )
+            .with_default_index(0)
+            .run(reader, writer, is_interactive)?;
 
         // 4. Optional Add-ons
-        write!(
-            writer,
-            "\n\x1b[1;36m?\x1b[0m \x1b[1mWould you like to use Tailwind CSS?\x1b[0m \x1b[90m› (Y/n)\x1b[0m "
-        )
-        .map_err(|e| e.to_string())?;
-        writer.flush().map_err(|e| e.to_string())?;
-        let mut tw_input = String::new();
-        reader.read_line(&mut tw_input).map_err(|e| e.to_string())?;
-        let enable_tailwind = !tw_input.trim().eq_ignore_ascii_case("n");
+        let enable_tailwind = ConfirmPrompt::new("Would you like to use Tailwind CSS?")
+            .with_default(true)
+            .run(reader, writer, is_interactive)?;
 
-        write!(
-            writer,
-            "\n\x1b[1;36m?\x1b[0m \x1b[1mInclude 3D Viewport & PBR shaders?\x1b[0m \x1b[90m› (Y/n)\x1b[0m "
-        )
-        .map_err(|e| e.to_string())?;
-        writer.flush().map_err(|e| e.to_string())?;
-        let mut c3d_input = String::new();
-        reader.read_line(&mut c3d_input).map_err(|e| e.to_string())?;
-        let enable_canvas_3d = !c3d_input.trim().eq_ignore_ascii_case("n");
+        let enable_canvas_3d = ConfirmPrompt::new("Include 3D Viewport & PBR shaders?")
+            .with_default(true)
+            .run(reader, writer, is_interactive)?;
 
-        write!(
-            writer,
-            "\n\x1b[1;36m?\x1b[0m \x1b[1mInclude persistent Bitcask storage?\x1b[0m \x1b[90m› (Y/n)\x1b[0m "
-        )
-        .map_err(|e| e.to_string())?;
-        writer.flush().map_err(|e| e.to_string())?;
-        let mut store_input = String::new();
-        reader.read_line(&mut store_input).map_err(|e| e.to_string())?;
-        let enable_bitcask_storage = !store_input.trim().eq_ignore_ascii_case("n");
+        let enable_bitcask_storage = ConfirmPrompt::new("Include persistent Bitcask storage?")
+            .with_default(true)
+            .run(reader, writer, is_interactive)?;
 
         writeln!(
             writer,

@@ -1,0 +1,824 @@
+//! Reusable, zero-dependency TUI prompt primitives for the Strata CLI.
+//!
+//! Provides interactive terminal prompts with:
+//! - Terminal raw mode and ANSI escape sequence control.
+//! - Arrow key (Up/Down) & Vim key (j/k) navigation.
+//! - Dynamic in-place line clearing and prompt collapsing (Next.js / Clack style).
+//! - Non-TTY fallback for deterministic streaming, pipes, and automated unit testing.
+
+use std::io::{BufRead, Read, Write};
+
+#[cfg(unix)]
+mod sys {
+    extern "C" {
+        pub fn isatty(fd: i32) -> i32;
+        pub fn tcgetattr(fd: i32, termios_p: *mut Termios) -> i32;
+        pub fn tcsetattr(fd: i32, optional_actions: i32, termios_p: *const Termios) -> i32;
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Termios {
+        pub c_iflag: u32,
+        pub c_oflag: u32,
+        pub c_cflag: u32,
+        pub c_lflag: u32,
+        pub c_line: u8,
+        pub c_cc: [u8; 32],
+        pub c_ispeed: u32,
+        pub c_ospeed: u32,
+    }
+
+    pub const TCSANOW: i32 = 0;
+    pub const ICANON: u32 = 0o000002;
+    pub const ECHO: u32 = 0o000010;
+}
+
+/// RAII Guard that puts standard input in raw mode and restores canonical mode on drop.
+pub struct RawModeGuard {
+    #[cfg(unix)]
+    orig_termios: sys::Termios,
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        unsafe {
+            sys::tcsetattr(0, sys::TCSANOW, &self.orig_termios);
+        }
+        // Always restore cursor visibility on drop
+        let _ = std::io::stdout().write_all(b"\x1b[?25h");
+        let _ = std::io::stdout().flush();
+    }
+}
+
+/// Terminal helper methods for TUI prompt interactions.
+pub struct Terminal;
+
+impl Terminal {
+    /// Returns true if both standard input and standard output are connected to a TTY.
+    pub fn is_interactive() -> bool {
+        #[cfg(unix)]
+        unsafe {
+            sys::isatty(0) != 0 && sys::isatty(1) != 0
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+
+    /// Attempts to enable terminal raw mode. Returns a guard that restores canonical mode on drop.
+    pub fn enable_raw_mode() -> Option<RawModeGuard> {
+        #[cfg(unix)]
+        unsafe {
+            if sys::isatty(0) == 0 {
+                return None;
+            }
+            let mut orig: sys::Termios = std::mem::zeroed();
+            if sys::tcgetattr(0, &mut orig) != 0 {
+                return None;
+            }
+            let mut raw = orig;
+            // Disable canonical mode and local echo, keep ISIG for Ctrl-C
+            raw.c_lflag &= !(sys::ICANON | sys::ECHO);
+            // Minimum number of characters for noncanonical read
+            raw.c_cc[6] = 1; // VMIN
+            raw.c_cc[5] = 0; // VTIME
+            if sys::tcsetattr(0, sys::TCSANOW, &raw) != 0 {
+                return None;
+            }
+            Some(RawModeGuard { orig_termios: orig })
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+}
+
+/// Represents a parsed keyboard event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Key {
+    Char(char),
+    Up,
+    Down,
+    Left,
+    Right,
+    Enter,
+    Backspace,
+    Tab,
+    Esc,
+    Unknown,
+}
+
+/// Reads a single key event from a reader.
+pub fn read_key<R: Read>(reader: &mut R) -> std::io::Result<Option<Key>> {
+    let mut buf = [0u8; 1];
+    let n = match reader.read(&mut buf) {
+        Ok(0) => return Ok(None),
+        Ok(n) => n,
+        Err(e) => return Err(e),
+    };
+    if n == 0 {
+        return Ok(None);
+    }
+    match buf[0] {
+        b'\r' | b'\n' => Ok(Some(Key::Enter)),
+        b'\x7f' | b'\x08' => Ok(Some(Key::Backspace)),
+        b'\t' => Ok(Some(Key::Tab)),
+        b'\x1b' => {
+            let mut seq = [0u8; 2];
+            match reader.read(&mut seq[0..1]) {
+                Ok(1) if seq[0] == b'[' => match reader.read(&mut seq[1..2]) {
+                    Ok(1) => match seq[1] {
+                        b'A' => Ok(Some(Key::Up)),
+                        b'B' => Ok(Some(Key::Down)),
+                        b'C' => Ok(Some(Key::Right)),
+                        b'D' => Ok(Some(Key::Left)),
+                        b'H' => Ok(Some(Key::Up)),
+                        b'F' => Ok(Some(Key::Down)),
+                        b'3' => {
+                            let mut tilde = [0u8; 1];
+                            let _ = reader.read(&mut tilde);
+                            Ok(Some(Key::Backspace))
+                        }
+                        _ => Ok(Some(Key::Unknown)),
+                    },
+                    _ => Ok(Some(Key::Esc)),
+                },
+                _ => Ok(Some(Key::Esc)),
+            }
+        }
+        c if c.is_ascii() => Ok(Some(Key::Char(c as char))),
+        _ => Ok(Some(Key::Unknown)),
+    }
+}
+
+/// Visual theme and design constants for Strata CLI prompts.
+pub struct PromptTheme;
+
+impl PromptTheme {
+    pub const SYMBOL_QUESTION: &'static str = "?";
+    pub const SYMBOL_SUCCESS: &'static str = "√";
+    pub const SYMBOL_POINTER: &'static str = "›";
+    pub const SYMBOL_BULLET: &'static str = "•";
+    pub const SYMBOL_DELIMITER: &'static str = "›";
+    pub const SYMBOL_BANNER: &'static str = "▲";
+    pub const SYMBOL_BAR: &'static str = "─";
+
+    pub fn question_prefix() -> &'static str {
+        "\x1b[1;36m?\x1b[0m"
+    }
+
+    pub fn success_prefix() -> &'static str {
+        "\x1b[32m√\x1b[0m"
+    }
+
+    pub fn pointer() -> &'static str {
+        "\x1b[36m›\x1b[0m"
+    }
+
+    pub fn delimiter() -> &'static str {
+        "\x1b[90m›\x1b[0m"
+    }
+}
+
+/// An interactive single-line text input prompt with dynamic collapsing.
+pub struct TextPrompt {
+    pub message: String,
+    pub default: Option<String>,
+    pub validator: Option<Box<dyn Fn(&str) -> Result<(), String>>>,
+}
+
+impl TextPrompt {
+    /// Creates a new text prompt with a question message.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            default: None,
+            validator: None,
+        }
+    }
+
+    /// Sets the optional default value used when Enter is pressed on empty input.
+    pub fn with_default(mut self, default: impl Into<String>) -> Self {
+        self.default = Some(default.into());
+        self
+    }
+
+    /// Sets a validation function for input values.
+    pub fn with_validator<F>(mut self, validator: F) -> Self
+    where
+        F: Fn(&str) -> Result<(), String> + 'static,
+    {
+        self.validator = Some(Box::new(validator));
+        self
+    }
+
+    /// Executes the text prompt.
+    pub fn run<R: BufRead, W: Write>(
+        &self,
+        reader: &mut R,
+        writer: &mut W,
+        is_interactive: bool,
+    ) -> Result<String, String> {
+        if is_interactive {
+            self.run_interactive(reader, writer)
+        } else {
+            self.run_stream(reader, writer)
+        }
+    }
+
+    fn run_stream<R: BufRead, W: Write>(
+        &self,
+        reader: &mut R,
+        writer: &mut W,
+    ) -> Result<String, String> {
+        let def_str = self.default.as_deref().unwrap_or("");
+        write!(
+            writer,
+            "{} \x1b[1m{}\x1b[0m {} \x1b[90m({})\x1b[0m ",
+            PromptTheme::question_prefix(),
+            self.message,
+            PromptTheme::delimiter(),
+            def_str
+        )
+        .map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+
+        let mut line = String::new();
+        reader.read_line(&mut line).map_err(|e| e.to_string())?;
+        let trimmed = line.trim();
+        let value = if trimmed.is_empty() {
+            def_str.to_string()
+        } else {
+            trimmed.to_string()
+        };
+
+        if let Some(validator) = &self.validator {
+            validator(&value)?;
+        }
+
+        writeln!(
+            writer,
+            "{} \x1b[1m{}\x1b[0m {} \x1b[36m{}\x1b[0m",
+            PromptTheme::success_prefix(),
+            self.message,
+            PromptTheme::delimiter(),
+            value
+        )
+        .map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+
+        Ok(value)
+    }
+
+    fn run_interactive<R: Read, W: Write>(
+        &self,
+        reader: &mut R,
+        writer: &mut W,
+    ) -> Result<String, String> {
+        let def_str = self.default.as_deref().unwrap_or("");
+        let mut buffer = String::new();
+
+        loop {
+            // Render active line
+            write!(
+                writer,
+                "\r\x1b[2K{} \x1b[1m{}\x1b[0m {} ",
+                PromptTheme::question_prefix(),
+                self.message,
+                PromptTheme::delimiter()
+            )
+            .map_err(|e| e.to_string())?;
+
+            if buffer.is_empty() {
+                write!(writer, "\x1b[90m({})\x1b[0m ", def_str).map_err(|e| e.to_string())?;
+            } else {
+                write!(writer, "\x1b[36m{}\x1b[0m", buffer).map_err(|e| e.to_string())?;
+            }
+            writer.flush().map_err(|e| e.to_string())?;
+
+            match read_key(reader) {
+                Ok(Some(Key::Enter)) => {
+                    let final_val = if buffer.trim().is_empty() {
+                        def_str.to_string()
+                    } else {
+                        buffer.trim().to_string()
+                    };
+
+                    if let Some(validator) = &self.validator {
+                        if let Err(err) = validator(&final_val) {
+                            writeln!(writer, "\n\x1b[31m✕ {}\x1b[0m", err)
+                                .map_err(|e| e.to_string())?;
+                            buffer.clear();
+                            continue;
+                        }
+                    }
+
+                    // Dynamic in-place collapse
+                    write!(
+                        writer,
+                        "\r\x1b[2K{} \x1b[1m{}\x1b[0m {} \x1b[36m{}\x1b[0m\n",
+                        PromptTheme::success_prefix(),
+                        self.message,
+                        PromptTheme::delimiter(),
+                        final_val
+                    )
+                    .map_err(|e| e.to_string())?;
+                    writer.flush().map_err(|e| e.to_string())?;
+                    return Ok(final_val);
+                }
+                Ok(Some(Key::Backspace)) => {
+                    buffer.pop();
+                }
+                Ok(Some(Key::Char(c))) => {
+                    if !c.is_control() {
+                        buffer.push(c);
+                    }
+                }
+                Ok(Some(Key::Esc)) => {
+                    return Err("Input cancelled by user".to_string());
+                }
+                Ok(None) => {
+                    return Err("Unexpected EOF while reading input".to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// An individual selectable item within a `SelectPrompt`.
+#[derive(Debug, Clone)]
+pub struct SelectItem<T: Clone> {
+    pub value: T,
+    pub label: String,
+    pub description: Option<String>,
+}
+
+impl<T: Clone> SelectItem<T> {
+    /// Creates a new select item with a label.
+    pub fn new(value: T, label: impl Into<String>) -> Self {
+        Self {
+            value,
+            label: label.into(),
+            description: None,
+        }
+    }
+
+    /// Creates a new select item with a label and an explanatory description.
+    pub fn with_description(
+        value: T,
+        label: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            value,
+            label: label.into(),
+            description: Some(description.into()),
+        }
+    }
+}
+
+/// An interactive selection modal/prompt component with arrow key navigation,
+/// number jump shortcuts, and dynamic in-place question collapsing.
+pub struct SelectPrompt<T: Clone> {
+    pub message: String,
+    pub items: Vec<SelectItem<T>>,
+    pub default_index: usize,
+}
+
+impl<T: Clone> SelectPrompt<T> {
+    /// Creates a new select prompt with a question message.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            items: Vec::new(),
+            default_index: 0,
+        }
+    }
+
+    /// Appends an item to the prompt choice list.
+    pub fn item(
+        mut self,
+        value: T,
+        label: impl Into<String>,
+        description: Option<impl Into<String>>,
+    ) -> Self {
+        self.items.push(SelectItem {
+            value,
+            label: label.into(),
+            description: description.map(|d| d.into()),
+        });
+        self
+    }
+
+    /// Sets the list of items.
+    pub fn items(mut self, items: Vec<SelectItem<T>>) -> Self {
+        self.items = items;
+        self
+    }
+
+    /// Sets the initial default item index.
+    pub fn with_default_index(mut self, index: usize) -> Self {
+        self.default_index = index;
+        self
+    }
+
+    /// Executes the select prompt.
+    pub fn run<R: BufRead, W: Write>(
+        &self,
+        reader: &mut R,
+        writer: &mut W,
+        is_interactive: bool,
+    ) -> Result<T, String> {
+        if self.items.is_empty() {
+            return Err("SelectPrompt requires at least one item".to_string());
+        }
+        if is_interactive {
+            self.run_interactive(reader, writer)
+        } else {
+            self.run_stream(reader, writer)
+        }
+    }
+
+    fn run_stream<R: BufRead, W: Write>(
+        &self,
+        reader: &mut R,
+        writer: &mut W,
+    ) -> Result<T, String> {
+        let max_label_len = self.items.iter().map(|it| it.label.len()).max().unwrap_or(0);
+
+        writeln!(
+            writer,
+            "\n{} \x1b[1m{}\x1b[0m",
+            PromptTheme::question_prefix(),
+            self.message
+        )
+        .map_err(|e| e.to_string())?;
+
+        for (idx, item) in self.items.iter().enumerate() {
+            let num = idx + 1;
+            let desc_str = match &item.description {
+                Some(d) => format!(" \x1b[90m({})\x1b[0m", d),
+                None => String::new(),
+            };
+            writeln!(
+                writer,
+                "  \x1b[36m{})\x1b[0m {:width$}{}",
+                num,
+                item.label,
+                desc_str,
+                width = max_label_len + 3
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        write!(
+            writer,
+            "  \x1b[90m› Enter choice [1-{}] (default: {}):\x1b[0m ",
+            self.items.len(),
+            self.default_index + 1
+        )
+        .map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+
+        let mut line = String::new();
+        reader.read_line(&mut line).map_err(|e| e.to_string())?;
+        let trimmed = line.trim();
+
+        let chosen_idx = if trimmed.is_empty() {
+            self.default_index
+        } else if let Ok(num) = trimmed.parse::<usize>() {
+            if num >= 1 && num <= self.items.len() {
+                num - 1
+            } else {
+                self.default_index
+            }
+        } else {
+            // Try matching substring or lowercase name
+            let lower = trimmed.to_lowercase();
+            self.items
+                .iter()
+                .position(|it| it.label.to_lowercase().contains(&lower))
+                .unwrap_or(self.default_index)
+        };
+
+        let selected = &self.items[chosen_idx];
+        writeln!(
+            writer,
+            "{} \x1b[1m{}\x1b[0m {} \x1b[36m{}\x1b[0m",
+            PromptTheme::success_prefix(),
+            self.message,
+            PromptTheme::delimiter(),
+            selected.label
+        )
+        .map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+
+        Ok(selected.value.clone())
+    }
+
+    fn run_interactive<R: Read, W: Write>(
+        &self,
+        reader: &mut R,
+        writer: &mut W,
+    ) -> Result<T, String> {
+        let n = self.items.len();
+        let mut active = if self.default_index < n {
+            self.default_index
+        } else {
+            0
+        };
+        let max_label_len = self.items.iter().map(|it| it.label.len()).max().unwrap_or(0);
+
+        // Hide cursor during interactive option selection
+        write!(writer, "\x1b[?25l").map_err(|e| e.to_string())?;
+
+        // Print header question
+        writeln!(
+            writer,
+            "\n{} \x1b[1m{}\x1b[0m",
+            PromptTheme::question_prefix(),
+            self.message
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Print initial choices
+        for (i, item) in self.items.iter().enumerate() {
+            let num = i + 1;
+            let is_selected = i == active;
+            let ptr = if is_selected {
+                PromptTheme::pointer()
+            } else {
+                " "
+            };
+            let num_str = if is_selected {
+                format!("\x1b[36m{})\x1b[0m", num)
+            } else {
+                format!("\x1b[90m{})\x1b[0m", num)
+            };
+            let label_str = if is_selected {
+                format!(
+                    "\x1b[1;36m{:width$}\x1b[0m",
+                    item.label,
+                    width = max_label_len + 3
+                )
+            } else {
+                format!(
+                    "\x1b[37m{:width$}\x1b[0m",
+                    item.label,
+                    width = max_label_len + 3
+                )
+            };
+            let desc_str = match &item.description {
+                Some(d) => format!(" \x1b[90m({})\x1b[0m", d),
+                None => String::new(),
+            };
+            let nl = if i + 1 < n { "\n" } else { "" };
+            write!(
+                writer,
+                "  {} {} {}{}{}",
+                ptr, num_str, label_str, desc_str, nl
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        writer.flush().map_err(|e| e.to_string())?;
+
+        loop {
+            match read_key(reader) {
+                Ok(Some(Key::Up)) | Ok(Some(Key::Char('k'))) => {
+                    active = if active == 0 { n - 1 } else { active - 1 };
+                }
+                Ok(Some(Key::Down)) | Ok(Some(Key::Char('j'))) => {
+                    active = (active + 1) % n;
+                }
+                Ok(Some(Key::Char(c @ '1'..='9'))) => {
+                    let idx = (c as usize) - ('1' as usize);
+                    if idx < n {
+                        active = idx;
+                    }
+                }
+                Ok(Some(Key::Enter)) => {
+                    break;
+                }
+                Ok(Some(Key::Esc)) => {
+                    let _ = write!(writer, "\x1b[?25h");
+                    let _ = writer.flush();
+                    return Err("Selection cancelled by user".to_string());
+                }
+                Ok(None) => {
+                    let _ = write!(writer, "\x1b[?25h");
+                    let _ = writer.flush();
+                    return Err("Unexpected EOF while selecting item".to_string());
+                }
+                _ => continue,
+            }
+
+            // Move cursor up (n - 1) lines to start of line 1
+            if n > 1 {
+                write!(writer, "\x1b[{}A\r", n - 1).map_err(|e| e.to_string())?;
+            } else {
+                write!(writer, "\r").map_err(|e| e.to_string())?;
+            }
+
+            for (i, item) in self.items.iter().enumerate() {
+                let num = i + 1;
+                let is_selected = i == active;
+                let ptr = if is_selected {
+                    PromptTheme::pointer()
+                } else {
+                    " "
+                };
+                let num_str = if is_selected {
+                    format!("\x1b[36m{})\x1b[0m", num)
+                } else {
+                    format!("\x1b[90m{})\x1b[0m", num)
+                };
+                let label_str = if is_selected {
+                    format!(
+                        "\x1b[1;36m{:width$}\x1b[0m",
+                        item.label,
+                        width = max_label_len + 3
+                    )
+                } else {
+                    format!(
+                        "\x1b[37m{:width$}\x1b[0m",
+                        item.label,
+                        width = max_label_len + 3
+                    )
+                };
+                let desc_str = match &item.description {
+                    Some(d) => format!(" \x1b[90m({})\x1b[0m", d),
+                    None => String::new(),
+                };
+                let nl = if i + 1 < n { "\n" } else { "" };
+                write!(
+                    writer,
+                    "\x1b[2K  {} {} {}{}{}",
+                    ptr, num_str, label_str, desc_str, nl
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            writer.flush().map_err(|e| e.to_string())?;
+        }
+
+        // On Enter: Erase all option lines + prompt header line in-place
+        // Cursor is at line n. Moving up n lines reaches the question line.
+        write!(writer, "\x1b[{}A\r\x1b[J", n).map_err(|e| e.to_string())?;
+
+        // Print collapsed single line
+        let selected = &self.items[active];
+        writeln!(
+            writer,
+            "{} \x1b[1m{}\x1b[0m {} \x1b[36m{}\x1b[0m",
+            PromptTheme::success_prefix(),
+            self.message,
+            PromptTheme::delimiter(),
+            selected.label
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Restore cursor
+        write!(writer, "\x1b[?25h").map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+
+        Ok(selected.value.clone())
+    }
+}
+
+/// An interactive yes/no confirmation prompt with in-place collapsing.
+pub struct ConfirmPrompt {
+    pub message: String,
+    pub default: bool,
+}
+
+impl ConfirmPrompt {
+    /// Creates a new confirmation prompt with a question message.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            default: true,
+        }
+    }
+
+    /// Sets the default boolean choice.
+    pub fn with_default(mut self, default: bool) -> Self {
+        self.default = default;
+        self
+    }
+
+    /// Executes the confirmation prompt.
+    pub fn run<R: BufRead, W: Write>(
+        &self,
+        reader: &mut R,
+        writer: &mut W,
+        is_interactive: bool,
+    ) -> Result<bool, String> {
+        if is_interactive {
+            self.run_interactive(reader, writer)
+        } else {
+            self.run_stream(reader, writer)
+        }
+    }
+
+    fn run_stream<R: BufRead, W: Write>(
+        &self,
+        reader: &mut R,
+        writer: &mut W,
+    ) -> Result<bool, String> {
+        let hint = if self.default { "(Y/n)" } else { "(y/N)" };
+        write!(
+            writer,
+            "\n{} \x1b[1m{}\x1b[0m \x1b[90m› {}\x1b[0m ",
+            PromptTheme::question_prefix(),
+            self.message,
+            hint
+        )
+        .map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+
+        let mut line = String::new();
+        reader.read_line(&mut line).map_err(|e| e.to_string())?;
+        let trimmed = line.trim();
+
+        let val = if trimmed.is_empty() {
+            self.default
+        } else if trimmed.starts_with('n') || trimmed.starts_with('N') {
+            false
+        } else {
+            true
+        };
+
+        let val_str = if val {
+            "\x1b[32mYes\x1b[0m"
+        } else {
+            "\x1b[90mNo\x1b[0m"
+        };
+        writeln!(
+            writer,
+            "{} \x1b[1m{}\x1b[0m {} {}",
+            PromptTheme::success_prefix(),
+            self.message,
+            PromptTheme::delimiter(),
+            val_str
+        )
+        .map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+
+        Ok(val)
+    }
+
+    fn run_interactive<R: Read, W: Write>(
+        &self,
+        reader: &mut R,
+        writer: &mut W,
+    ) -> Result<bool, String> {
+        let hint = if self.default { "(Y/n)" } else { "(y/N)" };
+        write!(
+            writer,
+            "\n{} \x1b[1m{}\x1b[0m \x1b[90m› {}\x1b[0m ",
+            PromptTheme::question_prefix(),
+            self.message,
+            hint
+        )
+        .map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+
+        let chosen = loop {
+            match read_key(reader) {
+                Ok(Some(Key::Enter)) => break self.default,
+                Ok(Some(Key::Char('y' | 'Y'))) => break true,
+                Ok(Some(Key::Char('n' | 'N'))) => break false,
+                Ok(Some(Key::Esc)) => {
+                    return Err("Confirmation cancelled by user".to_string());
+                }
+                Ok(None) => {
+                    return Err("Unexpected EOF while reading confirmation".to_string());
+                }
+                _ => continue,
+            }
+        };
+
+        let val_str = if chosen {
+            "\x1b[32mYes\x1b[0m"
+        } else {
+            "\x1b[90mNo\x1b[0m"
+        };
+        // Collapse in-place
+        write!(
+            writer,
+            "\r\x1b[2K{} \x1b[1m{}\x1b[0m {} {}\n",
+            PromptTheme::success_prefix(),
+            self.message,
+            PromptTheme::delimiter(),
+            val_str
+        )
+        .map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+
+        Ok(chosen)
+    }
+}
