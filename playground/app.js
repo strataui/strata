@@ -62,45 +62,45 @@ const TEMPLATES = {
     </div>
 }`,
 
-    horizon: `rsx! {
+    workbench: `rsx! {
     <div class="flex flex-col h-full bg-[#08090a] text-[#f7f8f8] p-6 gap-4 font-mono select-none">
         <div class="flex items-center justify-between border-b border-[rgba(255,255,255,0.07)] pb-3">
             <div class="flex items-center gap-3">
                 <span class="w-2.5 h-2.5 rounded-sm bg-[#5e6ad2]"></span>
-                <span class="font-bold text-sm tracking-wider">{"HORIZON C2 // MINI HUD"}</span>
+                <span class="font-bold text-sm tracking-wider">{"DEVELOPER WORKBENCH // MULTI-PANE IDE"}</span>
             </div>
             <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-[#10b981]/20 text-[#10b981] border border-[#10b981]/40">
-                {"AUTO_WAYPOINT · ARMED"}
+                {"LSP 3.17 · READY"}
             </span>
         </div>
 
         <div class="grid grid-cols-2 gap-4 flex-1">
             <div class="p-4 rounded-lg bg-[#0f1012] border border-[rgba(255,255,255,0.07)] flex flex-col justify-between">
-                <span class="text-xs text-[#71717a] font-bold">{"6-DOF ATTITUDE DIRECTOR"}</span>
+                <span class="text-xs text-[#71717a] font-bold">{"ACTIVE EDITOR SESSIONS"}</span>
                 <div class="flex flex-col items-center justify-center my-4">
-                    <span class="text-xs text-[#38bdf8]">{"PITCH: +2.4°  ·  ROLL: -1.2°"}</span>
-                    <span class="text-xl font-bold text-white mt-1">{"YAW: 184.5°"}</span>
+                    <span class="text-xs text-[#38bdf8]">{"main.rs  ·  lib.rs  ·  types.rs"}</span>
+                    <span class="text-xl font-bold text-white mt-1">{"0 ERRORS · 0 WARNINGS"}</span>
                 </div>
                 <div class="text-[10px] text-[#a1a1aa] flex justify-between">
-                    <span>{"IAS: 35.8 KT"}</span>
-                    <span class="text-[#10b981]">{"ALT: 142.8 M"}</span>
+                    <span>{"CPU: 0.8%"}</span>
+                    <span class="text-[#10b981]">{"MEMORY: 2.4 MB"}</span>
                 </div>
             </div>
 
             <div class="p-4 rounded-lg bg-[#0f1012] border border-[rgba(255,255,255,0.07)] flex flex-col justify-between">
-                <span class="text-xs text-[#71717a] font-bold">{"SORTIE WAYPOINT PROGRESS"}</span>
+                <span class="text-xs text-[#71717a] font-bold">{"WORKSPACE CRATE STATUS"}</span>
                 <div class="flex flex-col gap-2 my-2 text-xs">
                     <div class="flex justify-between text-[#10b981]">
-                        <span>{"WP-01 (ALPHA)"}</span>
-                        <span>{"√ REACHED"}</span>
+                        <span>{"crates/strata_lsp"}</span>
+                        <span>{"√ COMPILED"}</span>
                     </div>
-                    <div class="flex justify-between text-[#f59e0b] font-bold">
-                        <span>{"WP-02 (BRAVO)"}</span>
-                        <span>{"› EN ROUTE"}</span>
+                    <div class="flex justify-between text-[#38bdf8] font-bold">
+                        <span>{"crates/strata_build"}</span>
+                        <span>{"› WATCHING"}</span>
                     </div>
                     <div class="flex justify-between text-[#71717a]">
-                        <span>{"WP-03 (CHARLIE)"}</span>
-                        <span>{"PENDING"}</span>
+                        <span>{"crates/strata_ffi"}</span>
+                        <span>{"IDLE"}</span>
                     </div>
                 </div>
                 <span class="text-[10px] text-[#38bdf8]">{"BITCASK WAL BLACKBOX SYNCED"}</span>
@@ -119,17 +119,17 @@ const TEMPLATES = {
         <div class="flex-1 flex flex-col divide-y divide-[rgba(255,255,255,0.05)] my-2">
             <div class="py-2 flex items-center gap-4">
                 <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#f59e0b]/20 text-[#f59e0b]">{"0 D"}</span>
-                <span class="text-xs w-28 text-[#f7f8f8]">{"pwm.esc0"}</span>
+                <span class="text-xs w-28 text-[#f7f8f8]">{"spi.sclk"}</span>
                 <span class="text-[#f59e0b] text-xs font-mono">{"___|▔▔▔|___|▔▔▔|___|▔▔▔|___|▔▔▔|___|▔▔▔|___|▔▔▔|___"}</span>
             </div>
             <div class="py-2 flex items-center gap-4">
                 <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#10b981]/20 text-[#10b981]">{"1 D"}</span>
-                <span class="text-xs w-28 text-[#f7f8f8]">{"pwm.esc1"}</span>
+                <span class="text-xs w-28 text-[#f7f8f8]">{"spi.mosi"}</span>
                 <span class="text-[#10b981] text-xs font-mono">{"___|▔▔▔▔|___|▔▔▔▔|___|▔▔▔▔|___|▔▔▔▔|___|▔▔▔▔|___|"}</span>
             </div>
             <div class="py-2 flex items-center gap-4">
                 <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#d946ef]/20 text-[#d946ef]">{"B0"}</span>
-                <span class="text-xs w-28 text-[#f7f8f8]">{"can.uavcan"}</span>
+                <span class="text-xs w-28 text-[#f7f8f8]">{"i2c.sda"}</span>
                 <div class="flex gap-1 text-[10px] text-[#d946ef]">
                     <span class="px-1.5 py-0.5 rounded bg-[#d946ef]/10 border border-[#d946ef]/30">{"< 0x10FF_0140 >"}</span>
                     <span class="px-1.5 py-0.5 rounded bg-[#d946ef]/10 border border-[#d946ef]/30">{"< 0x0024_A312 >"}</span>

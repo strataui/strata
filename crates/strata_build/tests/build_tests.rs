@@ -7,13 +7,13 @@ use strata_build::{
 fn test_parse_strata_toml() {
     let toml_src = r#"
 [app]
-name = "my-robotics-app"
+name = "my-workbench-app"
 version = "2.1.0"
 template = "workbench"
-description = "Autonomous robotics platform"
+description = "Enterprise desktop developer workbench"
 
 [window]
-title = "Horizon Telemetry"
+title = "Workbench Studio"
 width = 1920
 height = 1080
 resizable = true
@@ -29,12 +29,12 @@ opt_level = "3"
 plugins = ["branding", "analytics"]
 
 [env.production]
-app.name = "my-robotics-app-prod"
-window.title = "Horizon Telemetry (Production)"
+app.name = "my-workbench-app-prod"
+window.title = "Workbench Studio (Production)"
 "#;
 
     let config = ProjectConfig::parse_toml(toml_src).expect("Failed to parse TOML");
-    assert_eq!(config.app.name, "my-robotics-app");
+    assert_eq!(config.app.name, "my-workbench-app");
     assert_eq!(config.app.version, "2.1.0");
     assert_eq!(config.app.template, "workbench");
     assert_eq!(config.window.width, 1920);
@@ -44,8 +44,8 @@ window.title = "Horizon Telemetry (Production)"
 
     // Test environment cascade
     let prod_config = config.resolve_environment("production");
-    assert_eq!(prod_config.app.name, "my-robotics-app-prod");
-    assert_eq!(prod_config.window.title, "Horizon Telemetry (Production)");
+    assert_eq!(prod_config.app.name, "my-workbench-app-prod");
+    assert_eq!(prod_config.window.title, "Workbench Studio (Production)");
 }
 
 #[test]

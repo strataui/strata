@@ -18,7 +18,7 @@ fn test_schema_tag_and_attribute_security() {
 
     // Attribute safety
     assert!(is_attribute_safe("class", "p-4 bg-[#08090a]"));
-    assert!(is_attribute_safe("action", "deploy_drone"));
+    assert!(is_attribute_safe("action", "fetch_metrics"));
     assert!(!is_attribute_safe("href", "javascript:alert(1)"));
     assert!(!is_attribute_safe("src", "data:text/html;base64,PHNjcmlwdD4="));
 
