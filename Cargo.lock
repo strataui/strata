@@ -50,6 +50,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata_a11y"
+version = "0.1.0"
+dependencies = [
+ "strata_dom",
+ "strata_primitives",
+]
+
+[[package]]
+name = "strata_agent_ui"
+version = "0.1.0"
+dependencies = [
+ "strata_dom",
+ "strata_primitives",
+]
+
+[[package]]
 name = "strata_cli"
 version = "0.1.0"
 dependencies = [
@@ -67,6 +83,13 @@ dependencies = [
  "strata_dom",
  "strata_primitives",
  "strata_style",
+]
+
+[[package]]
+name = "strata_crdt"
+version = "0.1.0"
+dependencies = [
+ "strata_primitives",
 ]
 
 [[package]]
@@ -90,6 +113,13 @@ dependencies = [
 [[package]]
 name = "strata_dom"
 version = "0.1.0"
+
+[[package]]
+name = "strata_gpu_path"
+version = "0.1.0"
+dependencies = [
+ "strata_primitives",
+]
 
 [[package]]
 name = "strata_icons"
