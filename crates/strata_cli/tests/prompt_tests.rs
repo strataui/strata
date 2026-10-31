@@ -284,11 +284,72 @@ fn test_multiselect_prompt_universal_selection() {
     let mut writer = Vec::new();
 
     let result = prompt.run(&mut reader, &mut writer, true).unwrap();
-    assert_eq!(result.len(), 4);
+    assert_eq!(result.len(), 3);
+    assert_eq!(
+        result,
+        vec![
+            BuildTarget::Desktop,
+            BuildTarget::WebWasm,
+            BuildTarget::Android
+        ]
+    );
 
     let output = String::from_utf8(writer).unwrap();
     let clean = strip_ansi(&output);
     assert!(clean.contains("√ Which target platform do you want to target? › Universal"));
     assert!(!clean.contains("Desktop, Web, Mobile, Universal"));
+}
+
+#[test]
+fn test_multiselect_unselecting_item_unselects_universal() {
+    let prompt = MultiSelectPrompt::new("Which target platform do you want to target?")
+        .item(BuildTarget::Desktop, "Desktop", None::<String>, true)
+        .item(BuildTarget::WebWasm, "Web", None::<String>, true)
+        .item(BuildTarget::Android, "Mobile", None::<String>, true)
+        .item(BuildTarget::Desktop, "Universal", None::<String>, true);
+
+    // Initial state: all selected. Cursor is at 0 (Desktop).
+    // Sequence: Down arrow (\x1b[B) to Web (index 1), Space to toggle [ ] (unselects Web and Universal), Enter (\r)
+    let input_bytes = b"\x1b[B \r";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+
+    let result = prompt.run(&mut reader, &mut writer, true).unwrap();
+    assert_eq!(result, vec![BuildTarget::Desktop, BuildTarget::Android]);
+
+    let output = String::from_utf8(writer).unwrap();
+    let clean = strip_ansi(&output);
+    assert!(clean.contains("√ Which target platform do you want to target? › Desktop, Mobile"));
+    assert!(!clean.contains("√ Which target platform do you want to target? › Universal"));
+    assert!(!clean.contains("Desktop, Mobile, Universal"));
+}
+
+#[test]
+fn test_multiselect_selecting_all_items_selects_universal() {
+    let prompt = MultiSelectPrompt::new("Which target platform do you want to target?")
+        .item(BuildTarget::Desktop, "Desktop", None::<String>, true)
+        .item(BuildTarget::WebWasm, "Web", None::<String>, true)
+        .item(BuildTarget::Android, "Mobile", None::<String>, false)
+        .item(BuildTarget::Desktop, "Universal", None::<String>, false);
+
+    // Initial: Desktop [x], Web [x], Mobile [ ], Universal [ ]
+    // Cursor at 0. Down 2 times to Mobile, Space to toggle [x] Mobile -> should automatically sync Universal to [x]
+    let input_bytes = b"\x1b[B\x1b[B \r";
+    let mut reader = Cursor::new(&input_bytes[..]);
+    let mut writer = Vec::new();
+
+    let result = prompt.run(&mut reader, &mut writer, true).unwrap();
+    assert_eq!(
+        result,
+        vec![
+            BuildTarget::Desktop,
+            BuildTarget::WebWasm,
+            BuildTarget::Android
+        ]
+    );
+
+    let output = String::from_utf8(writer).unwrap();
+    let clean = strip_ansi(&output);
+    assert!(clean.contains("√ Which target platform do you want to target? › Universal"));
 }
 

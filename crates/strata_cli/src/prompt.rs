@@ -923,6 +923,23 @@ impl<T: Clone> MultiSelectPrompt<T> {
         }
     }
 
+    fn sync_universal(items: &mut [MultiSelectItem<T>]) {
+        if let Some(univ_idx) = items
+            .iter()
+            .position(|it| it.label.eq_ignore_ascii_case("universal") || it.label.eq_ignore_ascii_case("all"))
+        {
+            let non_univ: Vec<_> = items
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| *idx != univ_idx)
+                .collect();
+            if !non_univ.is_empty() {
+                let all_non_univ_selected = non_univ.iter().all(|(_, it)| it.selected);
+                items[univ_idx].selected = all_non_univ_selected;
+            }
+        }
+    }
+
     fn run_stream<R: BufRead, W: Write>(
         &self,
         reader: &mut R,
@@ -998,6 +1015,7 @@ impl<T: Clone> MultiSelectPrompt<T> {
             for it in &mut items {
                 it.selected = false;
             }
+            let mut universal_triggered = false;
             for part in trimmed.split(|c| c == ',' || c == ' ') {
                 let part = part.trim();
                 if part.is_empty() {
@@ -1007,10 +1025,10 @@ impl<T: Clone> MultiSelectPrompt<T> {
                     if num >= 1 && num <= items.len() {
                         let idx = num - 1;
                         items[idx].selected = true;
-                        if items[idx].label.eq_ignore_ascii_case("universal") {
-                            for it in &mut items {
-                                it.selected = true;
-                            }
+                        if items[idx].label.eq_ignore_ascii_case("universal")
+                            || items[idx].label.eq_ignore_ascii_case("all")
+                        {
+                            universal_triggered = true;
                         }
                     }
                 } else {
@@ -1018,9 +1036,21 @@ impl<T: Clone> MultiSelectPrompt<T> {
                     for it in &mut items {
                         if it.label.to_lowercase().contains(&lower) {
                             it.selected = true;
+                            if it.label.eq_ignore_ascii_case("universal")
+                                || it.label.eq_ignore_ascii_case("all")
+                            {
+                                universal_triggered = true;
+                            }
                         }
                     }
                 }
+            }
+            if universal_triggered {
+                for it in &mut items {
+                    it.selected = true;
+                }
+            } else {
+                Self::sync_universal(&mut items);
             }
         }
 
@@ -1037,6 +1067,7 @@ impl<T: Clone> MultiSelectPrompt<T> {
         } else {
             selected_items
                 .iter()
+                .filter(|it| !it.label.eq_ignore_ascii_case("universal"))
                 .map(|it| it.label.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -1053,7 +1084,21 @@ impl<T: Clone> MultiSelectPrompt<T> {
         .map_err(|e| e.to_string())?;
         writer.flush().map_err(|e| e.to_string())?;
 
-        Ok(selected_items.into_iter().map(|it| it.value.clone()).collect())
+        let returned_items: Vec<_> = if is_all {
+            items
+                .iter()
+                .filter(|it| !it.label.eq_ignore_ascii_case("universal"))
+                .map(|it| it.value.clone())
+                .collect()
+        } else {
+            selected_items
+                .into_iter()
+                .filter(|it| !it.label.eq_ignore_ascii_case("universal"))
+                .map(|it| it.value.clone())
+                .collect()
+        };
+
+        Ok(returned_items)
     }
 
     fn run_interactive<R: Read, W: Write>(
@@ -1126,11 +1171,15 @@ impl<T: Clone> MultiSelectPrompt<T> {
                 }
                 Ok(Some(Key::Char(' '))) => {
                     items[cursor].selected = !items[cursor].selected;
-                    if items[cursor].label.eq_ignore_ascii_case("universal") {
+                    if items[cursor].label.eq_ignore_ascii_case("universal")
+                        || items[cursor].label.eq_ignore_ascii_case("all")
+                    {
                         let state = items[cursor].selected;
                         for it in &mut items {
                             it.selected = state;
                         }
+                    } else {
+                        Self::sync_universal(&mut items);
                     }
                 }
                 Ok(Some(Key::Char(c @ '1'..='9'))) => {
@@ -1138,11 +1187,15 @@ impl<T: Clone> MultiSelectPrompt<T> {
                     if idx < n {
                         items[idx].selected = !items[idx].selected;
                         cursor = idx;
-                        if items[idx].label.eq_ignore_ascii_case("universal") {
+                        if items[idx].label.eq_ignore_ascii_case("universal")
+                            || items[idx].label.eq_ignore_ascii_case("all")
+                        {
                             let state = items[idx].selected;
                             for it in &mut items {
                                 it.selected = state;
                             }
+                        } else {
+                            Self::sync_universal(&mut items);
                         }
                     }
                 }
@@ -1157,6 +1210,7 @@ impl<T: Clone> MultiSelectPrompt<T> {
                     let count_selected = items.iter().filter(|it| it.selected).count();
                     if count_selected == 0 && self.required {
                         items[cursor].selected = true;
+                        Self::sync_universal(&mut items);
                     }
                     break;
                 }
@@ -1203,6 +1257,7 @@ impl<T: Clone> MultiSelectPrompt<T> {
         } else {
             selected_items
                 .iter()
+                .filter(|it| !it.label.eq_ignore_ascii_case("universal"))
                 .map(|it| it.label.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -1223,7 +1278,21 @@ impl<T: Clone> MultiSelectPrompt<T> {
         write!(writer, "\x1b[?25h").map_err(|e| e.to_string())?;
         writer.flush().map_err(|e| e.to_string())?;
 
-        Ok(selected_items.into_iter().map(|it| it.value.clone()).collect())
+        let returned_items: Vec<_> = if is_all {
+            items
+                .iter()
+                .filter(|it| !it.label.eq_ignore_ascii_case("universal"))
+                .map(|it| it.value.clone())
+                .collect()
+        } else {
+            selected_items
+                .into_iter()
+                .filter(|it| !it.label.eq_ignore_ascii_case("universal"))
+                .map(|it| it.value.clone())
+                .collect()
+        };
+
+        Ok(returned_items)
     }
 }
 
