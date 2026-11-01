@@ -317,6 +317,32 @@ impl Packager {
                 fs::write(&package_path, ipa_metadata).map_err(|e| e.to_string())?;
                 generated_files.push(package_path.clone());
             }
+
+            PackageFormat::Flatpak => {
+                let manifest_path = dist_dir.join(format!("dev.strata.{}.json", app_name));
+                let manifest_content = format!(
+                    "{{\n  \"app-id\": \"dev.strata.{}\",\n  \"runtime\": \"org.freedesktop.Platform\",\n  \"runtime-version\": \"23.08\",\n  \"sdk\": \"org.freedesktop.Sdk\",\n  \"command\": \"{}\",\n  \"finish-args\": [\n    \"--share=ipc\",\n    \"--socket=wayland\",\n    \"--socket=fallback-x11\",\n    \"--device=dri\"\n  ]\n}}\n",
+                    app_name, app_name
+                );
+                fs::write(&manifest_path, manifest_content).map_err(|e| e.to_string())?;
+                generated_files.push(manifest_path);
+                fs::write(&package_path, b"FLATPAK-OSTREE-BUNDLE").map_err(|e| e.to_string())?;
+                generated_files.push(package_path.clone());
+            }
+
+            PackageFormat::Snap => {
+                let snapcraft_dir = dist_dir.join("snap");
+                fs::create_dir_all(&snapcraft_dir).map_err(|e| e.to_string())?;
+                let snapcraft_path = snapcraft_dir.join("snapcraft.yaml");
+                let snapcraft_content = format!(
+                    "name: {}\nversion: '{}'\nsummary: {}\ndescription: {}\ngrade: stable\nconfinement: strict\nbase: core22\napps:\n  {}:\n    command: usr/bin/{}\n    plugs: [x11, wayland, opengl, network]\n",
+                    app_name, app_version, window_title, app_desc, app_name, app_name
+                );
+                fs::write(&snapcraft_path, snapcraft_content).map_err(|e| e.to_string())?;
+                generated_files.push(snapcraft_path);
+                fs::write(&package_path, b"SNAP-SQUASHFS-CONTAINER").map_err(|e| e.to_string())?;
+                generated_files.push(package_path.clone());
+            }
         }
 
         Ok(PackageReport {
@@ -335,7 +361,13 @@ impl Packager {
             (BuildTarget::Windows, PackageFormat::Msi | PackageFormat::Exe) => true,
             (
                 BuildTarget::Linux,
-                PackageFormat::AppImage | PackageFormat::Deb | PackageFormat::Rpm | PackageFormat::PkgBuild | PackageFormat::TarGz,
+                PackageFormat::AppImage
+                    | PackageFormat::Deb
+                    | PackageFormat::Rpm
+                    | PackageFormat::PkgBuild
+                    | PackageFormat::TarGz
+                    | PackageFormat::Flatpak
+                    | PackageFormat::Snap,
             ) => true,
             (BuildTarget::Desktop, _) => true,
             (BuildTarget::WebWasm | BuildTarget::WebJs, PackageFormat::TarGz) => true,

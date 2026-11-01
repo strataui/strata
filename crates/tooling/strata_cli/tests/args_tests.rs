@@ -158,10 +158,17 @@ fn test_package_formats_parsing() {
         _ => panic!("Expected Package command"),
     }
 
-    // TarGz
-    let cmd = CliArgs::parse_from(&["strata", "package", "--target", "desktop", "--format", "tar.gz"]).unwrap();
+    // Flatpak
+    let cmd = CliArgs::parse_from(&["strata", "package", "--target", "linux", "--format", "flatpak"]).unwrap();
     match cmd {
-        CliCommand::Package { format, .. } => assert_eq!(format, Some(PackageFormat::TarGz)),
+        CliCommand::Package { format, .. } => assert_eq!(format, Some(PackageFormat::Flatpak)),
+        _ => panic!("Expected Package command"),
+    }
+
+    // Snap
+    let cmd = CliArgs::parse_from(&["strata", "package", "--target", "linux", "--format", "snap"]).unwrap();
+    match cmd {
+        CliCommand::Package { format, .. } => assert_eq!(format, Some(PackageFormat::Snap)),
         _ => panic!("Expected Package command"),
     }
 }

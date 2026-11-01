@@ -1,8 +1,5 @@
 use std::collections::HashMap;
-use strata_agent_ui::{
-    is_attribute_safe, is_tag_allowed, AgentActionBus, AgentPatch, AgentSchemaValidator,
-    AgentUiSandbox, TimeTravelHistory,
-};
+use strata_agent_ui::prelude::*;
 
 #[test]
 fn test_schema_tag_and_attribute_security() {
@@ -31,14 +28,14 @@ fn test_schema_tag_and_attribute_security() {
 fn test_agent_patch_json_roundtrip() {
     let mut props = HashMap::new();
     props.insert("class".to_string(), "p-4 bg-[#0f1012]".to_string());
-    props.insert("action".to_string(), "tune_pid".to_string());
+    props.insert("action".to_string(), "scale_cluster".to_string());
 
     let patch = AgentPatch::InsertNode {
         node_id: 101,
         parent_id: Some(1),
         tag: "button".to_string(),
         props,
-        text: Some("Launch Mission".to_string()),
+        text: Some("Deploy Cluster".to_string()),
     };
 
     let json = patch.to_json();
@@ -48,8 +45,8 @@ fn test_agent_patch_json_roundtrip() {
         assert_eq!(node_id, 101);
         assert_eq!(parent_id, Some(1));
         assert_eq!(tag, "button");
-        assert_eq!(text.as_deref(), Some("Launch Mission"));
-        assert_eq!(parsed_props.get("action").map(|s| s.as_str()), Some("tune_pid"));
+        assert_eq!(text.as_deref(), Some("Deploy Cluster"));
+        assert_eq!(parsed_props.get("action").map(|s| s.as_str()), Some("scale_cluster"));
     } else {
         panic!("Parsed wrong patch variant");
     }
@@ -103,7 +100,7 @@ fn test_sandboxed_generative_ui_streaming() {
         parent_id: Some(1),
         tag: "script".to_string(),
         props: HashMap::new(),
-        text: Some("eval('evil')".to_string()),
+        text: Some("evil()".to_string()),
     };
     assert!(sandbox.apply_patch(bad_patch).is_err());
 }
@@ -112,19 +109,19 @@ fn test_sandboxed_generative_ui_streaming() {
 fn test_agent_action_bus() {
     let mut bus = AgentActionBus::new();
 
-    bus.register("calculate_trajectory", |_action, params| {
-        let waypoints = params.get("waypoints").cloned().unwrap_or_else(|| "0".to_string());
-        Ok(format!("Trajectory planned for {} waypoints", waypoints))
+    bus.register("scale_cluster", |_action, params| {
+        let nodes = params.get("nodes").cloned().unwrap_or_else(|| "0".to_string());
+        Ok(format!("Cluster scaled to {} nodes", nodes))
     });
 
-    assert!(bus.has_action("calculate_trajectory"));
+    assert!(bus.has_action("scale_cluster"));
     assert!(!bus.has_action("unknown_action"));
 
     let mut params = HashMap::new();
-    params.insert("waypoints".to_string(), "12".to_string());
+    params.insert("nodes".to_string(), "12".to_string());
 
-    let res = bus.dispatch("calculate_trajectory", &params).unwrap();
-    assert_eq!(res, "Trajectory planned for 12 waypoints");
+    let res = bus.dispatch("scale_cluster", &params).unwrap();
+    assert_eq!(res, "Cluster scaled to 12 nodes");
 }
 
 #[test]
@@ -158,4 +155,95 @@ fn test_time_travel_history() {
     // Redo to revision 2
     let redone = history.redo().expect("Redo failed");
     assert!(redone.render_to_html().contains("Version 2"));
+}
+
+#[test]
+fn test_streaming_ui_parser_chunked_sse() {
+    let mut parser = StreamingUiParser::new();
+    let mut sandbox = AgentUiSandbox::new();
+
+    // Chunk 1: Incomplete line
+    let chunk1 = "data: {\"op\":\"insert\",\"id\":1,\"parent\":null,\"tag\":\"card\",\"props\":";
+    let p1 = parser.feed_chunk(chunk1);
+    assert!(p1.is_empty());
+    assert!(parser.has_buffered_data());
+
+    // Chunk 2: Completes line 1 and sends line 2
+    let chunk2 = "{\"class\":\"bg-slate-900\"},\"text\":null}\ndata: {\"op\":\"insert\",\"id\":2,\"parent\":1,\"tag\":\"button\",\"props\":{},\"text\":\"Deploy\"}\n";
+    let p2 = parser.feed_chunk(chunk2);
+    assert_eq!(p2.len(), 2);
+    assert!(!parser.has_buffered_data());
+
+    for patch in p2 {
+        assert!(sandbox.apply_patch(patch).is_ok());
+    }
+
+    // Chunk 3: SSE with keep-alive comments and [DONE]
+    let chunk3 = ": keep-alive\ndata: {\"op\":\"text\",\"id\":2,\"text\":\"Deploying...\"}\ndata: [DONE]\n";
+    let applied = parser.feed_chunk_and_apply(chunk3, &mut sandbox).expect("Apply should succeed");
+    assert_eq!(applied, 1);
+    assert_eq!(parser.total_patches(), 3);
+
+    let html = sandbox.render_to_html();
+    assert!(html.contains("<card class=\"bg-slate-900\"><button>Deploying...</button></card>"));
+}
+
+#[test]
+fn test_conversational_widgets_render_and_state() {
+    // 1. Approval Widget
+    let mut approval = ApprovalWidget::new(
+        "app_1",
+        "Rollout Production Canary",
+        "Approves rolling out canary release to 10% of cluster traffic.",
+        "execute_canary_rollout",
+    ).with_param("traffic_pct", "10%")
+     .with_param("region", "us-east-1");
+
+    assert_eq!(approval.status, ApprovalStatus::Pending);
+    let bp_pending = approval.render_blueprint();
+    if let strata_dom::NodeBlueprint::Element { tag, children, .. } = bp_pending {
+        assert_eq!(tag, strata_dom::Tag::Div);
+        assert!(!children.is_empty());
+    }
+
+    approval.approve();
+    assert_eq!(approval.status, ApprovalStatus::Approved);
+
+    // 2. Form Widget
+    let mut form = FormWidget::new("form_1", "Cluster Provisioning Parameters");
+    form.add_field(FormField::new("cluster_name", "Cluster Name", FormFieldType::Text).required());
+    form.add_field(FormField::new("node_count", "Initial Node Count", FormFieldType::Number));
+    form.add_field(FormField::new("region", "Cloud Region", FormFieldType::Select(vec!["us-east-1".into(), "eu-central-1".into()])));
+    form.set_value("cluster_name", "prod-telemetry-01");
+    let bp_form = form.render_blueprint();
+    if let strata_dom::NodeBlueprint::Element { tag, .. } = bp_form {
+        assert_eq!(tag, strata_dom::Tag::Form);
+    }
+
+    // 3. Telemetry Card
+    let card = TelemetryCard::new("tc_1", "Ingestion Throughput", "2.4M")
+        .with_unit("req/s")
+        .with_trend(14.2)
+        .with_status(MetricStatus::Optimal);
+    let bp_card = card.render_blueprint();
+    if let strata_dom::NodeBlueprint::Element { tag, .. } = bp_card {
+        assert_eq!(tag, strata_dom::Tag::Div);
+    }
+
+    // 4. Step Progress Widget
+    let mut progress = StepProgressWidget::new("sp_1", "Blue-Green Deployment Sequence");
+    let s1 = progress.add_step("Provision Target Subnet");
+    let s2 = progress.add_step("Spin Up Green Replica Pool");
+    let s3 = progress.add_step("Run Health Probes & Switch Route");
+
+    progress.set_step_status(s1, StepStatus::Completed);
+    progress.set_step_status(s2, StepStatus::Running);
+    progress.set_step_status(s3, StepStatus::Pending);
+
+    let bp_progress = progress.render_blueprint();
+    if let strata_dom::NodeBlueprint::Element { tag, children, .. } = bp_progress {
+        assert_eq!(tag, strata_dom::Tag::Div);
+        // Header + 3 steps = 4 children
+        assert_eq!(children.len(), 4);
+    }
 }

@@ -44,6 +44,24 @@ fn test_package_linux_distributions() {
     let pkgbuild_text = fs::read_to_string(&pkgbuild).unwrap();
     assert!(pkgbuild_text.contains("pkgname=strata-app"));
 
+    // 5. Flatpak (.flatpak)
+    let flatpak_report = Packager::package(BuildTarget::Desktop, Some(PackageFormat::Flatpak), &temp_dir).unwrap();
+    assert_eq!(flatpak_report.format, PackageFormat::Flatpak);
+    assert!(flatpak_report.package_path.exists());
+    let flatpak_manifest = temp_dir.join("dist/packages/dev.strata.strata-app.json");
+    assert!(flatpak_manifest.exists());
+    let manifest_text = fs::read_to_string(&flatpak_manifest).unwrap();
+    assert!(manifest_text.contains("org.freedesktop.Platform"));
+
+    // 6. Snap (.snap)
+    let snap_report = Packager::package(BuildTarget::Desktop, Some(PackageFormat::Snap), &temp_dir).unwrap();
+    assert_eq!(snap_report.format, PackageFormat::Snap);
+    assert!(snap_report.package_path.exists());
+    let snapcraft_yaml = temp_dir.join("dist/packages/snap/snapcraft.yaml");
+    assert!(snapcraft_yaml.exists());
+    let snapcraft_text = fs::read_to_string(&snapcraft_yaml).unwrap();
+    assert!(snapcraft_text.contains("confinement: strict"));
+
     let _ = fs::remove_dir_all(&temp_dir);
 }
 

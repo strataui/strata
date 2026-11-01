@@ -137,6 +137,7 @@ pub struct TrayIcon {
     pub visible: bool,
     pub click_count: usize,
     pub last_action_id: Option<u64>,
+    pub badge: Option<String>,
 }
 
 impl TrayIcon {
@@ -156,7 +157,23 @@ impl TrayIcon {
             visible: true,
             click_count: 0,
             last_action_id: None,
+            badge: None,
         }
+    }
+
+    /// Sets the notification badge text (e.g. "99+" or "NEW").
+    pub fn set_badge(&mut self, badge: Option<String>) {
+        self.badge = badge;
+    }
+
+    /// Sets the notification badge as a numeric count (or clears it if None or 0).
+    pub fn set_badge_count(&mut self, count: Option<u32>) {
+        self.badge = count.and_then(|c| if c > 0 { Some(c.to_string()) } else { None });
+    }
+
+    /// Returns current badge text if present.
+    pub fn badge(&self) -> Option<&str> {
+        self.badge.as_deref()
     }
 
     /// Sets the hover tooltip text.

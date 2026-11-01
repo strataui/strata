@@ -101,6 +101,8 @@ pub enum PackageFormat {
     Rpm,
     PkgBuild,
     TarGz,
+    Flatpak,
+    Snap,
 }
 
 impl PackageFormat {
@@ -119,8 +121,10 @@ impl PackageFormat {
             "rpm" => Ok(Self::Rpm),
             "pkgbuild" | "arch" => Ok(Self::PkgBuild),
             "tar.gz" | "targz" | "tar" => Ok(Self::TarGz),
+            "flatpak" => Ok(Self::Flatpak),
+            "snap" => Ok(Self::Snap),
             unknown => Err(format!(
-                "Invalid packaging format '{}'. Valid options: apk, aab, ipa, dmg, app, pkg, msi, exe, appimage, deb, rpm, pkgbuild, tar.gz",
+                "Invalid packaging format '{}'. Valid options: apk, aab, ipa, dmg, app, pkg, msi, exe, appimage, deb, rpm, pkgbuild, tar.gz, flatpak, snap",
                 unknown
             )),
         }
@@ -160,6 +164,8 @@ impl PackageFormat {
             Self::Rpm => "rpm",
             Self::PkgBuild => "PKGBUILD",
             Self::TarGz => "tar.gz",
+            Self::Flatpak => "flatpak",
+            Self::Snap => "snap",
         }
     }
 }

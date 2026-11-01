@@ -7,11 +7,14 @@ pub mod csd;
 pub mod events;
 pub mod raw_abi;
 pub mod surface;
+pub mod menu;
 pub mod tray;
 pub mod window;
+pub mod window_manager;
 
 pub use csd::{ControlPlacement, CsdGeometry, CsdHitZone};
 pub use events::{KeyCode, Modifiers, MouseButton, PlatformEvent, TouchPhase};
+pub use menu::{AcceleratorModifier, Menu, MenuAccelerator, MenuBar, MenuItem, MenuItemRole};
 pub use surface::{
     FramePacer, PresentError, PresentMode, RefreshRate, SoftwareSurfacePresenter, SurfaceConfig,
     SurfaceHandle, SurfacePresenter, SwapchainCompositor, SwapchainFormat,
@@ -21,6 +24,7 @@ pub use window::{
     CursorIcon, EventLoop, EventLoopControl, LivePlatformWindow, MockEventLoop, MockPlatformWindow,
     PlatformWindow, ThemeMode, WindowConfig, WindowDecoration, WindowMode,
 };
+pub use window_manager::{WindowId, WindowManager};
 
 /// Target operating system or runtime platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
