@@ -20,30 +20,24 @@ hero:
       link: https://github.com/larvance/strata
 
 features:
-  - title: Zero Chromium Architecture
+  - icon: ⚡
+    title: Zero Chromium Architecture
     details: Eliminates heavy WebViews, CEF, and V8 runtimes. Starts up in under 8ms with an idle memory footprint below 3MB.
-    icon:
-      src: /logo.svg
-  - title: Reactive Signals DAG
+  - icon: 🔄
+    title: Reactive Signals DAG
     details: Fine-grained reactivity via use_signal and use_effect. Direct node mutation without virtual DOM dirty reconciliation overhead.
-    icon:
-      src: /logo.svg
-  - title: Pixel-Perfect Layout Parity
+  - icon: 📐
+    title: Pixel-Perfect Layout Parity
     details: Spec-compliant CSS Box Model, Flexbox Level 1, and Grid Level 2 solvers with subpixel text shaping and HarfBuzz fonts.
-    icon:
-      src: /logo.svg
-  - title: Multi-Threaded Subtrees
+  - icon: 🚀
+    title: Multi-Threaded Subtrees
     details: Parallel subtree reconciliation across Rayon work-stealing threads based on the 5 Axioms of Layout Containment.
-    icon:
-      src: /logo.svg
-  - title: Analytical GPU & SDF Pipeline
+  - icon: 🎨
+    title: Analytical GPU & SDF Pipeline
     details: Direct Vulkan, Metal, Direct3D 12, and WebGPU backends with Slug-tier cubic Bezier font and curve rasterization.
-    icon:
-      src: /logo.svg
-  - title: Universal Multi-Target Engine
+  - icon: 🌐
+    title: Universal Multi-Target Engine
     details: Write once in RSX and compile to native Desktop (macOS/Win/Linux), Mobile (iOS/Android), Web (WASM/JS), and Terminal (TUI).
-    icon:
-      src: /logo.svg
 ---
 
 <div class="strata-scorecard">
@@ -152,16 +146,18 @@ pub fn TelemetryDashboard() -> View {
 
 ## Quick Installation
 
-Deploy the Strata toolchain in seconds using the standalone bootstrap installer:
+Install the Strata CLI toolchain directly via Cargo from GitHub:
 
 ```bash
-curl -fsSL https://strata.larvance.com/install.sh | sh
+cargo install --git https://github.com/larvance/strata strata_cli --locked
 ```
 
-Or install via Cargo from source:
+Or clone the repository and build from source:
 
 ```bash
-cargo install --path crates/strata_cli --locked
+git clone https://github.com/larvance/strata.git
+cd strata
+cargo install --path crates/tooling/strata_cli --locked
 ```
 
 Initialize your first production application:

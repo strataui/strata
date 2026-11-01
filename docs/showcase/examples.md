@@ -18,6 +18,8 @@ cargo run --release --example saas_dashboard
 - **Modal Dialogues & Drawers**: Focus-trapped accessible dialogs with backdrop blur transitions.
 - **Responsive Layout**: Collapsible sidebar with desktop and compact tablet breakpoints.
 
+[Read Full Technical Deep-Dive: SaaS Telemetry Dashboard](/showcase/saas-dashboard)
+
 ---
 
 ## 2. Creative Studio (`examples/creative_studio`)
@@ -33,6 +35,8 @@ cargo run --release --example creative_studio
 - **Unified 3D PBR Viewport**: Embedded `<Canvas3D>` rendering lighting, materials, and 3D mesh nodes.
 - **Dockable Property Inspectors**: Dynamic attribute controls (transforms, fill, stroke, blend modes, shadows).
 - **History & Undo/Redo**: Fast immutable state snapshots powered by generational node arenas.
+
+[Read Full Technical Deep-Dive: Creative Vector Studio](/showcase/creative-studio)
 
 ---
 
@@ -50,6 +54,8 @@ cargo run --release --example eda_studio
 - **Live Signal Inspection**: Interactive cursors displaying instantaneous circuit voltages and delta timing measurements ($\Delta t$).
 - **Schematic Canvas**: Pixel-precise grid snapping for electrical components (resistors, capacitors, transistors, logic gates).
 
+[Read Full Technical Deep-Dive: EDA & Circuit Studio](/showcase/eda-studio)
+
 ---
 
 ## 4. E-Commerce Storefront (`examples/ecommerce_storefront`)
@@ -64,6 +70,8 @@ cargo run --release --example ecommerce_storefront
 - **Instantaneous Multi-Facet Filtering**: Filters thousands of products by price, category, and availability without reflow lag.
 - **Sliding Shopping Cart Drawer**: Animated spring drawer with order total calculations.
 - **Dual Web Compilation**: Runs as a desktop binary or compiles to a 14 KB pure JavaScript ESM bundle.
+
+[Read Full Technical Deep-Dive: Apex E-Commerce Storefront](/showcase/ecommerce-storefront)
 
 ---
 

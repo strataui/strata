@@ -91,3 +91,8 @@ cd strata
 # Execute the standardized benchmark harness
 cargo run --release -p strata_benchmark
 ```
+
+---
+
+For a comprehensive comparative breakdown across cold-start latency, memory curves, layout throughput, frame reconciliation, energy telemetry, and binary footprints, read the [Comparative Framework Analysis](/benchmarks/comparative-analysis).
+
