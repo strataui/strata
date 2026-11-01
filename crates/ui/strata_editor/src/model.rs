@@ -98,4 +98,8 @@ impl Document {
     pub fn add_block(&mut self, block: BlockNode) {
         self.blocks.push(block);
     }
+
+    pub fn push(&mut self, block: BlockNode) {
+        self.blocks.push(block);
+    }
 }

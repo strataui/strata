@@ -3095,6 +3095,9 @@ dependencies = [
  "serde",
  "serde_json",
  "strata_dom",
+ "strata_primitives",
+ "strata_style",
+ "strata_web_reader",
 ]
 
 [[package]]
