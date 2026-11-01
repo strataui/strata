@@ -1,6 +1,11 @@
-//! Intrinsic text dimension measurement and greedy Unicode line breaking.
+//! Intrinsic text dimension measurement, OpenType shaping, and line breaking facade.
 
-/// Approximates intrinsic text dimensions based on character count, font size, and line height.
+use crate::typography::{
+    InlineFormattingContext, InlineLayoutOptions, InlineLayoutResult, WhiteSpaceMode,
+    VerticalAlignment,
+};
+
+/// Measures intrinsic text bounds (width, height) using subpixel typography and line breaking.
 pub fn measure_text_bounds(
     text: &str,
     font_size: f32,
@@ -11,40 +16,25 @@ pub fn measure_text_bounds(
         return (0.0, font_size * line_height_multiplier);
     }
 
-    // Average character width for typical sans-serif proportional fonts (Inter/Roboto)
-    let char_width = font_size * 0.55;
+    let ifc = InlineFormattingContext::new();
+    let explicit_lh = font_size * line_height_multiplier;
+    let options = InlineLayoutOptions {
+        font_size,
+        line_height: Some(explicit_lh),
+        max_width,
+        white_space: WhiteSpaceMode::Normal,
+        vertical_align: VerticalAlignment::Baseline,
+        is_monospace: false,
+    };
+
+    let result = ifc.layout_text(text, &options);
     let single_line_height = font_size * line_height_multiplier;
+    let total_height = result.line_count.max(1) as f32 * single_line_height;
+    (result.total_width, total_height)
+}
 
-    match max_width {
-        Some(max_w) if max_w > 0.0 => {
-            // Greedy word wrapping
-            let mut lines = 1usize;
-            let mut current_line_w = 0.0f32;
-            let mut max_observed_w = 0.0f32;
-
-            for word in text.split_whitespace() {
-                let word_w = word.chars().count() as f32 * char_width;
-                let space_w = char_width;
-
-                if current_line_w + word_w > max_w && current_line_w > 0.0 {
-                    max_observed_w = max_observed_w.max(current_line_w);
-                    lines += 1;
-                    current_line_w = word_w;
-                } else {
-                    if current_line_w > 0.0 {
-                        current_line_w += space_w;
-                    }
-                    current_line_w += word_w;
-                }
-            }
-
-            max_observed_w = max_observed_w.max(current_line_w);
-            (max_observed_w, lines as f32 * single_line_height)
-        }
-        _ => {
-            // Single unbroken line
-            let w = text.chars().count() as f32 * char_width;
-            (w, single_line_height)
-        }
-    }
+/// Advanced text layout returning detailed line boxes, glyph runs, baselines, and geometry.
+pub fn layout_inline_text(text: &str, options: &InlineLayoutOptions) -> InlineLayoutResult {
+    let ifc = InlineFormattingContext::new();
+    ifc.layout_text(text, options)
 }

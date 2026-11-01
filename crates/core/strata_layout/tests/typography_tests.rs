@@ -1,0 +1,197 @@
+//! Integration Tests: HarfBuzz OpenType Text Shaping, BiDi UAX#9, and Unicode Line Breaking.
+
+use strata_layout::prelude::*;
+use strata_primitives::geom::LayoutUnit;
+
+#[test]
+fn test_font_metrics_and_css_half_leading() {
+    let font_size = 20.0f32;
+    let metrics = FontMetrics::default_sans(font_size);
+
+    assert_eq!(metrics.font_size, 20.0);
+    assert!(metrics.ascent > metrics.descent);
+
+    // Target line-height = 32px
+    let line_height = LayoutUnit::from_f32(32.0);
+    let (leading_above, leading_below) = compute_half_leading(
+        line_height,
+        metrics.ascent,
+        metrics.descent,
+    );
+
+    // Half-leading invariant: ascent + descent + leading_above + leading_below == line_height
+    let total_reconstructed = metrics.ascent + metrics.descent + leading_above + leading_below;
+    assert_eq!(total_reconstructed, line_height);
+
+    // CSS Strut invariant
+    let strut = CssStrut::new(&metrics, Some(32.0));
+    assert_eq!(strut.line_height, line_height);
+    assert_eq!(strut.metrics.line_height(), line_height);
+
+    // FontHeight unite
+    let mut h1 = FontHeight::new(LayoutUnit::from_f32(14.0), LayoutUnit::from_f32(4.0));
+    let h2 = FontHeight::new(LayoutUnit::from_f32(18.0), LayoutUnit::from_f32(2.0));
+    h1.unite(h2);
+    assert_eq!(h1.ascent, LayoutUnit::from_f32(18.0));
+    assert_eq!(h1.descent, LayoutUnit::from_f32(4.0));
+}
+
+#[test]
+fn test_opentype_ligatures_and_pair_kerning() {
+    let shaper = TextShaper::new();
+    let metrics = FontMetrics::default_sans(16.0);
+
+    // 1. Code ligatures in proportional text
+    let code_text = "if (a === b && c != d) => run();";
+    let glyphs = shaper.shape(code_text, &metrics, false);
+
+    let has_triple_eq = glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xF002);
+    let has_not_eq = glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xF007);
+    let has_arrow = glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xF00A);
+
+    assert!(has_triple_eq, "Must identify '===' code ligature");
+    assert!(has_not_eq, "Must identify '!=' code ligature");
+    assert!(has_arrow, "Must identify '=>' code ligature");
+
+    // 2. Typographic ligatures
+    let typo_text = "difficult coffee flow";
+    let typo_glyphs = shaper.shape(typo_text, &metrics, false);
+    let has_ffi = typo_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xFB03);
+    let has_ff = typo_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xFB00);
+    let has_fl = typo_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xFB02);
+
+    assert!(has_ffi, "Must identify 'ffi' ligature in difficult");
+    assert!(has_ff, "Must identify 'ff' ligature in coffee");
+    assert!(has_fl, "Must identify 'fl' ligature in flow");
+
+    // 3. Monospace disables ligatures
+    let mono_glyphs = shaper.shape(code_text, &metrics, true);
+    let mono_has_lig = mono_glyphs.iter().any(|g| g.is_ligature);
+    assert!(!mono_has_lig, "Monospace code fonts must retain individual glyph clusters");
+
+    // 4. Optical pair kerning
+    let pair_kerned = shaper.shape("AV", &metrics, false);
+    let isolated_a = shaper.shape("A", &metrics, false);
+    let isolated_v = shaper.shape("V", &metrics, false);
+
+    let pair_w = pair_kerned[0].x_advance + pair_kerned[1].x_advance;
+    let sum_isolated = isolated_a[0].x_advance + isolated_v[0].x_advance;
+    assert!(
+        pair_w < sum_isolated,
+        "Optical pair kerning must reduce advance width for 'AV' pair"
+    );
+}
+
+#[test]
+fn test_unicode_bidi_uax9_mixed_scripts() {
+    let bidi = BidiEngine::new();
+
+    // 1. Pure LTR Latin
+    let ltr_text = "Distributed Cluster US-East-1";
+    let ltr_runs = bidi.resolve_runs(ltr_text);
+    assert_eq!(ltr_runs.len(), 1);
+    assert!(!ltr_runs[0].is_rtl);
+    assert_eq!(ltr_runs[0].level, 0);
+
+    // 2. Pure Hebrew (RTL)
+    let hebrew_text = "שלום עולם";
+    let hebrew_runs = bidi.resolve_runs(hebrew_text);
+    assert_eq!(hebrew_runs.len(), 1);
+    assert!(hebrew_runs[0].is_rtl);
+    assert_eq!(hebrew_runs[0].level, 1);
+
+    // 3. Mixed LTR and RTL: "Cluster שלום Node"
+    let mixed_text = "Cluster שלום Node";
+    let mixed_runs = bidi.resolve_runs(mixed_text);
+    assert!(mixed_runs.len() >= 3, "Mixed text must decompose into distinct directional runs");
+
+    let has_rtl = mixed_runs.iter().any(|r| r.is_rtl);
+    let has_ltr = mixed_runs.iter().any(|r| !r.is_rtl);
+    assert!(has_rtl && has_ltr, "Must contain both LTR and RTL runs");
+}
+
+#[test]
+fn test_unicode_line_breaking_and_whitespace_modes() {
+    let ifc = InlineFormattingContext::new();
+
+    let text = "First line with words\nSecond line with words";
+
+    // 1. WhiteSpaceMode::Normal wraps on bounds and preserves explicit newlines
+    let normal_opt = InlineLayoutOptions {
+        font_size: 16.0,
+        line_height: Some(24.0),
+        max_width: Some(120.0),
+        white_space: WhiteSpaceMode::Normal,
+        ..Default::default()
+    };
+    let normal_res = ifc.layout_text(text, &normal_opt);
+    assert!(normal_res.line_count >= 2);
+    assert!(normal_res.total_width <= 120.0);
+
+    // 2. WhiteSpaceMode::NoWrap suppresses soft line breaks
+    let nowrap_opt = InlineLayoutOptions {
+        font_size: 16.0,
+        line_height: Some(24.0),
+        max_width: Some(60.0),
+        white_space: WhiteSpaceMode::NoWrap,
+        ..Default::default()
+    };
+    let nowrap_res = ifc.layout_text(text, &nowrap_opt);
+    // Explicit newline produces exactly 2 lines despite tiny max_width 60.0
+    assert_eq!(nowrap_res.line_count, 2);
+    assert!(nowrap_res.total_width > 60.0);
+
+    // 3. Soft hyphen and Zero-Width Space breaking
+    let zwsp_text = "Super\u{200B}cali\u{200B}fragi\u{200B}listic";
+    let zwsp_opt = InlineLayoutOptions {
+        font_size: 16.0,
+        line_height: Some(24.0),
+        max_width: Some(50.0),
+        white_space: WhiteSpaceMode::Normal,
+        ..Default::default()
+    };
+    let zwsp_res = ifc.layout_text(zwsp_text, &zwsp_opt);
+    assert!(zwsp_res.line_count > 1, "Zero-width spaces must provide valid break points");
+}
+
+#[test]
+fn test_inline_formatting_context_vertical_alignments() {
+    let ifc = InlineFormattingContext::new();
+    let text = "Metrics Alignment Baseline";
+
+    let opt_baseline = InlineLayoutOptions {
+        font_size: 16.0,
+        line_height: Some(30.0),
+        vertical_align: VerticalAlignment::Baseline,
+        ..Default::default()
+    };
+    let res_baseline = ifc.layout_text(text, &opt_baseline);
+
+    let opt_super = InlineLayoutOptions {
+        font_size: 16.0,
+        line_height: Some(30.0),
+        vertical_align: VerticalAlignment::Super,
+        ..Default::default()
+    };
+    let res_super = ifc.layout_text(text, &opt_super);
+
+    let opt_sub = InlineLayoutOptions {
+        font_size: 16.0,
+        line_height: Some(30.0),
+        vertical_align: VerticalAlignment::Sub,
+        ..Default::default()
+    };
+    let res_sub = ifc.layout_text(text, &opt_sub);
+
+    // Superscript shifts baseline upward (lower numeric y in top-down coordinates)
+    assert!(
+        res_super.lines[0].baseline < res_baseline.lines[0].baseline,
+        "Superscript must elevate baseline upwards"
+    );
+
+    // Subscript shifts baseline downward (higher numeric y in top-down coordinates)
+    assert!(
+        res_sub.lines[0].baseline > res_baseline.lines[0].baseline,
+        "Subscript must lower baseline downwards"
+    );
+}

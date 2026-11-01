@@ -7,19 +7,26 @@ pub mod grid;
 pub mod positioning;
 pub mod text;
 pub mod tree;
+pub mod typography;
 pub mod wpt;
 
 pub use geometry::{LayoutGeometry, Rect};
 pub use box_model::{clamp_dimension, collapse_margins, resolve_dimension};
 pub use tree::LayoutNode;
-pub use text::measure_text_bounds;
+pub use text::{layout_inline_text, measure_text_bounds};
+pub use typography::{
+    BidiClass, BidiEngine, BidiRun, CssStrut, FontHeight, FontMetrics,
+    InlineFormattingContext, InlineLayoutOptions, InlineLayoutResult, LineBox, LineBreaker,
+    ShapedGlyph, TextLine, TextShaper, VerticalAlignment, WhiteSpaceMode,
+};
 pub use wpt::{WptSuite, WptTestVector};
 
 pub mod prelude {
     pub use crate::geometry::{LayoutGeometry, Rect};
     pub use crate::box_model::collapse_margins;
     pub use crate::tree::LayoutNode;
-    pub use crate::text::measure_text_bounds;
+    pub use crate::text::{layout_inline_text, measure_text_bounds};
+    pub use crate::typography::*;
     pub use crate::wpt::{WptSuite, WptTestVector};
 }
 
