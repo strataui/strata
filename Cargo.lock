@@ -3030,6 +3030,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata_chromium_surface"
+version = "0.1.0"
+dependencies = [
+ "strata_dom",
+ "strata_platform",
+ "strata_primitives",
+ "strata_render",
+]
+
+[[package]]
 name = "strata_cli"
 version = "0.1.0"
 dependencies = [

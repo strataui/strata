@@ -84,6 +84,7 @@ strata_parity_tauri = { path = "crates/harnesses/strata_parity_tauri" }
 strata_mobile_test = { path = "crates/harnesses/strata_mobile_test" }
 strata_sim = { path = "crates/harnesses/strata_sim" }
 strata_benchmark = { path = "crates/harnesses/strata_benchmark" }
+strata_chromium_surface = { path = "crates/harnesses/strata_chromium_surface" }
 
 [profile.dev]
 opt-level = 1
