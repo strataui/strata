@@ -1,0 +1,16 @@
+[package]
+name = "strata_web_reader"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "High-performance semantic web transpiler and offline article reader for Strata"
+
+[dependencies]
+strata_primitives = { workspace = true }
+strata_dom = { workspace = true }
+strata_style = { workspace = true }
+strata_layout = { workspace = true }
+strata_storage = { workspace = true }
+
+[dev-dependencies]

@@ -54,6 +54,7 @@ strata_ffi = { path = "crates/runtime/strata_ffi" }
 strata_router = { path = "crates/runtime/strata_router" }
 strata_device = { path = "crates/runtime/strata_device" }
 strata_parallel = { path = "crates/runtime/strata_parallel" }
+strata_web_reader = { path = "crates/runtime/strata_web_reader" }
 
 # UI
 strata_ui = { path = "crates/ui/strata_ui" }
