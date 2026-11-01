@@ -1,0 +1,14 @@
+[package]
+name = "strata_ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Comprehensive high-level component library and design system for Strata"
+
+[dependencies]
+strata_primitives = { workspace = true }
+strata_dom = { workspace = true }
+strata_macro = { workspace = true }
+strata_icons = { workspace = true }
+strata_style = { workspace = true }

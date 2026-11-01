@@ -1,0 +1,13 @@
+[package]
+name = "strata_form"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Pure-Rust signal-driven form state management and schema validation engine for Strata"
+
+[dependencies]
+strata_dom = { workspace = true }
+strata_primitives = { workspace = true }
+
+[dev-dependencies]

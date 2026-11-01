@@ -1,0 +1,9 @@
+[package]
+name = "strata_aria"
+version = "0.1.0"
+edition = "2021"
+description = "Accessible Headless UI Primitives & Floating Collision Engine for Strata"
+
+[dependencies]
+strata_dom = { workspace = true }
+strata_primitives = { workspace = true }

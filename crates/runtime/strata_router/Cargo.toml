@@ -1,0 +1,14 @@
+[package]
+name = "strata_router"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Universal type-safe declarative routing engine for Strata applications"
+
+[dependencies]
+strata_dom = { workspace = true }
+strata_macro = { workspace = true }
+strata_primitives = { workspace = true }
+
+[dev-dependencies]

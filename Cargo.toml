@@ -2,56 +2,13 @@
 resolver = "2"
 members = [
     "crates/strata",
-    "crates/strata_dom",
-    "crates/strata_macro",
-    "crates/strata_style",
-    "crates/strata_layout",
-    "crates/strata_render",
-    "crates/strata_js",
-    "crates/strata_platform",
-    "crates/strata_device",
-    "crates/strata_codegen_js",
-    "crates/strata_cli",
-    "crates/strata_devtools",
-    "crates/strata_icons",
-    "crates/strata_ui",
-    "crates/strata_primitives",
-    "crates/strata_vfs",
-    "crates/strata_storage",
-    "crates/strata_web_api",
-    "crates/strata_parallel",
-    "crates/strata_tui",
-    "crates/strata_mobile_test",
-    "crates/strata_sim",
-    "crates/strata_lsp",
-    "crates/strata_mdbook",
-    "crates/strata_a11y",
-    "crates/strata_gpu_path",
-    "crates/strata_crdt",
-    "crates/strata_agent_ui",
-    "crates/strata_audio",
-    "crates/strata_plugin_runtime",
-    "crates/strata_hot_reload",
-    "crates/strata_benchmark",
-    "crates/strata_build",
-    "crates/strata_ffi",
-    "crates/strata_form",
-    "crates/strata_i18n",
-    "crates/strata_query",
-    "crates/strata_router",
-    "crates/strata_virtual",
-    "crates/strata_aria",
-    "crates/strata_store",
-    "crates/strata_toast",
-    "crates/strata_motion",
-    "crates/strata_table",
-    "crates/strata_charts",
-    "crates/strata_editor",
-    "crates/strata_parity_tauri",
-    "examples/saas_dashboard",
-    "examples/ecommerce_storefront",
-    "examples/creative_studio",
-    "examples/eda_studio",
+    "crates/core/*",
+    "crates/render/*",
+    "crates/runtime/*",
+    "crates/ui/*",
+    "crates/tooling/*",
+    "crates/harnesses/*",
+    "examples/*",
 ]
 
 [workspace.package]
@@ -64,6 +21,68 @@ homepage = "https://github.com/larvance/strata"
 documentation = "https://docs.rs/strata"
 keywords = ["gui", "frontend", "framework", "css", "tailwind"]
 categories = ["gui", "web-programming", "rendering"]
+
+[workspace.dependencies]
+# Facade
+strata = { path = "crates/strata" }
+
+# Core
+strata_primitives = { path = "crates/core/strata_primitives" }
+strata_dom = { path = "crates/core/strata_dom" }
+strata_style = { path = "crates/core/strata_style" }
+strata_layout = { path = "crates/core/strata_layout" }
+strata_macro = { path = "crates/core/strata_macro" }
+strata_aria = { path = "crates/core/strata_aria" }
+
+# Render
+strata_render = { path = "crates/render/strata_render" }
+strata_gpu_path = { path = "crates/render/strata_gpu_path" }
+strata_platform = { path = "crates/render/strata_platform" }
+strata_tui = { path = "crates/render/strata_tui" }
+strata_audio = { path = "crates/render/strata_audio" }
+
+# Runtime
+strata_js = { path = "crates/runtime/strata_js" }
+strata_codegen_js = { path = "crates/runtime/strata_codegen_js" }
+strata_web_api = { path = "crates/runtime/strata_web_api" }
+strata_vfs = { path = "crates/runtime/strata_vfs" }
+strata_storage = { path = "crates/runtime/strata_storage" }
+strata_store = { path = "crates/runtime/strata_store" }
+strata_crdt = { path = "crates/runtime/strata_crdt" }
+strata_plugin_runtime = { path = "crates/runtime/strata_plugin_runtime" }
+strata_ffi = { path = "crates/runtime/strata_ffi" }
+strata_router = { path = "crates/runtime/strata_router" }
+strata_device = { path = "crates/runtime/strata_device" }
+strata_parallel = { path = "crates/runtime/strata_parallel" }
+
+# UI
+strata_ui = { path = "crates/ui/strata_ui" }
+strata_icons = { path = "crates/ui/strata_icons" }
+strata_table = { path = "crates/ui/strata_table" }
+strata_virtual = { path = "crates/ui/strata_virtual" }
+strata_form = { path = "crates/ui/strata_form" }
+strata_toast = { path = "crates/ui/strata_toast" }
+strata_motion = { path = "crates/ui/strata_motion" }
+strata_charts = { path = "crates/ui/strata_charts" }
+strata_editor = { path = "crates/ui/strata_editor" }
+strata_agent_ui = { path = "crates/ui/strata_agent_ui" }
+strata_a11y = { path = "crates/ui/strata_a11y" }
+strata_i18n = { path = "crates/ui/strata_i18n" }
+strata_query = { path = "crates/ui/strata_query" }
+
+# Tooling
+strata_cli = { path = "crates/tooling/strata_cli" }
+strata_lsp = { path = "crates/tooling/strata_lsp" }
+strata_devtools = { path = "crates/tooling/strata_devtools" }
+strata_build = { path = "crates/tooling/strata_build" }
+strata_hot_reload = { path = "crates/tooling/strata_hot_reload" }
+strata_mdbook = { path = "crates/tooling/strata_mdbook" }
+
+# Harnesses
+strata_parity_tauri = { path = "crates/harnesses/strata_parity_tauri" }
+strata_mobile_test = { path = "crates/harnesses/strata_mobile_test" }
+strata_sim = { path = "crates/harnesses/strata_sim" }
+strata_benchmark = { path = "crates/harnesses/strata_benchmark" }
 
 [profile.dev]
 opt-level = 1

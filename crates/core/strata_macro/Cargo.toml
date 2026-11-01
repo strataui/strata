@@ -1,0 +1,16 @@
+[package]
+name = "strata_macro"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Procedural macros for Strata: rsx! declarative syntax, #[component], and dynamic! macro"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+
+[dev-dependencies]
+strata_dom = { workspace = true }
+strata_js = { workspace = true }

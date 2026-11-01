@@ -1,0 +1,11 @@
+[package]
+name = "strata_plugin_runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Sandboxed dynamic plugin loader and runtime extension host for Project Strata"
+
+[dependencies]
+strata_dom = { workspace = true }
+strata_primitives = { workspace = true }

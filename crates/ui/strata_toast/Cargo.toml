@@ -1,0 +1,9 @@
+[package]
+name = "strata_toast"
+version = "0.1.0"
+edition = "2021"
+description = "Stacked Toast Notification Engine for Strata"
+
+[dependencies]
+strata_dom = { workspace = true }
+strata_primitives = { workspace = true }

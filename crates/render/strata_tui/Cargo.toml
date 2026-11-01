@@ -1,0 +1,13 @@
+[package]
+name = "strata_tui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Terminal User Interface (TUI) target backend for Strata"
+
+[dependencies]
+strata_dom = { workspace = true }
+strata_style = { workspace = true }
+strata_layout = { workspace = true }
+strata_primitives = { workspace = true }

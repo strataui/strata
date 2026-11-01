@@ -7,17 +7,17 @@ license.workspace = true
 description = "Flagship Electronic Design Automation (EDA) Circuit Studio & Waveform Analyzer in Strata"
 
 [dependencies]
-strata = { path = "../../crates/strata" }
-strata_primitives = { path = "../../crates/strata_primitives" }
-strata_dom = { path = "../../crates/strata_dom" }
-strata_macro = { path = "../../crates/strata_macro" }
-strata_style = { path = "../../crates/strata_style" }
-strata_layout = { path = "../../crates/strata_layout" }
-strata_render = { path = "../../crates/strata_render" }
-strata_ui = { path = "../../crates/strata_ui" }
-strata_icons = { path = "../../crates/strata_icons" }
-strata_storage = { path = "../../crates/strata_storage" }
-strata_tui = { path = "../../crates/strata_tui" }
-strata_platform = { path = "../../crates/strata_platform" }
-strata_gpu_path = { path = "../../crates/strata_gpu_path" }
-strata_audio = { path = "../../crates/strata_audio" }
+strata = { workspace = true }
+strata_primitives = { workspace = true }
+strata_dom = { workspace = true }
+strata_macro = { workspace = true }
+strata_style = { workspace = true }
+strata_layout = { workspace = true }
+strata_render = { workspace = true }
+strata_ui = { workspace = true }
+strata_icons = { workspace = true }
+strata_storage = { workspace = true }
+strata_tui = { workspace = true }
+strata_platform = { workspace = true }
+strata_gpu_path = { workspace = true }
+strata_audio = { workspace = true }

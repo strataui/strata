@@ -1,0 +1,15 @@
+[package]
+name = "strata_render"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "High-performance Display List, Stacking Context Compositor, and GPU rasterization pipeline"
+
+[dependencies]
+strata_primitives = { workspace = true }
+strata_style = { workspace = true }
+strata_layout = { workspace = true }
+strata_dom = { workspace = true }
+strata_macro = { workspace = true }
+strata_js = { workspace = true }
