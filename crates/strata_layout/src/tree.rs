@@ -13,6 +13,7 @@ pub struct LayoutNode {
     pub style: ComputedStyle,
     pub geometry: LayoutGeometry,
     pub children: Vec<LayoutNode>,
+    pub text: Option<String>,
 }
 
 impl LayoutNode {
@@ -22,6 +23,7 @@ impl LayoutNode {
             style,
             geometry: LayoutGeometry::default(),
             children: Vec::new(),
+            text: None,
         }
     }
 
@@ -31,6 +33,17 @@ impl LayoutNode {
             style,
             geometry: LayoutGeometry::default(),
             children,
+            text: None,
+        }
+    }
+
+    /// Constructs a text leaf node with computed styles and string content.
+    pub fn with_text(style: ComputedStyle, text: String) -> Self {
+        Self {
+            style,
+            geometry: LayoutGeometry::default(),
+            children: Vec::new(),
+            text: Some(text),
         }
     }
 
@@ -50,19 +63,41 @@ impl LayoutNode {
 
         let content_w = self.geometry.content_box.width;
         let content_h = self.geometry.content_box.height;
+        let preserved_geom = self.geometry.clone();
+
+        let container_avail_w = preserved_geom.border_box.width + self.style.margin.left + self.style.margin.right;
+        let container_avail_h = preserved_geom.border_box.height + self.style.margin.top + self.style.margin.bottom;
 
         match self.style.display {
             Display::Flex | Display::InlineFlex => {
-                solve_flexbox(self, content_w, content_h);
+                solve_flexbox(self, container_avail_w, container_avail_h);
             }
             Display::Grid | Display::InlineGrid => {
-                solve_grid(self, content_w, content_h);
+                solve_grid(self, container_avail_w, container_avail_h);
             }
             Display::Block | Display::Inline | Display::InlineBlock => {
                 crate::box_model::solve_block_children(self, content_w, content_h);
             }
             Display::None => {}
         }
+
+        let final_h = if self.style.height == strata_style::types::Dimension::Auto {
+            self.geometry.border_box.height.max(preserved_geom.border_box.height)
+        } else {
+            preserved_geom.border_box.height
+        };
+
+        self.geometry = LayoutGeometry::from_border_box(
+            crate::geometry::Rect::new(
+                preserved_geom.border_box.x,
+                preserved_geom.border_box.y,
+                preserved_geom.border_box.width,
+                final_h,
+            ),
+            self.style.padding,
+            self.style.border_width,
+            self.style.margin,
+        );
 
         solve_positioning(self, content_w, content_h);
         self.geometry.snap_to_pixel();

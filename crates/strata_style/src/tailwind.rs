@@ -437,38 +437,47 @@ impl TailwindEngine {
         match class {
             "text-xs" => {
                 style.font_size = 12.0;
+                style.line_height = 16.0 / 12.0;
                 return;
             }
             "text-sm" => {
                 style.font_size = 14.0;
+                style.line_height = 20.0 / 14.0;
                 return;
             }
             "text-base" => {
                 style.font_size = 16.0;
+                style.line_height = 24.0 / 16.0;
                 return;
             }
             "text-lg" => {
                 style.font_size = 18.0;
+                style.line_height = 28.0 / 18.0;
                 return;
             }
             "text-xl" => {
                 style.font_size = 20.0;
+                style.line_height = 28.0 / 20.0;
                 return;
             }
             "text-2xl" => {
                 style.font_size = 24.0;
+                style.line_height = 32.0 / 24.0;
                 return;
             }
             "text-3xl" => {
                 style.font_size = 30.0;
+                style.line_height = 36.0 / 30.0;
                 return;
             }
             "text-4xl" => {
                 style.font_size = 36.0;
+                style.line_height = 40.0 / 36.0;
                 return;
             }
             "text-5xl" => {
                 style.font_size = 48.0;
+                style.line_height = 48.0 / 48.0;
                 return;
             }
             "font-thin" => {
@@ -554,6 +563,32 @@ impl TailwindEngine {
         match class {
             "border" => {
                 style.border_width = EdgeInsets::all(1.0);
+                return;
+            }
+            "border-t" => {
+                style.border_width.top = 1.0;
+                return;
+            }
+            "border-b" => {
+                style.border_width.bottom = 1.0;
+                return;
+            }
+            "border-l" => {
+                style.border_width.left = 1.0;
+                return;
+            }
+            "border-r" => {
+                style.border_width.right = 1.0;
+                return;
+            }
+            "border-x" => {
+                style.border_width.left = 1.0;
+                style.border_width.right = 1.0;
+                return;
+            }
+            "border-y" => {
+                style.border_width.top = 1.0;
+                style.border_width.bottom = 1.0;
                 return;
             }
             "border-0" => {

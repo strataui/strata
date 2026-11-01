@@ -155,7 +155,7 @@ fn main() {
             TemplateKind::Saas => r#"use strata::prelude::*;
 
 #[component]
-fn MetricCard(title: String, value: String, delta: String) -> View {
+fn MetricCard(title: &'static str, value: &'static str, delta: &'static str) -> View {
     rsx! {
         <div class="p-6 bg-zinc-900 border border-zinc-800 rounded-xl flex flex-col justify-between">
             <span class="text-sm font-medium text-zinc-400">{title}</span>
@@ -174,9 +174,9 @@ fn App() -> View {
                 <span class="px-3 py-1 bg-emerald-950 text-emerald-400 text-xs font-semibold rounded-full border border-emerald-800">{"All Systems Operational"}</span>
             </header>
             <div class="grid grid-cols-3 gap-6">
-                <MetricCard title="Active Compute Nodes".into() value="1,024".into() delta="+12% from last hour".into() />
-                <MetricCard title="Average Latency".into() value="1.42 ms".into() delta="-0.2ms improvement".into() />
-                <MetricCard title="Bandwidth Ingress".into() value="48.2 Gbps".into() delta="+5.4 Gbps burst".into() />
+                <MetricCard title="Active Compute Nodes" value="1,024" delta="+12% from last hour" />
+                <MetricCard title="Average Latency" value="1.42 ms" delta="-0.2ms improvement" />
+                <MetricCard title="Bandwidth Ingress" value="48.2 Gbps" delta="+5.4 Gbps burst" />
             </div>
         </div>
     }
@@ -190,7 +190,7 @@ fn main() {
             TemplateKind::Workbench => r#"use strata::prelude::*;
 
 #[component]
-fn FileTreeItem(name: String, is_active: bool) -> View {
+fn FileTreeItem(name: &'static str, is_active: bool) -> View {
     let bg = if is_active { "bg-zinc-800 text-white" } else { "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900" };
     rsx! {
         <li class={format!("px-2 py-1.5 rounded text-xs font-mono cursor-pointer transition flex items-center justify-between {}", bg)}>
@@ -223,10 +223,10 @@ fn App() -> View {
                     <div>
                         <div class="text-[11px] font-bold text-zinc-500 uppercase tracking-wider mb-2">{"Explorer"}</div>
                         <ul class="space-y-0.5">
-                            <FileTreeItem name="src/main.rs".into() is_active=true />
-                            <FileTreeItem name="src/components.rs".into() is_active=false />
-                            <FileTreeItem name="strata.toml".into() is_active=false />
-                            <FileTreeItem name="Cargo.toml".into() is_active=false />
+                            <FileTreeItem name="src/main.rs" is_active=true />
+                            <FileTreeItem name="src/components.rs" is_active=false />
+                            <FileTreeItem name="strata.toml" is_active=false />
+                            <FileTreeItem name="Cargo.toml" is_active=false />
                         </ul>
                     </div>
                     <div class="text-[11px] text-zinc-600 border-t border-zinc-900 pt-2 flex items-center justify-between">
@@ -284,7 +284,7 @@ fn main() {
             TemplateKind::Ecommerce => r#"use strata::prelude::*;
 
 #[component]
-fn ProductCard(name: String, price: String, tag: String) -> View {
+fn ProductCard(name: &'static str, price: &'static str, tag: &'static str) -> View {
     rsx! {
         <div class="p-4 bg-zinc-900 border border-zinc-800 rounded-lg flex flex-col">
             <div class="h-48 bg-zinc-800 rounded-md mb-4 flex items-center justify-center text-zinc-500 font-semibold">
@@ -305,8 +305,8 @@ fn App() -> View {
         <div class="min-h-screen bg-[#09090b] text-white p-8">
             <h1 class="text-2xl font-bold mb-6">{"Featured Collection"}</h1>
             <div class="grid grid-cols-2 gap-6">
-                <ProductCard name="Strata Velocity Elite".into() price="$185.00".into() tag="Pro Apparel".into() />
-                <ProductCard name="AeroShield Windbreaker".into() price="$220.00".into() tag="Waterproof".into() />
+                <ProductCard name="Strata Velocity Elite" price="$185.00" tag="Pro Apparel" />
+                <ProductCard name="AeroShield Windbreaker" price="$220.00" tag="Waterproof" />
             </div>
         </div>
     }

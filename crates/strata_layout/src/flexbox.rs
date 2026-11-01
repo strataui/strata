@@ -16,6 +16,10 @@ struct FlexItemMeta {
     flex_grow: f32,
     flex_shrink: f32,
     align_self: AlignSelf,
+    margin_main_start: f32,
+    margin_main_end: f32,
+    margin_cross_start: f32,
+    margin_cross_end: f32,
 }
 
 struct FlexLine {
@@ -33,15 +37,19 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
     let resolved_width = match resolve_dimension(container.style.width, available_width) {
         Some(w) => clamp_dimension(w, container.style.min_width, container.style.max_width, available_width),
         None => {
-            let auto_w = (available_width - margin.left - margin.right - border.left - border.right - padding.left - padding.right).max(0.0);
+            let auto_w = (available_width - margin.left - margin.right).max(0.0);
             clamp_dimension(auto_w, container.style.min_width, container.style.max_width, available_width)
         }
     };
 
-    let inner_width = (resolved_width - padding.left - padding.right).max(0.0);
+    let inner_width = (resolved_width - padding.left - padding.right - border.left - border.right).max(0.0);
     let resolved_height = resolve_dimension(container.style.height, available_height)
         .map(|h| clamp_dimension(h, container.style.min_height, container.style.max_height, available_height));
-    let inner_height = resolved_height.map(|h| (h - padding.top - padding.bottom).max(0.0));
+    let inner_height = resolved_height
+        .or_else(|| {
+            resolve_dimension(container.style.min_height, available_height)
+        })
+        .map(|h| (h - padding.top - padding.bottom).max(0.0));
 
     let is_row = matches!(
         container.style.flex_direction,
@@ -98,6 +106,12 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
             cross_size = clamp_dimension(cross_size, child.style.min_width, child.style.max_width, inner_width);
         }
 
+        let (m_main_start, m_main_end, m_cross_start, m_cross_end) = if is_row {
+            (child.style.margin.left, child.style.margin.right, child.style.margin.top, child.style.margin.bottom)
+        } else {
+            (child.style.margin.top, child.style.margin.bottom, child.style.margin.left, child.style.margin.right)
+        };
+
         item_metas.push(FlexItemMeta {
             index: idx,
             hypothetical_main: main_size,
@@ -107,6 +121,10 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
             flex_grow: child.style.flex_grow,
             flex_shrink: child.style.flex_shrink,
             align_self: child.style.align_self,
+            margin_main_start: m_main_start,
+            margin_main_end: m_main_end,
+            margin_cross_start: m_cross_start,
+            margin_cross_end: m_cross_end,
         });
     }
 
@@ -120,7 +138,7 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
     if !item_metas.is_empty() {
         if !is_wrap || container_main <= 0.0 {
             // Single line (nowrap)
-            let mut max_cross = item_metas.iter().map(|it| it.hypothetical_cross).fold(0.0f32, f32::max);
+            let mut max_cross = item_metas.iter().map(|it| it.hypothetical_cross + it.margin_cross_start + it.margin_cross_end).fold(0.0f32, f32::max);
             if is_row {
                 if let Some(h) = inner_height {
                     max_cross = max_cross.max(h);
@@ -138,7 +156,7 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
             let mut current_line_main = 0.0;
 
             for it in item_metas {
-                let item_len = it.hypothetical_main;
+                let item_len = it.hypothetical_main + it.margin_main_start + it.margin_main_end;
                 let needed = if current_line_items.is_empty() {
                     item_len
                 } else {
@@ -146,7 +164,7 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
                 };
 
                 if !current_line_items.is_empty() && needed > container_main {
-                    let cross = current_line_items.iter().map(|x: &FlexItemMeta| x.hypothetical_cross).fold(0.0f32, f32::max);
+                    let cross = current_line_items.iter().map(|x: &FlexItemMeta| x.hypothetical_cross + x.margin_cross_start + x.margin_cross_end).fold(0.0f32, f32::max);
                     lines.push(FlexLine {
                         items: current_line_items,
                         cross_size: cross,
@@ -160,7 +178,7 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
             }
 
             if !current_line_items.is_empty() {
-                let cross = current_line_items.iter().map(|x| x.hypothetical_cross).fold(0.0f32, f32::max);
+                let cross = current_line_items.iter().map(|x| x.hypothetical_cross + x.margin_cross_start + x.margin_cross_end).fold(0.0f32, f32::max);
                 lines.push(FlexLine {
                     items: current_line_items,
                     cross_size: cross,
@@ -170,6 +188,12 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
     }
 
     // 4. Resolve flexible lengths on main axis for each line
+    let is_main_definite = if is_row {
+        true
+    } else {
+        resolved_height.is_some()
+    };
+
     for line in &mut lines {
         let count = line.items.len();
         if count == 0 {
@@ -177,42 +201,45 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
         }
 
         let total_gaps = if count > 1 { (count - 1) as f32 * main_gap } else { 0.0 };
-        let sum_hypothetical: f32 = line.items.iter().map(|it| it.hypothetical_main).sum();
-        let free_space = container_main - sum_hypothetical - total_gaps;
+        let sum_hypothetical: f32 = line.items.iter().map(|it| it.hypothetical_main + it.margin_main_start + it.margin_main_end).sum();
 
-        if free_space > 0.0 {
-            // Expansion via flex-grow
-            let total_grow: f32 = line.items.iter().map(|it| it.flex_grow).sum();
-            if total_grow > 0.0 {
-                for it in &mut line.items {
-                    if it.flex_grow > 0.0 {
-                        let delta = (it.flex_grow / total_grow) * free_space;
-                        it.resolved_main = it.hypothetical_main + delta;
+        if is_main_definite {
+            let free_space = container_main - sum_hypothetical - total_gaps;
+
+            if free_space > 0.0 {
+                // Expansion via flex-grow
+                let total_grow: f32 = line.items.iter().map(|it| it.flex_grow).sum();
+                if total_grow > 0.0 {
+                    for it in &mut line.items {
+                        if it.flex_grow > 0.0 {
+                            let delta = (it.flex_grow / total_grow) * free_space;
+                            it.resolved_main = it.hypothetical_main + delta;
+                        }
                     }
                 }
-            }
-        } else if free_space < 0.0 {
-            // Contraction via flex-shrink
-            let total_scaled_shrink: f32 = line
-                .items
-                .iter()
-                .map(|it| it.flex_shrink * it.hypothetical_main)
-                .sum();
+            } else if free_space < 0.0 {
+                // Contraction via flex-shrink
+                let total_scaled_shrink: f32 = line
+                    .items
+                    .iter()
+                    .map(|it| it.flex_shrink * it.hypothetical_main)
+                    .sum();
 
-            if total_scaled_shrink > 0.0 {
-                let abs_free = free_space.abs();
-                for it in &mut line.items {
-                    if it.flex_shrink > 0.0 {
-                        let scaled = it.flex_shrink * it.hypothetical_main;
-                        let reduction = (scaled / total_scaled_shrink) * abs_free;
-                        it.resolved_main = (it.hypothetical_main - reduction).max(0.0);
+                if total_scaled_shrink > 0.0 {
+                    let abs_free = free_space.abs();
+                    for it in &mut line.items {
+                        if it.flex_shrink > 0.0 {
+                            let scaled = it.flex_shrink * it.hypothetical_main;
+                            let reduction = (scaled / total_scaled_shrink) * abs_free;
+                            it.resolved_main = (it.hypothetical_main - reduction).max(0.0);
+                        }
                     }
                 }
             }
         }
 
         // Recompute line cross size after main sizing
-        let item_max_cross = line.items.iter().map(|it| it.hypothetical_cross).fold(0.0f32, f32::max);
+        let item_max_cross = line.items.iter().map(|it| it.hypothetical_cross + it.margin_cross_start + it.margin_cross_end).fold(0.0f32, f32::max);
         line.cross_size = line.cross_size.max(item_max_cross);
     }
 
@@ -231,13 +258,13 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
     let total_cross_gaps = if lines.len() > 1 { (lines.len() - 1) as f32 * cross_gap } else { 0.0 };
     let content_cross_size = total_lines_cross + total_cross_gaps;
 
-    let final_height = match resolved_height {
+    let raw_height = match resolved_height {
         Some(h) => h,
         None => {
             if is_row {
                 content_cross_size + padding.top + padding.bottom + border.top + border.bottom
             } else {
-                let sum_main: f32 = lines.iter().flat_map(|l| l.items.iter().map(|i| i.resolved_main)).sum();
+                let sum_main: f32 = lines.iter().flat_map(|l| l.items.iter().map(|i| i.resolved_main + i.margin_main_start + i.margin_main_end)).sum();
                 let gaps = if lines.iter().flat_map(|l| &l.items).count() > 1 {
                     (lines.iter().flat_map(|l| &l.items).count() - 1) as f32 * main_gap
                 } else {
@@ -247,10 +274,11 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
             }
         }
     };
+    let final_height = clamp_dimension(raw_height, container.style.min_height, container.style.max_height, available_height);
 
     let border_box = Rect::new(
-        container.geometry.border_box.x + margin.left,
-        container.geometry.border_box.y + margin.top,
+        container.geometry.border_box.x,
+        container.geometry.border_box.y,
         resolved_width,
         final_height,
     );
@@ -269,9 +297,13 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
             continue;
         }
 
-        let total_item_main: f32 = line.items.iter().map(|it| it.resolved_main).sum();
+        let total_item_main: f32 = line.items.iter().map(|it| it.resolved_main + it.margin_main_start + it.margin_main_end).sum();
         let total_gaps = if count > 1 { (count - 1) as f32 * main_gap } else { 0.0 };
-        let remaining_main = (container_main - total_item_main - total_gaps).max(0.0);
+        let remaining_main = if is_main_definite {
+            (container_main - total_item_main - total_gaps).max(0.0)
+        } else {
+            0.0
+        };
 
         // Main axis alignment distribution
         let (start_offset, step_between) = match container.style.justify_content {
@@ -322,10 +354,17 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
             let mut final_cross_size = it.resolved_cross;
             let cross_offset = match effective_align {
                 AlignItems::FlexStart => 0.0,
-                AlignItems::FlexEnd => line.cross_size - final_cross_size,
-                AlignItems::Center => (line.cross_size - final_cross_size) / 2.0,
+                AlignItems::FlexEnd => line.cross_size - (final_cross_size + it.margin_cross_start + it.margin_cross_end),
+                AlignItems::Center => (line.cross_size - (final_cross_size + it.margin_cross_start + it.margin_cross_end)) / 2.0,
                 AlignItems::Stretch => {
-                    final_cross_size = line.cross_size;
+                    let has_auto_cross = if is_row {
+                        child.style.height == Dimension::Auto
+                    } else {
+                        child.style.width == Dimension::Auto
+                    };
+                    if has_auto_cross {
+                        final_cross_size = (line.cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0);
+                    }
                     0.0
                 }
                 AlignItems::Baseline => 0.0,
@@ -333,15 +372,15 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
 
             let (item_x, item_y, item_w, item_h) = if is_row {
                 (
-                    current_main,
-                    current_line_cross + cross_offset,
+                    current_main + it.margin_main_start,
+                    current_line_cross + it.margin_cross_start + cross_offset,
                     it.resolved_main,
                     final_cross_size,
                 )
             } else {
                 (
-                    current_line_cross + cross_offset,
-                    current_main,
+                    current_line_cross + it.margin_cross_start + cross_offset,
+                    current_main + it.margin_main_start,
                     final_cross_size,
                     it.resolved_main,
                 )
@@ -357,7 +396,7 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
                 child.layout_children();
             }
 
-            current_main += it.resolved_main + step_between;
+            current_main += it.margin_main_start + it.resolved_main + it.margin_main_end + step_between;
         }
 
         current_line_cross += line.cross_size + cross_gap;

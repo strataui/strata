@@ -1,0 +1,23 @@
+[package]
+name = "strata_parity_tauri"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Parity Verification Harness between Strata Pure Rust Engine and Tauri WebKitGTK"
+
+[dependencies]
+strata = { path = "../strata", features = ["mobile-test"] }
+strata_dom = { path = "../strata_dom" }
+strata_style = { path = "../strata_style" }
+strata_layout = { path = "../strata_layout" }
+strata_render = { path = "../strata_render" }
+strata_platform = { path = "../strata_platform" }
+strata_mobile_test = { path = "../strata_mobile_test" }
+tauri = { version = "2.1.1" }
+gtk = "0.18.2"
+cairo-rs = "0.18.5"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[build-dependencies]
+tauri-build = { version = "2.1.1" }

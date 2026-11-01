@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "strata_parity_tauri",
+  "version": "0.1.0",
+  "identifier": "com.larvance.strata.parity.tauri",
+  "bundle": {
+    "icon": ["icons/icon.png"]
+  }
+}

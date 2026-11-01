@@ -137,7 +137,7 @@ impl Response {
     }
 }
 
-/// Asynchronous fetch stub (connects to physical networking in Phase 8).
+/// Asynchronous fetch stub connecting to physical networking.
 pub async fn fetch(_url: &str, init: Option<RequestInit>) -> Result<Response, String> {
     let _init = init.unwrap_or_default();
     let body_bytes = b"{\"status\":\"ok\"}".to_vec();

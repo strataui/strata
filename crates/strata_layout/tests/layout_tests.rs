@@ -1,4 +1,4 @@
-//! Phase 5 Integration Tests: Chromium-grade Box Model, Flexbox, CSS Grid, Positioning, and Subpixel Snapping.
+//! Integration Tests: Chromium-grade Box Model, Flexbox, CSS Grid, Positioning, and Subpixel Snapping.
 
 use strata_layout::prelude::*;
 use strata_layout::box_model::collapse_margins;

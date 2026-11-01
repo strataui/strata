@@ -1,4 +1,4 @@
-//! Phase 6 Integration Tests: 2D Stacking Context Compositor, SDF Rasterizer, 3D Linear Algebra, and Viewport Engine.
+//! Integration Tests: 2D Stacking Context Compositor, SDF Rasterizer, 3D Linear Algebra, and Viewport Engine.
 
 use strata_layout::{LayoutGeometry, LayoutNode, Rect};
 use strata_primitives::geom::EdgeInsets;

@@ -15,15 +15,15 @@ pub fn solve_grid(container: &mut LayoutNode, available_width: f32, available_he
     let resolved_width = match resolve_dimension(container.style.width, available_width) {
         Some(w) => clamp_dimension(w, container.style.min_width, container.style.max_width, available_width),
         None => {
-            let auto_w = (available_width - margin.left - margin.right - border.left - border.right - padding.left - padding.right).max(0.0);
+            let auto_w = (available_width - margin.left - margin.right).max(0.0);
             clamp_dimension(auto_w, container.style.min_width, container.style.max_width, available_width)
         }
     };
 
-    let inner_width = (resolved_width - padding.left - padding.right).max(0.0);
+    let inner_width = (resolved_width - padding.left - padding.right - border.left - border.right).max(0.0);
     let resolved_height = resolve_dimension(container.style.height, available_height)
         .map(|h| clamp_dimension(h, container.style.min_height, container.style.max_height, available_height));
-    let inner_height = resolved_height.map(|h| (h - padding.top - padding.bottom).max(0.0));
+    let inner_height = resolved_height.map(|h| (h - padding.top - padding.bottom - border.top - border.bottom).max(0.0));
 
     let gap_col = container.style.gap_col.max(container.style.gap);
     let gap_row = container.style.gap_row.max(container.style.gap);
@@ -132,7 +132,7 @@ pub fn solve_grid(container: &mut LayoutNode, available_width: f32, available_he
             let child = &mut container.children[item.child_index];
             let item_width = calculate_span_size(&col_sizes, item.col_start, item.col_span, gap_col);
             child.compute_layout(item_width, available_height);
-            let item_h = child.geometry.border_box.height;
+            let item_h = child.geometry.border_box.height + child.style.margin.top + child.style.margin.bottom;
             let h_per_row = item_h / item.row_span as f32;
             for r in 0..item.row_span {
                 sizes[item.row_start + r] = sizes[item.row_start + r].max(h_per_row);
@@ -149,8 +149,8 @@ pub fn solve_grid(container: &mut LayoutNode, available_width: f32, available_he
     let final_height = resolved_height.unwrap_or(content_height + padding.top + padding.bottom + border.top + border.bottom);
 
     let border_box = Rect::new(
-        container.geometry.border_box.x + margin.left,
-        container.geometry.border_box.y + margin.top,
+        container.geometry.border_box.x,
+        container.geometry.border_box.y,
         resolved_width,
         final_height,
     );
@@ -166,11 +166,14 @@ pub fn solve_grid(container: &mut LayoutNode, available_width: f32, available_he
         let offset_y = calculate_offset(&row_sizes, item.row_start, gap_row);
         let span_height = calculate_span_size(&row_sizes, item.row_start, item.row_span, gap_row);
 
-        let item_x = container.geometry.content_box.x + offset_x;
-        let item_y = container.geometry.content_box.y + offset_y;
+        let child_margin = child.style.margin;
+        let item_w = (span_width - child_margin.left - child_margin.right).max(0.0);
+        let item_h = (span_height - child_margin.top - child_margin.bottom).max(0.0);
+        let item_x = container.geometry.content_box.x + offset_x + child_margin.left;
+        let item_y = container.geometry.content_box.y + offset_y + child_margin.top;
 
         child.geometry = LayoutGeometry::from_border_box(
-            Rect::new(item_x, item_y, span_width, span_height),
+            Rect::new(item_x, item_y, item_w, item_h),
             child.style.padding,
             child.style.border_width,
             child.style.margin,
@@ -217,13 +220,31 @@ fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f
 
     let remaining_space = (available_space - total_fixed - total_gaps).max(0.0);
     if total_fr > 0.0 {
-        for (i, track) in tracks.iter().enumerate() {
-            let factor = match *track {
+        let fr_indices: Vec<usize> = tracks
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| match *t {
+                GridTrack::Fr(_) | GridTrack::Auto | GridTrack::MinContent | GridTrack::MaxContent => Some(i),
+                _ => None,
+            })
+            .collect();
+
+        let mut allocated = 0.0f32;
+        let fr_count = fr_indices.len();
+        for (idx, &i) in fr_indices.iter().enumerate() {
+            let factor = match tracks[i] {
                 GridTrack::Fr(fr) => fr,
                 GridTrack::Auto | GridTrack::MinContent | GridTrack::MaxContent => 1.0,
                 _ => continue,
             };
-            resolved[i] = (factor / total_fr) * remaining_space;
+            if idx == fr_count - 1 {
+                // Chromium FindFrSize residue absorption: guarantee exact space conservation on final flex track
+                resolved[i] = (remaining_space - allocated).max(0.0);
+            } else {
+                let size = ((factor / total_fr) * remaining_space * 64.0).round() / 64.0;
+                resolved[i] = size;
+                allocated += size;
+            }
         }
     }
 

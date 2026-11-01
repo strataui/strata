@@ -47,6 +47,7 @@ members = [
     "crates/strata_table",
     "crates/strata_charts",
     "crates/strata_editor",
+    "crates/strata_parity_tauri",
     "examples/saas_dashboard",
     "examples/ecommerce_storefront",
     "examples/creative_studio",

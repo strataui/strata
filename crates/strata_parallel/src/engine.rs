@@ -82,11 +82,15 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
             origin,
             text,
             font_size,
+            line_height,
+            font_weight,
             color,
         } => DrawCommand::DrawText {
             origin: (origin.0 + dx, origin.1 + dy),
             text: text.clone(),
             font_size: *font_size,
+            line_height: *line_height,
+            font_weight: *font_weight,
             color: *color,
         },
         DrawCommand::DrawViewport3D { bounds, scene } => DrawCommand::DrawViewport3D {

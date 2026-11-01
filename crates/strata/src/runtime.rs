@@ -6,9 +6,9 @@ use strata_platform::{
     EventLoop, EventLoopControl, LivePlatformWindow, PlatformEvent, PlatformWindow,
     SoftwareSurfacePresenter, SwapchainCompositor, SwapchainFormat, WindowConfig,
 };
-use strata_render::compositor::{DisplayList, DrawCommand};
+use strata_render::compositor::DisplayList;
 use strata_render::swapchain::{PresentError, SurfacePresenter};
-use strata_style::types::{Color, ComputedStyle, Dimension, Display, FlexDirection};
+use strata_style::types::{ComputedStyle, Dimension, Display, FlexDirection};
 
 /// Live running application instance holding active state, layout tree, and display list.
 #[derive(Debug)]
@@ -52,8 +52,16 @@ impl AppRuntime {
         &self.display_list
     }
 
-    /// Recursively transforms an RSX `NodeBlueprint` into a `LayoutNode` hierarchy with styling.
+    /// Recursively transforms an RSX `NodeBlueprint` into a `LayoutNode` hierarchy with styling and inheritance.
     pub fn build_layout_tree(blueprint: &NodeBlueprint) -> LayoutNode {
+        Self::build_layout_tree_with_parent(blueprint, None)
+    }
+
+    /// Internal recursive tree builder passing parent ComputedStyle for W3C CSS property inheritance.
+    pub fn build_layout_tree_with_parent(
+        blueprint: &NodeBlueprint,
+        parent_style: Option<&ComputedStyle>,
+    ) -> LayoutNode {
         match blueprint {
             NodeBlueprint::Element {
                 tag,
@@ -61,22 +69,49 @@ impl AppRuntime {
                 children,
                 ..
             } => {
-                let mut style = ComputedStyle::default();
+                let mut style = match parent_style {
+                    Some(p) => ComputedStyle::inherit_from(p),
+                    None => ComputedStyle::default(),
+                };
                 Self::apply_tailwind_classes(&mut style, classes);
 
                 // Default display based on tag if not explicitly set by classes
-                if classes.is_empty() {
+                let has_display_class = classes.iter().any(|c| {
+                    c.split_whitespace().any(|tok| {
+                        matches!(
+                            tok,
+                            "flex"
+                                | "grid"
+                                | "block"
+                                | "inline-flex"
+                                | "inline-block"
+                                | "inline"
+                                | "hidden"
+                        )
+                    })
+                });
+
+                if !has_display_class {
                     match tag {
-                        Tag::Div | Tag::Main | Tag::Section | Tag::Header | Tag::Footer | Tag::Nav | Tag::Aside => {
+                        Tag::Div
+                        | Tag::Main
+                        | Tag::Section
+                        | Tag::Header
+                        | Tag::Footer
+                        | Tag::Nav
+                        | Tag::Aside => {
                             style.display = Display::Flex;
                             style.flex_direction = FlexDirection::Column;
                         }
                         Tag::Button => {
-                            style.display = Display::Flex;
+                            style.display = Display::InlineFlex;
                             style.height = Dimension::Px(40.0);
                         }
-                        Tag::Span | Tag::P | Tag::H1 | Tag::H2 | Tag::H3 | Tag::H4 | Tag::H5 | Tag::H6 => {
-                            style.display = Display::Block;
+                        Tag::Span => {
+                            style.display = Display::InlineFlex;
+                        }
+                        Tag::P | Tag::H1 | Tag::H2 | Tag::H3 | Tag::H4 | Tag::H5 | Tag::H6 => {
+                            style.display = Display::InlineBlock;
                         }
                         _ => {
                             style.display = Display::Flex;
@@ -84,39 +119,65 @@ impl AppRuntime {
                     }
                 }
 
+                // If element has auto width and contains only a text child, compute intrinsic text dimensions
+                if style.width == Dimension::Auto && children.len() == 1 {
+                    if let NodeBlueprint::Text(t) = &children[0] {
+                        let char_w = style.font_size * 0.55;
+                        let text_w = t.len() as f32 * char_w;
+                        let total_w = text_w
+                            + style.padding.left
+                            + style.padding.right
+                            + style.border_width.left
+                            + style.border_width.right;
+                        style.width = Dimension::Px(total_w);
+                    }
+                }
+
                 let mut child_nodes = Vec::with_capacity(children.len());
                 for child in children {
-                    child_nodes.push(Self::build_layout_tree(child));
+                    child_nodes.push(Self::build_layout_tree_with_parent(child, Some(&style)));
                 }
 
                 LayoutNode::with_children(style, child_nodes)
             }
             NodeBlueprint::Text(text) => {
-                let mut style = ComputedStyle::default();
+                let mut style = match parent_style {
+                    Some(p) => ComputedStyle::inherit_from(p),
+                    None => ComputedStyle::default(),
+                };
                 style.display = Display::Block;
-                // Intrinsic size heuristic for text: ~8px per character width, 20px line height
-                let approx_width = (text.len() as f32 * 8.0).max(16.0);
+                let char_w = style.font_size * 0.55;
+                let approx_width = (text.len() as f32 * char_w).max(16.0);
+                let line_h = (style.font_size * style.line_height).max(style.font_size);
                 style.width = Dimension::Px(approx_width);
-                style.height = Dimension::Px(20.0);
-                LayoutNode::new(style)
+                style.height = Dimension::Px(line_h);
+                LayoutNode::with_text(style, text.clone())
             }
             NodeBlueprint::DynamicText(dyn_fn) => {
                 let text = dyn_fn();
-                let mut style = ComputedStyle::default();
+                let mut style = match parent_style {
+                    Some(p) => ComputedStyle::inherit_from(p),
+                    None => ComputedStyle::default(),
+                };
                 style.display = Display::Block;
-                let approx_width = (text.len() as f32 * 8.0).max(16.0);
+                let char_w = style.font_size * 0.55;
+                let approx_width = (text.len() as f32 * char_w).max(16.0);
+                let line_h = (style.font_size * style.line_height).max(style.font_size);
                 style.width = Dimension::Px(approx_width);
-                style.height = Dimension::Px(20.0);
-                LayoutNode::new(style)
+                style.height = Dimension::Px(line_h);
+                LayoutNode::with_text(style, text)
             }
             NodeBlueprint::Fragment(children) => {
-                let mut style = ComputedStyle::default();
+                let mut style = match parent_style {
+                    Some(p) => ComputedStyle::inherit_from(p),
+                    None => ComputedStyle::default(),
+                };
                 style.display = Display::Flex;
                 style.flex_direction = FlexDirection::Column;
 
                 let mut child_nodes = Vec::with_capacity(children.len());
                 for child in children {
-                    child_nodes.push(Self::build_layout_tree(child));
+                    child_nodes.push(Self::build_layout_tree_with_parent(child, Some(&style)));
                 }
 
                 LayoutNode::with_children(style, child_nodes)
@@ -129,44 +190,18 @@ impl AppRuntime {
         }
     }
 
-    /// Basic fast Tailwind class parser mapping common classes to layout dimensions and display modes.
+    /// Full Tailwind CSS class parser using strata_style's Tailwind JIT compiler.
     fn apply_tailwind_classes(style: &mut ComputedStyle, classes: &[String]) {
         for cls in classes {
-            match cls.as_str() {
-                "flex" => style.display = Display::Flex,
-                "grid" => style.display = Display::Grid,
-                "block" => style.display = Display::Block,
-                "hidden" => style.display = Display::None,
-                "flex-row" => style.flex_direction = FlexDirection::Row,
-                "flex-col" => style.flex_direction = FlexDirection::Column,
-                "flex-1" => style.flex_grow = 1.0,
-                "h-screen" => style.height = Dimension::Percent(100.0),
-                "w-screen" | "w-full" => style.width = Dimension::Percent(100.0),
-                "h-full" => style.height = Dimension::Percent(100.0),
-                "overflow-hidden" => {}
-                _ => {}
+            for single_class in cls.split_whitespace() {
+                strata_style::tailwind::TailwindEngine::apply_class(style, single_class);
             }
         }
     }
 
-    /// Generates draw commands for all computed layout rectangles.
+    /// Generates draw commands for all computed layout rectangles using the 7-layer CSS compositor.
     fn compile_display_list(&mut self) {
-        self.display_list.clear();
-        Self::emit_display_commands(&self.layout_root, &mut self.display_list);
-    }
-
-    fn emit_display_commands(node: &LayoutNode, dl: &mut DisplayList) {
-        let rect = node.geometry.border_box;
-        if rect.width > 0.0 && rect.height > 0.0 {
-            dl.push(DrawCommand::DrawRect {
-                bounds: rect,
-                color: Color::rgba(25, 25, 25, 255), // Neutral base
-            });
-        }
-
-        for child in &node.children {
-            Self::emit_display_commands(child, dl);
-        }
+        self.display_list = strata_render::compositor::Compositor::build_display_list(&self.layout_root);
     }
 
     /// Processes an incoming platform event, updating viewport/scale or dispatching synthetic events.

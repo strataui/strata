@@ -3,7 +3,7 @@
 use crate::scene3d::Scene3D;
 use strata_layout::{LayoutNode, Rect};
 use strata_primitives::geom::EdgeInsets;
-use strata_style::types::{BorderRadius, BoxShadow, Color, Display, Position};
+use strata_style::types::{BorderRadius, BoxShadow, Color, Display, FontWeight, Position};
 
 /// Low-level drawing primitives emitted to GPU command buffers.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +33,8 @@ pub enum DrawCommand {
         origin: (f32, f32),
         text: String,
         font_size: f32,
+        line_height: f32,
+        font_weight: FontWeight,
         color: Color,
     },
     DrawViewport3D {
@@ -202,6 +204,22 @@ impl Compositor {
             }
         }
 
+        // Text content on this node
+        if let Some(ref text) = node.text {
+            let font_size = node.style.font_size;
+            let line_height = node.style.line_height;
+            let font_weight = node.style.font_weight;
+            let color = node.style.color;
+            list.push(DrawCommand::DrawText {
+                origin: (node.geometry.content_box.x, node.geometry.content_box.y),
+                text: text.clone(),
+                font_size,
+                line_height,
+                font_weight,
+                color,
+            });
+        }
+
         // Apply clip for children if border radius is present
         if has_clip {
             list.push(DrawCommand::PushClip {
@@ -317,7 +335,11 @@ impl Compositor {
         // Border
         if !has_clip {
             if let Some(border_color) = node.style.border_color {
-                if node.style.border_width.top > 0.0 {
+                if node.style.border_width.top > 0.0
+                    || node.style.border_width.right > 0.0
+                    || node.style.border_width.bottom > 0.0
+                    || node.style.border_width.left > 0.0
+                {
                     list.push(DrawCommand::DrawBorder {
                         bounds,
                         widths: node.style.border_width,
@@ -326,6 +348,22 @@ impl Compositor {
                     });
                 }
             }
+        }
+
+        // Text content
+        if let Some(ref text) = node.text {
+            let font_size = node.style.font_size;
+            let line_height = node.style.line_height;
+            let font_weight = node.style.font_weight;
+            let color = node.style.color;
+            list.push(DrawCommand::DrawText {
+                origin: (node.geometry.content_box.x, node.geometry.content_box.y),
+                text: text.clone(),
+                font_size,
+                line_height,
+                font_weight,
+                color,
+            });
         }
 
         // Children
