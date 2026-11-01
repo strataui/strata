@@ -577,4 +577,10 @@ mod tests {
         let table_card = &main.children[2];
         assert_eq!(table_card.geometry.border_box.width, 1600.0);
     }
+    #[test]
+    fn test_strata_raw_benchmarks() {
+        let timing = crate::raw_bench::measure_strata_level(ParityLevel::Level1BoxModel, 5);
+        assert!(timing.total_us > 0);
+    }
 }
+

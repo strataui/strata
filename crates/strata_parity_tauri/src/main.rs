@@ -5,6 +5,7 @@ pub mod strata_runner;
 pub mod tauri_runner;
 pub mod diff;
 pub mod capture;
+pub mod raw_bench;
 
 use std::env;
 use std::path::Path;
@@ -38,6 +39,11 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let level = get_level_from_args(&args);
     let level_num = level_index(level);
+
+    if args.contains(&"--bench-raw".to_string()) {
+        raw_bench::run_raw_benchmarks();
+        return;
+    }
 
     if args.contains(&"--tauri-only".to_string()) {
         let html_path = format!("/tmp/parity_tauri_fixture_l{}.html", level_num);
