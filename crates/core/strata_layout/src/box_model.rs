@@ -33,6 +33,19 @@ pub fn resolve_dimension(dim: Dimension, available: f32) -> Option<f32> {
         Dimension::Vh(vh) => Some(available * (vh / 100.0)),
         Dimension::Rem(rem) => Some(rem * 16.0),
         Dimension::Em(em) => Some(em * 16.0),
+        Dimension::Calc(id) => {
+            strata_style::calc::get_calc(id).map(|expr| {
+                let ctx = strata_style::calc::CalcContext {
+                    parent_size: available,
+                    root_font_size: 16.0,
+                    current_font_size: 16.0,
+                    viewport_width: 1920.0,
+                    viewport_height: 1080.0,
+                };
+                expr.eval(&ctx)
+            })
+        }
+        Dimension::MinContent | Dimension::MaxContent | Dimension::FitContent(_) => None,
     }
 }
 

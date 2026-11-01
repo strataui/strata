@@ -47,6 +47,11 @@ impl LayoutNode {
         }
     }
 
+    /// Appends a child layout node.
+    pub fn add_child(&mut self, child: LayoutNode) {
+        self.children.push(child);
+    }
+
     /// Translates this node's geometry and all descendants recursively by (dx, dy).
     pub fn translate(&mut self, dx: f32, dy: f32) {
         self.geometry.translate(dx, dy);

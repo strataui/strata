@@ -41,9 +41,18 @@ pub enum Dimension {
     Vh(f32),
     Rem(f32),
     Em(f32),
+    Calc(crate::calc::CalcId),
+    MinContent,
+    MaxContent,
+    FitContent(f32),
 }
 
 impl Dimension {
+    /// Creates a Dimension variant from an AST calc expression.
+    pub fn calc(expr: crate::calc::CalcExpr) -> Self {
+        Self::Calc(crate::calc::intern_calc(expr))
+    }
+
     /// Resolves the dimension into concrete pixels given a context.
     pub fn resolve_px(&self, parent_size: f32, root_font_size: f32, current_font_size: f32) -> Option<f32> {
         match *self {
@@ -54,6 +63,19 @@ impl Dimension {
             Self::Vh(vh) => Some(vh),
             Self::Rem(rem) => Some(rem * root_font_size),
             Self::Em(em) => Some(em * current_font_size),
+            Self::Calc(id) => {
+                crate::calc::get_calc(id).map(|expr| {
+                    let ctx = crate::calc::CalcContext {
+                        parent_size,
+                        root_font_size,
+                        current_font_size,
+                        viewport_width: 1920.0,
+                        viewport_height: 1080.0,
+                    };
+                    expr.eval(&ctx)
+                })
+            }
+            Self::MinContent | Self::MaxContent | Self::FitContent(_) => None,
         }
     }
 }
@@ -276,6 +298,10 @@ pub struct ComputedStyle {
     pub text_align: TextAlign,
     pub line_height: f32,
     pub letter_spacing: f32,
+
+    // Visual Effects
+    pub backdrop_filter: Option<crate::effects::BackdropFilter>,
+    pub clip_path: Option<crate::effects::ClipPath>,
 }
 
 impl Default for ComputedStyle {
@@ -329,6 +355,9 @@ impl Default for ComputedStyle {
             text_align: TextAlign::Left,
             line_height: 1.5,
             letter_spacing: 0.0,
+
+            backdrop_filter: None,
+            clip_path: None,
         }
     }
 }

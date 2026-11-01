@@ -224,25 +224,37 @@ pub struct EdgeInsets<T = f32> {
     pub left: T,
 }
 
-impl<T: Copy> EdgeInsets<T> {
+impl<T> EdgeInsets<T> {
     #[inline(always)]
     pub const fn new(top: T, right: T, bottom: T, left: T) -> Self {
         Self { top, right, bottom, left }
     }
+}
 
+impl<T: Clone> EdgeInsets<T> {
     #[inline(always)]
-    pub const fn all(value: T) -> Self {
-        Self { top: value, right: value, bottom: value, left: value }
+    pub fn all(value: T) -> Self {
+        Self {
+            top: value.clone(),
+            right: value.clone(),
+            bottom: value.clone(),
+            left: value,
+        }
     }
 
     #[inline(always)]
-    pub const fn symmetric(vertical: T, horizontal: T) -> Self {
-        Self { top: vertical, right: horizontal, bottom: vertical, left: horizontal }
+    pub fn symmetric(vertical: T, horizontal: T) -> Self {
+        Self {
+            top: vertical.clone(),
+            right: horizontal.clone(),
+            bottom: vertical,
+            left: horizontal,
+        }
     }
 }
 
 impl EdgeInsets<f32> {
-    pub const ZERO: Self = Self::all(0.0);
+    pub const ZERO: Self = Self::new(0.0, 0.0, 0.0, 0.0);
 
     #[inline(always)]
     pub fn horizontal(self) -> f32 { self.left + self.right }
