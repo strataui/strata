@@ -17,6 +17,7 @@ impl View {
 pub mod events;
 pub mod ir;
 pub mod reactive;
+pub mod spring;
 
 pub use events::{Event, EventDispatcher, EventPhase, EventType};
 pub use ir::{
@@ -24,9 +25,10 @@ pub use ir::{
     UiIrGraph, UiIrNode,
 };
 pub use reactive::{
-    batch, untrack, use_effect, use_memo, use_signal, use_state, Effect, Memo, ReactiveRuntime,
-    ScopeId, Signal, SignalId, SubscriberId,
+    batch, create_signal, untrack, use_effect, use_memo, use_signal, use_state, Effect, Memo,
+    ReactiveRuntime, ReadSignal, ScopeId, SetSignal, Signal, SignalId, SubscriberId, WriteSignal,
 };
+pub use spring::{SpringConfig, SpringSignal};
 
 /// Trait abstracting event handlers accepting `()` or `(Event)`.
 pub trait EventHandlerMarker<Args> {

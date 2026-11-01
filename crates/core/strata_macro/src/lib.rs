@@ -9,6 +9,7 @@ mod component;
 mod cursor;
 mod dynamic;
 mod parser;
+mod store;
 
 /// Declares a Strata functional component with fine-grained reactivity and JSX prop builder.
 #[proc_macro_attribute]
@@ -40,4 +41,16 @@ pub fn rsx(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn dynamic(input: TokenStream) -> TokenStream {
     dynamic::expand_dynamic(input)
+}
+
+/// Derives a companion `<StructName>Store` where each field is an independent atomic `Signal<T>`.
+#[proc_macro_derive(Store)]
+pub fn derive_store(input: TokenStream) -> TokenStream {
+    store::expand_derive_store(input)
+}
+
+/// Alias for #[derive(Store)].
+#[proc_macro_derive(ReactiveStore)]
+pub fn derive_reactive_store(input: TokenStream) -> TokenStream {
+    store::expand_derive_store(input)
 }

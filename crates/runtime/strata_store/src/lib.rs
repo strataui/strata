@@ -11,9 +11,11 @@ pub mod store;
 pub use history::HistoryStore;
 pub use persist::{create_persistent_store, PersistOptions};
 pub use store::{create_store, Store};
+pub use strata_macro::ReactiveStore;
 
 pub mod prelude {
     pub use crate::history::HistoryStore;
     pub use crate::persist::{create_persistent_store, PersistOptions};
     pub use crate::store::{create_store, Store};
+    pub use strata_macro::ReactiveStore;
 }

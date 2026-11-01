@@ -1,6 +1,8 @@
-use strata_macro::{component, dynamic, rsx};
-use strata_dom::{Attribute, NodeBlueprint, Tag, View};
+use strata_macro::{component, dynamic, rsx, Store};
+use strata_dom::{Attribute, Effect, NodeBlueprint, Tag, View};
 use strata_js::JsValue;
+use std::cell::Cell;
+use std::rc::Rc;
 
 #[component]
 fn Header(title: &'static str, subtitle: Option<&'static str>) -> View {
@@ -187,3 +189,99 @@ fn test_dynamic_macro() {
     assert!(val["nullable"].is_null());
     assert!(val["void_val"].is_undefined());
 }
+
+#[derive(Store, Clone, Debug, Default, PartialEq)]
+pub struct ClusterTelemetry {
+    pub node_id: String,
+    pub cpu_percent: f32,
+    pub connections: u32,
+    pub is_healthy: bool,
+}
+
+#[test]
+fn test_derive_store_macro_atomic_reactivity_and_transactions() {
+    let initial = ClusterTelemetry {
+        node_id: "node-us-east-1a".to_string(),
+        cpu_percent: 24.5,
+        connections: 1200,
+        is_healthy: true,
+    };
+
+    let store = ClusterTelemetryStore::new(initial.clone());
+
+    // 1. Initial field signals
+    assert_eq!(store.node_id.get(), "node-us-east-1a");
+    assert_eq!(store.cpu_percent.get(), 24.5);
+    assert_eq!(store.connections.get(), 1200);
+    assert!(store.is_healthy.get());
+
+    // 2. Track single field reactivity
+    let cpu_runs = Rc::new(Cell::new(0));
+    let cpu_obs = Rc::new(Cell::new(0.0f32));
+
+    let cr = cpu_runs.clone();
+    let co = cpu_obs.clone();
+    let cpu_sig = store.cpu_percent.clone();
+
+    let _effect = Effect::new(move || {
+        cr.set(cr.get() + 1);
+        co.set(cpu_sig.get());
+        None
+    });
+
+    assert_eq!(cpu_runs.get(), 1);
+    assert_eq!(cpu_obs.get(), 24.5);
+
+    // Mutate only connections (cpu subscriber MUST NOT run)
+    store.connections.set(1350);
+    assert_eq!(cpu_runs.get(), 1, "Unrelated field mutation must not trigger cpu effect");
+    assert_eq!(store.connections.get(), 1350);
+
+    // Mutate cpu
+    store.cpu_percent.set(78.2);
+    assert_eq!(cpu_runs.get(), 2);
+    assert_eq!(cpu_obs.get(), 78.2);
+
+    // 3. Atomic Batch Transaction
+    let batch_runs = Rc::new(Cell::new(0));
+    let br = batch_runs.clone();
+    let s_node = store.node_id.clone();
+    let s_conn = store.connections.clone();
+
+    let _batch_effect = Effect::new(move || {
+        br.set(br.get() + 1);
+        let _ = s_node.get();
+        let _ = s_conn.get();
+        None
+    });
+
+    assert_eq!(batch_runs.get(), 1);
+
+    // Perform batch update across multiple fields
+    store.batch(|s| {
+        s.node_id.set("node-eu-west-1b".to_string());
+        s.connections.set(4500);
+    });
+
+    // Despite 2 field writes, the effect must run only ONCE after the batch completes!
+    assert_eq!(batch_runs.get(), 2, "Batch must coalesce notifications to exactly one flush");
+    assert_eq!(store.node_id.get(), "node-eu-west-1b");
+    assert_eq!(store.connections.get(), 4500);
+
+    // 4. Snapshot and Transaction Rollback
+    let snapshot = store.snapshot();
+    assert_eq!(snapshot.node_id, "node-eu-west-1b");
+    assert_eq!(snapshot.connections, 4500);
+
+    // Speculative mutation
+    store.cpu_percent.set(99.9);
+    store.is_healthy.set(false);
+    assert_eq!(store.cpu_percent.get(), 99.9);
+    assert!(!store.is_healthy.get());
+
+    // Rollback to snapshot
+    store.restore(&snapshot);
+    assert_eq!(store.cpu_percent.get(), 78.2);
+    assert!(store.is_healthy.get());
+}
+

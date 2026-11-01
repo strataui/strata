@@ -47,3 +47,37 @@ fn test_cart_store_selectors_and_history() {
     assert!(history_store.redo());
     assert_eq!(history_store.get().total_cents, 14800);
 }
+
+#[derive(ReactiveStore, Clone, Debug, Default, PartialEq)]
+pub struct ClusterNodeStoreState {
+    pub hostname: String,
+    pub load_avg: f32,
+    pub active_tasks: u32,
+}
+
+#[test]
+fn test_reactive_store_derive_integration() {
+    let initial = ClusterNodeStoreState {
+        hostname: "worker-01".to_string(),
+        load_avg: 1.25,
+        active_tasks: 8,
+    };
+
+    let store = initial.into_store();
+    assert_eq!(store.hostname.get(), "worker-01");
+    assert_eq!(store.load_avg.get(), 1.25);
+    assert_eq!(store.active_tasks.get(), 8);
+
+    store.batch(|s| {
+        s.load_avg.set(2.85);
+        s.active_tasks.set(16);
+    });
+
+    assert_eq!(store.load_avg.get(), 2.85);
+    assert_eq!(store.active_tasks.get(), 16);
+
+    let snap = store.snapshot();
+    assert_eq!(snap.load_avg, 2.85);
+    assert_eq!(snap.active_tasks, 16);
+}
+

@@ -6,6 +6,7 @@ description = "Lightweight Signal-Driven Global State Store for Strata"
 
 [dependencies]
 strata_dom = { workspace = true }
+strata_macro = { workspace = true }
 strata_storage = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

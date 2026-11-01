@@ -243,6 +243,102 @@ impl<T: Clone + 'static> Signal<T> {
         ReactiveRuntime::track(self.id);
         self.value.borrow()
     }
+
+    /// Splits this combined signal into decoupled read-only and write-only capabilities.
+    pub fn split(&self) -> (ReadSignal<T>, WriteSignal<T>) {
+        (
+            ReadSignal {
+                id: self.id,
+                value: self.value.clone(),
+            },
+            WriteSignal {
+                id: self.id,
+                value: self.value.clone(),
+            },
+        )
+    }
+}
+
+/// Read-only reactive signal capability.
+#[derive(Clone)]
+pub struct ReadSignal<T> {
+    id: SignalId,
+    value: Rc<RefCell<T>>,
+}
+
+impl<T: Clone + 'static> ReadSignal<T> {
+    pub fn id(&self) -> SignalId {
+        self.id
+    }
+
+    pub fn get(&self) -> T {
+        ReactiveRuntime::track(self.id);
+        self.value.borrow().clone()
+    }
+
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        ReactiveRuntime::track(self.id);
+        f(&*self.value.borrow())
+    }
+
+    pub fn untracked_get(&self) -> T {
+        self.value.borrow().clone()
+    }
+
+    pub fn read(&self) -> std::cell::Ref<'_, T> {
+        ReactiveRuntime::track(self.id);
+        self.value.borrow()
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for ReadSignal<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadSignal")
+            .field("id", &self.id)
+            .field("value", &*self.value.borrow())
+            .finish()
+    }
+}
+
+/// Write-only reactive signal capability.
+#[derive(Clone)]
+pub struct WriteSignal<T> {
+    id: SignalId,
+    value: Rc<RefCell<T>>,
+}
+
+impl<T: Clone + 'static> WriteSignal<T> {
+    pub fn id(&self) -> SignalId {
+        self.id
+    }
+
+    pub fn set(&self, new_val: T) {
+        *self.value.borrow_mut() = new_val;
+        ReactiveRuntime::notify(self.id);
+    }
+
+    pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        let res = f(&mut *self.value.borrow_mut());
+        ReactiveRuntime::notify(self.id);
+        res
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for WriteSignal<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WriteSignal")
+            .field("id", &self.id)
+            .finish()
+    }
+}
+
+/// Idiomatic SolidJS/Leptos alias for write capability.
+pub type SetSignal<T> = WriteSignal<T>;
+
+/// Creates an atomic reactive cell with decoupled read and write capabilities.
+pub fn create_signal<T: Clone + 'static>(initial: T) -> (ReadSignal<T>, WriteSignal<T>) {
+    let sig = Signal::new(initial);
+    sig.split()
 }
 
 struct MemoInner {
