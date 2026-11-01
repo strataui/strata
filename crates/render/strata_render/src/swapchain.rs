@@ -224,7 +224,15 @@ impl SwapchainCompositor {
         }
 
         let start = Instant::now();
-        self.framebuffer.execute_display_list(display_list);
+        if let Some(damage_rect) = damage {
+            if force_redraw {
+                self.framebuffer.execute_display_list(display_list);
+            } else {
+                self.framebuffer.execute_display_list_damaged(display_list, damage_rect);
+            }
+        } else {
+            self.framebuffer.execute_display_list(display_list);
+        }
         presenter.present(&self.framebuffer, damage)?;
 
         self.damage_tracker.reset();

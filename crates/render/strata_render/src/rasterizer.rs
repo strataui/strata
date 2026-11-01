@@ -55,6 +55,22 @@ impl FrameBuffer {
         }
     }
 
+    /// Clears an axis-aligned rectangular region with a solid color.
+    pub fn clear_rect(&mut self, rect: Rect, color: Color) {
+        let (min_x, max_x, min_y, max_y) = self.compute_clamped_bounds(rect, None);
+        let (r, g, b, a) = color.to_rgba8();
+        for y in min_y..max_y {
+            let row_start = (y * self.width + min_x) * 4;
+            let row_end = (y * self.width + max_x) * 4;
+            for chunk in self.pixels[row_start..row_end].chunks_exact_mut(4) {
+                chunk[0] = r;
+                chunk[1] = g;
+                chunk[2] = b;
+                chunk[3] = a;
+            }
+        }
+    }
+
     /// Reads a pixel at (x, y).
     #[inline]
     pub fn get_pixel(&self, x: usize, y: usize) -> Color {
@@ -275,6 +291,89 @@ impl FrameBuffer {
                 DrawCommand::PopClip => {
                     clip_stack.pop();
                 }
+            }
+        }
+    }
+
+    /// Executes drawing commands strictly scissored to the specified damage rectangle.
+    /// Commands that do not intersect damage are skipped in O(1).
+    pub fn execute_display_list_damaged(&mut self, list: &DisplayList, damage: Rect) {
+        if damage.width <= 0.0 || damage.height <= 0.0 {
+            return;
+        }
+
+        let mut clip_stack: Vec<Rect> = Vec::new();
+
+        for cmd in list.commands() {
+            if let DrawCommand::PushClip { bounds, .. } = cmd {
+                let combined = match clip_stack.last() {
+                    Some(prev) => prev.intersect(*bounds).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
+                    None => *bounds,
+                };
+                clip_stack.push(combined);
+                continue;
+            } else if let DrawCommand::PopClip = cmd {
+                clip_stack.pop();
+                continue;
+            }
+
+            let effective_clip = match clip_stack.last() {
+                Some(prev) => match prev.intersect(damage) {
+                    Some(c) => c,
+                    None => continue,
+                },
+                None => damage,
+            };
+
+            if let Some(cmd_bounds) = cmd.bounds() {
+                if cmd_bounds.intersect(effective_clip).is_none() {
+                    continue;
+                }
+            }
+
+            match cmd {
+                DrawCommand::DrawRect { bounds, color } => {
+                    self.draw_rect(*bounds, *color, Some(effective_clip));
+                }
+                DrawCommand::DrawRoundedRect {
+                    bounds,
+                    color,
+                    border_radius,
+                    border_width,
+                    border_color,
+                } => {
+                    self.draw_rounded_rect(
+                        *bounds,
+                        *color,
+                        border_radius.top_left,
+                        border_width.top,
+                        *border_color,
+                        Some(effective_clip),
+                    );
+                }
+                DrawCommand::DrawShadow { bounds, shadow } => {
+                    self.draw_shadow(*bounds, shadow, Some(effective_clip));
+                }
+                DrawCommand::DrawBorder {
+                    bounds,
+                    widths,
+                    color,
+                    border_radius,
+                } => {
+                    self.draw_rounded_rect(
+                        *bounds,
+                        Color::TRANSPARENT,
+                        border_radius.top_left,
+                        widths.top,
+                        Some(*color),
+                        Some(effective_clip),
+                    );
+                }
+                DrawCommand::DrawText { .. } => {}
+                DrawCommand::DrawViewport3D { bounds, scene } => {
+                    crate::rasterizer3d::render_scene_3d(self, *bounds, scene, Some(effective_clip));
+                }
+                DrawCommand::PushClip { .. } | DrawCommand::PopClip => unreachable!(),
             }
         }
     }

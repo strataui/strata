@@ -48,6 +48,46 @@ pub enum DrawCommand {
     PopClip,
 }
 
+impl DrawCommand {
+    /// Returns true if this command is a clipping push or pop instruction.
+    #[inline]
+    pub fn is_clip(&self) -> bool {
+        matches!(self, Self::PushClip { .. } | Self::PopClip)
+    }
+
+    /// Returns the bounding rectangle for this drawing command, if applicable.
+    pub fn bounds(&self) -> Option<Rect> {
+        match self {
+            Self::DrawRect { bounds, .. } => Some(*bounds),
+            Self::DrawRoundedRect { bounds, .. } => Some(*bounds),
+            Self::DrawShadow { bounds, shadow } => {
+                let spread = shadow.spread_radius + shadow.blur_radius;
+                Some(Rect::new(
+                    bounds.x + shadow.offset_x - spread,
+                    bounds.y + shadow.offset_y - spread,
+                    bounds.width + spread * 2.0,
+                    bounds.height + spread * 2.0,
+                ))
+            }
+            Self::DrawBorder { bounds, .. } => Some(*bounds),
+            Self::DrawText {
+                origin,
+                text,
+                font_size,
+                line_height,
+                ..
+            } => {
+                let h = line_height.max(*font_size);
+                let w = text.len() as f32 * font_size * 0.6;
+                Some(Rect::new(origin.0, origin.1, w, h))
+            }
+            Self::DrawViewport3D { bounds, .. } => Some(*bounds),
+            Self::PushClip { bounds, .. } => Some(*bounds),
+            Self::PopClip => None,
+        }
+    }
+}
+
 /// A serialized sequence of render instructions for a single frame.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct DisplayList {

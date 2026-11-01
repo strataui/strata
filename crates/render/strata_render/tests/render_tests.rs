@@ -253,3 +253,68 @@ fn test_3d_viewport_compositing_into_framebuffer() {
     let bg_pixel = fb.get_pixel(12, 12);
     assert_eq!(bg_pixel, Color::BLACK);
 }
+
+#[test]
+fn test_dirty_rect_damaged_rasterization() {
+    let mut dl = DisplayList::new();
+
+    // Background
+    dl.push(DrawCommand::DrawRect {
+        bounds: Rect::new(0.0, 0.0, 500.0, 500.0),
+        color: Color::rgb(15, 23, 42),
+    });
+
+    // Card 1 (Damage target)
+    dl.push(DrawCommand::DrawRect {
+        bounds: Rect::new(20.0, 20.0, 100.0, 100.0),
+        color: Color::rgb(59, 130, 246),
+    });
+
+    // Card 2 (Unrelated element)
+    dl.push(DrawCommand::DrawRect {
+        bounds: Rect::new(300.0, 300.0, 100.0, 100.0),
+        color: Color::rgb(34, 197, 94),
+    });
+
+    // Full frame render
+    let mut fb_full = FrameBuffer::new(500, 500);
+    fb_full.execute_display_list(&dl);
+
+    // Damaged render: start with empty buffer, render only Card 1 damage
+    let mut fb_damaged = FrameBuffer::new(500, 500);
+    let damage_rect = Rect::new(20.0, 20.0, 100.0, 100.0);
+    fb_damaged.execute_display_list_damaged(&dl, damage_rect);
+
+    // 1. Pixels inside damage rect must be pixel-for-pixel identical to full render
+    for y in 20..120 {
+        for x in 20..120 {
+            assert_eq!(
+                fb_damaged.get_pixel(x, y),
+                fb_full.get_pixel(x, y),
+                "Pixel mismatch at ({}, {})",
+                x,
+                y
+            );
+        }
+    }
+
+    // 2. Pixels in Card 2 (300..400) must NOT have been drawn in fb_damaged
+    assert_eq!(fb_full.get_pixel(350, 350), Color::rgb(34, 197, 94));
+    assert_eq!(fb_damaged.get_pixel(350, 350), Color::TRANSPARENT);
+}
+
+#[test]
+fn test_framebuffer_clear_rect() {
+    let mut fb = FrameBuffer::new(200, 200);
+    fb.clear(Color::WHITE);
+
+    fb.clear_rect(Rect::new(50.0, 50.0, 50.0, 50.0), Color::RED);
+
+    // Inside cleared rect
+    assert_eq!(fb.get_pixel(60, 60), Color::RED);
+    assert_eq!(fb.get_pixel(99, 99), Color::RED);
+
+    // Outside cleared rect
+    assert_eq!(fb.get_pixel(40, 40), Color::WHITE);
+    assert_eq!(fb.get_pixel(120, 120), Color::WHITE);
+}

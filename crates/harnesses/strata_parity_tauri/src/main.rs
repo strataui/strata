@@ -45,6 +45,11 @@ fn main() {
         return;
     }
 
+    if args.contains(&"--bench-damage".to_string()) {
+        raw_bench::run_damage_benchmarks();
+        return;
+    }
+
     if args.contains(&"--tauri-only".to_string()) {
         let html_path = format!("/tmp/parity_tauri_fixture_l{}.html", level_num);
         let tauri_shot = format!("/tmp/tauri_rendered_l{}.png", level_num);

@@ -53,6 +53,24 @@ impl Rect {
         }
     }
 
+    /// Returns true if this rectangle contains the given point (px, py).
+    #[inline]
+    pub fn contains_point(self, px: f32, py: f32) -> bool {
+        px >= self.min_x() && px <= self.max_x() && py >= self.min_y() && py <= self.max_y()
+    }
+
+    /// Returns true if this rectangle completely encloses `other`.
+    #[inline]
+    pub fn contains_rect(self, other: Self) -> bool {
+        if other.width <= 0.0 || other.height <= 0.0 {
+            return false;
+        }
+        other.min_x() >= self.min_x()
+            && other.max_x() <= self.max_x()
+            && other.min_y() >= self.min_y()
+            && other.max_y() <= self.max_y()
+    }
+
     /// Chromium subpixel pixel snapping via `LayoutUnit` (1/64th px fixed point).
     pub fn snap_to_pixel(self) -> Self {
         Self {

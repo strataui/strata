@@ -7,11 +7,17 @@ pub mod rasterizer;
 pub mod rasterizer3d;
 pub mod scene3d;
 pub mod swapchain;
+pub mod tiling;
+pub mod gpu_pipeline;
 
 // Re-exports
 pub use compositor::{Compositor, DamageTracker, DisplayList, DrawCommand};
 pub use geometry3d::{
     generate_box, generate_cylinder, generate_plane, generate_sphere, generate_custom, MeshBuffers, Vertex3D,
+};
+pub use gpu_pipeline::{
+    GpuBatch, GpuPresentationPipeline, GpuQuadInstance, GpuUniforms, GpuVertex, QUAD_VERTICES,
+    WGSL_ANALYTICAL_QUAD_SHADER,
 };
 pub use math3d::{Mat4, Ray3D, Vec3, Vec4};
 pub use rasterizer::{sd_rounded_rect, sdf_coverage, FrameBuffer};
@@ -19,6 +25,7 @@ pub use scene3d::{Camera3D, Geometry3D, Light3D, Material3D, Mesh3D, Scene3D, Tr
 pub use swapchain::{
     PresentError, SoftwareSurfacePresenter, SurfacePresenter, SwapchainCompositor, SwapchainFormat,
 };
+pub use tiling::{DEFAULT_TILE_SIZE, OcclusionTracker, Tile, TileCoord, TilingSet};
 
 pub mod prelude {
     pub use crate::compositor::{Compositor, DamageTracker, DisplayList, DrawCommand};
