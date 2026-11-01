@@ -9,8 +9,13 @@ pub mod scene3d;
 pub mod swapchain;
 pub mod tiling;
 pub mod gpu_pipeline;
+pub mod kinetic_scroll;
+pub mod canvas2d;
 
 // Re-exports
+pub use canvas2d::{
+    rasterize_canvas_commands, Canvas2DContext, CanvasCommand, CanvasPathVerb, Transform2D,
+};
 pub use compositor::{Compositor, DamageTracker, DisplayList, DrawCommand};
 pub use geometry3d::{
     generate_box, generate_cylinder, generate_plane, generate_sphere, generate_custom, MeshBuffers, Vertex3D,
@@ -18,6 +23,10 @@ pub use geometry3d::{
 pub use gpu_pipeline::{
     GpuBatch, GpuPresentationPipeline, GpuQuadInstance, GpuUniforms, GpuVertex, QUAD_VERTICES,
     WGSL_ANALYTICAL_QUAD_SHADER,
+};
+pub use kinetic_scroll::{
+    KineticScrollController, ScrollAxis, DEFAULT_FRICTION, REST_VELOCITY_THRESHOLD,
+    RUBBER_BAND_MAX_LIMIT, SPRING_DAMPING, SPRING_STIFFNESS,
 };
 pub use math3d::{Mat4, Ray3D, Vec3, Vec4};
 pub use rasterizer::{sd_rounded_rect, sdf_coverage, FrameBuffer};
@@ -28,10 +37,12 @@ pub use swapchain::{
 pub use tiling::{DEFAULT_TILE_SIZE, OcclusionTracker, Tile, TileCoord, TilingSet};
 
 pub mod prelude {
+    pub use crate::canvas2d::Canvas2DContext;
     pub use crate::compositor::{Compositor, DamageTracker, DisplayList, DrawCommand};
     pub use crate::geometry3d::{
         generate_box, generate_cylinder, generate_plane, generate_sphere, generate_custom, MeshBuffers, Vertex3D,
     };
+    pub use crate::kinetic_scroll::KineticScrollController;
     pub use crate::math3d::{Mat4, Ray3D, Vec3, Vec4};
     pub use crate::rasterizer::FrameBuffer;
     pub use crate::scene3d::*;

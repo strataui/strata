@@ -373,3 +373,57 @@ fn test_navigation_and_composites() {
         _ => panic!("Expected Element"),
     }
 }
+
+#[test]
+fn test_canvas2d_and_scroll_view_components() {
+    use std::rc::Rc;
+    use strata_style::types::Color;
+
+    // 1. Canvas2D Component
+    let drawn = Rc::new(std::cell::Cell::new(false));
+    let drawn_clone = drawn.clone();
+
+    let canvas = Canvas2D(
+        Some(400.0),
+        Some(300.0),
+        Some("shadow-2xl"),
+        Some(Rc::new(move |ctx| {
+            ctx.set_fill_style(Color::rgb(255, 0, 0));
+            ctx.fill_rect(10.0, 10.0, 100.0, 100.0);
+            drawn_clone.set(true);
+        })),
+    );
+
+    assert!(drawn.get(), "Canvas2D on_draw closure must have been executed");
+    match &canvas.root {
+        NodeBlueprint::Element { tag, .. } => assert_eq!(*tag, Tag::Div),
+        _ => panic!("Expected Element"),
+    }
+
+    // 2. Scrollbar Component
+    let scrollbar = Scrollbar(
+        Some(ScrollbarOrientation::Vertical),
+        Some(0.5),
+        Some(0.2),
+        Some(1.0),
+        None,
+    );
+    match &scrollbar.root {
+        NodeBlueprint::Element { tag, .. } => assert_eq!(*tag, Tag::Div),
+        _ => panic!("Expected Element"),
+    }
+
+    // 3. ScrollView Container
+    let scroll_view = ScrollView(
+        Some(vec![canvas.root]),
+        Some("h-96 w-full"),
+        Some(true),
+    );
+    match &scroll_view.root {
+        NodeBlueprint::Element { tag, children, .. } => {
+            assert_eq!(*tag, Tag::Div);
+            assert!(children.len() >= 1);
+        }
+        _ => panic!("Expected Element"),
+    }
+}

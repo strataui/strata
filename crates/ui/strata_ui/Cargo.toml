@@ -12,3 +12,5 @@ strata_dom = { workspace = true }
 strata_macro = { workspace = true }
 strata_icons = { workspace = true }
 strata_style = { workspace = true }
+strata_render = { workspace = true }
+strata_motion = { workspace = true }

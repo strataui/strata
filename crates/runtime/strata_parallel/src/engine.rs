@@ -97,6 +97,10 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
             scene: scene.clone(),
         },
+        DrawCommand::DrawCanvas2D { bounds, commands } => DrawCommand::DrawCanvas2D {
+            bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
+            commands: commands.clone(),
+        },
         DrawCommand::PushClip { bounds, radius } => DrawCommand::PushClip {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
             radius: *radius,

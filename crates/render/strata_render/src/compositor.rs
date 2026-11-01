@@ -41,6 +41,10 @@ pub enum DrawCommand {
         bounds: Rect,
         scene: Scene3D,
     },
+    DrawCanvas2D {
+        bounds: Rect,
+        commands: Vec<crate::canvas2d::CanvasCommand>,
+    },
     PushClip {
         bounds: Rect,
         radius: BorderRadius,
@@ -82,6 +86,7 @@ impl DrawCommand {
                 Some(Rect::new(origin.0, origin.1, w, h))
             }
             Self::DrawViewport3D { bounds, .. } => Some(*bounds),
+            Self::DrawCanvas2D { bounds, .. } => Some(*bounds),
             Self::PushClip { bounds, .. } => Some(*bounds),
             Self::PopClip => None,
         }

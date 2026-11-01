@@ -9,6 +9,8 @@ pub mod data_display;
 pub mod feedback;
 pub mod navigation;
 pub mod composite;
+pub mod canvas;
+pub mod scrollbar;
 
 pub mod prelude {
     pub use super::primitives::*;
@@ -18,4 +20,6 @@ pub mod prelude {
     pub use super::feedback::*;
     pub use super::navigation::*;
     pub use super::composite::*;
+    pub use super::canvas::*;
+    pub use super::scrollbar::*;
 }

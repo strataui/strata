@@ -13,3 +13,4 @@ strata_layout = { workspace = true }
 strata_dom = { workspace = true }
 strata_macro = { workspace = true }
 strata_js = { workspace = true }
+strata_gpu_path = { workspace = true }

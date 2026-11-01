@@ -316,6 +316,36 @@ impl Transform2D {
         )
     }
 
+    /// Creates a 2D affine transform from standard W3C 6-parameter coefficients:
+    /// `a` (scale x), `b` (shear y), `c` (shear x), `d` (scale y), `e` (translate x), `f` (translate y).
+    #[inline(always)]
+    pub const fn from_w3c(a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) -> Self {
+        Self { a, b, c, d, tx: e, ty: f }
+    }
+
+    #[inline(always)]
+    pub fn transform_xy(&self, x: f32, y: f32) -> (f32, f32) {
+        (
+            self.a * x + self.c * y + self.tx,
+            self.b * x + self.d * y + self.ty,
+        )
+    }
+
+    #[inline(always)]
+    pub fn translate(&mut self, dx: f32, dy: f32) {
+        *self = self.multiply(Self::translation(dx, dy));
+    }
+
+    #[inline(always)]
+    pub fn scale_mut(&mut self, sx: f32, sy: f32) {
+        *self = self.multiply(Self::scale(sx, sy));
+    }
+
+    #[inline(always)]
+    pub fn rotate_mut(&mut self, radians: f32) {
+        *self = self.multiply(Self::rotation(radians));
+    }
+
     /// Concatenates this transform with another (`self * other`).
     pub fn multiply(self, rhs: Self) -> Self {
         Self {

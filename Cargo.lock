@@ -3254,6 +3254,7 @@ name = "strata_render"
 version = "0.1.0"
 dependencies = [
  "strata_dom",
+ "strata_gpu_path",
  "strata_js",
  "strata_layout",
  "strata_macro",
@@ -3346,7 +3347,9 @@ dependencies = [
  "strata_dom",
  "strata_icons",
  "strata_macro",
+ "strata_motion",
  "strata_primitives",
+ "strata_render",
  "strata_style",
 ]
 
