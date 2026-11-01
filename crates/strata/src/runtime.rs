@@ -135,7 +135,7 @@ impl AppRuntime {
 
                 let mut child_nodes = Vec::with_capacity(children.len());
                 for child in children {
-                    child_nodes.push(Self::build_layout_tree_with_parent(child, Some(&style)));
+                    Self::append_child_layout_nodes(child, Some(&style), &mut child_nodes);
                 }
 
                 LayoutNode::with_children(style, child_nodes)
@@ -187,6 +187,21 @@ impl AppRuntime {
                 style.display = Display::None;
                 LayoutNode::new(style)
             }
+        }
+    }
+
+    /// Recursively flattens Fragment blueprints so child elements splice directly into parent layout contexts.
+    fn append_child_layout_nodes(
+        blueprint: &NodeBlueprint,
+        parent_style: Option<&ComputedStyle>,
+        out: &mut Vec<LayoutNode>,
+    ) {
+        if let NodeBlueprint::Fragment(children) = blueprint {
+            for child in children {
+                Self::append_child_layout_nodes(child, parent_style, out);
+            }
+        } else {
+            out.push(Self::build_layout_tree_with_parent(blueprint, parent_style));
         }
     }
 
