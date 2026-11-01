@@ -11,12 +11,19 @@ pub mod tiling;
 pub mod gpu_pipeline;
 pub mod kinetic_scroll;
 pub mod canvas2d;
+pub mod orbit_controls;
+pub mod shared_target;
+pub mod custom_shader;
 
 // Re-exports
 pub use canvas2d::{
     rasterize_canvas_commands, Canvas2DContext, CanvasCommand, CanvasPathVerb, Transform2D,
 };
 pub use compositor::{Compositor, DamageTracker, DisplayList, DrawCommand};
+pub use custom_shader::{
+    CustomShaderPipeline, FaceCullMode, GpuRenderCallback, GpuRenderContext, PrimitiveTopology,
+    WgslShaderSource, WGSL_COMPUTE_TELEMETRY_SHADER, WGSL_PBR_3D_SHADER,
+};
 pub use geometry3d::{
     generate_box, generate_cylinder, generate_plane, generate_sphere, generate_custom, MeshBuffers, Vertex3D,
 };
@@ -29,8 +36,10 @@ pub use kinetic_scroll::{
     RUBBER_BAND_MAX_LIMIT, SPRING_DAMPING, SPRING_STIFFNESS,
 };
 pub use math3d::{Mat4, Ray3D, Vec3, Vec4};
+pub use orbit_controls::{OrbitControls, OrbitInteractionMode};
 pub use rasterizer::{sd_rounded_rect, sdf_coverage, FrameBuffer};
 pub use scene3d::{Camera3D, Geometry3D, Light3D, Material3D, Mesh3D, Scene3D, Transform3D};
+pub use shared_target::{render_hybrid_frame, SharedRenderTarget};
 pub use swapchain::{
     PresentError, SoftwareSurfacePresenter, SurfacePresenter, SwapchainCompositor, SwapchainFormat,
 };
@@ -39,13 +48,16 @@ pub use tiling::{DEFAULT_TILE_SIZE, OcclusionTracker, Tile, TileCoord, TilingSet
 pub mod prelude {
     pub use crate::canvas2d::Canvas2DContext;
     pub use crate::compositor::{Compositor, DamageTracker, DisplayList, DrawCommand};
+    pub use crate::custom_shader::{CustomShaderPipeline, GpuRenderContext};
     pub use crate::geometry3d::{
         generate_box, generate_cylinder, generate_plane, generate_sphere, generate_custom, MeshBuffers, Vertex3D,
     };
     pub use crate::kinetic_scroll::KineticScrollController;
     pub use crate::math3d::{Mat4, Ray3D, Vec3, Vec4};
+    pub use crate::orbit_controls::OrbitControls;
     pub use crate::rasterizer::FrameBuffer;
     pub use crate::scene3d::*;
+    pub use crate::shared_target::SharedRenderTarget;
     pub use crate::swapchain::{
         PresentError, SoftwareSurfacePresenter, SurfacePresenter, SwapchainCompositor, SwapchainFormat,
     };

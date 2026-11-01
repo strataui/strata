@@ -11,6 +11,8 @@ pub mod navigation;
 pub mod composite;
 pub mod canvas;
 pub mod scrollbar;
+pub mod scene3d;
+pub mod gpu_surface;
 
 pub mod prelude {
     pub use super::primitives::*;
@@ -22,4 +24,6 @@ pub mod prelude {
     pub use super::composite::*;
     pub use super::canvas::*;
     pub use super::scrollbar::*;
+    pub use super::scene3d::{HudCard, SceneViewport};
+    pub use super::gpu_surface::*;
 }

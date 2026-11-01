@@ -343,3 +343,62 @@ pub fn ShaderMaterial(
         Vec::new(),
     ))
 }
+
+#[component]
+pub fn OrthographicCamera(
+    left: Option<f32>,
+    right: Option<f32>,
+    top: Option<f32>,
+    bottom: Option<f32>,
+    near: Option<f32>,
+    far: Option<f32>,
+    position: Option<[f32; 3]>,
+    target: Option<[f32; 3]>,
+) -> View {
+    View::new(NodeBlueprint::element(
+        Tag::Custom("OrthographicCamera"),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ))
+}
+
+#[component]
+pub fn PointLight(
+    position: Option<[f32; 3]>,
+    color: Option<&'static str>,
+    intensity: Option<f32>,
+    distance: Option<f32>,
+) -> View {
+    View::new(NodeBlueprint::element(
+        Tag::Custom("PointLight"),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ))
+}
+
+#[component]
+pub fn PlaneGeometry(width: Option<f32>, height: Option<f32>) -> View {
+    View::new(NodeBlueprint::element(
+        Tag::Custom("PlaneGeometry"),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ))
+}
+
+#[component]
+pub fn CylinderGeometry(
+    radius_top: Option<f32>,
+    radius_bottom: Option<f32>,
+    height: Option<f32>,
+    radial_segments: Option<u32>,
+) -> View {
+    View::new(NodeBlueprint::element(
+        Tag::Custom("CylinderGeometry"),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ))
+}

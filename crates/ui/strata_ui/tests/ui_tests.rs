@@ -427,3 +427,56 @@ fn test_canvas2d_and_scroll_view_components() {
         _ => panic!("Expected Element"),
     }
 }
+
+#[test]
+fn test_hybrid_3d_and_gpu_surface_components() {
+    use strata_dom::Tag;
+    use strata_render::scene3d::Scene3D;
+
+    // 1. HudCard Component
+    let hud_card = HudCard(
+        "Orbital Altitude",
+        Some("w-48"),
+        None,
+    );
+    match &hud_card.root {
+        NodeBlueprint::Element { tag, classes, .. } => {
+            assert_eq!(*tag, Tag::Div);
+            assert!(classes.iter().any(|c| c.contains("backdrop-blur-md")));
+        }
+        _ => panic!("Expected Element"),
+    }
+
+    // 2. SceneViewport with 2D HUD children
+    let scene = Scene3D::new();
+    let viewport = SceneViewport(
+        Some(scene),
+        Some(800.0),
+        Some(600.0),
+        Some("border-neutral-700"),
+        None,
+        Some(vec![hud_card.root]),
+    );
+    match &viewport.root {
+        NodeBlueprint::Element { tag, children, .. } => {
+            assert_eq!(*tag, Tag::Div);
+            assert!(children.len() >= 2, "Viewport must contain canvas backing and HUD overlay");
+        }
+        _ => panic!("Expected Element"),
+    }
+
+    // 3. GpuSurface Component
+    let gpu_surface = GpuSurface(
+        Some(640.0),
+        Some(480.0),
+        Some("rounded-2xl"),
+        None,
+    );
+    match &gpu_surface.root {
+        NodeBlueprint::Element { tag, classes, .. } => {
+            assert_eq!(*tag, Tag::Div);
+            assert!(classes.iter().any(|c| c.contains("bg-neutral-950")));
+        }
+        _ => panic!("Expected Element"),
+    }
+}

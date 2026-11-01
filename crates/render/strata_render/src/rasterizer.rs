@@ -86,6 +86,12 @@ impl FrameBuffer {
         )
     }
 
+    /// Safe zero-copy byte slice view of raw RGBA pixel data.
+    #[inline]
+    pub fn as_raw_bytes(&self) -> &[u8] {
+        &self.pixels
+    }
+
     /// Writes a pixel at (x, y) with standard alpha blending (Porter-Duff Over).
     #[inline]
     pub fn set_pixel(&mut self, x: usize, y: usize, src: Color) {
