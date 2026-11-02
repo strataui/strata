@@ -110,7 +110,7 @@ fn test_web_transpiler_node_blueprint_generation() {
         strata_dom::NodeBlueprint::Element { tag, classes, children, .. } => {
             assert_eq!(tag, Tag::Div);
             assert!(classes[0].contains("max-w-[760px]"));
-            assert!(classes[0].contains("bg-slate-950"));
+            assert!(classes[0].contains("bg-neutral-950"));
 
             // Check H1 title injected
             assert!(children.len() >= 2);
@@ -214,7 +214,7 @@ fn test_wikipedia_article_engine_infobox_and_toc() {
 fn test_reader_theme_and_color_palettes() {
     let dark = ReaderTheme::dark();
     assert_eq!(dark.name, "Dark");
-    assert!(dark.bg_class.contains("bg-slate-950"));
+    assert!(dark.bg_class.contains("bg-neutral-950"));
 
     let amoled = ReaderTheme::amoled();
     assert_eq!(amoled.name, "Amoled");

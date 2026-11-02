@@ -3,7 +3,7 @@
 use strata_benchmark::run_full_benchmark_suite;
 
 fn main() {
-    println!("▲ Strata Universal Benchmark Suite v0.1.0");
+    println!("Project Strata — Universal Performance Benchmark Suite v0.1.0");
     println!("─────────────────────────────────────────────────────────────");
 
     let report = run_full_benchmark_suite(10);

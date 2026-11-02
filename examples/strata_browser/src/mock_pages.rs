@@ -54,39 +54,37 @@ fn extract_search_query(url: &str) -> String {
 
 fn generate_search_results_html(query: &str) -> String {
     format!(
-        r#"<div class="google-search-results">
-            <header>
-                <h2>Google Search Results</h2>
-                <p>Showing top results for: <strong>{}</strong></p>
-                <hr />
+        r#"<div>
+            <header class="mb-4 pb-2 border-b border-neutral-800">
+                <p class="text-xs text-neutral-400 font-sans">About 1,840,000 results (0.24 seconds) for <strong>{}</strong></p>
             </header>
-            <main>
-                <section>
-                    <h3><a href="https://strata.larvance.com">Strata: High-Performance Universal Frontend Engine in Pure Rust</a></h3>
-                    <p>https://strata.larvance.com</p>
-                    <p>Strata is a zero-Chromium frontend engine written entirely in Rust. Features 60+ accessible components, subpixel Blink LayoutNG Flexbox and Grid, sub-3MB RSS footprint, and instant cold start.</p>
+            <main class="flex flex-col gap-6">
+                <section class="flex flex-col gap-1">
+                    <p class="text-xs text-emerald-400 font-sans mb-0">https://strata.larvance.com › docs › framework</p>
+                    <h3 class="text-lg font-medium text-blue-400 m-0"><a href="https://strata.larvance.com">Strata: High-Performance Universal Frontend Engine in Pure Rust</a></h3>
+                    <p class="text-sm text-neutral-300 font-sans leading-relaxed">Strata is a zero-Chromium frontend engine written entirely in Rust. Features 60+ accessible UI controls, subpixel Blink LayoutNG Flexbox and Grid, sub-3MB RSS footprint, and native 120 FPS frame pacing.</p>
                 </section>
-                <hr />
-                <section>
-                    <h3><a href="https://en.wikipedia.org/wiki/Rust_(programming_language)">Rust (programming language) - Free Encyclopedia</a></h3>
-                    <p>https://en.wikipedia.org/wiki/Rust_(programming_language)</p>
-                    <p>Rust is a multi-paradigm, general-purpose programming language that emphasizes performance, type safety, and concurrency. Rust enforces memory safety without requiring a garbage collector.</p>
+                <hr class="border-neutral-800 my-2" />
+                <section class="flex flex-col gap-1">
+                    <p class="text-xs text-emerald-400 font-sans mb-0">https://en.wikipedia.org › wiki › Rust_(programming_language)</p>
+                    <h3 class="text-lg font-medium text-blue-400 m-0"><a href="https://en.wikipedia.org/wiki/Rust_(programming_language)">Rust (programming language) - Free Encyclopedia</a></h3>
+                    <p class="text-sm text-neutral-300 font-sans leading-relaxed">Rust is a multi-paradigm, general-purpose programming language emphasizing performance, type safety, and memory safety without requiring a garbage collector.</p>
                 </section>
-                <hr />
-                <section>
-                    <h3><a href="https://news.ycombinator.com">Show HN: Strata Native Browser - Pure Rust Zero-Chromium Web Engine</a></h3>
-                    <p>https://news.ycombinator.com/item?id=42109842</p>
-                    <p>482 points by larvance 6 hours ago | 129 comments | An experimental native browser engine rendering HTML5 directly through Strata WebTranspiler at 120 FPS.</p>
+                <hr class="border-neutral-800 my-2" />
+                <section class="flex flex-col gap-1">
+                    <p class="text-xs text-emerald-400 font-sans mb-0">https://news.ycombinator.com › item?id=42109842</p>
+                    <h3 class="text-lg font-medium text-blue-400 m-0"><a href="https://news.ycombinator.com">Show HN: Strata Native Browser - Pure Rust Zero-Chromium Web Engine</a></h3>
+                    <p class="text-sm text-neutral-300 font-sans leading-relaxed">482 points by larvance 6 hours ago | 129 comments | An experimental native browser engine rendering HTML5 directly through Strata WebTranspiler at 120 FPS.</p>
                 </section>
-                <hr />
-                <section>
-                    <h3><a href="https://www.rust-lang.org">Rust Programming Language - Official Website</a></h3>
-                    <p>https://www.rust-lang.org</p>
-                    <p>A language empowering everyone to build reliable and efficient software. Performance, reliability, productivity - choose all three.</p>
+                <hr class="border-neutral-800 my-2" />
+                <section class="flex flex-col gap-1">
+                    <p class="text-xs text-emerald-400 font-sans mb-0">https://www.rust-lang.org</p>
+                    <h3 class="text-lg font-medium text-blue-400 m-0"><a href="https://www.rust-lang.org">Rust Programming Language - Official Website</a></h3>
+                    <p class="text-sm text-neutral-300 font-sans leading-relaxed">A language empowering everyone to build reliable and efficient software. Performance, reliability, productivity - choose all three.</p>
                 </section>
             </main>
-            <footer>
-                <p>Strata Native Engine - Zero Chromium Web Transpiler - Search execution time: 0.04s</p>
+            <footer class="mt-8 pt-4 border-t border-neutral-800 text-xs text-neutral-500">
+                <p>Strata Native Engine • Zero Chromium Web Transpiler • Search execution time: 0.04s</p>
             </footer>
         </div>"#,
         query
@@ -181,43 +179,64 @@ fn wikipedia_rust_html() -> &'static str {
 }
 
 fn hacker_news_html() -> &'static str {
-    r#"<div>
-        <header>
-            <h2>Hacker News</h2>
-            <nav>
-                <p><strong>top</strong> | new | past | comments | ask | show | jobs | submit</p>
-            </nav>
-            <hr />
+    r#"<div class="flex flex-col w-full rounded overflow-hidden border border-neutral-800">
+        <header class="bg-[#ff6600] px-3 py-2 flex items-center justify-between text-black font-sans">
+            <div class="flex items-center gap-2">
+                <span class="bg-white text-[#ff6600] px-1.5 py-0.5 font-bold font-mono text-xs border border-white">Y</span>
+                <span class="font-bold text-sm text-black">Hacker News</span>
+                <nav class="text-xs text-black/80 flex items-center gap-1.5 ml-2 font-medium">
+                    <strong>top</strong> | new | past | comments | ask | show | jobs | submit
+                </nav>
+            </div>
+            <span class="text-xs font-normal text-black pr-1">login</span>
         </header>
 
-        <main>
-            <ol>
-                <li>
-                    <h4><a href="https://strata.larvance.com">Strata 1.0: Zero-Chromium Native Web Engine in Pure Rust</a></h4>
-                    <p>482 points by larvance 4 hours ago | 129 comments | strata.larvance.com</p>
-                </li>
-                <li>
-                    <h4><a href="https://en.wikipedia.org/wiki/Rust_(programming_language)">Rust 1.85 Released with 2024 Edition Stabilization</a></h4>
-                    <p>328 points by rustacean 6 hours ago | 94 comments | rust-lang.org</p>
-                </li>
-                <li>
-                    <h4><a href="https://strata.larvance.com">Why Subpixel LayoutUnit Precision Matters in Modern Web Layouts</a></h4>
-                    <p>215 points by layout_dev 8 hours ago | 43 comments | strata.larvance.com</p>
-                </li>
-                <li>
-                    <h4><a href="https://news.ycombinator.com">Show HN: Building Desktop Applications with Less Than 3MB RAM</a></h4>
-                    <p>194 points by systems_eng 11 hours ago | 78 comments | github.com/larvance</p>
-                </li>
-                <li>
-                    <h4><a href="https://news.ycombinator.com">The Death of 500MB Electron Bloatware in Enterprise Workstations</a></h4>
-                    <p>176 points by pragmatist 14 hours ago | 62 comments | blog.systems.org</p>
-                </li>
-            </ol>
+        <main class="p-4 flex flex-col gap-3 bg-neutral-900/40">
+            <div class="flex items-start gap-2">
+                <span class="text-neutral-500 text-sm font-mono w-5 text-right">1.</span>
+                <span class="text-amber-500 text-xs font-bold font-mono">^</span>
+                <div class="flex flex-col">
+                    <p class="text-sm font-medium text-neutral-100 mb-0"><a href="https://strata.larvance.com">Strata 1.0: Zero-Chromium Native Web Engine in Pure Rust</a> <span class="text-xs text-neutral-500">(strata.larvance.com)</span></p>
+                    <p class="text-[11px] text-neutral-400 mb-0">482 points by larvance 4 hours ago | hide | 129 comments</p>
+                </div>
+            </div>
+            <div class="flex items-start gap-2">
+                <span class="text-neutral-500 text-sm font-mono w-5 text-right">2.</span>
+                <span class="text-amber-500 text-xs font-bold font-mono">^</span>
+                <div class="flex flex-col">
+                    <p class="text-sm font-medium text-neutral-100 mb-0"><a href="https://en.wikipedia.org/wiki/Rust_(programming_language)">Rust 1.85 Released with 2024 Edition Stabilization</a> <span class="text-xs text-neutral-500">(rust-lang.org)</span></p>
+                    <p class="text-[11px] text-neutral-400 mb-0">328 points by rustacean 6 hours ago | hide | 94 comments</p>
+                </div>
+            </div>
+            <div class="flex items-start gap-2">
+                <span class="text-neutral-500 text-sm font-mono w-5 text-right">3.</span>
+                <span class="text-amber-500 text-xs font-bold font-mono">^</span>
+                <div class="flex flex-col">
+                    <p class="text-sm font-medium text-neutral-100 mb-0"><a href="https://strata.larvance.com">Why Subpixel LayoutUnit Precision Matters in Modern Web Layouts</a> <span class="text-xs text-neutral-500">(strata.larvance.com)</span></p>
+                    <p class="text-[11px] text-neutral-400 mb-0">215 points by layout_dev 8 hours ago | hide | 43 comments</p>
+                </div>
+            </div>
+            <div class="flex items-start gap-2">
+                <span class="text-neutral-500 text-sm font-mono w-5 text-right">4.</span>
+                <span class="text-amber-500 text-xs font-bold font-mono">^</span>
+                <div class="flex flex-col">
+                    <p class="text-sm font-medium text-neutral-100 mb-0"><a href="https://news.ycombinator.com">Show HN: Building Desktop Applications with Less Than 3MB RAM</a> <span class="text-xs text-neutral-500">(github.com)</span></p>
+                    <p class="text-[11px] text-neutral-400 mb-0">194 points by systems_eng 11 hours ago | hide | 78 comments</p>
+                </div>
+            </div>
+            <div class="flex items-start gap-2">
+                <span class="text-neutral-500 text-sm font-mono w-5 text-right">5.</span>
+                <span class="text-amber-500 text-xs font-bold font-mono">^</span>
+                <div class="flex flex-col">
+                    <p class="text-sm font-medium text-neutral-100 mb-0"><a href="https://news.ycombinator.com">The Death of 500MB Electron Bloatware in Enterprise Workstations</a> <span class="text-xs text-neutral-500">(blog.systems.org)</span></p>
+                    <p class="text-[11px] text-neutral-400 mb-0">176 points by pragmatist 14 hours ago | hide | 62 comments</p>
+                </div>
+            </div>
         </main>
 
-        <footer>
-            <hr />
-            <p>Guidelines | FAQ | Lists | API | Security | Legal | Apply to YC | Contact</p>
+        <footer class="p-4 border-t border-[#ff6600]/40 flex flex-col items-center gap-2 text-center text-xs text-neutral-500 bg-neutral-900/60">
+            <p class="mb-0">Guidelines | FAQ | Lists | API | Security | Legal | Apply to YC | Contact</p>
+            <p class="text-[11px] text-neutral-600 mb-0">Search: [ Search Hacker News ]</p>
         </footer>
     </div>"#
 }

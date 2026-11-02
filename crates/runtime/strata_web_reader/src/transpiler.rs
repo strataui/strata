@@ -89,10 +89,14 @@ impl<'a> WebTranspiler<'a> {
         attributes: &[(String, String)],
     ) -> (Tag, Vec<String>, Vec<Attribute>) {
         let mut attrs = Vec::new();
+        let mut custom_classes = Vec::new();
 
         // Extract key standard attributes
         for (k, v) in attributes {
             match k.as_str() {
+                "class" => {
+                    custom_classes.push(v.clone());
+                }
                 "href" | "src" | "alt" | "title" | "id" => {
                     attrs.push(Attribute::property(k.clone(), v.clone()));
                 }
@@ -164,32 +168,32 @@ impl<'a> WebTranspiler<'a> {
             ),
             "table" => (
                 Tag::Table,
-                format!("w-full border-collapse my-6 text-sm border {}", self.theme.border_class),
+                format!("w-full border-collapse my-6 text-sm border rounded-lg overflow-hidden {}", self.theme.border_class),
             ),
             "thead" => (
                 Tag::Thead,
-                format!("border-b {}", self.theme.border_class),
+                format!("w-full border-b font-bold {}", self.theme.border_class),
             ),
             "tbody" => (
                 Tag::Tbody,
-                format!("divide-y {}", self.theme.border_class),
+                format!("w-full divide-y {}", self.theme.border_class),
             ),
             "tr" => (
                 Tag::Tr,
-                "hover:bg-slate-800/20 transition-colors".to_string(),
+                format!("w-full flex items-center border-b {} hover:bg-slate-800/20 transition-colors", self.theme.border_class),
             ),
             "th" => (
                 Tag::Th,
                 format!(
-                    "border p-2.5 font-semibold text-left {} {}",
+                    "w-48 p-2.5 font-semibold text-left border-r {} {}",
                     self.theme.border_class, self.theme.heading_class
                 ),
             ),
             "td" => (
                 Tag::Td,
                 format!(
-                    "border p-2.5 text-left {} {}",
-                    self.theme.border_class, self.theme.text_class
+                    "flex-1 p-2.5 text-left {}",
+                    self.theme.text_class
                 ),
             ),
             "img" => (
@@ -216,11 +220,12 @@ impl<'a> WebTranspiler<'a> {
             _ => (Tag::Div, "".to_string()),
         };
 
-        let classes = if class_str.is_empty() {
+        let mut classes = if class_str.is_empty() {
             Vec::new()
         } else {
             vec![class_str]
         };
+        classes.extend(custom_classes);
 
         (mapped_tag, classes, attrs)
     }

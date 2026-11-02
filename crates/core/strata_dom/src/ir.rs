@@ -148,6 +148,7 @@ impl Default for UiIrNode {
 #[derive(Debug, Clone, Default)]
 pub struct UiIrGraph {
     pub nodes: Vec<UiIrNode>,
+    pub last_children: Vec<NodeId>,
     pub root_id: Option<NodeId>,
 }
 
@@ -155,6 +156,7 @@ impl UiIrGraph {
     pub fn new() -> Self {
         Self {
             nodes: Vec::with_capacity(64),
+            last_children: Vec::with_capacity(64),
             root_id: None,
         }
     }
@@ -166,13 +168,14 @@ impl UiIrGraph {
         node.id = id;
         node.tag = tag;
         self.nodes.push(node);
+        self.last_children.push(NodeId::NULL);
         if self.root_id.is_none() {
             self.root_id = Some(id);
         }
         id
     }
 
-    /// Appends a child to a parent node, maintaining sibling pointers and child counts.
+    /// Appends a child to a parent node in O(1) time, maintaining sibling pointers and child counts.
     pub fn append_child(&mut self, parent_id: NodeId, child_id: NodeId) {
         if parent_id.is_null() || child_id.is_null() {
             return;
@@ -180,17 +183,13 @@ impl UiIrGraph {
 
         self.nodes[child_id.0 as usize].parent = parent_id;
 
-        let first_child = self.nodes[parent_id.0 as usize].first_child;
-        if first_child.is_null() {
+        let last_child = self.last_children[parent_id.0 as usize];
+        if last_child.is_null() {
             self.nodes[parent_id.0 as usize].first_child = child_id;
         } else {
-            // Find the last sibling and append
-            let mut curr = first_child;
-            while !self.nodes[curr.0 as usize].next_sibling.is_null() {
-                curr = self.nodes[curr.0 as usize].next_sibling;
-            }
-            self.nodes[curr.0 as usize].next_sibling = child_id;
+            self.nodes[last_child.0 as usize].next_sibling = child_id;
         }
+        self.last_children[parent_id.0 as usize] = child_id;
 
         self.nodes[parent_id.0 as usize].child_count += 1;
     }

@@ -23,6 +23,7 @@ pub fn Toolbar(state: BrowserState) -> View {
 
     // Bookmarks
     let bm_google = state.clone();
+    let bm_search = state.clone();
     let bm_wiki = state.clone();
     let bm_hn = state.clone();
     let bm_docs = state.clone();
@@ -184,8 +185,19 @@ pub fn Toolbar(state: BrowserState) -> View {
                         bm_google.navigate("strata://newtab");
                     }}
                 >
-                    {Icon(IconName::Search, Some("w-3 h-3 text-current")).root}
+                    {Icon(IconName::Compass, Some("w-3 h-3 text-current")).root}
                     <span>{"Google"}</span>
+                </button>
+
+                <button
+                    type="button"
+                    class="flex items-center gap-1.5 px-2 py-0.5 rounded hover:bg-neutral-800 hover:text-white transition-colors cursor-pointer"
+                    onclick={move |_| {
+                        bm_search.navigate("https://www.google.com/search?q=Strata+Framework");
+                    }}
+                >
+                    {Icon(IconName::Search, Some("w-3 h-3 text-current")).root}
+                    <span>{"Search"}</span>
                 </button>
 
                 <button

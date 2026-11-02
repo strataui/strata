@@ -3015,6 +3015,7 @@ dependencies = [
  "strata_primitives",
  "strata_render",
  "strata_style",
+ "strata_web_reader",
 ]
 
 [[package]]

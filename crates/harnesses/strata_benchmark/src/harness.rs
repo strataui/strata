@@ -70,6 +70,50 @@ pub fn bench_ui_ir_throughput_100k(iterations: usize) -> BenchmarkResult {
     })
 }
 
+pub const SAMPLE_HTML_PAGE: &str = r#"
+<article class="content">
+    <h1>Rust (programming language)</h1>
+    <p>Rust is a multi-paradigm, general-purpose programming language that emphasizes performance, type safety, and concurrency.</p>
+    <table>
+        <thead><tr><th>Property</th><th>Value</th></tr></thead>
+        <tbody>
+            <tr><td>Paradigm</td><td>Multi-paradigm: functional, imperative, concurrent</td></tr>
+            <tr><td>Designed by</td><td>Graydon Hoare</td></tr>
+            <tr><td>Developer</td><td>Rust Foundation</td></tr>
+            <tr><td>First appeared</td><td>July 7, 2010</td></tr>
+            <tr><td>Stable release</td><td>1.85.0 (2025)</td></tr>
+        </tbody>
+    </table>
+    <h2>Design Principles</h2>
+    <p>Rust enforces memory safety without requiring a garbage collector via its borrow checker system.</p>
+    <ul>
+        <li>Zero-cost abstractions</li>
+        <li>Move semantics and RAII lifetimes</li>
+        <li>Guaranteed thread safety without data races</li>
+        <li>Pattern matching and type inference</li>
+    </ul>
+    <h2>Performance Comparison</h2>
+    <p>Benchmarks demonstrate C/C++ parity with modern ergonomics.</p>
+</article>
+"#;
+
+/// Measures semantic HTML5 tokenizer and tree parser throughput.
+pub fn bench_html_parsing(iterations: usize) -> BenchmarkResult {
+    benchmark_task("HTML Semantic Parsing (Wikipedia Article)", iterations, || {
+        let _nodes = strata_web_reader::HtmlParser::parse(SAMPLE_HTML_PAGE);
+    })
+}
+
+/// Measures WebTranspiler Blueprint AST generation from parsed HTML nodes.
+pub fn bench_web_transpiler(iterations: usize) -> BenchmarkResult {
+    let theme = strata_web_reader::ReaderTheme::dark();
+    let transpiler = strata_web_reader::WebTranspiler::new(&theme);
+    let nodes = strata_web_reader::HtmlParser::parse(SAMPLE_HTML_PAGE);
+    benchmark_task("WebTranspiler Blueprint Gen (Wikipedia Article)", iterations, || {
+        let _blueprint = transpiler.transpile_document(&nodes, Some("Rust (programming language)"));
+    })
+}
+
 /// Reads current process Resident Set Size (RSS) in megabytes from /proc/self/statm.
 pub fn get_process_memory_rss_mb() -> f64 {
     #[cfg(target_os = "linux")]

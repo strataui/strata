@@ -36,7 +36,7 @@ impl ReaderTheme {
     pub fn dark() -> Self {
         Self {
             name: "Dark".to_string(),
-            bg_class: "bg-slate-950".to_string(),
+            bg_class: "bg-neutral-950".to_string(),
             text_class: "text-slate-300".to_string(),
             heading_class: "text-slate-100".to_string(),
             link_class: "text-indigo-400 hover:text-indigo-300".to_string(),

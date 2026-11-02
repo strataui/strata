@@ -37,7 +37,7 @@ pub fn Viewport(state: BrowserState) -> View {
         "amoled" => ("bg-black", "text-zinc-200"),
         "sepia" => ("bg-[#fbf0d9]", "text-[#5f4b32]"),
         "light" => ("bg-white", "text-slate-800"),
-        _ => ("bg-neutral-950", "text-neutral-200"),
+        _ => ("bg-slate-950", "text-neutral-200"),
     };
 
     rsx! {

@@ -176,9 +176,29 @@ impl AppRuntime {
                         | Tag::Header
                         | Tag::Footer
                         | Tag::Nav
-                        | Tag::Aside => {
+                        | Tag::Aside
+                        | Tag::Table
+                        | Tag::Thead
+                        | Tag::Tbody
+                        | Tag::Ul
+                        | Tag::Ol
+                        | Tag::Form
+                        | Tag::P
+                        | Tag::H1
+                        | Tag::H2
+                        | Tag::H3
+                        | Tag::H4
+                        | Tag::H5
+                        | Tag::H6 => {
                             style.display = Display::Flex;
                             style.flex_direction = FlexDirection::Column;
+                        }
+                        Tag::Tr => {
+                            style.display = Display::Flex;
+                            style.flex_direction = FlexDirection::Row;
+                        }
+                        Tag::Th | Tag::Td => {
+                            style.display = Display::Flex;
                         }
                         Tag::Button => {
                             style.display = Display::InlineFlex;
@@ -187,9 +207,6 @@ impl AppRuntime {
                         }
                         Tag::Span => {
                             style.display = Display::InlineFlex;
-                        }
-                        Tag::P | Tag::H1 | Tag::H2 | Tag::H3 | Tag::H4 | Tag::H5 | Tag::H6 => {
-                            style.display = Display::InlineBlock;
                         }
                         _ => {
                             style.display = Display::Flex;

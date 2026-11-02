@@ -38,6 +38,14 @@ pub fn TabBar(state: BrowserState) -> View {
                         ("bg-neutral-950 hover:bg-neutral-900/60", "border-transparent", "text-neutral-400 hover:text-neutral-200")
                     };
 
+                    let display_title = if tab.title.chars().count() > 18 {
+                        let mut s: String = tab.title.chars().take(15).collect();
+                        s.push_str("...");
+                        s
+                    } else {
+                        tab.title.clone()
+                    };
+
                     rsx! {
                         <div
                             class={format!("group flex items-center gap-2 h-9 px-3 rounded-t-lg border-t border-x w-44 {} {} {} transition-colors cursor-pointer select-none", bg, border, text_color)}
@@ -47,7 +55,7 @@ pub fn TabBar(state: BrowserState) -> View {
                         >
                             {Icon(icon, Some("w-3.5 h-3.5 text-neutral-400 flex-shrink-0")).root}
                             <span class="truncate text-xs font-medium flex-1 min-w-0">
-                                {tab.title}
+                                {display_title}
                             </span>
                             <button
                                 type="button"
