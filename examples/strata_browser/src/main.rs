@@ -15,8 +15,13 @@ use strata_browser::terminal_view::render_terminal_browser;
 fn main() {
     println!("[*] Starting Strata Native Zero-Chromium Web Browser...");
 
-    // 1. Initialize Strata Application Runtime and verify layout compilation
-    strata::launch(|| BrowserApp());
+    // 1. Initialize Strata Native Desktop Window and Surface Presenter
+    let mut config = WindowConfig::default();
+    config.title = "Strata Native Browser (Zero-Chromium Architecture)".to_string();
+    config.width = 1280;
+    config.height = 800;
+
+    let (_runtime, _window, _presenter) = strata::launch_window(BrowserApp, config);
 
     let state = BrowserState::new();
 
