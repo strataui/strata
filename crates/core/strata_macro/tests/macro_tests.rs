@@ -162,7 +162,7 @@ fn test_dynamic_macro() {
         "is_prod": true,
         "time": elapsed,
         "meta": {
-            "author": "Antigravity",
+            "author": "Strata",
             "tags": ["frontend", "rust", "wasm"]
         },
         "flags": [1, 2, 3],
@@ -177,7 +177,7 @@ fn test_dynamic_macro() {
     assert!((val["time"].as_f64().unwrap() - 3.14159).abs() < 1e-4);
 
     let meta = &val["meta"];
-    assert_eq!(meta["author"].as_str(), Some("Antigravity"));
+    assert_eq!(meta["author"].as_str(), Some("Strata"));
     assert_eq!(meta["tags"][0].as_str(), Some("frontend"));
     assert_eq!(meta["tags"][1].as_str(), Some("rust"));
 
