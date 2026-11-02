@@ -47,10 +47,12 @@ impl TailwindEngine {
         match class {
             "flex" => {
                 style.display = Display::Flex;
+                style.flex_direction = FlexDirection::Row;
                 return;
             }
             "inline-flex" => {
                 style.display = Display::InlineFlex;
+                style.flex_direction = FlexDirection::Row;
                 return;
             }
             "grid" => {

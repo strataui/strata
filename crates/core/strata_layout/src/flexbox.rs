@@ -86,10 +86,24 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
 
     let inner_width = (resolved_width - padding.left - padding.right - border.left - border.right).max(0.0);
     let resolved_height = resolve_dimension(container.style.height, available_height)
+        .or_else(|| {
+            if container.geometry.border_box.height > 0.0 {
+                let h = if available_height > 0.0 {
+                    container.geometry.border_box.height.min(available_height)
+                } else {
+                    container.geometry.border_box.height
+                };
+                Some(h)
+            } else {
+                None
+            }
+        })
         .map(|h| clamp_dimension(h, container.style.min_height, container.style.max_height, available_height));
+
     let inner_height = resolved_height
         .or_else(|| {
-            resolve_dimension(container.style.min_height, available_height)
+            let mh = resolve_dimension(container.style.min_height, available_height)?;
+            if mh > 0.0 { Some(mh) } else { None }
         })
         .map(|h| (h - padding.top - padding.bottom).max(0.0));
 
@@ -171,17 +185,18 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
     if !item_metas.is_empty() {
         if !is_wrap || container_main <= 0.0 {
             // Single line (nowrap)
-            let mut max_cross = item_metas.iter().map(|it| it.hypothetical_cross + it.margin_cross_start + it.margin_cross_end).fold(0.0f32, f32::max);
-            if is_row {
+            let cross_size = if is_row {
                 if let Some(h) = inner_height {
-                    max_cross = max_cross.max(h);
+                    h
+                } else {
+                    item_metas.iter().map(|it| it.hypothetical_cross + it.margin_cross_start + it.margin_cross_end).fold(0.0f32, f32::max)
                 }
             } else {
-                max_cross = max_cross.max(inner_width);
-            }
+                inner_width
+            };
             lines.push(FlexLine {
                 items: item_metas,
-                cross_size: max_cross,
+                cross_size,
             });
         } else {
             // Multi-line wrapping
@@ -391,9 +406,9 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
                 AlignItems::Center => (line.cross_size - (final_cross_size + it.margin_cross_start + it.margin_cross_end)) / 2.0,
                 AlignItems::Stretch => {
                     let has_auto_cross = if is_row {
-                        child.style.height == Dimension::Auto
+                        child.style.height == Dimension::Auto || matches!(child.style.height, Dimension::Percent(_))
                     } else {
-                        child.style.width == Dimension::Auto
+                        child.style.width == Dimension::Auto || matches!(child.style.width, Dimension::Percent(_))
                     };
                     if has_auto_cross {
                         final_cross_size = (line.cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0);

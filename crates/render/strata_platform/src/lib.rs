@@ -8,6 +8,7 @@ pub mod events;
 pub mod raw_abi;
 pub mod surface;
 pub mod menu;
+pub mod shortcuts;
 pub mod tray;
 pub mod window;
 pub mod window_manager;
@@ -19,6 +20,7 @@ pub mod gtk_window;
 pub use csd::{ControlPlacement, CsdGeometry, CsdHitZone};
 pub use events::{KeyCode, Modifiers, MouseButton, PlatformEvent, TouchPhase};
 pub use menu::{AcceleratorModifier, Menu, MenuAccelerator, MenuBar, MenuItem, MenuItemRole};
+pub use shortcuts::{ShortcutCallback, ShortcutManager, ShortcutTrigger};
 pub use surface::{
     FramePacer, PresentError, PresentMode, RefreshRate, SoftwareSurfacePresenter, SurfaceConfig,
     SurfaceHandle, SurfacePresenter, SwapchainCompositor, SwapchainFormat,

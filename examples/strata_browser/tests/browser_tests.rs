@@ -147,3 +147,32 @@ fn test_theme_switching() {
     state.set_theme("sepia");
     assert_eq!(state.active_theme.get(), "sepia");
 }
+
+#[test]
+fn test_devtools_panel_layout() {
+    let state = BrowserState::new();
+    state.open_devtools(strata_browser::state::DevToolsTab::Elements);
+    assert!(state.is_devtools_open.get());
+
+    let app_view = strata_browser::components::BrowserApp(state);
+    let runtime = strata::AppRuntime::new(app_view, 1280.0, 800.0, 1.0);
+
+    // Root -> Row container (Child 2) -> DevToolsPanel (Child 1)
+    let row_container = &runtime.layout_root.children[2];
+    assert_eq!(row_container.geometry.border_box.height, 679.0);
+
+    let devtools = &row_container.children[1];
+    assert_eq!(devtools.geometry.border_box.width, 560.0);
+    assert_eq!(devtools.geometry.border_box.height, 679.0);
+
+    // Child 0: Top nav strip (h=36)
+    let nav_strip = &devtools.children[0];
+    assert_eq!(nav_strip.geometry.border_box.y, 121.0);
+    assert_eq!(nav_strip.geometry.border_box.height, 36.0);
+
+    // Child 1: Active tab content pane (starts at y=157, h=643)
+    let content_pane = &devtools.children[1];
+    assert_eq!(content_pane.geometry.border_box.y, 157.0);
+    assert_eq!(content_pane.geometry.border_box.height, 643.0);
+}
+

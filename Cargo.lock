@@ -3023,9 +3023,11 @@ name = "strata_browser"
 version = "0.1.0"
 dependencies = [
  "strata",
+ "strata_devtools",
  "strata_dom",
  "strata_icons",
  "strata_macro",
+ "strata_platform",
  "strata_ui",
  "strata_web_reader",
 ]

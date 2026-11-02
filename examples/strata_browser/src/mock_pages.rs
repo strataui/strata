@@ -56,6 +56,7 @@ fn generate_search_results_html(query: &str) -> String {
     format!(
         r#"<div>
             <header class="mb-4 pb-2 border-b border-neutral-800">
+                <h2 class="text-sm font-semibold text-neutral-300 font-sans mb-1">Google Search Results</h2>
                 <p class="text-xs text-neutral-400 font-sans">About 1,840,000 results (0.24 seconds) for <strong>{}</strong></p>
             </header>
             <main class="flex flex-col gap-6">

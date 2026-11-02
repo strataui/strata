@@ -18,6 +18,7 @@ pub mod events;
 pub mod ir;
 pub mod reactive;
 pub mod spring;
+pub mod text_input;
 
 pub use events::{Event, EventDispatcher, EventPhase, EventType};
 pub use ir::{
@@ -29,6 +30,7 @@ pub use reactive::{
     ReactiveRuntime, ReadSignal, ScopeId, SetSignal, Signal, SignalId, SubscriberId, WriteSignal,
 };
 pub use spring::{SpringConfig, SpringSignal};
+pub use text_input::{InputKey, InputKeyResult, InputModifiers, TextInputState};
 
 /// Trait abstracting event handlers accepting `()` or `(Event)`.
 pub trait EventHandlerMarker<Args> {

@@ -50,36 +50,103 @@ fn main() {
         let render_state = state.clone();
         let event_state = state.clone();
 
+        // Initialize Generalized Shortcut Manager
+        let mut shortcuts = strata_platform::shortcuts::ShortcutManager::new();
+
+        // DevTools Suite Shortcuts
+        let s = state.clone();
+        shortcuts.register("F12", move || {
+            s.toggle_devtools();
+            true
+        });
+
+        let s = state.clone();
+        shortcuts.register("Ctrl+Shift+I", move || {
+            s.toggle_devtools();
+            true
+        });
+
+        let s = state.clone();
+        shortcuts.register("Ctrl+Shift+J", move || {
+            s.open_devtools(strata_browser::state::DevToolsTab::Console);
+            true
+        });
+
+        let s = state.clone();
+        shortcuts.register("Ctrl+Shift+C", move || {
+            s.toggle_inspect();
+            true
+        });
+
+        // Tab & Navigation Shortcuts
+        let s = state.clone();
+        shortcuts.register("Ctrl+T", move || {
+            s.new_tab("strata://newtab");
+            true
+        });
+
+        let s = state.clone();
+        shortcuts.register("Ctrl+W", move || {
+            if let Some(tab) = s.active_tab() {
+                s.close_tab(tab.id);
+                true
+            } else {
+                false
+            }
+        });
+
+        let s = state.clone();
+        shortcuts.register("Ctrl+R", move || {
+            s.reload();
+            true
+        });
+
+        let s = state.clone();
+        shortcuts.register("F5", move || {
+            s.reload();
+            true
+        });
+
+        let s = state.clone();
+        shortcuts.register("Ctrl+L", move || {
+            s.start_editing_omnibox();
+            true
+        });
+
+        let s = state.clone();
+        shortcuts.register("Alt+D", move || {
+            s.start_editing_omnibox();
+            true
+        });
+
+        let s = state.clone();
+        shortcuts.register("Alt+Left", move || {
+            s.go_back();
+            true
+        });
+
+        let s = state.clone();
+        shortcuts.register("Alt+Right", move || {
+            s.go_forward();
+            true
+        });
+
         let res = strata::launch_gtk_with_events(
             move || BrowserApp(render_state.clone()),
             config.clone(),
             move |event, _runtime| {
+                // First attempt shortcut dispatch via generalized ShortcutManager
+                if shortcuts.dispatch(event) {
+                    return true;
+                }
+
                 match event {
                     PlatformEvent::MouseDown { button: MouseButton::Middle, x, y } => {
                         event_state.handle_middle_click(*x, *y)
                     }
                     PlatformEvent::KeyDown { key, modifiers } => {
-                        // Chromium Browser Shortcut Keybinds
                         if modifiers.ctrl {
                             match key {
-                                KeyCode::KeyT => {
-                                    event_state.new_tab("strata://newtab");
-                                    return true;
-                                }
-                                KeyCode::KeyW => {
-                                    if let Some(tab) = event_state.active_tab() {
-                                        event_state.close_tab(tab.id);
-                                        return true;
-                                    }
-                                }
-                                KeyCode::KeyR => {
-                                    event_state.reload();
-                                    return true;
-                                }
-                                KeyCode::KeyL => {
-                                    event_state.start_editing_omnibox();
-                                    return true;
-                                }
                                 KeyCode::KeyA => {
                                     event_state.omnibox_selected.set(true);
                                     return true;
@@ -113,29 +180,7 @@ fn main() {
                             }
                         }
 
-                        if modifiers.alt {
-                            match key {
-                                KeyCode::KeyD => {
-                                    event_state.start_editing_omnibox();
-                                    return true;
-                                }
-                                KeyCode::ArrowLeft => {
-                                    event_state.go_back();
-                                    return true;
-                                }
-                                KeyCode::ArrowRight => {
-                                    event_state.go_forward();
-                                    return true;
-                                }
-                                _ => {}
-                            }
-                        }
-
                         match key {
-                            KeyCode::F5 => {
-                                event_state.reload();
-                                true
-                            }
                             KeyCode::Enter => {
                                 event_state.commit_omnibox();
                                 true

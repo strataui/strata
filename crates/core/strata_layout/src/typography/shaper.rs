@@ -227,33 +227,53 @@ impl TextShaper {
 
         match ch {
             // Very narrow characters
-            'i' | 'l' | '!' | ';' | ':' | '|' | '.' | ',' | '\'' | '`' | '\u{200B}' => em * 0.26,
-            'j' | 't' | 'r' | 'f' | '(' | ')' | '[' | ']' | '{' | '}' => em * 0.35,
-            ' ' | '\u{00A0}' => em * 0.28,
+            'i' | 'l' | 'j' => em * 0.25,
+            '\'' | '`' | '\u{200B}' => em * 0.22,
+            '.' | ',' | ';' | ':' | '!' | '|' => em * 0.26,
+            ' ' | '\u{00A0}' => em * 0.26,
 
-            // Moderately narrow
-            's' | 'c' | 'z' | 'k' | 'v' | 'x' | '-' | '*' => em * 0.46,
+            // Moderately narrow characters
+            'f' | 't' => em * 0.35,
+            'r' => em * 0.41,
+            'c' | 's' | 'z' => em * 0.48,
+            'v' | 'y' => em * 0.50,
+            'k' | 'x' => em * 0.52,
 
             // Average proportional lowercase
-            'a' | 'b' | 'd' | 'e' | 'g' | 'h' | 'n' | 'o' | 'p' | 'q' | 'u' | 'y' => em * 0.54,
+            'a' | 'e' => em * 0.56,
+            'g' => em * 0.55,
+            'o' => em * 0.60,
+            'b' | 'd' | 'h' | 'n' | 'p' | 'q' | 'u' => em * 0.61,
 
-            // Average proportional uppercase & digits
-            '0'..='9' | 'A'..='Z' => {
-                match ch {
-                    'M' | 'W' => em * 0.82,
-                    'I' | 'J' => em * 0.34,
-                    'E' | 'F' | 'L' => em * 0.52,
-                    _ => em * 0.62,
-                }
-            }
+            // Wide lowercase
+            'w' => em * 0.78,
+            'm' => em * 0.93,
 
-            // Wide characters
-            'w' | 'm' => em * 0.76,
+            // Uppercase characters
+            'I' | 'J' => em * 0.28,
+            'E' | 'F' | 'K' | 'L' | 'Y' | 'Z' => em * 0.54,
+            'S' | 'T' | 'X' => em * 0.56,
+            'P' | 'V' => em * 0.60,
+            'R' => em * 0.62,
+            'A' | 'B' | 'C' => em * 0.64,
+            'D' | 'G' | 'U' => em * 0.73,
+            'H' | 'N' => em * 0.75,
+            'O' | 'Q' => em * 0.78,
+            'M' | 'W' => em * 0.92,
+
+            // Digits (tabular modern font metrics)
+            '0'..='9' => em * 0.57,
+
+            // Punctuation and symbols
+            '(' | ')' | '[' | ']' => em * 0.30,
+            '{' | '}' => em * 0.35,
+            '-' | '*' | '?' => em * 0.33,
+            '"' => em * 0.40,
             '@' | '%' => em * 0.85,
             '—' | '–' => em * 0.70,
 
-            // Default proportional advance
-            _ => em * 0.52,
+            // Default fallback proportional advance
+            _ => em * 0.55,
         }
     }
 }

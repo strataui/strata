@@ -8,7 +8,22 @@ use strata_platform::{
 };
 use strata_render::compositor::DisplayList;
 use strata_render::swapchain::{PresentError, SurfacePresenter};
-use strata_style::types::{ComputedStyle, Dimension, Display, FlexDirection};
+use strata_style::types::{ComputedStyle, Dimension, Display, FlexDirection, FontWeight};
+
+/// Returns the typographic advance scaling factor for font weights in standard OpenType fonts.
+fn font_weight_scale(weight: FontWeight) -> f32 {
+    match weight {
+        FontWeight::Thin => 0.96,
+        FontWeight::ExtraLight => 0.98,
+        FontWeight::Light => 0.99,
+        FontWeight::Normal => 1.00,
+        FontWeight::Medium => 1.02,
+        FontWeight::SemiBold => 1.03,
+        FontWeight::Bold => 1.04,
+        FontWeight::ExtraBold => 1.05,
+        FontWeight::Black => 1.06,
+    }
+}
 
 /// Live running application instance holding active state, layout tree, and display list.
 #[derive(Debug)]
@@ -222,9 +237,9 @@ impl AppRuntime {
                 // If inline element has auto width and contains only a text child, compute intrinsic text dimensions
                 if is_inline && style.width == Dimension::Auto && children.len() == 1 {
                     if let NodeBlueprint::Text(t) = &children[0] {
-                        let is_bold = matches!(style.font_weight, strata_style::types::FontWeight::Bold | strata_style::types::FontWeight::ExtraBold | strata_style::types::FontWeight::Black | strata_style::types::FontWeight::SemiBold);
+                        let weight_scale = font_weight_scale(style.font_weight);
                         let (raw_w, _) = measure_text_bounds(t, style.font_size, style.line_height, None);
-                        let text_w = if is_bold { raw_w * 1.12 } else { raw_w };
+                        let text_w = raw_w * weight_scale;
                         let total_w = text_w
                             + style.padding.left
                             + style.padding.right
@@ -247,9 +262,9 @@ impl AppRuntime {
                     None => ComputedStyle::default(),
                 };
                 style.display = Display::Inline;
-                let is_bold = matches!(style.font_weight, strata_style::types::FontWeight::Bold | strata_style::types::FontWeight::ExtraBold | strata_style::types::FontWeight::Black | strata_style::types::FontWeight::SemiBold);
+                let weight_scale = font_weight_scale(style.font_weight);
                 let (raw_w, h) = measure_text_bounds(text, style.font_size, style.line_height, None);
-                let w = if is_bold { raw_w * 1.12 } else { raw_w };
+                let w = raw_w * weight_scale;
                 style.width = Dimension::Px(w);
                 style.height = Dimension::Px(h);
                 LayoutNode::with_text(style, text.clone())
@@ -261,9 +276,9 @@ impl AppRuntime {
                     None => ComputedStyle::default(),
                 };
                 style.display = Display::Inline;
-                let is_bold = matches!(style.font_weight, strata_style::types::FontWeight::Bold | strata_style::types::FontWeight::ExtraBold | strata_style::types::FontWeight::Black | strata_style::types::FontWeight::SemiBold);
+                let weight_scale = font_weight_scale(style.font_weight);
                 let (raw_w, h) = measure_text_bounds(&text, style.font_size, style.line_height, None);
-                let w = if is_bold { raw_w * 1.12 } else { raw_w };
+                let w = raw_w * weight_scale;
                 style.width = Dimension::Px(w);
                 style.height = Dimension::Px(h);
                 LayoutNode::with_text(style, text)

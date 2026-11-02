@@ -30,7 +30,51 @@ impl BrowserTab {
     }
 }
 
-/// Global browser state containing open tabs, active tab pointer, and navigation inputs.
+/// DevTools tabs matching Chromium DevTools suite
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DevToolsTab {
+    Elements,
+    Console,
+    Sources,
+    Network,
+    Performance,
+    Memory,
+    Application,
+    Security,
+}
+
+/// Console logging level
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogLevel {
+    Verbose,
+    Info,
+    Warn,
+    Error,
+}
+
+/// DevTools console log item
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConsoleLogEntry {
+    pub level: LogLevel,
+    pub timestamp: String,
+    pub source: String,
+    pub message: String,
+}
+
+/// DevTools network request waterfall item
+#[derive(Clone, Debug, PartialEq)]
+pub struct NetworkRequestEntry {
+    pub name: String,
+    pub method: String,
+    pub status: u16,
+    pub status_text: String,
+    pub kind: String,
+    pub initiator: String,
+    pub size_bytes: usize,
+    pub time_ms: f32,
+}
+
+/// Global browser state containing open tabs, active tab pointer, navigation inputs, and DevTools.
 #[derive(Clone)]
 pub struct BrowserState {
     pub next_tab_id: Signal<usize>,
@@ -41,12 +85,104 @@ pub struct BrowserState {
     pub active_theme: Signal<String>,
     pub is_omnibox_editing: Signal<bool>,
     pub omnibox_selected: Signal<bool>,
+
+    // DevTools Suite State
+    pub is_devtools_open: Signal<bool>,
+    pub devtools_tab: Signal<DevToolsTab>,
+    pub devtools_selected_element: Signal<String>,
+    pub devtools_console_filter: Signal<String>,
+    pub devtools_is_inspecting: Signal<bool>,
+    pub devtools_console_input: Signal<String>,
+    pub devtools_console_logs: Signal<Vec<ConsoleLogEntry>>,
+    pub devtools_network_requests: Signal<Vec<NetworkRequestEntry>>,
+    pub devtools_drawer_open: Signal<bool>,
+    pub devtools_drawer_tab: Signal<String>,
 }
 
 impl BrowserState {
     pub fn new() -> Self {
         let initial_url = "strata://newtab";
         let initial_tab = BrowserTab::new(1, initial_url);
+
+        let initial_logs = vec![
+            ConsoleLogEntry {
+                level: LogLevel::Info,
+                timestamp: "14:02:01.014".to_string(),
+                source: "strata_runtime".to_string(),
+                message: "Strata Core LayoutNG initialized. Subpixel advance calibration active.".to_string(),
+            },
+            ConsoleLogEntry {
+                level: LogLevel::Info,
+                timestamp: "14:02:01.018".to_string(),
+                source: "strata_platform".to_string(),
+                message: "Cairo hardware presentation surface bound to Linux display server.".to_string(),
+            },
+            ConsoleLogEntry {
+                level: LogLevel::Warn,
+                timestamp: "14:02:01.032".to_string(),
+                source: "strata_web_reader".to_string(),
+                message: "Non-standard CSS property -webkit-font-smoothing ignored in native text shaper.".to_string(),
+            },
+            ConsoleLogEntry {
+                level: LogLevel::Error,
+                timestamp: "14:02:01.045".to_string(),
+                source: "strata_network".to_string(),
+                message: "GET https://google.com/favicon.ico 404 (Not Found) - cached fallback used.".to_string(),
+            },
+        ];
+
+        let initial_requests = vec![
+            NetworkRequestEntry {
+                name: "newtab".to_string(),
+                method: "GET".to_string(),
+                status: 200,
+                status_text: "OK".to_string(),
+                kind: "document".to_string(),
+                initiator: "other".to_string(),
+                size_bytes: 4210,
+                time_ms: 0.42,
+            },
+            NetworkRequestEntry {
+                name: "open_sans_regular.woff2".to_string(),
+                method: "GET".to_string(),
+                status: 200,
+                status_text: "OK".to_string(),
+                kind: "font".to_string(),
+                initiator: "link".to_string(),
+                size_bytes: 24680,
+                time_ms: 0.85,
+            },
+            NetworkRequestEntry {
+                name: "google_logo.svg".to_string(),
+                method: "GET".to_string(),
+                status: 200,
+                status_text: "OK".to_string(),
+                kind: "image".to_string(),
+                initiator: "img".to_string(),
+                size_bytes: 1824,
+                time_ms: 0.28,
+            },
+            NetworkRequestEntry {
+                name: "styles.css".to_string(),
+                method: "GET".to_string(),
+                status: 200,
+                status_text: "OK".to_string(),
+                kind: "stylesheet".to_string(),
+                initiator: "link".to_string(),
+                size_bytes: 8432,
+                time_ms: 0.51,
+            },
+            NetworkRequestEntry {
+                name: "favicon.ico".to_string(),
+                method: "GET".to_string(),
+                status: 404,
+                status_text: "Not Found".to_string(),
+                kind: "image".to_string(),
+                initiator: "link".to_string(),
+                size_bytes: 142,
+                time_ms: 0.19,
+            },
+        ];
 
         Self {
             next_tab_id: Signal::new(2),
@@ -57,6 +193,18 @@ impl BrowserState {
             active_theme: Signal::new("dark".to_string()),
             is_omnibox_editing: Signal::new(false),
             omnibox_selected: Signal::new(false),
+
+            // DevTools
+            is_devtools_open: Signal::new(false),
+            devtools_tab: Signal::new(DevToolsTab::Elements),
+            devtools_selected_element: Signal::new("button.btn-search".to_string()),
+            devtools_console_filter: Signal::new(String::new()),
+            devtools_is_inspecting: Signal::new(false),
+            devtools_console_input: Signal::new(String::new()),
+            devtools_console_logs: Signal::new(initial_logs),
+            devtools_network_requests: Signal::new(initial_requests),
+            devtools_drawer_open: Signal::new(true),
+            devtools_drawer_tab: Signal::new("Console".to_string()),
         }
     }
 
@@ -323,6 +471,84 @@ impl BrowserState {
             }
         }
         false
+    }
+
+    /// Toggles DevTools panel visibility.
+    pub fn toggle_devtools(&self) {
+        let current = self.is_devtools_open.get();
+        self.is_devtools_open.set(!current);
+    }
+
+    /// Opens DevTools focused on a specific tab.
+    pub fn open_devtools(&self, tab: DevToolsTab) {
+        self.devtools_tab.set(tab);
+        self.is_devtools_open.set(true);
+    }
+
+    /// Closes the DevTools panel.
+    pub fn close_devtools(&self) {
+        self.is_devtools_open.set(false);
+        self.devtools_is_inspecting.set(false);
+    }
+
+    /// Toggles the inspect element picker tool.
+    pub fn toggle_inspect(&self) {
+        if !self.is_devtools_open.get() {
+            self.is_devtools_open.set(true);
+            self.devtools_tab.set(DevToolsTab::Elements);
+        }
+        let current = self.devtools_is_inspecting.get();
+        self.devtools_is_inspecting.set(!current);
+    }
+
+    /// Switches the active DevTools tab.
+    pub fn set_devtools_tab(&self, tab: DevToolsTab) {
+        self.devtools_tab.set(tab);
+    }
+
+    /// Selects an element selector for inspection and box model rendering.
+    pub fn select_dom_element(&self, selector: &str) {
+        self.devtools_selected_element.set(selector.to_string());
+    }
+
+    /// Appends a new log entry to the DevTools console stream.
+    pub fn add_console_log(&self, level: LogLevel, source: &str, message: &str) {
+        let entry = ConsoleLogEntry {
+            level,
+            timestamp: "14:02:04.112".to_string(),
+            source: source.to_string(),
+            message: message.to_string(),
+        };
+        self.devtools_console_logs.update(|logs| logs.push(entry));
+    }
+
+    /// Executes an interactive command in the DevTools console REPL.
+    pub fn execute_console_command(&self, cmd: &str) {
+        let trimmed = cmd.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        self.add_console_log(LogLevel::Verbose, "repl", &format!("> {trimmed}"));
+        if trimmed == "clear()" || trimmed == "clear" {
+            self.devtools_console_logs.set(Vec::new());
+        } else if trimmed == "help" {
+            self.add_console_log(LogLevel::Info, "repl", "Available: strata.version, strata.tabs, strata.reload(), strata.navigate(url), clear()");
+        } else if trimmed == "strata.version" {
+            self.add_console_log(LogLevel::Info, "repl", "\"0.1.0 (Zero-Chromium Pure Rust LayoutNG)\"");
+        } else if trimmed == "strata.tabs" {
+            let count = self.tabs.get().len();
+            self.add_console_log(LogLevel::Info, "repl", &format!("Array({count}) [BrowserTab]"));
+        } else if trimmed.starts_with("strata.navigate(") {
+            let url = trimmed.trim_start_matches("strata.navigate(").trim_end_matches(')').trim_matches('"').trim_matches('\'');
+            self.navigate(url);
+            self.add_console_log(LogLevel::Info, "repl", &format!("Navigated to {url}"));
+        } else if trimmed == "strata.reload()" {
+            self.reload();
+            self.add_console_log(LogLevel::Info, "repl", "Tab reloaded");
+        } else {
+            self.add_console_log(LogLevel::Info, "repl", &format!("Result: {trimmed} => OK"));
+        }
+        self.devtools_console_input.set(String::new());
     }
 }
 

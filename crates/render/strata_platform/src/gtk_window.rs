@@ -772,9 +772,10 @@ where
         gtk::glib::Propagation::Proceed
     });
 
-    // Keyboard handler
+    // Keyboard handler on Window to capture global shortcuts reliably
     let on_event_key = on_event_rc.clone();
-    drawing_area.connect_key_press_event(move |widget, event| {
+    let da_key = drawing_area.clone();
+    window.connect_key_press_event(move |_widget, event| {
         let state = event.state();
         let modifiers = crate::events::Modifiers {
             shift: state.contains(gtk::gdk::ModifierType::SHIFT_MASK),
@@ -876,7 +877,7 @@ where
         }
 
         if redraw {
-            widget.queue_draw();
+            da_key.queue_draw();
         }
 
         gtk::glib::Propagation::Proceed
