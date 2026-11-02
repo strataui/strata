@@ -23,7 +23,7 @@ features:
   - icon: ⚡
     title: Zero Chromium Architecture
     details: Eliminates heavy WebViews, CEF, and V8 runtimes. Starts up in under 8ms with an idle memory footprint below 3MB.
-  - icon: 🔄
+  - icon: 📡
     title: Reactive Signals DAG
     details: Fine-grained reactivity via use_signal and use_effect. Direct node mutation without virtual DOM dirty reconciliation overhead.
   - icon: 📐
