@@ -14,8 +14,6 @@ pub fn Toolbar(state: BrowserState) -> View {
     let fwd_state = state.clone();
     let reload_state = state.clone();
     let home_state = state.clone();
-    let go_state = state.clone();
-    let input_state = state.clone();
 
     // Theme toggles
     let theme_dark = state.clone();
@@ -91,33 +89,55 @@ pub fn Toolbar(state: BrowserState) -> View {
                 </button>
 
                 // Omnibox URL Bar
-                <div class="flex-1 flex items-center bg-neutral-950 border border-neutral-700/80 rounded-lg px-3 py-1.5 focus-within:border-blue-500 transition-colors">
-                    <div class={format!("flex items-center mr-2 {}", sec_color)}>
-                        {Icon(sec_icon, Some("w-3.5 h-3.5 text-current")).root}
-                    </div>
-
-                    <input
-                        type="text"
-                        class="flex-1 bg-transparent border-0 outline-none text-xs text-white placeholder-neutral-500 font-mono"
-                        placeholder="Enter URL or search query..."
-                        value={url_value.clone()}
-                        oninput={move |val: String| {
-                            input_state.url_input.set(val);
-                        }}
-                    />
-
-                    <button
-                        type="button"
-                        class="px-2.5 py-0.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded transition-colors cursor-pointer ml-2 flex items-center gap-1"
-                        onclick={move |_| {
-                            let dest = go_state.url_input.get();
-                            go_state.navigate(&dest);
-                        }}
-                    >
-                        <span>{"Go"}</span>
-                        {Icon(IconName::ArrowRight, Some("w-3 h-3 text-current")).root}
-                    </button>
-                </div>
+                {if !state.is_omnibox_editing.get() {
+                    let omni_click = state.clone();
+                    rsx! {
+                        <div
+                            class="flex-1 flex items-center bg-neutral-950 hover:bg-neutral-900/90 border border-neutral-700/80 hover:border-neutral-500 rounded-lg px-3 py-1.5 transition-all cursor-text"
+                            onclick={move |_| {
+                                omni_click.start_editing_omnibox();
+                            }}
+                        >
+                            <div class={format!("flex items-center mr-2 flex-shrink-0 {}", sec_color)}>
+                                {Icon(sec_icon, Some("w-3.5 h-3.5 text-current")).root}
+                            </div>
+                            <span class="flex-1 text-xs text-neutral-200 font-mono select-none truncate">
+                                {url_value.clone()}
+                            </span>
+                        </div>
+                    }
+                } else {
+                    let is_sel = state.omnibox_selected.get();
+                    let input_change = state.clone();
+                    rsx! {
+                        <div class="flex-1 flex items-center bg-neutral-950 border border-blue-500 rounded-lg px-3 py-1.5 transition-colors">
+                            <div class={format!("flex items-center mr-2 flex-shrink-0 {}", sec_color)}>
+                                {Icon(sec_icon, Some("w-3.5 h-3.5 text-current")).root}
+                            </div>
+                            <div class="flex-1 flex items-center min-w-0">
+                                {if is_sel {
+                                    rsx! {
+                                        <span class="bg-blue-600/70 text-white text-xs font-mono px-1 rounded truncate">
+                                            {url_value.clone()}
+                                        </span>
+                                    }
+                                } else {
+                                    rsx! {
+                                        <input
+                                            type="text"
+                                            class="flex-1 bg-transparent border-0 outline-none text-xs text-white placeholder-neutral-500 font-mono"
+                                            placeholder="Enter URL or search query..."
+                                            value={url_value.clone()}
+                                            oninput={move |val: String| {
+                                                input_change.url_input.set(val);
+                                            }}
+                                        />
+                                    }
+                                }}
+                            </div>
+                        </div>
+                    }
+                }}
 
                 // Theme Switcher Pills
                 <div class="flex items-center gap-1 p-0.5 rounded-lg bg-neutral-950 border border-neutral-800 text-xs">

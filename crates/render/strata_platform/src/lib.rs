@@ -31,7 +31,10 @@ pub use window::{
 #[cfg(target_os = "linux")]
 pub use x11_window::{X11EventLoop, X11Window};
 #[cfg(target_os = "linux")]
-pub use gtk_window::{cairo_rounded_rect, launch_gtk_window, render_display_list_to_cairo, render_to_png};
+pub use gtk_window::{
+    cairo_rounded_rect, gtk_close, gtk_get_clipboard_text, gtk_minimize, gtk_set_clipboard_text,
+    gtk_toggle_maximize, launch_gtk_window, render_display_list_to_cairo, render_to_png,
+};
 #[cfg(target_os = "linux")]
 pub use cairo;
 pub use window_manager::{WindowId, WindowManager};

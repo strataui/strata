@@ -12,13 +12,6 @@ pub fn TabBar(state: BrowserState) -> View {
 
     rsx! {
         <div class="flex items-center gap-1.5 px-3 pt-2 bg-neutral-950 border-b border-neutral-800/80 select-none">
-            // Window Traffic Lights
-            <div class="flex items-center gap-1.5 mr-3 pl-1">
-                <div class="w-3 h-3 rounded-full bg-rose-500/80"></div>
-                <div class="w-3 h-3 rounded-full bg-amber-500/80"></div>
-                <div class="w-3 h-3 rounded-full bg-emerald-500/80"></div>
-            </div>
-
             // Tabs List
             <div class="flex items-center gap-1 overflow-x-auto flex-1 min-w-0">
                 {tabs.into_iter().map(|tab| {
@@ -79,6 +72,40 @@ pub fn TabBar(state: BrowserState) -> View {
                     }}
                 >
                     {"+"}
+                </button>
+            </div>
+
+            // Top-Right Window Controls (CSD Frameless Window)
+            <div class="flex items-center gap-1 ml-3 flex-shrink-0">
+                <button
+                    type="button"
+                    class="flex items-center justify-center w-8 h-7 rounded hover:bg-neutral-800 text-neutral-400 hover:text-white transition-colors cursor-pointer text-sm font-bold"
+                    onclick={move |_| {
+                        #[cfg(target_os = "linux")]
+                        strata::gtk_minimize();
+                    }}
+                >
+                    {"−"}
+                </button>
+                <button
+                    type="button"
+                    class="flex items-center justify-center w-8 h-7 rounded hover:bg-neutral-800 text-neutral-400 hover:text-white transition-colors cursor-pointer text-xs"
+                    onclick={move |_| {
+                        #[cfg(target_os = "linux")]
+                        strata::gtk_toggle_maximize();
+                    }}
+                >
+                    {"□"}
+                </button>
+                <button
+                    type="button"
+                    class="flex items-center justify-center w-8 h-7 rounded hover:bg-red-600 text-neutral-400 hover:text-white transition-colors cursor-pointer text-xs font-semibold"
+                    onclick={move |_| {
+                        #[cfg(target_os = "linux")]
+                        strata::gtk_close();
+                    }}
+                >
+                    {"✕"}
                 </button>
             </div>
         </div>

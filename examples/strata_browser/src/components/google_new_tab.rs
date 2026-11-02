@@ -68,7 +68,7 @@ pub fn GoogleNewTab(state: BrowserState) -> View {
             <div class="flex items-center gap-3 mt-7">
                 <button
                     type="button"
-                    class="px-5 py-2.5 bg-neutral-800/80 hover:bg-neutral-700 text-neutral-200 hover:text-white text-sm font-medium rounded-lg border border-neutral-700/60 transition-all cursor-pointer shadow-sm"
+                    class="flex items-center justify-center px-5 py-2.5 bg-neutral-800/80 hover:bg-neutral-700 text-neutral-200 hover:text-white text-sm font-medium rounded-lg border border-neutral-700/60 transition-all cursor-pointer shadow-sm"
                     onclick={move |_| {
                         let q = state.search_input.get();
                         let target = if q.trim().is_empty() {
@@ -83,7 +83,7 @@ pub fn GoogleNewTab(state: BrowserState) -> View {
                 </button>
                 <button
                     type="button"
-                    class="px-5 py-2.5 bg-neutral-800/80 hover:bg-neutral-700 text-neutral-200 hover:text-white text-sm font-medium rounded-lg border border-neutral-700/60 transition-all cursor-pointer shadow-sm"
+                    class="flex items-center justify-center px-5 py-2.5 bg-neutral-800/80 hover:bg-neutral-700 text-neutral-200 hover:text-white text-sm font-medium rounded-lg border border-neutral-700/60 transition-all cursor-pointer shadow-sm"
                     onclick={move |_| {
                         lucky_state.navigate("https://en.wikipedia.org/wiki/Rust_(programming_language)");
                     }}

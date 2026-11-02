@@ -39,6 +39,8 @@ pub struct BrowserState {
     pub url_input: Signal<String>,
     pub search_input: Signal<String>,
     pub active_theme: Signal<String>,
+    pub is_omnibox_editing: Signal<bool>,
+    pub omnibox_selected: Signal<bool>,
 }
 
 impl BrowserState {
@@ -53,6 +55,67 @@ impl BrowserState {
             url_input: Signal::new(initial_url.to_string()),
             search_input: Signal::new(String::new()),
             active_theme: Signal::new("dark".to_string()),
+            is_omnibox_editing: Signal::new(false),
+            omnibox_selected: Signal::new(false),
+        }
+    }
+
+    /// Activates Omnibox input editing with all text selected by default.
+    pub fn start_editing_omnibox(&self) {
+        self.is_omnibox_editing.set(true);
+        self.omnibox_selected.set(true);
+    }
+
+    /// Exits Omnibox input editing.
+    pub fn stop_editing_omnibox(&self) {
+        self.is_omnibox_editing.set(false);
+        self.omnibox_selected.set(false);
+    }
+
+    /// Cancels Omnibox input editing, reverting to active tab's URL.
+    pub fn cancel_editing_omnibox(&self) {
+        if let Some(tab) = self.active_tab() {
+            self.url_input.set(tab.url);
+        }
+        self.is_omnibox_editing.set(false);
+        self.omnibox_selected.set(false);
+    }
+
+    /// Commits the current Omnibox input and navigates.
+    pub fn commit_omnibox(&self) {
+        let target = self.url_input.get();
+        self.navigate(&target);
+        self.is_omnibox_editing.set(false);
+        self.omnibox_selected.set(false);
+    }
+
+    /// Handles character input into the Omnibox.
+    pub fn handle_key_input(&self, ch: char) {
+        if self.omnibox_selected.get() {
+            self.url_input.set(ch.to_string());
+            self.omnibox_selected.set(false);
+        } else {
+            let mut cur = self.url_input.get();
+            cur.push(ch);
+            self.url_input.set(cur);
+        }
+    }
+
+    /// Handles Backspace key in the Omnibox.
+    pub fn handle_backspace(&self) -> bool {
+        if self.omnibox_selected.get() {
+            self.url_input.set(String::new());
+            self.omnibox_selected.set(false);
+            true
+        } else {
+            let mut cur = self.url_input.get();
+            if !cur.is_empty() {
+                cur.pop();
+                self.url_input.set(cur);
+                true
+            } else {
+                false
+            }
         }
     }
 
@@ -114,6 +177,8 @@ impl BrowserState {
         });
 
         self.active_tab_id.set(new_active_id);
+        self.is_omnibox_editing.set(false);
+        self.omnibox_selected.set(false);
         if let Some(new_active) = self.tabs.get().into_iter().find(|t| t.id == new_active_id) {
             self.url_input.set(new_active.url);
         }
@@ -122,6 +187,8 @@ impl BrowserState {
     /// Switches the active view to the specified tab.
     pub fn switch_tab(&self, tab_id: usize) {
         self.active_tab_id.set(tab_id);
+        self.is_omnibox_editing.set(false);
+        self.omnibox_selected.set(false);
         if let Some(tab) = self.tabs.get().into_iter().find(|t| t.id == tab_id) {
             self.url_input.set(tab.url);
         }
@@ -133,6 +200,9 @@ impl BrowserState {
         if trimmed.is_empty() {
             return;
         }
+
+        self.is_omnibox_editing.set(false);
+        self.omnibox_selected.set(false);
 
         let normalized = normalize_target(trimmed);
         let (title, html) = resolve_page(&normalized);
@@ -240,11 +310,10 @@ impl BrowserState {
     /// Handles a middle-click anywhere on the tab strip to close the clicked tab.
     pub fn handle_middle_click(&self, x: f32, y: f32) -> bool {
         // Tab bar is in the top header area: y between 0.0 and 42.0
-        // Window traffic lights take the first ~60px
-        if y >= 0.0 && y <= 42.0 && x > 60.0 {
+        if y >= 0.0 && y <= 42.0 && x >= 12.0 {
             let tabs = self.tabs.get();
             let tab_width = 176.0 + 4.0; // w-44 (176px) + gap-1 (4px)
-            let tab_offset_x = x - 64.0;
+            let tab_offset_x = x - 12.0;
             if tab_offset_x >= 0.0 {
                 let tab_idx = (tab_offset_x / tab_width) as usize;
                 if tab_idx < tabs.len() {

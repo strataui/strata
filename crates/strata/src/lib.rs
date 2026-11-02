@@ -74,6 +74,8 @@ pub use runtime::{
 };
 #[cfg(target_os = "linux")]
 pub use runtime::{launch_x11, launch_x11_with_events, launch_gtk, launch_gtk_with_events};
+#[cfg(target_os = "linux")]
+pub use strata_platform::{gtk_close, gtk_get_clipboard_text, gtk_minimize, gtk_set_clipboard_text, gtk_toggle_maximize};
 pub use benchmarks::{BenchmarkHarness, BenchmarkReport};
 pub use low_level::{LowLevelRenderer, OffscreenBuffer, RawSurfaceHandle};
 
@@ -181,5 +183,7 @@ pub mod prelude {
     };
     #[cfg(target_os = "linux")]
     pub use crate::runtime::{launch_x11, launch_x11_with_events, launch_gtk, launch_gtk_with_events};
+    #[cfg(target_os = "linux")]
+    pub use strata_platform::{gtk_close, gtk_get_clipboard_text, gtk_minimize, gtk_set_clipboard_text, gtk_toggle_maximize};
     pub use crate::benchmarks::{BenchmarkHarness, BenchmarkReport};
 }

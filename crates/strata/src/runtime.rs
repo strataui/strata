@@ -205,8 +205,7 @@ impl AppRuntime {
                 // If inline element has auto width and contains only a text child, compute intrinsic text dimensions
                 if is_inline && style.width == Dimension::Auto && children.len() == 1 {
                     if let NodeBlueprint::Text(t) = &children[0] {
-                        let char_w = style.font_size * 0.55;
-                        let text_w = t.len() as f32 * char_w;
+                        let (text_w, _) = measure_text_bounds(t, style.font_size, style.line_height, None);
                         let total_w = text_w
                             + style.padding.left
                             + style.padding.right
@@ -229,11 +228,9 @@ impl AppRuntime {
                     None => ComputedStyle::default(),
                 };
                 style.display = Display::Inline;
-                let char_w = style.font_size * 0.55;
-                let approx_width = (text.len() as f32 * char_w).max(16.0);
-                let line_h = (style.font_size * style.line_height).max(style.font_size);
-                style.width = Dimension::Px(approx_width);
-                style.height = Dimension::Px(line_h);
+                let (w, h) = measure_text_bounds(text, style.font_size, style.line_height, None);
+                style.width = Dimension::Px(w);
+                style.height = Dimension::Px(h);
                 LayoutNode::with_text(style, text.clone())
             }
             NodeBlueprint::DynamicText(dyn_fn) => {
@@ -243,11 +240,9 @@ impl AppRuntime {
                     None => ComputedStyle::default(),
                 };
                 style.display = Display::Inline;
-                let char_w = style.font_size * 0.55;
-                let approx_width = (text.len() as f32 * char_w).max(16.0);
-                let line_h = (style.font_size * style.line_height).max(style.font_size);
-                style.width = Dimension::Px(approx_width);
-                style.height = Dimension::Px(line_h);
+                let (w, h) = measure_text_bounds(&text, style.font_size, style.line_height, None);
+                style.width = Dimension::Px(w);
+                style.height = Dimension::Px(h);
                 LayoutNode::with_text(style, text)
             }
             NodeBlueprint::Fragment(children) => {
@@ -834,7 +829,8 @@ where
         }
     };
 
-    strata_platform::launch_gtk_window(&config.title, config.width, config.height, on_draw, on_event)
+    let decorated = config.decoration == strata_platform::WindowDecoration::NativeOs;
+    strata_platform::launch_gtk_window(&config.title, config.width, config.height, decorated, on_draw, on_event)
 }
 
 /// Frame timing and metrics information passed to frame lifecycle callbacks.
