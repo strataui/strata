@@ -762,6 +762,81 @@ where
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+/// Launches an interactive native GTK3/Cairo desktop window on Linux with high-fidelity system typography.
+pub fn launch_gtk<F>(root_fn: F, config: WindowConfig) -> Result<(), String>
+where
+    F: FnMut() -> View + 'static,
+{
+    launch_gtk_with_events(root_fn, config, |_, _| false)
+}
+
+#[cfg(target_os = "linux")]
+/// Launches an interactive native GTK3/Cairo desktop window on Linux with a custom event hook.
+pub fn launch_gtk_with_events<F, E>(
+    root_fn: F,
+    config: WindowConfig,
+    event_handler: E,
+) -> Result<(), String>
+where
+    F: FnMut() -> View + 'static,
+    E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
+{
+    let root_fn_rc = std::rc::Rc::new(std::cell::RefCell::new(root_fn));
+    let event_handler_rc = std::rc::Rc::new(std::cell::RefCell::new(event_handler));
+
+    let initial_view = (root_fn_rc.borrow_mut())();
+    let runtime = std::rc::Rc::new(std::cell::RefCell::new(AppRuntime::new(
+        initial_view,
+        config.width as f32,
+        config.height as f32,
+        1.0,
+    )));
+
+    let runtime_draw = runtime.clone();
+    let on_draw = move |width: f32, height: f32, cr: &strata_platform::cairo::Context| {
+        let mut rt = runtime_draw.borrow_mut();
+        rt.viewport_width = width;
+        rt.viewport_height = height;
+        rt.layout_root.compute_layout(width, height);
+        rt.compile_display_list();
+
+        // Fill background
+        cr.set_source_rgb(0.035, 0.035, 0.043);
+        let _ = cr.paint();
+
+        strata_platform::render_display_list_to_cairo(cr, &rt.display_list);
+    };
+
+    let runtime_event = runtime.clone();
+    let root_fn_event = root_fn_rc.clone();
+    let event_handler_event = event_handler_rc.clone();
+    let on_event = move |event: &strata_platform::PlatformEvent| -> bool {
+        let mut needs_rebuild = false;
+        {
+            let mut rt = runtime_event.borrow_mut();
+            if (event_handler_event.borrow_mut())(event, &mut rt) {
+                needs_rebuild = true;
+            }
+            if let strata_platform::PlatformEvent::MouseDown { x, y, button: strata_platform::MouseButton::Left } = event {
+                if rt.dispatch_click(*x, *y) {
+                    needs_rebuild = true;
+                }
+            }
+        }
+
+        if needs_rebuild {
+            let new_view = (root_fn_event.borrow_mut())();
+            runtime_event.borrow_mut().update_view(new_view);
+            true
+        } else {
+            false
+        }
+    };
+
+    strata_platform::launch_gtk_window(&config.title, config.width, config.height, on_draw, on_event)
+}
+
 /// Frame timing and metrics information passed to frame lifecycle callbacks.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AppFrameInfo {

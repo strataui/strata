@@ -13,6 +13,8 @@ pub mod window;
 pub mod window_manager;
 #[cfg(target_os = "linux")]
 pub mod x11_window;
+#[cfg(target_os = "linux")]
+pub mod gtk_window;
 
 pub use csd::{ControlPlacement, CsdGeometry, CsdHitZone};
 pub use events::{KeyCode, Modifiers, MouseButton, PlatformEvent, TouchPhase};
@@ -28,6 +30,10 @@ pub use window::{
 };
 #[cfg(target_os = "linux")]
 pub use x11_window::{X11EventLoop, X11Window};
+#[cfg(target_os = "linux")]
+pub use gtk_window::{cairo_rounded_rect, launch_gtk_window, render_display_list_to_cairo, render_to_png};
+#[cfg(target_os = "linux")]
+pub use cairo;
 pub use window_manager::{WindowId, WindowManager};
 
 /// Target operating system or runtime platform.

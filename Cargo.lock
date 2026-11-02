@@ -3251,7 +3251,11 @@ dependencies = [
 name = "strata_platform"
 version = "0.1.0"
 dependencies = [
+ "cairo-rs",
+ "gtk",
+ "strata_primitives",
  "strata_render",
+ "strata_style",
  "x11",
 ]
 

@@ -45,15 +45,18 @@ fn main() {
 
     #[cfg(target_os = "linux")]
     {
-        println!("[+] Connecting to native Linux display server (DISPLAY: {})...", std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string()));
+        println!("[+] Connecting to native Linux display server with GTK/Cairo high-fidelity presentation (DISPLAY: {})...", std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string()));
         let render_state = state.clone();
         let event_state = state.clone();
 
-        let res = strata::launch_x11_with_events(
+        let res = strata::launch_gtk_with_events(
             move || BrowserApp(render_state.clone()),
             config.clone(),
             move |event, _runtime| {
                 match event {
+                    PlatformEvent::MouseDown { button: MouseButton::Middle, x, y } => {
+                        event_state.handle_middle_click(*x, *y)
+                    }
                     PlatformEvent::KeyDown { key, .. } => {
                         match key {
                             KeyCode::Enter => {
@@ -98,7 +101,7 @@ fn main() {
         );
 
         if let Err(err) = res {
-            eprintln!("[!] Failed to initialize X11 desktop window: {}. Falling back to software surface presenter.", err);
+            eprintln!("[!] Failed to initialize GTK desktop window: {}. Falling back to software surface presenter.", err);
             let (_runtime, _window, presenter) = strata::launch_window(
                 move || BrowserApp(state.clone()),
                 config,

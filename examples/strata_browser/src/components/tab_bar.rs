@@ -47,26 +47,24 @@ pub fn TabBar(state: BrowserState) -> View {
 
                     rsx! {
                         <div
-                            class={format!("group flex items-center gap-2 h-9 px-3.5 rounded-t-lg border-t border-x {} {} {} transition-colors cursor-pointer max-w-[200px] min-w-[120px]", bg, border, text_color)}
+                            class={format!("group flex items-center gap-2 h-9 px-3 rounded-t-lg border-t border-x w-44 {} {} {} transition-colors cursor-pointer select-none", bg, border, text_color)}
                             onclick={move |_| {
                                 click_state.switch_tab(tab_id);
                             }}
                         >
-                            <div class="flex-shrink-0 text-neutral-400">
-                                {Icon(icon, Some("w-3.5 h-3.5 text-current")).root}
-                            </div>
-                            <span class="truncate text-xs font-medium flex-1">
+                            {Icon(icon, Some("w-3.5 h-3.5 text-neutral-400 flex-shrink-0")).root}
+                            <span class="truncate text-xs font-medium flex-1 min-w-0">
                                 {tab.title}
                             </span>
                             <button
                                 type="button"
-                                class="flex-shrink-0 p-0.5 rounded hover:bg-neutral-700/70 text-neutral-400 hover:text-white transition-colors cursor-pointer ml-1"
+                                class="flex items-center justify-center w-5 h-5 rounded hover:bg-neutral-700/70 text-neutral-400 hover:text-white transition-colors cursor-pointer text-sm font-semibold flex-shrink-0 ml-1"
                                 onclick={move |e: Event| {
                                     e.stop_propagation();
                                     close_state.close_tab(tab_id);
                                 }}
                             >
-                                {Icon(IconName::X, Some("w-3 h-3 text-current")).root}
+                                {"×"}
                             </button>
                         </div>
                     }
@@ -75,12 +73,12 @@ pub fn TabBar(state: BrowserState) -> View {
                 // Plus New Tab Button
                 <button
                     type="button"
-                    class="p-1.5 rounded-lg hover:bg-neutral-800 text-neutral-400 hover:text-white transition-colors cursor-pointer ml-1"
+                    class="flex items-center justify-center w-7 h-7 rounded-lg hover:bg-neutral-800 text-neutral-400 hover:text-white transition-colors cursor-pointer ml-1 text-base font-bold"
                     onclick={move |_| {
                         new_tab_state.new_tab("strata://newtab");
                     }}
                 >
-                    {Icon(IconName::Plus, Some("w-4 h-4 text-current")).root}
+                    {"+"}
                 </button>
             </div>
         </div>

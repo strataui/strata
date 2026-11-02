@@ -47,6 +47,8 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
         Some(w) => clamp_dimension(w, container.style.min_width, container.style.max_width, available_width),
         None => {
             let is_inline_or_shrink = container.style.display == strata_style::types::Display::InlineFlex
+                || container.style.display == strata_style::types::Display::Inline
+                || container.style.flex_shrink == 0.0
                 || (container.style.flex_grow == 0.0 && is_row);
             if is_inline_or_shrink && !container.children.is_empty() {
                 let mut sum_children = 0.0f32;

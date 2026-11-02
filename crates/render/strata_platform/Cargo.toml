@@ -8,6 +8,10 @@ description = "Native Hardware Abstraction Layer for Android, iOS, macOS, Window
 
 [dependencies]
 strata_render = { workspace = true }
+strata_style = { workspace = true }
+strata_primitives = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11 = { version = "2.21", features = ["xlib"] }
+gtk = "0.18.2"
+cairo-rs = { version = "0.18.5", features = ["png"] }

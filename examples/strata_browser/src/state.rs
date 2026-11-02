@@ -236,6 +236,25 @@ impl BrowserState {
     pub fn set_theme(&self, theme: &str) {
         self.active_theme.set(theme.to_string());
     }
+
+    /// Handles a middle-click anywhere on the tab strip to close the clicked tab.
+    pub fn handle_middle_click(&self, x: f32, y: f32) -> bool {
+        // Tab bar is in the top header area: y between 0.0 and 42.0
+        // Window traffic lights take the first ~60px
+        if y >= 0.0 && y <= 42.0 && x > 60.0 {
+            let tabs = self.tabs.get();
+            let tab_width = 176.0 + 4.0; // w-44 (176px) + gap-1 (4px)
+            let tab_offset_x = x - 64.0;
+            if tab_offset_x >= 0.0 {
+                let tab_idx = (tab_offset_x / tab_width) as usize;
+                if tab_idx < tabs.len() {
+                    self.close_tab(tabs[tab_idx].id);
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 fn normalize_target(input: &str) -> String {

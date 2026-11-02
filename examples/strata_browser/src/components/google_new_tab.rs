@@ -19,10 +19,10 @@ pub fn GoogleNewTab(state: BrowserState) -> View {
     let about_state = state.clone();
 
     rsx! {
-        <div class="flex flex-col items-center justify-center min-h-[calc(100vh-140px)] w-full px-4 py-12 select-none">
+        <div class="flex-1 flex flex-col items-center justify-center w-full px-4 py-8 select-none">
             // Google Brand Logo
             <div class="flex flex-col items-center mb-8">
-                <div class="flex items-center text-6xl sm:text-7xl font-bold tracking-tight">
+                <div class="flex items-center text-6xl font-bold tracking-tight">
                     <span class="text-blue-500">{"G"}</span>
                     <span class="text-red-500">{"o"}</span>
                     <span class="text-amber-400">{"o"}</span>
@@ -30,16 +30,14 @@ pub fn GoogleNewTab(state: BrowserState) -> View {
                     <span class="text-emerald-500">{"l"}</span>
                     <span class="text-red-500">{"e"}</span>
                 </div>
-                <div class="mt-2 text-xs font-mono uppercase tracking-widest text-neutral-500">
+                <div class="flex items-center justify-center mt-2 text-xs font-mono uppercase tracking-widest text-neutral-500">
                     {"Strata Native Zero-Chromium Edition"}
                 </div>
             </div>
 
             // Google Search Input Box
             <div class="w-full max-w-2xl bg-neutral-900 border border-neutral-700 hover:border-neutral-500 rounded-full px-5 py-3 flex items-center gap-3 shadow-xl">
-                <div class="text-neutral-400">
-                    {Icon(IconName::Search, Some("w-5 h-5 text-neutral-400")).root}
-                </div>
+                {Icon(IconName::Search, Some("w-5 h-5 text-neutral-400 flex-shrink-0")).root}
                 <input
                     type="text"
                     class="flex-1 bg-transparent border-0 outline-none text-white text-base placeholder-neutral-500 font-sans"
@@ -51,7 +49,7 @@ pub fn GoogleNewTab(state: BrowserState) -> View {
                 />
                 <button
                     type="button"
-                    class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-full transition-colors cursor-pointer"
+                    class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-full transition-colors cursor-pointer flex-shrink-0"
                     onclick={move |_| {
                         let q = search_state.search_input.get();
                         let target = if q.trim().is_empty() {
