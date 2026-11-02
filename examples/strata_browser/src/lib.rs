@@ -8,9 +8,7 @@
 pub mod components;
 pub mod mock_pages;
 pub mod state;
-pub mod terminal_view;
 
 pub use components::{BrowserApp, GoogleNewTab, StatusBar, TabBar, Toolbar, Viewport};
 pub use mock_pages::resolve_page;
 pub use state::{BrowserState, BrowserTab};
-pub use terminal_view::render_terminal_browser;

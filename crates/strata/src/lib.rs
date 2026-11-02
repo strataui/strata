@@ -72,6 +72,8 @@ pub use runtime::{
     app, AppFrameInfo, AppLifecycleHooks, AppRuntime, launch, launch_headless, launch_window,
     StrataApp, StrataAppBuilder,
 };
+#[cfg(target_os = "linux")]
+pub use runtime::{launch_x11, launch_x11_with_events};
 pub use benchmarks::{BenchmarkHarness, BenchmarkReport};
 pub use low_level::{LowLevelRenderer, OffscreenBuffer, RawSurfaceHandle};
 
@@ -177,5 +179,7 @@ pub mod prelude {
         app, AppFrameInfo, AppLifecycleHooks, AppRuntime, launch, launch_headless, launch_window,
         StrataApp, StrataAppBuilder,
     };
+    #[cfg(target_os = "linux")]
+    pub use crate::runtime::{launch_x11, launch_x11_with_events};
     pub use crate::benchmarks::{BenchmarkHarness, BenchmarkReport};
 }

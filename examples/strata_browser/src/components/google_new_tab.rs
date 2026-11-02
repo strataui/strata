@@ -36,7 +36,7 @@ pub fn GoogleNewTab(state: BrowserState) -> View {
             </div>
 
             // Google Search Input Box
-            <div class="w-full max-w-2xl bg-neutral-900/90 border border-neutral-700/80 hover:border-neutral-500 focus-within:border-blue-500 rounded-full px-5 py-3 flex items-center gap-3 shadow-xl transition-all">
+            <div class="w-full max-w-2xl bg-neutral-900 border border-neutral-700 hover:border-neutral-500 rounded-full px-5 py-3 flex items-center gap-3 shadow-xl">
                 <div class="text-neutral-400">
                     {Icon(IconName::Search, Some("w-5 h-5 text-neutral-400")).root}
                 </div>
@@ -95,7 +95,7 @@ pub fn GoogleNewTab(state: BrowserState) -> View {
             </div>
 
             // Quick Access Shortcut Tiles
-            <div class="grid grid-cols-3 sm:grid-cols-5 gap-4 mt-12 max-w-2xl w-full">
+            <div class="grid grid-cols-5 gap-4 mt-8 max-w-2xl w-full">
                 // Wikipedia
                 <button
                     type="button"

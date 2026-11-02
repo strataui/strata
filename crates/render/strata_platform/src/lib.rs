@@ -11,6 +11,8 @@ pub mod menu;
 pub mod tray;
 pub mod window;
 pub mod window_manager;
+#[cfg(target_os = "linux")]
+pub mod x11_window;
 
 pub use csd::{ControlPlacement, CsdGeometry, CsdHitZone};
 pub use events::{KeyCode, Modifiers, MouseButton, PlatformEvent, TouchPhase};
@@ -24,6 +26,8 @@ pub use window::{
     CursorIcon, EventLoop, EventLoopControl, LivePlatformWindow, MockEventLoop, MockPlatformWindow,
     PlatformWindow, ThemeMode, WindowConfig, WindowDecoration, WindowMode,
 };
+#[cfg(target_os = "linux")]
+pub use x11_window::{X11EventLoop, X11Window};
 pub use window_manager::{WindowId, WindowManager};
 
 /// Target operating system or runtime platform.
@@ -92,5 +96,7 @@ pub mod prelude {
         CursorIcon, EventLoop, EventLoopControl, LivePlatformWindow, MockEventLoop, MockPlatformWindow,
         PlatformWindow, ThemeMode, WindowConfig, WindowDecoration, WindowMode,
     };
+    #[cfg(target_os = "linux")]
+    pub use super::x11_window::{X11EventLoop, X11Window};
     pub use super::PlatformTarget;
 }

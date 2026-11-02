@@ -318,3 +318,21 @@ fn test_framebuffer_clear_rect() {
     assert_eq!(fb.get_pixel(40, 40), Color::WHITE);
     assert_eq!(fb.get_pixel(120, 120), Color::WHITE);
 }
+
+#[test]
+fn test_framebuffer_draw_text() {
+    let mut fb = FrameBuffer::new(200, 100);
+    fb.clear(Color::BLACK);
+
+    fb.draw_text((10.0, 10.0), "Hello Strata", 16.0, Color::WHITE, None);
+
+    let mut white_count = 0;
+    for y in 10..30 {
+        for x in 10..150 {
+            if fb.get_pixel(x, y) == Color::WHITE {
+                white_count += 1;
+            }
+        }
+    }
+    assert!(white_count > 20, "Text should have rasterized pixels, found {}", white_count);
+}

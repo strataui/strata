@@ -52,6 +52,13 @@ impl AppRuntime {
         &self.display_list
     }
 
+    /// Updates the application root view, reconstructing the layout tree and compiling a new display list.
+    pub fn update_view(&mut self, new_view: View) {
+        self.root_blueprint = new_view.root;
+        self.layout_root = Self::build_layout_tree(&self.root_blueprint);
+        self.tick_frame();
+    }
+
     /// Recursively transforms an RSX `NodeBlueprint` into a `LayoutNode` hierarchy with styling and inheritance.
     pub fn build_layout_tree(blueprint: &NodeBlueprint) -> LayoutNode {
         Self::build_layout_tree_with_parent(blueprint, None)
@@ -130,14 +137,14 @@ impl AppRuntime {
                     if let Some(val) = value_text {
                         let char_w = style.font_size * 0.55;
                         let approx_width = (val.len() as f32 * char_w).max(40.0);
-                        if style.width == Dimension::Auto {
+                        if style.width == Dimension::Auto && style.flex_grow <= 0.0 {
                             style.width = Dimension::Px(approx_width + style.padding.left + style.padding.right);
                         }
                         return LayoutNode::with_text(style, val);
                     } else if let Some(ph) = placeholder_text {
                         let char_w = style.font_size * 0.55;
                         let approx_width = (ph.len() as f32 * char_w).max(40.0);
-                        if style.width == Dimension::Auto {
+                        if style.width == Dimension::Auto && style.flex_grow <= 0.0 {
                             style.width = Dimension::Px(approx_width + style.padding.left + style.padding.right);
                         }
                         style.color = strata_style::types::Color::new(140, 145, 155, 255);
@@ -665,6 +672,94 @@ where
     );
 
     (runtime, window, presenter)
+}
+
+#[cfg(target_os = "linux")]
+/// Launches an interactive native X11 desktop window on Linux displaying the Strata application.
+pub fn launch_x11<F>(root_fn: F, config: WindowConfig) -> Result<(), String>
+where
+    F: FnMut() -> View + 'static,
+{
+    launch_x11_with_events(root_fn, config, |_, _| false)
+}
+
+#[cfg(target_os = "linux")]
+/// Launches an interactive native X11 desktop window on Linux with a custom event hook.
+pub fn launch_x11_with_events<F, E>(
+    mut root_fn: F,
+    config: WindowConfig,
+    mut event_handler: E,
+) -> Result<(), String>
+where
+    F: FnMut() -> View + 'static,
+    E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
+{
+    println!("[+] Launching Strata Native Desktop Window on X11: \"{}\"...", config.title);
+    let mut x11_window = strata_platform::x11_window::X11Window::new(config.clone())?;
+    let view = root_fn();
+    let width = config.width as f32;
+    let height = config.height as f32;
+    let mut runtime = AppRuntime::new(view, width, height, 1.0);
+    let mut presenter = SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
+    let mut compositor = SwapchainCompositor::new(config.width, config.height, 1.0);
+
+    // Initial frame presentation
+    let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
+    let _ = x11_window.present_bgra(&presenter.backing_buffer, presenter.width, presenter.height);
+
+    println!(
+        "[OK] Strata Native Desktop Window active on X11 display: {}x{} physical pixels, {} commands presented.",
+        presenter.width,
+        presenter.height,
+        runtime.display_list.commands.len()
+    );
+
+    let mut running = true;
+    while running {
+        let events = x11_window.poll_native_events();
+        let mut needs_rebuild = false;
+        let mut needs_redraw = false;
+
+        for event in events {
+            if event_handler(&event, &mut runtime) {
+                needs_rebuild = true;
+            }
+
+            match event {
+                strata_platform::PlatformEvent::WindowCloseRequested => {
+                    running = false;
+                    break;
+                }
+                strata_platform::PlatformEvent::WindowResized { width: w, height: h } => {
+                    compositor.resize(w, h, runtime.dpr);
+                    let _ = presenter.resize(w, h);
+                    runtime.viewport_width = w as f32;
+                    runtime.viewport_height = h as f32;
+                    needs_redraw = true;
+                }
+                strata_platform::PlatformEvent::MouseDown { x, y, button: strata_platform::MouseButton::Left } => {
+                    if runtime.dispatch_click(x, y) {
+                        needs_rebuild = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if needs_rebuild {
+            let new_view = root_fn();
+            runtime.update_view(new_view);
+            let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
+            let _ = x11_window.present_bgra(&presenter.backing_buffer, presenter.width, presenter.height);
+        } else if needs_redraw || x11_window.redraw_requested {
+            let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
+            let _ = x11_window.present_bgra(&presenter.backing_buffer, presenter.width, presenter.height);
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(16));
+    }
+
+    Ok(())
 }
 
 /// Frame timing and metrics information passed to frame lifecycle callbacks.

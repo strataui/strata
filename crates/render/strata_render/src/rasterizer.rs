@@ -12,6 +12,7 @@ use strata_style::types::{BoxShadow, Color};
 /// `d = length(max(q, 0)) + min(max(q.x, q.y), 0) - r`
 #[inline(always)]
 pub fn sd_rounded_rect(px: f32, py: f32, half_w: f32, half_h: f32, r: f32) -> f32 {
+    let r = r.min(half_w).min(half_h).max(0.0);
     let qx = px.abs() - half_w + r;
     let qy = py.abs() - half_h + r;
 
@@ -236,6 +237,77 @@ impl FrameBuffer {
         }
     }
 
+    /// Renders text using the embedded 8x16 bitmap font.
+    pub fn draw_text(
+        &mut self,
+        origin: (f32, f32),
+        text: &str,
+        font_size: f32,
+        color: Color,
+        clip: Option<Rect>,
+    ) {
+        if color.a() <= 0.001 {
+            return;
+        }
+
+        let scale = (font_size / 16.0).max(0.65);
+        let char_w = 8.0 * scale;
+        let char_h = 16.0 * scale;
+
+        let mut cursor_x = origin.0;
+        let mut cursor_y = origin.1;
+
+        for ch in text.chars() {
+            if ch == '\n' {
+                cursor_y += char_h * 1.25;
+                cursor_x = origin.0;
+                continue;
+            }
+
+            if let Some(glyph) = crate::font::get_glyph(ch) {
+                for (row_idx, &row) in glyph.iter().enumerate() {
+                    if row == 0 {
+                        continue;
+                    }
+                    for col_idx in 0..8 {
+                        if (row & (1 << (7 - col_idx))) != 0 {
+                            let px = cursor_x + (col_idx as f32) * scale;
+                            let py = cursor_y + (row_idx as f32) * scale;
+
+                            if scale <= 1.0 {
+                                let x = px.round() as usize;
+                                let y = py.round() as usize;
+                                if let Some(c) = clip {
+                                    if !c.contains_point(px, py) {
+                                        continue;
+                                    }
+                                }
+                                self.set_pixel(x, y, color);
+                            } else {
+                                let min_x = px.floor() as usize;
+                                let max_x = ((px + scale).ceil() as usize).min(self.width);
+                                let min_y = py.floor() as usize;
+                                let max_y = ((py + scale).ceil() as usize).min(self.height);
+
+                                for y in min_y..max_y {
+                                    for x in min_x..max_x {
+                                        if let Some(c) = clip {
+                                            if !c.contains_point(x as f32, y as f32) {
+                                                continue;
+                                            }
+                                        }
+                                        self.set_pixel(x, y, color);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            cursor_x += char_w;
+        }
+    }
+
     /// Executes an entire DisplayList onto this FrameBuffer.
     pub fn execute_display_list(&mut self, list: &DisplayList) {
         let mut clip_stack: Vec<Rect> = Vec::new();
@@ -281,8 +353,14 @@ impl FrameBuffer {
                         current_clip,
                     );
                 }
-                DrawCommand::DrawText { .. } => {
-                    // Handled by font atlas or software fallback
+                DrawCommand::DrawText {
+                    origin,
+                    text,
+                    font_size,
+                    color,
+                    ..
+                } => {
+                    self.draw_text(*origin, text, *font_size, *color, current_clip);
                 }
                 DrawCommand::DrawViewport3D { bounds, scene } => {
                     crate::rasterizer3d::render_scene_3d(self, *bounds, scene, current_clip);
@@ -379,7 +457,15 @@ impl FrameBuffer {
                         Some(effective_clip),
                     );
                 }
-                DrawCommand::DrawText { .. } => {}
+                DrawCommand::DrawText {
+                    origin,
+                    text,
+                    font_size,
+                    color,
+                    ..
+                } => {
+                    self.draw_text(*origin, text, *font_size, *color, Some(effective_clip));
+                }
                 DrawCommand::DrawViewport3D { bounds, scene } => {
                     crate::rasterizer3d::render_scene_3d(self, *bounds, scene, Some(effective_clip));
                 }

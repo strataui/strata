@@ -480,6 +480,26 @@ impl TailwindEngine {
                 style.line_height = 48.0 / 48.0;
                 return;
             }
+            "text-6xl" => {
+                style.font_size = 60.0;
+                style.line_height = 1.0;
+                return;
+            }
+            "text-7xl" => {
+                style.font_size = 72.0;
+                style.line_height = 1.0;
+                return;
+            }
+            "text-8xl" => {
+                style.font_size = 96.0;
+                style.line_height = 1.0;
+                return;
+            }
+            "text-9xl" => {
+                style.font_size = 128.0;
+                style.line_height = 1.0;
+                return;
+            }
             "font-thin" => {
                 style.font_weight = FontWeight::Thin;
                 return;
@@ -886,6 +906,21 @@ fn resolve_spacing(token: &str) -> Option<f32> {
 }
 
 fn resolve_sizing_dimension(token: &str) -> Option<Dimension> {
+    match token {
+        "xs" => return Some(Dimension::Px(320.0)),
+        "sm" => return Some(Dimension::Px(384.0)),
+        "md" => return Some(Dimension::Px(448.0)),
+        "lg" => return Some(Dimension::Px(512.0)),
+        "xl" => return Some(Dimension::Px(576.0)),
+        "2xl" => return Some(Dimension::Px(672.0)),
+        "3xl" => return Some(Dimension::Px(768.0)),
+        "4xl" => return Some(Dimension::Px(896.0)),
+        "5xl" => return Some(Dimension::Px(1024.0)),
+        "6xl" => return Some(Dimension::Px(1152.0)),
+        "7xl" => return Some(Dimension::Px(1280.0)),
+        _ => {}
+    }
+
     if token.starts_with('[') && token.ends_with(']') {
         let inner = &token[1..token.len() - 1];
         if let Some(px) = resolve_arbitrary_px(inner) {

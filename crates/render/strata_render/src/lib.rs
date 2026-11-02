@@ -14,6 +14,7 @@ pub mod canvas2d;
 pub mod orbit_controls;
 pub mod shared_target;
 pub mod custom_shader;
+pub mod font;
 
 // Re-exports
 pub use canvas2d::{

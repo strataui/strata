@@ -3252,6 +3252,7 @@ name = "strata_platform"
 version = "0.1.0"
 dependencies = [
  "strata_render",
+ "x11",
 ]
 
 [[package]]
