@@ -45,6 +45,14 @@ pub enum DrawCommand {
         bounds: Rect,
         commands: Vec<crate::canvas2d::CanvasCommand>,
     },
+    DrawSvgPath {
+        bounds: Rect,
+        path_data: String,
+        stroke_color: Option<Color>,
+        fill_color: Option<Color>,
+        stroke_width: f32,
+        view_box: (f32, f32),
+    },
     PushClip {
         bounds: Rect,
         radius: BorderRadius,
@@ -87,6 +95,7 @@ impl DrawCommand {
             }
             Self::DrawViewport3D { bounds, .. } => Some(*bounds),
             Self::DrawCanvas2D { bounds, .. } => Some(*bounds),
+            Self::DrawSvgPath { bounds, .. } => Some(*bounds),
             Self::PushClip { bounds, .. } => Some(*bounds),
             Self::PopClip => None,
         }
@@ -265,6 +274,36 @@ impl Compositor {
             });
         }
 
+        // SVG Vector Path content on this node
+        if !node.svg_items.is_empty() {
+            for item in &node.svg_items {
+                let stroke = item.stroke_color.or_else(|| {
+                    if item.fill_color.is_none() {
+                        Some(node.style.color)
+                    } else {
+                        None
+                    }
+                });
+                list.push(DrawCommand::DrawSvgPath {
+                    bounds,
+                    path_data: item.path_data.clone(),
+                    stroke_color: stroke,
+                    fill_color: item.fill_color,
+                    stroke_width: item.stroke_width,
+                    view_box: item.view_box,
+                });
+            }
+        } else if let Some(ref path_data) = node.svg_path {
+            list.push(DrawCommand::DrawSvgPath {
+                bounds,
+                path_data: path_data.clone(),
+                stroke_color: Some(node.style.color),
+                fill_color: None,
+                stroke_width: 2.0,
+                view_box: (24.0, 24.0),
+            });
+        }
+
         // Apply clip for children if border radius is present
         if has_clip {
             list.push(DrawCommand::PushClip {
@@ -408,6 +447,36 @@ impl Compositor {
                 line_height,
                 font_weight,
                 color,
+            });
+        }
+
+        // SVG Vector Path content
+        if !node.svg_items.is_empty() {
+            for item in &node.svg_items {
+                let stroke = item.stroke_color.or_else(|| {
+                    if item.fill_color.is_none() {
+                        Some(node.style.color)
+                    } else {
+                        None
+                    }
+                });
+                list.push(DrawCommand::DrawSvgPath {
+                    bounds,
+                    path_data: item.path_data.clone(),
+                    stroke_color: stroke,
+                    fill_color: item.fill_color,
+                    stroke_width: item.stroke_width,
+                    view_box: item.view_box,
+                });
+            }
+        } else if let Some(ref path_data) = node.svg_path {
+            list.push(DrawCommand::DrawSvgPath {
+                bounds,
+                path_data: path_data.clone(),
+                stroke_color: Some(node.style.color),
+                fill_color: None,
+                stroke_width: 2.0,
+                view_box: (24.0, 24.0),
             });
         }
 

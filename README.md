@@ -201,6 +201,7 @@ Check out our comprehensive examples in the [`examples/`](examples/) directory:
 - **[`examples/saas_dashboard`](examples/saas_dashboard)**: Complete enterprise analytics dashboard with real-time reactive metrics, charts, modals, and Tailwind UI.
 - **[`examples/ecommerce_storefront`](examples/ecommerce_storefront)**: Modern online marketplace with filtering, shopping cart drawer, and dynamic pricing.
 - **[`examples/creative_studio`](examples/creative_studio)**: Professional Figma/Canva-like node canvas editor with dockable toolbars, property inspector, and gesture interactions.
+- **[`examples/strata_browser`](examples/strata_browser)**: Native zero-Chromium web browser with multi-tab management, Omnibox navigation, Google Search New Tab start page, and WebTranspiler HTML document rendering.
 
 ---
 

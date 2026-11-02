@@ -101,6 +101,21 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
             commands: commands.clone(),
         },
+        DrawCommand::DrawSvgPath {
+            bounds,
+            path_data,
+            stroke_color,
+            fill_color,
+            stroke_width,
+            view_box,
+        } => DrawCommand::DrawSvgPath {
+            bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
+            path_data: path_data.clone(),
+            stroke_color: *stroke_color,
+            fill_color: *fill_color,
+            stroke_width: *stroke_width,
+            view_box: *view_box,
+        },
         DrawCommand::PushClip { bounds, radius } => DrawCommand::PushClip {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
             radius: *radius,

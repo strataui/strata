@@ -180,19 +180,19 @@ impl TailwindEngine {
                 style.flex_basis = Dimension::Auto;
                 return;
             }
-            "grow" => {
+            "grow" | "flex-grow" => {
                 style.flex_grow = 1.0;
                 return;
             }
-            "grow-0" => {
+            "grow-0" | "flex-grow-0" => {
                 style.flex_grow = 0.0;
                 return;
             }
-            "shrink" => {
+            "shrink" | "flex-shrink" => {
                 style.flex_shrink = 1.0;
                 return;
             }
-            "shrink-0" => {
+            "shrink-0" | "flex-shrink-0" => {
                 style.flex_shrink = 0.0;
                 return;
             }
@@ -809,8 +809,15 @@ fn split_modifier(token: &str) -> (Option<&str>, &str) {
 
 fn split_opacity(token: &str) -> (&str, Option<f32>) {
     if let Some((color, op_str)) = token.split_once('/') {
-        if let Ok(pct) = op_str.parse::<f32>() {
-            return (color, Some(pct / 100.0));
+        let op_trimmed = op_str.trim_start_matches('[').trim_end_matches(']');
+        if let Some(pct) = op_trimmed.strip_suffix('%') {
+            if let Ok(p) = pct.parse::<f32>() {
+                return (color, Some((p / 100.0).clamp(0.0, 1.0)));
+            }
+        }
+        if let Ok(val) = op_trimmed.parse::<f32>() {
+            let alpha = if val <= 1.0 { val } else { val / 100.0 };
+            return (color, Some(alpha.clamp(0.0, 1.0)));
         }
         (color, None)
     } else {

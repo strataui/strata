@@ -7,6 +7,16 @@ use crate::grid::solve_grid;
 use crate::positioning::solve_positioning;
 use strata_style::types::{ComputedStyle, Display};
 
+/// An individual SVG vector item within a layout node.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SvgItem {
+    pub path_data: String,
+    pub stroke_color: Option<strata_style::types::Color>,
+    pub fill_color: Option<strata_style::types::Color>,
+    pub stroke_width: f32,
+    pub view_box: (f32, f32),
+}
+
 /// A node participating in the layout tree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayoutNode {
@@ -14,6 +24,8 @@ pub struct LayoutNode {
     pub geometry: LayoutGeometry,
     pub children: Vec<LayoutNode>,
     pub text: Option<String>,
+    pub svg_path: Option<String>,
+    pub svg_items: Vec<SvgItem>,
 }
 
 impl LayoutNode {
@@ -24,6 +36,8 @@ impl LayoutNode {
             geometry: LayoutGeometry::default(),
             children: Vec::new(),
             text: None,
+            svg_path: None,
+            svg_items: Vec::new(),
         }
     }
 
@@ -34,6 +48,8 @@ impl LayoutNode {
             geometry: LayoutGeometry::default(),
             children,
             text: None,
+            svg_path: None,
+            svg_items: Vec::new(),
         }
     }
 
@@ -44,6 +60,39 @@ impl LayoutNode {
             geometry: LayoutGeometry::default(),
             children: Vec::new(),
             text: Some(text),
+            svg_path: None,
+            svg_items: Vec::new(),
+        }
+    }
+
+    /// Constructs an SVG vector path leaf node with computed styles and path string.
+    pub fn with_svg_path(style: ComputedStyle, svg_path: String) -> Self {
+        Self {
+            style,
+            geometry: LayoutGeometry::default(),
+            children: Vec::new(),
+            text: None,
+            svg_path: Some(svg_path.clone()),
+            svg_items: vec![SvgItem {
+                path_data: svg_path,
+                stroke_color: None,
+                fill_color: None,
+                stroke_width: 2.0,
+                view_box: (24.0, 24.0),
+            }],
+        }
+    }
+
+    /// Constructs an SVG layout node with multiple styled vector items and viewBox.
+    pub fn with_svg_items(style: ComputedStyle, svg_items: Vec<SvgItem>) -> Self {
+        let first_path = svg_items.first().map(|i| i.path_data.clone());
+        Self {
+            style,
+            geometry: LayoutGeometry::default(),
+            children: Vec::new(),
+            text: None,
+            svg_path: first_path,
+            svg_items,
         }
     }
 

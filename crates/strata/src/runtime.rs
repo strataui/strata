@@ -66,6 +66,7 @@ impl AppRuntime {
             NodeBlueprint::Element {
                 tag,
                 classes,
+                attributes,
                 children,
                 ..
             } => {
@@ -74,6 +75,75 @@ impl AppRuntime {
                     None => ComputedStyle::default(),
                 };
                 Self::apply_tailwind_classes(&mut style, classes);
+
+                // 1. Vector SVG handling: extract path data from d attribute or child path
+                if matches!(tag, Tag::Svg | Tag::Path) {
+                    let mut view_box = (24.0f32, 24.0f32);
+                    for attr in attributes {
+                        if let strata_dom::Attribute::Property { key, value } = attr {
+                            if key == "viewBox" {
+                                let parts: Vec<f32> = value
+                                    .split(|c: char| c.is_whitespace() || c == ',')
+                                    .filter(|s| !s.is_empty())
+                                    .filter_map(|s| s.parse::<f32>().ok())
+                                    .collect();
+                                if parts.len() >= 4 {
+                                    view_box = (parts[2], parts[3]);
+                                }
+                            }
+                        }
+                    }
+
+                    let svg_items = Self::collect_svg_items_from_blueprint(
+                        blueprint,
+                        view_box,
+                        None,
+                        None,
+                        2.0,
+                        style.color,
+                    );
+
+                    if !svg_items.is_empty() {
+                        if style.width == Dimension::Auto {
+                            style.width = Dimension::Px(16.0);
+                        }
+                        if style.height == Dimension::Auto {
+                            style.height = Dimension::Px(16.0);
+                        }
+                        return LayoutNode::with_svg_items(style, svg_items);
+                    }
+                }
+
+                // 2. Input handling: synthesize text from value or placeholder attributes
+                if matches!(tag, Tag::Input) {
+                    let mut value_text = None;
+                    let mut placeholder_text = None;
+                    for attr in attributes {
+                        if let strata_dom::Attribute::Property { key, value } = attr {
+                            if key == "value" && !value.is_empty() {
+                                value_text = Some(value.clone());
+                            } else if key == "placeholder" && !value.is_empty() {
+                                placeholder_text = Some(value.clone());
+                            }
+                        }
+                    }
+                    if let Some(val) = value_text {
+                        let char_w = style.font_size * 0.55;
+                        let approx_width = (val.len() as f32 * char_w).max(40.0);
+                        if style.width == Dimension::Auto {
+                            style.width = Dimension::Px(approx_width + style.padding.left + style.padding.right);
+                        }
+                        return LayoutNode::with_text(style, val);
+                    } else if let Some(ph) = placeholder_text {
+                        let char_w = style.font_size * 0.55;
+                        let approx_width = (ph.len() as f32 * char_w).max(40.0);
+                        if style.width == Dimension::Auto {
+                            style.width = Dimension::Px(approx_width + style.padding.left + style.padding.right);
+                        }
+                        style.color = strata_style::types::Color::new(140, 145, 155, 255);
+                        return LayoutNode::with_text(style, ph);
+                    }
+                }
 
                 // Default display based on tag if not explicitly set by classes
                 let has_display_class = classes.iter().any(|c| {
@@ -105,7 +175,8 @@ impl AppRuntime {
                         }
                         Tag::Button => {
                             style.display = Display::InlineFlex;
-                            style.height = Dimension::Px(40.0);
+                            style.align_items = strata_style::types::AlignItems::Center;
+                            style.justify_content = strata_style::types::JustifyContent::Center;
                         }
                         Tag::Span => {
                             style.display = Display::InlineFlex;
@@ -119,8 +190,13 @@ impl AppRuntime {
                     }
                 }
 
-                // If element has auto width and contains only a text child, compute intrinsic text dimensions
-                if style.width == Dimension::Auto && children.len() == 1 {
+                let is_inline = matches!(
+                    style.display,
+                    Display::Inline | Display::InlineFlex | Display::InlineBlock
+                ) || matches!(tag, Tag::Span | Tag::Button);
+
+                // If inline element has auto width and contains only a text child, compute intrinsic text dimensions
+                if is_inline && style.width == Dimension::Auto && children.len() == 1 {
                     if let NodeBlueprint::Text(t) = &children[0] {
                         let char_w = style.font_size * 0.55;
                         let text_w = t.len() as f32 * char_w;
@@ -145,7 +221,7 @@ impl AppRuntime {
                     Some(p) => ComputedStyle::inherit_from(p),
                     None => ComputedStyle::default(),
                 };
-                style.display = Display::Block;
+                style.display = Display::Inline;
                 let char_w = style.font_size * 0.55;
                 let approx_width = (text.len() as f32 * char_w).max(16.0);
                 let line_h = (style.font_size * style.line_height).max(style.font_size);
@@ -159,7 +235,7 @@ impl AppRuntime {
                     Some(p) => ComputedStyle::inherit_from(p),
                     None => ComputedStyle::default(),
                 };
-                style.display = Display::Block;
+                style.display = Display::Inline;
                 let char_w = style.font_size * 0.55;
                 let approx_width = (text.len() as f32 * char_w).max(16.0);
                 let line_h = (style.font_size * style.line_height).max(style.font_size);
@@ -187,8 +263,175 @@ impl AppRuntime {
                 style.display = Display::None;
                 LayoutNode::new(style)
             }
-        }
     }
+}
+
+/// Helper function to extract all SVG vector shapes from a blueprint hierarchy.
+fn collect_svg_items_from_blueprint(
+    blueprint: &NodeBlueprint,
+    default_view_box: (f32, f32),
+    inherited_stroke: Option<strata_style::types::Color>,
+    inherited_fill: Option<strata_style::types::Color>,
+    inherited_stroke_width: f32,
+    parent_color: strata_style::types::Color,
+) -> Vec<strata_layout::SvgItem> {
+    let mut items = Vec::new();
+    match blueprint {
+        NodeBlueprint::Element {
+            attributes,
+            children,
+            ..
+        } => {
+            let mut d = None;
+            let mut stroke = inherited_stroke;
+            let mut fill = inherited_fill;
+            let mut stroke_width = inherited_stroke_width;
+
+            let mut x1 = 0.0f32;
+            let mut y1 = 0.0f32;
+            let mut x2 = 0.0f32;
+            let mut y2 = 0.0f32;
+            let mut has_line = false;
+
+            let mut cx = 0.0f32;
+            let mut cy = 0.0f32;
+            let mut r = 0.0f32;
+            let mut rx = 0.0f32;
+            let mut ry = 0.0f32;
+            let mut has_circle = false;
+            let mut has_ellipse = false;
+
+            let mut rect_x = 0.0f32;
+            let mut rect_y = 0.0f32;
+            let mut rect_w = 0.0f32;
+            let mut rect_h = 0.0f32;
+            let mut rect_rx = 0.0f32;
+            let mut has_rect = false;
+
+            for attr in attributes {
+                if let strata_dom::Attribute::Property { key, value } = attr {
+                    match key.as_str() {
+                        "d" => d = Some(value.clone()),
+                        "stroke" => {
+                            if value == "currentColor" {
+                                stroke = Some(parent_color);
+                            } else if value == "none" {
+                                stroke = None;
+                            } else if let Some(c) = strata_style::types::Color::parse_hex(value) {
+                                stroke = Some(c);
+                            }
+                        }
+                        "fill" => {
+                            if value == "currentColor" {
+                                fill = Some(parent_color);
+                            } else if value == "none" {
+                                fill = None;
+                            } else if let Some(c) = strata_style::types::Color::parse_hex(value) {
+                                fill = Some(c);
+                            }
+                        }
+                        "stroke-width" => {
+                            if let Ok(w) = value.parse::<f32>() {
+                                stroke_width = w;
+                            }
+                        }
+                        "x1" => { x1 = value.parse().unwrap_or(0.0); has_line = true; }
+                        "y1" => { y1 = value.parse().unwrap_or(0.0); has_line = true; }
+                        "x2" => { x2 = value.parse().unwrap_or(0.0); has_line = true; }
+                        "y2" => { y2 = value.parse().unwrap_or(0.0); has_line = true; }
+                        "cx" => { cx = value.parse().unwrap_or(0.0); }
+                        "cy" => { cy = value.parse().unwrap_or(0.0); }
+                        "r" => { r = value.parse().unwrap_or(0.0); has_circle = true; }
+                        "rx" => {
+                            let v = value.parse().unwrap_or(0.0);
+                            rx = v;
+                            rect_rx = v;
+                        }
+                        "ry" => { ry = value.parse().unwrap_or(0.0); has_ellipse = true; }
+                        "x" => { rect_x = value.parse().unwrap_or(0.0); }
+                        "y" => { rect_y = value.parse().unwrap_or(0.0); }
+                        "width" => { rect_w = value.parse().unwrap_or(0.0); has_rect = true; }
+                        "height" => { rect_h = value.parse().unwrap_or(0.0); has_rect = true; }
+                        _ => {}
+                    }
+                }
+            }
+
+            if let Some(path_str) = d {
+                items.push(strata_layout::SvgItem {
+                    path_data: path_str,
+                    stroke_color: stroke,
+                    fill_color: fill,
+                    stroke_width,
+                    view_box: default_view_box,
+                });
+            } else if has_line {
+                items.push(strata_layout::SvgItem {
+                    path_data: format!("M {} {} L {} {}", x1, y1, x2, y2),
+                    stroke_color: stroke.or(Some(parent_color)),
+                    fill_color: None,
+                    stroke_width,
+                    view_box: default_view_box,
+                });
+            } else if has_circle && r > 0.0 {
+                items.push(strata_layout::SvgItem {
+                    path_data: format!("M {} {} a {} {} 0 1 0 {} 0 a {} {} 0 1 0 {} 0 Z", cx - r, cy, r, r, 2.0 * r, r, r, -2.0 * r),
+                    stroke_color: stroke,
+                    fill_color: fill,
+                    stroke_width,
+                    view_box: default_view_box,
+                });
+            } else if has_ellipse && rx > 0.0 && ry > 0.0 {
+                items.push(strata_layout::SvgItem {
+                    path_data: format!("M {} {} a {} {} 0 1 0 {} 0 a {} {} 0 1 0 {} 0 Z", cx - rx, cy, rx, ry, 2.0 * rx, rx, ry, -2.0 * rx),
+                    stroke_color: stroke,
+                    fill_color: fill,
+                    stroke_width,
+                    view_box: default_view_box,
+                });
+            } else if has_rect && rect_w > 0.0 && rect_h > 0.0 {
+                let rect_path = if rect_rx > 0.0 {
+                    format!(
+                        "M {} {} h {} a {} {} 0 0 1 {} {} v {} a {} {} 0 0 1 {} {} h {} a {} {} 0 0 1 {} {} v {} a {} {} 0 0 1 {} {} Z",
+                        rect_x + rect_rx, rect_y,
+                        rect_w - 2.0 * rect_rx,
+                        rect_rx, rect_rx, rect_rx, rect_rx,
+                        rect_h - 2.0 * rect_rx,
+                        rect_rx, rect_rx, -rect_rx, rect_rx,
+                        -(rect_w - 2.0 * rect_rx),
+                        rect_rx, rect_rx, -rect_rx, -rect_rx,
+                        -(rect_h - 2.0 * rect_rx),
+                        rect_rx, rect_rx, rect_rx, -rect_rx,
+                    )
+                } else {
+                    format!("M {} {} h {} v {} h {} Z", rect_x, rect_y, rect_w, rect_h, -rect_w)
+                };
+                items.push(strata_layout::SvgItem {
+                    path_data: rect_path,
+                    stroke_color: stroke,
+                    fill_color: fill,
+                    stroke_width,
+                    view_box: default_view_box,
+                });
+            }
+
+            // Recurse for children (e.g. <g>, or nested paths)
+            for child in children {
+                let child_items = Self::collect_svg_items_from_blueprint(
+                    child,
+                    default_view_box,
+                    stroke,
+                    fill,
+                    stroke_width,
+                    parent_color,
+                );
+                items.extend(child_items);
+            }
+        }
+        _ => {}
+    }
+    items
+}
 
     /// Recursively flattens Fragment blueprints so child elements splice directly into parent layout contexts.
     fn append_child_layout_nodes(
@@ -211,6 +454,79 @@ impl AppRuntime {
             for single_class in cls.split_whitespace() {
                 strata_style::tailwind::TailwindEngine::apply_class(style, single_class);
             }
+        }
+    }
+
+    /// Recursively flattens Fragment blueprints for linear child index alignment.
+    fn flatten_blueprints<'a>(bp: &'a NodeBlueprint, out: &mut Vec<&'a NodeBlueprint>) {
+        if let NodeBlueprint::Fragment(children) = bp {
+            for c in children {
+                Self::flatten_blueprints(c, out);
+            }
+        } else {
+            out.push(bp);
+        }
+    }
+
+    /// Recursively hit tests a coordinate point against the blueprint and computed layout hierarchy.
+    pub fn hit_test_click(
+        blueprint: &NodeBlueprint,
+        layout: &LayoutNode,
+        px: f32,
+        py: f32,
+    ) -> Option<std::rc::Rc<dyn Fn(strata_dom::Event)>> {
+        if !layout.geometry.border_box.contains_point(px, py) {
+            return None;
+        }
+
+        match blueprint {
+            NodeBlueprint::Element {
+                attributes,
+                children,
+                ..
+            } => {
+                let mut flat_children = Vec::new();
+                for c in children {
+                    Self::flatten_blueprints(c, &mut flat_children);
+                }
+
+                for (&child_bp, child_layout) in flat_children.iter().zip(layout.children.iter()).rev() {
+                    if let Some(handler) = Self::hit_test_click(child_bp, child_layout, px, py) {
+                        return Some(handler);
+                    }
+                }
+
+                for attr in attributes {
+                    if let strata_dom::Attribute::EventListener {
+                        event: strata_dom::EventType::Click,
+                        handler,
+                    } = attr
+                    {
+                        return Some(handler.clone());
+                    }
+                }
+                None
+            }
+            NodeBlueprint::Fragment(children) => {
+                for (child_bp, child_layout) in children.iter().zip(layout.children.iter()).rev() {
+                    if let Some(handler) = Self::hit_test_click(child_bp, child_layout, px, py) {
+                        return Some(handler);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Dispatches a pointer click event at (x, y) coordinates into the application blueprint tree.
+    /// Returns true if an event listener was invoked.
+    pub fn dispatch_click(&self, px: f32, py: f32) -> bool {
+        if let Some(handler) = Self::hit_test_click(&self.root_blueprint, &self.layout_root, px, py) {
+            handler(strata_dom::Event::new(strata_dom::EventType::Click));
+            true
+        } else {
+            false
         }
     }
 

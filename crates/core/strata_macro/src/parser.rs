@@ -182,7 +182,7 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor) -> Result<RsxNode, String> {
             }
         }
 
-        children.push(parse_node(cursor)?);
+        push_child_node(&mut children, parse_node(cursor)?);
     }
 
     if is_custom_component {
@@ -199,6 +199,33 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor) -> Result<RsxNode, String> {
             children,
             self_closing: false,
         }))
+    }
+}
+
+fn push_child_node(children: &mut Vec<RsxNode>, next_node: RsxNode) {
+    if let RsxNode::Text(next_text) = next_node {
+        if let Some(RsxNode::Text(prev_text)) = children.last_mut() {
+            if next_text == "."
+                || next_text == ","
+                || next_text == ":"
+                || next_text == ";"
+                || next_text == "!"
+                || next_text == "?"
+                || next_text == ")"
+                || next_text == "]"
+            {
+                prev_text.push_str(&next_text);
+            } else if prev_text.ends_with('(') || prev_text.ends_with('[') {
+                prev_text.push_str(&next_text);
+            } else {
+                prev_text.push(' ');
+                prev_text.push_str(&next_text);
+            }
+        } else {
+            children.push(RsxNode::Text(next_text));
+        }
+    } else {
+        children.push(next_node);
     }
 }
 
@@ -219,7 +246,7 @@ fn parse_fragment(cursor: &mut TokenCursor) -> Result<RsxNode, String> {
             break;
         }
 
-        children.push(parse_node(cursor)?);
+        push_child_node(&mut children, parse_node(cursor)?);
     }
     Ok(RsxNode::Fragment(children))
 }

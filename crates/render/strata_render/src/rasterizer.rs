@@ -290,6 +290,7 @@ impl FrameBuffer {
                 DrawCommand::DrawCanvas2D { bounds, commands } => {
                     crate::canvas2d::rasterize_canvas_commands(self, commands, bounds.x, bounds.y, current_clip);
                 }
+                DrawCommand::DrawSvgPath { .. } => {}
                 DrawCommand::PushClip { bounds, .. } => {
                     let combined = match current_clip {
                         Some(prev) => prev.intersect(bounds.clone()).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
@@ -385,6 +386,7 @@ impl FrameBuffer {
                 DrawCommand::DrawCanvas2D { bounds, commands } => {
                     crate::canvas2d::rasterize_canvas_commands(self, commands, bounds.x, bounds.y, Some(effective_clip));
                 }
+                DrawCommand::DrawSvgPath { .. } => {}
                 DrawCommand::PushClip { .. } | DrawCommand::PopClip => unreachable!(),
             }
         }

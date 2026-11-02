@@ -75,6 +75,23 @@ cargo run --release --example ecommerce_storefront
 
 ---
 
+## 5. Strata Native Browser (`examples/strata_browser`)
+
+A high-performance desktop web browser written entirely in pure Rust, rendering HTML documents natively via `strata_web_reader::WebTranspiler` with sub-3MB resident memory and zero Chromium dependency.
+
+```bash
+cargo run --release -p strata_browser
+```
+
+### Architectural Features
+- **Zero-Chromium Native Execution**: Direct HTML5 stream tokenization and AST parsing lowered into Strata `NodeBlueprint` reactive views.
+- **Dynamic Multi-Tab Management**: Add, switch, and close tabs with automatic focus transfer and history preservation.
+- **Full Omnibox & History**: Omnibox address bar supporting URL navigation, query normalization to Google search, and back/forward history traversal.
+- **Google Search "New Tab" Start Page**: Classic Google start page layout with multicolored branding, search bar, and quick-access shortcut tiles.
+- **Adaptive Reading Themes**: Instantaneous palette switching across Dark, Amoled, and Sepia modes.
+
+---
+
 ## Running Examples Locally
 
 You can run any example directly from the cloned repository:
@@ -85,6 +102,7 @@ git clone https://github.com/larvance/strata.git
 cd strata
 
 # Run any example target
+cargo run --release -p strata_browser
 cargo run --release --example eda_studio
 cargo run --release --example creative_studio
 cargo run --release --example saas_dashboard

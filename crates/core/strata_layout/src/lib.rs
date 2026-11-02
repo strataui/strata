@@ -13,7 +13,7 @@ pub mod wpt;
 
 pub use geometry::{LayoutGeometry, Rect};
 pub use box_model::{clamp_dimension, collapse_margins, resolve_dimension};
-pub use tree::LayoutNode;
+pub use tree::{LayoutNode, SvgItem};
 pub use text::{layout_inline_text, measure_text_bounds};
 pub use intrinsic::{compute_min_max_sizes, MinMaxSizes};
 pub use typography::{

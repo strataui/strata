@@ -33,12 +33,52 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
     let border = container.style.border_width;
     let margin = container.style.margin;
 
+    let is_row = matches!(
+        container.style.flex_direction,
+        FlexDirection::Row | FlexDirection::RowReverse
+    );
+    let is_reverse = matches!(
+        container.style.flex_direction,
+        FlexDirection::RowReverse | FlexDirection::ColumnReverse
+    );
+
     // 1. Resolve container dimensions
     let resolved_width = match resolve_dimension(container.style.width, available_width) {
         Some(w) => clamp_dimension(w, container.style.min_width, container.style.max_width, available_width),
         None => {
-            let auto_w = (available_width - margin.left - margin.right).max(0.0);
-            clamp_dimension(auto_w, container.style.min_width, container.style.max_width, available_width)
+            let is_inline_or_shrink = container.style.display == strata_style::types::Display::InlineFlex
+                || (container.style.flex_grow == 0.0 && is_row);
+            if is_inline_or_shrink && !container.children.is_empty() {
+                let mut sum_children = 0.0f32;
+                for child in &mut container.children {
+                    if child.style.position == Position::Absolute || child.style.position == Position::Fixed {
+                        continue;
+                    }
+                    let cw = resolve_dimension(child.style.width, available_width)
+                        .unwrap_or_else(|| {
+                            child.compute_layout(available_width, available_height);
+                            child.geometry.border_box.width
+                        });
+                    let mw = child.style.margin.left + child.style.margin.right;
+                    if is_row {
+                        sum_children += cw + mw;
+                    } else {
+                        sum_children = sum_children.max(cw + mw);
+                    }
+                }
+                let in_flow_count = container.children.iter().filter(|c| c.style.position != Position::Absolute && c.style.position != Position::Fixed).count();
+                let gap_val = if is_row { container.style.gap_col.max(container.style.gap) } else { container.style.gap_row.max(container.style.gap) };
+                let gaps = if is_row && in_flow_count > 1 {
+                    (in_flow_count - 1) as f32 * gap_val
+                } else {
+                    0.0
+                };
+                let fit_w = (sum_children + gaps + padding.left + padding.right + border.left + border.right).min(available_width);
+                clamp_dimension(fit_w, container.style.min_width, container.style.max_width, available_width)
+            } else {
+                let auto_w = (available_width - margin.left - margin.right).max(0.0);
+                clamp_dimension(auto_w, container.style.min_width, container.style.max_width, available_width)
+            }
         }
     };
 
@@ -50,15 +90,6 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
             resolve_dimension(container.style.min_height, available_height)
         })
         .map(|h| (h - padding.top - padding.bottom).max(0.0));
-
-    let is_row = matches!(
-        container.style.flex_direction,
-        FlexDirection::Row | FlexDirection::RowReverse
-    );
-    let is_reverse = matches!(
-        container.style.flex_direction,
-        FlexDirection::RowReverse | FlexDirection::ColumnReverse
-    );
 
     let main_gap = if is_row { container.style.gap_col.max(container.style.gap) } else { container.style.gap_row.max(container.style.gap) };
     let cross_gap = if is_row { container.style.gap_row.max(container.style.gap) } else { container.style.gap_col.max(container.style.gap) };

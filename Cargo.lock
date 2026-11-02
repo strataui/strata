@@ -3018,6 +3018,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata_browser"
+version = "0.1.0"
+dependencies = [
+ "strata",
+ "strata_dom",
+ "strata_icons",
+ "strata_macro",
+ "strata_ui",
+ "strata_web_reader",
+]
+
+[[package]]
 name = "strata_build"
 version = "0.1.0"
 

@@ -106,13 +106,25 @@ pub fn solve_block(node: &mut LayoutNode, available_width: f32, available_height
     let border = node.style.border_width;
     let margin = node.style.margin;
 
+    let (text_w, text_h) = if let Some(ref text) = node.text {
+        crate::text::measure_text_bounds(text, node.style.font_size, node.style.line_height, Some(available_width))
+    } else {
+        (0.0, 0.0)
+    };
+
     // 1. Resolve element width
     let resolved_width = match resolve_dimension(node.style.width, available_width) {
         Some(w) => clamp_dimension(w, node.style.min_width, node.style.max_width, available_width),
         None => {
-            // In CSS block layout, auto width fills available width minus margins
-            let auto_w = (available_width - margin.left - margin.right).max(0.0);
-            clamp_dimension(auto_w, node.style.min_width, node.style.max_width, available_width)
+            if node.text.is_some() || matches!(node.style.display, strata_style::types::Display::Inline | strata_style::types::Display::InlineBlock) {
+                // Shrink-to-fit for text or inline elements
+                let fit_w = text_w + padding.left + padding.right + border.left + border.right;
+                clamp_dimension(fit_w, node.style.min_width, node.style.max_width, available_width)
+            } else {
+                // In CSS block layout, auto width fills available width minus margins
+                let auto_w = (available_width - margin.left - margin.right).max(0.0);
+                clamp_dimension(auto_w, node.style.min_width, node.style.max_width, available_width)
+            }
         }
     };
 
@@ -124,7 +136,11 @@ pub fn solve_block(node: &mut LayoutNode, available_width: f32, available_height
     let content_width = (border_box_width - padding.left - padding.right - border.left - border.right).max(0.0);
 
     // 2. Lay out in-flow children vertically with margin collapsing
-    let children_height = solve_block_children(node, content_width, available_height);
+    let children_height = if node.children.is_empty() && node.text.is_some() {
+        text_h + padding.top + padding.bottom + border.top + border.bottom
+    } else {
+        solve_block_children(node, content_width, available_height)
+    };
 
     // 3. Resolve element height
     let resolved_height = match resolve_dimension(node.style.height, available_height) {
