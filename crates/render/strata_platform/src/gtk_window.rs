@@ -572,7 +572,7 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                     | FontWeight::SemiBold => cairo::FontWeight::Bold,
                     _ => cairo::FontWeight::Normal,
                 };
-                cr.select_font_face("sans-serif", cairo::FontSlant::Normal, weight);
+                cr.select_font_face("Open Sans", cairo::FontSlant::Normal, weight);
                 cr.set_font_size(*font_size as f64);
                 cr.set_source_rgba(
                     color.r() as f64,

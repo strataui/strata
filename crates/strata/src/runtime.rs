@@ -205,7 +205,9 @@ impl AppRuntime {
                 // If inline element has auto width and contains only a text child, compute intrinsic text dimensions
                 if is_inline && style.width == Dimension::Auto && children.len() == 1 {
                     if let NodeBlueprint::Text(t) = &children[0] {
-                        let (text_w, _) = measure_text_bounds(t, style.font_size, style.line_height, None);
+                        let is_bold = matches!(style.font_weight, strata_style::types::FontWeight::Bold | strata_style::types::FontWeight::ExtraBold | strata_style::types::FontWeight::Black | strata_style::types::FontWeight::SemiBold);
+                        let (raw_w, _) = measure_text_bounds(t, style.font_size, style.line_height, None);
+                        let text_w = if is_bold { raw_w * 1.12 } else { raw_w };
                         let total_w = text_w
                             + style.padding.left
                             + style.padding.right
@@ -228,7 +230,9 @@ impl AppRuntime {
                     None => ComputedStyle::default(),
                 };
                 style.display = Display::Inline;
-                let (w, h) = measure_text_bounds(text, style.font_size, style.line_height, None);
+                let is_bold = matches!(style.font_weight, strata_style::types::FontWeight::Bold | strata_style::types::FontWeight::ExtraBold | strata_style::types::FontWeight::Black | strata_style::types::FontWeight::SemiBold);
+                let (raw_w, h) = measure_text_bounds(text, style.font_size, style.line_height, None);
+                let w = if is_bold { raw_w * 1.12 } else { raw_w };
                 style.width = Dimension::Px(w);
                 style.height = Dimension::Px(h);
                 LayoutNode::with_text(style, text.clone())
@@ -240,7 +244,9 @@ impl AppRuntime {
                     None => ComputedStyle::default(),
                 };
                 style.display = Display::Inline;
-                let (w, h) = measure_text_bounds(&text, style.font_size, style.line_height, None);
+                let is_bold = matches!(style.font_weight, strata_style::types::FontWeight::Bold | strata_style::types::FontWeight::ExtraBold | strata_style::types::FontWeight::Black | strata_style::types::FontWeight::SemiBold);
+                let (raw_w, h) = measure_text_bounds(&text, style.font_size, style.line_height, None);
+                let w = if is_bold { raw_w * 1.12 } else { raw_w };
                 style.width = Dimension::Px(w);
                 style.height = Dimension::Px(h);
                 LayoutNode::with_text(style, text)

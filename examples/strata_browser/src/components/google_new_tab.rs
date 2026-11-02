@@ -22,11 +22,11 @@ pub fn GoogleNewTab(state: BrowserState) -> View {
         <div class="flex-1 flex flex-col items-center justify-center w-full px-4 py-8 select-none">
             // Google Brand Logo
             <div class="flex flex-col items-center mb-8">
-                <div class="flex items-center text-6xl font-bold tracking-tight">
+                <div class="flex items-center text-6xl font-bold gap-1">
                     <span class="text-blue-500">{"G"}</span>
                     <span class="text-red-500">{"o"}</span>
                     <span class="text-amber-400">{"o"}</span>
-                    <span class="text-blue-500">{"g"}</span>
+                    <span class="text-blue-500 ml-1">{"g"}</span>
                     <span class="text-emerald-500">{"l"}</span>
                     <span class="text-red-500">{"e"}</span>
                 </div>
