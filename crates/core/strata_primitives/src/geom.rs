@@ -499,3 +499,335 @@ impl FixedRect {
         )
     }
 }
+
+/// 4x4 homogeneous transformation matrix stored in column-major order.
+///
+/// Matrix indices:
+/// [ 0  4  8 12 ]
+/// [ 1  5  9 13 ]
+/// [ 2  6 10 14 ]
+/// [ 3  7 11 15 ]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Matrix4x4 {
+    pub m: [f32; 16],
+}
+
+impl Default for Matrix4x4 {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::identity()
+    }
+}
+
+impl Matrix4x4 {
+    pub const IDENTITY: Self = Self {
+        m: [
+            1.0, 0.0, 0.0, 0.0, // col 0
+            0.0, 1.0, 0.0, 0.0, // col 1
+            0.0, 0.0, 1.0, 0.0, // col 2
+            0.0, 0.0, 0.0, 1.0, // col 3
+        ],
+    };
+
+    #[inline(always)]
+    pub const fn identity() -> Self {
+        Self::IDENTITY
+    }
+
+    #[inline(always)]
+    pub const fn from_array(m: [f32; 16]) -> Self {
+        Self { m }
+    }
+
+    /// Constructs a 4x4 matrix from 2D affine matrix components:
+    /// `matrix(a, b, c, d, e, f)` where `a, c, e` are row 0, `b, d, f` are row 1.
+    #[inline(always)]
+    pub const fn from_2d(a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) -> Self {
+        Self {
+            m: [
+                a, b, 0.0, 0.0,
+                c, d, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                e, f, 0.0, 1.0,
+            ],
+        }
+    }
+
+    /// Creates a 3D translation matrix.
+    #[inline(always)]
+    pub fn translation(tx: f32, ty: f32, tz: f32) -> Self {
+        Self {
+            m: [
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                tx, ty, tz, 1.0,
+            ],
+        }
+    }
+
+    /// Creates a 3D scaling matrix.
+    #[inline(always)]
+    pub fn scaling(sx: f32, sy: f32, sz: f32) -> Self {
+        Self {
+            m: [
+                sx, 0.0, 0.0, 0.0,
+                0.0, sy, 0.0, 0.0,
+                0.0, 0.0, sz, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ],
+        }
+    }
+
+    /// Creates a rotation matrix around the Z axis (standard 2D rotation).
+    #[inline(always)]
+    pub fn rotation_z(rad: f32) -> Self {
+        let (sin, cos) = rad.sin_cos();
+        Self {
+            m: [
+                cos, sin, 0.0, 0.0,
+                -sin, cos, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ],
+        }
+    }
+
+    /// Creates a rotation matrix around the X axis.
+    #[inline(always)]
+    pub fn rotation_x(rad: f32) -> Self {
+        let (sin, cos) = rad.sin_cos();
+        Self {
+            m: [
+                1.0, 0.0, 0.0, 0.0,
+                0.0, cos, sin, 0.0,
+                0.0, -sin, cos, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ],
+        }
+    }
+
+    /// Creates a rotation matrix around the Y axis.
+    #[inline(always)]
+    pub fn rotation_y(rad: f32) -> Self {
+        let (sin, cos) = rad.sin_cos();
+        Self {
+            m: [
+                cos, 0.0, -sin, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                sin, 0.0, cos, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ],
+        }
+    }
+
+    /// Creates a rotation matrix around an arbitrary 3D axis `[x, y, z]`.
+    pub fn rotation_axis(x: f32, y: f32, z: f32, rad: f32) -> Self {
+        let len = (x * x + y * y + z * z).sqrt();
+        if len < 1e-6 {
+            return Self::identity();
+        }
+        let (x, y, z) = (x / len, y / len, z / len);
+        let (sin, cos) = rad.sin_cos();
+        let one_minus_cos = 1.0 - cos;
+
+        Self {
+            m: [
+                cos + x * x * one_minus_cos,
+                y * x * one_minus_cos + z * sin,
+                z * x * one_minus_cos - y * sin,
+                0.0,
+
+                x * y * one_minus_cos - z * sin,
+                cos + y * y * one_minus_cos,
+                z * y * one_minus_cos + x * sin,
+                0.0,
+
+                x * z * one_minus_cos + y * sin,
+                y * z * one_minus_cos - x * sin,
+                cos + z * z * one_minus_cos,
+                0.0,
+
+                0.0, 0.0, 0.0, 1.0,
+            ],
+        }
+    }
+
+    /// Creates a 2D skew matrix given horizontal and vertical angles in radians.
+    #[inline(always)]
+    pub fn skew(ax_rad: f32, ay_rad: f32) -> Self {
+        Self {
+            m: [
+                1.0, ay_rad.tan(), 0.0, 0.0,
+                ax_rad.tan(), 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ],
+        }
+    }
+
+    /// Creates a perspective projection matrix where `d` is the distance to the projection plane.
+    #[inline(always)]
+    pub fn perspective(d: f32) -> Self {
+        let p = if d > 0.0 { -1.0 / d } else { 0.0 };
+        Self {
+            m: [
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, p,
+                0.0, 0.0, 0.0, 1.0,
+            ],
+        }
+    }
+
+    /// Multiplies `self` by `rhs`: `Result = self * rhs`.
+    pub fn multiply(&self, rhs: &Self) -> Self {
+        let a = &self.m;
+        let b = &rhs.m;
+        let mut r = [0.0f32; 16];
+
+        for col in 0..4 {
+            for row in 0..4 {
+                r[col * 4 + row] =
+                    a[row] * b[col * 4]
+                    + a[4 + row] * b[col * 4 + 1]
+                    + a[8 + row] * b[col * 4 + 2]
+                    + a[12 + row] * b[col * 4 + 3];
+            }
+        }
+
+        Self { m: r }
+    }
+
+    /// Computes the determinant of the 4x4 matrix using Laplace expansion.
+    pub fn determinant(&self) -> f32 {
+        let m = &self.m;
+        let s0 = m[0] * m[5] - m[1] * m[4];
+        let s1 = m[0] * m[6] - m[2] * m[4];
+        let s2 = m[0] * m[7] - m[3] * m[4];
+        let s3 = m[1] * m[6] - m[2] * m[5];
+        let s4 = m[1] * m[7] - m[3] * m[5];
+        let s5 = m[2] * m[7] - m[3] * m[6];
+
+        let c5 = m[10] * m[15] - m[11] * m[14];
+        let c4 = m[9] * m[15] - m[11] * m[13];
+        let c3 = m[9] * m[14] - m[10] * m[13];
+        let c2 = m[8] * m[15] - m[11] * m[12];
+        let c1 = m[8] * m[14] - m[10] * m[12];
+        let c0 = m[8] * m[13] - m[9] * m[12];
+
+        s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0
+    }
+
+    /// Computes the analytical inverse of the 4x4 matrix.
+    pub fn inverse(&self) -> Option<Self> {
+        let m = &self.m;
+        let s0 = m[0] * m[5] - m[1] * m[4];
+        let s1 = m[0] * m[6] - m[2] * m[4];
+        let s2 = m[0] * m[7] - m[3] * m[4];
+        let s3 = m[1] * m[6] - m[2] * m[5];
+        let s4 = m[1] * m[7] - m[3] * m[5];
+        let s5 = m[2] * m[7] - m[3] * m[6];
+
+        let c5 = m[10] * m[15] - m[11] * m[14];
+        let c4 = m[9] * m[15] - m[11] * m[13];
+        let c3 = m[9] * m[14] - m[10] * m[13];
+        let c2 = m[8] * m[15] - m[11] * m[12];
+        let c1 = m[8] * m[14] - m[10] * m[12];
+        let c0 = m[8] * m[13] - m[9] * m[12];
+
+        let det = s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0;
+        if det.abs() < 1e-7 {
+            return None;
+        }
+
+        let inv_det = 1.0 / det;
+        let mut inv = [0.0f32; 16];
+
+        inv[0] = (m[5] * c5 - m[6] * c4 + m[7] * c3) * inv_det;
+        inv[1] = (-m[1] * c5 + m[2] * c4 - m[3] * c3) * inv_det;
+        inv[2] = (m[13] * s5 - m[14] * s4 + m[15] * s3) * inv_det;
+        inv[3] = (-m[9] * s5 + m[10] * s4 - m[11] * s3) * inv_det;
+
+        inv[4] = (-m[4] * c5 + m[6] * c2 - m[7] * c1) * inv_det;
+        inv[5] = (m[0] * c5 - m[2] * c2 + m[3] * c1) * inv_det;
+        inv[6] = (-m[12] * s5 + m[14] * s2 - m[15] * s1) * inv_det;
+        inv[7] = (m[8] * s5 - m[10] * s2 + m[11] * s1) * inv_det;
+
+        inv[8] = (m[4] * c4 - m[5] * c2 + m[7] * c0) * inv_det;
+        inv[9] = (-m[0] * c4 + m[1] * c2 - m[3] * c0) * inv_det;
+        inv[10] = (m[12] * s4 - m[13] * s2 + m[15] * s0) * inv_det;
+        inv[11] = (-m[8] * s4 + m[9] * s2 - m[11] * s0) * inv_det;
+
+        inv[12] = (-m[4] * c3 + m[5] * c1 - m[6] * c0) * inv_det;
+        inv[13] = (m[0] * c3 - m[1] * c1 + m[2] * c0) * inv_det;
+        inv[14] = (-m[12] * s3 + m[13] * s1 - m[14] * s0) * inv_det;
+        inv[15] = (m[8] * s3 - m[9] * s1 + m[10] * s0) * inv_det;
+
+        Some(Self { m: inv })
+    }
+
+    /// Transforms a 2D point using homogeneous coordinates with perspective divide.
+    pub fn transform_point2d(&self, p: Point<f32>) -> Point<f32> {
+        let m = &self.m;
+        let x = m[0] * p.x + m[4] * p.y + m[12];
+        let y = m[1] * p.x + m[5] * p.y + m[13];
+        let w = m[3] * p.x + m[7] * p.y + m[15];
+
+        if w.abs() > 1e-6 && (w - 1.0).abs() > 1e-6 {
+            Point::new(x / w, y / w)
+        } else {
+            Point::new(x, y)
+        }
+    }
+
+    /// Transforms 2D coordinates `(x, y)` using homogeneous coordinates with perspective divide.
+    #[inline]
+    pub fn transform_point(&self, x: f32, y: f32) -> (f32, f32) {
+        let p = self.transform_point2d(Point::new(x, y));
+        (p.x, p.y)
+    }
+
+    /// Transforms an axis-aligned rectangle, computing its new bounding box.
+    pub fn transform_rect(&self, r: Rect<f32>) -> Rect<f32> {
+        let p1 = self.transform_point2d(Point::new(r.origin.x, r.origin.y));
+        let p2 = self.transform_point2d(Point::new(r.origin.x + r.size.width, r.origin.y));
+        let p3 = self.transform_point2d(Point::new(r.origin.x, r.origin.y + r.size.height));
+        let p4 = self.transform_point2d(Point::new(r.origin.x + r.size.width, r.origin.y + r.size.height));
+
+        let min_x = p1.x.min(p2.x).min(p3.x).min(p4.x);
+        let max_x = p1.x.max(p2.x).max(p3.x).max(p4.x);
+        let min_y = p1.y.min(p2.y).min(p3.y).min(p4.y);
+        let max_y = p1.y.max(p2.y).max(p3.y).max(p4.y);
+
+        Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y)
+    }
+
+    /// Transforms an axis-aligned rectangle `(x, y, width, height)` returning the new bounding box `(min_x, min_y, w, h)`.
+    #[inline]
+    pub fn transform_bounds(&self, x: f32, y: f32, width: f32, height: f32) -> (f32, f32, f32, f32) {
+        let r = self.transform_rect(Rect::from_xywh(x, y, width, height));
+        (r.origin.x, r.origin.y, r.size.width, r.size.height)
+    }
+
+    /// Returns true if this matrix is approximately the identity matrix.
+    pub fn is_identity(&self) -> bool {
+        let id = Self::IDENTITY.m;
+        for i in 0..16 {
+            if (self.m[i] - id[i]).abs() > 1e-5 {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Returns true if this matrix represents a pure 2D affine transformation (no Z or perspective).
+    pub fn is_2d(&self) -> bool {
+        let m = &self.m;
+        m[2].abs() < 1e-5 && m[3].abs() < 1e-5
+            && m[6].abs() < 1e-5 && m[7].abs() < 1e-5
+            && m[8].abs() < 1e-5 && m[9].abs() < 1e-5 && (m[10] - 1.0).abs() < 1e-5 && m[11].abs() < 1e-5
+            && m[14].abs() < 1e-5 && (m[15] - 1.0).abs() < 1e-5
+    }
+}

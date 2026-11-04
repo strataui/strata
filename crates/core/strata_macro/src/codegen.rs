@@ -124,6 +124,16 @@ fn lower_element(el: &RsxElement) -> String {
         if attr.name.starts_with("on") {
             let event_type = match attr.name.to_ascii_lowercase().as_str() {
                 "onclick" => "strata_dom::EventType::Click".to_string(),
+                "ondblclick" => "strata_dom::EventType::DblClick".to_string(),
+                "oncontextmenu" => "strata_dom::EventType::ContextMenu".to_string(),
+                "onauxclick" => "strata_dom::EventType::AuxClick".to_string(),
+                "onmousedown" => "strata_dom::EventType::MouseDown".to_string(),
+                "onmouseup" => "strata_dom::EventType::MouseUp".to_string(),
+                "onmousemove" => "strata_dom::EventType::MouseMove".to_string(),
+                "onmouseenter" => "strata_dom::EventType::MouseEnter".to_string(),
+                "onmouseleave" => "strata_dom::EventType::MouseLeave".to_string(),
+                "onmouseover" => "strata_dom::EventType::MouseOver".to_string(),
+                "onmouseout" => "strata_dom::EventType::MouseOut".to_string(),
                 "oninput" => "strata_dom::EventType::Input".to_string(),
                 "onchange" => "strata_dom::EventType::Change".to_string(),
                 "onsubmit" => "strata_dom::EventType::Submit".to_string(),
@@ -134,12 +144,21 @@ fn lower_element(el: &RsxElement) -> String {
                 "onpointermove" => "strata_dom::EventType::PointerMove".to_string(),
                 "onfocus" => "strata_dom::EventType::Focus".to_string(),
                 "onblur" => "strata_dom::EventType::Blur".to_string(),
+                "onwheel" => "strata_dom::EventType::Wheel".to_string(),
+                "ontransitionrun" => "strata_dom::EventType::TransitionRun".to_string(),
+                "ontransitionstart" => "strata_dom::EventType::TransitionStart".to_string(),
+                "ontransitionend" => "strata_dom::EventType::TransitionEnd".to_string(),
+                "ontransitioncancel" => "strata_dom::EventType::TransitionCancel".to_string(),
+                "onanimationstart" => "strata_dom::EventType::AnimationStart".to_string(),
+                "onanimationiteration" => "strata_dom::EventType::AnimationIteration".to_string(),
+                "onanimationend" => "strata_dom::EventType::AnimationEnd".to_string(),
+                "onanimationcancel" => "strata_dom::EventType::AnimationCancel".to_string(),
                 _ => format!("strata_dom::EventType::Custom({:?})", attr.name),
             };
 
             match &attr.value {
                 RsxAttrValue::Expression(stream) => {
-                    let method = if attr.name == "oninput" || attr.name == "onchange" {
+                    let method = if attr.name == "oninput" || attr.name == "onchange" || attr.name == "onsubmit" {
                         "value_listener"
                     } else {
                         "event_listener"

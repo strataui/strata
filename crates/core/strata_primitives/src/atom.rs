@@ -75,6 +75,12 @@ impl AtomId {
     pub const GRID_TEMPLATE_COLUMNS: Self = Self(123);
     pub const GRID_TEMPLATE_ROWS: Self = Self(124);
 
+    // Pre-baked Font Families and Common Properties (201 ..= 210)
+    pub const FONT_SANS: Self = Self(201);
+    pub const FONT_SERIF: Self = Self(202);
+    pub const FONT_MONO: Self = Self(203);
+    pub const HREF: Self = Self(204);
+
     #[inline(always)]
     pub const fn is_static(self) -> bool {
         self.0 > 0 && self.0 <= 1023
@@ -141,6 +147,10 @@ const STATIC_ATOMS: &[(AtomId, &str)] = &[
     (AtomId::GAP, "gap"),
     (AtomId::GRID_TEMPLATE_COLUMNS, "grid-template-columns"),
     (AtomId::GRID_TEMPLATE_ROWS, "grid-template-rows"),
+    (AtomId::FONT_SANS, "system-ui, sans-serif"),
+    (AtomId::FONT_SERIF, "ui-serif, Georgia, Cambria, serif"),
+    (AtomId::FONT_MONO, "ui-monospace, monospace"),
+    (AtomId::HREF, "href"),
 ];
 
 /// Thread-safe string interning table with pre-baked static atoms.
@@ -209,4 +219,21 @@ impl AtomTable {
         let list = self.id_to_string.read().unwrap();
         list.get(idx).cloned()
     }
+}
+
+static GLOBAL_ATOM_TABLE: std::sync::OnceLock<AtomTable> = std::sync::OnceLock::new();
+
+/// Returns a reference to the global thread-safe string interning table.
+pub fn global_atom_table() -> &'static AtomTable {
+    GLOBAL_ATOM_TABLE.get_or_init(AtomTable::new)
+}
+
+/// Interns a string into the global atom table, returning its AtomId.
+pub fn intern(text: &str) -> AtomId {
+    global_atom_table().intern(text)
+}
+
+/// Resolves an AtomId back to its string representation from the global atom table.
+pub fn resolve(id: AtomId) -> Option<String> {
+    global_atom_table().resolve(id)
 }

@@ -5,16 +5,16 @@ pub mod color;
 pub mod arena;
 pub mod atom;
 
-pub use geom::{Point, Size, Rect, EdgeInsets, Transform2D, LayoutUnit, FixedRect};
+pub use geom::{Point, Size, Rect, EdgeInsets, Transform2D, LayoutUnit, FixedRect, Matrix4x4};
 pub use color::{Rgba, Hsla, Oklch};
 pub use arena::{BumpArena, FrameArenaManager, ThreadLocalArena, DEFAULT_ARENA_CAPACITY};
-pub use atom::{AtomId, AtomTable};
+pub use atom::{AtomId, AtomTable, intern, resolve};
 
 pub mod prelude {
-    pub use crate::geom::{Point, Size, Rect, EdgeInsets, Transform2D, LayoutUnit, FixedRect};
+    pub use crate::geom::{Point, Size, Rect, EdgeInsets, Transform2D, LayoutUnit, FixedRect, Matrix4x4};
     pub use crate::color::{Rgba, Hsla, Oklch};
     pub use crate::arena::{BumpArena, FrameArenaManager, ThreadLocalArena};
-    pub use crate::atom::{AtomId, AtomTable};
+    pub use crate::atom::{AtomId, AtomTable, intern, resolve};
 }
 
 #[cfg(test)]
@@ -195,5 +195,31 @@ mod tests {
         assert_eq!(id1, id2);
         assert!(id1.0 >= 1024);
         assert_eq!(table.resolve(id1).unwrap(), "custom-user-component-key");
+    }
+
+    #[test]
+    fn test_matrix4x4_math_and_inversion() {
+        let t = Matrix4x4::translation(50.0, 100.0, 0.0);
+        let s = Matrix4x4::scaling(2.0, 3.0, 1.0);
+        let r = Matrix4x4::rotation_z(std::f32::consts::FRAC_PI_2); // 90 deg
+
+        // Composition: T * R * S
+        let m = t.multiply(&r).multiply(&s);
+
+        // Transform point (10, 0)
+        // Scaled to (20, 0), rotated 90 deg to (0, 20), translated by (50, 100) -> (50, 120)
+        let p = m.transform_point2d(Point::new(10.0, 0.0));
+        assert!((p.x - 50.0).abs() < 1e-4);
+        assert!((p.y - 120.0).abs() < 1e-4);
+
+        // Analytical Inverse
+        let inv = m.inverse().expect("Matrix must be invertible");
+        let identity = m.multiply(&inv);
+        assert!(identity.is_identity());
+
+        // Unproject (50, 120) -> should yield back (10, 0)
+        let unprojected = inv.transform_point2d(p);
+        assert!((unprojected.x - 10.0).abs() < 1e-4);
+        assert!((unprojected.y - 0.0).abs() < 1e-4);
     }
 }
