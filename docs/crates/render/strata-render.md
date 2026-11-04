@@ -69,6 +69,11 @@ An element establishes a new Stacking Context in `strata_render` if any of the f
 1. The element is the root layout node (`is_root == true`).
 2. The element is positioned (`position: relative`, `absolute`, or `fixed`) and has an explicit `z-index` value.
 3. The element has an opacity strictly less than `1.0` (`opacity < 0.999`).
+4. The element clips overflow (`overflow_x != Visible` or `overflow_y != Visible`).
+5. The element defines any 2D or 3D transform operations (`transform != none`).
+6. The element specifies a non-normal blend mode (`mix-blend-mode != BlendMode::Normal`).
+7. The element establishes an isolated blending group (`isolation: isolate`).
+8. The element has active CSS filters (`filter != none`), backdrop filters (`backdrop-filter != none`), or vector clip paths (`clip-path != none`).
 
 ### The 7-Layer Painting Order
 
@@ -90,8 +95,9 @@ When the layout tree is compiled, `Compositor::build_display_list` outputs a fla
 
 ```rust
 use strata_layout::Rect;
-use strata_primitives::geom::EdgeInsets;
-use strata_style::types::{BorderRadius, BoxShadow, Color, FontWeight};
+use strata_primitives::geom::{EdgeInsets, Matrix4x4};
+use strata_style::effects::{BackdropFilter, ClipPath};
+use strata_style::types::{BlendMode, BorderRadius, BoxShadow, Color, FontWeight};
 use strata_render::scene3d::Scene3D;
 use strata_render::canvas2d::CanvasCommand;
 
@@ -112,6 +118,30 @@ pub enum DrawCommand {
         bounds: Rect,
         shadow: BoxShadow,
     },
+    PushBackdropFilter {
+        bounds: Rect,
+        radius: BorderRadius,
+        filter: BackdropFilter,
+    },
+    PopBackdropFilter,
+    PushFilter {
+        bounds: Rect,
+        filter: BackdropFilter,
+    },
+    PopFilter,
+    PushClipPath {
+        bounds: Rect,
+        clip_path: ClipPath,
+    },
+    PopClipPath,
+    PushBlendMode {
+        mode: BlendMode,
+    },
+    PopBlendMode,
+    PushIsolation {
+        isolate: bool,
+    },
+    PopIsolation,
     DrawBorder {
         bounds: Rect,
         widths: EdgeInsets<f32>,
@@ -139,6 +169,10 @@ pub enum DrawCommand {
         radius: BorderRadius,
     },
     PopClip,
+    PushTransform {
+        matrix: Matrix4x4,
+    },
+    PopTransform,
 }
 ```
 

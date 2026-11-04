@@ -227,9 +227,9 @@ assert_eq!(resolved_pixels, 968.0); // 1000.0 - 32.0
 
 ---
 
-## Declarative Keyframe Animations (`keyframes`)
+## Declarative Keyframe Animations (`keyframes` & `animation`)
 
-The keyframes subsystem provides cubic-bezier timing curves and timeline property interpolation for smooth 60/120 FPS transitions.
+The keyframes and animation subsystems provide complete W3C CSS Animations Level 1 & Level 2 parity, cubic-bezier timing curves, and timeline property interpolation across all animatable CSS properties for smooth 60/120 FPS transitions.
 
 ### Newton-Raphson Cubic-Bezier Solver
 
@@ -256,35 +256,93 @@ Standard easing curves are available as constants:
 - `CubicBezier::ease_out()`: `(0.0, 0.0, 0.58, 1.0)`
 - `CubicBezier::ease_in_out()`: `(0.42, 0.0, 0.58, 1.0)`
 
-### Animation Sampling
+### W3C CSS Keyframe Engine & Animation Manager
+
+The `strata_style::animation` module provides continuous keyframe evaluation and tracks lifecycle events:
 
 ```rust
-use strata_style::keyframes::{CubicBezier, Keyframe, KeyframeAnimation, KeyframeProperty};
+use strata_style::animation::{AnimationManager, KeyframeRegistry, KeyframeTrack};
+use strata_style::types::{AnimationDirection, AnimationFillMode, AnimationIterationCount, AnimationPlayState, AnimationSpec};
 
-let anim = KeyframeAnimation::new(
-    "pulse-alert",
-    1.0, // 1.0 second duration
-    CubicBezier::ease_in_out(),
-    vec![
-        Keyframe::new(0.0, vec![KeyframeProperty::Opacity(1.0), KeyframeProperty::Scale(1.0)]),
-        Keyframe::new(0.5, vec![KeyframeProperty::Opacity(0.4), KeyframeProperty::Scale(1.05)]),
-        Keyframe::new(1.0, vec![KeyframeProperty::Opacity(1.0), KeyframeProperty::Scale(1.0)]),
-    ],
-);
+let mut manager = AnimationManager::new();
 
-// Sample properties at t = 0.5s
-let props = anim.sample(0.5);
-assert_eq!(props[0], KeyframeProperty::Opacity(0.4));
+// Built-in Tailwind animations are pre-registered:
+// "spin", "ping", "pulse", "bounce"
+assert!(manager.registry_mut().get("spin").is_some());
+
+// Inspect active status for auto-sleep frame presentation
+let active = manager.has_active_animations();
 ```
+
+Keyframe animation tracks support sub-segment easing overrides, all four direction modes (`normal`, `reverse`, `alternate`, `alternate-reverse`), all four fill modes (`none`, `forwards`, `backwards`, `both`), and lifecycle event generation (`start`, `iteration`, `end`, `cancel`).
 
 ---
 
-## Visual Effects (`effects`)
+## Visual Effects & GPU Compositing (`effects`, `types`)
 
-Provides modern compositing operations:
-- `FilterOp`: `Blur(px)`, `Brightness(factor)`, `Contrast(factor)`, `Grayscale(amount)`.
-- `BackdropFilter`: Applies real-time GPU frosted glass blur behind surfaces.
-- `ClipPath`: Geometry mask clipping (`Circle`, `Inset`, `Polygon`).
+Provides complete W3C CSS Filter Effects Module Level 1, CSS Compositing Level 1, and CSS Masking Level 1 primitives:
+
+### 16 W3C CSS Blend Modes (`BlendMode`)
+- **Separable Modes**: `Normal`, `Multiply`, `Screen`, `Overlay`, `Darken`, `Lighten`, `ColorDodge`, `ColorBurn`, `HardLight`, `SoftLight`, `Difference`, `Exclusion`.
+- **Non-Separable HSL Modes**: `Hue`, `Saturation`, `Color`, `Luminosity`.
+- Any element with `mix-blend-mode != BlendMode::Normal` automatically establishes an isolated stacking context per W3C specification.
+
+### CSS Isolation (`Isolation`)
+- `Isolation::Auto`: Element blends normally with background unless establishing a stacking context for other reasons.
+- `Isolation::Isolate`: Explicitly establishes an isolated stacking context for blending, preventing descendant blend modes from bleeding into ancestor layers.
+
+### Filter Operations (`FilterOp` & `BackdropFilter`)
+- `FilterOp::Blur(px)`: Dual-pass separable Gaussian blur radius.
+- `FilterOp::Brightness(factor)`: Linear luminance multiplier.
+- `FilterOp::Contrast(factor)`: Linear contrast curve multiplier.
+- `FilterOp::Grayscale(fraction)`: Rec. 709 luminance desaturation.
+- `FilterOp::Invert(fraction)`: Color complement inversion.
+- `FilterOp::Opacity(fraction)`: Alpha transparency multiplier.
+- `FilterOp::Saturate(factor)`: HSL saturation adjustment.
+- `FilterOp::Sepia(fraction)`: Warm photographic sepia toning matrix.
+- `FilterOp::DropShadow { offset_x, offset_y, blur_radius, color }`: Analytical Gaussian drop shadow.
+- `FilterOp::HueRotate(deg)`: Spherical RGB/YIQ hue axis rotation.
+
+### Vector Clip-Paths (`ClipPath`)
+Arbitrary geometric vector boundaries with subpixel point containment (`contains_point`):
+- `ClipPath::Inset { top, right, bottom, left, border_radius }`: Rectangular boundary with rounded corners.
+- `ClipPath::Circle { radius, center_x, center_y }`: Radial Euclidean boundary.
+- `ClipPath::Ellipse { radius_x, radius_y, center_x, center_y }`: Dual-axis quadratic boundary.
+- `ClipPath::Polygon(Vec<Point<f32>>)`: Arbitrary n-vertex polygon using ray-casting point-in-polygon containment.
+- `ClipPath::Path(String)`: Arbitrary SVG path data executed via hardware path rasterizer.
+
+---
+
+## Next-Gen CSS Standards & Modern Transitions Suite
+
+`strata_style` implements modern W3C CSS specifications for transitions, properties, and animations:
+
+### CSS `@starting-style` (W3C CSS Transitions Level 2)
+The `@starting-style` at-rule provides initial property values when an element transitions from `display: none` or is newly mounted into the DOM. This eliminates double-render frame hacks by providing a dedicated pre-transition baseline:
+- **Parser**: Supports both top-level `@starting-style { .card { opacity: 0; } }` and nested `@starting-style { opacity: 0; }` within standard rule blocks.
+- **Cascade**: In `resolve_with_hierarchy`, matching `@starting-style` declarations are resolved onto a cloned computed style stored in `computed.starting_style = Some(Box::new(...))`.
+- **Runtime Transition Seeding**: In `AppRuntime::sync_tree_animations_rec`, when an element transitions from `display: None` or is mounted for the first time, its transition start state is seeded from `starting_style` rather than defaulting to the target style.
+
+### Scroll-Driven Animations (W3C Scroll-Driven Animations Level 1)
+Enables animations driven directly by container scroll position rather than wall-clock time:
+- **`animation-timeline`**:
+  - `scroll(nearest | root | self, block | inline | vertical | horizontal)`: Links animation progress directly to the normalized scroll offset $[0.0, 1.0]$ of the target scroll container.
+  - `view(block | inline, start_offset, end_offset)`: Progress computed relative to the element's visibility within the scroll viewport.
+  - `named(name)`: Links to a named timeline.
+- **`animation-range`**: Supports `normal`, `cover`, `contain`, `entry`, `exit` range phases with customizable percentage offsets.
+- **Zero-CPU Stationary State**: When no scroll input occurs, scroll animations do not trigger timer wakeups (`animation_manager.has_time_based_animations() -> false`), ensuring 0.0% CPU overhead while stationary.
+
+### Houdini `@property` (W3C CSS Properties & Values API Level 1)
+Typed CSS custom property registration supporting continuous property interpolation:
+- **Syntax Types**: `<color>`, `<length>`, `<percentage>`, `<length-percentage>`, `<number>`, `<integer>`, `<angle>`, `<time>`, and `<custom-ident>`.
+- **Inheritance & Initial Values**: Declarative `inherits: true | false` and `initial-value: ...` validation.
+- **Continuous Interpolation**: Allows CSS transitions and keyframes to smoothly interpolate custom properties (e.g. `--gradient-stop`, `--gauge-angle`) across frames.
+
+### CSS View Transitions Module Level 1 & 2 (`view-transition-name`)
+Enables cross-DOM morphing and seamless view transitions between different application states:
+- **`view-transition-name`**: Declares a persistent transition identifier on DOM elements.
+- **Snapshot Capture**: `ViewTransitionManager::capture_snapshot` captures origin coordinates, width, and height before DOM tree mutations.
+- **Geometry Morphing**: Automatically generates interpolated bounding boxes and cross-fade opacities between old and new element positions.
 
 ---
 

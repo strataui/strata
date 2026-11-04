@@ -215,6 +215,21 @@ fn main() {
 
 ---
 
+## Transition & Animation Runtime Orchestration
+
+`AppRuntime` coordinates active CSS transitions, keyframes, scroll-driven animations, and view transitions across the DOM and layout trees:
+
+### Transition & Animation Pipeline
+1. **Tree Sync (`sync_tree_animations`)**: On view updates, compares current layout node styles against `previous_node_styles`. If an element is newly mounted or enters from `display: None`, initial transition states are seeded from `node.style.starting_style` (W3C `@starting-style`).
+2. **Scroll-Driven Evaluation (`evaluate_scroll_animations`)**: Maps normalized container scroll offsets directly to keyframe animation progress with zero wall-clock timer overhead when stationary.
+3. **View Transitions Manager (`ViewTransitionManager`)**:
+   - Captures element snapshots (`capture_snapshot`) identified by `view-transition-name`.
+   - On state transitions, morphs bounding boxes (`Rect::from_xywh`) and cross-fades opacity between previous and target states over an ease-in-out curve.
+   - Cleans up active transitions on completion.
+4. **Layout Tree Application (`apply_animations_to_layout_tree`)**: Recursively applies interpolated values onto `node.style`, with a final settling pass when animations finish to ensure exact target property values are restored.
+
+---
+
 ## Production Cloud Telemetry Console Example
 
 The following complete, runnable example constructs a cloud cluster observability panel with responsive layout, real-time node count tracking, and status metrics:
