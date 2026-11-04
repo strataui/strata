@@ -416,3 +416,38 @@ fn test_wpt_suite_execution_and_compliance() {
     assert_eq!(compliance, 100.0);
 }
 
+#[test]
+fn test_subtree_layout_cache_invalidation_and_hit() {
+    let mut root_style = ComputedStyle::default();
+    root_style.display = Display::Flex;
+    root_style.width = Dimension::Px(500.0);
+    root_style.height = Dimension::Px(300.0);
+
+    let mut child_style = ComputedStyle::default();
+    child_style.width = Dimension::Px(200.0);
+    child_style.height = Dimension::Px(100.0);
+
+    let mut root = LayoutNode::with_children(root_style, vec![LayoutNode::new(child_style)]);
+
+    assert!(!root.layout_cache.is_valid);
+    assert!(!root.children[0].layout_cache.is_valid);
+
+    // Initial layout computes and populates cache
+    root.compute_layout(500.0, 300.0);
+
+    assert!(root.layout_cache.is_valid);
+    assert_eq!(root.layout_cache.available_w, 500.0);
+    assert_eq!(root.layout_cache.available_h, 300.0);
+    assert_eq!(root.layout_cache.result_w, 500.0);
+    assert_eq!(root.layout_cache.result_h, 300.0);
+
+    // Repeated layout with identical bounds hits the cache
+    root.compute_layout(500.0, 300.0);
+    assert!(root.layout_cache.is_valid);
+
+    // Explicit cache invalidation
+    root.invalidate_cache();
+    assert!(!root.layout_cache.is_valid);
+    assert!(!root.children[0].layout_cache.is_valid);
+}
+

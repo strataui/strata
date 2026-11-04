@@ -4,7 +4,7 @@ use crate::box_model::{clamp_dimension, resolve_dimension};
 use crate::geometry::{LayoutGeometry, Rect};
 use crate::tree::LayoutNode;
 use strata_style::types::{
-    AlignItems, AlignSelf, Dimension, FlexDirection, FlexWrap, JustifyContent, Position,
+    AlignItems, AlignSelf, Dimension, FlexDirection, FlexWrap, JustifyContent, Overflow, Position,
 };
 
 struct FlexItemMeta {
@@ -48,9 +48,8 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
         None => {
             let is_inline_or_shrink = container.style.display == strata_style::types::Display::InlineFlex
                 || container.style.display == strata_style::types::Display::Inline
-                || container.style.flex_shrink == 0.0
-                || (container.style.flex_grow == 0.0 && is_row);
-            if is_inline_or_shrink && !container.children.is_empty() {
+                || container.style.flex_shrink == 0.0;
+            if is_inline_or_shrink {
                 let mut sum_children = 0.0f32;
                 for child in &mut container.children {
                     if child.style.position == Position::Absolute || child.style.position == Position::Fixed {
@@ -58,8 +57,12 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
                     }
                     let cw = resolve_dimension(child.style.width, available_width)
                         .unwrap_or_else(|| {
-                            child.compute_layout(available_width, available_height);
-                            child.geometry.border_box.width
+                            if child.geometry.border_box.width > 0.0 {
+                                child.geometry.border_box.width
+                            } else {
+                                child.compute_layout(available_width, available_height);
+                                child.geometry.border_box.width
+                            }
                         });
                     let mw = child.style.margin.left + child.style.margin.right;
                     if is_row {
@@ -86,18 +89,6 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
 
     let inner_width = (resolved_width - padding.left - padding.right - border.left - border.right).max(0.0);
     let resolved_height = resolve_dimension(container.style.height, available_height)
-        .or_else(|| {
-            if container.geometry.border_box.height > 0.0 {
-                let h = if available_height > 0.0 {
-                    container.geometry.border_box.height.min(available_height)
-                } else {
-                    container.geometry.border_box.height
-                };
-                Some(h)
-            } else {
-                None
-            }
-        })
         .map(|h| clamp_dimension(h, container.style.min_height, container.style.max_height, available_height));
 
     let inner_height = resolved_height
@@ -112,6 +103,8 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
 
     let container_main = if is_row { inner_width } else { inner_height.unwrap_or(0.0) };
 
+    let target_avail_h = inner_height.unwrap_or(available_height);
+
     // 2. Collect in-flow flex items and determine hypothetical sizes
     let mut item_metas = Vec::new();
     for (idx, child) in container.children.iter_mut().enumerate() {
@@ -119,17 +112,61 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
             continue;
         }
 
-        let child_w = resolve_dimension(child.style.width, inner_width)
-            .unwrap_or_else(|| {
-                // If width is auto, probe hypothetical content
-                child.compute_layout(inner_width, inner_height.unwrap_or(available_height));
-                child.geometry.border_box.width
-            });
-        let child_h = resolve_dimension(child.style.height, inner_height.unwrap_or(available_height))
-            .unwrap_or_else(|| {
-                child.compute_layout(inner_width, inner_height.unwrap_or(available_height));
-                child.geometry.border_box.height
-            });
+        let effective_align = match child.style.align_self {
+            AlignSelf::Auto => container.style.align_items,
+            AlignSelf::Stretch => AlignItems::Stretch,
+            AlignSelf::FlexStart => AlignItems::FlexStart,
+            AlignSelf::FlexEnd => AlignItems::FlexEnd,
+            AlignSelf::Center => AlignItems::Center,
+            AlignSelf::Baseline => AlignItems::Baseline,
+        };
+
+        let should_shrink_child = if is_row {
+            child.style.width == Dimension::Auto
+                && child.style.flex_basis == Dimension::Auto
+                && child.style.flex_grow == 0.0
+        } else {
+            child.style.width == Dimension::Auto
+                && effective_align != AlignItems::Stretch
+        };
+
+        if should_shrink_child && child.style.display == strata_style::types::Display::Flex {
+            child.style.display = strata_style::types::Display::InlineFlex;
+        }
+
+        let (mut child_w, mut child_h) = match (
+            resolve_dimension(child.style.width, inner_width),
+            resolve_dimension(child.style.height, target_avail_h),
+        ) {
+            (Some(w), Some(h)) => (w, h),
+            (Some(w), None) => {
+                child.compute_layout(w, target_avail_h);
+                (w, child.geometry.border_box.height)
+            }
+            (None, Some(h)) => {
+                child.compute_layout(inner_width, h);
+                (child.geometry.border_box.width, h)
+            }
+            (None, None) => {
+                child.compute_layout(inner_width, target_avail_h);
+                (child.geometry.border_box.width, child.geometry.border_box.height)
+            }
+        };
+
+        if let Some(ref text_str) = child.text {
+            if inner_width > 0.0 && child_w > inner_width {
+                let (_, wrapped_h) = crate::text::measure_text_bounds(
+                    text_str,
+                    child.style.font_size,
+                    child.style.line_height,
+                    Some(inner_width),
+                );
+                child_w = inner_width;
+                child_h = wrapped_h;
+                child.style.width = Dimension::Px(child_w);
+                child.style.height = Dimension::Px(child_h);
+            }
+        }
 
         let (mut main_size, mut cross_size) = if is_row {
             (child_w, child_h)
@@ -266,12 +303,18 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
                     }
                 }
             } else if free_space < 0.0 {
-                // Contraction via flex-shrink
+                // Contraction via flex-shrink along main axis (row or column)
                 let total_scaled_shrink: f32 = line
                     .items
                     .iter()
                     .map(|it| it.flex_shrink * it.hypothetical_main)
                     .sum();
+
+                let is_scroll_main = if is_row {
+                    matches!(container.style.overflow_x, Overflow::Auto | Overflow::Scroll)
+                } else {
+                    matches!(container.style.overflow_y, Overflow::Auto | Overflow::Scroll)
+                };
 
                 if total_scaled_shrink > 0.0 {
                     let abs_free = free_space.abs();
@@ -279,16 +322,51 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
                         if it.flex_shrink > 0.0 {
                             let scaled = it.flex_shrink * it.hypothetical_main;
                             let reduction = (scaled / total_scaled_shrink) * abs_free;
-                            it.resolved_main = (it.hypothetical_main - reduction).max(0.0);
+                            let min_main = if is_row {
+                                if is_scroll_main {
+                                    let explicit_min = resolve_dimension(container.children[it.index].style.min_width, inner_width).unwrap_or(0.0);
+                                    it.hypothetical_main.max(explicit_min)
+                                } else if container.children[it.index].style.min_width == Dimension::Auto {
+                                    0.0
+                                } else {
+                                    resolve_dimension(container.children[it.index].style.min_width, inner_width).unwrap_or(0.0)
+                                }
+                            } else {
+                                if is_scroll_main {
+                                    let explicit_min = resolve_dimension(container.children[it.index].style.min_height, target_avail_h).unwrap_or(0.0);
+                                    it.hypothetical_main.max(explicit_min)
+                                } else if container.children[it.index].style.min_height == Dimension::Auto {
+                                    0.0
+                                } else {
+                                    resolve_dimension(container.children[it.index].style.min_height, target_avail_h).unwrap_or(0.0)
+                                }
+                            };
+                            it.resolved_main = (it.hypothetical_main - reduction).max(min_main);
                         }
                     }
                 }
             }
         }
 
-        // Recompute line cross size after main sizing
-        let item_max_cross = line.items.iter().map(|it| it.hypothetical_cross + it.margin_cross_start + it.margin_cross_end).fold(0.0f32, f32::max);
-        line.cross_size = line.cross_size.max(item_max_cross);
+        // Recompute line cross size after main sizing (CSS Flexbox Level 1 §9.4)
+        for it in &mut line.items {
+            if (it.resolved_main - it.hypothetical_main).abs() > 0.5 {
+                let child = &mut container.children[it.index];
+                if is_row {
+                    child.compute_layout(it.resolved_main, target_avail_h);
+                    it.resolved_cross = child.geometry.border_box.height;
+                } else {
+                    child.compute_layout(inner_width, it.resolved_main);
+                    it.resolved_cross = child.geometry.border_box.width;
+                }
+            }
+        }
+        let item_max_cross = line.items.iter().map(|it| it.resolved_cross + it.margin_cross_start + it.margin_cross_end).fold(0.0f32, f32::max);
+        line.cross_size = if is_row && inner_height.is_none() {
+            item_max_cross
+        } else {
+            line.cross_size.max(item_max_cross)
+        };
     }
 
     if lines.len() == 1 {
@@ -434,14 +512,40 @@ pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available
                 )
             };
 
-            child.geometry = LayoutGeometry::from_border_box(
-                Rect::new(item_x, item_y, item_w, item_h),
-                child.style.padding,
-                child.style.border_width,
-                child.style.margin,
-            );
-            if !child.children.is_empty() {
-                child.layout_children();
+            let old_x = child.geometry.border_box.x;
+            let old_y = child.geometry.border_box.y;
+            let old_w = child.geometry.border_box.width;
+            let old_h = child.geometry.border_box.height;
+
+            if old_w > 0.0
+                && (item_w - old_w).abs() < 0.05
+                && (item_h - old_h).abs() < 0.05
+            {
+                let dx = item_x - old_x;
+                let dy = item_y - old_y;
+                if dx.abs() > 0.001 || dy.abs() > 0.001 {
+                    child.translate(dx, dy);
+                }
+                child.geometry = LayoutGeometry::from_border_box(
+                    Rect::new(item_x, item_y, item_w, item_h),
+                    child.style.padding,
+                    child.style.border_width,
+                    child.style.margin,
+                );
+            } else {
+                child.geometry = LayoutGeometry::from_border_box(
+                    Rect::new(item_x, item_y, item_w, item_h),
+                    child.style.padding,
+                    child.style.border_width,
+                    child.style.margin,
+                );
+                if !child.children.is_empty() {
+                    child.layout_children();
+                } else if !child.inline_items.is_empty() || child.text.is_some() {
+                    let content_w = child.geometry.content_box.width;
+                    let content_h = child.geometry.content_box.height;
+                    crate::box_model::solve_block_children(child, content_w, content_h);
+                }
             }
 
             current_main += it.margin_main_start + it.resolved_main + it.margin_main_end + step_between;

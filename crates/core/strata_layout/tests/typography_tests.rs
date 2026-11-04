@@ -195,3 +195,129 @@ fn test_inline_formatting_context_vertical_alignments() {
         "Subscript must lower baseline downwards"
     );
 }
+
+#[test]
+fn test_multi_span_inline_stream_line_breaking() {
+    let ifc = InlineFormattingContext::new();
+
+    let items = vec![
+        InlineItem::text("The Rust programming language ", InlineTextStyle {
+            font_size: 16.0,
+            font_weight: strata_style::types::FontWeight::Normal,
+            ..Default::default()
+        }),
+        InlineItem::text("provides memory safety without a garbage collector ", InlineTextStyle {
+            font_size: 16.0,
+            font_weight: strata_style::types::FontWeight::Bold,
+            ..Default::default()
+        }),
+        InlineItem::text("and high performance concurrency.", InlineTextStyle {
+            font_size: 16.0,
+            font_style: strata_style::types::FontStyle::Italic,
+            ..Default::default()
+        }),
+    ];
+
+    let options = InlineLayoutOptions {
+        font_size: 16.0,
+        line_height: Some(24.0),
+        max_width: Some(300.0),
+        white_space: WhiteSpaceMode::Normal,
+        ..Default::default()
+    };
+
+    let result = ifc.layout_inline_stream(&items, &options);
+
+    assert!(result.line_count >= 2, "Prose stream must break into multiple lines");
+    assert!(result.total_width <= 300.0, "Total width must fit within container constraint 300.0");
+    assert!(result.total_height >= 48.0, "Total height must encompass all stacked line boxes");
+
+    // Check that line boxes have text fragments
+    let all_frags: Vec<&TextFragment> = result.lines.iter().flat_map(|l| &l.text_fragments).collect();
+    assert!(all_frags.len() >= 3, "Must have visual fragments for each styling run");
+}
+
+#[test]
+fn test_multi_line_span_fragmentation() {
+    let ifc = InlineFormattingContext::new();
+
+    // A single long bold item spanning across lines
+    let items = vec![
+        InlineItem::text("Prefix ", InlineTextStyle { font_size: 16.0, ..Default::default() }),
+        InlineItem::text("extremely long continuous bold phrasing that definitely spans across multiple visual lines cleanly", InlineTextStyle {
+            font_size: 16.0,
+            font_weight: strata_style::types::FontWeight::Bold,
+            color: strata_style::types::Color::new(255, 0, 0, 255),
+            ..Default::default()
+        }),
+        InlineItem::text(" Suffix", InlineTextStyle { font_size: 16.0, ..Default::default() }),
+    ];
+
+    let options = InlineLayoutOptions {
+        font_size: 16.0,
+        line_height: Some(24.0),
+        max_width: Some(220.0),
+        white_space: WhiteSpaceMode::Normal,
+        ..Default::default()
+    };
+
+    let result = ifc.layout_inline_stream(&items, &options);
+
+    assert!(result.line_count >= 3, "Must fragment into at least 3 lines");
+
+    // Check item 1 fragments: item_index 1 must appear on multiple lines
+    let item1_frags: Vec<&TextFragment> = result
+        .lines
+        .iter()
+        .flat_map(|l| &l.text_fragments)
+        .filter(|f| f.item_index == 1)
+        .collect();
+
+    assert!(
+        item1_frags.len() >= 2,
+        "Bold run (item 1) must be fragmented into at least 2 distinct visual fragments"
+    );
+    for frag in &item1_frags {
+        assert_eq!(frag.style.font_weight, strata_style::types::FontWeight::Bold);
+        assert_eq!(frag.style.color, strata_style::types::Color::new(255, 0, 0, 255));
+    }
+}
+
+#[test]
+fn test_block_container_ifc_auto_wrapping() {
+    // Create a block container <p> with inline children
+    let mut block = LayoutNode::new(strata_style::types::ComputedStyle {
+        display: strata_style::types::Display::Block,
+        width: strata_style::types::Dimension::Px(250.0),
+        height: strata_style::types::Dimension::Auto,
+        font_size: 16.0,
+        line_height: 1.5,
+        ..Default::default()
+    });
+
+    let mut span1 = LayoutNode::new(strata_style::types::ComputedStyle {
+        display: strata_style::types::Display::Inline,
+        font_size: 16.0,
+        line_height: 1.5,
+        ..Default::default()
+    });
+    span1.text = Some("Modern computing systems require ".to_string());
+
+    let mut span2 = LayoutNode::new(strata_style::types::ComputedStyle {
+        display: strata_style::types::Display::Inline,
+        font_size: 16.0,
+        font_weight: strata_style::types::FontWeight::Bold,
+        line_height: 1.5,
+        ..Default::default()
+    });
+    span2.text = Some("uncompromising safety, speed, and concurrency.".to_string());
+
+    block.add_child(span1);
+    block.add_child(span2);
+
+    block.compute_layout(250.0, 1000.0);
+
+    assert!(!block.line_boxes.is_empty(), "Block container must establish an IFC and produce line boxes");
+    assert!(block.line_boxes.len() >= 2, "Prose must wrap into multiple line boxes");
+    assert!(block.geometry.border_box.height >= 40.0, "Height must encompass all lines");
+}
