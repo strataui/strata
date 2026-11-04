@@ -336,3 +336,83 @@ fn test_framebuffer_draw_text() {
     }
     assert!(white_count > 20, "Text should have rasterized pixels, found {}", white_count);
 }
+
+#[test]
+fn test_display_list_spatial_viewport_culling() {
+    use strata_style::types::{ComputedStyle, Display, Dimension, Position};
+    use strata_render::compositor::Compositor;
+
+    // Create a long root container with 100 vertical child cards
+    let mut root_style = ComputedStyle::default();
+    root_style.display = Display::Block;
+    root_style.width = Dimension::Px(1000.0);
+    let mut root = LayoutNode::new(root_style);
+    root.geometry.border_box = Rect::new(0.0, 0.0, 1000.0, 10000.0);
+
+    // Fixed header navbar at y=0, height=60
+    let mut fixed_style = ComputedStyle::default();
+    fixed_style.display = Display::Block;
+    fixed_style.position = Position::Fixed;
+    fixed_style.background_color = Some(Color::rgb(20, 20, 20));
+    let mut fixed_node = LayoutNode::new(fixed_style);
+    fixed_node.geometry.border_box = Rect::new(0.0, 0.0, 1000.0, 60.0);
+    root.children.push(fixed_node);
+
+    // 100 in-flow static cards, each 100px high, spaced 100px apart (y = 0, 100, 200, ... 9900)
+    for i in 0..100 {
+        let mut card_style = ComputedStyle::default();
+        card_style.display = Display::Block;
+        card_style.position = Position::Static;
+        card_style.background_color = Some(Color::rgb((i % 255) as u8, 100, 150));
+        let mut card = LayoutNode::new(card_style);
+        card.geometry.border_box = Rect::new(0.0, (i as f32) * 100.0, 1000.0, 90.0);
+        root.children.push(card);
+    }
+
+    // 1. Unculled display list: builds draw commands for ALL 101 nodes
+    let dl_full = Compositor::build_display_list(&root);
+    assert!(dl_full.commands.len() >= 101, "Full display list should contain all 101 commands, got {}", dl_full.commands.len());
+
+    // 2. Viewport-culled display list at y=5000 (viewport: 5000..5800, buffer: 3800..7000)
+    let viewport = Rect::new(0.0, 5000.0, 1000.0, 800.0);
+    let dl_culled = Compositor::build_display_list_with_viewport(&root, Some(viewport));
+
+    // Cards far above (e.g. y=0..3500) and far below (e.g. y=7500..9900) must be culled
+    assert!(dl_culled.commands.len() < 40, "Culled display list should contain <40 commands, got {}", dl_culled.commands.len());
+
+    // Fixed header navbar (position: fixed) must ALWAYS be preserved
+    let has_fixed_nav = dl_culled.commands.iter().any(|cmd| {
+        match cmd {
+            strata_render::compositor::DrawCommand::DrawRect { bounds, color } => {
+                bounds.y == 0.0 && *color == Color::rgb(20, 20, 20)
+            }
+            _ => false,
+        }
+    });
+    assert!(has_fixed_nav, "Fixed header navbar must never be culled");
+}
+
+#[test]
+fn test_content_visibility_hidden_and_contain_intrinsic_size() {
+    use strata_style::types::{ComputedStyle, ContentVisibility, Dimension, Display};
+
+    let mut style = ComputedStyle::default();
+    style.display = Display::Block;
+    style.content_visibility = ContentVisibility::Hidden;
+    style.contain_intrinsic_width = Some(Dimension::Px(800.0));
+    style.contain_intrinsic_height = Some(Dimension::Px(450.0));
+
+    let mut node = LayoutNode::new(style);
+    // Add child that should be completely skipped by layout
+    let mut child_style = ComputedStyle::default();
+    child_style.display = Display::Block;
+    child_style.height = Dimension::Px(2000.0);
+    node.children.push(LayoutNode::new(child_style));
+
+    node.compute_layout(1000.0, 1000.0);
+
+    // Height must match contain_intrinsic_height (450px) instead of child height (2000px)
+    assert_eq!(node.geometry.border_box.height, 450.0);
+    assert_eq!(node.geometry.border_box.width, 800.0);
+}
+

@@ -4,7 +4,8 @@
 //! FreeType/HarfBuzz font shaping, and subpixel anti-aliased vector geometry.
 
 use strata_render::compositor::{DisplayList, DrawCommand};
-use strata_style::types::FontWeight;
+use strata_render::{FillRule, StrokeLineCap, StrokeLineJoin};
+use strata_style::types::{FontStyle, FontWeight, TextDecoration};
 
 /// Draws a rounded rectangle path into a Cairo graphics context.
 pub fn cairo_rounded_rect(
@@ -28,6 +29,213 @@ pub fn cairo_rounded_rect(
     cr.arc(x + r, y + h - r, r, 90.0 * degrees, 180.0 * degrees);
     cr.arc(x + r, y + r, r, 180.0 * degrees, 270.0 * degrees);
     cr.close_path();
+}
+
+/// Renders an outer box shadow with analytical concentric Gaussian falloff in Cairo.
+pub fn cairo_draw_shadow(
+    cr: &cairo::Context,
+    bounds: &strata_layout::Rect,
+    shadow: &strata_style::types::BoxShadow,
+) {
+    if shadow.color.a() <= 0.001 {
+        return;
+    }
+    let r = shadow.color.r() as f64;
+    let g = shadow.color.g() as f64;
+    let b = shadow.color.b() as f64;
+    let base_a = shadow.color.a() as f64;
+
+    if shadow.blur_radius <= 0.5 {
+        let x = (bounds.x + shadow.offset_x - shadow.spread_radius) as f64;
+        let y = (bounds.y + shadow.offset_y - shadow.spread_radius) as f64;
+        let w = (bounds.width + shadow.spread_radius * 2.0).max(0.0) as f64;
+        let h = (bounds.height + shadow.spread_radius * 2.0).max(0.0) as f64;
+        cr.set_source_rgba(r, g, b, base_a);
+        cr.rectangle(x, y, w, h);
+        let _ = cr.fill();
+        return;
+    }
+
+    // Concentric Gaussian approximation
+    let steps = (shadow.blur_radius.ceil() as usize).clamp(3, 12);
+    let blur = shadow.blur_radius as f64;
+    let spread = shadow.spread_radius as f64;
+    let total_layers = steps as f64;
+
+    for i in 0..steps {
+        let t = (i as f64 + 0.5) / total_layers;
+        // Gaussian falloff approximation: (1 - t^2)
+        let alpha = base_a * (1.0 - t * t) / (total_layers * 0.65);
+        let current_expand = spread + t * blur;
+
+        let x = (bounds.x + shadow.offset_x) as f64 - current_expand;
+        let y = (bounds.y + shadow.offset_y) as f64 - current_expand;
+        let w = (bounds.width as f64 + current_expand * 2.0).max(0.0);
+        let h = (bounds.height as f64 + current_expand * 2.0).max(0.0);
+
+        let corner_r = (current_expand * 0.5).max(0.0);
+        cairo_rounded_rect(cr, x, y, w, h, corner_r);
+        cr.set_source_rgba(r, g, b, alpha);
+        let _ = cr.fill();
+    }
+}
+
+/// Renders an inset box shadow clipped to the element's border box in Cairo.
+pub fn cairo_draw_inset_shadow(
+    cr: &cairo::Context,
+    bounds: &strata_layout::Rect,
+    shadow: &strata_style::types::BoxShadow,
+    border_radius: strata_style::types::BorderRadius,
+) {
+    if shadow.color.a() <= 0.001 {
+        return;
+    }
+    let _ = cr.save();
+    cairo_rounded_rect(
+        cr,
+        bounds.x as f64,
+        bounds.y as f64,
+        bounds.width as f64,
+        bounds.height as f64,
+        border_radius.top_left as f64,
+    );
+    cr.clip();
+
+    let r = shadow.color.r() as f64;
+    let g = shadow.color.g() as f64;
+    let b = shadow.color.b() as f64;
+    let base_a = shadow.color.a() as f64;
+
+    let blur = shadow.blur_radius.max(1.0) as f64;
+    let steps = (blur.ceil() as usize).clamp(3, 10);
+    let total_layers = steps as f64;
+
+    for i in 0..steps {
+        let t = (i as f64 + 0.5) / total_layers;
+        let alpha = base_a * (1.0 - t * t) / (total_layers * 0.7);
+        let stroke_w = (t * blur * 1.5).max(1.0);
+
+        let inset_x = bounds.x as f64 + shadow.offset_x as f64;
+        let inset_y = bounds.y as f64 + shadow.offset_y as f64;
+        let inset_w = bounds.width as f64;
+        let inset_h = bounds.height as f64;
+
+        cairo_rounded_rect(cr, inset_x, inset_y, inset_w, inset_h, border_radius.top_left as f64);
+        cr.set_source_rgba(r, g, b, alpha);
+        cr.set_line_width(stroke_w);
+        let _ = cr.stroke();
+    }
+
+    let _ = cr.restore();
+}
+
+/// Renders a CSS Linear Gradient using high-precision Cairo LinearGradient patterns.
+pub fn cairo_draw_linear_gradient(
+    cr: &cairo::Context,
+    bounds: &strata_layout::Rect,
+    angle_deg: f32,
+    stops: &[strata_style::types::ColorStop],
+    border_radius: strata_style::types::BorderRadius,
+) {
+    if stops.is_empty() || bounds.width <= 0.0 || bounds.height <= 0.0 {
+        return;
+    }
+
+    let rad = (angle_deg.to_radians()) as f64;
+    let w = bounds.width as f64;
+    let h = bounds.height as f64;
+    let cx = bounds.x as f64 + w / 2.0;
+    let cy = bounds.y as f64 + h / 2.0;
+
+    let length = (w * rad.sin().abs() + h * rad.cos().abs()) / 2.0;
+    let dx = rad.sin() * length;
+    let dy = -rad.cos() * length;
+
+    let x0 = cx - dx;
+    let y0 = cy - dy;
+    let x1 = cx + dx;
+    let y1 = cy + dy;
+
+    let pattern = cairo::LinearGradient::new(x0, y0, x1, y1);
+    let n = stops.len();
+    for (idx, stop) in stops.iter().enumerate() {
+        let pos = match stop.position {
+            Some(p) => p as f64,
+            None => {
+                if n > 1 {
+                    idx as f64 / (n - 1) as f64
+                } else {
+                    0.0
+                }
+            }
+        };
+        pattern.add_color_stop_rgba(
+            pos.clamp(0.0, 1.0),
+            stop.color.r() as f64,
+            stop.color.g() as f64,
+            stop.color.b() as f64,
+            stop.color.a() as f64,
+        );
+    }
+
+    if border_radius.top_left > 0.0 || border_radius.top_right > 0.0 {
+        cairo_rounded_rect(cr, bounds.x as f64, bounds.y as f64, w, h, border_radius.top_left as f64);
+    } else {
+        cr.rectangle(bounds.x as f64, bounds.y as f64, w, h);
+    }
+
+    let _ = cr.set_source(&pattern);
+    let _ = cr.fill();
+}
+
+/// Renders a CSS Radial Gradient using high-precision Cairo RadialGradient patterns.
+pub fn cairo_draw_radial_gradient(
+    cr: &cairo::Context,
+    bounds: &strata_layout::Rect,
+    center: (f32, f32),
+    stops: &[strata_style::types::ColorStop],
+    border_radius: strata_style::types::BorderRadius,
+) {
+    if stops.is_empty() || bounds.width <= 0.0 || bounds.height <= 0.0 {
+        return;
+    }
+
+    let w = bounds.width as f64;
+    let h = bounds.height as f64;
+    let cx = bounds.x as f64 + w * center.0 as f64;
+    let cy = bounds.y as f64 + h * center.1 as f64;
+    let radius = (w.max(h) / 2.0).max(1.0);
+
+    let pattern = cairo::RadialGradient::new(cx, cy, 0.0, cx, cy, radius);
+    let n = stops.len();
+    for (idx, stop) in stops.iter().enumerate() {
+        let pos = match stop.position {
+            Some(p) => p as f64,
+            None => {
+                if n > 1 {
+                    idx as f64 / (n - 1) as f64
+                } else {
+                    0.0
+                }
+            }
+        };
+        pattern.add_color_stop_rgba(
+            pos.clamp(0.0, 1.0),
+            stop.color.r() as f64,
+            stop.color.g() as f64,
+            stop.color.b() as f64,
+            stop.color.a() as f64,
+        );
+    }
+
+    if border_radius.top_left > 0.0 || border_radius.top_right > 0.0 {
+        cairo_rounded_rect(cr, bounds.x as f64, bounds.y as f64, w, h, border_radius.top_left as f64);
+    } else {
+        cr.rectangle(bounds.x as f64, bounds.y as f64, w, h);
+    }
+
+    let _ = cr.set_source(&pattern);
+    let _ = cr.fill();
 }
 
 fn skip_ws(chars: &mut std::iter::Peekable<std::str::Chars>) {
@@ -429,9 +637,46 @@ pub fn cairo_interpret_svg_path(cr: &cairo::Context, path_data: &str) {
     }
 }
 
+/// Maps Strata's W3C BlendMode to the corresponding Cairo compositing operator.
+pub fn blend_mode_to_cairo_operator(mode: strata_style::types::BlendMode) -> cairo::Operator {
+    match mode {
+        strata_style::types::BlendMode::Normal => cairo::Operator::Over,
+        strata_style::types::BlendMode::Multiply => cairo::Operator::Multiply,
+        strata_style::types::BlendMode::Screen => cairo::Operator::Screen,
+        strata_style::types::BlendMode::Overlay => cairo::Operator::Overlay,
+        strata_style::types::BlendMode::Darken => cairo::Operator::Darken,
+        strata_style::types::BlendMode::Lighten => cairo::Operator::Lighten,
+        strata_style::types::BlendMode::ColorDodge => cairo::Operator::ColorDodge,
+        strata_style::types::BlendMode::ColorBurn => cairo::Operator::ColorBurn,
+        strata_style::types::BlendMode::HardLight => cairo::Operator::HardLight,
+        strata_style::types::BlendMode::SoftLight => cairo::Operator::SoftLight,
+        strata_style::types::BlendMode::Difference => cairo::Operator::Difference,
+        strata_style::types::BlendMode::Exclusion => cairo::Operator::Exclusion,
+        strata_style::types::BlendMode::Hue => cairo::Operator::HslHue,
+        strata_style::types::BlendMode::Saturation => cairo::Operator::HslSaturation,
+        strata_style::types::BlendMode::Color => cairo::Operator::HslColor,
+        strata_style::types::BlendMode::Luminosity => cairo::Operator::HslLuminosity,
+    }
+}
+
 /// Executes a Strata DisplayList into a Cairo graphics context with full typography and vector support.
 pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
+    let mut current_clip = cr.clip_extents().unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
+    let mut operator_stack: Vec<cairo::Operator> = Vec::new();
+
     for cmd in list.commands() {
+        if !cmd.is_clip() {
+            let (cx1, cy1, cx2, cy2) = current_clip;
+            if let Some(b) = cmd.bounds() {
+                let bx1 = b.x as f64;
+                let by1 = b.y as f64;
+                let bx2 = (b.x + b.width) as f64;
+                let by2 = (b.y + b.height) as f64;
+                if bx2 < cx1 || bx1 > cx2 || by2 < cy1 || by1 > cy2 {
+                    continue;
+                }
+            }
+        }
         match cmd {
             DrawCommand::DrawRect { bounds, color } => {
                 cr.set_source_rgba(
@@ -494,6 +739,37 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                         let _ = cr.stroke();
                     }
                 }
+            }
+            DrawCommand::DrawShadow { bounds, shadow } => {
+                cairo_draw_shadow(cr, bounds, shadow);
+            }
+            DrawCommand::DrawInsetShadow { bounds, shadow, border_radius } => {
+                cairo_draw_inset_shadow(cr, bounds, shadow, *border_radius);
+            }
+            DrawCommand::DrawLinearGradient { bounds, angle_deg, stops, border_radius } => {
+                cairo_draw_linear_gradient(cr, bounds, *angle_deg, stops, *border_radius);
+            }
+            DrawCommand::DrawRadialGradient { bounds, center, stops, border_radius } => {
+                cairo_draw_radial_gradient(cr, bounds, *center, stops, *border_radius);
+            }
+            DrawCommand::PushBackdropFilter { bounds, radius, filter } => {
+                let _ = cr.save();
+                cairo_rounded_rect(
+                    cr,
+                    bounds.x as f64,
+                    bounds.y as f64,
+                    bounds.width as f64,
+                    bounds.height as f64,
+                    radius.top_left as f64,
+                );
+                cr.clip();
+                if filter.operations.iter().any(|op| matches!(op, strata_style::effects::FilterOp::Blur(_))) {
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.04);
+                    let _ = cr.paint();
+                }
+            }
+            DrawCommand::PopBackdropFilter => {
+                let _ = cr.restore();
             }
             DrawCommand::DrawBorder {
                 bounds,
@@ -559,31 +835,173 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
             }
             DrawCommand::DrawText {
                 origin,
+                bounds_width,
+                bounds_height,
+                text_align,
                 text,
                 font_size,
                 line_height,
                 font_weight,
                 color,
+                is_monospace,
             } => {
-                let weight = match font_weight {
-                    FontWeight::Bold
-                    | FontWeight::ExtraBold
-                    | FontWeight::Black
-                    | FontWeight::SemiBold => cairo::FontWeight::Bold,
-                    _ => cairo::FontWeight::Normal,
+                let layout = pangocairo::functions::create_layout(cr);
+                let mut font_desc = pango::FontDescription::new();
+                if *is_monospace {
+                    font_desc.set_family(MONO_FONT_FAMILY);
+                } else {
+                    font_desc.set_family(SANS_FONT_FAMILY);
+                }
+                font_desc.set_absolute_size(*font_size as f64 * pango::SCALE as f64);
+                let p_weight = match font_weight {
+                    FontWeight::Thin => pango::Weight::Thin,
+                    FontWeight::ExtraLight => pango::Weight::Ultralight,
+                    FontWeight::Light => pango::Weight::Light,
+                    FontWeight::Normal => pango::Weight::Normal,
+                    FontWeight::Medium => pango::Weight::Medium,
+                    FontWeight::SemiBold => pango::Weight::Semibold,
+                    FontWeight::Bold => pango::Weight::Bold,
+                    FontWeight::ExtraBold => pango::Weight::Ultrabold,
+                    FontWeight::Black => pango::Weight::Heavy,
                 };
-                cr.select_font_face("Open Sans", cairo::FontSlant::Normal, weight);
-                cr.set_font_size(*font_size as f64);
+                font_desc.set_weight(p_weight);
+                layout.set_font_description(Some(&font_desc));
+                layout.set_text(text);
+
+                if let Some(w) = bounds_width {
+                    let (unwrapped_w, _) = layout.size();
+                    let unwrapped_px = unwrapped_w as f32 / pango::SCALE as f32;
+                    if unwrapped_px > *w * 1.12 {
+                        layout.set_width((*w * pango::SCALE as f32) as i32);
+                        layout.set_wrap(pango::WrapMode::WordChar);
+                    } else if *text_align != strata_style::TextAlign::Left {
+                        layout.set_width((*w * pango::SCALE as f32) as i32);
+                    }
+                    match text_align {
+                        strata_style::TextAlign::Left => layout.set_alignment(pango::Alignment::Left),
+                        strata_style::TextAlign::Center => layout.set_alignment(pango::Alignment::Center),
+                        strata_style::TextAlign::Right => layout.set_alignment(pango::Alignment::Right),
+                        strata_style::TextAlign::Justify => layout.set_justify(true),
+                    }
+                }
+
                 cr.set_source_rgba(
                     color.r() as f64,
                     color.g() as f64,
                     color.b() as f64,
                     color.a() as f64,
                 );
-                let half_leading = (font_size * line_height - font_size).max(0.0) / 2.0;
-                let baseline_y = (origin.1 + half_leading + font_size * 0.85) as f64;
-                cr.move_to(origin.0 as f64, baseline_y);
-                let _ = cr.show_text(text);
+                let (_, pango_h) = layout.size();
+                let pango_h_px = pango_h as f64 / pango::SCALE as f64;
+                let target_h = bounds_height.unwrap_or(*font_size * *line_height).max(*font_size * *line_height) as f64;
+                let vert_offset = ((target_h - pango_h_px) / 2.0).max(0.0);
+                cr.move_to(origin.0 as f64, origin.1 as f64 + vert_offset);
+                pangocairo::functions::show_layout(cr, &layout);
+            }
+            DrawCommand::DrawTextFragments { fragments } => {
+                let clip_opt = cr.clip_extents().ok();
+                for frag in fragments {
+                    if frag.text.is_empty() && frag.style.background_color.is_none() {
+                        continue;
+                    }
+
+                    if let Some((cx1, cy1, cx2, cy2)) = clip_opt {
+                        let fx1 = (frag.bounds.x - 4.0) as f64;
+                        let fy1 = (frag.bounds.y - 2.0) as f64;
+                        let fx2 = (frag.bounds.x + frag.bounds.width + 4.0) as f64;
+                        let fy2 = (frag.bounds.y + frag.bounds.height + 2.0) as f64;
+                        if fx2 < cx1 || fx1 > cx2 || fy2 < cy1 || fy1 > cy2 {
+                            continue;
+                        }
+                    }
+
+                    // 1. Span background rectangle (e.g. <code> badge)
+                    if let Some(bg_color) = frag.style.background_color {
+                        cr.set_source_rgba(
+                            bg_color.r() as f64,
+                            bg_color.g() as f64,
+                            bg_color.b() as f64,
+                            bg_color.a() as f64,
+                        );
+                        let bg_x = frag.bounds.x as f64 - 2.0;
+                        let bg_y = frag.bounds.y as f64 - 1.0;
+                        let bg_w = frag.bounds.width as f64 + 4.0;
+                        let bg_h = frag.bounds.height as f64 + 2.0;
+                        cairo_rounded_rect(cr, bg_x, bg_y, bg_w, bg_h, 3.0);
+                        let _ = cr.fill();
+                    }
+
+                    // 2. Fragment text rendering with exact font weight and style
+                    if !frag.text.is_empty() {
+                        let layout = pangocairo::functions::create_layout(cr);
+                        let mut font_desc = pango::FontDescription::new();
+                        if frag.style.is_monospace {
+                            font_desc.set_family(MONO_FONT_FAMILY);
+                        } else {
+                            font_desc.set_family(SANS_FONT_FAMILY);
+                        }
+                        font_desc.set_absolute_size(frag.style.font_size as f64 * pango::SCALE as f64);
+
+                        let p_weight = match frag.style.font_weight {
+                            FontWeight::Thin => pango::Weight::Thin,
+                            FontWeight::ExtraLight => pango::Weight::Ultralight,
+                            FontWeight::Light => pango::Weight::Light,
+                            FontWeight::Normal => pango::Weight::Normal,
+                            FontWeight::Medium => pango::Weight::Medium,
+                            FontWeight::SemiBold => pango::Weight::Semibold,
+                            FontWeight::Bold => pango::Weight::Bold,
+                            FontWeight::ExtraBold => pango::Weight::Ultrabold,
+                            FontWeight::Black => pango::Weight::Heavy,
+                        };
+                        font_desc.set_weight(p_weight);
+
+                        if frag.style.font_style == FontStyle::Italic {
+                            font_desc.set_style(pango::Style::Italic);
+                        } else if frag.style.font_style == FontStyle::Oblique {
+                            font_desc.set_style(pango::Style::Oblique);
+                        }
+
+                        layout.set_font_description(Some(&font_desc));
+                        layout.set_text(&frag.text);
+
+                        cr.set_source_rgba(
+                            frag.style.color.r() as f64,
+                            frag.style.color.g() as f64,
+                            frag.style.color.b() as f64,
+                            frag.style.color.a() as f64,
+                        );
+
+                        cr.move_to(frag.bounds.x as f64, frag.bounds.y as f64);
+                        pangocairo::functions::show_layout(cr, &layout);
+
+                        // 3. Text decorations (Underline, LineThrough)
+                        let pango_baseline = {
+                            let bl = layout.baseline() as f64 / pango::SCALE as f64;
+                            if bl > 0.0 {
+                                bl
+                            } else {
+                                frag.style.font_size as f64 * 0.82
+                            }
+                        };
+                        match frag.style.text_decoration {
+                            TextDecoration::Underline => {
+                                cr.set_line_width(1.0);
+                                let underline_y = (frag.bounds.y as f64 + pango_baseline + 1.5).round();
+                                cr.move_to(frag.bounds.x as f64, underline_y);
+                                cr.line_to((frag.bounds.x + frag.bounds.width) as f64, underline_y);
+                                let _ = cr.stroke();
+                            }
+                            TextDecoration::LineThrough => {
+                                cr.set_line_width(1.0);
+                                let strike_y = (frag.bounds.y as f64 + pango_baseline - (frag.style.font_size as f64 * 0.28)).round();
+                                cr.move_to(frag.bounds.x as f64, strike_y);
+                                cr.line_to((frag.bounds.x + frag.bounds.width) as f64, strike_y);
+                                let _ = cr.stroke();
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
             DrawCommand::DrawSvgPath {
                 bounds,
@@ -591,6 +1009,10 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                 stroke_color,
                 fill_color,
                 stroke_width,
+                stroke_linecap,
+                stroke_linejoin,
+                stroke_dasharray,
+                fill_rule,
                 view_box,
             } => {
                 if bounds.width > 0.0 && bounds.height > 0.0 && view_box.0 > 0.0 && view_box.1 > 0.0 {
@@ -601,6 +1023,10 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                     cr.scale(scale_x, scale_y);
 
                     cr.new_path();
+                    match fill_rule {
+                        FillRule::NonZero => cr.set_fill_rule(cairo::FillRule::Winding),
+                        FillRule::EvenOdd => cr.set_fill_rule(cairo::FillRule::EvenOdd),
+                    }
                     cairo_interpret_svg_path(cr, path_data);
 
                     if let Some(fill) = fill_color {
@@ -614,12 +1040,154 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                     if let Some(stroke) = stroke_color {
                         cr.set_source_rgba(stroke.r() as f64, stroke.g() as f64, stroke.b() as f64, stroke.a() as f64);
                         cr.set_line_width(*stroke_width as f64);
-                        cr.set_line_cap(cairo::LineCap::Round);
-                        cr.set_line_join(cairo::LineJoin::Round);
+
+                        match stroke_linecap {
+                            StrokeLineCap::Butt => cr.set_line_cap(cairo::LineCap::Butt),
+                            StrokeLineCap::Round => cr.set_line_cap(cairo::LineCap::Round),
+                            StrokeLineCap::Square => cr.set_line_cap(cairo::LineCap::Square),
+                        }
+
+                        match stroke_linejoin {
+                            StrokeLineJoin::Miter => cr.set_line_join(cairo::LineJoin::Miter),
+                            StrokeLineJoin::Round => cr.set_line_join(cairo::LineJoin::Round),
+                            StrokeLineJoin::Bevel => cr.set_line_join(cairo::LineJoin::Bevel),
+                        }
+
+                        if !stroke_dasharray.is_empty() {
+                            let dashes: Vec<f64> = stroke_dasharray.iter().map(|&d| d as f64).collect();
+                            cr.set_dash(&dashes, 0.0);
+                        } else {
+                            cr.set_dash(&[], 0.0);
+                        }
+
                         let _ = cr.stroke();
                     }
                     let _ = cr.restore();
                 }
+            }
+            DrawCommand::PushClip { bounds, radius } => {
+                let _ = cr.save();
+                if radius.top_left > 0.0 || radius.top_right > 0.0 || radius.bottom_left > 0.0 || radius.bottom_right > 0.0 {
+                    cairo_rounded_rect(
+                        cr,
+                        bounds.x as f64,
+                        bounds.y as f64,
+                        bounds.width as f64,
+                        bounds.height as f64,
+                        radius.top_left as f64,
+                    );
+                } else {
+                    cr.rectangle(
+                        bounds.x as f64,
+                        bounds.y as f64,
+                        bounds.width as f64,
+                        bounds.height as f64,
+                    );
+                }
+                cr.clip();
+                current_clip = cr.clip_extents().unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
+            }
+            DrawCommand::PopClip => {
+                let _ = cr.restore();
+                current_clip = cr.clip_extents().unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
+            }
+            DrawCommand::PushBlendMode { mode } => {
+                operator_stack.push(cr.operator());
+                cr.set_operator(blend_mode_to_cairo_operator(*mode));
+            }
+            DrawCommand::PopBlendMode => {
+                if let Some(op) = operator_stack.pop() {
+                    cr.set_operator(op);
+                }
+            }
+            DrawCommand::PushIsolation { isolate } => {
+                if *isolate {
+                    cr.push_group();
+                }
+            }
+            DrawCommand::PopIsolation => {
+                let _ = cr.pop_group_to_source();
+                let _ = cr.paint();
+            }
+            DrawCommand::PushFilter { .. } => {
+                cr.push_group();
+            }
+            DrawCommand::PopFilter => {
+                let _ = cr.pop_group_to_source();
+                let _ = cr.paint();
+            }
+            DrawCommand::PushClipPath { bounds, clip_path } => {
+                let _ = cr.save();
+                match clip_path {
+                    strata_style::effects::ClipPath::Inset { top, right, bottom, left, border_radius } => {
+                        let ix = bounds.x as f64 + *left as f64;
+                        let iy = bounds.y as f64 + *top as f64;
+                        let iw = (bounds.width as f64 - *left as f64 - *right as f64).max(0.0);
+                        let ih = (bounds.height as f64 - *top as f64 - *bottom as f64).max(0.0);
+                        cairo_rounded_rect(cr, ix, iy, iw, ih, *border_radius as f64);
+                        cr.clip();
+                    }
+                    strata_style::effects::ClipPath::Circle { radius, center_x, center_y } => {
+                        let cx = bounds.x as f64 + *center_x as f64;
+                        let cy = bounds.y as f64 + *center_y as f64;
+                        cr.arc(cx, cy, *radius as f64, 0.0, 2.0 * std::f64::consts::PI);
+                        cr.clip();
+                    }
+                    strata_style::effects::ClipPath::Ellipse { radius_x, radius_y, center_x, center_y } => {
+                        if *radius_x > 0.0 && *radius_y > 0.0 {
+                            let cx = bounds.x as f64 + *center_x as f64;
+                            let cy = bounds.y as f64 + *center_y as f64;
+                            let rx = *radius_x as f64;
+                            let ry = *radius_y as f64;
+                            let _ = cr.save();
+                            cr.translate(cx, cy);
+                            cr.scale(rx, ry);
+                            cr.arc(0.0, 0.0, 1.0, 0.0, 2.0 * std::f64::consts::PI);
+                            let _ = cr.restore();
+                            cr.clip();
+                        }
+                    }
+                    strata_style::effects::ClipPath::Polygon(vertices) => {
+                        if !vertices.is_empty() {
+                            cr.new_path();
+                            cr.move_to(bounds.x as f64 + vertices[0].x as f64, bounds.y as f64 + vertices[0].y as f64);
+                            for pt in &vertices[1..] {
+                                cr.line_to(bounds.x as f64 + pt.x as f64, bounds.y as f64 + pt.y as f64);
+                            }
+                            cr.close_path();
+                            cr.clip();
+                        }
+                    }
+                    strata_style::effects::ClipPath::Path(svg_path) => {
+                        let _ = cr.save();
+                        cr.translate(bounds.x as f64, bounds.y as f64);
+                        cairo_interpret_svg_path(cr, svg_path);
+                        let _ = cr.restore();
+                        cr.clip();
+                    }
+                    strata_style::effects::ClipPath::None => {}
+                }
+                current_clip = cr.clip_extents().unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
+            }
+            DrawCommand::PopClipPath => {
+                let _ = cr.restore();
+                current_clip = cr.clip_extents().unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
+            }
+            DrawCommand::PushTransform { matrix } => {
+                let _ = cr.save();
+                let m = matrix.m;
+                let cairo_mat = cairo::Matrix::new(
+                    m[0] as f64,
+                    m[1] as f64,
+                    m[4] as f64,
+                    m[5] as f64,
+                    m[12] as f64,
+                    m[13] as f64,
+                );
+                cr.transform(cairo_mat);
+            }
+            DrawCommand::PopTransform => {
+                let _ = cr.restore();
             }
             _ => {}
         }
@@ -649,6 +1217,8 @@ pub fn render_to_png(display_list: &DisplayList, width: i32, height: i32, path: 
 
 thread_local! {
     static CURRENT_GTK_WINDOW: std::cell::RefCell<Option<gtk::Window>> = const { std::cell::RefCell::new(None) };
+    static IS_MAXIMIZED_TRACKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static WINDOW_NORMAL_GEOMETRY: std::cell::Cell<(i32, i32, i32, i32)> = const { std::cell::Cell::new((100, 100, 1280, 800)) };
 }
 
 /// Minimizes the current native GTK desktop window.
@@ -662,28 +1232,137 @@ pub fn gtk_minimize() {
 }
 
 /// Toggles maximize / restore state on the current native GTK desktop window.
-pub fn gtk_toggle_maximize() {
+/// Returns true if the window is now maximized, false otherwise.
+pub fn gtk_toggle_maximize() -> bool {
     CURRENT_GTK_WINDOW.with(|w| {
         use gtk::prelude::*;
         if let Some(win) = w.borrow().as_ref() {
-            if win.is_maximized() {
+            let was_max = win.is_maximized() || IS_MAXIMIZED_TRACKER.with(|t| t.get());
+            let next_max = !was_max;
+            IS_MAXIMIZED_TRACKER.with(|t| t.set(next_max));
+            if was_max {
                 win.unmaximize();
+                let (gx, gy, gw, gh) = WINDOW_NORMAL_GEOMETRY.with(|g| g.get());
+                win.resize(gw, gh);
+                win.move_(gx, gy);
             } else {
+                let (wx, wy) = win.position();
+                let (ww, wh) = win.size();
+                WINDOW_NORMAL_GEOMETRY.with(|g| g.set((wx, wy, ww, wh)));
                 win.maximize();
+                if let Some(display) = gtk::gdk::Display::default() {
+                    if let Some(monitor) = display.primary_monitor() {
+                        let geom = monitor.geometry();
+                        win.move_(geom.x(), geom.y());
+                        win.resize(geom.width(), geom.height());
+                    }
+                }
             }
+            next_max
+        } else {
+            false
+        }
+    })
+}
+
+/// Returns true while the native GTK window is maximized.
+pub fn gtk_is_maximized() -> bool {
+    CURRENT_GTK_WINDOW.with(|w| {
+        use gtk::prelude::*;
+        w.borrow().as_ref().map(|win| win.is_maximized() || IS_MAXIMIZED_TRACKER.with(|t| t.get())).unwrap_or(false)
+    })
+}
+
+#[derive(Clone, Copy, Debug)]
+struct WindowDragState {
+    start_root_x: f64,
+    start_root_y: f64,
+    start_win_x: i32,
+    start_win_y: i32,
+    active: bool,
+}
+
+thread_local! {
+    /// Root-relative position, button and timestamp of the latest button press, as required by
+    /// `gtk_window_begin_move_drag`.
+    static LAST_PRESS: std::cell::Cell<(f64, f64, u32, u32)> = const { std::cell::Cell::new((0.0, 0.0, 1, 0)) };
+
+    /// Fallback window drag state for environments where the native window manager does not capture pointer grabs.
+    static DRAG_STATE: std::cell::Cell<Option<WindowDragState>> = const { std::cell::Cell::new(None) };
+
+    /// Active keyboard modifiers tracked from input events.
+    static CURRENT_MODIFIERS: std::cell::Cell<crate::events::Modifiers> = const {
+        std::cell::Cell::new(crate::events::Modifiers {
+            shift: false,
+            ctrl: false,
+            alt: false,
+            meta: false,
+        })
+    };
+}
+
+/// Returns the currently active keyboard modifier flags.
+pub fn gtk_current_modifiers() -> crate::events::Modifiers {
+    CURRENT_MODIFIERS.with(|m| m.get())
+}
+
+/// Starts a window-manager move for the current press. When the window is maximized it is first
+/// restored and repositioned so the pointer keeps its proportional place on the title strip.
+pub fn gtk_begin_window_drag(fraction_x: f32, local_y: f32) {
+    let (rx, ry, button, time) = LAST_PRESS.with(|p| p.get());
+    CURRENT_GTK_WINDOW.with(|w| {
+        use gtk::prelude::*;
+        if let Some(win) = w.borrow().as_ref() {
+            let is_max = win.is_maximized() || IS_MAXIMIZED_TRACKER.with(|t| t.get());
+            if is_max {
+                let (normal_w, normal_h) = {
+                    let (_, _, gw, gh) = WINDOW_NORMAL_GEOMETRY.with(|g| g.get());
+                    let (dw, dh) = win.default_size();
+                    (if dw > 0 { dw } else { gw }, if dh > 0 { dh } else { gh })
+                };
+                win.unmaximize();
+                IS_MAXIMIZED_TRACKER.with(|t| t.set(false));
+                win.resize(normal_w, normal_h);
+                let new_x = (rx - fraction_x as f64 * normal_w as f64) as i32;
+                let new_y = (ry - local_y as f64) as i32;
+                win.move_(new_x, new_y.max(0));
+            }
+            // Request native window manager interactive movement drag
+            win.begin_move_drag(button as i32, rx as i32, ry as i32, time);
+
+            // Record drag state for manual motion fallback if WM does not grab
+            let (wx, wy) = win.position();
+            DRAG_STATE.with(|d| {
+                d.set(Some(WindowDragState {
+                    start_root_x: rx,
+                    start_root_y: ry,
+                    start_win_x: wx,
+                    start_win_y: wy,
+                    active: true,
+                }));
+            });
         }
     });
 }
 
-/// Closes the current native GTK desktop window.
+thread_local! {
+    static IS_CLOSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Returns true if the native GTK window is in the process of closing.
+pub fn gtk_is_closing() -> bool {
+    IS_CLOSING.with(|c| c.get())
+}
+
+/// Closes the current native GTK desktop window immediately.
 pub fn gtk_close() {
+    IS_CLOSING.with(|c| c.set(true));
     CURRENT_GTK_WINDOW.with(|w| {
         use gtk::prelude::*;
         if let Some(win) = w.borrow().as_ref() {
             win.close();
-        } else {
-            gtk::main_quit();
         }
+        gtk::main_quit();
     });
 }
 
@@ -697,6 +1376,84 @@ pub fn gtk_get_clipboard_text() -> Option<String> {
 pub fn gtk_set_clipboard_text(text: &str) {
     let clip = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
     clip.set_text(text);
+}
+
+thread_local! {
+    static CURRENT_CURSOR: std::cell::Cell<Option<crate::window::CursorIcon>> = const { std::cell::Cell::new(None) };
+}
+
+/// Sets the current mouse cursor icon on the active native GTK window.
+pub fn gtk_set_cursor(cursor_icon: crate::window::CursorIcon) {
+    if CURRENT_CURSOR.with(|c| c.get()) == Some(cursor_icon) {
+        return;
+    }
+
+    CURRENT_GTK_WINDOW.with(|w| {
+        use gtk::prelude::*;
+        if let Some(win) = w.borrow().as_ref() {
+            if let Some(gdk_win) = win.window() {
+                let display = win.display();
+                let cursor = match cursor_icon {
+                    crate::window::CursorIcon::Pointer => {
+                        gtk::gdk::Cursor::from_name(&display, "pointer")
+                            .or_else(|| gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::Hand2))
+                    }
+                    crate::window::CursorIcon::Text => {
+                        gtk::gdk::Cursor::from_name(&display, "text")
+                            .or_else(|| gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::Xterm))
+                    }
+                    crate::window::CursorIcon::Crosshair => {
+                        gtk::gdk::Cursor::from_name(&display, "crosshair")
+                            .or_else(|| gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::Crosshair))
+                    }
+                    crate::window::CursorIcon::Move => {
+                        gtk::gdk::Cursor::from_name(&display, "move")
+                            .or_else(|| gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::Fleur))
+                    }
+                    crate::window::CursorIcon::NotAllowed => {
+                        gtk::gdk::Cursor::from_name(&display, "not-allowed")
+                            .or_else(|| gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::Circle))
+                    }
+                    crate::window::CursorIcon::Wait => {
+                        gtk::gdk::Cursor::from_name(&display, "wait")
+                            .or_else(|| gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::Watch))
+                    }
+                    crate::window::CursorIcon::Grab => {
+                        gtk::gdk::Cursor::from_name(&display, "grab")
+                            .or_else(|| gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::Hand1))
+                    }
+                    crate::window::CursorIcon::Grabbing => {
+                        gtk::gdk::Cursor::from_name(&display, "grabbing")
+                            .or_else(|| gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::Hand1))
+                    }
+                    crate::window::CursorIcon::ColResize => {
+                        gtk::gdk::Cursor::from_name(&display, "col-resize")
+                            .or_else(|| gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::SbHDoubleArrow))
+                    }
+                    crate::window::CursorIcon::RowResize => {
+                        gtk::gdk::Cursor::from_name(&display, "row-resize")
+                            .or_else(|| gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::SbVDoubleArrow))
+                    }
+                    crate::window::CursorIcon::Help => {
+                        gtk::gdk::Cursor::from_name(&display, "help")
+                            .or_else(|| gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::QuestionArrow))
+                    }
+                    crate::window::CursorIcon::None => {
+                        gtk::gdk::Cursor::from_name(&display, "none")
+                            .or_else(|| gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::BlankCursor))
+                    }
+                    crate::window::CursorIcon::Default => {
+                        gtk::gdk::Cursor::from_name(&display, "default")
+                            .or_else(|| gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::LeftPtr))
+                    }
+                    _ => gtk::gdk::Cursor::from_name(&display, "default")
+                        .or_else(|| gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::LeftPtr)),
+                };
+                gdk_win.set_cursor(cursor.as_ref());
+                CURRENT_CURSOR.with(|c| c.set(Some(cursor_icon)));
+            }
+        }
+    });
 }
 
 /// Launches a live native GTK3 desktop window with Cairo graphics presentation.
@@ -721,6 +1478,8 @@ where
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
     window.set_title(title);
     window.set_default_size(width as i32, height as i32);
+    window.set_size_request(width as i32, height as i32);
+    window.resize(width as i32, height as i32);
     window.set_decorated(decorated);
 
     CURRENT_GTK_WINDOW.with(|w| {
@@ -733,9 +1492,16 @@ where
             | gtk::gdk::EventMask::BUTTON_RELEASE_MASK
             | gtk::gdk::EventMask::POINTER_MOTION_MASK
             | gtk::gdk::EventMask::KEY_PRESS_MASK
-            | gtk::gdk::EventMask::STRUCTURE_MASK,
+            | gtk::gdk::EventMask::STRUCTURE_MASK
+            | gtk::gdk::EventMask::ENTER_NOTIFY_MASK
+            | gtk::gdk::EventMask::LEAVE_NOTIFY_MASK
+            | gtk::gdk::EventMask::SCROLL_MASK
+            | gtk::gdk::EventMask::SMOOTH_SCROLL_MASK,
     );
     drawing_area.set_can_focus(true);
+    drawing_area.set_hexpand(true);
+    drawing_area.set_vexpand(true);
+    drawing_area.set_size_request(width as i32, height as i32);
 
     let on_draw_rc = std::rc::Rc::new(std::cell::RefCell::new(on_draw));
     let on_draw_cb = on_draw_rc.clone();
@@ -752,6 +1518,19 @@ where
     let on_event_mouse = on_event_rc.clone();
     drawing_area.connect_button_press_event(move |widget, event| {
         let (x, y) = event.position();
+        let (root_x, root_y) = event.root();
+        LAST_PRESS.with(|p| p.set((root_x, root_y, event.button(), event.time())));
+
+        let state = event.state();
+        let modifiers = crate::events::Modifiers {
+            shift: state.contains(gtk::gdk::ModifierType::SHIFT_MASK),
+            ctrl: state.contains(gtk::gdk::ModifierType::CONTROL_MASK),
+            alt: state.contains(gtk::gdk::ModifierType::MOD1_MASK),
+            meta: state.contains(gtk::gdk::ModifierType::META_MASK)
+                || state.contains(gtk::gdk::ModifierType::SUPER_MASK),
+        };
+        CURRENT_MODIFIERS.with(|m| m.set(modifiers));
+
         let btn = match event.button() {
             1 => crate::events::MouseButton::Left,
             2 => crate::events::MouseButton::Middle,
@@ -759,13 +1538,159 @@ where
             b => crate::events::MouseButton::Other(b as u16),
         };
 
-        let plat_event = crate::events::PlatformEvent::MouseDown {
+        let plat_event = match event.event_type() {
+            gtk::gdk::EventType::DoubleButtonPress => crate::events::PlatformEvent::DoubleClick {
+                button: btn,
+                x: x as f32,
+                y: y as f32,
+            },
+            _ => crate::events::PlatformEvent::MouseDown {
+                button: btn,
+                x: x as f32,
+                y: y as f32,
+            },
+        };
+
+        if (on_event_mouse.borrow_mut())(&plat_event) {
+            widget.queue_draw();
+        }
+
+        gtk::glib::Propagation::Proceed
+    });
+
+    // Mouse button release handler
+    let on_event_release = on_event_rc.clone();
+    drawing_area.connect_button_release_event(move |widget, event| {
+        // Clear manual window drag state upon mouse release
+        DRAG_STATE.with(|d| d.set(None));
+
+        let (x, y) = event.position();
+        let state = event.state();
+        let modifiers = crate::events::Modifiers {
+            shift: state.contains(gtk::gdk::ModifierType::SHIFT_MASK),
+            ctrl: state.contains(gtk::gdk::ModifierType::CONTROL_MASK),
+            alt: state.contains(gtk::gdk::ModifierType::MOD1_MASK),
+            meta: state.contains(gtk::gdk::ModifierType::META_MASK)
+                || state.contains(gtk::gdk::ModifierType::SUPER_MASK),
+        };
+        CURRENT_MODIFIERS.with(|m| m.set(modifiers));
+
+        let btn = match event.button() {
+            1 => crate::events::MouseButton::Left,
+            2 => crate::events::MouseButton::Middle,
+            3 => crate::events::MouseButton::Right,
+            b => crate::events::MouseButton::Other(b as u16),
+        };
+
+        let plat_event = crate::events::PlatformEvent::MouseUp {
             button: btn,
             x: x as f32,
             y: y as f32,
         };
 
-        if (on_event_mouse.borrow_mut())(&plat_event) {
+        if (on_event_release.borrow_mut())(&plat_event) {
+            widget.queue_draw();
+        }
+
+        gtk::glib::Propagation::Proceed
+    });
+
+    // Pointer motion handler
+    let on_event_motion = on_event_rc.clone();
+    drawing_area.connect_motion_notify_event(move |widget, event| {
+        let (x, y) = event.position();
+        let (root_x, root_y) = event.root();
+
+        let state = event.state();
+        let modifiers = crate::events::Modifiers {
+            shift: state.contains(gtk::gdk::ModifierType::SHIFT_MASK),
+            ctrl: state.contains(gtk::gdk::ModifierType::CONTROL_MASK),
+            alt: state.contains(gtk::gdk::ModifierType::MOD1_MASK),
+            meta: state.contains(gtk::gdk::ModifierType::META_MASK)
+                || state.contains(gtk::gdk::ModifierType::SUPER_MASK),
+        };
+        CURRENT_MODIFIERS.with(|m| m.set(modifiers));
+
+        // If manual window drag fallback is active, update window position
+        DRAG_STATE.with(|d| {
+            if let Some(ds) = d.get() {
+                if ds.active {
+                    CURRENT_GTK_WINDOW.with(|w| {
+                        use gtk::prelude::*;
+                        if let Some(win) = w.borrow().as_ref() {
+                            let dx = (root_x - ds.start_root_x) as i32;
+                            let dy = (root_y - ds.start_root_y) as i32;
+                            win.move_(ds.start_win_x + dx, (ds.start_win_y + dy).max(0));
+                        }
+                    });
+                }
+            }
+        });
+
+        if IS_CLOSING.with(|c| c.get()) {
+            return gtk::glib::Propagation::Proceed;
+        }
+
+        let plat_event = crate::events::PlatformEvent::MouseMove {
+            x: x as f32,
+            y: y as f32,
+        };
+
+        if (on_event_motion.borrow_mut())(&plat_event) {
+            widget.queue_draw();
+        }
+
+        gtk::glib::Propagation::Proceed
+    });
+
+    let on_event_leave = on_event_rc.clone();
+    drawing_area.connect_leave_notify_event(move |widget, _event| {
+        let plat_event = crate::events::PlatformEvent::CursorLeft;
+        if (on_event_leave.borrow_mut())(&plat_event) {
+            widget.queue_draw();
+        }
+        gtk::glib::Propagation::Proceed
+    });
+
+    let on_event_enter = on_event_rc.clone();
+    drawing_area.connect_enter_notify_event(move |widget, _event| {
+        let plat_event = crate::events::PlatformEvent::CursorEntered;
+        if (on_event_enter.borrow_mut())(&plat_event) {
+            widget.queue_draw();
+        }
+        gtk::glib::Propagation::Proceed
+    });
+
+    let on_event_scroll = on_event_rc.clone();
+    drawing_area.connect_scroll_event(move |widget, event| {
+        let (x, y) = event.position();
+        let (mut dx, mut dy) = (0.0f32, 0.0f32);
+        if let Some((smooth_dx, smooth_dy)) = event.scroll_deltas() {
+            dx = smooth_dx as f32 * 110.0;
+            dy = smooth_dy as f32 * 110.0;
+        } else {
+            match event.direction() {
+                gtk::gdk::ScrollDirection::Up => dy = -110.0,
+                gtk::gdk::ScrollDirection::Down => dy = 110.0,
+                gtk::gdk::ScrollDirection::Left => dx = -110.0,
+                gtk::gdk::ScrollDirection::Right => dx = 110.0,
+                _ => {}
+            }
+        }
+
+        let move_ev = crate::events::PlatformEvent::MouseMove {
+            x: x as f32,
+            y: y as f32,
+        };
+        let _ = (on_event_scroll.borrow_mut())(&move_ev);
+
+        let scroll_ev = crate::events::PlatformEvent::Scroll {
+            delta_x: dx,
+            delta_y: dy,
+            is_momentum: false,
+        };
+
+        if (on_event_scroll.borrow_mut())(&scroll_ev) {
             widget.queue_draw();
         }
 
@@ -883,7 +1808,35 @@ where
         gtk::glib::Propagation::Proceed
     });
 
+    // Maximize-state tracking so the UI can swap its maximize / restore affordance.
+    let on_event_state = on_event_rc.clone();
+    let da_state = drawing_area.clone();
+    window.connect_window_state_event(move |_widget, event| {
+        let maximized = event
+            .new_window_state()
+            .contains(gtk::gdk::WindowState::MAXIMIZED);
+        let changed = event
+            .changed_mask()
+            .contains(gtk::gdk::WindowState::MAXIMIZED);
+        if changed {
+            IS_MAXIMIZED_TRACKER.with(|t| t.set(maximized));
+            if let Ok(mut cb) = on_event_state.try_borrow_mut() {
+                let _ = cb(&crate::events::PlatformEvent::WindowMaximized(maximized));
+            }
+            da_state.queue_draw();
+        }
+        gtk::glib::Propagation::Proceed
+    });
+
+    window.connect_delete_event(|_, _| {
+        IS_CLOSING.with(|c| c.set(true));
+        gtk::main_quit();
+        gtk::glib::Propagation::Proceed
+    });
+
     window.connect_destroy(|_| {
+        IS_CLOSING.with(|c| c.set(true));
+        IS_MAXIMIZED_TRACKER.with(|t| t.set(false));
         CURRENT_GTK_WINDOW.with(|w| {
             *w.borrow_mut() = None;
         });
@@ -893,8 +1846,78 @@ where
     window.add(&drawing_area);
     window.show_all();
     drawing_area.grab_focus();
+    gtk_set_cursor(crate::window::CursorIcon::Default);
+
+    // Hardware VSync frame tick callback for smooth 120 FPS kinetic physics and animations
+    let on_event_tick = on_event_rc.clone();
+    drawing_area.add_tick_callback(move |widget, _frame_clock| {
+        let tick_ev = crate::events::PlatformEvent::AnimationTick;
+        if (on_event_tick.borrow_mut())(&tick_ev) {
+            widget.queue_draw();
+        }
+        gtk::glib::ControlFlow::Continue
+    });
 
     gtk::main();
 
     Ok(())
 }
+
+thread_local! {
+    static MEASURE_SURFACE_AND_CR: (cairo::ImageSurface, cairo::Context) = {
+        let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 1, 1)
+            .expect("failed to create cairo measurement surface");
+        let cr = cairo::Context::new(&surface)
+            .expect("failed to create cairo measurement context");
+        (surface, cr)
+    };
+}
+
+/// Shared proportional font family stack used by both measurement and rasterization.
+const SANS_FONT_FAMILY: &str = "Open Sans, DejaVu Sans, Noto Sans, system-ui, sans-serif";
+/// Shared monospace font family stack used by both measurement and rasterization.
+const MONO_FONT_FAMILY: &str = "JetBrains Mono, Fira Code, DejaVu Sans Mono, monospace";
+
+/// Measures exact text dimensions using Pango font metrics and system fallback fonts.
+pub fn pango_measure_text(
+    text: &str,
+    font_size: f32,
+    line_height_multiplier: f32,
+    max_width: Option<f32>,
+    is_monospace: bool,
+) -> (f32, f32) {
+    if text.is_empty() {
+        return (0.0, font_size * line_height_multiplier);
+    }
+
+    MEASURE_SURFACE_AND_CR.with(|(_, cr)| {
+        let layout = pangocairo::functions::create_layout(cr);
+        let mut font_desc = pango::FontDescription::new();
+        // Must match the family used by the DrawTextFragments rasterizer exactly,
+        // otherwise layout widths diverge from painted glyph widths.
+        if is_monospace {
+            font_desc.set_family(MONO_FONT_FAMILY);
+        } else {
+            font_desc.set_family(SANS_FONT_FAMILY);
+        }
+        font_desc.set_absolute_size(font_size as f64 * pango::SCALE as f64);
+        layout.set_font_description(Some(&font_desc));
+        layout.set_text(text);
+
+        if let Some(mw) = max_width {
+            layout.set_width((mw * pango::SCALE as f32) as i32);
+            layout.set_wrap(pango::WrapMode::WordChar);
+        }
+
+        let (p_w, p_h) = layout.size();
+        let measured_w = p_w as f32 / pango::SCALE as f32;
+        let measured_h = (p_h as f32 / pango::SCALE as f32).max(font_size * line_height_multiplier);
+        (measured_w, measured_h)
+    })
+}
+
+/// Initializes Pango text measurement hook into `strata_layout`.
+pub fn init_pango_text_measurement() {
+    strata_layout::text::register_text_measurer(pango_measure_text);
+}
+

@@ -12,6 +12,18 @@ pub enum MouseButton {
     Other(u16),
 }
 
+impl MouseButton {
+    /// Returns the standard W3C DOM button index: 0 for Left, 1 for Middle, 2 for Right, or custom.
+    pub fn to_button_index(&self) -> i16 {
+        match self {
+            MouseButton::Left => 0,
+            MouseButton::Middle => 1,
+            MouseButton::Right => 2,
+            MouseButton::Other(b) => *b as i16,
+        }
+    }
+}
+
 /// Keyboard key codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
@@ -52,14 +64,19 @@ pub enum PlatformEvent {
     WindowMoved { x: i32, y: i32 },
     WindowCloseRequested,
     WindowFocused(bool),
+    /// Emitted when the window enters or leaves the maximized state.
+    WindowMaximized(bool),
     ScaleFactorChanged { scale_factor: f32 },
     ThemeChanged(ThemeMode),
     RedrawRequested,
+    /// Periodic VSync display frame animation tick for physics and inertial kinetic scrolling.
+    AnimationTick,
 
     // Cursor / Mouse
     MouseMove { x: f32, y: f32 },
     MouseDown { button: MouseButton, x: f32, y: f32 },
     MouseUp { button: MouseButton, x: f32, y: f32 },
+    DoubleClick { button: MouseButton, x: f32, y: f32 },
     Scroll { delta_x: f32, delta_y: f32, is_momentum: bool },
     CursorEntered,
     CursorLeft,

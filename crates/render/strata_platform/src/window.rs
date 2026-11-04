@@ -57,6 +57,8 @@ pub enum CursorIcon {
     ResizeSw,
     ColResize,
     RowResize,
+    Help,
+    None,
 }
 
 /// Configuration used when creating or reconfiguring a platform window.

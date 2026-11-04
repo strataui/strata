@@ -308,16 +308,129 @@ impl FrameBuffer {
         }
     }
 
+    /// Applies CSS filter operations to the specified rectangle in the FrameBuffer.
+    pub fn apply_filter(&mut self, bounds: Rect, filter: &strata_style::effects::BackdropFilter) {
+        if filter.is_empty() {
+            return;
+        }
+        let (min_x, max_x, min_y, max_y) = self.compute_clamped_bounds(bounds, None);
+        if min_x >= max_x || min_y >= max_y {
+            return;
+        }
+
+        for op in &filter.operations {
+            match *op {
+                strata_style::effects::FilterOp::Brightness(factor) => {
+                    for y in min_y..max_y {
+                        let row_start = (y * self.width + min_x) * 4;
+                        let row_end = (y * self.width + max_x) * 4;
+                        for chunk in self.pixels[row_start..row_end].chunks_exact_mut(4) {
+                            chunk[0] = ((chunk[0] as f32 * factor).round() as u32).min(255) as u8;
+                            chunk[1] = ((chunk[1] as f32 * factor).round() as u32).min(255) as u8;
+                            chunk[2] = ((chunk[2] as f32 * factor).round() as u32).min(255) as u8;
+                        }
+                    }
+                }
+                strata_style::effects::FilterOp::Contrast(factor) => {
+                    for y in min_y..max_y {
+                        let row_start = (y * self.width + min_x) * 4;
+                        let row_end = (y * self.width + max_x) * 4;
+                        for chunk in self.pixels[row_start..row_end].chunks_exact_mut(4) {
+                            for c in 0..3 {
+                                let norm = chunk[c] as f32 / 255.0;
+                                let adjusted = ((norm - 0.5) * factor + 0.5).clamp(0.0, 1.0);
+                                chunk[c] = (adjusted * 255.0).round() as u8;
+                            }
+                        }
+                    }
+                }
+                strata_style::effects::FilterOp::Grayscale(amt) => {
+                    let amt = amt.clamp(0.0, 1.0);
+                    let inv = 1.0 - amt;
+                    for y in min_y..max_y {
+                        let row_start = (y * self.width + min_x) * 4;
+                        let row_end = (y * self.width + max_x) * 4;
+                        for chunk in self.pixels[row_start..row_end].chunks_exact_mut(4) {
+                            let r = chunk[0] as f32;
+                            let g = chunk[1] as f32;
+                            let b = chunk[2] as f32;
+                            let gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                            chunk[0] = (r * inv + gray * amt).round() as u8;
+                            chunk[1] = (g * inv + gray * amt).round() as u8;
+                            chunk[2] = (b * inv + gray * amt).round() as u8;
+                        }
+                    }
+                }
+                strata_style::effects::FilterOp::Invert(amt) => {
+                    let amt = amt.clamp(0.0, 1.0);
+                    let inv = 1.0 - amt;
+                    for y in min_y..max_y {
+                        let row_start = (y * self.width + min_x) * 4;
+                        let row_end = (y * self.width + max_x) * 4;
+                        for chunk in self.pixels[row_start..row_end].chunks_exact_mut(4) {
+                            chunk[0] = (chunk[0] as f32 * inv + (255 - chunk[0]) as f32 * amt).round() as u8;
+                            chunk[1] = (chunk[1] as f32 * inv + (255 - chunk[1]) as f32 * amt).round() as u8;
+                            chunk[2] = (chunk[2] as f32 * inv + (255 - chunk[2]) as f32 * amt).round() as u8;
+                        }
+                    }
+                }
+                strata_style::effects::FilterOp::Sepia(amt) => {
+                    let amt = amt.clamp(0.0, 1.0);
+                    let inv = 1.0 - amt;
+                    for y in min_y..max_y {
+                        let row_start = (y * self.width + min_x) * 4;
+                        let row_end = (y * self.width + max_x) * 4;
+                        for chunk in self.pixels[row_start..row_end].chunks_exact_mut(4) {
+                            let r = chunk[0] as f32;
+                            let g = chunk[1] as f32;
+                            let b = chunk[2] as f32;
+                            let sr = (0.393 * r + 0.769 * g + 0.189 * b).min(255.0);
+                            let sg = (0.349 * r + 0.686 * g + 0.168 * b).min(255.0);
+                            let sb = (0.272 * r + 0.534 * g + 0.131 * b).min(255.0);
+                            chunk[0] = (r * inv + sr * amt).round() as u8;
+                            chunk[1] = (g * inv + sg * amt).round() as u8;
+                            chunk[2] = (b * inv + sb * amt).round() as u8;
+                        }
+                    }
+                }
+                strata_style::effects::FilterOp::Opacity(amt) => {
+                    let amt = amt.clamp(0.0, 1.0);
+                    for y in min_y..max_y {
+                        let row_start = (y * self.width + min_x) * 4;
+                        let row_end = (y * self.width + max_x) * 4;
+                        for chunk in self.pixels[row_start..row_end].chunks_exact_mut(4) {
+                            chunk[3] = (chunk[3] as f32 * amt).round() as u8;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Executes an entire DisplayList onto this FrameBuffer.
     pub fn execute_display_list(&mut self, list: &DisplayList) {
         let mut clip_stack: Vec<Rect> = Vec::new();
+        let mut transform_stack: Vec<strata_primitives::geom::Matrix4x4> = Vec::new();
+        let mut filter_stack: Vec<(Rect, strata_style::effects::BackdropFilter)> = Vec::new();
 
         for cmd in list.commands() {
             let current_clip = clip_stack.last().copied();
 
+            let active_matrix = transform_stack.last();
+            let transform_rect_fn = |r: Rect| -> Rect {
+                if let Some(mat) = active_matrix {
+                    if !mat.is_identity() {
+                        let (x, y, w, h) = mat.transform_bounds(r.x, r.y, r.width, r.height);
+                        return Rect::new(x, y, w, h);
+                    }
+                }
+                r
+            };
+
             match cmd {
                 DrawCommand::DrawRect { bounds, color } => {
-                    self.draw_rect(*bounds, *color, current_clip);
+                    self.draw_rect(transform_rect_fn(*bounds), *color, current_clip);
                 }
                 DrawCommand::DrawRoundedRect {
                     bounds,
@@ -327,7 +440,7 @@ impl FrameBuffer {
                     border_color,
                 } => {
                     self.draw_rounded_rect(
-                        *bounds,
+                        transform_rect_fn(*bounds),
                         *color,
                         border_radius.top_left,
                         border_width.top,
@@ -336,7 +449,7 @@ impl FrameBuffer {
                     );
                 }
                 DrawCommand::DrawShadow { bounds, shadow } => {
-                    self.draw_shadow(*bounds, shadow, current_clip);
+                    self.draw_shadow(transform_rect_fn(*bounds), shadow, current_clip);
                 }
                 DrawCommand::DrawBorder {
                     bounds,
@@ -345,7 +458,7 @@ impl FrameBuffer {
                     border_radius,
                 } => {
                     self.draw_rounded_rect(
-                        *bounds,
+                        transform_rect_fn(*bounds),
                         Color::TRANSPARENT,
                         border_radius.top_left,
                         widths.top,
@@ -360,14 +473,56 @@ impl FrameBuffer {
                     color,
                     ..
                 } => {
-                    self.draw_text(*origin, text, *font_size, *color, current_clip);
+                    let pt = if let Some(m) = active_matrix {
+                        m.transform_point(origin.0, origin.1)
+                    } else {
+                        *origin
+                    };
+                    self.draw_text(pt, text, *font_size, *color, current_clip);
                 }
                 DrawCommand::DrawViewport3D { bounds, scene } => {
-                    crate::rasterizer3d::render_scene_3d(self, *bounds, scene, current_clip);
+                    crate::rasterizer3d::render_scene_3d(self, transform_rect_fn(*bounds), scene, current_clip);
                 }
                 DrawCommand::DrawCanvas2D { bounds, commands } => {
-                    crate::canvas2d::rasterize_canvas_commands(self, commands, bounds.x, bounds.y, current_clip);
+                    let tb = transform_rect_fn(*bounds);
+                    crate::canvas2d::rasterize_canvas_commands(self, commands, tb.x, tb.y, current_clip);
                 }
+                DrawCommand::DrawTextFragments { fragments } => {
+                    for frag in fragments {
+                        if !frag.text.is_empty() {
+                            let fb = transform_rect_fn(frag.bounds);
+                            self.draw_text((fb.x, fb.y), &frag.text, frag.style.font_size, frag.style.color, current_clip);
+                        }
+                    }
+                }
+                DrawCommand::DrawInsetShadow { bounds, shadow, .. } => {
+                    self.draw_shadow(transform_rect_fn(*bounds), shadow, current_clip);
+                }
+                DrawCommand::DrawLinearGradient { bounds, stops, border_radius, .. } => {
+                    if let Some(first) = stops.first() {
+                        self.draw_rounded_rect(transform_rect_fn(*bounds), first.color, border_radius.top_left, 0.0, None, current_clip);
+                    }
+                }
+                DrawCommand::DrawRadialGradient { bounds, stops, border_radius, .. } => {
+                    if let Some(first) = stops.first() {
+                        self.draw_rounded_rect(transform_rect_fn(*bounds), first.color, border_radius.top_left, 0.0, None, current_clip);
+                    }
+                }
+                DrawCommand::PushBackdropFilter { .. } | DrawCommand::PopBackdropFilter => {}
+                DrawCommand::PushFilter { bounds, filter } => {
+                    filter_stack.push((*bounds, filter.clone()));
+                }
+                DrawCommand::PopFilter => {
+                    if let Some((bounds, filter)) = filter_stack.pop() {
+                        self.apply_filter(transform_rect_fn(bounds), &filter);
+                    }
+                }
+                DrawCommand::PushClipPath { .. }
+                | DrawCommand::PopClipPath
+                | DrawCommand::PushBlendMode { .. }
+                | DrawCommand::PopBlendMode
+                | DrawCommand::PushIsolation { .. }
+                | DrawCommand::PopIsolation => {}
                 DrawCommand::DrawSvgPath { .. } => {}
                 DrawCommand::PushClip { bounds, .. } => {
                     let combined = match current_clip {
@@ -378,6 +533,16 @@ impl FrameBuffer {
                 }
                 DrawCommand::PopClip => {
                     clip_stack.pop();
+                }
+                DrawCommand::PushTransform { matrix } => {
+                    let combined = match transform_stack.last() {
+                        Some(prev) => prev.multiply(matrix),
+                        None => *matrix,
+                    };
+                    transform_stack.push(combined);
+                }
+                DrawCommand::PopTransform => {
+                    transform_stack.pop();
                 }
             }
         }
@@ -391,6 +556,8 @@ impl FrameBuffer {
         }
 
         let mut clip_stack: Vec<Rect> = Vec::new();
+        let mut transform_stack: Vec<strata_primitives::geom::Matrix4x4> = Vec::new();
+        let mut filter_stack: Vec<(Rect, strata_style::effects::BackdropFilter)> = Vec::new();
 
         for cmd in list.commands() {
             if let DrawCommand::PushClip { bounds, .. } = cmd {
@@ -403,6 +570,16 @@ impl FrameBuffer {
             } else if let DrawCommand::PopClip = cmd {
                 clip_stack.pop();
                 continue;
+            } else if let DrawCommand::PushTransform { matrix } = cmd {
+                let combined = match transform_stack.last() {
+                    Some(prev) => prev.multiply(matrix),
+                    None => *matrix,
+                };
+                transform_stack.push(combined);
+                continue;
+            } else if let DrawCommand::PopTransform = cmd {
+                transform_stack.pop();
+                continue;
             }
 
             let effective_clip = match clip_stack.last() {
@@ -413,7 +590,19 @@ impl FrameBuffer {
                 None => damage,
             };
 
-            if let Some(cmd_bounds) = cmd.bounds() {
+            let active_matrix = transform_stack.last();
+            let transform_rect_fn = |r: Rect| -> Rect {
+                if let Some(mat) = active_matrix {
+                    if !mat.is_identity() {
+                        let (x, y, w, h) = mat.transform_bounds(r.x, r.y, r.width, r.height);
+                        return Rect::new(x, y, w, h);
+                    }
+                }
+                r
+            };
+
+            let transformed_cmd_bounds = cmd.bounds().map(transform_rect_fn);
+            if let Some(cmd_bounds) = transformed_cmd_bounds {
                 if cmd_bounds.intersect(effective_clip).is_none() {
                     continue;
                 }
@@ -421,7 +610,7 @@ impl FrameBuffer {
 
             match cmd {
                 DrawCommand::DrawRect { bounds, color } => {
-                    self.draw_rect(*bounds, *color, Some(effective_clip));
+                    self.draw_rect(transform_rect_fn(*bounds), *color, Some(effective_clip));
                 }
                 DrawCommand::DrawRoundedRect {
                     bounds,
@@ -431,7 +620,7 @@ impl FrameBuffer {
                     border_color,
                 } => {
                     self.draw_rounded_rect(
-                        *bounds,
+                        transform_rect_fn(*bounds),
                         *color,
                         border_radius.top_left,
                         border_width.top,
@@ -440,7 +629,7 @@ impl FrameBuffer {
                     );
                 }
                 DrawCommand::DrawShadow { bounds, shadow } => {
-                    self.draw_shadow(*bounds, shadow, Some(effective_clip));
+                    self.draw_shadow(transform_rect_fn(*bounds), shadow, Some(effective_clip));
                 }
                 DrawCommand::DrawBorder {
                     bounds,
@@ -449,7 +638,7 @@ impl FrameBuffer {
                     border_radius,
                 } => {
                     self.draw_rounded_rect(
-                        *bounds,
+                        transform_rect_fn(*bounds),
                         Color::TRANSPARENT,
                         border_radius.top_left,
                         widths.top,
@@ -464,16 +653,61 @@ impl FrameBuffer {
                     color,
                     ..
                 } => {
-                    self.draw_text(*origin, text, *font_size, *color, Some(effective_clip));
+                    let (ox, oy) = if let Some(m) = active_matrix {
+                        m.transform_point(origin.0, origin.1)
+                    } else {
+                        *origin
+                    };
+                    self.draw_text((ox, oy), text, *font_size, *color, Some(effective_clip));
                 }
                 DrawCommand::DrawViewport3D { bounds, scene } => {
-                    crate::rasterizer3d::render_scene_3d(self, *bounds, scene, Some(effective_clip));
+                    crate::rasterizer3d::render_scene_3d(self, transform_rect_fn(*bounds), scene, Some(effective_clip));
                 }
                 DrawCommand::DrawCanvas2D { bounds, commands } => {
-                    crate::canvas2d::rasterize_canvas_commands(self, commands, bounds.x, bounds.y, Some(effective_clip));
+                    let tb = transform_rect_fn(*bounds);
+                    crate::canvas2d::rasterize_canvas_commands(self, commands, tb.x, tb.y, Some(effective_clip));
                 }
+                DrawCommand::DrawTextFragments { fragments } => {
+                    for frag in fragments {
+                        if !frag.text.is_empty() {
+                            let fb = transform_rect_fn(frag.bounds);
+                            self.draw_text((fb.x, fb.y), &frag.text, frag.style.font_size, frag.style.color, Some(effective_clip));
+                        }
+                    }
+                }
+                DrawCommand::DrawInsetShadow { bounds, shadow, .. } => {
+                    self.draw_shadow(transform_rect_fn(*bounds), shadow, Some(effective_clip));
+                }
+                DrawCommand::DrawLinearGradient { bounds, stops, border_radius, .. } => {
+                    if let Some(first) = stops.first() {
+                        self.draw_rounded_rect(transform_rect_fn(*bounds), first.color, border_radius.top_left, 0.0, None, Some(effective_clip));
+                    }
+                }
+                DrawCommand::DrawRadialGradient { bounds, stops, border_radius, .. } => {
+                    if let Some(first) = stops.first() {
+                        self.draw_rounded_rect(transform_rect_fn(*bounds), first.color, border_radius.top_left, 0.0, None, Some(effective_clip));
+                    }
+                }
+                DrawCommand::PushBackdropFilter { .. } | DrawCommand::PopBackdropFilter => {}
+                DrawCommand::PushFilter { bounds, filter } => {
+                    filter_stack.push((*bounds, filter.clone()));
+                }
+                DrawCommand::PopFilter => {
+                    if let Some((bounds, filter)) = filter_stack.pop() {
+                        self.apply_filter(transform_rect_fn(bounds), &filter);
+                    }
+                }
+                DrawCommand::PushClipPath { .. }
+                | DrawCommand::PopClipPath
+                | DrawCommand::PushBlendMode { .. }
+                | DrawCommand::PopBlendMode
+                | DrawCommand::PushIsolation { .. }
+                | DrawCommand::PopIsolation => {}
                 DrawCommand::DrawSvgPath { .. } => {}
-                DrawCommand::PushClip { .. } | DrawCommand::PopClip => unreachable!(),
+                DrawCommand::PushClip { .. }
+                | DrawCommand::PopClip
+                | DrawCommand::PushTransform { .. }
+                | DrawCommand::PopTransform => unreachable!(),
             }
         }
     }

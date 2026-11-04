@@ -34,11 +34,16 @@ pub use window::{
 pub use x11_window::{X11EventLoop, X11Window};
 #[cfg(target_os = "linux")]
 pub use gtk_window::{
-    cairo_rounded_rect, gtk_close, gtk_get_clipboard_text, gtk_minimize, gtk_set_clipboard_text,
-    gtk_toggle_maximize, launch_gtk_window, render_display_list_to_cairo, render_to_png,
+    cairo_rounded_rect, gtk_close, gtk_is_closing, gtk_get_clipboard_text, gtk_minimize, gtk_set_clipboard_text,
+    gtk_set_cursor, gtk_toggle_maximize, gtk_is_maximized, gtk_begin_window_drag, gtk_current_modifiers,
+    init_pango_text_measurement, launch_gtk_window, pango_measure_text, render_display_list_to_cairo, render_to_png,
 };
 #[cfg(target_os = "linux")]
 pub use cairo;
+#[cfg(target_os = "linux")]
+pub use gtk;
+#[cfg(target_os = "linux")]
+pub use pango;
 pub use window_manager::{WindowId, WindowManager};
 
 /// Target operating system or runtime platform.

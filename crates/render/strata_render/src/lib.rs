@@ -15,12 +15,17 @@ pub mod orbit_controls;
 pub mod shared_target;
 pub mod custom_shader;
 pub mod font;
+pub mod shm_compositor;
 
 // Re-exports
+pub use shm_compositor::{
+    CompositorTelemetry, ShmFrameSlot, ShmRingBuffer, SlotState, ZeroCopyCompositor,
+};
 pub use canvas2d::{
     rasterize_canvas_commands, Canvas2DContext, CanvasCommand, CanvasPathVerb, Transform2D,
 };
 pub use compositor::{Compositor, DamageTracker, DisplayList, DrawCommand};
+pub use strata_layout::{FillRule, StrokeLineCap, StrokeLineJoin, SvgItem};
 pub use custom_shader::{
     CustomShaderPipeline, FaceCullMode, GpuRenderCallback, GpuRenderContext, PrimitiveTopology,
     WgslShaderSource, WGSL_COMPUTE_TELEMETRY_SHADER, WGSL_PBR_3D_SHADER,
@@ -59,6 +64,7 @@ pub mod prelude {
     pub use crate::rasterizer::FrameBuffer;
     pub use crate::scene3d::*;
     pub use crate::shared_target::SharedRenderTarget;
+    pub use crate::shm_compositor::{CompositorTelemetry, ShmFrameSlot, ShmRingBuffer, ZeroCopyCompositor};
     pub use crate::swapchain::{
         PresentError, SoftwareSurfacePresenter, SurfacePresenter, SwapchainCompositor, SwapchainFormat,
     };

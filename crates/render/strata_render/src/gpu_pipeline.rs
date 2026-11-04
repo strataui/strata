@@ -303,6 +303,7 @@ impl GpuBatch {
     ) -> Self {
         let mut batch = Self::with_capacity(list.len());
         let mut clip_stack: Vec<Rect> = Vec::new();
+        let mut transform_stack: Vec<strata_primitives::geom::Matrix4x4> = Vec::new();
         let default_clip = damage.unwrap_or(Rect::new(0.0, 0.0, viewport_width, viewport_height));
 
         for cmd in list.commands() {
@@ -316,6 +317,16 @@ impl GpuBatch {
             } else if let DrawCommand::PopClip = cmd {
                 clip_stack.pop();
                 continue;
+            } else if let DrawCommand::PushTransform { matrix } = cmd {
+                let combined = match transform_stack.last() {
+                    Some(prev) => prev.multiply(matrix),
+                    None => *matrix,
+                };
+                transform_stack.push(combined);
+                continue;
+            } else if let DrawCommand::PopTransform = cmd {
+                transform_stack.pop();
+                continue;
             }
 
             let current_clip = match clip_stack.last() {
@@ -326,8 +337,20 @@ impl GpuBatch {
                 None => default_clip,
             };
 
+            let active_matrix = transform_stack.last();
+            let transform_rect_fn = |r: Rect| -> Rect {
+                if let Some(mat) = active_matrix {
+                    if !mat.is_identity() {
+                        let (x, y, w, h) = mat.transform_bounds(r.x, r.y, r.width, r.height);
+                        return Rect::new(x, y, w, h);
+                    }
+                }
+                r
+            };
+
             // Fast AABB intersection check
-            if let Some(cmd_bounds) = cmd.bounds() {
+            let transformed_bounds = cmd.bounds().map(transform_rect_fn);
+            if let Some(cmd_bounds) = transformed_bounds {
                 if cmd_bounds.intersect(current_clip).is_none() {
                     continue;
                 }
@@ -335,7 +358,7 @@ impl GpuBatch {
 
             match cmd {
                 DrawCommand::DrawRect { bounds, color } => {
-                    batch.push(GpuQuadInstance::from_rect(*bounds, *color, current_clip));
+                    batch.push(GpuQuadInstance::from_rect(transform_rect_fn(*bounds), *color, current_clip));
                 }
                 DrawCommand::DrawRoundedRect {
                     bounds,
@@ -345,7 +368,7 @@ impl GpuBatch {
                     border_color,
                 } => {
                     batch.push(GpuQuadInstance::from_rounded_rect(
-                        *bounds,
+                        transform_rect_fn(*bounds),
                         *color,
                         *border_radius,
                         *border_width,
@@ -360,7 +383,7 @@ impl GpuBatch {
                     border_radius,
                 } => {
                     batch.push(GpuQuadInstance::from_rounded_rect(
-                        *bounds,
+                        transform_rect_fn(*bounds),
                         Color::TRANSPARENT,
                         *border_radius,
                         *widths,
