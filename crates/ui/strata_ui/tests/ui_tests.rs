@@ -480,3 +480,60 @@ fn test_hybrid_3d_and_gpu_surface_components() {
         _ => panic!("Expected Element"),
     }
 }
+
+#[test]
+fn test_menu_and_dropdown_components() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let clicked = Rc::new(Cell::new(false));
+    let clicked_clone = clicked.clone();
+
+    let item = MenuItem(
+        "New Tab".to_string(),
+        Some(IconName::Plus),
+        Some("Ctrl+T".to_string()),
+        None,
+        None,
+        Some(Rc::new(move || {
+            clicked_clone.set(true);
+        })),
+    );
+
+    match &item.root {
+        NodeBlueprint::Element { tag, classes, .. } => {
+            assert_eq!(*tag, Tag::Button);
+            assert!(classes.iter().any(|c| c.contains("hover:bg-blue-600/30")));
+        }
+        _ => panic!("Expected Button Element"),
+    }
+
+    let menu = DropdownMenu(
+        true,
+        None,
+        vec![
+            item.root,
+            MenuSeparator().root,
+            MenuSectionHeader("Tools".to_string()).root,
+        ],
+    );
+
+    match &menu.root {
+        NodeBlueprint::Element { tag, children, .. } => {
+            assert_eq!(*tag, Tag::Div);
+            match &children[0] {
+                NodeBlueprint::Fragment(items) => assert_eq!(items.len(), 3),
+                _ => assert_eq!(children.len(), 3),
+            }
+        }
+        _ => panic!("Expected Div Element"),
+    }
+
+    let closed_menu = DropdownMenu(false, None, vec![]);
+    match &closed_menu.root {
+        NodeBlueprint::Element { classes, .. } => {
+            assert!(classes.iter().any(|c| c.contains("hidden")));
+        }
+        _ => panic!("Expected Div Element"),
+    }
+}
+

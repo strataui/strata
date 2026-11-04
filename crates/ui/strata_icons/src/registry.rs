@@ -48,6 +48,8 @@ pub enum IconName {
     MoreVertical,
     Maximize,
     Minimize,
+    Square,
+    WindowRestore,
 
     // Dev & Infrastructure
     Server,
@@ -197,8 +199,8 @@ pub fn lookup_icon(name: IconName) -> IconData {
         IconName::Sliders => IconData::new(name, "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"),
         IconName::Eye => IconData::new(name, "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 100 6 3 3 0 000-6z"),
         IconName::EyeOff => IconData::new(name, "M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24M1 1l22 22"),
-        IconName::Lock => IconData::new(name, "M19 11H5a2 2 0 00-2 2v7a2 2 0 002 2h14a2 2 0 002-2v-7a2 2 0 00-2-2zm-7 0V7a4 4 0 00-8 0v4"),
-        IconName::Unlock => IconData::new(name, "M19 11H5a2 2 0 00-2 2v7a2 2 0 002 2h14a2 2 0 002-2v-7a2 2 0 00-2-2zm-7 0V7a4 4 0 018 0v4"),
+        IconName::Lock => IconData::new(name, "M5 11h14a2 2 0 012 2v7a2 2 0 01-2 2H5a2 2 0 01-2-2v-7a2 2 0 012-2zM7 11V7a5 5 0 0110 0v4"),
+        IconName::Unlock => IconData::new(name, "M5 11h14a2 2 0 012 2v7a2 2 0 01-2 2H5a2 2 0 01-2-2v-7a2 2 0 012-2zM7 11V7a5 5 0 019.9-1"),
         IconName::Settings => IconData::new(name, "M12 15a3 3 0 100-6 3 3 0 000 6zm7.4 1.5a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"),
         IconName::RefreshCw => IconData::new(name, "M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"),
         IconName::RotateCw => IconData::new(name, "M23 4v6h-6M20.49 15a9 9 0 11-2.12-9.36L23 10"),
@@ -206,6 +208,8 @@ pub fn lookup_icon(name: IconName) -> IconData {
         IconName::MoreVertical => IconData::new(name, "M12 6a1 1 0 100-2 1 1 0 000 2zm0 7a1 1 0 100-2 1 1 0 000 2zm0 7a1 1 0 100-2 1 1 0 000 2z"),
         IconName::Maximize => IconData::new(name, "M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"),
         IconName::Minimize => IconData::new(name, "M4 14h6m0 0v6m0-6L3 21m17-7h-6m0 0v6m0-6l7 7M14 4h6m-6 0v6m6-6l-7 7M4 10h6m0 0V4m0 6L3 3"),
+        IconName::Square => IconData::new(name, "M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z"),
+        IconName::WindowRestore => IconData::new(name, "M9 5h10a2 2 0 012 2v10M5 9h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2z"),
 
         // Dev & Infrastructure
         IconName::Server => IconData::new(name, "M2 4h20v6H2zM2 14h20v6H2zM6 7h.01M6 17h.01"),
@@ -312,7 +316,7 @@ pub fn all_icons() -> &'static [IconName] {
         IconName::Upload, IconName::Share, IconName::Filter, IconName::Sliders, IconName::Eye,
         IconName::EyeOff, IconName::Lock, IconName::Unlock, IconName::Settings, IconName::RefreshCw,
         IconName::RotateCw, IconName::MoreHorizontal, IconName::MoreVertical, IconName::Maximize,
-        IconName::Minimize,
+        IconName::Minimize, IconName::Square, IconName::WindowRestore,
         IconName::Server, IconName::Cpu, IconName::HardDrive, IconName::Database, IconName::Network,
         IconName::Activity, IconName::Terminal, IconName::Code, IconName::GitBranch, IconName::GitCommit,
         IconName::GitPullRequest, IconName::Shield, IconName::ShieldCheck, IconName::Zap, IconName::Cloud,
