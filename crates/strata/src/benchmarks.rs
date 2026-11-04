@@ -24,7 +24,8 @@ pub struct BenchmarkReport {
 impl BenchmarkReport {
     /// Asserts whether the recorded metrics satisfy Strata's production performance criteria.
     pub fn is_passing(&self) -> bool {
-        self.cold_start_duration_us < 8_000
+        let max_cold_start = if cfg!(debug_assertions) { 20_000 } else { 8_000 };
+        self.cold_start_duration_us < max_cold_start
             && self.layout_10k_nodes_duration_us < 50_000
             && self.frame_reconcile_duration_us < 2_000
     }

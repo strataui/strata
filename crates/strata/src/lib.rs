@@ -68,14 +68,16 @@ pub use strata_editor as editor;
 pub mod runtime;
 pub mod benchmarks;
 pub mod low_level;
+pub mod view_transition;
 pub use runtime::{
     app, AppFrameInfo, AppLifecycleHooks, AppRuntime, launch, launch_headless, launch_window,
-    StrataApp, StrataAppBuilder,
+    StrataApp, StrataAppBuilder, EditCommand, queue_edit_command,
 };
+pub use view_transition::{ViewTransitionManager, ViewTransitionSnapshot};
 #[cfg(target_os = "linux")]
 pub use runtime::{launch_x11, launch_x11_with_events, launch_gtk, launch_gtk_with_events};
 #[cfg(target_os = "linux")]
-pub use strata_platform::{gtk_close, gtk_get_clipboard_text, gtk_minimize, gtk_set_clipboard_text, gtk_toggle_maximize};
+pub use strata_platform::{gtk_close, gtk_is_closing, gtk_get_clipboard_text, gtk_minimize, gtk_set_clipboard_text, gtk_toggle_maximize, gtk_is_maximized, gtk_begin_window_drag, gtk_current_modifiers};
 pub use benchmarks::{BenchmarkHarness, BenchmarkReport};
 pub use low_level::{LowLevelRenderer, OffscreenBuffer, RawSurfaceHandle};
 
@@ -83,8 +85,15 @@ pub mod prelude {
     pub use strata_dom;
     pub use strata_js;
     pub use strata_dom::{
-        use_effect, use_memo, use_signal, use_state, Attribute, Event, EventType, IntoNodeBlueprint,
-        NodeBlueprint, Signal, Tag, View,
+        clear_cursor_override, current_cursor, dispatch_click_outside, dispatch_global_keydown,
+        set_current_cursor, set_system_color_scheme, set_system_contrast, set_system_reduced_motion,
+        set_viewport_dimensions, use_active, use_click_outside, use_clipboard, use_color_scheme,
+        use_contrast, use_cursor, use_effect, use_focus, use_focus_within, use_hover,
+        use_keyboard_shortcut, use_media_query, use_memo, use_press, use_reduced_motion,
+        use_signal, use_state, Attribute, ClickOutsideHandle, ClipboardHandle, ColorScheme,
+        ContrastPreference, CursorIcon, Event, EventType, FocusHandlers, HoverHandlers,
+        IntoNodeBlueprint, KeyChord, NodeBlueprint, PressHandlers, ShortcutHandle, Signal, Tag,
+        View,
     };
     pub use strata_js::{
         json::{parse_json, stringify_json},
@@ -179,11 +188,11 @@ pub mod prelude {
 
     pub use crate::runtime::{
         app, AppFrameInfo, AppLifecycleHooks, AppRuntime, launch, launch_headless, launch_window,
-        StrataApp, StrataAppBuilder,
+        StrataApp, StrataAppBuilder, EditCommand, queue_edit_command,
     };
     #[cfg(target_os = "linux")]
     pub use crate::runtime::{launch_x11, launch_x11_with_events, launch_gtk, launch_gtk_with_events};
     #[cfg(target_os = "linux")]
-    pub use strata_platform::{gtk_close, gtk_get_clipboard_text, gtk_minimize, gtk_set_clipboard_text, gtk_toggle_maximize};
+    pub use strata_platform::{gtk_close, gtk_get_clipboard_text, gtk_minimize, gtk_set_clipboard_text, gtk_toggle_maximize, gtk_is_maximized, gtk_begin_window_drag};
     pub use crate::benchmarks::{BenchmarkHarness, BenchmarkReport};
 }
