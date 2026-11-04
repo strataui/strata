@@ -41,6 +41,27 @@ impl TailwindEngine {
         style
     }
 
+    /// Applies a single Tailwind class token evaluating pseudo-classes (`hover:`, `focus:`, `dark:`).
+    pub fn apply_class_with_state(
+        style: &mut ComputedStyle,
+        token: &str,
+        is_hovered: bool,
+        is_focused: bool,
+        is_dark_mode: bool,
+    ) {
+        let (modifier, class) = split_modifier(token);
+        let should_apply = match modifier {
+            None => true,
+            Some("hover") => is_hovered,
+            Some("focus") => is_focused,
+            Some("dark") => is_dark_mode,
+            Some(_) => false,
+        };
+        if should_apply {
+            Self::apply_class(style, class);
+        }
+    }
+
     /// Applies a single, non-modified Tailwind class to `ComputedStyle`.
     pub fn apply_class(style: &mut ComputedStyle, class: &str) {
         // 1. Display & Layout Mode
@@ -75,14 +96,123 @@ impl TailwindEngine {
                 style.display = Display::Inline;
                 return;
             }
+            "table" => {
+                style.display = Display::Table;
+                return;
+            }
+            "inline-table" => {
+                style.display = Display::InlineTable;
+                return;
+            }
+            "table-caption" => {
+                style.display = Display::TableCaption;
+                return;
+            }
+            "table-cell" => {
+                style.display = Display::TableCell;
+                return;
+            }
+            "table-column" => {
+                style.display = Display::TableColumn;
+                return;
+            }
+            "table-column-group" => {
+                style.display = Display::TableColumnGroup;
+                return;
+            }
+            "table-footer-group" => {
+                style.display = Display::TableFooterGroup;
+                return;
+            }
+            "table-header-group" => {
+                style.display = Display::TableHeaderGroup;
+                return;
+            }
+            "table-row-group" => {
+                style.display = Display::TableRowGroup;
+                return;
+            }
+            "table-row" => {
+                style.display = Display::TableRow;
+                return;
+            }
+            "table-auto" => {
+                style.table_layout = TableLayout::Auto;
+                return;
+            }
+            "table-fixed" => {
+                style.table_layout = TableLayout::Fixed;
+                return;
+            }
+            "border-collapse" => {
+                style.border_collapse = BorderCollapse::Collapse;
+                return;
+            }
+            "border-separate" => {
+                style.border_collapse = BorderCollapse::Separate;
+                return;
+            }
+            "caption-top" => {
+                style.caption_side = CaptionSide::Top;
+                return;
+            }
+            "caption-bottom" => {
+                style.caption_side = CaptionSide::Bottom;
+                return;
+            }
             "hidden" => {
                 style.display = Display::None;
+                return;
+            }
+            "content-auto" => {
+                style.content_visibility = ContentVisibility::Auto;
+                return;
+            }
+            "content-visible" => {
+                style.content_visibility = ContentVisibility::Visible;
+                return;
+            }
+            "content-hidden" => {
+                style.content_visibility = ContentVisibility::Hidden;
                 return;
             }
             _ => {}
         }
 
-        // 2. Flexbox Container & Item Props
+        // 2. Float and Clear Props
+        match class {
+            "float-left" => {
+                style.float = Float::Left;
+                return;
+            }
+            "float-right" => {
+                style.float = Float::Right;
+                return;
+            }
+            "float-none" => {
+                style.float = Float::None;
+                return;
+            }
+            "clear-left" => {
+                style.clear = Clear::Left;
+                return;
+            }
+            "clear-right" => {
+                style.clear = Clear::Right;
+                return;
+            }
+            "clear-both" => {
+                style.clear = Clear::Both;
+                return;
+            }
+            "clear-none" => {
+                style.clear = Clear::None;
+                return;
+            }
+            _ => {}
+        }
+
+        // 3. Flexbox Container & Item Props
         match class {
             "flex-row" => {
                 style.flex_direction = FlexDirection::Row;
@@ -217,12 +347,14 @@ impl TailwindEngine {
         if let Some(rest) = class.strip_prefix("col-span-") {
             if let Ok(span) = rest.parse::<u32>() {
                 style.grid_column_span = Some(span);
+                style.colspan = span;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("row-span-") {
             if let Ok(span) = rest.parse::<u32>() {
                 style.grid_row_span = Some(span);
+                style.rowspan = span;
                 return;
             }
         }
@@ -273,26 +405,66 @@ impl TailwindEngine {
             }
         }
 
+        if class == "m-auto" {
+            style.margin_auto_top = true;
+            style.margin_auto_right = true;
+            style.margin_auto_bottom = true;
+            style.margin_auto_left = true;
+            return;
+        }
+        if class == "mx-auto" {
+            style.margin_auto_left = true;
+            style.margin_auto_right = true;
+            return;
+        }
+        if class == "my-auto" {
+            style.margin_auto_top = true;
+            style.margin_auto_bottom = true;
+            return;
+        }
+        if class == "ml-auto" {
+            style.margin_auto_left = true;
+            return;
+        }
+        if class == "mr-auto" {
+            style.margin_auto_right = true;
+            return;
+        }
+        if class == "mt-auto" {
+            style.margin_auto_top = true;
+            return;
+        }
+        if class == "mb-auto" {
+            style.margin_auto_bottom = true;
+            return;
+        }
+
         if let Some(rest) = class.strip_prefix("m-") {
             if let Some(px) = resolve_spacing(rest) {
                 style.margin = EdgeInsets::all(px);
+                style.margin_auto_top = false;
+                style.margin_auto_right = false;
+                style.margin_auto_bottom = false;
+                style.margin_auto_left = false;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("-m-") {
             if let Some(px) = resolve_spacing(rest) {
                 style.margin = EdgeInsets::all(-px);
+                style.margin_auto_top = false;
+                style.margin_auto_right = false;
+                style.margin_auto_bottom = false;
+                style.margin_auto_left = false;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("mx-") {
-            if rest == "auto" {
-                // Auto margins handled in layout solver
-                return;
-            }
             if let Some(px) = resolve_spacing(rest) {
                 style.margin.left = px;
                 style.margin.right = px;
+                style.margin_auto_left = false;
+                style.margin_auto_right = false;
                 return;
             }
         }
@@ -300,30 +472,36 @@ impl TailwindEngine {
             if let Some(px) = resolve_spacing(rest) {
                 style.margin.top = px;
                 style.margin.bottom = px;
+                style.margin_auto_top = false;
+                style.margin_auto_bottom = false;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("mt-") {
             if let Some(px) = resolve_spacing(rest) {
                 style.margin.top = px;
+                style.margin_auto_top = false;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("mr-") {
             if let Some(px) = resolve_spacing(rest) {
                 style.margin.right = px;
+                style.margin_auto_right = false;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("mb-") {
             if let Some(px) = resolve_spacing(rest) {
                 style.margin.bottom = px;
+                style.margin_auto_bottom = false;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("ml-") {
             if let Some(px) = resolve_spacing(rest) {
                 style.margin.left = px;
+                style.margin_auto_left = false;
                 return;
             }
         }
@@ -343,6 +521,18 @@ impl TailwindEngine {
             }
         }
         if let Some(rest) = class.strip_prefix("gap-y-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.gap_row = px;
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("space-x-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.gap_col = px;
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("space-y-") {
             if let Some(px) = resolve_spacing(rest) {
                 style.gap_row = px;
                 return;
@@ -502,6 +692,18 @@ impl TailwindEngine {
                 style.line_height = 1.0;
                 return;
             }
+            "font-sans" => {
+                style.font_family = strata_primitives::AtomId::FONT_SANS;
+                return;
+            }
+            "font-serif" => {
+                style.font_family = strata_primitives::AtomId::FONT_SERIF;
+                return;
+            }
+            "font-mono" => {
+                style.font_family = strata_primitives::AtomId::FONT_MONO;
+                return;
+            }
             "font-thin" => {
                 style.font_weight = FontWeight::Thin;
                 return;
@@ -578,7 +780,107 @@ impl TailwindEngine {
                 style.line_height = 2.0;
                 return;
             }
+            "whitespace-normal" => {
+                style.white_space = WhiteSpace::Normal;
+                return;
+            }
+            "whitespace-nowrap" => {
+                style.white_space = WhiteSpace::NoWrap;
+                return;
+            }
+            "whitespace-pre" => {
+                style.white_space = WhiteSpace::Pre;
+                return;
+            }
+            "whitespace-pre-line" => {
+                style.white_space = WhiteSpace::PreLine;
+                return;
+            }
+            "whitespace-pre-wrap" => {
+                style.white_space = WhiteSpace::PreWrap;
+                return;
+            }
+            "truncate" => {
+                style.overflow_x = Overflow::Hidden;
+                style.overflow_y = Overflow::Hidden;
+                style.white_space = WhiteSpace::NoWrap;
+                style.text_overflow = TextOverflow::Ellipsis;
+                return;
+            }
+            "cursor-auto" | "cursor-default" => {
+                style.cursor = Cursor::Default;
+                return;
+            }
+            "cursor-pointer" => {
+                style.cursor = Cursor::Pointer;
+                return;
+            }
+            "cursor-text" => {
+                style.cursor = Cursor::Text;
+                return;
+            }
+            "cursor-move" => {
+                style.cursor = Cursor::Move;
+                return;
+            }
+            "cursor-not-allowed" => {
+                style.cursor = Cursor::NotAllowed;
+                return;
+            }
+            "cursor-grab" => {
+                style.cursor = Cursor::Grab;
+                return;
+            }
+            "cursor-grabbing" => {
+                style.cursor = Cursor::Grabbing;
+                return;
+            }
+            "cursor-col-resize" => {
+                style.cursor = Cursor::ColResize;
+                return;
+            }
+            "cursor-row-resize" => {
+                style.cursor = Cursor::RowResize;
+                return;
+            }
+            "cursor-crosshair" => {
+                style.cursor = Cursor::Crosshair;
+                return;
+            }
+            "cursor-wait" => {
+                style.cursor = Cursor::Wait;
+                return;
+            }
+            "cursor-help" => {
+                style.cursor = Cursor::Help;
+                return;
+            }
+            "cursor-none" => {
+                style.cursor = Cursor::None;
+                return;
+            }
             _ => {}
+        }
+
+        // Caret Color (CSS caret-color)
+        if let Some(rest) = class.strip_prefix("caret-") {
+            if rest == "auto" {
+                style.caret_color = None;
+                return;
+            }
+            if rest == "transparent" {
+                style.caret_color = Some(Color::rgba(0, 0, 0, 0));
+                return;
+            }
+            if rest == "current" || rest == "inherit" {
+                style.caret_color = Some(style.color);
+                return;
+            }
+            let (color_part, opacity) = split_opacity(rest);
+            if let Some(c) = lookup_color_or_arbitrary(color_part, opacity) {
+                style.caret_color = Some(c);
+                return;
+            }
         }
 
         // 8. Borders & Radii
@@ -673,6 +975,25 @@ impl TailwindEngine {
                     style.border_radius = BorderRadius::all(px);
                     return;
                 }
+            }
+        }
+
+        if let Some(rest) = class.strip_prefix("border-spacing-x-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.border_spacing.0 = px;
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("border-spacing-y-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.border_spacing.1 = px;
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("border-spacing-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.border_spacing = (px, px);
+                return;
             }
         }
 
@@ -772,6 +1093,36 @@ impl TailwindEngine {
                 style.insets = EdgeInsets::all(Dimension::Px(0.0));
                 return;
             }
+            "inset-auto" => {
+                style.insets = EdgeInsets::all(Dimension::Auto);
+                return;
+            }
+            "inset-x-auto" => {
+                style.insets.left = Dimension::Auto;
+                style.insets.right = Dimension::Auto;
+                return;
+            }
+            "inset-y-auto" => {
+                style.insets.top = Dimension::Auto;
+                style.insets.bottom = Dimension::Auto;
+                return;
+            }
+            "top-auto" => {
+                style.insets.top = Dimension::Auto;
+                return;
+            }
+            "bottom-auto" => {
+                style.insets.bottom = Dimension::Auto;
+                return;
+            }
+            "left-auto" => {
+                style.insets.left = Dimension::Auto;
+                return;
+            }
+            "right-auto" => {
+                style.insets.right = Dimension::Auto;
+                return;
+            }
             "overflow-hidden" => {
                 style.overflow_x = Overflow::Hidden;
                 style.overflow_y = Overflow::Hidden;
@@ -782,6 +1133,48 @@ impl TailwindEngine {
                 style.overflow_y = Overflow::Auto;
                 return;
             }
+            "overflow-scroll" => {
+                style.overflow_x = Overflow::Scroll;
+                style.overflow_y = Overflow::Scroll;
+                return;
+            }
+            "overflow-visible" => {
+                style.overflow_x = Overflow::Visible;
+                style.overflow_y = Overflow::Visible;
+                return;
+            }
+            "overflow-x-auto" => {
+                style.overflow_x = Overflow::Auto;
+                return;
+            }
+            "overflow-y-auto" => {
+                style.overflow_y = Overflow::Auto;
+                return;
+            }
+            "overflow-x-hidden" => {
+                style.overflow_x = Overflow::Hidden;
+                return;
+            }
+            "overflow-y-hidden" => {
+                style.overflow_y = Overflow::Hidden;
+                return;
+            }
+            "overflow-x-scroll" => {
+                style.overflow_x = Overflow::Scroll;
+                return;
+            }
+            "overflow-y-scroll" => {
+                style.overflow_y = Overflow::Scroll;
+                return;
+            }
+            "overflow-x-visible" => {
+                style.overflow_x = Overflow::Visible;
+                return;
+            }
+            "overflow-y-visible" => {
+                style.overflow_y = Overflow::Visible;
+                return;
+            }
             _ => {}
         }
         if let Some(rest) = class.strip_prefix("z-") {
@@ -789,8 +1182,64 @@ impl TailwindEngine {
                 style.z_index = None;
                 return;
             }
-            if let Ok(z) = rest.parse::<i32>() {
+            let num_str = if rest.starts_with('[') && rest.ends_with(']') {
+                &rest[1..rest.len() - 1]
+            } else {
+                rest
+            };
+            if let Ok(z) = num_str.parse::<i32>() {
                 style.z_index = Some(z);
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("-z-") {
+            let num_str = if rest.starts_with('[') && rest.ends_with(']') {
+                &rest[1..rest.len() - 1]
+            } else {
+                rest
+            };
+            if let Ok(z) = num_str.parse::<i32>() {
+                style.z_index = Some(-z);
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("inset-x-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.insets.left = Dimension::Px(px);
+                style.insets.right = Dimension::Px(px);
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("-inset-x-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.insets.left = Dimension::Px(-px);
+                style.insets.right = Dimension::Px(-px);
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("inset-y-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.insets.top = Dimension::Px(px);
+                style.insets.bottom = Dimension::Px(px);
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("-inset-y-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.insets.top = Dimension::Px(-px);
+                style.insets.bottom = Dimension::Px(-px);
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("inset-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.insets = EdgeInsets::all(Dimension::Px(px));
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("-inset-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.insets = EdgeInsets::all(Dimension::Px(-px));
                 return;
             }
         }
@@ -800,9 +1249,21 @@ impl TailwindEngine {
                 return;
             }
         }
+        if let Some(rest) = class.strip_prefix("-top-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.insets.top = Dimension::Px(-px);
+                return;
+            }
+        }
         if let Some(rest) = class.strip_prefix("left-") {
             if let Some(px) = resolve_spacing(rest) {
                 style.insets.left = Dimension::Px(px);
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("-left-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.insets.left = Dimension::Px(-px);
                 return;
             }
         }
@@ -812,16 +1273,811 @@ impl TailwindEngine {
                 return;
             }
         }
+        if let Some(rest) = class.strip_prefix("-right-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.insets.right = Dimension::Px(-px);
+                return;
+            }
+        }
         if let Some(rest) = class.strip_prefix("bottom-") {
             if let Some(px) = resolve_spacing(rest) {
                 style.insets.bottom = Dimension::Px(px);
                 return;
             }
         }
+        if let Some(rest) = class.strip_prefix("-bottom-") {
+            if let Some(px) = resolve_spacing(rest) {
+                style.insets.bottom = Dimension::Px(-px);
+                return;
+            }
+        }
+
+        // Transitions & Animations (Tailwind v3/v4)
+        if class == "transition" {
+            let default_easing = TransitionEasing::CubicBezier(0.4, 0.0, 0.2, 1.0);
+            style.transitions = vec![
+                TransitionSpec {
+                    property: TransitionProperty::Color,
+                    duration_ms: 150.0,
+                    timing_function: default_easing,
+                    delay_ms: 0.0,
+                    behavior: TransitionBehavior::Normal,
+                },
+                TransitionSpec {
+                    property: TransitionProperty::BackgroundColor,
+                    duration_ms: 150.0,
+                    timing_function: default_easing,
+                    delay_ms: 0.0,
+                    behavior: TransitionBehavior::Normal,
+                },
+                TransitionSpec {
+                    property: TransitionProperty::BorderColor,
+                    duration_ms: 150.0,
+                    timing_function: default_easing,
+                    delay_ms: 0.0,
+                    behavior: TransitionBehavior::Normal,
+                },
+                TransitionSpec {
+                    property: TransitionProperty::Opacity,
+                    duration_ms: 150.0,
+                    timing_function: default_easing,
+                    delay_ms: 0.0,
+                    behavior: TransitionBehavior::Normal,
+                },
+                TransitionSpec {
+                    property: TransitionProperty::BoxShadow,
+                    duration_ms: 150.0,
+                    timing_function: default_easing,
+                    delay_ms: 0.0,
+                    behavior: TransitionBehavior::Normal,
+                },
+                TransitionSpec {
+                    property: TransitionProperty::Transform,
+                    duration_ms: 150.0,
+                    timing_function: default_easing,
+                    delay_ms: 0.0,
+                    behavior: TransitionBehavior::Normal,
+                },
+            ];
+            return;
+        }
+        if class == "transition-all" {
+            style.transitions = vec![TransitionSpec {
+                property: TransitionProperty::All,
+                duration_ms: 150.0,
+                timing_function: TransitionEasing::CubicBezier(0.4, 0.0, 0.2, 1.0),
+                delay_ms: 0.0,
+                behavior: TransitionBehavior::Normal,
+            }];
+            return;
+        }
+        if class == "transition-colors" {
+            let default_easing = TransitionEasing::CubicBezier(0.4, 0.0, 0.2, 1.0);
+            style.transitions = vec![
+                TransitionSpec {
+                    property: TransitionProperty::Color,
+                    duration_ms: 150.0,
+                    timing_function: default_easing,
+                    delay_ms: 0.0,
+                    behavior: TransitionBehavior::Normal,
+                },
+                TransitionSpec {
+                    property: TransitionProperty::BackgroundColor,
+                    duration_ms: 150.0,
+                    timing_function: default_easing,
+                    delay_ms: 0.0,
+                    behavior: TransitionBehavior::Normal,
+                },
+                TransitionSpec {
+                    property: TransitionProperty::BorderColor,
+                    duration_ms: 150.0,
+                    timing_function: default_easing,
+                    delay_ms: 0.0,
+                    behavior: TransitionBehavior::Normal,
+                },
+            ];
+            return;
+        }
+        if class == "transition-opacity" {
+            style.transitions = vec![TransitionSpec {
+                property: TransitionProperty::Opacity,
+                duration_ms: 150.0,
+                timing_function: TransitionEasing::CubicBezier(0.4, 0.0, 0.2, 1.0),
+                delay_ms: 0.0,
+                behavior: TransitionBehavior::Normal,
+            }];
+            return;
+        }
+        if class == "transition-shadow" {
+            style.transitions = vec![TransitionSpec {
+                property: TransitionProperty::BoxShadow,
+                duration_ms: 150.0,
+                timing_function: TransitionEasing::CubicBezier(0.4, 0.0, 0.2, 1.0),
+                delay_ms: 0.0,
+                behavior: TransitionBehavior::Normal,
+            }];
+            return;
+        }
+        if class == "transition-transform" {
+            style.transitions = vec![TransitionSpec {
+                property: TransitionProperty::Transform,
+                duration_ms: 150.0,
+                timing_function: TransitionEasing::CubicBezier(0.4, 0.0, 0.2, 1.0),
+                delay_ms: 0.0,
+                behavior: TransitionBehavior::Normal,
+            }];
+            return;
+        }
+        if class == "transition-none" {
+            style.transitions = vec![TransitionSpec {
+                property: TransitionProperty::None,
+                duration_ms: 0.0,
+                ..Default::default()
+            }];
+            return;
+        }
+
+        if let Some(dur_str) = class.strip_prefix("duration-") {
+            let dur_ms = match dur_str {
+                "0" => Some(0.0),
+                "75" => Some(75.0),
+                "100" => Some(100.0),
+                "150" => Some(150.0),
+                "200" => Some(200.0),
+                "300" => Some(300.0),
+                "500" => Some(500.0),
+                "700" => Some(700.0),
+                "1000" => Some(1000.0),
+                custom => {
+                    let inner = custom.trim_start_matches('[').trim_end_matches(']');
+                    crate::parser::parse_time_ms(inner)
+                }
+            };
+            if let Some(d) = dur_ms {
+                if style.transitions.is_empty() {
+                    style.transitions = vec![TransitionSpec {
+                        duration_ms: d,
+                        ..Default::default()
+                    }];
+                } else {
+                    for spec in &mut style.transitions {
+                        spec.duration_ms = d;
+                    }
+                }
+                return;
+            }
+        }
+
+        if let Some(ease_str) = class.strip_prefix("ease-") {
+            let easing = match ease_str {
+                "linear" => Some(TransitionEasing::Linear),
+                "in" => Some(TransitionEasing::CubicBezier(0.4, 0.0, 1.0, 1.0)),
+                "out" => Some(TransitionEasing::CubicBezier(0.0, 0.0, 0.2, 1.0)),
+                "in-out" => Some(TransitionEasing::CubicBezier(0.4, 0.0, 0.2, 1.0)),
+                "initial" => Some(TransitionEasing::Ease),
+                custom => {
+                    let inner = custom.trim_start_matches('[').trim_end_matches(']');
+                    TransitionEasing::parse(inner)
+                }
+            };
+            if let Some(e) = easing {
+                if style.transitions.is_empty() {
+                    style.transitions = vec![TransitionSpec {
+                        timing_function: e,
+                        ..Default::default()
+                    }];
+                } else {
+                    for spec in &mut style.transitions {
+                        spec.timing_function = e;
+                    }
+                }
+                return;
+            }
+        }
+
+        if let Some(delay_str) = class.strip_prefix("delay-") {
+            let delay_ms = match delay_str {
+                "75" => Some(75.0),
+                "100" => Some(100.0),
+                "150" => Some(150.0),
+                "200" => Some(200.0),
+                "300" => Some(300.0),
+                "500" => Some(500.0),
+                "700" => Some(700.0),
+                "1000" => Some(1000.0),
+                custom => {
+                    let inner = custom.trim_start_matches('[').trim_end_matches(']');
+                    crate::parser::parse_time_ms(inner)
+                }
+            };
+            if let Some(del) = delay_ms {
+                if style.transitions.is_empty() {
+                    style.transitions = vec![TransitionSpec {
+                        delay_ms: del,
+                        ..Default::default()
+                    }];
+                } else {
+                    for spec in &mut style.transitions {
+                        spec.delay_ms = del;
+                    }
+                }
+                return;
+            }
+        }
+
+        // Animations (Tailwind v3/v4)
+        if class == "animate-none" {
+            style.animations.clear();
+            return;
+        }
+        if class == "animate-spin" {
+            style.animations = vec![AnimationSpec {
+                name: "spin".to_string(),
+                duration_ms: 1000.0,
+                timing_function: TransitionEasing::Linear,
+                delay_ms: 0.0,
+                iteration_count: AnimationIterationCount::Infinite,
+                direction: AnimationDirection::Normal,
+                fill_mode: AnimationFillMode::None,
+                play_state: AnimationPlayState::Running,
+                ..Default::default()
+            }];
+            return;
+        }
+        if class == "animate-ping" {
+            style.animations = vec![AnimationSpec {
+                name: "ping".to_string(),
+                duration_ms: 1000.0,
+                timing_function: TransitionEasing::CubicBezier(0.0, 0.0, 0.2, 1.0),
+                delay_ms: 0.0,
+                iteration_count: AnimationIterationCount::Infinite,
+                direction: AnimationDirection::Normal,
+                fill_mode: AnimationFillMode::None,
+                play_state: AnimationPlayState::Running,
+                ..Default::default()
+            }];
+            return;
+        }
+        if class == "animate-pulse" {
+            style.animations = vec![AnimationSpec {
+                name: "pulse".to_string(),
+                duration_ms: 2000.0,
+                timing_function: TransitionEasing::CubicBezier(0.4, 0.0, 0.6, 1.0),
+                delay_ms: 0.0,
+                iteration_count: AnimationIterationCount::Infinite,
+                direction: AnimationDirection::Normal,
+                fill_mode: AnimationFillMode::None,
+                play_state: AnimationPlayState::Running,
+                ..Default::default()
+            }];
+            return;
+        }
+        if class == "animate-bounce" {
+            style.animations = vec![AnimationSpec {
+                name: "bounce".to_string(),
+                duration_ms: 1000.0,
+                timing_function: TransitionEasing::Ease,
+                delay_ms: 0.0,
+                iteration_count: AnimationIterationCount::Infinite,
+                direction: AnimationDirection::Normal,
+                fill_mode: AnimationFillMode::None,
+                play_state: AnimationPlayState::Running,
+                ..Default::default()
+            }];
+            return;
+        }
+        if let Some(rest) = class.strip_prefix("animate-") {
+            if rest.starts_with('[') && rest.ends_with(']') {
+                let inner = &rest[1..rest.len() - 1];
+                let normalized = inner.replace('_', " ");
+                let parsed = crate::parser::parse_animations(&normalized);
+                if !parsed.is_empty() {
+                    style.animations = parsed;
+                    return;
+                }
+            } else {
+                style.animations = vec![AnimationSpec {
+                    name: rest.to_string(),
+                    duration_ms: 1000.0,
+                    timing_function: TransitionEasing::Ease,
+                    delay_ms: 0.0,
+                    iteration_count: AnimationIterationCount::Count(1.0),
+                    direction: AnimationDirection::Normal,
+                    fill_mode: AnimationFillMode::None,
+                    play_state: AnimationPlayState::Running,
+                    timeline: AnimationTimeline::Time,
+                    range: AnimationRange::default(),
+                }];
+                return;
+            }
+        }
+
+        // View Transitions Module Level 1 & 2
+        if class == "view-transition-none" {
+            style.view_transition_name = None;
+            return;
+        }
+        if let Some(rest) = class.strip_prefix("view-transition-") {
+            let name = if rest.starts_with('[') && rest.ends_with(']') {
+                &rest[1..rest.len() - 1]
+            } else {
+                rest
+            };
+            style.view_transition_name = Some(name.to_string());
+            return;
+        }
+
+        // Scroll-Driven Animation Timelines (W3C Level 1)
+        if class == "timeline-none" {
+            style.animation_timeline = AnimationTimeline::Named("none".to_string());
+            return;
+        }
+        if class == "timeline-scroll" {
+            style.animation_timeline = AnimationTimeline::Scroll(ScrollTimelineSource::Nearest, ScrollAxis::Block);
+            return;
+        }
+        if class == "timeline-scroll-root" {
+            style.animation_timeline = AnimationTimeline::Scroll(ScrollTimelineSource::Root, ScrollAxis::Block);
+            return;
+        }
+        if class == "timeline-scroll-inline" {
+            style.animation_timeline = AnimationTimeline::Scroll(ScrollTimelineSource::Nearest, ScrollAxis::Inline);
+            return;
+        }
+        if class == "timeline-view" {
+            style.animation_timeline = AnimationTimeline::View(ScrollAxis::Block, 0.0, 0.0);
+            return;
+        }
+        if let Some(rest) = class.strip_prefix("timeline-") {
+            let name = if rest.starts_with('[') && rest.ends_with(']') {
+                &rest[1..rest.len() - 1]
+            } else {
+                rest
+            };
+            style.animation_timeline = crate::parser::parse_animation_timeline(name);
+            return;
+        }
+
+        // Animation Range Anchors
+        if class == "range-cover" {
+            style.animation_range = AnimationRange {
+                name: AnimationRangeName::Cover,
+                start_offset: 0.0,
+                end_offset: 1.0,
+            };
+            return;
+        }
+        if class == "range-contain" {
+            style.animation_range = AnimationRange {
+                name: AnimationRangeName::Contain,
+                start_offset: 0.0,
+                end_offset: 1.0,
+            };
+            return;
+        }
+        if class == "range-entry" {
+            style.animation_range = AnimationRange {
+                name: AnimationRangeName::Entry,
+                start_offset: 0.0,
+                end_offset: 1.0,
+            };
+            return;
+        }
+        if class == "range-exit" {
+            style.animation_range = AnimationRange {
+                name: AnimationRangeName::Exit,
+                start_offset: 0.0,
+                end_offset: 1.0,
+            };
+            return;
+        }
+        if class == "range-normal" {
+            style.animation_range = AnimationRange::default();
+            return;
+        }
+
+        // 2D & 3D Transforms (Tailwind v3/v4)
+        if class.starts_with("scale-") {
+            let rest = &class[6..];
+            let factor = match rest {
+                "0" => Some(0.0),
+                "50" => Some(0.5),
+                "75" => Some(0.75),
+                "90" => Some(0.9),
+                "95" => Some(0.95),
+                "100" => Some(1.0),
+                "105" => Some(1.05),
+                "110" => Some(1.10),
+                "125" => Some(1.25),
+                "150" => Some(1.5),
+                custom => {
+                    let inner = custom.trim_start_matches('[').trim_end_matches(']');
+                    if let Some(pct) = inner.strip_suffix('%') {
+                        pct.parse::<f32>().map(|p| p / 100.0).ok()
+                    } else {
+                        inner.parse::<f32>().ok()
+                    }
+                }
+            };
+            if let Some(f) = factor {
+                style.transform.retain(|op| !matches!(op, TransformOp::Scale(_, _)));
+                style.transform.push(TransformOp::Scale(f, f));
+                return;
+            }
+        }
+
+        if let Some(rest) = class.strip_prefix("rotate-") {
+            let angle_rad = match rest {
+                "0" => Some(0.0),
+                "1" => Some(1.0f32.to_radians()),
+                "2" => Some(2.0f32.to_radians()),
+                "3" => Some(3.0f32.to_radians()),
+                "6" => Some(6.0f32.to_radians()),
+                "12" => Some(12.0f32.to_radians()),
+                "45" => Some(45.0f32.to_radians()),
+                "90" => Some(90.0f32.to_radians()),
+                "180" => Some(180.0f32.to_radians()),
+                custom => {
+                    let inner = custom.trim_start_matches('[').trim_end_matches(']');
+                    crate::parser::parse_angle_rad(inner)
+                }
+            };
+            if let Some(rad) = angle_rad {
+                style.transform.retain(|op| !matches!(op, TransformOp::Rotate(_)));
+                style.transform.push(TransformOp::Rotate(rad));
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("-rotate-") {
+            let angle_rad = match rest {
+                "1" => Some(-1.0f32.to_radians()),
+                "2" => Some(-2.0f32.to_radians()),
+                "3" => Some(-3.0f32.to_radians()),
+                "6" => Some(-6.0f32.to_radians()),
+                "12" => Some(-12.0f32.to_radians()),
+                "45" => Some(-45.0f32.to_radians()),
+                "90" => Some(-90.0f32.to_radians()),
+                "180" => Some(-180.0f32.to_radians()),
+                custom => {
+                    let inner = custom.trim_start_matches('[').trim_end_matches(']');
+                    crate::parser::parse_angle_rad(inner).map(|r| -r)
+                }
+            };
+            if let Some(rad) = angle_rad {
+                style.transform.retain(|op| !matches!(op, TransformOp::Rotate(_)));
+                style.transform.push(TransformOp::Rotate(rad));
+                return;
+            }
+        }
+
+        if let Some(rest) = class.strip_prefix("translate-x-") {
+            let dim = match rest {
+                "full" => Some(Dimension::Percent(100.0)),
+                "1/2" => Some(Dimension::Percent(50.0)),
+                "1/3" => Some(Dimension::Percent(33.333)),
+                "2/3" => Some(Dimension::Percent(66.666)),
+                "1/4" => Some(Dimension::Percent(25.0)),
+                "3/4" => Some(Dimension::Percent(75.0)),
+                other => resolve_sizing_dimension(other),
+            };
+            if let Some(d) = dim {
+                style.transform.push(TransformOp::Translate(d, Dimension::Px(0.0)));
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("-translate-x-") {
+            let dim = match rest {
+                "full" => Some(Dimension::Percent(-100.0)),
+                "1/2" => Some(Dimension::Percent(-50.0)),
+                "1/3" => Some(Dimension::Percent(-33.333)),
+                "2/3" => Some(Dimension::Percent(-66.666)),
+                "1/4" => Some(Dimension::Percent(-25.0)),
+                "3/4" => Some(Dimension::Percent(-75.0)),
+                other => resolve_spacing(other).map(|px| Dimension::Px(-px)),
+            };
+            if let Some(d) = dim {
+                style.transform.push(TransformOp::Translate(d, Dimension::Px(0.0)));
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("translate-y-") {
+            let dim = match rest {
+                "full" => Some(Dimension::Percent(100.0)),
+                "1/2" => Some(Dimension::Percent(50.0)),
+                "1/3" => Some(Dimension::Percent(33.333)),
+                "2/3" => Some(Dimension::Percent(66.666)),
+                "1/4" => Some(Dimension::Percent(25.0)),
+                "3/4" => Some(Dimension::Percent(75.0)),
+                other => resolve_sizing_dimension(other),
+            };
+            if let Some(d) = dim {
+                style.transform.push(TransformOp::Translate(Dimension::Px(0.0), d));
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("-translate-y-") {
+            let dim = match rest {
+                "full" => Some(Dimension::Percent(-100.0)),
+                "1/2" => Some(Dimension::Percent(-50.0)),
+                "1/3" => Some(Dimension::Percent(-33.333)),
+                "2/3" => Some(Dimension::Percent(-66.666)),
+                "1/4" => Some(Dimension::Percent(-25.0)),
+                "3/4" => Some(Dimension::Percent(-75.0)),
+                other => resolve_spacing(other).map(|px| Dimension::Px(-px)),
+            };
+            if let Some(d) = dim {
+                style.transform.push(TransformOp::Translate(Dimension::Px(0.0), d));
+                return;
+            }
+        }
+
+        if let Some(rest) = class.strip_prefix("origin-") {
+            let origin = match rest {
+                "center" => Some(TransformOrigin { x: Dimension::Percent(50.0), y: Dimension::Percent(50.0), z: 0.0 }),
+                "top" => Some(TransformOrigin { x: Dimension::Percent(50.0), y: Dimension::Percent(0.0), z: 0.0 }),
+                "top-right" => Some(TransformOrigin { x: Dimension::Percent(100.0), y: Dimension::Percent(0.0), z: 0.0 }),
+                "right" => Some(TransformOrigin { x: Dimension::Percent(100.0), y: Dimension::Percent(50.0), z: 0.0 }),
+                "bottom-right" => Some(TransformOrigin { x: Dimension::Percent(100.0), y: Dimension::Percent(100.0), z: 0.0 }),
+                "bottom" => Some(TransformOrigin { x: Dimension::Percent(50.0), y: Dimension::Percent(100.0), z: 0.0 }),
+                "bottom-left" => Some(TransformOrigin { x: Dimension::Percent(0.0), y: Dimension::Percent(100.0), z: 0.0 }),
+                "left" => Some(TransformOrigin { x: Dimension::Percent(0.0), y: Dimension::Percent(50.0), z: 0.0 }),
+                "top-left" => Some(TransformOrigin { x: Dimension::Percent(0.0), y: Dimension::Percent(0.0), z: 0.0 }),
+                _ => None,
+            };
+            if let Some(o) = origin {
+                style.transform_origin = o;
+                return;
+            }
+        }
+
+        // 7. Visual Effects: Blend modes, Isolation, Filters, and Backdrop Filters
+        if resolve_visual_effects(class, style) {
+            return;
+        }
     }
 }
 
-fn split_modifier(token: &str) -> (Option<&str>, &str) {
+fn resolve_visual_effects(class: &str, style: &mut ComputedStyle) -> bool {
+    // 1. Isolation
+    if class == "isolate" {
+        style.isolation = Isolation::Isolate;
+        return true;
+    }
+    if class == "isolation-auto" {
+        style.isolation = Isolation::Auto;
+        return true;
+    }
+
+    // 2. Mix Blend Modes
+    if let Some(rest) = class.strip_prefix("mix-blend-") {
+        if let Some(bm) = BlendMode::parse(rest) {
+            style.mix_blend_mode = bm;
+            return true;
+        } else if rest == "plus-lighter" {
+            style.mix_blend_mode = BlendMode::Lighten;
+            return true;
+        }
+    }
+
+    // 3. Filter enable / disable
+    if class == "filter-none" {
+        style.filter = None;
+        return true;
+    }
+    if class == "filter" {
+        if style.filter.is_none() {
+            style.filter = Some(crate::effects::BackdropFilter::new(Vec::new()));
+        }
+        return true;
+    }
+
+    // 4. Blur filters
+    if class == "blur-none" {
+        add_filter_op(&mut style.filter, crate::effects::FilterOp::Blur(0.0));
+        return true;
+    }
+    if class == "blur-sm" {
+        add_filter_op(&mut style.filter, crate::effects::FilterOp::Blur(4.0));
+        return true;
+    }
+    if class == "blur" {
+        add_filter_op(&mut style.filter, crate::effects::FilterOp::Blur(8.0));
+        return true;
+    }
+    if class == "blur-md" {
+        add_filter_op(&mut style.filter, crate::effects::FilterOp::Blur(12.0));
+        return true;
+    }
+    if class == "blur-lg" {
+        add_filter_op(&mut style.filter, crate::effects::FilterOp::Blur(16.0));
+        return true;
+    }
+    if class == "blur-xl" {
+        add_filter_op(&mut style.filter, crate::effects::FilterOp::Blur(24.0));
+        return true;
+    }
+    if class == "blur-2xl" {
+        add_filter_op(&mut style.filter, crate::effects::FilterOp::Blur(40.0));
+        return true;
+    }
+    if class == "blur-3xl" {
+        add_filter_op(&mut style.filter, crate::effects::FilterOp::Blur(64.0));
+        return true;
+    }
+    if let Some(rest) = class.strip_prefix("blur-[") {
+        if let Some(inner) = rest.strip_suffix(']') {
+            if let Some(px) = resolve_pixel_length(inner) {
+                add_filter_op(&mut style.filter, crate::effects::FilterOp::Blur(px));
+                return true;
+            }
+        }
+    }
+
+    // 5. Brightness filters
+    if let Some(rest) = class.strip_prefix("brightness-") {
+        let val = match rest {
+            "0" => Some(0.0),
+            "50" => Some(0.5),
+            "75" => Some(0.75),
+            "90" => Some(0.9),
+            "95" => Some(0.95),
+            "100" => Some(1.0),
+            "105" => Some(1.05),
+            "110" => Some(1.10),
+            "125" => Some(1.25),
+            "150" => Some(1.5),
+            "200" => Some(2.0),
+            other => {
+                if other.starts_with('[') && other.ends_with(']') {
+                    other[1..other.len() - 1].parse::<f32>().ok()
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(b) = val {
+            add_filter_op(&mut style.filter, crate::effects::FilterOp::Brightness(b));
+            return true;
+        }
+    }
+
+    // 6. Contrast filters
+    if let Some(rest) = class.strip_prefix("contrast-") {
+        let val = match rest {
+            "0" => Some(0.0),
+            "50" => Some(0.5),
+            "75" => Some(0.75),
+            "100" => Some(1.0),
+            "125" => Some(1.25),
+            "150" => Some(1.5),
+            "200" => Some(2.0),
+            other => {
+                if other.starts_with('[') && other.ends_with(']') {
+                    other[1..other.len() - 1].parse::<f32>().ok()
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(c) = val {
+            add_filter_op(&mut style.filter, crate::effects::FilterOp::Contrast(c));
+            return true;
+        }
+    }
+
+    // 7. Grayscale
+    if class == "grayscale" {
+        add_filter_op(&mut style.filter, crate::effects::FilterOp::Grayscale(1.0));
+        return true;
+    }
+    if class == "grayscale-0" {
+        add_filter_op(&mut style.filter, crate::effects::FilterOp::Grayscale(0.0));
+        return true;
+    }
+
+    // 8. Invert
+    if class == "invert" {
+        add_filter_op(&mut style.filter, crate::effects::FilterOp::Invert(1.0));
+        return true;
+    }
+    if class == "invert-0" {
+        add_filter_op(&mut style.filter, crate::effects::FilterOp::Invert(0.0));
+        return true;
+    }
+
+    // 9. Sepia
+    if class == "sepia" {
+        add_filter_op(&mut style.filter, crate::effects::FilterOp::Sepia(1.0));
+        return true;
+    }
+    if class == "sepia-0" {
+        add_filter_op(&mut style.filter, crate::effects::FilterOp::Sepia(0.0));
+        return true;
+    }
+
+    // 10. Backdrop filters
+    if class == "backdrop-filter-none" {
+        style.backdrop_filter = None;
+        return true;
+    }
+    if class == "backdrop-filter" {
+        if style.backdrop_filter.is_none() {
+            style.backdrop_filter = Some(crate::effects::BackdropFilter::new(Vec::new()));
+        }
+        return true;
+    }
+    if class == "backdrop-blur-none" {
+        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(0.0));
+        return true;
+    }
+    if class == "backdrop-blur-sm" {
+        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(4.0));
+        return true;
+    }
+    if class == "backdrop-blur" {
+        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(8.0));
+        return true;
+    }
+    if class == "backdrop-blur-md" {
+        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(12.0));
+        return true;
+    }
+    if class == "backdrop-blur-lg" {
+        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(16.0));
+        return true;
+    }
+    if class == "backdrop-blur-xl" {
+        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(24.0));
+        return true;
+    }
+    if class == "backdrop-blur-2xl" {
+        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(40.0));
+        return true;
+    }
+    if class == "backdrop-blur-3xl" {
+        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(64.0));
+        return true;
+    }
+    if let Some(rest) = class.strip_prefix("backdrop-blur-[") {
+        if let Some(inner) = rest.strip_suffix(']') {
+            if let Some(px) = resolve_pixel_length(inner) {
+                add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(px));
+                return true;
+            }
+        }
+    }
+
+    // 11. Arbitrary clip-path
+    if let Some(rest) = class.strip_prefix("clip-path-[") {
+        if let Some(inner) = rest.strip_suffix(']') {
+            let normalized = inner.replace('_', " ");
+            style.clip_path = crate::parser::parse_clip_path(&normalized);
+            return true;
+        }
+    }
+
+    false
+}
+
+fn add_filter_op(target: &mut Option<crate::effects::BackdropFilter>, op: crate::effects::FilterOp) {
+    if let Some(filter) = target.as_mut() {
+        filter.operations.push(op);
+    } else {
+        *target = Some(crate::effects::BackdropFilter::new(vec![op]));
+    }
+}
+
+fn resolve_pixel_length(val: &str) -> Option<f32> {
+    if let Some(px) = val.strip_suffix("px") {
+        px.trim().parse::<f32>().ok()
+    } else if let Some(rem) = val.strip_suffix("rem") {
+        rem.trim().parse::<f32>().map(|r| r * 16.0).ok()
+    } else {
+        val.trim().parse::<f32>().ok()
+    }
+}
+
+pub fn split_modifier(token: &str) -> (Option<&str>, &str) {
     if let Some((modifier, rest)) = token.split_once(':') {
         (Some(modifier), rest)
     } else {
@@ -909,6 +2165,9 @@ fn resolve_spacing(token: &str) -> Option<f32> {
 
 fn resolve_sizing_dimension(token: &str) -> Option<Dimension> {
     match token {
+        "full" => return Some(Dimension::Percent(100.0)),
+        "screen" => return Some(Dimension::Vh(100.0)),
+        "0" => return Some(Dimension::Px(0.0)),
         "xs" => return Some(Dimension::Px(320.0)),
         "sm" => return Some(Dimension::Px(384.0)),
         "md" => return Some(Dimension::Px(448.0)),

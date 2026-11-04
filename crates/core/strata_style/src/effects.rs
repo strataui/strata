@@ -21,7 +21,19 @@ pub enum FilterOp {
     Saturate(f32),
     /// Sepia toning fraction (0.0 = normal, 1.0 = full sepia).
     Sepia(f32),
+    /// Drop shadow filter operation with offsets, blur radius, and color.
+    DropShadow {
+        offset_x: f32,
+        offset_y: f32,
+        blur_radius: f32,
+        color: crate::types::Color,
+    },
+    /// Hue rotation in degrees.
+    HueRotate(f32),
 }
+
+/// Composite filter specification applied to an element or underneath it.
+pub type FilterList = BackdropFilter;
 
 /// Composite backdrop filter specification applied to pixels underneath the element.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -79,6 +91,41 @@ pub enum ClipPath {
 }
 
 impl ClipPath {
+    pub fn inset(top: f32, right: f32, bottom: f32, left: f32, border_radius: f32) -> Self {
+        Self::Inset {
+            top,
+            right,
+            bottom,
+            left,
+            border_radius,
+        }
+    }
+
+    pub fn circle(radius: f32, center_x: f32, center_y: f32) -> Self {
+        Self::Circle {
+            radius,
+            center_x,
+            center_y,
+        }
+    }
+
+    pub fn ellipse(radius_x: f32, radius_y: f32, center_x: f32, center_y: f32) -> Self {
+        Self::Ellipse {
+            radius_x,
+            radius_y,
+            center_x,
+            center_y,
+        }
+    }
+
+    pub fn polygon(vertices: Vec<Point<f32>>) -> Self {
+        Self::Polygon(vertices)
+    }
+
+    pub fn path(path_str: impl Into<String>) -> Self {
+        Self::Path(path_str.into())
+    }
+
     pub fn is_none(&self) -> bool {
         matches!(self, ClipPath::None)
     }
