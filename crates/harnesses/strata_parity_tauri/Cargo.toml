@@ -14,6 +14,7 @@ strata_layout = { workspace = true }
 strata_render = { workspace = true }
 strata_platform = { workspace = true }
 strata_mobile_test = { workspace = true }
+strata_web_reader = { workspace = true }
 tauri = { version = "2.1.1" }
 gtk = "0.18.2"
 cairo-rs = "0.18.5"

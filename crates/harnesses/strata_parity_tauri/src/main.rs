@@ -6,6 +6,7 @@ pub mod tauri_runner;
 pub mod diff;
 pub mod capture;
 pub mod raw_bench;
+pub mod chromium_parity;
 
 use std::env;
 use std::path::Path;
@@ -47,6 +48,76 @@ fn main() {
 
     if args.contains(&"--bench-damage".to_string()) {
         raw_bench::run_damage_benchmarks();
+        return;
+    }
+
+    if args.contains(&"--chromium-parity".to_string()) {
+        println!("=============================================================");
+        println!("  Strata vs Headless Chromium Maximized Viewport Parity      ");
+        println!("=============================================================");
+        let config = chromium_parity::ParityHarnessConfig::default();
+        let sample_html = r#"<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #09090b; color: #f4f4f5; font-family: sans-serif; padding: 48px; }
+  h1 { font-size: 32px; font-weight: 700; margin-bottom: 16px; border-bottom: 2px solid #27272a; padding-bottom: 8px; }
+  p { font-size: 16px; line-height: 1.6; margin-bottom: 24px; color: #a1a1aa; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 32px; }
+  th, td { border: 1px solid #27272a; padding: 12px 16px; text-align: left; }
+  th { background: #18181b; font-weight: 600; }
+  .card { background: #18181b; border: 1px solid #27272a; border-radius: 8px; padding: 24px; margin-bottom: 24px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Strata Maximized Web Viewport Engine</h1>
+    <p>This benchmark measures visual and layout parity between Strata pure-Rust layout engine and Chromium Blink LayoutNG.</p>
+    <table>
+      <thead>
+        <tr><th>Metric</th><th>Target</th><th>Engine</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>SSIM Score</td><td>&ge; 0.95</td><td>Strata vs Blink</td></tr>
+        <tr><td>Rendering Latency</td><td>&le; 16.6ms (60 FPS)</td><td>Zero-Chromium Native</td></tr>
+        <tr><td>Kinetic Scrolling</td><td>Critically Damped Harmonic</td><td>Smooth Wheel Physics</td></tr>
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>"#;
+        match chromium_parity::run_synchronized_parity_suite(sample_html, "viewport_parity", &config) {
+            Ok(results) => {
+                for r in results {
+                    println!("[Parity Result] {}x{} (y={:.0}): SSIM = {:.4}, Exact = {:.2}%, Perceptual = {:.2}%, Mean Delta E = {:.2}",
+                        r.width, r.height, r.scroll_y,
+                        r.metrics.ssim_score,
+                        r.metrics.exact_match_percentage,
+                        r.metrics.perceptual_match_percentage,
+                        r.metrics.mean_delta_e
+                    );
+                }
+            }
+            Err(e) => eprintln!("[!] Parity suite failed: {}", e),
+        }
+        return;
+    }
+
+    if args.contains(&"--scrolling-bench".to_string()) {
+        println!("=============================================================");
+        println!("  Strata Kinetic Wheel Scrolling & Telemetry Benchmark       ");
+        println!("=============================================================");
+        let sample_html = "<div style='height: 10000px;'><h1 style='padding: 24px;'>Long Document</h1></div>";
+        let scorecard_60hz = chromium_parity::run_synthetic_wheel_scroll_benchmark(sample_html, 1920, 1080, 60.0, 120);
+        let scorecard_120hz = chromium_parity::run_synthetic_wheel_scroll_benchmark(sample_html, 1920, 1080, 120.0, 120);
+        println!("[60Hz Telemetry] p50: {:.2}ms, p95: {:.2}ms, p99: {:.2}ms, Dropped: {}, Monotonic: {}, CPU: {:.2}%",
+            scorecard_60hz.p50_frame_time_ms, scorecard_60hz.p95_frame_time_ms, scorecard_60hz.p99_frame_time_ms,
+            scorecard_60hz.dropped_frames, scorecard_60hz.monotonic_convergence, scorecard_60hz.cpu_utilization_pct);
+        println!("[120Hz Telemetry] p50: {:.2}ms, p95: {:.2}ms, p99: {:.2}ms, Dropped: {}, Monotonic: {}, CPU: {:.2}%",
+            scorecard_120hz.p50_frame_time_ms, scorecard_120hz.p95_frame_time_ms, scorecard_120hz.p99_frame_time_ms,
+            scorecard_120hz.dropped_frames, scorecard_120hz.monotonic_convergence, scorecard_120hz.cpu_utilization_pct);
         return;
     }
 

@@ -30,6 +30,19 @@ pub fn cairo_rounded_rect(
 /// Executes a Strata DisplayList into a Cairo graphics context.
 pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
     for cmd in list.commands() {
+        if !cmd.is_clip() {
+            if let Ok((cx1, cy1, cx2, cy2)) = cr.clip_extents() {
+                if let Some(b) = cmd.bounds() {
+                    let bx1 = b.x as f64;
+                    let by1 = b.y as f64;
+                    let bx2 = (b.x + b.width) as f64;
+                    let by2 = (b.y + b.height) as f64;
+                    if bx2 < cx1 || bx1 > cx2 || by2 < cy1 || by1 > cy2 {
+                        continue;
+                    }
+                }
+            }
+        }
         match cmd {
             DrawCommand::DrawRect { bounds, color } => {
                 cr.set_source_rgba(
@@ -162,6 +175,8 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                 line_height,
                 font_weight,
                 color,
+                is_monospace,
+                ..
             } => {
                 let weight = match font_weight {
                     strata_style::types::FontWeight::Bold
@@ -170,7 +185,8 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                     | strata_style::types::FontWeight::SemiBold => cairo::FontWeight::Bold,
                     _ => cairo::FontWeight::Normal,
                 };
-                cr.select_font_face("sans-serif", cairo::FontSlant::Normal, weight);
+                let font_family = if *is_monospace { "monospace" } else { "sans-serif" };
+                cr.select_font_face(font_family, cairo::FontSlant::Normal, weight);
                 cr.set_font_size(*font_size as f64);
                 cr.set_source_rgba(
                     color.r() as f64,

@@ -33,15 +33,13 @@ impl SsimEngine {
             return Err("Buffer length smaller than specified dimensions");
         }
 
-        let mut sum_a = 0.0f32;
-        let mut sum_b = 0.0f32;
         let mut mismatched = 0;
         let mut min_x = width as u32;
         let mut max_x = 0u32;
         let mut min_y = height as u32;
         let mut max_y = 0u32;
 
-        // Compute means and locate damage bounding box
+        // Compute damage bounding box
         for y in 0..height {
             for x in 0..width {
                 let idx = (y * width + x) * bytes_per_pixel;
@@ -58,9 +56,6 @@ impl SsimEngine {
                     buf_b[idx] as f32
                 };
 
-                sum_a += lum_a;
-                sum_b += lum_b;
-
                 if (lum_a - lum_b).abs() > 1.0 {
                     mismatched += 1;
                     min_x = min_x.min(x as u32);
@@ -71,51 +66,83 @@ impl SsimEngine {
             }
         }
 
-        let n = total_pixels as f32;
-        let mean_a = sum_a / n;
-        let mean_b = sum_b / n;
+        // Block-based Mean SSIM (Wang et al. 2004 IEEE TIP standard)
+        let block_size = if width >= 16 && height >= 16 { 8 } else { width.min(height).max(1) };
+        let mut total_block_ssim = 0.0f32;
+        let mut block_count = 0usize;
 
-        // Compute variance and covariance
-        let mut var_a = 0.0f32;
-        let mut var_b = 0.0f32;
-        let mut cov_ab = 0.0f32;
+        for by in (0..height).step_by(block_size) {
+            let bh = (height - by).min(block_size);
+            for bx in (0..width).step_by(block_size) {
+                let bw = (width - bx).min(block_size);
+                let n_b = (bw * bh) as f32;
 
-        for y in 0..height {
-            for x in 0..width {
-                let idx = (y * width + x) * bytes_per_pixel;
-                let lum_a = if bytes_per_pixel >= 3 {
-                    0.2126 * buf_a[idx] as f32 + 0.7152 * buf_a[idx + 1] as f32 + 0.0722 * buf_a[idx + 2] as f32
-                } else {
-                    buf_a[idx] as f32
-                };
+                let mut b_sum_a = 0.0f32;
+                let mut b_sum_b = 0.0f32;
 
-                let lum_b = if bytes_per_pixel >= 3 {
-                    0.2126 * buf_b[idx] as f32 + 0.7152 * buf_b[idx + 1] as f32 + 0.0722 * buf_b[idx + 2] as f32
-                } else {
-                    buf_b[idx] as f32
-                };
+                for y in by..by + bh {
+                    for x in bx..bx + bw {
+                        let idx = (y * width + x) * bytes_per_pixel;
+                        let lum_a = if bytes_per_pixel >= 3 {
+                            0.2126 * buf_a[idx] as f32 + 0.7152 * buf_a[idx + 1] as f32 + 0.0722 * buf_a[idx + 2] as f32
+                        } else {
+                            buf_a[idx] as f32
+                        };
+                        let lum_b = if bytes_per_pixel >= 3 {
+                            0.2126 * buf_b[idx] as f32 + 0.7152 * buf_b[idx + 1] as f32 + 0.0722 * buf_b[idx + 2] as f32
+                        } else {
+                            buf_b[idx] as f32
+                        };
+                        b_sum_a += lum_a;
+                        b_sum_b += lum_b;
+                    }
+                }
 
-                let diff_a = lum_a - mean_a;
-                let diff_b = lum_b - mean_b;
+                let b_mean_a = b_sum_a / n_b;
+                let b_mean_b = b_sum_b / n_b;
 
-                var_a += diff_a * diff_a;
-                var_b += diff_b * diff_b;
-                cov_ab += diff_a * diff_b;
+                let mut b_var_a = 0.0f32;
+                let mut b_var_b = 0.0f32;
+                let mut b_cov_ab = 0.0f32;
+
+                for y in by..by + bh {
+                    for x in bx..bx + bw {
+                        let idx = (y * width + x) * bytes_per_pixel;
+                        let lum_a = if bytes_per_pixel >= 3 {
+                            0.2126 * buf_a[idx] as f32 + 0.7152 * buf_a[idx + 1] as f32 + 0.0722 * buf_a[idx + 2] as f32
+                        } else {
+                            buf_a[idx] as f32
+                        };
+                        let lum_b = if bytes_per_pixel >= 3 {
+                            0.2126 * buf_b[idx] as f32 + 0.7152 * buf_b[idx + 1] as f32 + 0.0722 * buf_b[idx + 2] as f32
+                        } else {
+                            buf_b[idx] as f32
+                        };
+                        let da = lum_a - b_mean_a;
+                        let db = lum_b - b_mean_b;
+                        b_var_a += da * da;
+                        b_var_b += db * db;
+                        b_cov_ab += da * db;
+                    }
+                }
+
+                b_var_a /= n_b;
+                b_var_b /= n_b;
+                b_cov_ab /= n_b;
+
+                let num = (2.0 * b_mean_a * b_mean_b + C1) * (2.0 * b_cov_ab + C2);
+                let den = (b_mean_a * b_mean_a + b_mean_b * b_mean_b + C1) * (b_var_a + b_var_b + C2);
+                let b_ssim = if den == 0.0 { 1.0 } else { (num / den).clamp(0.0, 1.0) };
+
+                total_block_ssim += b_ssim;
+                block_count += 1;
             }
         }
 
-        var_a /= n;
-        var_b /= n;
-        cov_ab /= n;
-
-        // Formula: SSIM = ((2 * mu_x * mu_y + C1) * (2 * sigma_xy + C2)) / ((mu_x^2 + mu_y^2 + C1) * (sigma_x^2 + sigma_y^2 + C2))
-        let numerator = (2.0 * mean_a * mean_b + C1) * (2.0 * cov_ab + C2);
-        let denominator = (mean_a * mean_a + mean_b * mean_b + C1) * (var_a + var_b + C2);
-
-        let ssim_score = if denominator == 0.0 {
+        let ssim_score = if block_count == 0 {
             1.0
         } else {
-            (numerator / denominator).clamp(0.0, 1.0)
+            total_block_ssim / (block_count as f32)
         };
 
         let mut damage_rects = Vec::new();
