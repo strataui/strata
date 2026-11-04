@@ -131,6 +131,17 @@ fn main() {
             true
         });
 
+        let s = state.clone();
+        shortcuts.register("Ctrl+Shift+T", move || {
+            s.reopen_closed_tab()
+        });
+
+        let s = state.clone();
+        shortcuts.register("Ctrl+D", move || {
+            s.open_bookmark_editor(None);
+            true
+        });
+
         let res = strata::launch_gtk_with_events(
             move || BrowserApp(render_state.clone()),
             config.clone(),
@@ -141,76 +152,47 @@ fn main() {
                 }
 
                 match event {
+                    PlatformEvent::WindowMaximized(max) => {
+                        event_state.is_window_maximized.set(*max);
+                        true
+                    }
+                    PlatformEvent::DoubleClick { button: MouseButton::Left, .. } => {
+                        #[cfg(target_os = "linux")]
+                        {
+                            let is_max = strata_platform::gtk_is_maximized();
+                            event_state.is_window_maximized.set(is_max);
+                        }
+                        true
+                    }
+                    PlatformEvent::MouseDown { button: MouseButton::Left, x, y } => {
+                        event_state.handle_global_click(*x, *y)
+                    }
                     PlatformEvent::MouseDown { button: MouseButton::Middle, x, y } => {
                         event_state.handle_middle_click(*x, *y)
                     }
-                    PlatformEvent::KeyDown { key, modifiers } => {
-                        if modifiers.ctrl {
-                            match key {
-                                KeyCode::KeyA => {
-                                    event_state.omnibox_selected.set(true);
-                                    return true;
-                                }
-                                KeyCode::KeyC => {
-                                    let text = event_state.url_input.get();
-                                    strata::gtk_set_clipboard_text(&text);
-                                    return true;
-                                }
-                                KeyCode::KeyX => {
-                                    let text = event_state.url_input.get();
-                                    strata::gtk_set_clipboard_text(&text);
-                                    event_state.url_input.set(String::new());
-                                    event_state.omnibox_selected.set(false);
-                                    return true;
-                                }
-                                KeyCode::KeyV => {
-                                    if let Some(clip) = strata::gtk_get_clipboard_text() {
-                                        if event_state.omnibox_selected.get() {
-                                            event_state.url_input.set(clip);
-                                            event_state.omnibox_selected.set(false);
-                                        } else {
-                                            let mut cur = event_state.url_input.get();
-                                            cur.push_str(&clip);
-                                            event_state.url_input.set(cur);
-                                        }
-                                        return true;
-                                    }
-                                }
-                                _ => {}
+                    PlatformEvent::KeyDown { key, .. } => {
+                        if *key == KeyCode::Escape {
+                            if event_state.is_context_menu_open.get() {
+                                event_state.close_context_menu();
+                                return true;
+                            }
+                            if event_state.bookmark_editor.get().is_some() {
+                                event_state.close_bookmark_editor();
+                                return true;
+                            }
+                            if event_state.is_settings_modal_open.get() {
+                                event_state.close_settings();
+                                return true;
+                            }
+                            if event_state.is_kebab_menu_open.get() {
+                                event_state.close_kebab_menu();
+                                return true;
                             }
                         }
-
-                        match key {
-                            KeyCode::Enter => {
-                                event_state.commit_omnibox();
-                                true
-                            }
-                            KeyCode::Backspace => {
-                                event_state.handle_backspace()
-                            }
-                            KeyCode::Delete => {
-                                if event_state.omnibox_selected.get() {
-                                    event_state.url_input.set(String::new());
-                                    event_state.omnibox_selected.set(false);
-                                    true
-                                } else {
-                                    false
-                                }
-                            }
-                            KeyCode::Escape => {
-                                event_state.cancel_editing_omnibox();
-                                true
-                            }
-                            _ => false,
-                        }
+                        false
                     }
-                    PlatformEvent::ReceivedCharacter(ch) => {
-                        if !ch.is_control() {
-                            event_state.handle_key_input(*ch);
-                            true
-                        } else {
-                            false
-                        }
+                    PlatformEvent::AnimationTick => {
+                        event_state.poll_worker_responses()
                     }
                     _ => false,
                 }

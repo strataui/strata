@@ -6,11 +6,12 @@
 
 use strata::prelude::*;
 use strata_icons::prelude::{Icon, IconName};
-use crate::state::{BrowserState, DevToolsTab, LogLevel};
+use crate::state::{BrowserState, DevToolsTab, DevToolsTarget, LogLevel};
 
 #[component]
 pub fn DevToolsPanel(state: BrowserState) -> View {
     let current_tab = state.devtools_tab.get();
+    let current_target = state.devtools_target.get();
     let is_inspecting = state.devtools_is_inspecting.get();
 
     let tab_elem = state.clone();
@@ -22,6 +23,9 @@ pub fn DevToolsPanel(state: BrowserState) -> View {
     let tab_app = state.clone();
     let tab_sec = state.clone();
 
+    let target_page_state = state.clone();
+    let target_strata_state = state.clone();
+
     let inspect_state = state.clone();
     let close_state = state.clone();
 
@@ -30,11 +34,11 @@ pub fn DevToolsPanel(state: BrowserState) -> View {
             // DevTools Top Navigation Strip
             <div class="flex flex-row items-center justify-between h-9 px-2 bg-[#1f1f23] border-b border-neutral-800 select-none">
                 // Left Inspection Tools and Tabs
-                <div class="flex flex-row items-center gap-1 overflow-x-auto min-w-0">
+                <div class="flex flex-row items-center gap-0.5 overflow-x-auto min-w-0">
                     // Inspect Element Picker Tool
                     <button
                         type="button"
-                        class={format!("p-1.5 rounded transition-colors cursor-pointer flex-shrink-0 {}", if is_inspecting { "bg-blue-600/30 text-blue-400 border border-blue-500/60" } else { "text-neutral-400 hover:text-white hover:bg-neutral-800" })}
+                        class={format!("p-1 rounded transition-colors cursor-pointer flex-shrink-0 {}", if is_inspecting { "bg-blue-600/30 text-blue-400 border border-blue-500/60" } else { "text-neutral-400 hover:text-white hover:bg-neutral-800" })}
                         title="Select an element in the page to inspect it (Ctrl+Shift+C)"
                         onclick={move |_| {
                             inspect_state.toggle_inspect();
@@ -46,18 +50,18 @@ pub fn DevToolsPanel(state: BrowserState) -> View {
                     // Toggle Device Toolbar (Responsive Emulation)
                     <button
                         type="button"
-                        class="p-1.5 rounded text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors cursor-pointer flex-shrink-0"
+                        class="p-1 rounded text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors cursor-pointer flex-shrink-0"
                         title="Toggle device toolbar (Ctrl+Shift+M)"
                     >
                         {Icon(IconName::Smartphone, Some("w-3.5 h-3.5 text-current")).root}
                     </button>
 
-                    <div class="h-3.5 w-[1px] bg-neutral-700 mx-1 flex-shrink-0"></div>
+                    <div class="h-3.5 w-[1px] bg-neutral-700 mx-0.5 flex-shrink-0"></div>
 
                     // Navigation Tabs
                     <button
                         type="button"
-                        class={format!("px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Elements { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
+                        class={format!("px-1.5 py-1 text-[10px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Elements { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
                         onclick={move |_| tab_elem.set_devtools_tab(DevToolsTab::Elements)}
                     >
                         {"Elements"}
@@ -65,7 +69,7 @@ pub fn DevToolsPanel(state: BrowserState) -> View {
 
                     <button
                         type="button"
-                        class={format!("px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Console { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
+                        class={format!("px-1.5 py-1 text-[10px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Console { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
                         onclick={move |_| tab_console.set_devtools_tab(DevToolsTab::Console)}
                     >
                         {"Console"}
@@ -73,7 +77,7 @@ pub fn DevToolsPanel(state: BrowserState) -> View {
 
                     <button
                         type="button"
-                        class={format!("px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Sources { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
+                        class={format!("px-1.5 py-1 text-[10px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Sources { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
                         onclick={move |_| tab_sources.set_devtools_tab(DevToolsTab::Sources)}
                     >
                         {"Sources"}
@@ -81,7 +85,7 @@ pub fn DevToolsPanel(state: BrowserState) -> View {
 
                     <button
                         type="button"
-                        class={format!("px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Network { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
+                        class={format!("px-1.5 py-1 text-[10px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Network { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
                         onclick={move |_| tab_network.set_devtools_tab(DevToolsTab::Network)}
                     >
                         {"Network"}
@@ -89,15 +93,15 @@ pub fn DevToolsPanel(state: BrowserState) -> View {
 
                     <button
                         type="button"
-                        class={format!("px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Performance { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
+                        class={format!("px-1.5 py-1 text-[10px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Performance { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
                         onclick={move |_| tab_perf.set_devtools_tab(DevToolsTab::Performance)}
                     >
-                        {"Performance"}
+                        {"Perf"}
                     </button>
 
                     <button
                         type="button"
-                        class={format!("px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Memory { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
+                        class={format!("px-1.5 py-1 text-[10px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Memory { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
                         onclick={move |_| tab_memory.set_devtools_tab(DevToolsTab::Memory)}
                     >
                         {"Memory"}
@@ -105,23 +109,43 @@ pub fn DevToolsPanel(state: BrowserState) -> View {
 
                     <button
                         type="button"
-                        class={format!("px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Application { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
+                        class={format!("px-1.5 py-1 text-[10px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Application { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
                         onclick={move |_| tab_app.set_devtools_tab(DevToolsTab::Application)}
                     >
-                        {"Application"}
+                        {"App"}
                     </button>
 
                     <button
                         type="button"
-                        class={format!("px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Security { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
+                        class={format!("px-1.5 py-1 text-[10px] font-medium transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap {}", if current_tab == DevToolsTab::Security { "text-white border-b-2 border-blue-500 bg-neutral-800/40" } else { "text-neutral-400 hover:text-neutral-200" })}
                         onclick={move |_| tab_sec.set_devtools_tab(DevToolsTab::Security)}
                     >
-                        {"Security"}
+                        {"Sec"}
                     </button>
                 </div>
 
                 // Right Utility Buttons
                 <div class="flex flex-row items-center gap-1.5 flex-shrink-0 pl-1">
+                    // Target Switcher: Page (Web DOM) vs Strata (Native Framework)
+                    <div class="flex flex-row items-center bg-neutral-900 rounded p-0.5 border border-neutral-700/60 text-[9px] font-medium flex-shrink-0">
+                        <button
+                            type="button"
+                            class={format!("px-1.5 py-0.5 rounded cursor-pointer transition-colors {}", if current_target == DevToolsTarget::Page { "bg-blue-600 text-white font-semibold" } else { "text-neutral-400 hover:text-white" })}
+                            title="Inspect loaded Web Page DOM, CSS & Network"
+                            onclick={move |_| target_page_state.set_devtools_target(DevToolsTarget::Page)}
+                        >
+                            {"Page"}
+                        </button>
+                        <button
+                            type="button"
+                            class={format!("px-1.5 py-0.5 rounded cursor-pointer transition-colors {}", if current_target == DevToolsTarget::Strata { "bg-indigo-600 text-white font-semibold" } else { "text-neutral-400 hover:text-white" })}
+                            title="Inspect Native Strata Framework Components, Signals & Rust Profiler"
+                            onclick={move |_| target_strata_state.set_devtools_target(DevToolsTarget::Strata)}
+                        >
+                            {"Strata"}
+                        </button>
+                    </div>
+
                     // Issues counter badge
                     <div class="flex flex-row items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px] font-mono border border-amber-500/40 cursor-pointer">
                         <span class="font-bold">{"!"}</span>
@@ -171,6 +195,10 @@ pub fn DevToolsPanel(state: BrowserState) -> View {
 /// Elements Panel: DOM IR Hierarchy Tree and CSS Box Model visualizer.
 #[component]
 fn ElementsPane(state: BrowserState) -> View {
+    if state.devtools_target.get() == DevToolsTarget::Strata {
+        return StrataElementsPane(state);
+    }
+
     let sel_elem = state.devtools_selected_element.get();
     let is_btn_search = sel_elem.contains("btn-search") || sel_elem.contains("button");
 
@@ -185,7 +213,7 @@ fn ElementsPane(state: BrowserState) -> View {
                 </div>
 
                 // Collapsible DOM IR Tree
-                <div class="flex-1 overflow-y-auto p-2 font-mono text-[11px] leading-tight select-text space-y-0.5">
+                <div class="flex-1 overflow-y-auto p-1.5 font-mono text-[11px] leading-tight select-text">
                     <div class="text-neutral-500">{"<!DOCTYPE html>"}</div>
                     <div class="flex flex-row items-center">
                         <span class="text-indigo-400">{"<"}</span>
@@ -310,56 +338,56 @@ fn ElementsPane(state: BrowserState) -> View {
                 </div>
 
                 // Authentic Chromium CSS Box Model Diagram
-                <div class="p-3 flex flex-col items-center select-none font-mono text-[10px]">
+                <div class="p-2 flex flex-col items-center select-none font-mono text-[10px]">
                     // Margin Box (Orange)
-                    <div class="w-full max-w-[340px] bg-[#ea580c]/15 border border-[#ea580c]/50 rounded p-1 flex flex-col items-center relative text-[#fb923c]">
+                    <div class="w-full max-w-[340px] bg-[#ea580c]/15 border border-[#ea580c]/50 rounded p-0.5 flex flex-col items-center relative text-[#fb923c]">
                         <span class="absolute top-0.5 left-1 text-[9px] text-[#ea580c] font-sans">{"margin"}</span>
-                        <span class="py-0.5">{"0"}</span>
+                        <span>{"0"}</span>
 
                         <div class="w-full flex flex-row items-center justify-between px-1">
                             <span>{"auto"}</span>
 
                             // Border Box (Yellow)
-                            <div class="flex-1 bg-[#ca8a04]/20 border border-[#ca8a04]/60 rounded p-1 mx-2 flex flex-col items-center relative text-[#facc15]">
+                            <div class="flex-1 bg-[#ca8a04]/20 border border-[#ca8a04]/60 rounded p-0.5 mx-2 flex flex-col items-center relative text-[#facc15]">
                                 <span class="absolute top-0.5 left-1 text-[9px] text-[#ca8a04] font-sans">{"border"}</span>
-                                <span class="py-0.5">{"1"}</span>
+                                <span>{"1"}</span>
 
                                 <div class="w-full flex flex-row items-center justify-between px-1">
                                     <span>{"1"}</span>
 
                                     // Padding Box (Green)
-                                    <div class="flex-1 bg-[#16a34a]/20 border border-[#16a34a]/60 rounded p-1 mx-2 flex flex-col items-center relative text-[#4ade80]">
+                                    <div class="flex-1 bg-[#16a34a]/20 border border-[#16a34a]/60 rounded p-0.5 mx-2 flex flex-col items-center relative text-[#4ade80]">
                                         <span class="absolute top-0.5 left-1 text-[9px] text-[#16a34a] font-sans">{"padding"}</span>
-                                        <span class="py-0.5">{"10"}</span>
+                                        <span>{"10"}</span>
 
                                         <div class="w-full flex flex-row items-center justify-between px-1">
                                             <span>{"20"}</span>
 
                                             // Content Box (Blue)
-                                            <div class="bg-[#2563eb]/25 border border-[#2563eb]/70 rounded px-3 py-1.5 mx-1.5 text-center text-[#60a5fa] font-bold">
+                                            <div class="bg-[#2563eb]/25 border border-[#2563eb]/70 rounded px-2.5 py-1 mx-1.5 text-center text-[#60a5fa] font-bold">
                                                 <span>{"96.0 × 36.0"}</span>
                                             </div>
 
                                             <span>{"20"}</span>
                                         </div>
 
-                                        <span class="py-0.5">{"10"}</span>
+                                        <span>{"10"}</span>
                                     </div>
 
                                     <span>{"1"}</span>
                                 </div>
 
-                                <span class="py-0.5">{"1"}</span>
+                                <span>{"1"}</span>
                             </div>
 
                             <span>{"auto"}</span>
                         </div>
 
-                        <span class="py-0.5">{"0"}</span>
+                        <span>{"0"}</span>
                     </div>
 
                     // Subpixel Advance Metrics Note
-                    <div class="mt-2 text-[10px] text-neutral-400 font-sans flex flex-row items-center gap-1.5">
+                    <div class="mt-1.5 text-[10px] text-neutral-400 font-sans flex flex-row items-center gap-1.5">
                         <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
                         <span>{"FreeType calibrated text advance: 96.0px (symmetric 20.0px padding)"}</span>
                     </div>
@@ -418,6 +446,10 @@ fn ElementsPane(state: BrowserState) -> View {
 /// Dedicated Full Console Panel with REPL evaluation
 #[component]
 fn ConsolePane(state: BrowserState) -> View {
+    if state.devtools_target.get() == DevToolsTarget::Strata {
+        return StrataConsolePane(state);
+    }
+
     let logs = state.devtools_console_logs.get();
     let filter_text = state.devtools_console_filter.get().to_lowercase();
     let clear_state = state.clone();
@@ -636,7 +668,11 @@ fn NetworkPane(state: BrowserState) -> View {
 
 /// Performance Panel: 120 FPS timeline and sub-millisecond pipeline timings
 #[component]
-fn PerformancePane(_state: BrowserState) -> View {
+fn PerformancePane(state: BrowserState) -> View {
+    if state.devtools_target.get() == DevToolsTarget::Strata {
+        return StrataPerformancePane(state);
+    }
+
     rsx! {
         <div class="flex-1 flex flex-col min-h-0 bg-[#121214] font-sans text-xs p-3 gap-3 overflow-y-auto">
             <div class="flex flex-row items-center justify-between pb-2 border-b border-neutral-800">
@@ -777,3 +813,307 @@ fn SecurityPane(_state: BrowserState) -> View {
         </div>
     }
 }
+
+/// Strata Elements Panel: Inspects the native Strata Component Tree & UI IR Hierarchy.
+#[component]
+fn StrataElementsPane(state: BrowserState) -> View {
+    let sel_elem = state.devtools_selected_element.get();
+    let is_btn_search = sel_elem.contains("btn-search") || sel_elem.contains("button");
+
+    rsx! {
+        <div class="flex-1 flex flex-col min-h-0 overflow-hidden font-sans">
+            // Component Hierarchy Tree View (Top Half)
+            <div class="h-44 flex flex-col min-h-0 bg-[#121214] border-b border-neutral-800">
+                // Search Filter Header
+                <div class="flex flex-row items-center px-2 py-1 bg-neutral-900 border-b border-neutral-800 text-[11px] text-neutral-400">
+                    <span class="text-indigo-400 font-semibold mr-2">{"Strata IR:"}</span>
+                    <span class="font-mono text-neutral-400">{"Filter by Component name, signal, or crate"}</span>
+                </div>
+
+                // Collapsible Component Tree
+                <div class="flex-1 overflow-y-auto p-1.5 font-mono text-[11px] leading-tight select-text">
+                    <div class="text-neutral-500">{"// Root Strata Application Context"}</div>
+                    <div class="flex flex-row items-center">
+                        <span class="text-indigo-400">{"<"}</span>
+                        <span class="text-amber-400 font-bold">{"BrowserApp"}</span>
+                        <span class="text-neutral-400 pl-1 text-[10px]">{"crate::app"}</span>
+                        <span class="text-indigo-400">{">"}</span>
+                    </div>
+
+                    <div class="flex flex-row items-center pl-3">
+                        <span class="text-indigo-400">{"<"}</span>
+                        <span class="text-emerald-400 font-semibold">{"Titlebar"}</span>
+                        <span class="text-neutral-500 pl-1 text-[10px]">{"csd=true buttons=3"}</span>
+                        <span class="text-indigo-400">{">"}</span>
+                    </div>
+
+                    <div class="flex flex-row items-center pl-3">
+                        <span class="text-indigo-400">{"<"}</span>
+                        <span class="text-emerald-400 font-semibold">{"Toolbar"}</span>
+                        <span class="text-indigo-400">{">"}</span>
+                    </div>
+
+                    <div class="flex flex-row items-center pl-6">
+                        <span class="text-indigo-400">{"<"}</span>
+                        <span class="text-blue-400">{"Omnibox"}</span>
+                        <span class="text-neutral-500 pl-1 text-[10px]">{"url=Signal<String>"}</span>
+                        <span class="text-indigo-400">{">"}</span>
+                    </div>
+
+                    <div class="flex flex-row items-center pl-3">
+                        <span class="text-indigo-400">{"<"}</span>
+                        <span class="text-emerald-400 font-semibold">{"Viewport"}</span>
+                        <span class="text-neutral-500 pl-1 text-[10px]">{"theme=Signal<String>"}</span>
+                        <span class="text-indigo-400">{">"}</span>
+                    </div>
+
+                    <div class="flex flex-row items-center pl-6">
+                        <span class="text-indigo-400">{"<"}</span>
+                        <span class="text-purple-400 font-semibold">{"GoogleNewTab"}</span>
+                        <span class="text-neutral-500 pl-1 text-[10px]">{"components::google_new_tab"}</span>
+                        <span class="text-indigo-400">{">"}</span>
+                    </div>
+
+                    <div class="flex flex-row items-center pl-9">
+                        <span class="text-indigo-400">{"<"}</span>
+                        <span class="text-cyan-400">{"GoogleLogo"}</span>
+                        <span class="text-neutral-500 pl-1 text-[10px]">{"font_size=60px weight=700"}</span>
+                        <span class="text-indigo-400">{">"}</span>
+                    </div>
+
+                    <div class="flex flex-row items-center pl-9">
+                        <span class="text-indigo-400">{"<"}</span>
+                        <span class="text-cyan-400">{"SearchOmnibox"}</span>
+                        <span class="text-neutral-500 pl-1 text-[10px]">{"w=672px rounded=full"}</span>
+                        <span class="text-indigo-400">{">"}</span>
+                    </div>
+
+                    <div class="flex flex-row items-center pl-9">
+                        <span class="text-indigo-400">{"<"}</span>
+                        <span class="text-cyan-400">{"ButtonGroup"}</span>
+                        <span class="text-neutral-500 pl-1 text-[10px]">{"gap=12px justify=center"}</span>
+                        <span class="text-indigo-400">{">"}</span>
+                    </div>
+
+                    // Active Selected Component: Button Google Search
+                    <div class={format!("flex flex-row items-center pl-12 py-0.5 rounded cursor-pointer {}", if is_btn_search { "bg-indigo-900/50 text-white font-medium border-l-2 border-indigo-400" } else { "hover:bg-neutral-800" })}>
+                        <span class="text-indigo-400">{"<"}</span>
+                        <span class="text-amber-300 font-bold">{"Button"}</span>
+                        <span class="text-neutral-400 pl-1">{"label="}</span>
+                        <span class="text-emerald-400">{"\"Google Search\""}</span>
+                        <span class="text-neutral-500 pl-1 text-[10px]">{"px=20 py=10"}</span>
+                        <span class="text-indigo-400">{"/>"}</span>
+                    </div>
+
+                    <div class="flex flex-row items-center pl-12 py-0.5 hover:bg-neutral-800 rounded cursor-pointer">
+                        <span class="text-indigo-400">{"<"}</span>
+                        <span class="text-amber-300 font-bold">{"Button"}</span>
+                        <span class="text-neutral-400 pl-1">{"label="}</span>
+                        <span class="text-emerald-400">{"\"I'm Feeling Lucky\""}</span>
+                        <span class="text-neutral-500 pl-1 text-[10px]">{"px=20 py=10"}</span>
+                        <span class="text-indigo-400">{"/>"}</span>
+                    </div>
+
+                    <div class="flex flex-row items-center pl-9">
+                        <span class="text-indigo-400">{"<"}</span>
+                        <span class="text-cyan-400">{"ShortcutGrid"}</span>
+                        <span class="text-neutral-500 pl-1 text-[10px]">{"cols=5 gap=16"}</span>
+                        <span class="text-indigo-400">{"/>"}</span>
+                    </div>
+
+                    <div class="flex flex-row items-center">
+                        <span class="text-indigo-400">{"</"}</span>
+                        <span class="text-amber-400 font-bold">{"BrowserApp"}</span>
+                        <span class="text-indigo-400">{">"}</span>
+                    </div>
+                </div>
+            </div>
+
+            // Middle Section: Component Reactive Signals & Arena Memory
+            <div class="flex-1 flex flex-col min-h-0 bg-[#161618] overflow-y-auto">
+                <div class="flex flex-row items-center gap-2 px-3 py-1 bg-neutral-900 border-b border-neutral-800 text-[11px]">
+                    <span class="text-indigo-400 font-medium border-b border-indigo-500 pb-0.5 cursor-pointer">{"Signals"}</span>
+                    <span class="text-neutral-400 hover:text-white cursor-pointer">{"Props"}</span>
+                    <span class="text-neutral-400 hover:text-white cursor-pointer">{"Memory Arena"}</span>
+                    <span class="text-neutral-400 hover:text-white cursor-pointer">{"Layout Solver"}</span>
+                </div>
+
+                // Signals Table
+                <div class="p-2 space-y-1 font-mono text-[10px] text-neutral-300">
+                    <div class="flex flex-row justify-between py-1 border-b border-neutral-800/60">
+                        <span class="text-amber-300">{"Signal<usize> (active_tab_id)"}</span>
+                        <span class="text-emerald-400 font-bold">{"1"}</span>
+                        <span class="text-neutral-500">{"6 subscribers"}</span>
+                    </div>
+                    <div class="flex flex-row justify-between py-1 border-b border-neutral-800/60">
+                        <span class="text-amber-300">{"Signal<String> (url_input)"}</span>
+                        <span class="text-emerald-400 font-bold">{"\"strata://newtab\""}</span>
+                        <span class="text-neutral-500">{"3 subscribers"}</span>
+                    </div>
+                    <div class="flex flex-row justify-between py-1 border-b border-neutral-800/60">
+                        <span class="text-amber-300">{"Signal<String> (active_theme)"}</span>
+                        <span class="text-emerald-400 font-bold">{"\"dark\""}</span>
+                        <span class="text-neutral-500">{"4 subscribers"}</span>
+                    </div>
+                    <div class="flex flex-row justify-between py-1 border-b border-neutral-800/60">
+                        <span class="text-amber-300">{"Signal<bool> (is_devtools_open)"}</span>
+                        <span class="text-emerald-400 font-bold">{"true"}</span>
+                        <span class="text-neutral-500">{"2 subscribers"}</span>
+                    </div>
+                    <div class="flex flex-row justify-between py-1 border-b border-neutral-800/60">
+                        <span class="text-amber-300">{"Signal<DevToolsTarget> (devtools_target)"}</span>
+                        <span class="text-indigo-400 font-bold">{"Strata"}</span>
+                        <span class="text-neutral-500">{"2 subscribers"}</span>
+                    </div>
+                </div>
+
+                // Subsystem Diagnostics Banner
+                <div class="mx-2 mb-2 p-2 bg-neutral-900/90 border border-neutral-800 rounded font-mono text-[10px] space-y-1">
+                    <div class="flex flex-row justify-between text-neutral-400">
+                        <span>{"BumpArena Capacity:"}</span>
+                        <span class="text-white">{"2.74 MB (142 KB active)"}</span>
+                    </div>
+                    <div class="flex flex-row justify-between text-neutral-400">
+                        <span>{"AtomTable Strings:"}</span>
+                        <span class="text-white">{"1,842 interned (0 collisions)"}</span>
+                    </div>
+                    <div class="flex flex-row justify-between text-neutral-400">
+                        <span>{"LayoutNG Solver:"}</span>
+                        <span class="text-emerald-400">{"W3C Flexbox Level 1 & Grid 2"}</span>
+                    </div>
+                    <div class="flex flex-row justify-between text-neutral-400">
+                        <span>{"Subpixel Math:"}</span>
+                        <span class="text-white">{"Fixed-point 1/64th px (0.015625 px)"}</span>
+                    </div>
+                </div>
+            </div>
+
+            // Bottom Strata Diagnostics Drawer
+            <div class="h-24 bg-[#141416] border-t border-neutral-800 flex flex-col font-mono text-[10px]">
+                <div class="flex flex-row items-center justify-between px-2 py-1 bg-neutral-900/80 border-b border-neutral-800 text-[11px] font-sans">
+                    <div class="flex flex-row items-center gap-2">
+                        <span class="text-indigo-400 font-semibold">{"Strata Framework Engine Diagnostics"}</span>
+                        <span class="text-neutral-500">{"|"}</span>
+                        <span class="text-neutral-400">{"Active"}</span>
+                    </div>
+                    <span class="text-[10px] font-mono text-neutral-500">{"docked bottom"}</span>
+                </div>
+                <div class="flex-1 p-2 space-y-1 overflow-y-auto">
+                    <div class="text-indigo-400">{"[INFO] strata_dom::runtime: Signal DAG topology evaluated: 4 effects scheduled"}</div>
+                    <div class="text-blue-400">{"[INFO] strata_layout::flexbox: 10,000-node layout solved in 784 µs"}</div>
+                    <div class="text-emerald-400">{"[INFO] strata_render::cairo: Frame presented to Linux display server in 0.02 ms"}</div>
+                    <div class="text-amber-400">{"[DEBUG] strata_primitives::arena: BumpArena reset in 30 ns"}</div>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+/// Dedicated Strata Engine Console Panel
+#[component]
+fn StrataConsolePane(_state: BrowserState) -> View {
+    rsx! {
+        <div class="flex-1 flex flex-col min-h-0 bg-[#121214] font-mono text-xs">
+            // Console Toolbar
+            <div class="flex flex-row items-center justify-between px-2 py-1.5 bg-neutral-900 border-b border-neutral-800 text-[11px] select-none font-sans">
+                <div class="flex flex-row items-center gap-2">
+                    <span class="text-indigo-400 font-semibold">{"Strata Core Runtime REPL"}</span>
+                    <span class="text-neutral-600">{"|"}</span>
+                    <span class="text-neutral-400">{"Target: strata-engine (x86_64-unknown-linux-gnu)"}</span>
+                </div>
+                <span class="text-[10px] text-emerald-400">{"Connected"}</span>
+            </div>
+
+            // Console Logs
+            <div class="flex-1 p-2 space-y-1 overflow-y-auto text-[11px]">
+                <div class="text-neutral-500">{"Strata Engine Interactive REPL v0.1.0"}</div>
+                <div class="text-neutral-500">{"Type 'help', 'signals', 'memory', or 'layout' for telemetry."}</div>
+                <div class="text-indigo-400">{"[INFO] strata_dom::runtime: Signal DAG topology evaluated: 4 effects scheduled"}</div>
+                <div class="text-blue-400">{"[INFO] strata_layout::flexbox: 10,000-node layout solved in 784 µs"}</div>
+                <div class="text-emerald-400">{"[INFO] strata_render::cairo: Cairo hardware presentation surface bound"}</div>
+                <div class="text-amber-400">{"[DEBUG] strata_primitives::arena: BumpArena reset in 30 ns"}</div>
+                <div class="text-purple-400">{"[TRACE] strata_style::tailwind: JIT utility resolution completed for 48 classes"}</div>
+            </div>
+
+            // REPL Input Prompt
+            <div class="flex flex-row items-center px-2 py-1.5 bg-neutral-950 border-t border-neutral-800">
+                <span class="text-indigo-400 font-bold mr-2">{"strata>"}</span>
+                <input
+                    type="text"
+                    class="flex-1 bg-transparent border-0 outline-none text-white text-xs font-mono placeholder-neutral-600"
+                    placeholder="Evaluate Rust signal, arena stats, or layout command..."
+                />
+            </div>
+        </div>
+    }
+}
+
+/// Strata Rust-Wise Systems Profiler
+#[component]
+fn StrataPerformancePane(_state: BrowserState) -> View {
+    rsx! {
+        <div class="flex-1 flex flex-col min-h-0 bg-[#121214] font-sans text-xs p-3 gap-3 overflow-y-auto">
+            <div class="flex flex-row items-center justify-between pb-2 border-b border-neutral-800">
+                <span class="font-semibold text-white">{"Strata Rust Engine Microsecond Profiler"}</span>
+                <span class="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono text-[10px] border border-indigo-500/40">{"120.0 FPS Steady"}</span>
+            </div>
+
+            // Rust Pipeline Microsecond Breakdown
+            <div class="bg-neutral-900/60 border border-neutral-800 rounded p-3 font-mono text-[11px] flex flex-col gap-2">
+                <div class="text-neutral-400 font-sans text-xs font-medium mb-1">{"Rust Subsystem Latency Breakdown"}</div>
+
+                <div class="flex flex-row justify-between items-center py-1 border-b border-neutral-800/60">
+                    <span class="text-indigo-400">{"RSX Signal Reconcile (DAG Topological Diff)"}</span>
+                    <span class="text-white font-bold">{"12 µs"}</span>
+                </div>
+
+                <div class="flex flex-row justify-between items-center py-1 border-b border-neutral-800/60">
+                    <span class="text-purple-400">{"Tailwind JIT Cascade & Specificity"}</span>
+                    <span class="text-white font-bold">{"24 µs"}</span>
+                </div>
+
+                <div class="flex flex-row justify-between items-center py-1 border-b border-neutral-800/60">
+                    <span class="text-blue-400">{"Blink LayoutNG Pass (Flexbox & Grid 2)"}</span>
+                    <span class="text-white font-bold">{"784 µs"}</span>
+                </div>
+
+                <div class="flex flex-row justify-between items-center py-1 border-b border-neutral-800/60">
+                    <span class="text-amber-400">{"Display List Assembly"}</span>
+                    <span class="text-white font-bold">{"8 µs"}</span>
+                </div>
+
+                <div class="flex flex-row justify-between items-center py-1 border-b border-neutral-800/60">
+                    <span class="text-cyan-400">{"Cairo Hardware Rasterization & Swapchain"}</span>
+                    <span class="text-white font-bold">{"420 µs"}</span>
+                </div>
+
+                <div class="flex flex-row justify-between items-center py-1 border-t border-neutral-700 pt-1">
+                    <span class="text-emerald-400 font-bold">{"Total Frame Execution Time"}</span>
+                    <span class="text-emerald-400 font-bold">{"1,248 µs (1.25 ms)"}</span>
+                </div>
+            </div>
+
+            // System Telemetry Scorecard
+            <div class="bg-neutral-900/60 border border-neutral-800 rounded p-3 text-[11px] font-mono text-neutral-300 flex flex-col gap-1.5">
+                <div class="text-neutral-400 font-sans text-xs font-medium mb-1">{"Low-Level Runtime Telemetry"}</div>
+                <div class="flex flex-row justify-between py-0.5 border-b border-neutral-800/40">
+                    <span>{"Rayon Work-Stealing Workers"}</span>
+                    <span class="text-white">{"8 threads active"}</span>
+                </div>
+                <div class="flex flex-row justify-between py-0.5 border-b border-neutral-800/40">
+                    <span>{"Resident Set Size (RSS)"}</span>
+                    <span class="text-emerald-400 font-bold">{"2.74 MB"}</span>
+                </div>
+                <div class="flex flex-row justify-between py-0.5 border-b border-neutral-800/40">
+                    <span>{"Heap Allocations in Render Loop"}</span>
+                    <span class="text-emerald-400 font-bold">{"0 bytes (bump arena reused)"}</span>
+                </div>
+                <div class="flex flex-row justify-between py-0.5">
+                    <span>{"Peak FPS Headroom"}</span>
+                    <span class="text-emerald-400 font-bold">{"800 FPS (1.25 ms frame cycle)"}</span>
+                </div>
+            </div>
+        </div>
+    }
+}
+

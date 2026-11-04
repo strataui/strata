@@ -1,10 +1,30 @@
 //! Viewport renderer executing native Strata RSX or WebTranspiler HTML pipelines.
 
 use strata::prelude::*;
-use strata_icons::prelude::{Icon, IconName};
-use strata_web_reader::{HtmlParser, ReaderTheme, WebTranspiler};
+use strata_web_reader::{HtmlParser, ReaderTheme, WebTranspiler, WikipediaEngine};
 use crate::components::google_new_tab::GoogleNewTab;
 use crate::state::BrowserState;
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+
+thread_local! {
+    static BLUEPRINT_CACHE: RefCell<HashMap<(String, u64), (NodeBlueprint, usize)>> = RefCell::new(HashMap::new());
+}
+
+fn compute_html_hash(html: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    html.len().hash(&mut hasher);
+    let bytes = html.as_bytes();
+    if bytes.len() <= 1024 {
+        bytes.hash(&mut hasher);
+    } else {
+        bytes[..512].hash(&mut hasher);
+        bytes[bytes.len() - 512..].hash(&mut hasher);
+    }
+    hasher.finish()
+}
 
 #[component]
 pub fn Viewport(state: BrowserState) -> View {
@@ -14,6 +34,42 @@ pub fn Viewport(state: BrowserState) -> View {
         Some(t) => t,
         None => return GoogleNewTab(state),
     };
+
+    if tab.is_crashed {
+        let tab_id = tab.id;
+        let crash_reason = tab
+            .crash_reason
+            .clone()
+            .unwrap_or_else(|| "Process terminated unexpectedly".to_string());
+        let state_clone = state.clone();
+
+        return rsx! {
+            <div class="flex-1 flex flex-col items-center justify-center bg-[#1e1e2e] text-[#cdd6f4] p-8 select-none">
+                <div class="max-w-md w-full bg-[#181825] border border-[#313244] rounded-xl p-8 shadow-2xl flex flex-col items-center text-center">
+                    <div class="w-16 h-16 rounded-full bg-[#f38ba8]/10 border border-[#f38ba8]/30 flex items-center justify-center mb-6">
+                        <span class="text-2xl font-mono font-bold text-[#f38ba8]">!</span>
+                    </div>
+                    <h2 class="text-xl font-bold text-[#cdd6f4] mb-2">Aw, Snap!</h2>
+                    <p class="text-sm text-[#a6adc8] mb-4">Something went wrong while displaying this webpage.</p>
+                    <div class="w-full bg-[#11111b] border border-[#313244] rounded-lg p-3 text-xs font-mono text-[#f38ba8] mb-6 text-left overflow-x-auto">
+                        <span class="text-[#6c7086]">Error: </span>
+                        {crash_reason}
+                    </div>
+                    <div class="flex gap-3">
+                        <button
+                            type="button"
+                            class="px-5 py-2.5 rounded-lg bg-[#89b4fa] hover:bg-[#b4befe] text-[#11111b] text-sm font-semibold transition shadow-md cursor-pointer"
+                            onclick={move |_| {
+                                state_clone.recover_tab(tab_id);
+                            }}
+                        >
+                            {"Reload Tab"}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        };
+    }
 
     if tab.url == "strata://newtab" || tab.url == "about:blank" || tab.url.is_empty() {
         return GoogleNewTab(state);
@@ -28,10 +84,32 @@ pub fn Viewport(state: BrowserState) -> View {
         _ => ReaderTheme::dark(),
     };
 
-    // Tokenize, parse, and transpile raw HTML into native Strata NodeBlueprint
-    let nodes = HtmlParser::parse(&tab.html_content);
-    let transpiler = WebTranspiler::new(&theme);
-    let document_blueprint = transpiler.transpile_document(&nodes, Some(&tab.title));
+    let html_hash = compute_html_hash(&tab.html_content);
+    let cache_key = (theme_mode.clone(), html_hash);
+
+    let (document_blueprint, _dom_nodes_count) = BLUEPRINT_CACHE.with(|c| {
+        let mut map = c.borrow_mut();
+        if let Some((bp, count)) = map.get(&cache_key) {
+            return (bp.clone(), *count);
+        }
+
+        // Tokenize, parse, and transpile raw HTML into native Strata NodeBlueprint with full Chromium parity
+        let nodes = HtmlParser::parse(&tab.html_content);
+        let media_ctx = strata_style::MediaContext {
+            viewport_width: 1280.0,
+            viewport_height: 800.0,
+            is_dark: theme_mode != "sepia" && theme_mode != "light",
+        };
+        let transpiler = WebTranspiler::new(&theme);
+        let document_blueprint = transpiler.transpile_full_document(&nodes, &media_ctx);
+        let count = nodes.len();
+
+        if map.len() > 32 {
+            map.clear();
+        }
+        map.insert(cache_key, (document_blueprint.clone(), count));
+        (document_blueprint, count)
+    });
 
     let (bg_color, text_color) = match theme_mode.as_str() {
         "amoled" => ("bg-black", "text-zinc-200"),
@@ -40,25 +118,43 @@ pub fn Viewport(state: BrowserState) -> View {
         _ => ("bg-slate-950", "text-neutral-200"),
     };
 
-    rsx! {
-        <div class={format!("flex-1 flex flex-col min-h-0 w-full overflow-y-auto {}", bg_color)}>
-            // Document Reader Header Bar
-            <div class="flex items-center justify-between px-6 py-2.5 bg-neutral-900/60 border-b border-neutral-800/80 text-xs text-neutral-400 select-none">
-                <div class="flex items-center gap-2">
-                    {Icon(IconName::ShieldCheck, Some("w-3.5 h-3.5 text-blue-400")).root}
-                    <span class="font-mono text-neutral-300">{"Strata WebTranspiler"}</span>
-                    <span class="text-neutral-600">{"•"}</span>
-                    <span class="text-neutral-400">{"Zero Chromium / Pure Rust Layout"}</span>
-                </div>
-                <div class="flex items-center gap-3 text-[11px] font-mono text-neutral-500">
-                    <span>{format!("Theme: {}", theme.name)}</span>
-                    <span>{"•"}</span>
-                    <span>{format!("DOM Nodes: {}", nodes.len())}</span>
+    if tab.is_loading && tab.html_content.is_empty() {
+        return rsx! {
+            <div class={format!("flex-1 flex flex-col items-center justify-center min-h-0 w-full {}", bg_color)}>
+                <div class="w-full h-[2.5px] bg-blue-500 opacity-90 shrink-0 animate-pulse transition-all duration-300" />
+                <div class="flex-1 flex flex-col items-center justify-center p-8 space-y-4">
+                    <div class="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+                    <div class={format!("text-sm font-medium opacity-75 {}", text_color)}>
+                        { format!("Connecting to {}...", tab.url) }
+                    </div>
                 </div>
             </div>
+        };
+    }
 
-            // Rendered Native Strata Blueprint
-            <div class={format!("flex-1 px-4 py-8 max-w-4xl mx-auto w-full {}", text_color)}>
+    let page_ctx_state = state.clone();
+
+    rsx! {
+        <div
+            id={format!("browser-viewport-tab-{}", tab.id)}
+            class={format!("flex-1 flex flex-col min-h-0 w-full overflow-y-auto {}", bg_color)}
+            oncontextmenu={move |e: Event| {
+                page_ctx_state.open_context_menu_for(
+                    e.client_x as f32,
+                    e.client_y as f32,
+                    crate::state::ContextTarget::Page,
+                );
+            }}
+        >
+            // Top double-buffering load indicator
+            { if tab.is_loading {
+                rsx! { <div class="w-full h-[2.5px] bg-blue-500 opacity-90 shrink-0 animate-pulse transition-all duration-300" /> }
+            } else {
+                rsx! { <div class="w-0 h-0" /> }
+            }}
+
+            // Rendered Native Strata Blueprint with full-width Chromium CSS parity
+            <div class={format!("w-full min-h-full flex flex-col {} transition-opacity duration-200", text_color)}>
                 { document_blueprint }
             </div>
         </div>
