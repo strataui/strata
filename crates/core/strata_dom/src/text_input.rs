@@ -116,6 +116,89 @@ impl TextInputState {
         self.selection_anchor.set(None);
     }
 
+    /// Starts a mouse drag selection from a character index.
+    pub fn start_selection(&self, index: usize) {
+        let total = self.text.get().chars().count();
+        let clamped = index.min(total);
+        self.selection_anchor.set(Some(clamped));
+        self.cursor_index.set(clamped);
+    }
+
+    /// Extends an active mouse drag selection to a new character index.
+    pub fn update_selection_drag(&self, index: usize) {
+        let total = self.text.get().chars().count();
+        let clamped = index.min(total);
+        if self.selection_anchor.get().is_none() {
+            self.selection_anchor.set(Some(self.cursor_index.get()));
+        }
+        self.cursor_index.set(clamped);
+    }
+
+    /// Selects the entire word or token surrounding the given character index (double-click contract).
+    pub fn select_word_at_index(&self, index: usize) {
+        let cur_text = self.text.get();
+        let chars: Vec<char> = cur_text.chars().collect();
+        let len = chars.len();
+        if len == 0 {
+            return;
+        }
+        let clamped = index.min(len.saturating_sub(1));
+        let is_word = is_word_char(chars[clamped]);
+
+        let mut start = clamped;
+        while start > 0 {
+            let prev = chars[start - 1];
+            if prev.is_whitespace() || (is_word != is_word_char(prev)) {
+                break;
+            }
+            start -= 1;
+        }
+
+        let mut end = clamped;
+        while end < len {
+            let ch = chars[end];
+            if ch.is_whitespace() || (is_word != is_word_char(ch)) {
+                break;
+            }
+            end += 1;
+        }
+
+        self.selection_anchor.set(Some(start));
+        self.cursor_index.set(end);
+    }
+
+    /// Calculates character index from an x offset in pixels.
+    pub fn calculate_char_index_at_offset(text: &str, x_offset: f32, font_size: f32) -> usize {
+        if x_offset <= 0.0 || text.is_empty() {
+            return 0;
+        }
+
+        let char_w = font_size * 0.55;
+        let approx_idx = (x_offset / char_w).round() as usize;
+        approx_idx.min(text.chars().count())
+    }
+
+    /// Replaces the entire text buffer, pushing an undo snapshot so Ctrl+Z can restore it.
+    pub fn replace_all_text(&mut self, new_text: &str) {
+        self.push_undo_snapshot();
+        self.text.set(new_text.to_string());
+        self.cursor_index.set(new_text.chars().count());
+        self.selection_anchor.set(None);
+    }
+
+    /// Synchronizes text from an external source without destroying undo/redo history.
+    pub fn sync_external_text(&mut self, new_text: &str) {
+        if self.text.get() != new_text {
+            self.push_undo_snapshot();
+            self.text.set(new_text.to_string());
+            let count = new_text.chars().count();
+            if self.cursor_index.get() > count {
+                self.cursor_index.set(count);
+            }
+            self.selection_anchor.set(None);
+        }
+    }
+
     /// Sets the text value, resetting the cursor to the end and clearing undo stacks.
     pub fn set_text(&mut self, new_text: &str) {
         self.undo_stack.clear();
@@ -151,6 +234,7 @@ impl TextInputState {
             let new_cursor = cursor + inserted.chars().count();
             self.text.set(new_chars.into_iter().collect());
             self.cursor_index.set(new_cursor);
+            self.selection_anchor.set(None);
         }
     }
 
@@ -243,7 +327,7 @@ impl TextInputState {
     }
 
     /// Deletes the active selection range.
-    fn delete_selection(&mut self) {
+    pub fn delete_selection(&mut self) {
         if let Some((start, end)) = self.selection_range() {
             self.push_undo_snapshot();
             let cur_text = self.text.get();
@@ -500,6 +584,23 @@ impl Default for TextInputState {
     }
 }
 
+impl std::fmt::Debug for TextInputState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TextInputState")
+            .field("text", &self.text.get())
+            .field("cursor_index", &self.cursor_index.get())
+            .field("selection_anchor", &self.selection_anchor.get())
+            .field("undo_count", &self.undo_stack.len())
+            .field("redo_count", &self.redo_stack.len())
+            .finish()
+    }
+}
+
+#[inline]
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
 /// Helper locating the previous word boundary index before `cursor`.
 fn find_prev_word_boundary(chars: &[char], cursor: usize) -> usize {
     if cursor == 0 {
@@ -511,9 +612,18 @@ fn find_prev_word_boundary(chars: &[char], cursor: usize) -> usize {
     while idx > 0 && chars[idx - 1].is_whitespace() {
         idx -= 1;
     }
-    // Skip word characters
-    while idx > 0 && !chars[idx - 1].is_whitespace() {
-        idx -= 1;
+    if idx == 0 {
+        return 0;
+    }
+
+    if is_word_char(chars[idx - 1]) {
+        while idx > 0 && is_word_char(chars[idx - 1]) {
+            idx -= 1;
+        }
+    } else {
+        while idx > 0 && !is_word_char(chars[idx - 1]) && !chars[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
     }
     idx
 }
@@ -526,13 +636,22 @@ fn find_next_word_boundary(chars: &[char], cursor: usize) -> usize {
     }
     let mut idx = cursor;
 
-    // Skip current word characters
-    while idx < len && !chars[idx].is_whitespace() {
-        idx += 1;
-    }
-    // Skip subsequent whitespace
+    // Skip whitespace
     while idx < len && chars[idx].is_whitespace() {
         idx += 1;
+    }
+    if idx >= len {
+        return len;
+    }
+
+    if is_word_char(chars[idx]) {
+        while idx < len && is_word_char(chars[idx]) {
+            idx += 1;
+        }
+    } else {
+        while idx < len && !is_word_char(chars[idx]) && !chars[idx].is_whitespace() {
+            idx += 1;
+        }
     }
     idx
 }

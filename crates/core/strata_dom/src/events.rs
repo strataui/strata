@@ -7,16 +7,36 @@ use std::ops::Deref;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EventType {
     Click,
-    Input,
-    Change,
-    Submit,
-    KeyDown,
-    KeyUp,
+    DblClick,
+    /// W3C `contextmenu`: fired for a secondary-button press on the nearest listening element.
+    ContextMenu,
+    AuxClick,
+    MouseDown,
+    MouseUp,
+    MouseMove,
+    MouseEnter,
+    MouseLeave,
+    MouseOver,
+    MouseOut,
     PointerDown,
     PointerUp,
     PointerMove,
+    KeyDown,
+    KeyUp,
+    Input,
+    Change,
+    Submit,
     Focus,
     Blur,
+    Wheel,
+    TransitionRun,
+    TransitionStart,
+    TransitionEnd,
+    TransitionCancel,
+    AnimationStart,
+    AnimationIteration,
+    AnimationEnd,
+    AnimationCancel,
     Custom(&'static str),
 }
 
@@ -29,7 +49,7 @@ pub enum EventPhase {
     Bubbling,
 }
 
-/// Synthetic DOM Event passed to event handlers.
+/// Synthetic DOM Event passed to event handlers, fully modeled after W3C DOM Level 3 / UI Events.
 #[derive(Clone, Debug)]
 pub struct Event {
     pub event_type: EventType,
@@ -38,16 +58,52 @@ pub struct Event {
     pub current_target_id: Cell<Option<u32>>,
     pub propagation_stopped: Cell<bool>,
     pub default_prevented: Cell<bool>,
+
+    // Text & Form Value Properties
     pub value: String,
+    pub data: Option<String>,
+    pub input_type: String,
+
+    // Mouse & Pointer Coordinate Properties (W3C MouseEvent / PointerEvent)
     pub client_x: f64,
     pub client_y: f64,
-    pub button: u8,
+    pub screen_x: f64,
+    pub screen_y: f64,
+    pub page_x: f64,
+    pub page_y: f64,
+    pub offset_x: f64,
+    pub offset_y: f64,
+    pub movement_x: f64,
+    pub movement_y: f64,
+    pub button: i16,
+    pub buttons: u16,
+    pub detail: i32,
+
+    // Keyboard Properties (W3C KeyboardEvent)
     pub key: String,
     pub code: String,
+    pub repeat: bool,
+    pub location: u32,
+
+    // Modifier Keys
     pub ctrl_key: bool,
     pub shift_key: bool,
     pub alt_key: bool,
     pub meta_key: bool,
+
+    // Wheel Properties (W3C WheelEvent)
+    pub delta_x: f64,
+    pub delta_y: f64,
+    pub delta_z: f64,
+    pub delta_mode: u32,
+
+    // Event Timestamp in Milliseconds
+    pub timestamp: f64,
+
+    // Transition & Animation Event Properties (W3C CSS Transitions & Animations)
+    pub property_name: String,
+    pub animation_name: String,
+    pub elapsed_time: f32,
 }
 
 impl Default for Event {
@@ -60,15 +116,37 @@ impl Default for Event {
             propagation_stopped: Cell::new(false),
             default_prevented: Cell::new(false),
             value: String::new(),
+            data: None,
+            input_type: String::new(),
             client_x: 0.0,
             client_y: 0.0,
+            screen_x: 0.0,
+            screen_y: 0.0,
+            page_x: 0.0,
+            page_y: 0.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            movement_x: 0.0,
+            movement_y: 0.0,
             button: 0,
+            buttons: 0,
+            detail: 0,
             key: String::new(),
             code: String::new(),
+            repeat: false,
+            location: 0,
             ctrl_key: false,
             shift_key: false,
             alt_key: false,
             meta_key: false,
+            delta_x: 0.0,
+            delta_y: 0.0,
+            delta_z: 0.0,
+            delta_mode: 0,
+            timestamp: 0.0,
+            property_name: String::new(),
+            animation_name: String::new(),
+            elapsed_time: 0.0,
         }
     }
 }
@@ -85,6 +163,24 @@ impl Event {
         Self {
             event_type,
             value: val.into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn transition(event_type: EventType, property: impl Into<String>, elapsed_time: f32) -> Self {
+        Self {
+            event_type,
+            property_name: property.into(),
+            elapsed_time,
+            ..Default::default()
+        }
+    }
+
+    pub fn animation(event_type: EventType, animation_name: impl Into<String>, elapsed_time: f32) -> Self {
+        Self {
+            event_type,
+            animation_name: animation_name.into(),
+            elapsed_time,
             ..Default::default()
         }
     }
@@ -111,6 +207,26 @@ impl Event {
 
     pub fn current_target(&self) -> Option<u32> {
         self.current_target_id.get()
+    }
+
+    /// Returns true if this event was initiated by the primary (usually left) mouse button.
+    pub fn is_primary(&self) -> bool {
+        self.button == 0
+    }
+
+    /// Returns true if this event was initiated by the auxiliary (usually middle) mouse button.
+    pub fn is_auxiliary(&self) -> bool {
+        self.button == 1
+    }
+
+    /// Returns true if this event was initiated by the secondary (usually right) mouse button.
+    pub fn is_secondary(&self) -> bool {
+        self.button == 2
+    }
+
+    /// Returns true if any keyboard modifier key (Ctrl, Shift, Alt, or Meta) was held.
+    pub fn has_modifier(&self) -> bool {
+        self.ctrl_key || self.shift_key || self.alt_key || self.meta_key
     }
 }
 

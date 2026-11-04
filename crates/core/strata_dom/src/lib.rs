@@ -15,12 +15,14 @@ impl View {
 }
 
 pub mod events;
+pub mod hooks;
 pub mod ir;
 pub mod reactive;
 pub mod spring;
 pub mod text_input;
 
 pub use events::{Event, EventDispatcher, EventPhase, EventType};
+pub use hooks::*;
 pub use ir::{
     DisplayChunkRange, FixedRect, IrNodeFlags, IrTag, MemoCache, MemoEntry, NodeId, StackGuard,
     UiIrGraph, UiIrNode,
@@ -89,6 +91,7 @@ pub enum Attribute {
         event: EventType,
         handler: Rc<dyn Fn(Event)>,
     },
+    DirectStyle(Rc<dyn std::any::Any>),
 }
 
 impl Attribute {
@@ -97,6 +100,10 @@ impl Attribute {
             key: key.into(),
             value: value.into(),
         }
+    }
+
+    pub fn direct_style<T: 'static>(style: T) -> Self {
+        Self::DirectStyle(Rc::new(style))
     }
 
     pub fn event_listener<Args, F: EventHandlerMarker<Args> + 'static>(
@@ -132,6 +139,10 @@ impl std::fmt::Debug for Attribute {
                 .debug_struct("EventListener")
                 .field("event", event)
                 .field("handler", &"<callback>")
+                .finish(),
+            Self::DirectStyle(_) => f
+                .debug_tuple("DirectStyle")
+                .field(&"<typed_style>")
                 .finish(),
         }
     }
