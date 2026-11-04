@@ -86,8 +86,27 @@ impl SemanticNode {
 
     fn collect_text(&self, out: &mut String) {
         match self {
-            Self::Text(t) => out.push_str(t),
-            Self::Element { children, .. } => {
+            Self::Text(t) => {
+                if !out.is_empty()
+                    && !out.ends_with(char::is_whitespace)
+                    && !t.starts_with(char::is_whitespace)
+                    && !t.starts_with(',')
+                    && !t.starts_with('.')
+                    && !t.starts_with(';')
+                    && !t.starts_with(':')
+                    && !t.starts_with(')')
+                    && !t.starts_with(']')
+                    && !out.ends_with('(')
+                    && !out.ends_with('[')
+                {
+                    out.push(' ');
+                }
+                out.push_str(t);
+            }
+            Self::Element { tag, children, .. } => {
+                if tag == "style" || tag == "script" {
+                    return;
+                }
                 for child in children {
                     child.collect_text(out);
                 }
@@ -148,5 +167,20 @@ impl SemanticNode {
                 child.collect_by_class(target_class, results);
             }
         }
+    }
+
+    /// Recursively finds the first descendant element with the specified ID.
+    pub fn find_by_id(&self, target_id: &str) -> Option<&SemanticNode> {
+        if let Self::Element { children, .. } = self {
+            if self.id() == Some(target_id) {
+                return Some(self);
+            }
+            for child in children {
+                if let Some(found) = child.find_by_id(target_id) {
+                    return Some(found);
+                }
+            }
+        }
+        None
     }
 }

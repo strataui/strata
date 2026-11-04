@@ -7,3 +7,5 @@ license.workspace = true
 description = "W3C Web Platform APIs in pure idiomatic Rust for Strata"
 
 [dependencies]
+flate2 = "1.0"
+brotli = "9"

@@ -9,9 +9,9 @@ const VOID_ELEMENTS: &[&str] = &[
     "link", "meta", "param", "source", "track", "wbr",
 ];
 
-/// Tags that are completely ignored and stripped from semantic reader output.
+/// Tags whose text/markup is completely ignored from output.
 const STRIPPED_ELEMENTS: &[&str] = &[
-    "script", "style", "noscript", "iframe", "object", "embed", "svg",
+    "script", "noscript",
 ];
 
 /// Stack frame representing an unclosed element during tree construction.
@@ -61,7 +61,19 @@ impl HtmlParser {
                     // Omit DOCTYPE and HTML comments from semantic view output
                 }
                 HtmlToken::Text(text) => {
-                    if !text.trim().is_empty() {
+                    let should_keep = if let Some(top) = stack.last() {
+                        if matches!(
+                            top.tag.as_str(),
+                            "table" | "tbody" | "thead" | "tfoot" | "tr" | "colgroup" | "ul" | "ol" | "dl" | "select" | "html" | "head"
+                        ) {
+                            !text.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0C')).is_empty()
+                        } else {
+                            !text.is_empty()
+                        }
+                    } else {
+                        !text.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0C')).is_empty()
+                    };
+                    if should_keep {
                         let node = SemanticNode::Text(text);
                         if let Some(top) = stack.last_mut() {
                             top.children.push(node);

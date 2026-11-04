@@ -138,3 +138,66 @@ fn test_geolocation_and_haversine() {
     let distance = strata_web_api::haversine_distance_meters(51.5074, -0.1278, 48.8566, 2.3522);
     assert!((distance - 343_550.0).abs() < 5000.0); // within 5km accuracy
 }
+
+#[test]
+fn test_chunked_transfer_decoding() {
+    let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nWiki\r\n6\r\npedia \r\n8\r\nArticles\r\n0\r\n\r\n";
+    let res = parse_http_response(raw).expect("Failed to parse chunked response");
+    assert_eq!(res.text().unwrap(), "Wikipedia Articles");
+}
+
+#[test]
+fn test_gzip_deflate_brotli_decompression() {
+    use std::io::Write;
+    let original = "Strata high-performance compressed stream engine 2026";
+
+    // 1. Gzip
+    let mut gz_encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz_encoder.write_all(original.as_bytes()).unwrap();
+    let gz_bytes = gz_encoder.finish().unwrap();
+
+    let decomp_gz = strata_web_api::decompress_body(&gz_bytes, "gzip").unwrap();
+    assert_eq!(String::from_utf8(decomp_gz).unwrap(), original);
+
+    // 2. Deflate
+    let mut def_encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    def_encoder.write_all(original.as_bytes()).unwrap();
+    let def_bytes = def_encoder.finish().unwrap();
+
+    let decomp_def = strata_web_api::decompress_body(&def_bytes, "deflate").unwrap();
+    assert_eq!(String::from_utf8(decomp_def).unwrap(), original);
+
+    // 3. Brotli
+    let mut br_bytes = Vec::new();
+    let params = brotli::enc::BrotliEncoderParams::default();
+    brotli::BrotliCompress(&mut original.as_bytes(), &mut br_bytes, &params).unwrap();
+
+    let decomp_br = strata_web_api::decompress_body(&br_bytes, "br").unwrap();
+    assert_eq!(String::from_utf8(decomp_br).unwrap(), original);
+}
+
+#[test]
+fn test_w3c_cache_storage_and_cache_control() {
+    let storage = CacheStorage::new();
+    let cache = storage.open("v1-assets");
+
+    let mut headers = Headers::new();
+    headers.set("Cache-Control", "public, max-age=3600");
+    headers.set("ETag", "\"123456\"");
+    let response = Response::new(200, "OK", headers, b"Cached stylesheet content".to_vec());
+
+    let stored = cache.put("https://cdn.strata.dev/style.css", response).unwrap();
+    assert!(stored);
+
+    let matched = cache.match_url("https://cdn.strata.dev/style.css").expect("Cache hit expected");
+    assert_eq!(matched.text().unwrap(), "Cached stylesheet content");
+
+    // no-store must NOT be stored in cache
+    let mut no_store_headers = Headers::new();
+    no_store_headers.set("Cache-Control", "no-store");
+    let no_store_res = Response::new(200, "OK", no_store_headers, b"Private user data".to_vec());
+    let stored_no_store = cache.put("https://api.strata.dev/user/private", no_store_res).unwrap();
+    assert!(!stored_no_store);
+    assert!(cache.match_url("https://api.strata.dev/user/private").is_none());
+}
+

@@ -83,6 +83,7 @@ impl JsTranspiler {
                             out.push_str(&format!("'on{}': (e) => {{ /* event handler */ }}", evt_name));
                             first_attr = false;
                         }
+                        Attribute::DirectStyle(_) => {}
                     }
                 }
 
@@ -191,6 +192,16 @@ impl JsTranspiler {
     pub fn event_name(event: EventType) -> &'static str {
         match event {
             EventType::Click => "click",
+            EventType::DblClick => "dblclick",
+            EventType::ContextMenu => "contextmenu",
+            EventType::AuxClick => "auxclick",
+            EventType::MouseDown => "mousedown",
+            EventType::MouseUp => "mouseup",
+            EventType::MouseMove => "mousemove",
+            EventType::MouseEnter => "mouseenter",
+            EventType::MouseLeave => "mouseleave",
+            EventType::MouseOver => "mouseover",
+            EventType::MouseOut => "mouseout",
             EventType::Input => "input",
             EventType::Change => "change",
             EventType::Submit => "submit",
@@ -201,6 +212,15 @@ impl JsTranspiler {
             EventType::PointerMove => "pointermove",
             EventType::Focus => "focus",
             EventType::Blur => "blur",
+            EventType::Wheel => "wheel",
+            EventType::TransitionRun => "transitionrun",
+            EventType::TransitionStart => "transitionstart",
+            EventType::TransitionEnd => "transitionend",
+            EventType::TransitionCancel => "transitioncancel",
+            EventType::AnimationStart => "animationstart",
+            EventType::AnimationIteration => "animationiteration",
+            EventType::AnimationEnd => "animationend",
+            EventType::AnimationCancel => "animationcancel",
             EventType::Custom(_) => "custom",
         }
     }

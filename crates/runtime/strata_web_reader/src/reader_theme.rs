@@ -111,4 +111,26 @@ impl ReaderTheme {
             max_width_px: 760,
         }
     }
+
+    /// Resolves the primary canvas background color as RGBA.
+    pub fn bg_color_rgba(&self) -> strata_primitives::color::Rgba {
+        match self.name.as_str() {
+            "Amoled" => strata_primitives::color::Rgba::new(0, 0, 0, 255),
+            "Sepia" => strata_primitives::color::Rgba::new(251, 240, 217, 255),
+            "Light" => strata_primitives::color::Rgba::new(255, 255, 255, 255),
+            "Solarized" => strata_primitives::color::Rgba::new(0, 43, 54, 255),
+            _ => strata_primitives::color::Rgba::new(10, 10, 10, 255), // Dark
+        }
+    }
+
+    /// Resolves the default text color as RGBA.
+    pub fn text_color_rgba(&self) -> strata_primitives::color::Rgba {
+        match self.name.as_str() {
+            "Amoled" => strata_primitives::color::Rgba::new(212, 212, 216, 255),
+            "Sepia" => strata_primitives::color::Rgba::new(95, 75, 50, 255),
+            "Light" => strata_primitives::color::Rgba::new(51, 65, 85, 255),
+            "Solarized" => strata_primitives::color::Rgba::new(131, 148, 150, 255),
+            _ => strata_primitives::color::Rgba::new(203, 213, 225, 255), // Dark
+        }
+    }
 }

@@ -4,11 +4,13 @@ pub mod clipboard;
 pub mod fetch;
 pub mod geolocation;
 pub mod websocket;
+pub mod cache;
 
+pub use cache::{Cache, CacheEntry, CacheStorage};
 pub use clipboard::{Clipboard, ClipboardError};
 pub use fetch::{
-    fetch, parse_http_response, AbortController, AbortSignal, FetchError, FormData, Headers,
-    ParsedUrl, RequestInit, Response,
+    decode_chunked_body, decompress_body, fetch, parse_http_response, AbortController, AbortSignal,
+    FetchError, FormData, Headers, ParsedUrl, RequestInit, Response,
 };
 pub use geolocation::{
     haversine_distance_meters, initial_bearing_degrees, GeoCoordinates, Geolocation,
@@ -19,6 +21,7 @@ pub use websocket::{
 };
 
 pub mod prelude {
+    pub use super::cache::{Cache, CacheEntry, CacheStorage};
     pub use super::clipboard::{Clipboard, ClipboardError};
     pub use super::fetch::{
         fetch, AbortController, AbortSignal, FetchError, FormData, Headers, RequestInit, Response,

@@ -80,18 +80,35 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
         },
         DrawCommand::DrawText {
             origin,
+            bounds_width,
+            bounds_height,
+            text_align,
             text,
             font_size,
             line_height,
             font_weight,
             color,
+            is_monospace,
         } => DrawCommand::DrawText {
             origin: (origin.0 + dx, origin.1 + dy),
+            bounds_width: *bounds_width,
+            bounds_height: *bounds_height,
+            text_align: *text_align,
             text: text.clone(),
             font_size: *font_size,
             line_height: *line_height,
             font_weight: *font_weight,
             color: *color,
+            is_monospace: *is_monospace,
+        },
+        DrawCommand::DrawTextFragments { fragments } => {
+            let mut translated = fragments.clone();
+            for f in &mut translated {
+                f.bounds.x += dx;
+                f.bounds.y += dy;
+                f.baseline_y += dy;
+            }
+            DrawCommand::DrawTextFragments { fragments: translated }
         },
         DrawCommand::DrawViewport3D { bounds, scene } => DrawCommand::DrawViewport3D {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
@@ -107,6 +124,10 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
             stroke_color,
             fill_color,
             stroke_width,
+            stroke_linecap,
+            stroke_linejoin,
+            stroke_dasharray,
+            fill_rule,
             view_box,
         } => DrawCommand::DrawSvgPath {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
@@ -114,13 +135,56 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
             stroke_color: *stroke_color,
             fill_color: *fill_color,
             stroke_width: *stroke_width,
+            stroke_linecap: *stroke_linecap,
+            stroke_linejoin: *stroke_linejoin,
+            stroke_dasharray: stroke_dasharray.clone(),
+            fill_rule: *fill_rule,
             view_box: *view_box,
         },
+        DrawCommand::DrawInsetShadow { bounds, shadow, border_radius } => DrawCommand::DrawInsetShadow {
+            bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
+            shadow: shadow.clone(),
+            border_radius: *border_radius,
+        },
+        DrawCommand::DrawLinearGradient { bounds, angle_deg, stops, border_radius } => DrawCommand::DrawLinearGradient {
+            bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
+            angle_deg: *angle_deg,
+            stops: stops.clone(),
+            border_radius: *border_radius,
+        },
+        DrawCommand::DrawRadialGradient { bounds, center, stops, border_radius } => DrawCommand::DrawRadialGradient {
+            bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
+            center: *center,
+            stops: stops.clone(),
+            border_radius: *border_radius,
+        },
+        DrawCommand::PushBackdropFilter { bounds, radius, filter } => DrawCommand::PushBackdropFilter {
+            bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
+            radius: *radius,
+            filter: filter.clone(),
+        },
+        DrawCommand::PopBackdropFilter => DrawCommand::PopBackdropFilter,
+        DrawCommand::PushFilter { bounds, filter } => DrawCommand::PushFilter {
+            bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
+            filter: filter.clone(),
+        },
+        DrawCommand::PopFilter => DrawCommand::PopFilter,
+        DrawCommand::PushClipPath { bounds, clip_path } => DrawCommand::PushClipPath {
+            bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
+            clip_path: clip_path.clone(),
+        },
+        DrawCommand::PopClipPath => DrawCommand::PopClipPath,
+        DrawCommand::PushBlendMode { mode } => DrawCommand::PushBlendMode { mode: *mode },
+        DrawCommand::PopBlendMode => DrawCommand::PopBlendMode,
+        DrawCommand::PushIsolation { isolate } => DrawCommand::PushIsolation { isolate: *isolate },
+        DrawCommand::PopIsolation => DrawCommand::PopIsolation,
         DrawCommand::PushClip { bounds, radius } => DrawCommand::PushClip {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
             radius: *radius,
         },
         DrawCommand::PopClip => DrawCommand::PopClip,
+        DrawCommand::PushTransform { matrix } => DrawCommand::PushTransform { matrix: *matrix },
+        DrawCommand::PopTransform => DrawCommand::PopTransform,
     }
 }
 

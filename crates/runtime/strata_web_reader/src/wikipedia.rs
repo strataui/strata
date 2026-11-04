@@ -96,8 +96,30 @@ impl WikipediaEngine {
         }
 
         // 4. Clean body nodes and extract lead summary
+        let mut source_nodes: Vec<SemanticNode> = Vec::new();
+        for node in &root_nodes {
+            let parser_outputs = node.find_by_class("mw-parser-output");
+            if let Some(po) = parser_outputs
+                .into_iter()
+                .max_by_key(|n| match n {
+                    SemanticNode::Element { children, .. } => children.len(),
+                    _ => 0,
+                })
+            {
+                if let SemanticNode::Element { children, .. } = po {
+                    if !children.is_empty() {
+                        source_nodes = children.clone();
+                        break;
+                    }
+                }
+            }
+        }
+        if source_nodes.is_empty() {
+            source_nodes = root_nodes;
+        }
+
         let mut cleaned_nodes = Vec::new();
-        for node in root_nodes {
+        for node in source_nodes {
             Self::sanitize_node(&node, &mut cleaned_nodes);
         }
 
@@ -131,6 +153,23 @@ impl WikipediaEngine {
         // 5. Partition into sections
         let sections = Self::partition_sections(unwrapped_nodes);
 
+        if toc.is_empty() {
+            let mut idx = 1;
+            for sec in &sections {
+                if sec.level == 2 {
+                    if let Some(ref t) = sec.title {
+                        toc.push(WikipediaTocItem {
+                            level: 2,
+                            number: format!("{}", idx),
+                            title: t.clone(),
+                            anchor: t.to_lowercase().replace(' ', "_"),
+                        });
+                        idx += 1;
+                    }
+                }
+            }
+        }
+
         WikipediaArticle {
             title,
             summary,
@@ -145,7 +184,7 @@ impl WikipediaEngine {
         loop {
             if current.len() == 1 {
                 let tag = current[0].tag().unwrap_or("");
-                if tag == "html" || tag == "body" || tag == "article" {
+                if tag == "html" || tag == "body" || tag == "article" || tag == "main" {
                     if let SemanticNode::Element { children, .. } = current.pop().unwrap() {
                         current = children;
                         continue;
@@ -267,7 +306,7 @@ impl WikipediaEngine {
                 children,
             } => {
                 // Strip Wikipedia noise, editing links, and navboxes
-                if tag == "style" || tag == "script" {
+                if tag == "style" || tag == "script" || tag == "h1" {
                     return;
                 }
                 if let Some(classes) = node.attr("class") {
@@ -276,12 +315,21 @@ impl WikipediaEngine {
                         || classes.contains("infobox")
                         || classes.contains("toc")
                         || classes.contains("mw-empty-elt")
+                        || classes.contains("reference")
+                        || classes.contains("noprint")
+                        || classes.contains("shortdescription")
+                        || classes.contains("hatnote")
+                        || classes.contains("ambox")
+                        || classes.contains("sistersitebox")
+                        || classes.contains("catlinks")
+                        || classes.contains("printfooter")
+                        || classes.contains("reflist")
                     {
                         return;
                     }
                 }
                 if let Some(id) = node.attr("id") {
-                    if id == "toc" || id == "coordinates" {
+                    if id == "toc" || id == "coordinates" || id == "siteSub" || id == "contentSub" {
                         return;
                     }
                 }
@@ -298,9 +346,7 @@ impl WikipediaEngine {
                 });
             }
             SemanticNode::Text(text) => {
-                if !text.trim().is_empty() {
-                    out.push(SemanticNode::Text(text.clone()));
-                }
+                out.push(SemanticNode::Text(text.clone()));
             }
             SemanticNode::Comment(_) => {}
         }
@@ -313,12 +359,22 @@ impl WikipediaEngine {
         let mut current_nodes = Vec::new();
 
         for node in nodes {
-            let is_heading = match node.tag() {
+            let mut is_heading = match node.tag() {
                 Some("h2") => Some((node.text_content().trim().to_string(), 2)),
                 Some("h3") => Some((node.text_content().trim().to_string(), 3)),
                 Some("h4") => Some((node.text_content().trim().to_string(), 4)),
                 _ => None,
             };
+
+            if is_heading.is_none() && node.has_class("mw-heading") {
+                if let Some(h2) = node.find_first("h2") {
+                    is_heading = Some((h2.text_content().trim().to_string(), 2));
+                } else if let Some(h3) = node.find_first("h3") {
+                    is_heading = Some((h3.text_content().trim().to_string(), 3));
+                } else if let Some(h4) = node.find_first("h4") {
+                    is_heading = Some((h4.text_content().trim().to_string(), 4));
+                }
+            }
 
             if let Some((heading_title, level)) = is_heading {
                 if !current_nodes.is_empty() || current_title.is_some() {
@@ -352,18 +408,12 @@ impl WikipediaEngine {
         let transpiler = WebTranspiler::new(theme);
         let mut root_children = Vec::new();
 
-        // 1. Top Header: Title & Subtitle Badge
+        // 1. Top Header: Title
         root_children.push(NodeBlueprint::element(
             Tag::Div,
-            vec!["mb-8 pb-4 border-b ".to_string() + &theme.border_class],
+            vec!["mb-5 pb-4 border-b ".to_string() + &theme.border_class],
             Vec::new(),
             vec![
-                NodeBlueprint::element(
-                    Tag::Span,
-                    vec!["text-xs uppercase tracking-widest font-bold text-indigo-400 mb-2 block".to_string()],
-                    Vec::new(),
-                    vec![NodeBlueprint::text("Wikipedia Article Reader")],
-                ),
                 NodeBlueprint::element(
                     Tag::H1,
                     vec![format!("text-4xl sm:text-5xl font-black tracking-tight {}", theme.heading_class)],
@@ -373,17 +423,27 @@ impl WikipediaEngine {
             ],
         ));
 
-        // 2. Infobox Card (if present)
+        // 2. Lead Summary Paragraph (if present)
+        if !article.summary.is_empty() {
+            root_children.push(NodeBlueprint::element(
+                Tag::P,
+                vec![format!("text-base leading-relaxed mb-6 {}", theme.text_class)],
+                Vec::new(),
+                vec![NodeBlueprint::text(article.summary.clone())],
+            ));
+        }
+
+        // 3. Infobox Card (if present)
         if let Some(ref infobox) = article.infobox {
             root_children.push(Self::render_infobox_card(infobox, theme));
         }
 
-        // 3. Table of Contents Card (if items exist)
+        // 4. Table of Contents Card (if items exist)
         if !article.toc.is_empty() {
             root_children.push(Self::render_toc_card(&article.toc, theme));
         }
 
-        // 4. Main Body Sections
+        // 5. Main Body Sections
         for section in &article.sections {
             let mut section_children = Vec::new();
 
@@ -421,9 +481,9 @@ impl WikipediaEngine {
             ));
         }
 
-        // 5. Container wrapper
+        // 6. Container wrapper
         let container_style = format!(
-            "w-full max-w-[{}px] mx-auto px-6 py-10 {} {}",
+            "w-full max-w-[{}px] mx-auto px-6 py-6 {} {}",
             theme.max_width_px, theme.bg_class, theme.text_class
         );
 
@@ -440,46 +500,27 @@ impl WikipediaEngine {
 
         card_children.push(NodeBlueprint::element(
             Tag::H3,
-            vec![format!("text-lg font-bold pb-2 border-b {} {}", theme.border_class, theme.heading_class)],
+            vec![format!("text-lg font-bold pb-2 mb-2 border-b {} {}", theme.border_class, theme.heading_class)],
             Vec::new(),
             vec![NodeBlueprint::text(infobox.title.clone())],
         ));
 
-        if let Some(ref img_url) = infobox.image_url {
-            let mut img_attrs = vec![Attribute::property("src", img_url.clone())];
-            if let Some(ref cap) = infobox.image_caption {
-                img_attrs.push(Attribute::property("alt", cap.clone()));
-            }
-
-            card_children.push(NodeBlueprint::element(
-                Tag::Div,
-                vec!["my-3 flex justify-center".to_string()],
-                Vec::new(),
-                vec![NodeBlueprint::element(
-                    Tag::Img,
-                    vec!["rounded max-h-64 object-contain shadow-sm".to_string()],
-                    img_attrs,
-                    Vec::new(),
-                )],
-            ));
-        }
-
         let mut row_nodes = Vec::new();
-        for row in &infobox.rows {
+        for row in infobox.rows.iter().take(8) {
             row_nodes.push(NodeBlueprint::element(
                 Tag::Tr,
-                vec!["border-b last:border-b-0 ".to_string() + &theme.border_class],
+                vec!["w-full flex flex-row items-baseline border-b last:border-b-0 ".to_string() + &theme.border_class],
                 Vec::new(),
                 vec![
                     NodeBlueprint::element(
                         Tag::Td,
-                        vec![format!("py-1.5 pr-3 text-xs font-semibold w-1/3 {}", theme.heading_class)],
+                        vec![format!("py-1.5 pr-4 text-xs font-semibold w-44 {}", theme.heading_class)],
                         Vec::new(),
                         vec![NodeBlueprint::text(row.label.clone())],
                     ),
                     NodeBlueprint::element(
                         Tag::Td,
-                        vec![format!("py-1.5 pl-3 text-xs leading-relaxed {}", theme.text_class)],
+                        vec![format!("py-1.5 text-xs leading-relaxed flex-1 {}", theme.text_class)],
                         Vec::new(),
                         vec![NodeBlueprint::text(row.value.clone())],
                     ),
@@ -502,7 +543,7 @@ impl WikipediaEngine {
         NodeBlueprint::element(
             Tag::Aside,
             vec![format!(
-                "float-none sm:float-right sm:w-80 sm:ml-6 mb-6 p-4 rounded-xl border shadow-lg {} {}",
+                "w-full mb-6 p-4 rounded-xl border shadow-lg {} {}",
                 theme.border_class, theme.card_bg_class
             )],
             Vec::new(),

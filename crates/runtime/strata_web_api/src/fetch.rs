@@ -328,6 +328,10 @@ pub fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, FetchErro
         request_bytes.extend_from_slice(format!("Content-Length: {body_len}\r\n").as_bytes());
     }
 
+    if !req.headers.has("Accept-Encoding") {
+        request_bytes.extend_from_slice(b"Accept-Encoding: gzip, deflate, br\r\n");
+    }
+
     for (k, v) in req.headers.entries() {
         request_bytes.extend_from_slice(format!("{k}: {v}\r\n").as_bytes());
     }
@@ -345,6 +349,83 @@ pub fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, FetchErro
     stream.read_to_end(&mut raw_response).map_err(|e| FetchError::NetworkError(e.to_string()))?;
 
     parse_http_response(&raw_response)
+}
+
+/// Decodes HTTP/1.1 chunked transfer encoded payloads.
+pub fn decode_chunked_body(raw_body: &[u8]) -> Result<Vec<u8>, FetchError> {
+    let mut decoded = Vec::new();
+    let mut cursor = 0;
+
+    while cursor < raw_body.len() {
+        let slice = &raw_body[cursor..];
+        let Some(newline_pos) = slice.windows(2).position(|w| w == b"\r\n") else {
+            break;
+        };
+
+        let size_str = std::str::from_utf8(&slice[..newline_pos])
+            .map_err(|e| FetchError::NetworkError(format!("Invalid chunk size encoding: {e}")))?
+            .trim();
+
+        let size_hex = size_str.split(';').next().unwrap_or(size_str).trim();
+        let chunk_size = usize::from_str_radix(size_hex, 16)
+            .map_err(|e| FetchError::NetworkError(format!("Invalid hex chunk size '{size_hex}': {e}")))?;
+
+        cursor += newline_pos + 2;
+
+        if chunk_size == 0 {
+            break;
+        }
+
+        if cursor + chunk_size > raw_body.len() {
+            return Err(FetchError::NetworkError("Truncated chunked HTTP payload".into()));
+        }
+
+        decoded.extend_from_slice(&raw_body[cursor..cursor + chunk_size]);
+        cursor += chunk_size;
+
+        if cursor + 2 <= raw_body.len() && &raw_body[cursor..cursor + 2] == b"\r\n" {
+            cursor += 2;
+        }
+    }
+
+    Ok(decoded)
+}
+
+/// Decompresses body bytes based on HTTP Content-Encoding (gzip, deflate, br).
+pub fn decompress_body(raw_body: &[u8], encoding: &str) -> Result<Vec<u8>, FetchError> {
+    let lower = encoding.trim().to_ascii_lowercase();
+    match lower.as_str() {
+        "gzip" => {
+            let mut decoder = flate2::read::GzDecoder::new(raw_body);
+            let mut decompressed = Vec::new();
+            decoder
+                .read_to_end(&mut decompressed)
+                .map_err(|e| FetchError::NetworkError(format!("Gzip decompression failed: {e}")))?;
+            Ok(decompressed)
+        }
+        "deflate" => {
+            let mut decoder = flate2::read::ZlibDecoder::new(raw_body);
+            let mut decompressed = Vec::new();
+            if decoder.read_to_end(&mut decompressed).is_ok() {
+                Ok(decompressed)
+            } else {
+                let mut raw_decoder = flate2::read::DeflateDecoder::new(raw_body);
+                let mut raw_decompressed = Vec::new();
+                raw_decoder
+                    .read_to_end(&mut raw_decompressed)
+                    .map_err(|e| FetchError::NetworkError(format!("Deflate decompression failed: {e}")))?;
+                Ok(raw_decompressed)
+            }
+        }
+        "br" | "brotli" => {
+            let mut decompressed = Vec::new();
+            brotli::BrotliDecompress(&mut &raw_body[..], &mut decompressed)
+                .map_err(|e| FetchError::NetworkError(format!("Brotli decompression failed: {e:?}")))?;
+            Ok(decompressed)
+        }
+        "identity" | "" => Ok(raw_body.to_vec()),
+        _ => Ok(raw_body.to_vec()),
+    }
 }
 
 /// Parses raw HTTP/1.1 response bytes into a structured `Response`.
@@ -376,7 +457,25 @@ pub fn parse_http_response(raw: &[u8]) -> Result<Response, FetchError> {
         }
     }
 
-    let body = raw[header_end + 4..].to_vec();
+    let raw_body = &raw[header_end + 4..];
+
+    // Decode chunked transfer encoding if specified
+    let unchunked_body = if headers
+        .get("transfer-encoding")
+        .map(|v| v.eq_ignore_ascii_case("chunked"))
+        .unwrap_or(false)
+    {
+        decode_chunked_body(raw_body)?
+    } else {
+        raw_body.to_vec()
+    };
+
+    // Decompress payload if Content-Encoding is set
+    let body = if let Some(encoding) = headers.get("content-encoding") {
+        decompress_body(&unchunked_body, encoding)?
+    } else {
+        unchunked_body
+    };
 
     Ok(Response::new(status_code, status_text, headers, body))
 }
