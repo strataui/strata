@@ -4,6 +4,11 @@
 info/
 references/
 
+# Local agent configuration, instructions, and task records (kept locally, never committed)
+.opencode/
+AGENTS.md
+info/agent_tasks/
+
 # Rust Cargo build artifacts
 /target/
 **/*.rs.bk
