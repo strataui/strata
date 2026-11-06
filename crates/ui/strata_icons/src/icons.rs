@@ -91,6 +91,7 @@ impl Icons {
     pub fn Menu(class: Option<&'static str>) -> View { Icon(IconName::Menu, class) }
     pub fn ExternalLink(class: Option<&'static str>) -> View { Icon(IconName::ExternalLink, class) }
     pub fn Compass(class: Option<&'static str>) -> View { Icon(IconName::Compass, class) }
+    pub fn Home(class: Option<&'static str>) -> View { Icon(IconName::Home, class) }
     pub fn CornerDownRight(class: Option<&'static str>) -> View { Icon(IconName::CornerDownRight, class) }
 
     // Actions & Interface

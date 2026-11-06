@@ -20,6 +20,7 @@ pub enum IconName {
     Menu,
     ExternalLink,
     Compass,
+    Home,
     CornerDownRight,
 
     // Actions & Interface
@@ -180,6 +181,7 @@ pub fn lookup_icon(name: IconName) -> IconData {
         IconName::Menu => IconData::new(name, "M4 6h16M4 12h16M4 18h16"),
         IconName::ExternalLink => IconData::new(name, "M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"),
         IconName::Compass => IconData::new(name, "M12 2a10 10 0 100 20 10 10 0 000-20zM16.24 7.76l-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z"),
+        IconName::Home => IconData::new(name, "M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z M9 22V12h6v10"),
         IconName::CornerDownRight => IconData::new(name, "M15 10l5 5-5 5M4 4v7a4 4 0 004 4h12"),
 
         // Actions & Interface
@@ -309,7 +311,7 @@ pub fn all_icons() -> &'static [IconName] {
         IconName::ArrowLeft, IconName::ArrowRight, IconName::ArrowUp, IconName::ArrowDown,
         IconName::ArrowUpRight, IconName::ArrowDownLeft, IconName::ChevronLeft, IconName::ChevronRight,
         IconName::ChevronUp, IconName::ChevronDown, IconName::ChevronsUpDown, IconName::ChevronsLeft,
-        IconName::ChevronsRight, IconName::Menu, IconName::ExternalLink, IconName::Compass,
+        IconName::ChevronsRight, IconName::Menu, IconName::ExternalLink, IconName::Compass, IconName::Home,
         IconName::CornerDownRight,
         IconName::Search, IconName::X, IconName::Plus, IconName::Minus, IconName::Check,
         IconName::CheckCheck, IconName::Copy, IconName::Edit, IconName::Trash, IconName::Download,
