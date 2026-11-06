@@ -24,6 +24,10 @@ thread_local! {
 fn inline_layout_cache_key(items: &[InlineItem], options: &InlineLayoutOptions) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // Measurement callbacks can be re-registered at runtime. Mixing the font
+    // generation into the key prevents cached geometry from an older
+    // measurement backend surviving a rebuild.
+    crate::text::font_generation().hash(&mut hasher);
     options.font_size.to_bits().hash(&mut hasher);
     options
         .line_height
@@ -57,6 +61,26 @@ fn inline_layout_cache_key(items: &[InlineItem], options: &InlineLayoutOptions) 
                     .hash(&mut hasher);
                 style.is_monospace.hash(&mut hasher);
                 (style.vertical_align as u8).hash(&mut hasher);
+                // Paint-only fields must participate in the key. A cached
+                // result carries cloned fragments with a full InlineTextStyle,
+                // so a hit with a different color would repaint the first
+                // run's styling for the life of the thread.
+                style.color.r.hash(&mut hasher);
+                style.color.g.hash(&mut hasher);
+                style.color.b.hash(&mut hasher);
+                style.color.a.hash(&mut hasher);
+                match style.background_color {
+                    Some(c) => {
+                        1u8.hash(&mut hasher);
+                        c.r.hash(&mut hasher);
+                        c.g.hash(&mut hasher);
+                        c.b.hash(&mut hasher);
+                        c.a.hash(&mut hasher);
+                    }
+                    None => 0u8.hash(&mut hasher),
+                }
+                (style.text_decoration as u8).hash(&mut hasher);
+                style.href.hash(&mut hasher);
             }
             InlineItem::Atomic {
                 node_index,
