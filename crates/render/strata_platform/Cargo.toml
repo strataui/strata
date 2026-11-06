@@ -17,4 +17,4 @@ x11 = { version = "2.21", features = ["xlib"] }
 gtk = "0.18.2"
 cairo-rs = { version = "0.18.5", features = ["png"] }
 pangocairo = "0.18.0"
-pango = "0.18.0"
+pango = { version = "0.18.0", features = ["v1_44"] }

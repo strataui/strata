@@ -172,7 +172,11 @@ impl ShortcutManager {
     }
 
     /// Registers a shortcut with a pre-constructed `ShortcutTrigger`.
-    pub fn register_trigger(&mut self, trigger: ShortcutTrigger, action: impl Fn() -> bool + 'static) {
+    pub fn register_trigger(
+        &mut self,
+        trigger: ShortcutTrigger,
+        action: impl Fn() -> bool + 'static,
+    ) {
         self.bindings.push((trigger, Box::new(action)));
     }
 

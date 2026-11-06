@@ -1,8 +1,8 @@
 //! Multi-window desktop manager with parent-child modality, focus arbitration, and event multiplexing.
 
-use std::collections::HashMap;
 use crate::events::PlatformEvent;
 use crate::window::{MockPlatformWindow, PlatformWindow, WindowConfig};
+use std::collections::HashMap;
 
 /// Unique 64-bit identifier for an active platform window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -169,7 +169,10 @@ impl WindowManager {
 
         // Check if modal blocked
         if self.is_modal_blocked(id) {
-            return Err(format!("Window {:?} cannot receive focus while blocked by a modal dialog", id));
+            return Err(format!(
+                "Window {:?} cannot receive focus while blocked by a modal dialog",
+                id
+            ));
         }
 
         // Update focus flags

@@ -5,46 +5,51 @@
 
 pub mod csd;
 pub mod events;
-pub mod raw_abi;
-pub mod surface;
+#[cfg(target_os = "linux")]
+pub mod gtk_window;
 pub mod menu;
+pub mod raw_abi;
 pub mod shortcuts;
+pub mod single_instance;
+pub mod surface;
 pub mod tray;
 pub mod window;
 pub mod window_manager;
 #[cfg(target_os = "linux")]
 pub mod x11_window;
-#[cfg(target_os = "linux")]
-pub mod gtk_window;
 
+#[cfg(target_os = "linux")]
+pub use cairo;
 pub use csd::{ControlPlacement, CsdGeometry, CsdHitZone};
 pub use events::{KeyCode, Modifiers, MouseButton, PlatformEvent, TouchPhase};
+#[cfg(target_os = "linux")]
+pub use gtk;
+#[cfg(target_os = "linux")]
+pub use gtk_window::{
+    cairo_rounded_rect, gtk_begin_window_drag, gtk_close, gtk_current_modifiers, gtk_focus_window,
+    gtk_get_clipboard_text, gtk_is_closing, gtk_is_maximized, gtk_minimize, gtk_set_clipboard_text,
+    gtk_set_cursor, gtk_toggle_maximize, init_pango_text_measurement, launch_gtk_window,
+    pango_font_metrics, pango_measure_styled_text, pango_measure_styled_text_family,
+    pango_measure_text, pango_measure_text_family, post_platform_event,
+    render_display_list_to_cairo, render_to_png, resolved_font_family,
+};
 pub use menu::{AcceleratorModifier, Menu, MenuAccelerator, MenuBar, MenuItem, MenuItemRole};
+#[cfg(target_os = "linux")]
+pub use pango;
 pub use shortcuts::{ShortcutCallback, ShortcutManager, ShortcutTrigger};
+pub use single_instance::{SingleInstanceLock, SingleInstanceStatus};
 pub use surface::{
     FramePacer, PresentError, PresentMode, RefreshRate, SoftwareSurfacePresenter, SurfaceConfig,
     SurfaceHandle, SurfacePresenter, SwapchainCompositor, SwapchainFormat,
 };
-pub use tray::{TrayIcon, TrayMenu, TrayMenuItem};
+pub use tray::{NativeTrayHandle, TrayEventSink, TrayIcon, TrayMenu, TrayMenuItem};
 pub use window::{
     CursorIcon, EventLoop, EventLoopControl, LivePlatformWindow, MockEventLoop, MockPlatformWindow,
     PlatformWindow, ThemeMode, WindowConfig, WindowDecoration, WindowMode,
 };
+pub use window_manager::{WindowId, WindowManager};
 #[cfg(target_os = "linux")]
 pub use x11_window::{X11EventLoop, X11Window};
-#[cfg(target_os = "linux")]
-pub use gtk_window::{
-    cairo_rounded_rect, gtk_close, gtk_is_closing, gtk_get_clipboard_text, gtk_minimize, gtk_set_clipboard_text,
-    gtk_set_cursor, gtk_toggle_maximize, gtk_is_maximized, gtk_begin_window_drag, gtk_current_modifiers,
-    init_pango_text_measurement, launch_gtk_window, pango_measure_text, render_display_list_to_cairo, render_to_png,
-};
-#[cfg(target_os = "linux")]
-pub use cairo;
-#[cfg(target_os = "linux")]
-pub use gtk;
-#[cfg(target_os = "linux")]
-pub use pango;
-pub use window_manager::{WindowId, WindowManager};
 
 /// Target operating system or runtime platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -106,11 +111,13 @@ impl PlatformTarget {
 pub mod prelude {
     pub use super::csd::{ControlPlacement, CsdGeometry, CsdHitZone};
     pub use super::events::{KeyCode, Modifiers, MouseButton, PlatformEvent, TouchPhase};
+    pub use super::surface::{
+        FramePacer, PresentMode, RefreshRate, SurfaceConfig, SurfaceHandle, SwapchainFormat,
+    };
     pub use super::tray::{TrayIcon, TrayMenu, TrayMenuItem};
-    pub use super::surface::{FramePacer, PresentMode, RefreshRate, SurfaceConfig, SurfaceHandle, SwapchainFormat};
     pub use super::window::{
-        CursorIcon, EventLoop, EventLoopControl, LivePlatformWindow, MockEventLoop, MockPlatformWindow,
-        PlatformWindow, ThemeMode, WindowConfig, WindowDecoration, WindowMode,
+        CursorIcon, EventLoop, EventLoopControl, LivePlatformWindow, MockEventLoop,
+        MockPlatformWindow, PlatformWindow, ThemeMode, WindowConfig, WindowDecoration, WindowMode,
     };
     #[cfg(target_os = "linux")]
     pub use super::x11_window::{X11EventLoop, X11Window};

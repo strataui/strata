@@ -13,7 +13,9 @@ use x11::xlib;
 
 use crate::events::{KeyCode, Modifiers, MouseButton, PlatformEvent};
 use crate::surface::PresentError;
-use crate::window::{CursorIcon, EventLoop, EventLoopControl, PlatformWindow, WindowConfig, WindowMode};
+use crate::window::{
+    CursorIcon, EventLoop, EventLoopControl, PlatformWindow, WindowConfig, WindowMode,
+};
 
 /// Native Linux X11 window instance managing the X server connection, window lifecycle, and frame presentation.
 pub struct X11Window {
@@ -35,7 +37,10 @@ impl X11Window {
         unsafe {
             let display = xlib::XOpenDisplay(std::ptr::null());
             if display.is_null() {
-                return Err("Failed to open X11 display. Ensure DISPLAY environment variable is valid.".to_string());
+                return Err(
+                    "Failed to open X11 display. Ensure DISPLAY environment variable is valid."
+                        .to_string(),
+                );
             }
 
             let screen = xlib::XDefaultScreen(display);
@@ -63,7 +68,8 @@ impl X11Window {
             }
 
             // Set Window Title
-            let c_title = CString::new(config.title.as_str()).unwrap_or_else(|_| CString::new("Strata Application").unwrap());
+            let c_title = CString::new(config.title.as_str())
+                .unwrap_or_else(|_| CString::new("Strata Application").unwrap());
             xlib::XStoreName(display, window, c_title.as_ptr());
 
             // Intercept window close (X button) via WM_DELETE_WINDOW
@@ -106,7 +112,12 @@ impl X11Window {
     }
 
     /// Presents a BGRA8 pixel slice directly to the X11 window.
-    pub fn present_bgra(&mut self, buffer: &[u8], width: u32, height: u32) -> Result<(), PresentError> {
+    pub fn present_bgra(
+        &mut self,
+        buffer: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<(), PresentError> {
         if self.display.is_null() || self.window == 0 {
             return Err(PresentError::SurfaceLost);
         }
@@ -140,8 +151,10 @@ impl X11Window {
                 self.window,
                 self.gc,
                 image,
-                0, 0,
-                0, 0,
+                0,
+                0,
+                0,
+                0,
                 width,
                 height,
             );
@@ -181,7 +194,10 @@ impl X11Window {
                             self.config.width = w;
                             self.config.height = h;
                             self.redraw_requested = true;
-                            events.push(PlatformEvent::WindowResized { width: w, height: h });
+                            events.push(PlatformEvent::WindowResized {
+                                width: w,
+                                height: h,
+                            });
                         }
                     }
                     xlib::ButtonPress => {
@@ -254,17 +270,38 @@ impl X11Window {
                                 _ => KeyCode::Digit9,
                             },
                             0x0041..=0x005A | 0x0061..=0x007A => {
-                                let c = if keysym >= 0x0061 { keysym - 0x0061 } else { keysym - 0x0041 };
+                                let c = if keysym >= 0x0061 {
+                                    keysym - 0x0061
+                                } else {
+                                    keysym - 0x0041
+                                };
                                 match c {
-                                    0 => KeyCode::KeyA, 1 => KeyCode::KeyB, 2 => KeyCode::KeyC,
-                                    3 => KeyCode::KeyD, 4 => KeyCode::KeyE, 5 => KeyCode::KeyF,
-                                    6 => KeyCode::KeyG, 7 => KeyCode::KeyH, 8 => KeyCode::KeyI,
-                                    9 => KeyCode::KeyJ, 10 => KeyCode::KeyK, 11 => KeyCode::KeyL,
-                                    12 => KeyCode::KeyM, 13 => KeyCode::KeyN, 14 => KeyCode::KeyO,
-                                    15 => KeyCode::KeyP, 16 => KeyCode::KeyQ, 17 => KeyCode::KeyR,
-                                    18 => KeyCode::KeyS, 19 => KeyCode::KeyT, 20 => KeyCode::KeyU,
-                                    21 => KeyCode::KeyV, 22 => KeyCode::KeyW, 23 => KeyCode::KeyX,
-                                    24 => KeyCode::KeyY, _ => KeyCode::KeyZ,
+                                    0 => KeyCode::KeyA,
+                                    1 => KeyCode::KeyB,
+                                    2 => KeyCode::KeyC,
+                                    3 => KeyCode::KeyD,
+                                    4 => KeyCode::KeyE,
+                                    5 => KeyCode::KeyF,
+                                    6 => KeyCode::KeyG,
+                                    7 => KeyCode::KeyH,
+                                    8 => KeyCode::KeyI,
+                                    9 => KeyCode::KeyJ,
+                                    10 => KeyCode::KeyK,
+                                    11 => KeyCode::KeyL,
+                                    12 => KeyCode::KeyM,
+                                    13 => KeyCode::KeyN,
+                                    14 => KeyCode::KeyO,
+                                    15 => KeyCode::KeyP,
+                                    16 => KeyCode::KeyQ,
+                                    17 => KeyCode::KeyR,
+                                    18 => KeyCode::KeyS,
+                                    19 => KeyCode::KeyT,
+                                    20 => KeyCode::KeyU,
+                                    21 => KeyCode::KeyV,
+                                    22 => KeyCode::KeyW,
+                                    23 => KeyCode::KeyX,
+                                    24 => KeyCode::KeyY,
+                                    _ => KeyCode::KeyZ,
                                 }
                             }
                             _ => KeyCode::Unknown,

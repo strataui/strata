@@ -49,9 +49,9 @@ impl CsdHitZone {
         match self {
             CsdHitZone::None => CursorIcon::Default,
             CsdHitZone::Titlebar => CursorIcon::Default,
-            CsdHitZone::MinimizeButton
-            | CsdHitZone::MaximizeButton
-            | CsdHitZone::CloseButton => CursorIcon::Pointer,
+            CsdHitZone::MinimizeButton | CsdHitZone::MaximizeButton | CsdHitZone::CloseButton => {
+                CursorIcon::Pointer
+            }
             CsdHitZone::ResizeBorderTop | CsdHitZone::ResizeBorderBottom => CursorIcon::ResizeN,
             CsdHitZone::ResizeBorderLeft | CsdHitZone::ResizeBorderRight => CursorIcon::ResizeE,
             CsdHitZone::ResizeCornerTopLeft | CsdHitZone::ResizeCornerBottomRight => {
@@ -69,7 +69,7 @@ impl CsdHitZone {
 pub enum ControlPlacement {
     #[default]
     Right, // Windows / Linux default
-    Left,  // macOS default
+    Left, // macOS default
 }
 
 /// Geometry parameters defining CSD titlebar and resize borders.

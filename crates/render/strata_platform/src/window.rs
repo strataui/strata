@@ -1,9 +1,9 @@
 //! Window configuration, platform window traits, and mock implementations.
 
-use std::collections::VecDeque;
-use std::time::Instant;
 use crate::events::PlatformEvent;
 use crate::surface::{FramePacer, RefreshRate, SurfaceConfig, SurfaceHandle};
+use std::collections::VecDeque;
+use std::time::Instant;
 
 /// Operating mode of the platform window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -77,6 +77,15 @@ pub struct WindowConfig {
     pub theme: ThemeMode,
     pub transparent: bool,
     pub always_on_top: bool,
+    pub single_instance_id: Option<String>,
+}
+
+impl WindowConfig {
+    /// Configures the window to enforce a single-instance mutex and focus existing instance on launch.
+    pub fn with_single_instance(mut self, app_id: impl Into<String>) -> Self {
+        self.single_instance_id = Some(app_id.into());
+        self
+    }
 }
 
 impl Default for WindowConfig {
@@ -95,6 +104,7 @@ impl Default for WindowConfig {
             theme: ThemeMode::System,
             transparent: false,
             always_on_top: false,
+            single_instance_id: None,
         }
     }
 }

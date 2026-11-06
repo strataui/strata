@@ -46,18 +46,41 @@ impl MenuAccelerator {
 
         let key_str = parts.last()?;
         let key = match key_str.to_uppercase().as_str() {
-            "A" => KeyCode::KeyA, "B" => KeyCode::KeyB, "C" => KeyCode::KeyC,
-            "D" => KeyCode::KeyD, "E" => KeyCode::KeyE, "F" => KeyCode::KeyF,
-            "G" => KeyCode::KeyG, "H" => KeyCode::KeyH, "I" => KeyCode::KeyI,
-            "J" => KeyCode::KeyJ, "K" => KeyCode::KeyK, "L" => KeyCode::KeyL,
-            "M" => KeyCode::KeyM, "N" => KeyCode::KeyN, "O" => KeyCode::KeyO,
-            "P" => KeyCode::KeyP, "Q" => KeyCode::KeyQ, "R" => KeyCode::KeyR,
-            "S" => KeyCode::KeyS, "T" => KeyCode::KeyT, "U" => KeyCode::KeyU,
-            "V" => KeyCode::KeyV, "W" => KeyCode::KeyW, "X" => KeyCode::KeyX,
-            "Y" => KeyCode::KeyY, "Z" => KeyCode::KeyZ,
-            "0" => KeyCode::Digit0, "1" => KeyCode::Digit1, "2" => KeyCode::Digit2,
-            "3" => KeyCode::Digit3, "4" => KeyCode::Digit4, "5" => KeyCode::Digit5,
-            "6" => KeyCode::Digit6, "7" => KeyCode::Digit7, "8" => KeyCode::Digit8,
+            "A" => KeyCode::KeyA,
+            "B" => KeyCode::KeyB,
+            "C" => KeyCode::KeyC,
+            "D" => KeyCode::KeyD,
+            "E" => KeyCode::KeyE,
+            "F" => KeyCode::KeyF,
+            "G" => KeyCode::KeyG,
+            "H" => KeyCode::KeyH,
+            "I" => KeyCode::KeyI,
+            "J" => KeyCode::KeyJ,
+            "K" => KeyCode::KeyK,
+            "L" => KeyCode::KeyL,
+            "M" => KeyCode::KeyM,
+            "N" => KeyCode::KeyN,
+            "O" => KeyCode::KeyO,
+            "P" => KeyCode::KeyP,
+            "Q" => KeyCode::KeyQ,
+            "R" => KeyCode::KeyR,
+            "S" => KeyCode::KeyS,
+            "T" => KeyCode::KeyT,
+            "U" => KeyCode::KeyU,
+            "V" => KeyCode::KeyV,
+            "W" => KeyCode::KeyW,
+            "X" => KeyCode::KeyX,
+            "Y" => KeyCode::KeyY,
+            "Z" => KeyCode::KeyZ,
+            "0" => KeyCode::Digit0,
+            "1" => KeyCode::Digit1,
+            "2" => KeyCode::Digit2,
+            "3" => KeyCode::Digit3,
+            "4" => KeyCode::Digit4,
+            "5" => KeyCode::Digit5,
+            "6" => KeyCode::Digit6,
+            "7" => KeyCode::Digit7,
+            "8" => KeyCode::Digit8,
             "9" => KeyCode::Digit9,
             "ESC" | "ESCAPE" => KeyCode::Escape,
             "ENTER" | "RETURN" => KeyCode::Enter,
@@ -69,10 +92,18 @@ impl MenuAccelerator {
             "DOWN" => KeyCode::ArrowDown,
             "LEFT" => KeyCode::ArrowLeft,
             "RIGHT" => KeyCode::ArrowRight,
-            "F1" => KeyCode::F1, "F2" => KeyCode::F2, "F3" => KeyCode::F3,
-            "F4" => KeyCode::F4, "F5" => KeyCode::F5, "F6" => KeyCode::F6,
-            "F7" => KeyCode::F7, "F8" => KeyCode::F8, "F9" => KeyCode::F9,
-            "F10" => KeyCode::F10, "F11" => KeyCode::F11, "F12" => KeyCode::F12,
+            "F1" => KeyCode::F1,
+            "F2" => KeyCode::F2,
+            "F3" => KeyCode::F3,
+            "F4" => KeyCode::F4,
+            "F5" => KeyCode::F5,
+            "F6" => KeyCode::F6,
+            "F7" => KeyCode::F7,
+            "F8" => KeyCode::F8,
+            "F9" => KeyCode::F9,
+            "F10" => KeyCode::F10,
+            "F11" => KeyCode::F11,
+            "F12" => KeyCode::F12,
             _ => return None,
         };
 
@@ -84,28 +115,75 @@ impl MenuAccelerator {
         let mut parts = Vec::new();
         for m in &self.modifiers {
             let label = match m {
-                AcceleratorModifier::CmdOrCtrl => if is_macos { "⌘" } else { "Ctrl+" },
-                AcceleratorModifier::Cmd => if is_macos { "⌘" } else { "Win+" },
+                AcceleratorModifier::CmdOrCtrl => {
+                    if is_macos {
+                        "⌘"
+                    } else {
+                        "Ctrl+"
+                    }
+                }
+                AcceleratorModifier::Cmd => {
+                    if is_macos {
+                        "⌘"
+                    } else {
+                        "Win+"
+                    }
+                }
                 AcceleratorModifier::Ctrl => "Ctrl+",
-                AcceleratorModifier::Alt => if is_macos { "⌥" } else { "Alt+" },
-                AcceleratorModifier::Shift => if is_macos { "⇧" } else { "Shift+" },
+                AcceleratorModifier::Alt => {
+                    if is_macos {
+                        "⌥"
+                    } else {
+                        "Alt+"
+                    }
+                }
+                AcceleratorModifier::Shift => {
+                    if is_macos {
+                        "⇧"
+                    } else {
+                        "Shift+"
+                    }
+                }
             };
             parts.push(label.to_string());
         }
 
         let key_name = match self.key {
-            KeyCode::KeyA => "A", KeyCode::KeyB => "B", KeyCode::KeyC => "C",
-            KeyCode::KeyD => "D", KeyCode::KeyE => "E", KeyCode::KeyF => "F",
-            KeyCode::KeyG => "G", KeyCode::KeyH => "H", KeyCode::KeyI => "I",
-            KeyCode::KeyJ => "J", KeyCode::KeyK => "K", KeyCode::KeyL => "L",
-            KeyCode::KeyM => "M", KeyCode::KeyN => "N", KeyCode::KeyO => "O",
-            KeyCode::KeyP => "P", KeyCode::KeyQ => "Q", KeyCode::KeyR => "R",
-            KeyCode::KeyS => "S", KeyCode::KeyT => "T", KeyCode::KeyU => "U",
-            KeyCode::KeyV => "V", KeyCode::KeyW => "W", KeyCode::KeyX => "X",
-            KeyCode::KeyY => "Y", KeyCode::KeyZ => "Z",
-            KeyCode::Digit0 => "0", KeyCode::Digit1 => "1", KeyCode::Digit2 => "2",
-            KeyCode::Digit3 => "3", KeyCode::Digit4 => "4", KeyCode::Digit5 => "5",
-            KeyCode::Digit6 => "6", KeyCode::Digit7 => "7", KeyCode::Digit8 => "8",
+            KeyCode::KeyA => "A",
+            KeyCode::KeyB => "B",
+            KeyCode::KeyC => "C",
+            KeyCode::KeyD => "D",
+            KeyCode::KeyE => "E",
+            KeyCode::KeyF => "F",
+            KeyCode::KeyG => "G",
+            KeyCode::KeyH => "H",
+            KeyCode::KeyI => "I",
+            KeyCode::KeyJ => "J",
+            KeyCode::KeyK => "K",
+            KeyCode::KeyL => "L",
+            KeyCode::KeyM => "M",
+            KeyCode::KeyN => "N",
+            KeyCode::KeyO => "O",
+            KeyCode::KeyP => "P",
+            KeyCode::KeyQ => "Q",
+            KeyCode::KeyR => "R",
+            KeyCode::KeyS => "S",
+            KeyCode::KeyT => "T",
+            KeyCode::KeyU => "U",
+            KeyCode::KeyV => "V",
+            KeyCode::KeyW => "W",
+            KeyCode::KeyX => "X",
+            KeyCode::KeyY => "Y",
+            KeyCode::KeyZ => "Z",
+            KeyCode::Digit0 => "0",
+            KeyCode::Digit1 => "1",
+            KeyCode::Digit2 => "2",
+            KeyCode::Digit3 => "3",
+            KeyCode::Digit4 => "4",
+            KeyCode::Digit5 => "5",
+            KeyCode::Digit6 => "6",
+            KeyCode::Digit7 => "7",
+            KeyCode::Digit8 => "8",
             KeyCode::Digit9 => "9",
             KeyCode::Escape => "Esc",
             KeyCode::Enter => "Enter",
@@ -117,12 +195,22 @@ impl MenuAccelerator {
             KeyCode::ArrowDown => "Down",
             KeyCode::ArrowLeft => "Left",
             KeyCode::ArrowRight => "Right",
-            KeyCode::F1 => "F1", KeyCode::F2 => "F2", KeyCode::F3 => "F3",
-            KeyCode::F4 => "F4", KeyCode::F5 => "F5", KeyCode::F6 => "F6",
-            KeyCode::F7 => "F7", KeyCode::F8 => "F8", KeyCode::F9 => "F9",
-            KeyCode::F10 => "F10", KeyCode::F11 => "F11", KeyCode::F12 => "F12",
-            KeyCode::Home => "Home", KeyCode::End => "End",
-            KeyCode::PageUp => "PageUp", KeyCode::PageDown => "PageDown",
+            KeyCode::F1 => "F1",
+            KeyCode::F2 => "F2",
+            KeyCode::F3 => "F3",
+            KeyCode::F4 => "F4",
+            KeyCode::F5 => "F5",
+            KeyCode::F6 => "F6",
+            KeyCode::F7 => "F7",
+            KeyCode::F8 => "F8",
+            KeyCode::F9 => "F9",
+            KeyCode::F10 => "F10",
+            KeyCode::F11 => "F11",
+            KeyCode::F12 => "F12",
+            KeyCode::Home => "Home",
+            KeyCode::End => "End",
+            KeyCode::PageUp => "PageUp",
+            KeyCode::PageDown => "PageDown",
             KeyCode::Unknown => "?",
         };
 
@@ -326,14 +414,16 @@ impl MenuBar {
         file_menu.add_separator();
         file_menu.add_item(MenuItem::item(103, "Save").with_accelerator("CmdOrCtrl+S"));
         file_menu.add_separator();
-        file_menu.add_item(MenuItem::role(MenuItemRole::CloseWindow).with_accelerator("CmdOrCtrl+W"));
+        file_menu
+            .add_item(MenuItem::role(MenuItemRole::CloseWindow).with_accelerator("CmdOrCtrl+W"));
         file_menu.add_item(MenuItem::role(MenuItemRole::Quit).with_accelerator("CmdOrCtrl+Q"));
         bar.add_menu(file_menu);
 
         // Edit Menu
         let mut edit_menu = Menu::new("Edit");
         edit_menu.add_item(MenuItem::role(MenuItemRole::Undo).with_accelerator("CmdOrCtrl+Z"));
-        edit_menu.add_item(MenuItem::role(MenuItemRole::Redo).with_accelerator("CmdOrCtrl+Shift+Z"));
+        edit_menu
+            .add_item(MenuItem::role(MenuItemRole::Redo).with_accelerator("CmdOrCtrl+Shift+Z"));
         edit_menu.add_separator();
         edit_menu.add_item(MenuItem::role(MenuItemRole::Cut).with_accelerator("CmdOrCtrl+X"));
         edit_menu.add_item(MenuItem::role(MenuItemRole::Copy).with_accelerator("CmdOrCtrl+C"));
@@ -349,7 +439,8 @@ impl MenuBar {
 
         // Window Menu
         let mut window_menu = Menu::new("Window");
-        window_menu.add_item(MenuItem::role(MenuItemRole::Minimize).with_accelerator("CmdOrCtrl+M"));
+        window_menu
+            .add_item(MenuItem::role(MenuItemRole::Minimize).with_accelerator("CmdOrCtrl+M"));
         window_menu.add_item(MenuItem::role(MenuItemRole::Zoom));
         bar.add_menu(window_menu);
 

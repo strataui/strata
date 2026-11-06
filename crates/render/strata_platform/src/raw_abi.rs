@@ -112,7 +112,8 @@ pub mod wayland {
     /// Wayland socket path resolver.
     pub fn default_socket_path() -> String {
         if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-            let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".to_string());
+            let display =
+                std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".to_string());
             format!("{}/{}", runtime_dir, display)
         } else {
             "/run/user/1000/wayland-0".to_string()
@@ -146,7 +147,11 @@ pub mod wayland {
             let object_id = u32::from_ne_bytes(slice[0..4].try_into().ok()?);
             let opcode = u16::from_ne_bytes(slice[4..6].try_into().ok()?);
             let size = u16::from_ne_bytes(slice[6..8].try_into().ok()?);
-            Some(Self { object_id, opcode, size })
+            Some(Self {
+                object_id,
+                opcode,
+                size,
+            })
         }
     }
 
@@ -210,7 +215,12 @@ pub mod cocoa {
 
     impl NsRect {
         pub fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
-            Self { x, y, width, height }
+            Self {
+                x,
+                y,
+                width,
+                height,
+            }
         }
     }
 }
