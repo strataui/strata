@@ -1,8 +1,8 @@
 //! Bottom status bar displaying telemetry, runtime performance, and layout stats.
 
+use crate::state::BrowserState;
 use strata::prelude::*;
 use strata_icons::prelude::{Icon, IconName};
-use crate::state::BrowserState;
 
 #[component]
 pub fn StatusBar(state: BrowserState) -> View {

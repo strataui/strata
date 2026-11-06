@@ -3,9 +3,9 @@
 //! Provides Chromium-parity bookmark creation and editing dialog with Name and URL inputs,
 //! validation, and instant persistence.
 
+use crate::state::BrowserState;
 use strata::prelude::*;
 use strata_icons::prelude::{Icon, IconName};
-use crate::state::BrowserState;
 
 #[component]
 pub fn BookmarkModal(state: BrowserState) -> View {
@@ -14,7 +14,11 @@ pub fn BookmarkModal(state: BrowserState) -> View {
     };
 
     let is_edit = editor.bookmark_id.is_some();
-    let modal_title = if is_edit { "Edit Bookmark" } else { "Add Bookmark" };
+    let modal_title = if is_edit {
+        "Edit Bookmark"
+    } else {
+        "Add Bookmark"
+    };
     let modal_desc = if is_edit {
         "Update the bookmark's name or destination address."
     } else {
@@ -64,7 +68,7 @@ pub fn BookmarkModal(state: BrowserState) -> View {
                     </div>
                     <button
                         type="button"
-                        class="p-2 rounded-xl text-neutral-400 hover:text-white hover:bg-neutral-800 hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer"
+                        class="p-2 rounded-xl text-neutral-400 hover:text-white hover:bg-neutral-800 active:bg-neutral-700 transition-colors duration-150 cursor-pointer"
                         onclick={move |_| {
                             close_header_state.close_bookmark_editor();
                         }}
@@ -118,7 +122,7 @@ pub fn BookmarkModal(state: BrowserState) -> View {
                 <div class="flex items-center justify-end gap-2 px-6 py-4 bg-neutral-950/60 border-t border-neutral-800/80">
                     <button
                         type="button"
-                        class="px-4 py-2 rounded-lg text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800 hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer"
+                        class="px-4 py-2 rounded-lg text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800 active:bg-neutral-700 transition-colors duration-150 cursor-pointer"
                         onclick={move |_| {
                             close_footer_state.close_bookmark_editor();
                         }}
@@ -127,7 +131,7 @@ pub fn BookmarkModal(state: BrowserState) -> View {
                     </button>
                     <button
                         type="button"
-                        class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-semibold text-white shadow-md hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer"
+                        class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-xs font-semibold text-white shadow-md transition-colors duration-150 cursor-pointer"
                         onclick={move |_| {
                             let t = title_for_save.get();
                             let u = url_for_save.get();

@@ -1,29 +1,36 @@
 //! Viewport renderer executing native Strata RSX or WebTranspiler HTML pipelines.
 
-use strata::prelude::*;
-use strata_web_reader::{HtmlParser, ReaderTheme, WebTranspiler, WikipediaEngine};
 use crate::components::google_new_tab::GoogleNewTab;
 use crate::state::BrowserState;
+use strata::prelude::*;
+use strata_web_reader::{HtmlParser, ReaderTheme, WebTranspiler, WikipediaEngine};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 
 thread_local! {
     static BLUEPRINT_CACHE: RefCell<HashMap<(String, u64), (NodeBlueprint, usize)>> = RefCell::new(HashMap::new());
 }
 
 fn compute_html_hash(html: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    html.len().hash(&mut hasher);
-    let bytes = html.as_bytes();
-    if bytes.len() <= 1024 {
-        bytes.hash(&mut hasher);
-    } else {
-        bytes[..512].hash(&mut hasher);
-        bytes[bytes.len() - 512..].hash(&mut hasher);
+    // Stable 64-bit FNV-1a over every byte so edits in the middle of a large
+    // document cannot alias a stale cached blueprint.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &byte in html.as_bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    hasher.finish()
+    hash
+}
+
+fn count_blueprint_nodes(bp: &NodeBlueprint) -> usize {
+    match bp {
+        NodeBlueprint::Element { children, .. } => {
+            1 + children.iter().map(count_blueprint_nodes).sum::<usize>()
+        }
+        NodeBlueprint::Fragment(children) => children.iter().map(count_blueprint_nodes).sum(),
+        _ => 1,
+    }
 }
 
 #[component]
@@ -90,18 +97,48 @@ pub fn Viewport(state: BrowserState) -> View {
     let (document_blueprint, _dom_nodes_count) = BLUEPRINT_CACHE.with(|c| {
         let mut map = c.borrow_mut();
         if let Some((bp, count)) = map.get(&cache_key) {
-            return (bp.clone(), *count);
+            let clone_start = std::time::Instant::now();
+            let cloned = bp.clone();
+            crate::perf::log_ms("blueprint_clone", clone_start, format!("{} nodes", count));
+            return (cloned, *count);
         }
 
         // Tokenize, parse, and transpile raw HTML into native Strata NodeBlueprint with full Chromium parity
-        let nodes = HtmlParser::parse(&tab.html_content);
+        let parse_start = std::time::Instant::now();
+        let parsed_nodes;
+        let nodes: &[strata_web_reader::ast::SemanticNode] = if !tab.dom_nodes.is_empty() {
+            &tab.dom_nodes
+        } else {
+            parsed_nodes = HtmlParser::parse(&tab.html_content);
+            &parsed_nodes
+        };
+        crate::perf::log_ms(
+            "html_parse_ui",
+            parse_start,
+            format!("{} bytes, {} nodes", tab.html_content.len(), nodes.len()),
+        );
+        // Normal page rendering follows the browser's light color-scheme preference
+        // so W3C UA defaults and `prefers-color-scheme: light` author rules apply.
+        // The chrome and any future reader mode remain themed independently.
         let media_ctx = strata_style::MediaContext {
             viewport_width: 1280.0,
             viewport_height: 800.0,
-            is_dark: theme_mode != "sepia" && theme_mode != "light",
+            is_dark: false,
         };
+        let transpile_start = std::time::Instant::now();
         let transpiler = WebTranspiler::new(&theme);
         let document_blueprint = transpiler.transpile_full_document(&nodes, &media_ctx);
+        if crate::perf::enabled() {
+            crate::perf::log_ms(
+                "transpile_full_document",
+                transpile_start,
+                format!(
+                    "{} nodes -> {} blueprint nodes",
+                    nodes.len(),
+                    count_blueprint_nodes(&document_blueprint)
+                ),
+            );
+        }
         let count = nodes.len();
 
         if map.len() > 32 {
@@ -153,8 +190,10 @@ pub fn Viewport(state: BrowserState) -> View {
                 rsx! { <div class="w-0 h-0" /> }
             }}
 
-            // Rendered Native Strata Blueprint with full-width Chromium CSS parity
-            <div class={format!("w-full min-h-full flex flex-col {} transition-opacity duration-200", text_color)}>
+            // Rendered Native Strata Blueprint with full-width Chromium CSS parity.
+            // No theme text color here: the document root owns its own `color`
+            // (black on the white UA canvas) and author CSS overrides it.
+            <div class="w-full min-h-full flex flex-col transition-opacity duration-200">
                 { document_blueprint }
             </div>
         </div>

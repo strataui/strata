@@ -1,14 +1,14 @@
 //! Root application layout for the Strata Native Browser.
 
-use strata::prelude::*;
-use strata_icons::prelude::{Icon, IconName};
-use strata_ui::prelude::*;
-use std::rc::Rc;
 use crate::components::devtools::DevToolsPanel;
 use crate::components::tab_bar::TabBar;
 use crate::components::toolbar::Toolbar;
 use crate::components::viewport::Viewport;
 use crate::state::{BrowserState, ContextTarget};
+use std::rc::Rc;
+use strata::prelude::*;
+use strata_icons::prelude::{Icon, IconName};
+use strata_ui::prelude::*;
 
 #[component]
 pub fn BrowserApp(state: BrowserState) -> View {

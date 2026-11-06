@@ -3,9 +3,9 @@
 //! Provides Chromium-parity browser settings, theme configuration (Dark, Amoled, Sepia, Light),
 //! search engine defaults, cache clearing, and engine diagnostics.
 
+use crate::state::BrowserState;
 use strata::prelude::*;
 use strata_icons::prelude::{Icon, IconName};
-use crate::state::BrowserState;
 
 #[component]
 pub fn SettingsModal(state: BrowserState) -> View {
@@ -55,7 +55,7 @@ pub fn SettingsModal(state: BrowserState) -> View {
                     </div>
                     <button
                         type="button"
-                        class="p-2 rounded-xl text-neutral-400 hover:text-white hover:bg-neutral-800 hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer"
+                        class="p-2 rounded-xl text-neutral-400 hover:text-white hover:bg-neutral-800 active:bg-neutral-700 transition-colors duration-150 cursor-pointer"
                         onclick={move |_| {
                             close_state.close_settings();
                         }}
@@ -172,7 +172,7 @@ pub fn SettingsModal(state: BrowserState) -> View {
                             <button
                                 type="button"
                                 class={format!(
-                                    "flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-medium border hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer {}",
+                                    "flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-medium border active:bg-neutral-800 transition-colors duration-150 cursor-pointer {}",
                                     if current_search == "google" { "bg-blue-600/20 border-blue-500 text-blue-400" } else { "bg-neutral-950/70 border-neutral-800 text-neutral-400 hover:text-white" }
                                 )}
                                 onclick={move |_| {
@@ -185,7 +185,7 @@ pub fn SettingsModal(state: BrowserState) -> View {
                             <button
                                 type="button"
                                 class={format!(
-                                    "flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-medium border hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer {}",
+                                    "flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-medium border active:bg-neutral-800 transition-colors duration-150 cursor-pointer {}",
                                     if current_search == "duckduckgo" { "bg-blue-600/20 border-blue-500 text-blue-400" } else { "bg-neutral-950/70 border-neutral-800 text-neutral-400 hover:text-white" }
                                 )}
                                 onclick={move |_| {
@@ -198,7 +198,7 @@ pub fn SettingsModal(state: BrowserState) -> View {
                             <button
                                 type="button"
                                 class={format!(
-                                    "flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-medium border hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer {}",
+                                    "flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-medium border active:bg-neutral-800 transition-colors duration-150 cursor-pointer {}",
                                     if current_search == "bing" { "bg-blue-600/20 border-blue-500 text-blue-400" } else { "bg-neutral-950/70 border-neutral-800 text-neutral-400 hover:text-white" }
                                 )}
                                 onclick={move |_| {
@@ -221,7 +221,7 @@ pub fn SettingsModal(state: BrowserState) -> View {
                             </div>
                             <button
                                 type="button"
-                                class="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs text-neutral-200 hover:text-white font-medium hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer border border-neutral-700/60"
+                                class="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 active:bg-neutral-600 text-xs text-neutral-200 hover:text-white font-medium transition-colors duration-150 cursor-pointer border border-neutral-700/60"
                                 onclick={move |_| {
                                     clear_cache_state.url_undo_stack.set(Vec::new());
                                     clear_cache_state.url_redo_stack.set(Vec::new());
@@ -237,7 +237,7 @@ pub fn SettingsModal(state: BrowserState) -> View {
                 <div class="flex items-center justify-end px-6 py-3.5 bg-neutral-950/80 border-t border-neutral-800">
                     <button
                         type="button"
-                        class="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-xl hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer shadow-sm"
+                        class="px-5 py-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-colors duration-150 cursor-pointer shadow-sm"
                         onclick={move |_| {
                             state.close_settings();
                         }}

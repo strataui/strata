@@ -1,8 +1,8 @@
+use crate::state::{BrowserState, ContextTarget};
+use std::rc::Rc;
 use strata::prelude::*;
 use strata_icons::prelude::{Icon, IconName};
 use strata_ui::prelude::*;
-use std::rc::Rc;
-use crate::state::{BrowserState, ContextTarget};
 
 #[component]
 pub fn Toolbar(state: BrowserState) -> View {
@@ -60,8 +60,16 @@ pub fn Toolbar(state: BrowserState) -> View {
     };
 
     let is_loading = state.active_tab().map(|t| t.is_loading).unwrap_or(false);
-    let back_opacity = if can_back { "text-neutral-300 hover:text-white hover:bg-neutral-800 hover:scale-105 active:scale-95 cursor-pointer" } else { "text-neutral-600 pointer-events-none opacity-50" };
-    let fwd_opacity = if can_fwd { "text-neutral-300 hover:text-white hover:bg-neutral-800 hover:scale-105 active:scale-95 cursor-pointer" } else { "text-neutral-600 pointer-events-none opacity-50" };
+    let back_opacity = if can_back {
+        "text-neutral-300 hover:text-white hover:bg-neutral-800 active:bg-neutral-700 cursor-pointer"
+    } else {
+        "text-neutral-600 pointer-events-none opacity-50"
+    };
+    let fwd_opacity = if can_fwd {
+        "text-neutral-300 hover:text-white hover:bg-neutral-800 active:bg-neutral-700 cursor-pointer"
+    } else {
+        "text-neutral-600 pointer-events-none opacity-50"
+    };
 
     rsx! {
         <div class="relative z-40 flex flex-col bg-neutral-900 border-b border-neutral-800 select-none">
@@ -70,7 +78,7 @@ pub fn Toolbar(state: BrowserState) -> View {
                 // Back Button
                 <button
                     type="button"
-                    class={format!("p-1.5 rounded-lg transition-all duration-150 {}", back_opacity)}
+                    class={format!("p-1.5 rounded-lg transition-colors duration-150 {}", back_opacity)}
                     onclick={move |_| {
                         back_state.go_back();
                     }}
@@ -81,7 +89,7 @@ pub fn Toolbar(state: BrowserState) -> View {
                 // Forward Button
                 <button
                     type="button"
-                    class={format!("p-1.5 rounded-lg transition-all duration-150 {}", fwd_opacity)}
+                    class={format!("p-1.5 rounded-lg transition-colors duration-150 {}", fwd_opacity)}
                     onclick={move |_| {
                         fwd_state.go_forward();
                     }}
@@ -92,7 +100,7 @@ pub fn Toolbar(state: BrowserState) -> View {
                 // Reload Button
                 <button
                     type="button"
-                    class="p-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer"
+                    class="p-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 active:bg-neutral-700 transition-colors duration-150 cursor-pointer"
                     onclick={move |_| {
                         reload_state.reload();
                     }}
@@ -107,12 +115,12 @@ pub fn Toolbar(state: BrowserState) -> View {
                 // Home Button
                 <button
                     type="button"
-                    class="p-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer"
+                    class="p-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 active:bg-neutral-700 transition-colors duration-150 cursor-pointer"
                     onclick={move |_| {
                         home_state.go_home();
                     }}
                 >
-                    {Icon(IconName::Compass, Some("w-4 h-4 text-current")).root}
+                    {Icon(IconName::Home, Some("w-4 h-4 text-current")).root}
                 </button>
 
                 // Omnibox URL Bar
@@ -156,7 +164,7 @@ pub fn Toolbar(state: BrowserState) -> View {
                 <div class="relative">
                     <button
                         type="button"
-                        class="p-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer"
+                        class="p-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 active:bg-neutral-700 transition-colors duration-150 cursor-pointer"
                         onclick={move |_| {
                             kebab_toggle.toggle_kebab_menu();
                         }}
@@ -358,75 +366,82 @@ pub fn Toolbar(state: BrowserState) -> View {
             </div>
 
             // Bookmarks Quick Access Bar (whitespace-nowrap & vertically centered icons)
-            <div
-                class="flex items-center gap-1 px-3 py-1 bg-neutral-950/60 border-t border-neutral-800/60 text-xs text-neutral-400 overflow-x-auto whitespace-nowrap flex-nowrap"
-                oncontextmenu={move |e: Event| {
-                    bm_bar_ctx_state.open_context_menu_for(
-                        e.client_x as f32,
-                        e.client_y as f32,
-                        ContextTarget::BookmarksBar,
-                    );
-                }}
-            >
-                <span class="text-neutral-500 font-mono text-[10px] uppercase tracking-wider pl-1 whitespace-nowrap flex-shrink-0">
-                    {"Bookmarks:"}
-                </span>
+            // Shown exclusively on the New Tab page per browser design standard
+            { if state.active_tab().map_or(false, |t| t.url.starts_with("strata://newtab") || t.url.is_empty() || t.url == "about:blank") {
+                rsx! {
+                    <div
+                        class="flex items-center gap-1.5 px-3 py-1 bg-neutral-950/60 border-t border-neutral-800/60 text-xs text-neutral-400 overflow-x-auto whitespace-nowrap flex-nowrap"
+                        oncontextmenu={move |e: Event| {
+                            bm_bar_ctx_state.open_context_menu_for(
+                                e.client_x as f32,
+                                e.client_y as f32,
+                                ContextTarget::BookmarksBar,
+                            );
+                        }}
+                    >
+                        {bookmarks.into_iter().map(|bm| {
+                            let bm_id = bm.id;
+                            let bm_url = bm.url.clone();
+                            let bm_nav = state.clone();
+                            let bm_ctx = state.clone();
 
-                {bookmarks.into_iter().map(|bm| {
-                    let bm_id = bm.id;
-                    let bm_url = bm.url.clone();
-                    let bm_nav = state.clone();
-                    let bm_ctx = state.clone();
+                            let icon = if bm.url.starts_with("strata://newtab") {
+                                IconName::Home
+                            } else if bm.url.contains("google.com") {
+                                IconName::Globe
+                            } else if bm.url.contains("search") {
+                                IconName::Search
+                            } else if bm.url.contains("wikipedia.org") {
+                                IconName::Code
+                            } else if bm.url.contains("ycombinator.com") {
+                                IconName::Terminal
+                            } else if bm.url.contains("strata.larvance.com") {
+                                IconName::ShieldCheck
+                            } else {
+                                IconName::Globe
+                            };
 
-                    let icon = if bm.url.starts_with("strata://newtab") || bm.url.contains("google.com") {
-                        IconName::Compass
-                    } else if bm.url.contains("search") {
-                        IconName::Search
-                    } else if bm.url.contains("wikipedia.org") {
-                        IconName::Code
-                    } else if bm.url.contains("ycombinator.com") {
-                        IconName::Terminal
-                    } else if bm.url.contains("strata.larvance.com") {
-                        IconName::ShieldCheck
-                    } else {
-                        IconName::Globe
-                    };
+                            rsx! {
+                                <button
+                                    type="button"
+                                    class="flex items-center gap-1.5 px-2.5 py-1 rounded-md hover:bg-neutral-800 hover:text-white active:bg-neutral-700 transition-colors duration-150 cursor-pointer whitespace-nowrap flex-shrink-0 text-neutral-300 font-medium"
+                                    onclick={move |_| {
+                                        bm_nav.navigate(&bm_url);
+                                    }}
+                                    oncontextmenu={move |e: Event| {
+                                        e.stop_propagation();
+                                        bm_ctx.open_context_menu_for(
+                                            e.client_x as f32,
+                                            e.client_y as f32,
+                                            ContextTarget::Bookmark(bm_id),
+                                        );
+                                    }}
+                                >
+                                    <div class="flex items-center justify-center flex-shrink-0">
+                                        {Icon(icon, Some("w-3.5 h-3.5 text-current")).root}
+                                    </div>
+                                    <span class="whitespace-nowrap flex-shrink-0">{bm.title}</span>
+                                </button>
+                            }
+                        })}
 
-                    rsx! {
                         <button
                             type="button"
-                            class="flex items-center gap-1.5 px-2 py-0.5 rounded hover:bg-neutral-800 hover:text-white hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer whitespace-nowrap flex-shrink-0"
+                            title="Add Bookmark"
+                            class="flex items-center justify-center w-6 h-6 rounded-md hover:bg-neutral-800 hover:text-white text-neutral-400 active:bg-neutral-700 transition-colors duration-150 cursor-pointer ml-1 flex-shrink-0 text-xs"
                             onclick={move |_| {
-                                bm_nav.navigate(&bm_url);
-                            }}
-                            oncontextmenu={move |e: Event| {
-                                e.stop_propagation();
-                                bm_ctx.open_context_menu_for(
-                                    e.client_x as f32,
-                                    e.client_y as f32,
-                                    ContextTarget::Bookmark(bm_id),
-                                );
+                                add_bm_state.open_bookmark_editor(None);
                             }}
                         >
-                            <div class="flex items-center justify-center flex-shrink-0">
-                                {Icon(icon, Some("w-3 h-3 text-current")).root}
-                            </div>
-                            <span class="whitespace-nowrap flex-shrink-0">{bm.title}</span>
+                            {Icon(IconName::Plus, Some("w-3.5 h-3.5 text-current")).root}
                         </button>
-                    }
-                })}
-
-                <button
-                    type="button"
-                    title="Add Bookmark"
-                    class="flex items-center justify-center w-5 h-5 rounded hover:bg-neutral-800 hover:text-white text-neutral-400 hover:scale-110 active:scale-95 transition-all duration-150 cursor-pointer ml-1 flex-shrink-0 text-xs"
-                    onclick={move |_| {
-                        add_bm_state.open_bookmark_editor(None);
-                    }}
-                >
-                    {Icon(IconName::Plus, Some("w-3 h-3 text-current")).root}
-                </button>
-            </div>
+                    </div>
+                }
+            } else {
+                rsx! {
+                    <div class="hidden" />
+                }
+            }}
         </div>
     }
 }

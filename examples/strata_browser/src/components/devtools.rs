@@ -4,9 +4,9 @@
 //! computed CSS Box Model diagram, interactive Console REPL,
 //! Reactive Signal DAG inspector, Network waterfall table, and 120 FPS profiler.
 
+use crate::state::{BrowserState, DevToolsTab, DevToolsTarget, LogLevel};
 use strata::prelude::*;
 use strata_icons::prelude::{Icon, IconName};
-use crate::state::{BrowserState, DevToolsTab, DevToolsTarget, LogLevel};
 
 #[component]
 pub fn DevToolsPanel(state: BrowserState) -> View {
@@ -1116,4 +1116,3 @@ fn StrataPerformancePane(_state: BrowserState) -> View {
         </div>
     }
 }
-

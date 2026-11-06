@@ -1,8 +1,8 @@
 //! Interactive tab bar and tab switching controls.
 
+use crate::state::{BrowserState, ContextTarget};
 use strata::prelude::*;
 use strata_icons::prelude::{Icon, IconName};
-use crate::state::{BrowserState, ContextTarget};
 
 #[component]
 pub fn TabBar(state: BrowserState) -> View {
@@ -93,7 +93,7 @@ pub fn TabBar(state: BrowserState) -> View {
                             </span>
                             <button
                                 type="button"
-                                class="flex items-center justify-center w-5 h-5 rounded hover:bg-neutral-700/70 text-neutral-400 hover:text-white hover:scale-110 active:scale-95 transition-all duration-100 cursor-pointer text-sm font-semibold flex-shrink-0 ml-1"
+                                class="flex items-center justify-center w-5 h-5 rounded hover:bg-neutral-700/70 active:bg-neutral-600 text-neutral-400 hover:text-white transition-colors duration-100 cursor-pointer text-sm font-semibold flex-shrink-0 ml-1"
                                 onclick={move |e: Event| {
                                     e.stop_propagation();
                                     close_state.close_tab(tab_id);
@@ -109,7 +109,7 @@ pub fn TabBar(state: BrowserState) -> View {
                 <button
                     type="button"
                     data-app-region="no-drag"
-                    class="w-7 h-7 flex items-center justify-center rounded-md bg-neutral-900/80 hover:bg-neutral-800 text-neutral-200 hover:text-white border border-neutral-700/60 hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer ml-1 text-sm font-semibold flex-shrink-0"
+                    class="w-7 h-7 flex items-center justify-center rounded-md bg-neutral-900/80 hover:bg-neutral-800 active:bg-neutral-700 text-neutral-200 hover:text-white border border-neutral-700/60 transition-colors duration-150 cursor-pointer ml-1 text-sm font-semibold flex-shrink-0"
                     onclick={move |_| {
                         new_tab_state.new_tab("strata://newtab");
                     }}

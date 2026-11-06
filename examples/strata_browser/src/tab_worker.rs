@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 use strata_render::shm_compositor::ShmRingBuffer;
 use strata_web_reader::ast::SemanticNode;
 
-use crate::sandboxing::{SandboxedJob, SandboxedResponse, SandboxedTabPool, SandboxedTabWorker, SandboxPolicy};
+use crate::sandboxing::{
+    SandboxPolicy, SandboxedJob, SandboxedResponse, SandboxedTabPool, SandboxedTabWorker,
+};
 use crate::state::NetworkRequestEntry;
 
 /// Incoming job dispatch request sent from the UI thread to the worker pool.
@@ -105,7 +107,10 @@ impl TabWorkerPool {
     /// Creates a new `TabWorkerPool` spawning sandboxed background workers.
     pub fn new(num_workers: usize) -> Self {
         Self {
-            inner: Arc::new(SandboxedTabPool::new(num_workers, SandboxPolicy::ThreadSandbox)),
+            inner: Arc::new(SandboxedTabPool::new(
+                num_workers,
+                SandboxPolicy::ThreadSandbox,
+            )),
         }
     }
 

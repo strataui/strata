@@ -7,12 +7,16 @@
 
 pub mod components;
 pub mod network;
+pub mod perf;
 pub mod sandboxing;
 pub mod state;
 pub mod tab_worker;
 
 pub use components::{BrowserApp, GoogleNewTab, StatusBar, TabBar, Toolbar, Viewport};
 pub use network::{load_page, normalize_target, PageLoadResult};
-pub use sandboxing::{ProcessStatus, SandboxPolicy, SandboxedJob, SandboxedResponse, SandboxedTabPool, SandboxedTabWorker};
+pub use sandboxing::{
+    ProcessStatus, SandboxPolicy, SandboxedJob, SandboxedResponse, SandboxedTabPool,
+    SandboxedTabWorker,
+};
 pub use state::{BookmarkItem, BrowserState, BrowserTab, ContextTarget};
 pub use tab_worker::{TabWorkerJob, TabWorkerPool, TabWorkerResponse};

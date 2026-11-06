@@ -1,8 +1,8 @@
 //! Google Search New Tab Page Component.
 
+use crate::state::BrowserState;
 use strata::prelude::*;
 use strata_icons::prelude::{Icon, IconName};
-use crate::state::BrowserState;
 
 #[component]
 pub fn GoogleNewTab(state: BrowserState) -> View {
@@ -245,7 +245,7 @@ pub fn GoogleNewTab(state: BrowserState) -> View {
                     }}
                 >
                     <div class={format!("w-12 h-12 rounded-full {} group-hover:bg-blue-600/20 group-hover:text-blue-400 group-hover:scale-105 flex items-center justify-center transition-all", tile_icon_bg)}>
-                        {Icon(IconName::Compass, Some("w-5 h-5 text-current")).root}
+                        {Icon(IconName::Home, Some("w-5 h-5 text-current")).root}
                     </div>
                     <span class={format!("text-xs font-medium {} text-center truncate max-w-[90px] w-full", tile_text)}>
                         {"About"}

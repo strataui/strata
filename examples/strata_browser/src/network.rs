@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 static PAGE_CACHE: Mutex<Option<HashMap<String, PageLoadResult>>> = Mutex::new(None);
+static STYLESHEET_CACHE: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 
 /// Invalidates a specific URL from the in-memory page cache.
 pub fn invalidate_cache(url: &str) {
@@ -18,10 +19,14 @@ pub fn invalidate_cache(url: &str) {
     }
 }
 
-/// Clears all entries from the in-memory page cache.
+/// Clears all entries from the in-memory page and stylesheet caches.
 pub fn clear_cache() {
     let mut guard = PAGE_CACHE.lock().unwrap();
     if let Some(ref mut cache) = *guard {
+        cache.clear();
+    }
+    let mut s_guard = STYLESHEET_CACHE.lock().unwrap();
+    if let Some(ref mut cache) = *s_guard {
         cache.clear();
     }
 }
@@ -143,13 +148,114 @@ fn get_agent() -> &'static ureq::Agent {
     })
 }
 
+fn resolve_relative_url(base: &str, relative: &str) -> Option<String> {
+    let rel_trimmed = relative.trim();
+    if rel_trimmed.is_empty() {
+        return None;
+    }
+    if rel_trimmed.starts_with("http://") || rel_trimmed.starts_with("https://") {
+        return Some(rel_trimmed.to_string());
+    }
+    if rel_trimmed.starts_with("//") {
+        return Some(format!("https:{rel_trimmed}"));
+    }
+
+    let (scheme, rest) = if let Some(stripped) = base.strip_prefix("https://") {
+        ("https://", stripped)
+    } else if let Some(stripped) = base.strip_prefix("http://") {
+        ("http://", stripped)
+    } else {
+        return None;
+    };
+
+    let (host, path) = match rest.split_once('/') {
+        Some((h, p)) => (h, format!("/{p}")),
+        None => (rest, "/".to_string()),
+    };
+
+    if rel_trimmed.starts_with('/') {
+        Some(format!("{scheme}{host}{rel_trimmed}"))
+    } else {
+        let dir = match path.rfind('/') {
+            Some(idx) => &path[..=idx],
+            None => "/",
+        };
+        Some(format!("{scheme}{host}{dir}{rel_trimmed}"))
+    }
+}
+
+/// Automatically downloads external linked stylesheets and inlines them into <style> tags within HTML.
+fn inline_linked_stylesheets(base_url: &str, mut html: String) -> String {
+    use std::io::Read;
+    let agent = get_agent();
+    let nodes = strata_web_reader::HtmlParser::parse(&html);
+    let stylesheet_hrefs = strata_web_reader::WebTranspiler::extract_stylesheet_urls(&nodes);
+
+    if stylesheet_hrefs.is_empty() {
+        return html;
+    }
+
+    let mut inlined_styles = String::new();
+    for href in stylesheet_hrefs.into_iter().take(8) {
+        if let Some(abs_url) = resolve_relative_url(base_url, &href) {
+            let cached_css = {
+                let mut guard = STYLESHEET_CACHE.lock().unwrap();
+                let cache = guard.get_or_insert_with(HashMap::new);
+                cache.get(&abs_url).cloned()
+            };
+
+            let css_text = if let Some(css) = cached_css {
+                css
+            } else if let Ok(resp) = agent.get(&abs_url).call() {
+                if resp.status() == 200 {
+                    let mut reader = resp.into_reader().take(1024 * 512); // 512KB cap
+                    let mut text = String::new();
+                    if reader.read_to_string(&mut text).is_ok() {
+                        let mut guard = STYLESHEET_CACHE.lock().unwrap();
+                        let cache = guard.get_or_insert_with(HashMap::new);
+                        cache.insert(abs_url, text.clone());
+                        text
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+
+            if !css_text.trim().is_empty() {
+                inlined_styles.push_str(&format!(
+                    "<style data-strata-inlined=\"{}\">\n{}\n</style>\n",
+                    href, css_text
+                ));
+            }
+        }
+    }
+
+    if !inlined_styles.is_empty() {
+        if let Some(head_end) = html.to_ascii_lowercase().find("</head>") {
+            html.insert_str(head_end, &inlined_styles);
+        } else if let Some(body_start) = html.to_ascii_lowercase().find("<body") {
+            html.insert_str(body_start, &inlined_styles);
+        } else {
+            html.insert_str(0, &inlined_styles);
+        }
+    }
+
+    html
+}
+
 /// Performs a real live HTTP/HTTPS request over the network.
 fn fetch_live_web_page(url: &str) -> PageLoadResult {
     use std::io::Read;
     let agent = get_agent();
 
     // For Wikipedia articles, fetch directly via official Wikipedia REST API endpoint for clean, full semantic HTML5
-    if url.starts_with("https://en.wikipedia.org/wiki/") || url.starts_with("http://en.wikipedia.org/wiki/") {
+    if url.starts_with("https://en.wikipedia.org/wiki/")
+        || url.starts_with("http://en.wikipedia.org/wiki/")
+    {
         let slug = url
             .trim_start_matches("https://en.wikipedia.org/wiki/")
             .trim_start_matches("http://en.wikipedia.org/wiki/");
@@ -165,10 +271,12 @@ fn fetch_live_web_page(url: &str) -> PageLoadResult {
                 let mut body = String::new();
                 if reader.read_to_string(&mut body).is_ok() && !body.is_empty() {
                     let page_title = slug.replace('_', " ");
-                    let title = extract_html_title(&body).unwrap_or_else(|| format!("{page_title} - Wikipedia"));
+                    let title = extract_html_title(&body)
+                        .unwrap_or_else(|| format!("{page_title} - Wikipedia"));
+                    let inlined = inline_linked_stylesheets(url, body);
                     return PageLoadResult {
                         title,
-                        html: body,
+                        html: inlined,
                         status: 200,
                         is_error: false,
                     };
@@ -179,7 +287,10 @@ fn fetch_live_web_page(url: &str) -> PageLoadResult {
 
     match agent
         .get(url)
-        .set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+        .set(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        )
         .set("Accept-Language", "en-US,en;q=0.9")
         .call()
     {
@@ -189,15 +300,12 @@ fn fetch_live_web_page(url: &str) -> PageLoadResult {
             let mut body = String::new();
             match reader.read_to_string(&mut body) {
                 Ok(_) => {
-                    let title = extract_html_title(&body).unwrap_or_else(|| {
-                        url.split('/')
-                            .nth(2)
-                            .unwrap_or(url)
-                            .to_string()
-                    });
+                    let title = extract_html_title(&body)
+                        .unwrap_or_else(|| url.split('/').nth(2).unwrap_or(url).to_string());
+                    let inlined = inline_linked_stylesheets(url, body);
                     PageLoadResult {
                         title,
-                        html: body,
+                        html: inlined,
                         status,
                         is_error: false,
                     }
@@ -222,7 +330,10 @@ fn fetch_live_web_page(url: &str) -> PageLoadResult {
         }
         Err(ureq::Error::Transport(transport_err)) => {
             // In hermetic / offline environments without internet, provide fallback for standard test fixtures
-            if matches!(transport_err.kind(), ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed | ureq::ErrorKind::Io) {
+            if matches!(
+                transport_err.kind(),
+                ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed | ureq::ErrorKind::Io
+            ) {
                 if url == "https://en.wikipedia.org/wiki/Rust_(programming_language)" {
                     return PageLoadResult {
                         title: "Rust (programming language) - Wikipedia (Offline)".to_string(),
@@ -396,6 +507,25 @@ pub fn default_rust_wikipedia_html() -> String {
 <html lang="en">
 <head>
     <title>Rust (programming language) - Wikipedia</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; margin: 16px 24px; color: #202122; background-color: #ffffff; }
+        .infobox { border: 1px solid #a2a9b1; background-color: #f8f9fa; color: #202122; padding: 4px; float: right; clear: right; margin: 8px 0 16px 24px; width: 22em; border-spacing: 2px; font-size: 13px; line-height: 1.5; border-collapse: collapse; }
+        .infobox th, .infobox td { vertical-align: top; text-align: left; padding: 6px 10px; border-bottom: 1px solid #eaecf0; }
+        .infobox th { font-weight: bold; width: 35%; }
+        .infobox-above { font-size: 18px; text-align: center !important; font-weight: bold; background-color: #eaecf0; color: #202122; padding: 10px !important; }
+        .infobox-image { text-align: center !important; padding: 12px !important; }
+        .toc { border: 1px solid #a2a9b1; background-color: #f8f9fa; color: #202122; padding: 12px 16px; display: table; margin: 16px 0; border-radius: 4px; }
+        .toctitle h2 { font-size: 16px; font-weight: bold; border-bottom: none; margin: 0 0 8px 0; }
+        .toc ul { list-style: none; margin: 0; padding-left: 20px; }
+        h1.firstHeading { font-size: 28px; border-bottom: 1px solid #a2a9b1; margin-bottom: 16px; padding-bottom: 8px; font-weight: normal; }
+        h2 { font-size: 22px; border-bottom: 1px solid #a2a9b1; margin-top: 24px; margin-bottom: 12px; padding-bottom: 6px; font-weight: normal; }
+        h3 { font-size: 18px; margin-top: 18px; margin-bottom: 8px; font-weight: bold; }
+        p { margin: 8px 0 14px 0; line-height: 1.6; }
+        a { color: #3366cc; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        code, pre { font-family: monospace; background-color: #f8f9fa; border: 1px solid #eaecf0; border-radius: 4px; }
+        pre { padding: 12px; margin: 14px 0; }
+    </style>
 </head>
 <body class="mediawiki ltr sitedir-ltr mw-hide-empty-elt ns-0 ns-subject">
 <div id="content" class="mw-body">

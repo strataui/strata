@@ -37,8 +37,14 @@ pub enum SandboxPolicy {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProcessStatus {
     Idle,
-    Running { pid: u32, started_at: Instant },
-    Crashed { exit_code: Option<i32>, reason: String },
+    Running {
+        pid: u32,
+        started_at: Instant,
+    },
+    Crashed {
+        exit_code: Option<i32>,
+        reason: String,
+    },
     Terminated,
     Restarting,
 }
@@ -206,7 +212,9 @@ impl SandboxedTabPool {
                                 status: 504,
                                 is_error: true,
                                 is_crashed: true,
-                                crash_reason: Some("Heartbeat timeout: unresponsive execution".to_string()),
+                                crash_reason: Some(
+                                    "Heartbeat timeout: unresponsive execution".to_string(),
+                                ),
                                 elapsed_ms: 0.0,
                                 request_entry: NetworkRequestEntry {
                                     name: job.url.clone(),
@@ -283,6 +291,7 @@ impl SandboxedTabPool {
                                 font_weight: strata_style::FontWeight::Bold,
                                 color: Color::rgb(17, 24, 39),
                                 is_monospace: false,
+                                font_family: strata::primitives::AtomId::FONT_SANS,
                             });
                             worker_inner.ring_buffer.commit_write(
                                 slot_idx,
@@ -299,7 +308,11 @@ impl SandboxedTabPool {
                                 name: job_clone.url.clone(),
                                 method: "GET".to_string(),
                                 status: result.status,
-                                status_text: if result.status == 200 { "OK".to_string() } else { "Error".to_string() },
+                                status_text: if result.status == 200 {
+                                    "OK".to_string()
+                                } else {
+                                    "Error".to_string()
+                                },
                                 kind: "document".to_string(),
                                 initiator: "navigation".to_string(),
                                 size_bytes: result.html.len(),

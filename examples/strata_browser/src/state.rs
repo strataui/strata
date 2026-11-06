@@ -1,5 +1,7 @@
-use strata::prelude::*;
 use crate::network::{load_page, normalize_target};
+use strata::prelude::*;
+use std::sync::Arc;
+use strata_web_reader::ast::SemanticNode;
 
 /// Represents an individual browser tab with full history and rendered document state.
 #[derive(Clone, Debug, PartialEq)]
@@ -11,6 +13,8 @@ pub struct BrowserTab {
     pub history_index: usize,
     pub is_loading: bool,
     pub html_content: String,
+    /// Semantic DOM tree produced by the background tab worker; empty when unknown.
+    pub dom_nodes: Arc<Vec<SemanticNode>>,
     pub generation: u64,
     pub is_crashed: bool,
     pub crash_reason: Option<String>,
@@ -27,6 +31,7 @@ impl BrowserTab {
             history_index: 0,
             is_loading: false,
             html_content: result.html,
+            dom_nodes: Arc::new(Vec::new()),
             generation: 0,
             is_crashed: false,
             crash_reason: None,
@@ -159,7 +164,9 @@ fn is_test_execution() -> bool {
     cfg!(test)
         || std::env::var("RUST_TEST_THREADS").is_ok()
         || std::env::var("CARGO_TARGET_TMPDIR").is_ok()
-        || std::thread::current().name().map_or(false, |n| n.starts_with("test_"))
+        || std::thread::current()
+            .name()
+            .map_or(false, |n| n.starts_with("test_"))
 }
 
 impl BrowserState {
@@ -247,14 +254,7 @@ impl BrowserState {
             },
         ];
 
-        let initial_bookmarks = vec![
-            BookmarkItem { id: 1, title: "Google".to_string(), url: "strata://newtab".to_string() },
-            BookmarkItem { id: 2, title: "Search".to_string(), url: "https://www.google.com/search?q=Strata+Framework".to_string() },
-            BookmarkItem { id: 3, title: "Wikipedia: Rust".to_string(), url: "https://en.wikipedia.org/wiki/Rust_(programming_language)".to_string() },
-            BookmarkItem { id: 4, title: "Hacker News".to_string(), url: "https://news.ycombinator.com".to_string() },
-            BookmarkItem { id: 5, title: "Strata Docs".to_string(), url: "https://strata.larvance.com".to_string() },
-            BookmarkItem { id: 6, title: "About".to_string(), url: "strata://about".to_string() },
-        ];
+        let initial_bookmarks = Vec::new();
 
         Self {
             next_tab_id: Signal::new(2),
@@ -277,7 +277,7 @@ impl BrowserState {
             is_window_maximized: Signal::new(false),
             closed_tabs: Signal::new(Vec::new()),
             bookmarks: Signal::new(initial_bookmarks),
-            next_bookmark_id: Signal::new(7),
+            next_bookmark_id: Signal::new(1),
             bookmark_editor: Signal::new(None),
 
             // DevTools
@@ -508,6 +508,8 @@ impl BrowserState {
 
         let mut changed = false;
         for resp in responses {
+            let html_len = resp.html.len();
+            let dom_count = resp.dom_nodes.len();
             let mut matched = false;
             self.tabs.update(|tabs| {
                 if let Some(tab) = tabs.iter_mut().find(|t| t.id == resp.tab_id) {
@@ -523,6 +525,7 @@ impl BrowserState {
                             tab.crash_reason = None;
                             tab.title = resp.title.clone();
                             tab.html_content = resp.html;
+                            tab.dom_nodes = Arc::new(resp.dom_nodes);
                         }
                         changed = true;
                     }
@@ -551,12 +554,22 @@ impl BrowserState {
                         ),
                     );
                 } else {
+                    if crate::perf::enabled() {
+                        eprintln!(
+                            "[perf] worker_fetch_parse: {:.3} ms ({} bytes, {} nodes) {}",
+                            resp.elapsed_ms, html_len, dom_count, resp.url
+                        );
+                    }
                     self.add_console_log(
-                        if resp.is_error { LogLevel::Error } else { LogLevel::Info },
+                        if resp.is_error {
+                            LogLevel::Error
+                        } else {
+                            LogLevel::Info
+                        },
                         "strata_tab_worker",
                         &format!(
                             "Finished loading {} in {:.2}ms ({} DOM nodes)",
-                            resp.url, resp.elapsed_ms, resp.dom_nodes.len()
+                            resp.url, resp.elapsed_ms, dom_count
                         ),
                     );
                 }
@@ -596,7 +609,10 @@ impl BrowserState {
                     break;
                 }
             }
-            if let Some(resp) = self.worker_pool.wait_timeout(std::time::Duration::from_millis(15)) {
+            if let Some(resp) = self
+                .worker_pool
+                .wait_timeout(std::time::Duration::from_millis(15))
+            {
                 let mut matched = false;
                 self.tabs.update(|tabs| {
                     if let Some(tab) = tabs.iter_mut().find(|t| t.id == resp.tab_id) {
@@ -605,6 +621,7 @@ impl BrowserState {
                             tab.is_loading = false;
                             tab.title = resp.title.clone();
                             tab.html_content = resp.html;
+                            tab.dom_nodes = Arc::new(resp.dom_nodes);
                         }
                     }
                 });
@@ -627,7 +644,9 @@ impl BrowserState {
         self.next_tab_id.set(id + 1);
 
         let normalized = normalize_target(target_url);
-        let is_internal = normalized == "strata://newtab" || normalized == "strata://about" || normalized == "strata://version";
+        let is_internal = normalized == "strata://newtab"
+            || normalized == "strata://about"
+            || normalized == "strata://version";
 
         let new_tab = if is_internal {
             BrowserTab::new(id, &normalized)
@@ -640,6 +659,7 @@ impl BrowserState {
                 history_index: 0,
                 is_loading: true,
                 html_content: String::new(),
+                dom_nodes: Arc::new(Vec::new()),
                 generation: 1,
                 is_crashed: false,
                 crash_reason: None,
@@ -654,7 +674,8 @@ impl BrowserState {
         self.url_input.set(normalized.clone());
 
         if !is_internal {
-            self.worker_pool.submit_job(crate::tab_worker::TabWorkerJob::new(id, 1, normalized));
+            self.worker_pool
+                .submit_job(crate::tab_worker::TabWorkerJob::new(id, 1, normalized));
             if is_test_execution() {
                 self.wait_for_pending_loads();
             }
@@ -677,6 +698,7 @@ impl BrowserState {
                     first.url = reset_url.to_string();
                     first.title = result.title;
                     first.html_content = result.html;
+                    first.dom_nodes = Arc::new(Vec::new());
                     first.history = vec![reset_url.to_string()];
                     first.history_index = 0;
                 }
@@ -885,7 +907,10 @@ impl BrowserState {
         let active_id = self.active_tab_id.get();
 
         // Internal browser schemes resolve synchronously
-        if normalized == "strata://newtab" || normalized == "strata://about" || normalized == "strata://version" {
+        if normalized == "strata://newtab"
+            || normalized == "strata://about"
+            || normalized == "strata://version"
+        {
             let result = load_page(&normalized);
             self.tabs.update(|tabs| {
                 if let Some(tab) = tabs.iter_mut().find(|t| t.id == active_id) {
@@ -893,6 +918,7 @@ impl BrowserState {
                     tab.url = normalized.clone();
                     tab.title = result.title;
                     tab.html_content = result.html;
+                    tab.dom_nodes = Arc::new(Vec::new());
                     tab.is_loading = false;
 
                     if tab.history_index + 1 < tab.history.len() {
@@ -914,6 +940,7 @@ impl BrowserState {
                     tab.url = normalized.clone();
                     tab.title = cached.title;
                     tab.html_content = cached.html;
+                    tab.dom_nodes = Arc::new(Vec::new());
                     tab.is_loading = false;
 
                     if tab.history_index + 1 < tab.history.len() {
@@ -974,14 +1001,19 @@ impl BrowserState {
                     tab.url = url.clone();
                     target_url = Some(url.clone());
 
-                    if url == "strata://newtab" || url == "strata://about" || url == "strata://version" {
+                    if url == "strata://newtab"
+                        || url == "strata://about"
+                        || url == "strata://version"
+                    {
                         let result = load_page(&url);
                         tab.title = result.title;
                         tab.html_content = result.html;
+                        tab.dom_nodes = Arc::new(Vec::new());
                         tab.is_loading = false;
                     } else if let Some(cached) = crate::network::get_cached_page(&url) {
                         tab.title = cached.title;
                         tab.html_content = cached.html;
+                        tab.dom_nodes = Arc::new(Vec::new());
                         tab.is_loading = false;
                     } else {
                         tab.is_loading = true;
@@ -1022,14 +1054,19 @@ impl BrowserState {
                     tab.url = url.clone();
                     target_url = Some(url.clone());
 
-                    if url == "strata://newtab" || url == "strata://about" || url == "strata://version" {
+                    if url == "strata://newtab"
+                        || url == "strata://about"
+                        || url == "strata://version"
+                    {
                         let result = load_page(&url);
                         tab.title = result.title;
                         tab.html_content = result.html;
+                        tab.dom_nodes = Arc::new(Vec::new());
                         tab.is_loading = false;
                     } else if let Some(cached) = crate::network::get_cached_page(&url) {
                         tab.title = cached.title;
                         tab.html_content = cached.html;
+                        tab.dom_nodes = Arc::new(Vec::new());
                         tab.is_loading = false;
                     } else {
                         tab.is_loading = true;
@@ -1181,12 +1218,24 @@ impl BrowserState {
         } else if trimmed == "help" {
             self.add_console_log(LogLevel::Info, "repl", "Available: strata.version, strata.tabs, strata.reload(), strata.navigate(url), clear()");
         } else if trimmed == "strata.version" {
-            self.add_console_log(LogLevel::Info, "repl", "\"0.1.0 (Zero-Chromium Pure Rust LayoutNG)\"");
+            self.add_console_log(
+                LogLevel::Info,
+                "repl",
+                "\"0.1.0 (Zero-Chromium Pure Rust LayoutNG)\"",
+            );
         } else if trimmed == "strata.tabs" {
             let count = self.tabs.get().len();
-            self.add_console_log(LogLevel::Info, "repl", &format!("Array({count}) [BrowserTab]"));
+            self.add_console_log(
+                LogLevel::Info,
+                "repl",
+                &format!("Array({count}) [BrowserTab]"),
+            );
         } else if trimmed.starts_with("strata.navigate(") {
-            let url = trimmed.trim_start_matches("strata.navigate(").trim_end_matches(')').trim_matches('"').trim_matches('\'');
+            let url = trimmed
+                .trim_start_matches("strata.navigate(")
+                .trim_end_matches(')')
+                .trim_matches('"')
+                .trim_matches('\'');
             self.navigate(url);
             self.add_console_log(LogLevel::Info, "repl", &format!("Navigated to {url}"));
         } else if trimmed == "strata.reload()" {
