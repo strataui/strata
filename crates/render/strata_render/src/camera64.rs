@@ -213,8 +213,9 @@ pub struct Camera64 {
     pub eye: DVec3,
     pub target: DVec3,
     pub up: DVec3,
-    /// Horizontal field of view in degrees, matching `Camera3D::Perspective`.
-    pub fov_y_deg: f64,
+    /// Horizontal field of view in degrees, matching
+    /// `Camera3D::Perspective::fov_horizontal_deg`.
+    pub fov_horizontal_deg: f64,
     pub near: f64,
     pub far: f64,
 }
@@ -225,7 +226,7 @@ impl Default for Camera64 {
             eye: DVec3::new(0.0, 0.0, 10.0),
             target: DVec3::ZERO,
             up: DVec3::UP,
-            fov_y_deg: 60.0,
+            fov_horizontal_deg: 60.0,
             near: 0.1,
             far: 1.0e9,
         }
@@ -270,10 +271,18 @@ impl RenderFrame64 {
         };
         // `Camera3D::Perspective` applies its field of view on the horizontal
         // axis, while the projection matrix takes a vertical one.
-        let fov_x = camera.fov_y_deg.to_radians();
+        let fov_x = camera.fov_horizontal_deg.to_radians();
         let fov_y = 2.0 * ((fov_x * 0.5).tan() / aspect).atan();
+        // Build the view around the RTC origin too. `project` subtracts that
+        // origin from each world point before applying this matrix, so the eye
+        // and target must be shifted by the same amount or the origin would
+        // not cancel.
         Self {
-            view_from_world: DMat4::look_at(camera.eye, camera.target, camera.up),
+            view_from_world: DMat4::look_at(
+                camera.eye.sub(rtc_origin),
+                camera.target.sub(rtc_origin),
+                camera.up,
+            ),
             projection: DMat4::perspective(fov_y, aspect, camera.near, camera.far),
             rtc_origin,
             width,
@@ -354,7 +363,7 @@ mod tests {
             eye: DVec3::new(0.0, 0.0, 20_000.0),
             target: DVec3::ZERO,
             up: DVec3::new(0.0, 1.0, 0.0),
-            fov_y_deg: 120.0,
+            fov_horizontal_deg: 120.0,
             near: 1.0,
             far: 1e9,
         };

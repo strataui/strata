@@ -27,7 +27,7 @@ fn camera() -> Camera64 {
         eye: DVec3::new(0.0, 0.0, 10.0),
         target: DVec3::ZERO,
         up: DVec3::UP,
-        fov_y_deg: 60.0,
+        fov_horizontal_deg: 60.0,
         near: 0.1,
         far: 1000.0,
     }
@@ -40,7 +40,7 @@ fn overlay_camera() -> Camera64 {
         eye: DVec3::new(0.0, 0.0, 10.0),
         target: DVec3::ZERO,
         up: DVec3::UP,
-        fov_y_deg: 60.0,
+        fov_horizontal_deg: 60.0,
         near: 0.1,
         far: 1000.0,
     }
@@ -91,8 +91,7 @@ fn overlay_anchor_matches_the_geometry_pixel() {
 
     let mut scene = Scene3D::new();
     scene.camera = Camera3D::Perspective {
-        fov: 60.0,
-        aspect: (VIEW_W / VIEW_H) as f32,
+        fov_horizontal_deg: 60.0,
         near: 0.1,
         far: 1000.0,
         position: [0.0, 0.0, 10.0],

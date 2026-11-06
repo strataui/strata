@@ -171,16 +171,21 @@ mod tests {
 
         let mut scene = Scene3D::new();
         scene.camera = Camera3D::Perspective {
-            fov: 60.0,
-            aspect: 200.0 / 150.0,
+            fov_horizontal_deg: 60.0,
             near: 0.1,
             far: 100.0,
             position: [0.0, 0.0, 5.0],
             target: [0.0, 0.0, 0.0],
         };
         scene.add_mesh(Mesh3D::new(
-            Geometry3D::Box { width: 1.0, height: 1.0, depth: 1.0 },
-            Material3D::Basic { color: Color::rgb(34, 197, 94) },
+            Geometry3D::Box {
+                width: 1.0,
+                height: 1.0,
+                depth: 1.0,
+            },
+            Material3D::Basic {
+                color: Color::rgb(34, 197, 94),
+            },
         ));
 
         target.render_if_dirty(&scene);

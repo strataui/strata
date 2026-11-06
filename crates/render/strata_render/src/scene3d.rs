@@ -42,8 +42,9 @@ impl Transform3D {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Camera3D {
     Perspective {
-        fov: f32,
-        aspect: f32,
+        /// Horizontal field of view in degrees. The projection matrix derives
+        /// the vertical field of view from the viewport's aspect ratio.
+        fov_horizontal_deg: f32,
         near: f32,
         far: f32,
         position: [f32; 3],
@@ -64,8 +65,7 @@ pub enum Camera3D {
 impl Default for Camera3D {
     fn default() -> Self {
         Self::Perspective {
-            fov: 60.0,
-            aspect: 16.0 / 9.0,
+            fov_horizontal_deg: 60.0,
             near: 0.1,
             far: 1000.0,
             position: [0.0, 2.0, 5.0],

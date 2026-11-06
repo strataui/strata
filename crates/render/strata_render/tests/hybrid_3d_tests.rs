@@ -15,8 +15,7 @@ use strata_style::types::Color;
 #[test]
 fn test_orbit_controls_interactive_simulation() {
     let mut camera = Camera3D::Perspective {
-        fov: 60.0,
-        aspect: 16.0 / 9.0,
+        fov_horizontal_deg: 60.0,
         near: 0.1,
         far: 1000.0,
         position: [0.0, 5.0, 10.0],
@@ -40,7 +39,11 @@ fn test_orbit_controls_interactive_simulation() {
 
     if let Camera3D::Perspective { position, .. } = camera {
         let eye = Vec3::new(position[0], position[1], position[2]);
-        assert_ne!(eye, Vec3::new(0.0, 5.0, 10.0), "Eye position must have rotated");
+        assert_ne!(
+            eye,
+            Vec3::new(0.0, 5.0, 10.0),
+            "Eye position must have rotated"
+        );
     }
 
     // 2. Simulate pointer right-click pan
@@ -52,7 +55,10 @@ fn test_orbit_controls_interactive_simulation() {
     for _ in 0..30 {
         controls.tick(0.016);
     }
-    assert_ne!(controls.target, pre_pan_target, "Target must have shifted via panning");
+    assert_ne!(
+        controls.target, pre_pan_target,
+        "Target must have shifted via panning"
+    );
 
     // 3. Simulate mouse wheel zoom
     let pre_zoom_radius = controls.radius;
@@ -60,11 +66,17 @@ fn test_orbit_controls_interactive_simulation() {
     for _ in 0..30 {
         controls.tick(0.016);
     }
-    assert!(controls.radius < pre_zoom_radius, "Radius must decrease when zooming in");
+    assert!(
+        controls.radius < pre_zoom_radius,
+        "Radius must decrease when zooming in"
+    );
 
     // View matrix should be valid and invertible
     let vm = controls.view_matrix();
-    assert!(vm.inverse().is_some(), "View matrix must be non-singular and invertible");
+    assert!(
+        vm.inverse().is_some(),
+        "View matrix must be non-singular and invertible"
+    );
 }
 
 #[test]
@@ -79,8 +91,7 @@ fn test_shared_render_target_telemetry_hud_overlay() {
     // Build 3D telemetry scene
     let mut scene = Scene3D::new();
     scene.camera = Camera3D::Perspective {
-        fov: 50.0,
-        aspect: 600.0 / 400.0,
+        fov_horizontal_deg: 50.0,
         near: 0.1,
         far: 500.0,
         position: [0.0, 2.0, 6.0],
@@ -100,7 +111,11 @@ fn test_shared_render_target_telemetry_hud_overlay() {
     // Central server node
     scene.add_mesh(
         Mesh3D::new(
-            Geometry3D::Box { width: 1.6, height: 1.6, depth: 1.6 },
+            Geometry3D::Box {
+                width: 1.6,
+                height: 1.6,
+                depth: 1.6,
+            },
             Material3D::Standard {
                 color: Color::rgb(59, 130, 246), // Blue-500
                 roughness: 0.3,

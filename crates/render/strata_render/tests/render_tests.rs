@@ -208,8 +208,7 @@ fn test_3d_viewport_compositing_into_framebuffer() {
     // Create a 3D scene with a red box mesh and directional light
     let mut scene = Scene3D::new();
     scene.camera = Camera3D::Perspective {
-        fov: 60.0,
-        aspect: 1.0,
+        fov_horizontal_deg: 60.0,
         near: 0.1,
         far: 100.0,
         position: [0.0, 0.0, 5.0],

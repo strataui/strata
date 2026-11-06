@@ -15,7 +15,7 @@ fn surface_camera() -> Camera64 {
         eye: DVec3::new(EARTH_RADIUS_M + 8_400_000.0, 0.0, 0.0),
         target: DVec3::new(EARTH_RADIUS_M, 0.0, 0.0),
         up: DVec3::UP,
-        fov_y_deg: 60.0,
+        fov_horizontal_deg: 60.0,
         near: 1.0,
         far: 1.0e9,
     }
@@ -105,7 +105,11 @@ fn points_behind_the_camera_are_clipped() {
     let frame = RenderFrame64::from_camera(&camera, 1440.0, 900.0);
     // A point on the far side of the eye along its view axis. The camera looks
     // along -X, so +X beyond the eye is behind it.
-    let behind = frame.project(camera.eye.add(DVec3::new(2.0 * (camera.eye.x - EARTH_RADIUS_M), 0.0, 0.0)));
+    let behind = frame.project(camera.eye.add(DVec3::new(
+        2.0 * (camera.eye.x - EARTH_RADIUS_M),
+        0.0,
+        0.0,
+    )));
     assert!(behind.clipped, "a point behind the eye must be clipped");
 }
 
@@ -139,4 +143,24 @@ fn morph_curve_is_reproducible_in_f64() {
         (a.z - (globe.z + terrain.z) / 2.0).abs() < 1e-9,
         "interpolation must be exact in f64"
     );
+}
+
+#[test]
+fn rtc_origin_cancels_for_an_off_axis_target() {
+    let camera = Camera64 {
+        eye: DVec3::new(10.0, 0.0, 0.0),
+        target: DVec3::new(0.0, 3.0, 0.0),
+        up: DVec3::UP,
+        fov_horizontal_deg: 60.0,
+        near: 0.1,
+        far: 100.0,
+    };
+    let point = DVec3::new(0.0, 4.0, 1.0);
+    let at_target = RenderFrame64::new(&camera, camera.target, 800.0, 600.0).project(point);
+    let at_point = RenderFrame64::new(&camera, point, 800.0, 600.0).project(point);
+    let at_zero = RenderFrame64::new(&camera, DVec3::ZERO, 800.0, 600.0).project(point);
+    assert!((at_target.x - at_point.x).abs() < 1e-6);
+    assert!((at_target.y - at_point.y).abs() < 1e-6);
+    assert!((at_target.x - at_zero.x).abs() < 1e-6);
+    assert!((at_target.y - at_zero.y).abs() < 1e-6);
 }

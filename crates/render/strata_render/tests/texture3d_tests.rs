@@ -184,8 +184,7 @@ fn textured_plane_scene(texture: strata_render::texture3d::TextureId, uv: UvTran
     let indices = vec![0, 1, 2, 0, 2, 3];
     let mut scene = Scene3D::new();
     scene.camera = Camera3D::Perspective {
-        fov: 60.0,
-        aspect: 1.0,
+        fov_horizontal_deg: 60.0,
         near: 0.1,
         far: 100.0,
         position: [0.0, 0.0, 4.0],
@@ -296,8 +295,7 @@ fn perspective_correction_keeps_the_midline_straight() {
     ];
     let mut scene = Scene3D::new();
     scene.camera = Camera3D::Perspective {
-        fov: 60.0,
-        aspect: 1.0,
+        fov_horizontal_deg: 60.0,
         near: 0.1,
         far: 100.0,
         position: [0.0, 0.0, 4.0],

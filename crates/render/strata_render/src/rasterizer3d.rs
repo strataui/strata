@@ -69,16 +69,15 @@ pub fn render_scene_3d_with_textures(
     // clipping stage, and the combined matrix is only used by the overlay.
     let (proj_mat, view_mat, near_plane) = match &scene.camera {
         Camera3D::Perspective {
-            fov,
+            fov_horizontal_deg,
             near,
             far,
             position,
             target,
-            ..
         } => {
-            // The scene camera's field of view is horizontal; the projection
-            // matrix takes a vertical one.
-            let fov_x = fov.to_radians();
+            // The scene camera declares a horizontal field of view; the
+            // projection matrix takes a vertical one.
+            let fov_x = fov_horizontal_deg.to_radians();
             let fov_y = 2.0 * ((fov_x * 0.5).tan() / aspect).atan();
             let p = Mat4::perspective(fov_y, aspect, *near, *far);
             let eye = Vec3::new(position[0], position[1], position[2]);
@@ -1012,12 +1011,11 @@ pub fn overlay_frame(scene: &Scene3D, viewport: Rect) -> crate::camera64::Render
     use crate::camera64::{Camera64, DVec3, RenderFrame64};
     let camera = match &scene.camera {
         Camera3D::Perspective {
-            fov,
+            fov_horizontal_deg,
             near,
             far,
             position,
             target,
-            ..
         } => Camera64 {
             eye: DVec3::new(position[0] as f64, position[1] as f64, position[2] as f64),
             target: DVec3::new(target[0] as f64, target[1] as f64, target[2] as f64),
@@ -1025,7 +1023,7 @@ pub fn overlay_frame(scene: &Scene3D, viewport: Rect) -> crate::camera64::Render
                 .camera_up()
                 .map(|u| DVec3::new(u[0], u[1], u[2]))
                 .unwrap_or(DVec3::UP),
-            fov_y_deg: *fov as f64,
+            fov_horizontal_deg: *fov_horizontal_deg as f64,
             near: *near as f64,
             far: *far as f64,
         },
@@ -1042,7 +1040,7 @@ pub fn overlay_frame(scene: &Scene3D, viewport: Rect) -> crate::camera64::Render
                 .camera_up()
                 .map(|u| DVec3::new(u[0], u[1], u[2]))
                 .unwrap_or(DVec3::UP),
-            fov_y_deg: 60.0,
+            fov_horizontal_deg: 60.0,
             near: *near as f64,
             far: *far as f64,
         },

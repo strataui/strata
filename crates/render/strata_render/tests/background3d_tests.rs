@@ -12,8 +12,7 @@ use strata_style::types::Color;
 
 fn camera() -> Camera3D {
     Camera3D::Perspective {
-        fov: 60.0,
-        aspect: 1.0,
+        fov_horizontal_deg: 60.0,
         near: 0.1,
         far: 1000.0,
         position: [0.0, 0.0, 10.0],
@@ -205,8 +204,7 @@ fn background_precedes_geometry() {
     ];
     let mut scene = Scene3D::new();
     scene.camera = Camera3D::Perspective {
-        fov: 60.0,
-        aspect: 1.0,
+        fov_horizontal_deg: 60.0,
         near: 0.1,
         far: 100.0,
         position: [0.0, 0.0, 4.0],
