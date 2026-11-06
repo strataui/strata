@@ -6,7 +6,7 @@
 
 ## Architectural Mission
 
-Modern server management cockpits and operations centers benefit significantly from multi-sensory telemetry feedback. When managing thousands of distributed microservices, human visual attention is easily saturated by complex dashboards. Spatial auditory cues provide immediate directional awareness for critical system events:
+Modern server management consoles and operations centers benefit significantly from multi-sensory telemetry feedback. When managing thousands of distributed microservices, human visual attention is easily saturated by complex dashboards. Spatial auditory cues provide immediate directional awareness for critical system events:
 - **Directional Fault Localization**: An operator wearing headphones immediately perceives which quadrant of a server cluster or topology graph generated an incident based on 3D spatial audio panning.
 - **Physical Attenuation and Doppler Cues**: Rapidly scaling server clusters or approaching load spikes emit frequency-modulated acoustic signals indicating velocity and proximity.
 - **Pure-Rust Determinism**: Unlike frameworks binding to heavyweight audio backends (like OpenAL, FMOD, or PortAudio), `strata_audio` runs natively across desktop, server headless CI, and WebAssembly with zero audio-driver lockup risks.

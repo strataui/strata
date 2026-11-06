@@ -1,208 +1,158 @@
-# strata_parity_tauri: Visual Parity & Differential Analysis Harness
+# strata_parity_tauri: Three-Engine Visual Parity
 
-The `strata_parity_tauri` harness provides an automated visual regression and performance profiling test suite comparing Project Strata directly against Tauri 2.0 (running WebKitGTK 2.44 on Linux and WebView2 on Windows).
+`strata_parity_tauri` is the visual regression harness for the Strata renderer.
+It captures the same inline HTML fixture in three engines at a fixed 1280x720
+viewport, writes the captures and perceptual diffs, and gates on the
+Chromium-vs-Strata result.
 
-By executing identical HTML/CSS documents in isolated subprocesses and capturing maximized window framebuffers, this harness mathematically verifies layout spec-compliance, subpixel rendering accuracy, and rendering pipeline latency.
-
----
-
-## Architectural Topology
-
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│                      strata_parity_tauri Runner                        │
-├────────────────────────────────────────────────────────────────────────┤
-│                                                                        │
-│   ┌────────────────────────────────────────────────────────────────┐   │
-│   │               7-Tier Progressive Fixture Engine                │   │
-│   │         (Pure Box Model -> 2D Grid -> Telemetry Console)         │   │
-│   └───────────────────────────────┬────────────────────────────────┘   │
-│                                   │                                    │
-│                 ┌─────────────────┴─────────────────┐                  │
-│                 ▼                                   ▼                  │
-│   ┌───────────────────────────┐       ┌────────────────────────────┐   │
-│   │      Tauri 2 Runner       │       │    Strata Native Runner    │   │
-│   │ (WebKitGTK Web View Host) │       │ (Pure-Rust Engine Window)  │   │
-│   └─────────────┬─────────────┘       └─────────────┬──────────────┘   │
-│                 │                                   │                  │
-│                 ▼                                   ▼                  │
-│          /tmp/tauri.png                      /tmp/strata.png           │
-│                 │                                   │                  │
-│                 └─────────────────┬─────────────────┘                  │
-│                                   ▼                                    │
-│   ┌────────────────────────────────────────────────────────────────┐   │
-│   │                  Differential Pixel Analysis                   │   │
-│   │  (Exact Match %, Perceptual Match %, SSIM, Delta E, Heatmaps)  │   │
-│   └────────────────────────────────────────────────────────────────┘   │
-│                                                                        │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 1. The 7-Tier Progressive Parity Fixtures
-
-The harness defines seven progressive layout fixtures (`fixture.rs`), testing from atomic box-model geometry up to enterprise telemetry consoles:
-
-### Level 1: Pure Box Model
-- **Target**: Solid rectangular containers, exact border calculations, box-sizing (`content-box` vs `border-box`), margins, and padding.
-- **Fixture Spec**: `#09090b` canvas with a centered `#18181b` card bounded by a 2px `#27272a` solid border.
-
-### Level 2: Rounded Rectangles & Curvature
-- **Target**: Subpixel corner curvature, anti-aliased border arcs, and clipped interior fills.
-- **Fixture Spec**: Nested containers with varied radii (`rounded-lg`, `rounded-2xl`, `rounded-full`).
-
-### Level 3: Typography & Baseline Placement
-- **Target**: Subpixel glyph positioning, font leading, line-height normalization, letter spacing, and vertical alignment against baseline grids.
-- **Fixture Spec**: High-contrast headings, body copy, and monospace code snippets rendered with Inter and JetBrains Mono.
-
-### Level 4: Flexbox 1D Row Alignment
-- **Target**: Spec-compliant 1D distribution (`justify-content: space-between`, `align-items: center`, `flex-wrap: nowrap`, automatic min-content sizing).
-- **Fixture Spec**: Status bar components with left brand badges, center status pills, and right telemetry timestamps.
-
-### Level 5: Full Multi-Card Infrastructure Dashboard
-- **Target**: Nested flex containers, metric indicators, tabular rows, and multi-card dashboards.
-- **Verification Assert**: Validated via unit tests asserting identical computed bounding box coordinates:
-  - Header border box: `y = 32.0`, `height = 49.0`
-  - Grid root: `y = 113.0`
-  - Metric Card 1: `y = 113.0`, `height = 134.0`
-  - Primary Value text node: `y = 166.0`, `height = 36.0`
-
-### Level 6: 2D CSS Grid
-- **Target**: 2D track sizing, explicit column/row definitions, track gutters (`gap: 24px`), `minmax(0, 1fr)` tracks, and multi-span grid items (`col-span-2`, `row-span-2`).
-- **Fixture Spec**: Asymmetric telemetry dashboard layout with dense item packing.
-
-### Level 7: High-Complexity Multi-Section Telemetry Console
-- **Target**: Production-grade enterprise monitoring workstation with collapsible sidebars, multi-layer card headers, real-time table views, and status badges.
-
----
-
-## 2. Multi-Process Execution Architecture
-
-To eliminate shared memory interference, static state pollution, and display server grab conflicts between GTK and Strata, each framework instance executes in an isolated operating system process:
-
-### Stage 1: Tauri Subprocess
-Launches Tauri with `--tauri-only --level <N>`. Tauri instantiates a WebKitGTK window, loads the generated fixture HTML, renders the document at $1920 \times 1080$, and saves the frame buffer to `/tmp/tauri_rendered_l<N>.png`.
-
-### Stage 2: Strata Subprocess
-Launches the native Strata window with `--strata-only --level <N>`. Strata evaluates the component tree through `strata_layout`, builds a hardware display list via `strata_render::compositor::Compositor`, rasters the frame buffer, and saves the image to `/tmp/strata_rendered_l<N>.png`.
-
-### Stage 3: Differential Analysis
-The parent runner loads both PNG artifacts into memory, extracts overlapping bounds, and executes pixel-level and perceptual differential analysis.
-
----
-
-## 3. Quantitative Parity Metrics
-
-The analysis engine (`diff.rs`) computes statistical and perceptual metrics:
-
-### Metric Definitions
-
-- **Exact Match Pixels**: Pixels where RGBA values match identically ($\Delta R = \Delta G = \Delta B = \Delta A = 0$).
-- **Perceptual Match Pixels**: Pixels within human eye just-noticeable-difference (JND) threshold, where color distance $\Delta E \le 2.0$.
-- **SSIM Score**: Structural Similarity index computed across $8 \times 8$ sliding pixel windows.
-- **Mean & Max $\Delta E$**: Color space difference computed using the CIE76 color distance formula:
-
-$$\Delta E = \sqrt{(L_1 - L_2)^2 + (a_1 - a_2)^2 + (b_1 - b_2)^2}$$
-
-- **Diff Heatmap Artifact**: Automatically outputs a false-color PNG image (`/tmp/parity_diff_heatmap_l<N>.png`) where differing pixels are highlighted in vibrant red/magenta against a darkened background, highlighting rasterization deltas.
-
-### Empirical Parity Scorecard
-
-Summary report from running the progressive parity suite:
-
-```text
-=========================================================================================
-  PROGRESSIVE VISUAL PARITY SUITE SUMMARY REPORT
-=========================================================================================
-Level    | Stage                        | Resolution   | Exact Match    | Perceptual     | SSIM      
------------------------------------------------------------------------------------------
-L1       | Pure Box Model               | 1920 x 1080  |  99.88%        |  99.98%        |  0.99984
-L2       | Rounded Rectangles           | 1920 x 1080  |  98.42%        |  99.85%        |  0.99892
-L3       | Typography & Baselines       | 1920 x 1080  |  96.75%        |  99.42%        |  0.99720
-L4       | Flexbox 1D Row Alignment     | 1920 x 1080  |  98.15%        |  99.78%        |  0.99865
-L5       | Full Infrastructure Dash     | 1920 x 1080  |  97.60%        |  99.64%        |  0.99810
-L6       | 2D CSS Grid Layout           | 1920 x 1080  |  97.90%        |  99.70%        |  0.99835
-L7       | Telemetry Console            | 1920 x 1080  |  96.95%        |  99.50%        |  0.99780
-=========================================================================================
-```
-
-*Key Takeaway*: Across all seven fixtures, Strata achieves greater than **99.5% Perceptual Parity** and **>0.997 SSIM** against WebKitGTK. Minor deltas originate from subpixel font antialiasing (FreeType font rasterizer hinting differences vs WebKit HarfBuzz/Pango).
-
----
-
-## 4. In-Engine Raw Performance Profiling
-
-In addition to visual comparison, the harness includes `--bench-raw` to profile internal pipeline latencies (`raw_bench.rs`) and compare them against Chromium Blink metrics collected via Chrome DevTools Protocol (CDP `Performance.getMetrics`):
-
-### Pipeline Stage Breakdown (1920x993 Viewport, Pure Rust)
-
-```text
------------------------------------------------------------------------------------------
-  STRATA NATIVE PIPELINE LATENCY PROFILE (1920x993 Viewport, Pure Rust)
------------------------------------------------------------------------------------------
-Level    | DOM/Style (µs) | Layout (µs)  | Paint (µs)   | Rasterize (µs) | Total Frame (µs)
------------------------------------------------------------------------------------------
-L1       |         1.2 µs |       3.8 µs |       2.1 µs |      120.4 µs  |      127.5 µs (0.13 ms)
-L2       |         1.8 µs |       5.2 µs |       3.4 µs |      185.2 µs  |      195.6 µs (0.20 ms)
-L3       |         2.4 µs |       8.9 µs |       5.8 µs |      240.8 µs  |      257.9 µs (0.26 ms)
-L4       |         3.1 µs |      12.4 µs |       7.2 µs |      310.5 µs  |      333.2 µs (0.33 ms)
-L5       |         6.8 µs |      28.5 µs |      14.2 µs |      580.4 µs  |      629.9 µs (0.63 ms)
-L6       |         7.4 µs |      34.2 µs |      16.8 µs |      640.2 µs  |      698.6 µs (0.70 ms)
-L7       |        12.5 µs |      58.4 µs |      29.1 µs |      890.6 µs  |      990.6 µs (0.99 ms)
------------------------------------------------------------------------------------------
-```
-
-### Side-by-Side Comparison: Strata vs Chromium Blink
-
-```text
------------------------------------------------------------------------------------------
-Level    | Strata Layout+Paint    | Chromium Style+Layout  | Strata Speedup
------------------------------------------------------------------------------------------
-L1       |                5.9 µs  |               92.4 µs  |        15.7x
-L2       |                8.6 µs  |              118.6 µs  |        13.8x
-L3       |               14.7 µs  |              174.2 µs  |        11.9x
-L4       |               19.6 µs  |              215.8 µs  |        11.0x
-L5       |               42.7 µs  |              410.5 µs  |         9.6x
-L6       |               51.0 µs  |              485.2 µs  |         9.5x
-L7       |               87.5 µs  |              790.4 µs  |         9.0x
------------------------------------------------------------------------------------------
-```
-
-Strata resolves Layout + Paint calculations **9x to 15x faster than Chromium Blink**.
-
----
-
-## 5. Dirty-Rect Damage Scissoring Profile
-
-To optimize rasterization performance, Strata incorporates dirty-rect damage tracking (`run_damage_benchmarks`). When a small indicator or counter updates, the software rasterizer clips drawing operations strictly to the damaged bounding rect:
-
-```text
------------------------------------------------------------------------------------------
-Level    | Scenario                      | Damaged Area   | Full Raster  | Damage Raster | Speedup
------------------------------------------------------------------------------------------
-L5       | Status Pill State Change      | 120 x 32 px    |     580.4 µs |       14.2 µs |   40.9x
-L5       | Single Metric Digit Update    | 180 x 48 px    |     580.4 µs |       19.8 µs |   29.3x
-L7       | Table Row Hover Highlight     | 960 x 36 px    |     890.6 µs |       42.5 µs |   21.0x
------------------------------------------------------------------------------------------
-```
-
-Damage scissoring delivers up to a **40x speedup** on incremental UI updates.
-
----
-
-## Command Line Execution
+## Command
 
 ```bash
-# Execute the complete progressive parity suite (Levels 1 through 7)
-cargo run --release -p strata_parity_tauri -- --suite
+cargo run -p strata_parity_tauri --release -- --parity-suite
+```
 
-# Execute a specific parity level (e.g. Level 5)
-cargo run --release -p strata_parity_tauri -- --level 5
+The default run captures every fixture twice into `run_a/` and `run_b/` so the
+harness can verify run-to-run determinism. Use `--single-run` while iterating on
+a fixture.
 
-# Run in-engine microsecond benchmarks vs Chromium CDP
-cargo run --release -p strata_parity_tauri -- --bench-raw
+```bash
+cargo run -p strata_parity_tauri --release -- --fixture grid_tracks --single-run
+cargo run -p strata_parity_tauri --release -- --list-fixtures
+cargo run -p strata_parity_tauri --release -- --parity-suite --thresholds 0.90,90
+```
 
-# Run damage scissoring profile
-cargo run --release -p strata_parity_tauri -- --bench-damage
+## Engines
+
+| Engine | Role | Identity |
+| --- | --- | --- |
+| Chromium | Visual ground truth | Headless Google Chrome / Chromium |
+| Tauri | Informational control | Tauri 2 on WebKitGTK on Linux, WebView2 on Windows, WKWebView on macOS |
+| Strata | Native engine under test | Strata layout, compositor, and Cairo presentation |
+
+On Linux the Tauri control is WebKitGTK, not Chromium. Chromium remains the
+oracle for every threshold decision. Tauri numbers are reported and must be real
+captures, but they do not decide the pass gate. The report records the detected
+WebKitGTK version from `pkg-config --modversion webkit2gtk-4.1` or
+`webkit2gtk-4.0`.
+
+## Determinism
+
+All browser captures receive an injected style and script:
+
+- animations and transitions are disabled, and reduced-motion rules are present;
+- `caret-color` is transparent and `scroll-behavior` is `auto`;
+- `Date`, `Date.now`, `performance.now`, and animation frame timestamps are frozen;
+- the document scroll offset and the fixture scroll container are set to the
+  fixed captured offset.
+
+Chromium is launched with a fresh profile under
+`target/parity/chrome-profile/`, a fixed 1280x720 window, device scale factor
+1.0, sRGB color, no GPU, no LCD text, and font hinting disabled. Chromium uses
+`--virtual-time-budget=2000`; Tauri waits 1500 ms after opening the window.
+
+The Tauri window is undecorated, non-resizable, and not maximized. Window-scoped
+capture can include a few rows of window-manager padding below the page. The
+harness removes that deterministic padding by cropping the capture to the
+top-left 1280x720 content area before hashing and comparison. The crop note is
+written to `report.json` as `tauri_capture_normalization`. A capture that is
+smaller than 1280x720, empty, or not a valid image is reported as unavailable
+with the exact error instead of being fabricated.
+
+The pass gate compares the SHA-256 of `chromium.png` and `strata.png` between
+`run_a/` and `run_b/`. Tauri hashes are compared and reported separately but do
+not gate.
+
+## Output Layout
+
+The default output root is `target/parity/`:
+
+```text
+target/parity/<fixture>/
+  chromium.png
+  tauri.png
+  strata.png
+  diff_chromium_strata.png
+  diff_chromium_tauri.png
+  report.json
+  hashes.txt
+  run_a/
+    chromium.png
+    tauri.png
+    strata.png
+    diff_chromium_strata.png
+    diff_chromium_tauri.png
+    input.html
+  run_b/
+    ...
+```
+
+The top-level capture files are the canonical copies from `run_a`. Each
+`report.json` records the fixture name, engine labels, viewport, per-engine
+SHA-256 for both runs, SSIM, exact and perceptual percentages, mean and maximum
+color distance, significant-difference pixel count and bounding box, thresholds,
+known-gap notes, Tauri availability, and pass/fail. `hashes.txt` is a compact
+per-run hash and determinism summary.
+
+Diff images use Chromium as the reference. Pixels within a color distance of 0.5
+are dimmed context, distances from 0.5 to 15 are amber, and distances above 15
+are red.
+
+## Thresholds
+
+The default threshold is SSIM `>= 0.95` and perceptual match `>= 95%` against
+Chromium. Each fixture may carry its own thresholds. `--thresholds
+<ssim>,<perceptual>` overrides the effective threshold for the run and prints a
+prominent warning; it never changes a fixture definition.
+
+A fixture is in scope by default. A fixture that exposes a known renderer gap is
+marked `in_scope: false` and carries a `known_gap` note in `components.rs` and
+`report.json`. It is still captured and diffed, but it does not fail the gate.
+Current out-of-scope categories include native form controls, element opacity,
+border patterns, and default line-height resolution.
+
+The command exits non-zero if any in-scope fixture misses its thresholds, or if
+the Chromium or Strata capture is unavailable or non-deterministic.
+
+## Adding a Fixture
+
+Add a function to `src/components.rs` that returns a `Fixture` and register it in
+`suite_fixtures()`.
+
+```rust
+Fixture {
+    name: "my_fixture",
+    description: "What the fixture exercises",
+    html: r#"<!DOCTYPE html>... "#,
+    in_scope: true,
+    ssim_threshold: DEFAULT_SSIM_THRESHOLD,
+    perceptual_threshold: DEFAULT_PERCEPTUAL_THRESHOLD,
+    scroll_y: 0.0,
+    known_gap: None,
+}
+```
+
+Requirements for a fixture:
+
+- inline HTML and CSS only, with no network resources;
+- explicit `background` on both `html` and `body`;
+- fixed pixel sizes and no animations or transitions;
+- `font-family: "DejaVu Sans", sans-serif;` on the document and
+  `"DejaVu Sans Mono", monospace` for code;
+- a fixed `scroll_y` when the fixture exercises scrolling. A dedicated
+  `#parity-scroll-root` container is scrolled in both browser engines and in
+  Strata.
+
+## Existing Modes
+
+The harness keeps the earlier modes available:
+
+```bash
+cargo run -p strata_parity_tauri --release -- --chromium-parity
+cargo run -p strata_parity_tauri --release -- --suite
+cargo run -p strata_parity_tauri --release -- --tauri-only --level 2
+cargo run -p strata_parity_tauri --release -- --strata-only --level 2
+cargo run -p strata_parity_tauri --release -- --diff-only --level 2
+cargo run -p strata_parity_tauri --release -- --bench-raw
+cargo run -p strata_parity_tauri --release -- --bench-damage
+cargo run -p strata_parity_tauri --release -- --scrolling-bench
 ```

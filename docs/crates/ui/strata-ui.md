@@ -463,6 +463,82 @@ let breadcrumbs = Breadcrumb(trail, None);
 
 ---
 
+## Scroll Containers and Frameless Window Chrome
+
+### ScrollArea
+
+`strata_ui::scroll_area::ScrollArea` is the declarative scroll container. It renders a `div` with `overflow-y-auto` and a stable `id`; the runtime uses that id to keep the scroll offset across component re-renders.
+
+```rust
+use strata_ui::prelude::ScrollArea;
+
+let feed = ScrollArea(
+    Some("telemetry-feed"),   // stable id for scroll-position persistence
+    Some("h-96 w-full px-4"), // Tailwind overrides
+    Some(rows),               // children
+    Some(true),               // show_scrollbar
+);
+```
+
+```rust
+rsx! {
+    <ScrollArea id={Some("telemetry-feed")} class={Some("h-96 w-full px-4")} show_scrollbar={Some(true)}>
+        {rows}
+    </ScrollArea>
+}
+```
+
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `id` | `Option<&'static str>` | Stable container identity used for scroll-position persistence. |
+| `class` | `Option<&'static str>` | Additional Tailwind utilities appended to the container. |
+| `children` | `Option<Vec<NodeBlueprint>>` | Scrollable content. |
+| `show_scrollbar` | `Option<bool>` | Optional scrollbar flag; defaults to `true`. |
+
+For containers that overflow, the runtime supplies the interaction behavior: wheel input feeds the kinetic momentum solver, the floating thumb expands and becomes more opaque on hover without shifting layout, the thumb can be dragged, and a saturated inner container forwards the remaining delta to its parent.
+
+### TitleBar and WindowDragHandle
+
+`strata_ui::title_bar::TitleBar` emits frameless window chrome. It is a `<header>` whose body carries `data-app-region="drag"` when `drag_region` is true, or `data-app-region="no-drag"` when false.
+
+```rust
+use strata_ui::prelude::{TitleBar, WindowDragHandle};
+
+rsx! {
+    <TitleBar
+        title={Some("Strata Telemetry".to_string())}
+        drag_region={Some(true)}
+        show_controls={Some(true)}
+        on_minimize={Some(std::rc::Rc::new(|_: strata_dom::Event| { /* minimize */ }))}
+        on_maximize={Some(std::rc::Rc::new(|_: strata_dom::Event| { /* toggle maximize */ }))}
+        on_close={Some(std::rc::Rc::new(|_: strata_dom::Event| { /* close */ }))}
+    />
+}
+
+rsx! {
+    <WindowDragHandle class={Some("h-8 w-full")}>
+        <span class="text-xs text-neutral-400">{"Custom chrome drag strip"}</span>
+    </WindowDragHandle>
+}
+```
+
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `title` | `Option<String>` | Title text rendered on the left. |
+| `drag_region` | `Option<bool>` | Emits `data-app-region="drag"` when true; defaults to `true`. |
+| `show_controls` | `Option<bool>` | Renders the built-in minimize, maximize, and close buttons; defaults to `true`. |
+| `on_minimize` | `Option<Rc<dyn Fn(Event)>>` | Invoked by the minimize button. |
+| `on_maximize` | `Option<Rc<dyn Fn(Event)>>` | Invoked by the maximize button. |
+| `on_close` | `Option<Rc<dyn Fn(Event)>>` | Invoked by the close button. |
+| `class` | `Option<&'static str>` | Additional Tailwind utilities. |
+| `children` | `Option<Vec<NodeBlueprint>>` | Extra controls placed before the built-in buttons. |
+
+The built-in buttons set `data-window-action="minimize"`, `"maximize"`, and `"close"`, and each also opts out of dragging with `data-app-region="no-drag"`. `WindowDragHandle` is the bare primitive: a `div` with `data-app-region="drag"` for custom title strips.
+
+`strata_ui` deliberately does not depend on `strata_platform`. Components only emit `data-*` markers and optional callbacks; the application or runtime translates them into native calls. The runtime treats a primary press on a drag region as a window-drag candidate once the pointer moves past a small threshold, and a double-click on a drag region toggles maximize.
+
+---
+
 ## High-Throughput Composite DataTable
 
 The `DataTable` component combines typed column accessors with structured headers, sorting, and tabular styling:

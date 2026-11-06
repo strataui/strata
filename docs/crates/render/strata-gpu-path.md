@@ -336,3 +336,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+---
+
+## Embedded WebGPU/WGSL Compute Shaders & Direct Hardware Path Pipeline
+
+`strata_gpu_path` embeds zero-CPU WebGPU Shading Language (WGSL) compute and analytical fragment shaders for direct GPU curve decomposition, stroke expansion, and subpixel distance field rasterization:
+
+### 1. Parallel Curve Decomposition (`WGSL_PATH_COMPUTE_FLATTEN_SHADER`)
+Accepts batches of 64-byte `RawCurveInput` structs in a read-only storage buffer and computes degree reduction / quadratic approximations directly on the GPU in `@compute @workgroup_size(64)` workgroups.
+
+### 2. Analytical Signed Distance Field Rasterization (`WGSL_ANALYTICAL_PATH_RASTER_SHADER`)
+Evaluates continuous distance to quadratic Bézier segments $B(t)$ in fragment shaders, applying subpixel anti-aliasing via distance field thresholds without MSAA or polygon triangulation.
+
+### 3. Analytical Stroke Expansion Engine
+Computes unit normal offset envelopes $\mathbf{n}(t) = \frac{(-y'(t), x'(t))}{\sqrt{x'(t)^2 + y'(t)^2}}$ for thick strokes, generating closed outline curves with support for `LineCap` (`Butt`, `Round`, `Square`) and `LineJoin` (`Miter`, `Round`, `Bevel`).
+
+### 4. Direct Hardware Integration with `GpuPathPipeline`
+Within `strata_render` and `strata::runtime::AppRuntime`, `GpuPathPipeline` batches both `DrawCommand::DrawGpuPath` and declarative SVG icon paths into zero-copy `GpuPathSegment` storage buffers, complete with spatial damage scissoring and viewport projection.
+

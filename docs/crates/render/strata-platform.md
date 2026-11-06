@@ -193,6 +193,39 @@ assert_eq!(wm.active_window(), Some(main_id));
 
 ---
 
+## Single Instance Application Lock
+
+Desktop tools such as editors, browsers, and telemetry utilities should not open a second process when the user launches the executable again. `strata_platform::single_instance` provides an exclusive lock, argument forwarding, and a window-focus request.
+
+```rust
+use strata_platform::{SingleInstanceLock, SingleInstanceStatus};
+
+let status = SingleInstanceLock::acquire(
+    "com.example.telemetry-hub",
+    &std::env::args().collect::<Vec<_>>(),
+    |forwarded_args| {
+        // Runs on the listener thread in the primary instance.
+        println!("second launch with {:?}", forwarded_args);
+    },
+)?;
+
+match status {
+    SingleInstanceStatus::Primary(lock) => {
+        // Keep the lock alive for the lifetime of the application.
+        let _lock = lock;
+    }
+    SingleInstanceStatus::SecondaryExited => return Ok(()),
+}
+```
+
+`acquire_in_dir(app_id, args, runtime_dir, on_secondary_args)` is the testable form: it takes an explicit runtime directory instead of reading the process environment.
+
+On Unix the lock is a Unix domain socket named `<app_id with "/" replaced by "_">.sock` inside `$XDG_RUNTIME_DIR`, falling back to `/tmp`. When the bind reports `AddrInUse`, the implementation connects to the existing path. A successful connection means a live primary instance: the arguments are written newline-separated and the process returns `SecondaryExited`. A refused connection identifies a stale socket left by a crashed process, which is removed and rebound.
+
+On Windows the same contract is implemented over a named pipe at `\\.\pipe\<sanitized-app-id>` using raw `kernel32` calls. That path is compile-gated to Windows and is not exercised or verified on Linux hosts.
+
+`SingleInstanceLock::app_id` returns the identifier. Dropping the lock stops the listener thread and removes the socket, or closes the pipe handle.
+
 ## Native Application Menus and Accelerators
 
 `strata_platform::menu` defines hierarchical application menus with automatic OS role mappings and cross-platform keyboard shortcut formatting.
@@ -268,6 +301,76 @@ let handled = tray.trigger_menu_action(1);
 assert!(handled);
 assert_eq!(tray.last_action_id, Some(1));
 ```
+
+---
+
+### Native Tray Backends
+
+`TrayIcon::trigger_click` and `TrayIcon::trigger_menu_action` drive the deterministic in-process model used by tests. Real desktops use `TrayIcon::spawn_native`, which returns a `NativeTrayHandle` and routes user interaction into a `TrayEventSink` callback:
+
+```rust
+use strata_platform::tray::{TrayIcon, TrayMenu};
+use strata_platform::PlatformEvent;
+
+let icon_rgba = vec![255; 32 * 32 * 4];
+
+let mut menu = TrayMenu::new();
+menu.add_item(10, "Open Dashboard");
+menu.add_item(11, "Quit");
+
+let mut icon = TrayIcon::new("Strata Agent", icon_rgba, 32, 32);
+icon.set_menu(Some(menu));
+
+let mut handle = icon.spawn_native(|event| match event {
+    PlatformEvent::TrayIconClicked => {
+        // Restore and focus the main window.
+    }
+    PlatformEvent::TrayMenuItemClicked(10) => {
+        // Open the dashboard.
+    }
+    PlatformEvent::TrayMenuItemClicked(11) => {
+        // Exit the application.
+    }
+    _ => {}
+});
+
+assert!(matches!(handle.backend_name(), "ayatana-appindicator" | "handle-only"));
+```
+
+`NativeTrayHandle::backend_name` returns `"ayatana-appindicator"` when a live Linux indicator is registered, otherwise `"handle-only"`.
+
+On Linux the backend dynamically loads `libayatana-appindicator3.so.1`, falling back to `libappindicator3.so.1`, and talks to the Ayatana AppIndicator/StatusNotifierItem surface at runtime. The library is never a build-time dependency. A live indicator is created only when `spawn_native` runs on the GTK main thread after `gtk::init()`; calls from worker threads, or processes without the library, stay on the handle-only model.
+
+Menu mapping:
+
+- Each `TrayMenuItem` becomes a `GtkMenuItem` or a `GtkCheckMenuItem`; an enabled item activation emits `TrayMenuItemClicked(id)`.
+- `TrayMenu::add_separator` maps to `GtkSeparatorMenuItem`.
+- `TrayMenu::add_submenu` maps to a nested `GtkMenu`.
+- AppIndicator exports its menu over D-Bus and does not deliver a primary-click callback through this integration, so the backend connects the root `GtkMenu` `show` signal to `TrayIconClicked` once per menu open. Desktops that render the exported D-Bus menu without showing the `GtkMenu` may not fire that signal; those clicks then arrive only through the in-process controller.
+
+`NativeTrayHandle` mirrors updates to the live indicator: `set_tooltip`, `set_menu`, `set_visible`, and `set_badge` (applied through `app_indicator_set_label`). Dropping the handle releases the GObject reference, clears the retained `GtkMenu`, and removes the temporary icon PNG written under `$XDG_RUNTIME_DIR`.
+
+Windows `Shell_NotifyIconW` and macOS `NSStatusBar` backends are not implemented or verified in this tree. On those targets `backend_name()` reports `"handle-only"` and events flow only through the in-process controller.
+
+---
+
+## Event Injection Across Threads
+
+`post_platform_event(event)` schedules a `PlatformEvent` onto the running GTK event loop from any thread. The event is delivered through the registered event dispatch callback, and a redraw is queued when the callback reports a state change.
+
+The tray and single-instance subsystems use this seam:
+
+- `PlatformEvent::TrayIconClicked` for a primary tray interaction.
+- `PlatformEvent::TrayMenuItemClicked(id)` for an activated menu item.
+- `PlatformEvent::SingleInstanceTriggered(args)` carrying the arguments forwarded by a secondary process.
+
+The window event pump invokes the application's user event hook before any built-in handling, so an application can intercept these events and decide whether the runtime should rebuild the frame. Built-in behavior still runs when the hook returns `false`.
+
+---
+
+## Clipboard Safety in Headless Processes
+
+The GTK window driver exposes `gtk_get_clipboard_text` and `gtk_set_clipboard_text`. Both guard on `gtk::is_initialized` and `gtk::is_initialized_main_thread` before touching `gtk::Clipboard`, because the GTK clipboard API panics when GTK has not been initialized. In a headless test, a worker thread, or any non-GUI process, `gtk_get_clipboard_text` returns `None` and `gtk_set_clipboard_text` is a no-op. The application runtime detects this and falls back to its in-process clipboard, so copy, cut, and paste keep working without a display server.
 
 ---
 

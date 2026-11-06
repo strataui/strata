@@ -121,6 +121,52 @@ During initialization, `AppRuntime::build_layout_tree(blueprint)` recursively tr
 
 ---
 
+## Native Text Input and Selection
+
+Text inputs are first-class runtime components, not application widget state. A press anywhere inside the padded container that wraps an `<input>` focuses the input; a `cursor-text` class, a `Cursor::Text` style, or a `<label>` ancestor registers the container as a fallback hit target while the input itself keeps priority. While focused, the runtime draws a blinking insertion caret (530 ms toggle, driven by `AnimationTick` through `poll_caret_blink`) and resets the blink cycle on every edit so the caret stays solid while typing.
+
+Mouse semantics on a focused field:
+
+- Click positions the caret at the nearest character boundary using subpixel text measurement.
+- Dragging extends the selection from the press anchor.
+- Shift+click extends the existing selection to the new point.
+- Double-click selects the word under the pointer.
+- Triple-click selects the line.
+- Four or more clicks select the whole buffer.
+
+Keyboard semantics on the focused field:
+
+- `Left` and `Right` move the caret, or move by word with `Ctrl`/`Cmd`; `Home` and `End` jump to the buffer edges; `Shift` extends the selection.
+- `Ctrl`/`Cmd` + `A` selects all, `C` copies, `V` pastes, `X` cuts.
+- `Ctrl`/`Cmd` + `Z` undoes and `Y` (or `Shift+Z`) redoes.
+- `Ctrl`/`Cmd` + `Backspace` and `Delete` remove the previous or next word.
+
+`handle_key_event` performs the edits and routes clipboard work through `apply_edit_command`, which mirrors copies into an in-process fallback buffer so headless tests and processes without a display server keep working.
+
+`sync_active_input_layout` pushes the focused input's live text, caret styling, and measured size into the layout tree after every rebuild and edit. This makes the runtime authoritative for the focused field, so typing works even when the application passes a stale `value` attribute or registers no `on_input` handler.
+
+## Automatic Cursor Switching
+
+`hit_test_cursor` resolves the pointer icon for a coordinate against the blueprint and computed layout. Children are tested front-to-back first, so the deepest interactive element wins. Explicit CSS `cursor` values map to their platform equivalent; otherwise a `<button>`, an `<a>`, a `cursor-pointer` class, or any registered `on_click` listener resolves to `Pointer`, and an `<input>` or `Cursor::Text` container resolves to `Text`. Everything else returns `Default`.
+
+The native pump applies the result through `gtk_set_cursor` on pointer movement and resets it to `Default` on `CursorLeft`, so the icon does not stay stuck when the pointer leaves the window.
+
+## User Event Hook
+
+Every native window event passes through a single application hook before the runtime's built-in handling. `runtime::invoke_user_event_hook(event, runtime, hook)` calls the closure supplied to `launch_gtk_with_events` and returns a bool that asks the pump to rebuild the frame. Because the hook runs first, applications can intercept window, tray, and single-instance events:
+
+- `PlatformEvent::TrayIconClicked`
+- `PlatformEvent::TrayMenuItemClicked(id)`
+- `PlatformEvent::SingleInstanceTriggered(args)`
+
+Built-in handling runs regardless of the hook's return value; returning `true` additionally asks the pump to rebuild the frame.
+
+## Scroll Chaining
+
+`dispatch_smooth_scroll` accumulates wheel input into the kinetic momentum solver for the innermost scroll container under the pointer. It collects the containers whose bounds contain the point, then chooses the innermost one that can still absorb the delta in the requested direction. A container that has reached its top or bottom limit is skipped, so the same wheel event is applied to its parent instead of being trapped by the saturated inner scroller. When no container can move, the event is a no-op.
+
+---
+
 ## Application Orchestration (`StrataApp` & `StrataAppBuilder`)
 
 `StrataApp` provides low-level control over window management, swapchain presentation, lifecycle hooks, and manual frame stepping.
