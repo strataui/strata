@@ -3,7 +3,12 @@
 #![allow(unused_variables)]
 
 use std::collections::BTreeMap;
+use crate::overlay3d::Overlay3D;
 use strata_style::Color;
+
+pub use crate::texture3d::{
+    SamplerDesc, TextureData, TextureDesc, TextureId, TextureStore, UvTransform,
+};
 
 /// 3D Spatial Transformation
 #[derive(Debug, Clone, PartialEq)]
@@ -117,6 +122,53 @@ pub enum Geometry3D {
         vertices: Vec<f32>,
         indices: Vec<u32>,
     },
+    /// Custom vertex buffer with explicit texture coordinates.
+    ///
+    /// `vertices` is an eight-float stride: `x, y, z, nx, ny, nz, u, v`. Use this
+    /// for tile quads, relief walls, and building prisms whose UVs are authored
+    /// per corner rather than derived from the primitive generator.
+    CustomTextured {
+        vertices: Vec<f32>,
+        indices: Vec<u32>,
+    },
+}
+
+/// Textured surface material.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TexturedMaterial3D {
+    /// Texture sampled per fragment.
+    pub texture: TextureId,
+    /// Multiplied with the sampled RGBA before lighting.
+    pub tint: Color,
+    /// Sub-rect of the texture addressed by the mesh UVs.
+    pub uv_transform: UvTransform,
+    /// Whether the surface receives scene lighting. Tiles are usually unlit
+    /// because the imagery already carries shading.
+    pub lit: bool,
+    /// How much of the sampled alpha to honour, 0..=1.
+    pub opacity: f32,
+}
+
+impl TexturedMaterial3D {
+    pub fn new(texture: TextureId) -> Self {
+        Self {
+            texture,
+            tint: Color::rgba(255, 255, 255, 255),
+            uv_transform: UvTransform::IDENTITY,
+            lit: false,
+            opacity: 1.0,
+        }
+    }
+
+    pub fn with_uv_transform(mut self, transform: UvTransform) -> Self {
+        self.uv_transform = transform;
+        self
+    }
+
+    pub fn with_tint(mut self, tint: Color) -> Self {
+        self.tint = tint;
+        self
+    }
 }
 
 /// Low-Level Hardware Shader Source
@@ -147,9 +199,7 @@ pub enum Material3D {
         transmission: f32,
     },
     /// High-Level Unlit flat material
-    Basic {
-        color: Color,
-    },
+    Basic { color: Color },
     /// Low-Level Custom Hardware Shader Material
     Shader {
         vertex_shader: Option<ShaderSource>,
@@ -157,6 +207,8 @@ pub enum Material3D {
         glsl_fragment: Option<String>,
         uniforms: BTreeMap<String, f32>,
     },
+    /// Textured surface sampled from a [`TextureId`].
+    Textured(TexturedMaterial3D),
 }
 
 impl Default for Material3D {
@@ -193,12 +245,95 @@ impl Mesh3D {
     }
 }
 
+/// What the rasterizer fills before any geometry is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Background3D {
+    /// Leave the existing framebuffer contents untouched.
+    #[default]
+    Transparent,
+    /// A single colour.
+    Solid(Color),
+    /// A vertical gradient from `top` to `bottom` over the viewport.
+    VerticalGradient { top: Color, bottom: Color },
+}
+
+impl Background3D {
+    /// Returns the colour at a normalized vertical position `t` (0 = top).
+    pub fn color_at(self, t: f32) -> Option<Color> {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Self::Transparent => None,
+            Self::Solid(color) => Some(color),
+            Self::VerticalGradient { top, bottom } => {
+                let mix = |a: f32, b: f32| -> u8 {
+                    ((a * (1.0 - t) + b * t) * 255.0).round().clamp(0.0, 255.0) as u8
+                };
+                Some(Color::rgba(
+                    mix(top.r(), bottom.r()),
+                    mix(top.g(), bottom.g()),
+                    mix(top.b(), bottom.b()),
+                    mix(top.a(), bottom.a()),
+                ))
+            }
+        }
+    }
+}
+
+/// An emissive celestial body drawn as a billboard: the sun, the moon, or a
+/// sensor anomaly marker.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CelestialBody3D {
+    /// Scene-space position of the body centre.
+    pub position: [f64; 3],
+    /// Apparent radius in scene units.
+    pub radius: f64,
+    pub color: Color,
+    /// Soft edge width in pixels; 0 draws a hard disc.
+    pub glow: f32,
+    /// Whether the body participates in depth testing. The sun and stars
+    /// usually do not.
+    pub depth_test: bool,
+}
+
+/// A translucent spherical shell drawn over the surface: clouds, a night arc,
+/// or a coverage wash.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CloudShell3D {
+    /// Scene-space centre of the shell.
+    pub centre: [f64; 3],
+    /// Radius of the shell in scene units.
+    pub radius: f64,
+    pub color: Color,
+    /// Fraction of the shell that is cloud, 0..=1.
+    pub coverage: f32,
+    /// Shell opacity at full coverage, 0..=1.
+    pub opacity: f32,
+}
+
+impl CloudShell3D {
+    /// Opacity after applying the coverage ramp.
+    ///
+    /// The reference ramps cloud opacity from clear to full as density rises;
+    /// clamping here keeps every consumer on the same curve.
+    pub fn effective_opacity(&self) -> f32 {
+        (self.coverage.clamp(0.0, 1.0) * self.opacity.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+    }
+}
+
 /// Top-Level 3D Scene representation embedded in a Strata Viewport.
+///
+/// The background, celestial, cloud, and overlay state are private so adding
+/// them does not break struct literals written by existing callers. Use the
+/// `with_*` builders; the accessors below read them back.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Scene3D {
     pub camera: Camera3D,
     pub lights: Vec<Light3D>,
     pub meshes: Vec<Mesh3D>,
+    background: Background3D,
+    celestial: Vec<CelestialBody3D>,
+    cloud_shells: Vec<CloudShell3D>,
+    overlay: Option<Overlay3D>,
 }
 
 impl Scene3D {
@@ -213,6 +348,67 @@ impl Scene3D {
     pub fn add_light(&mut self, light: Light3D) {
         self.lights.push(light);
     }
+
+    /// Replaces the background fill used before geometry is drawn.
+    pub fn with_background(mut self, background: Background3D) -> Self {
+        self.background = background;
+        self
+    }
+
+    /// Adds an emissive celestial body.
+    pub fn with_celestial(mut self, body: CelestialBody3D) -> Self {
+        self.celestial.push(body);
+        self
+    }
+
+    /// Adds a translucent cloud shell.
+    pub fn with_cloud_shell(mut self, shell: CloudShell3D) -> Self {
+        self.cloud_shells.push(shell);
+        self
+    }
+
+    /// Attaches the overlay pass drawn after geometry.
+    pub fn with_overlay(mut self, overlay: Overlay3D) -> Self {
+        self.overlay = Some(overlay);
+        self
+    }
+
+    pub fn overlay(&self) -> Option<&Overlay3D> {
+        self.overlay.as_ref()
+    }
+
+    pub fn background(&self) -> Background3D {
+        self.background
+    }
+
+    pub fn celestial(&self) -> &[CelestialBody3D] {
+        &self.celestial
+    }
+
+    pub fn cloud_shells(&self) -> &[CloudShell3D] {
+        &self.cloud_shells
+    }
+}
+
+/// Callback that rasterizes a text run into the framebuffer.
+///
+/// The 3D overlay pass needs text, but `strata_render` must not depend on the
+/// platform text backend. Consumers install a rasterizer, exactly like the
+/// layout crate installs a text measurer.
+pub type TextRasterizer = crate::overlay3d::TextRasterizer;
+
+thread_local! {
+    static TEXT_RASTERIZER: std::cell::Cell<Option<TextRasterizer>> = const { std::cell::Cell::new(None) };
+}
+
+/// Installs the overlay text rasterizer for this thread.
+pub fn register_overlay_text_rasterizer(rasterizer: TextRasterizer) {
+    TEXT_RASTERIZER.with(|slot| slot.set(Some(rasterizer)));
+}
+
+/// Returns the installed overlay text rasterizer, if any.
+pub fn overlay_text_rasterizer() -> Option<TextRasterizer> {
+    TEXT_RASTERIZER.with(|slot| slot.get())
 }
 
 // ---------------------------------------------------------------------------

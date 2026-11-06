@@ -14,7 +14,11 @@ pub struct Vertex3D {
 impl Vertex3D {
     #[inline(always)]
     pub const fn new(position: Vec3, normal: Vec3, uv: (f32, f32)) -> Self {
-        Self { position, normal, uv }
+        Self {
+            position,
+            normal,
+            uv,
+        }
     }
 }
 
@@ -50,17 +54,65 @@ pub fn generate_box(width: f32, height: f32, depth: f32) -> MeshBuffers {
 
     let faces = [
         // Front (+Z)
-        (Vec3::new(0.0, 0.0, 1.0), [Vec3::new(-w, -h, d), Vec3::new(w, -h, d), Vec3::new(w, h, d), Vec3::new(-w, h, d)]),
+        (
+            Vec3::new(0.0, 0.0, 1.0),
+            [
+                Vec3::new(-w, -h, d),
+                Vec3::new(w, -h, d),
+                Vec3::new(w, h, d),
+                Vec3::new(-w, h, d),
+            ],
+        ),
         // Back (-Z)
-        (Vec3::new(0.0, 0.0, -1.0), [Vec3::new(w, -h, -d), Vec3::new(-w, -h, -d), Vec3::new(-w, h, -d), Vec3::new(w, h, -d)]),
+        (
+            Vec3::new(0.0, 0.0, -1.0),
+            [
+                Vec3::new(w, -h, -d),
+                Vec3::new(-w, -h, -d),
+                Vec3::new(-w, h, -d),
+                Vec3::new(w, h, -d),
+            ],
+        ),
         // Top (+Y)
-        (Vec3::new(0.0, 1.0, 0.0), [Vec3::new(-w, h, d), Vec3::new(w, h, d), Vec3::new(w, h, -d), Vec3::new(-w, h, -d)]),
+        (
+            Vec3::new(0.0, 1.0, 0.0),
+            [
+                Vec3::new(-w, h, d),
+                Vec3::new(w, h, d),
+                Vec3::new(w, h, -d),
+                Vec3::new(-w, h, -d),
+            ],
+        ),
         // Bottom (-Y)
-        (Vec3::new(0.0, -1.0, 0.0), [Vec3::new(-w, -h, -d), Vec3::new(w, -h, -d), Vec3::new(w, -h, d), Vec3::new(-w, -h, d)]),
+        (
+            Vec3::new(0.0, -1.0, 0.0),
+            [
+                Vec3::new(-w, -h, -d),
+                Vec3::new(w, -h, -d),
+                Vec3::new(w, -h, d),
+                Vec3::new(-w, -h, d),
+            ],
+        ),
         // Right (+X)
-        (Vec3::new(1.0, 0.0, 0.0), [Vec3::new(w, -h, d), Vec3::new(w, -h, -d), Vec3::new(w, h, -d), Vec3::new(w, h, d)]),
+        (
+            Vec3::new(1.0, 0.0, 0.0),
+            [
+                Vec3::new(w, -h, d),
+                Vec3::new(w, -h, -d),
+                Vec3::new(w, h, -d),
+                Vec3::new(w, h, d),
+            ],
+        ),
         // Left (-X)
-        (Vec3::new(-1.0, 0.0, 0.0), [Vec3::new(-w, -h, -d), Vec3::new(-w, -h, d), Vec3::new(-w, h, d), Vec3::new(-w, h, -d)]),
+        (
+            Vec3::new(-1.0, 0.0, 0.0),
+            [
+                Vec3::new(-w, -h, -d),
+                Vec3::new(-w, -h, d),
+                Vec3::new(-w, h, d),
+                Vec3::new(-w, h, -d),
+            ],
+        ),
     ];
 
     let uvs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
@@ -71,8 +123,12 @@ pub fn generate_box(width: f32, height: f32, depth: f32) -> MeshBuffers {
             vertices.push(Vertex3D::new(corners[i], normal, uvs[i]));
         }
         indices.extend_from_slice(&[
-            base_idx, base_idx + 1, base_idx + 2,
-            base_idx, base_idx + 2, base_idx + 3,
+            base_idx,
+            base_idx + 1,
+            base_idx + 2,
+            base_idx,
+            base_idx + 2,
+            base_idx + 3,
         ]);
     }
 
@@ -131,7 +187,12 @@ pub fn generate_sphere(radius: f32, width_segments: u32, height_segments: u32) -
 }
 
 /// Generates a planar subdivided grid quad.
-pub fn generate_plane(width: f32, height: f32, width_segments: u32, height_segments: u32) -> MeshBuffers {
+pub fn generate_plane(
+    width: f32,
+    height: f32,
+    width_segments: u32,
+    height_segments: u32,
+) -> MeshBuffers {
     let ws = width_segments.max(1);
     let hs = height_segments.max(1);
 
@@ -235,4 +296,22 @@ pub fn generate_custom(vertices_flat: &[f32], indices: &[u32]) -> MeshBuffers {
         vertices,
         indices: indices.to_vec(),
     }
+}
+
+/// Interleaved float stride of the textured custom vertex layout.
+pub const TEXTURED_VERTEX_STRIDE: usize = 8;
+
+/// Builds mesh buffers for a textured custom mesh.
+///
+/// The stride is the same eight floats as [`generate_custom`] but the contract is
+/// explicit: `x, y, z, nx, ny, nz, u, v`. Degenerate indices are dropped so a
+/// malformed tile quad cannot index out of bounds later.
+pub fn generate_custom_textured(vertices_flat: &[f32], indices: &[u32]) -> MeshBuffers {
+    let mut buffers = generate_custom(vertices_flat, indices);
+    let vertex_count = buffers.vertices.len() as u32;
+    if buffers.indices.iter().any(|&i| i >= vertex_count) {
+        buffers.indices.retain(|&i| i < vertex_count);
+    }
+    buffers.indices.truncate(buffers.indices.len() / 3 * 3);
+    buffers
 }
