@@ -71,8 +71,16 @@ impl TilingSet {
     /// Constructs a tiling grid covering the specified surface dimensions.
     pub fn new(surface_width: u32, surface_height: u32, tile_size: u32) -> Self {
         let ts = tile_size.max(16);
-        let cols = if surface_width == 0 { 0 } else { (surface_width + ts - 1) / ts };
-        let rows = if surface_height == 0 { 0 } else { (surface_height + ts - 1) / ts };
+        let cols = if surface_width == 0 {
+            0
+        } else {
+            (surface_width + ts - 1) / ts
+        };
+        let rows = if surface_height == 0 {
+            0
+        } else {
+            (surface_height + ts - 1) / ts
+        };
 
         let mut tiles = Vec::with_capacity((cols * rows) as usize);
         for r in 0..rows {
@@ -247,7 +255,7 @@ impl OcclusionTracker {
 
         // Scan in reverse order: frontmost commands first
         for (i, cmd) in commands.iter().enumerate().rev() {
-            if cmd.is_clip() {
+            if cmd.is_state_command() {
                 continue;
             }
 
@@ -271,8 +279,11 @@ impl OcclusionTracker {
                         ..
                     } => {
                         // A rounded rect is opaque in its inner core box
-                        if color.a() >= 0.999 && border_radius.top_left == 0.0 && border_radius.top_right == 0.0
-                            && border_radius.bottom_right == 0.0 && border_radius.bottom_left == 0.0
+                        if color.a() >= 0.999
+                            && border_radius.top_left == 0.0
+                            && border_radius.top_right == 0.0
+                            && border_radius.bottom_right == 0.0
+                            && border_radius.bottom_left == 0.0
                         {
                             tracker.add_occluder(*bounds);
                         }
@@ -291,7 +302,7 @@ impl OcclusionTracker {
         let mut culled = DisplayList::new();
 
         for (cmd, is_occluded) in list.commands().iter().zip(mask.iter()) {
-            if !*is_occluded || cmd.is_clip() {
+            if !*is_occluded || cmd.is_state_command() {
                 culled.push(cmd.clone());
             }
         }

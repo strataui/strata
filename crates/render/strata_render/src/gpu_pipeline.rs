@@ -173,7 +173,9 @@ impl GpuQuadInstance {
         clip: Rect,
     ) -> Self {
         let (r, g, b, a) = color.to_f32();
-        let (br, bg, bb, ba) = border_color.map(|c| c.to_f32()).unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let (br, bg, bb, ba) = border_color
+            .map(|c| c.to_f32())
+            .unwrap_or((0.0, 0.0, 0.0, 0.0));
 
         Self {
             bounds: [bounds.x, bounds.y, bounds.width, bounds.height],
@@ -193,22 +195,14 @@ impl GpuQuadInstance {
     /// Safe zero-copy byte slice view of this quad instance.
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(
-                (self as *const Self) as *const u8,
-                Self::BYTE_SIZE,
-            )
-        }
+        unsafe { std::slice::from_raw_parts((self as *const Self) as *const u8, Self::BYTE_SIZE) }
     }
 
     /// Safe zero-copy byte slice view of a contiguous slice of quad instances.
     #[inline]
     pub fn slice_to_bytes(slice: &[Self]) -> &[u8] {
         unsafe {
-            std::slice::from_raw_parts(
-                slice.as_ptr() as *const u8,
-                slice.len() * Self::BYTE_SIZE,
-            )
+            std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * Self::BYTE_SIZE)
         }
     }
 }
@@ -233,12 +227,7 @@ impl GpuUniforms {
 
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(
-                (self as *const Self) as *const u8,
-                Self::BYTE_SIZE,
-            )
-        }
+        unsafe { std::slice::from_raw_parts((self as *const Self) as *const u8, Self::BYTE_SIZE) }
     }
 }
 
@@ -285,13 +274,12 @@ impl GpuBatch {
     }
 
     /// Compiles a DisplayList into GPU quad instances for the given viewport.
-    pub fn from_display_list(list: &DisplayList, viewport_width: f32, viewport_height: f32) -> Self {
-        Self::from_display_list_damaged(
-            list,
-            None,
-            viewport_width,
-            viewport_height,
-        )
+    pub fn from_display_list(
+        list: &DisplayList,
+        viewport_width: f32,
+        viewport_height: f32,
+    ) -> Self {
+        Self::from_display_list_damaged(list, None, viewport_width, viewport_height)
     }
 
     /// Compiles a DisplayList into GPU quad instances, scissoring to the optional damage rectangle.
@@ -358,7 +346,11 @@ impl GpuBatch {
 
             match cmd {
                 DrawCommand::DrawRect { bounds, color } => {
-                    batch.push(GpuQuadInstance::from_rect(transform_rect_fn(*bounds), *color, current_clip));
+                    batch.push(GpuQuadInstance::from_rect(
+                        transform_rect_fn(*bounds),
+                        *color,
+                        current_clip,
+                    ));
                 }
                 DrawCommand::DrawRoundedRect {
                     bounds,
@@ -381,6 +373,7 @@ impl GpuBatch {
                     widths,
                     color,
                     border_radius,
+                    ..
                 } => {
                     batch.push(GpuQuadInstance::from_rounded_rect(
                         transform_rect_fn(*bounds),
@@ -447,6 +440,248 @@ impl GpuPresentationPipeline {
 
     #[inline]
     pub fn instance_bytes(&self) -> &[u8] {
+        self.batch.as_bytes()
+    }
+
+    #[inline]
+    pub fn uniform_bytes(&self) -> &[u8] {
+        self.uniforms.as_bytes()
+    }
+}
+
+/// Batch collection of GPU instanced path segments ready for upload to storage/vertex buffers.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct GpuPathBatch {
+    pub segments: Vec<strata_gpu_path::GpuPathSegment>,
+}
+
+impl GpuPathBatch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            segments: Vec::with_capacity(capacity),
+        }
+    }
+
+    #[inline]
+    pub fn push(&mut self, segment: strata_gpu_path::GpuPathSegment) {
+        self.segments.push(segment);
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.segments.clear();
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.segments.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        strata_gpu_path::GpuPathSegment::slice_to_bytes(&self.segments)
+    }
+
+    /// Compiles vector paths from a DisplayList into GPU path segments.
+    pub fn from_display_list(
+        list: &DisplayList,
+        viewport_width: f32,
+        viewport_height: f32,
+    ) -> Self {
+        Self::from_display_list_damaged(list, None, viewport_width, viewport_height)
+    }
+
+    /// Compiles vector paths from a DisplayList into GPU path segments with optional damage scissoring.
+    pub fn from_display_list_damaged(
+        list: &DisplayList,
+        damage: Option<Rect>,
+        viewport_width: f32,
+        viewport_height: f32,
+    ) -> Self {
+        let mut batch = Self::new();
+        let mut clip_stack: Vec<Rect> = Vec::new();
+        let default_clip = damage.unwrap_or(Rect::new(0.0, 0.0, viewport_width, viewport_height));
+
+        for cmd in list.commands() {
+            if let DrawCommand::PushClip { bounds, .. } = cmd {
+                let combined = match clip_stack.last() {
+                    Some(prev) => prev.intersect(*bounds).unwrap_or(Rect::zero()),
+                    None => *bounds,
+                };
+                clip_stack.push(combined);
+                continue;
+            } else if let DrawCommand::PopClip = cmd {
+                clip_stack.pop();
+                continue;
+            }
+
+            let current_clip = match clip_stack.last() {
+                Some(prev) => match prev.intersect(default_clip) {
+                    Some(c) => c,
+                    None => continue,
+                },
+                None => default_clip,
+            };
+
+            match cmd {
+                DrawCommand::DrawGpuPath {
+                    bounds,
+                    path,
+                    stroke,
+                    fill_color,
+                    stroke_color,
+                    transform: _,
+                } => {
+                    if bounds.intersect(current_clip).is_none() {
+                        continue;
+                    }
+
+                    let quads = path.to_quadratics(0.25);
+                    let mut flags = 0;
+                    if fill_color.is_some() {
+                        flags |= strata_gpu_path::FLAG_FILL;
+                    }
+                    if stroke_color.is_some() {
+                        flags |= strata_gpu_path::FLAG_STROKE;
+                    }
+                    if path.fill_rule == Some(strata_gpu_path::FillRule::EvenOdd) {
+                        flags |= strata_gpu_path::FLAG_EVEN_ODD;
+                    }
+
+                    let color_f32 = if let Some(fc) = fill_color {
+                        let (r, g, b, a) = fc.to_f32();
+                        [r, g, b, a]
+                    } else if let Some(sc) = stroke_color {
+                        let (r, g, b, a) = sc.to_f32();
+                        [r, g, b, a]
+                    } else {
+                        [1.0, 1.0, 1.0, 1.0]
+                    };
+
+                    let stroke_w = stroke.map(|s| s.width).unwrap_or(1.0);
+
+                    for q in quads {
+                        batch.push(strata_gpu_path::GpuPathSegment::from_quadratic(
+                            &q, stroke_w, flags, color_f32, 0.0,
+                        ));
+                    }
+                }
+                DrawCommand::DrawSvgPath {
+                    bounds,
+                    path_data,
+                    stroke_color,
+                    fill_color,
+                    stroke_width,
+                    fill_rule,
+                    ..
+                } => {
+                    if bounds.intersect(current_clip).is_none() {
+                        continue;
+                    }
+                    let parsed = strata_gpu_path::PathBuilder::from_svg(path_data);
+                    let quads = parsed.to_quadratics(0.25);
+                    let mut flags = 0;
+                    if fill_color.is_some() {
+                        flags |= strata_gpu_path::FLAG_FILL;
+                    }
+                    if stroke_color.is_some() {
+                        flags |= strata_gpu_path::FLAG_STROKE;
+                    }
+                    if *fill_rule == strata_layout::FillRule::EvenOdd {
+                        flags |= strata_gpu_path::FLAG_EVEN_ODD;
+                    }
+
+                    let color_f32 = if let Some(fc) = fill_color {
+                        let (r, g, b, a) = fc.to_f32();
+                        [r, g, b, a]
+                    } else if let Some(sc) = stroke_color {
+                        let (r, g, b, a) = sc.to_f32();
+                        [r, g, b, a]
+                    } else {
+                        [1.0, 1.0, 1.0, 1.0]
+                    };
+
+                    for q in quads {
+                        batch.push(strata_gpu_path::GpuPathSegment::from_quadratic(
+                            &q,
+                            *stroke_width,
+                            flags,
+                            color_f32,
+                            0.0,
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        batch
+    }
+}
+
+/// High-level orchestration pipeline for compiling vector paths into GPU compute/render buffers.
+#[derive(Debug, Clone)]
+pub struct GpuPathPipeline {
+    pub viewport_width: f32,
+    pub viewport_height: f32,
+    pub uniforms: strata_gpu_path::GpuPathUniforms,
+    pub batch: GpuPathBatch,
+    pub total_uploaded_bytes: usize,
+    pub compiled_frames: u64,
+}
+
+impl GpuPathPipeline {
+    pub fn new(viewport_width: f32, viewport_height: f32) -> Self {
+        Self {
+            viewport_width,
+            viewport_height,
+            uniforms: strata_gpu_path::GpuPathUniforms::new(
+                viewport_width,
+                viewport_height,
+                0.25,
+                0,
+            ),
+            batch: GpuPathBatch::new(),
+            total_uploaded_bytes: 0,
+            compiled_frames: 0,
+        }
+    }
+
+    pub fn resize(&mut self, width: f32, height: f32) {
+        self.viewport_width = width;
+        self.viewport_height = height;
+        self.uniforms =
+            strata_gpu_path::GpuPathUniforms::new(width, height, 0.25, self.batch.len() as u32);
+    }
+
+    /// Compiles a frame from a DisplayList and optional damage rectangle into the internal path batch buffer.
+    pub fn compile_frame(&mut self, list: &DisplayList, damage: Option<Rect>) -> usize {
+        self.batch = GpuPathBatch::from_display_list_damaged(
+            list,
+            damage,
+            self.viewport_width,
+            self.viewport_height,
+        );
+
+        self.uniforms.curve_count = self.batch.len() as u32;
+        let byte_count = self.batch.as_bytes().len() + self.uniforms.as_bytes().len();
+        self.total_uploaded_bytes += byte_count;
+        self.compiled_frames += 1;
+
+        self.batch.len()
+    }
+
+    #[inline]
+    pub fn segment_bytes(&self) -> &[u8] {
         self.batch.as_bytes()
     }
 
@@ -540,5 +775,55 @@ mod tests {
         assert_eq!(pipeline.compiled_frames, 1);
         assert_eq!(pipeline.instance_bytes().len(), 96);
         assert_eq!(pipeline.uniform_bytes().len(), 16);
+    }
+
+    #[test]
+    fn test_gpu_path_batch_and_pipeline() {
+        let mut path_pipeline = GpuPathPipeline::new(1920.0, 1080.0);
+
+        let mut dl = DisplayList::new();
+        // Add DrawGpuPath
+        let path = strata_gpu_path::PathBuilder::from_svg("M 0 0 L 100 100 Q 150 50 200 0 Z")
+            .with_fill(strata_gpu_path::FillRule::NonZero);
+
+        dl.push(DrawCommand::DrawGpuPath {
+            bounds: Rect::new(0.0, 0.0, 200.0, 100.0),
+            path,
+            stroke: Some(strata_gpu_path::StrokeOptions::new(2.0)),
+            fill_color: Some(Color::rgb(16, 185, 129)),
+            stroke_color: Some(Color::rgb(5, 150, 105)),
+            transform: None,
+        });
+
+        // Add DrawSvgPath
+        dl.push(DrawCommand::DrawSvgPath {
+            bounds: Rect::new(300.0, 300.0, 50.0, 50.0),
+            path_data: "M 0 0 L 50 50 Z".to_string(),
+            stroke_color: Some(Color::rgb(255, 255, 255)),
+            fill_color: None,
+            stroke_width: 1.5,
+            stroke_linecap: strata_layout::StrokeLineCap::Round,
+            stroke_linejoin: strata_layout::StrokeLineJoin::Round,
+            stroke_dasharray: Vec::new(),
+            fill_rule: strata_layout::FillRule::NonZero,
+            view_box: (50.0, 50.0),
+        });
+
+        let seg_count = path_pipeline.compile_frame(&dl, None);
+        assert!(
+            seg_count >= 4,
+            "Should emit multiple quadratic segments for path + svg"
+        );
+        assert_eq!(path_pipeline.compiled_frames, 1);
+        assert_eq!(path_pipeline.segment_bytes().len(), seg_count * 64);
+        assert_eq!(path_pipeline.uniform_bytes().len(), 16);
+
+        // Test damage scissoring: scissoring away the second path
+        let damage = Rect::new(0.0, 0.0, 220.0, 120.0);
+        let damaged_count = path_pipeline.compile_frame(&dl, Some(damage));
+        assert!(
+            damaged_count < seg_count,
+            "Damaged compilation should skip path outside damage rect"
+        );
     }
 }

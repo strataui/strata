@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use strata_layout::Rect;
 use crate::compositor::{DisplayList, DrawCommand};
+use strata_layout::Rect;
 
 /// State of an individual shared memory frame slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,7 +273,11 @@ impl ZeroCopyCompositor {
 
     /// Updates the spatial viewport offset and visibility for a specific attached surface.
     pub fn set_surface_layout(&mut self, surface_id: usize, offset: (f32, f32), visible: bool) {
-        if let Some(surf) = self.surfaces.iter_mut().find(|s| s.surface_id == surface_id) {
+        if let Some(surf) = self
+            .surfaces
+            .iter_mut()
+            .find(|s| s.surface_id == surface_id)
+        {
             surf.viewport_offset = offset;
             surf.visible = visible;
         }
@@ -392,11 +396,13 @@ fn translate_cmd(cmd: &DrawCommand, offset: (f32, f32)) -> DrawCommand {
             widths,
             color,
             border_radius,
+            style,
         } => DrawCommand::DrawBorder {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
             widths: *widths,
             color: *color,
             border_radius: *border_radius,
+            style: *style,
         },
         DrawCommand::DrawText {
             origin,
@@ -409,6 +415,7 @@ fn translate_cmd(cmd: &DrawCommand, offset: (f32, f32)) -> DrawCommand {
             font_weight,
             color,
             is_monospace,
+            font_family,
         } => DrawCommand::DrawText {
             origin: (origin.0 + dx, origin.1 + dy),
             bounds_width: *bounds_width,
@@ -420,6 +427,7 @@ fn translate_cmd(cmd: &DrawCommand, offset: (f32, f32)) -> DrawCommand {
             font_weight: *font_weight,
             color: *color,
             is_monospace: *is_monospace,
+            font_family: *font_family,
         },
         DrawCommand::PushClip { bounds, radius } => DrawCommand::PushClip {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),

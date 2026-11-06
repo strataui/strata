@@ -72,11 +72,13 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
             widths,
             color,
             border_radius,
+            style,
         } => DrawCommand::DrawBorder {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
             widths: *widths,
             color: *color,
             border_radius: *border_radius,
+            style: *style,
         },
         DrawCommand::DrawText {
             origin,
@@ -89,6 +91,7 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
             font_weight,
             color,
             is_monospace,
+            font_family,
         } => DrawCommand::DrawText {
             origin: (origin.0 + dx, origin.1 + dy),
             bounds_width: *bounds_width,
@@ -100,6 +103,7 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
             font_weight: *font_weight,
             color: *color,
             is_monospace: *is_monospace,
+            font_family: *font_family,
         },
         DrawCommand::DrawTextFragments { fragments } => {
             let mut translated = fragments.clone();
@@ -108,8 +112,10 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
                 f.bounds.y += dy;
                 f.baseline_y += dy;
             }
-            DrawCommand::DrawTextFragments { fragments: translated }
-        },
+            DrawCommand::DrawTextFragments {
+                fragments: translated,
+            }
+        }
         DrawCommand::DrawViewport3D { bounds, scene } => DrawCommand::DrawViewport3D {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
             scene: scene.clone(),
@@ -141,24 +147,57 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
             fill_rule: *fill_rule,
             view_box: *view_box,
         },
-        DrawCommand::DrawInsetShadow { bounds, shadow, border_radius } => DrawCommand::DrawInsetShadow {
+        DrawCommand::DrawGpuPath {
+            bounds,
+            path,
+            stroke,
+            fill_color,
+            stroke_color,
+            transform,
+        } => DrawCommand::DrawGpuPath {
+            bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
+            path: path.clone(),
+            stroke: *stroke,
+            fill_color: *fill_color,
+            stroke_color: *stroke_color,
+            transform: *transform,
+        },
+        DrawCommand::DrawInsetShadow {
+            bounds,
+            shadow,
+            border_radius,
+        } => DrawCommand::DrawInsetShadow {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
             shadow: shadow.clone(),
             border_radius: *border_radius,
         },
-        DrawCommand::DrawLinearGradient { bounds, angle_deg, stops, border_radius } => DrawCommand::DrawLinearGradient {
+        DrawCommand::DrawLinearGradient {
+            bounds,
+            angle_deg,
+            stops,
+            border_radius,
+        } => DrawCommand::DrawLinearGradient {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
             angle_deg: *angle_deg,
             stops: stops.clone(),
             border_radius: *border_radius,
         },
-        DrawCommand::DrawRadialGradient { bounds, center, stops, border_radius } => DrawCommand::DrawRadialGradient {
+        DrawCommand::DrawRadialGradient {
+            bounds,
+            center,
+            stops,
+            border_radius,
+        } => DrawCommand::DrawRadialGradient {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
             center: *center,
             stops: stops.clone(),
             border_radius: *border_radius,
         },
-        DrawCommand::PushBackdropFilter { bounds, radius, filter } => DrawCommand::PushBackdropFilter {
+        DrawCommand::PushBackdropFilter {
+            bounds,
+            radius,
+            filter,
+        } => DrawCommand::PushBackdropFilter {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
             radius: *radius,
             filter: filter.clone(),
@@ -178,6 +217,8 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
         DrawCommand::PopBlendMode => DrawCommand::PopBlendMode,
         DrawCommand::PushIsolation { isolate } => DrawCommand::PushIsolation { isolate: *isolate },
         DrawCommand::PopIsolation => DrawCommand::PopIsolation,
+        DrawCommand::PushOpacity { alpha } => DrawCommand::PushOpacity { alpha: *alpha },
+        DrawCommand::PopOpacity => DrawCommand::PopOpacity,
         DrawCommand::PushClip { bounds, radius } => DrawCommand::PushClip {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
             radius: *radius,
@@ -185,6 +226,10 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
         DrawCommand::PopClip => DrawCommand::PopClip,
         DrawCommand::PushTransform { matrix } => DrawCommand::PushTransform { matrix: *matrix },
         DrawCommand::PopTransform => DrawCommand::PopTransform,
+        DrawCommand::DrawImage { bounds, image } => DrawCommand::DrawImage {
+            bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
+            image: image.clone(),
+        },
     }
 }
 
@@ -205,7 +250,9 @@ impl ParallelEngine {
         let threads = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        Self { num_threads: threads }
+        Self {
+            num_threads: threads,
+        }
     }
 
     pub fn with_threads(num_threads: usize) -> Self {
@@ -293,10 +340,7 @@ impl ParallelEngine {
 
     /// Assembles completed partition chunks into the final Master Display List in deterministic O(K) time
     /// without sorting, applying spatial origin offsets directly.
-    pub fn assemble_master_display_list(
-        &self,
-        slots: &[Option<DisplayListChunk>],
-    ) -> DisplayList {
+    pub fn assemble_master_display_list(&self, slots: &[Option<DisplayListChunk>]) -> DisplayList {
         let mut master = DisplayList::new();
 
         for slot in slots {

@@ -34,9 +34,10 @@ pub use geometry3d::{
     generate_box, generate_cylinder, generate_plane, generate_sphere, generate_custom, MeshBuffers, Vertex3D,
 };
 pub use gpu_pipeline::{
-    GpuBatch, GpuPresentationPipeline, GpuQuadInstance, GpuUniforms, GpuVertex, QUAD_VERTICES,
-    WGSL_ANALYTICAL_QUAD_SHADER,
+    GpuBatch, GpuPathBatch, GpuPathPipeline, GpuPresentationPipeline, GpuQuadInstance, GpuUniforms,
+    GpuVertex, QUAD_VERTICES, WGSL_ANALYTICAL_QUAD_SHADER,
 };
+pub use strata_gpu_path as gpu_path;
 pub use kinetic_scroll::{
     KineticScrollController, ScrollAxis, DEFAULT_FRICTION, REST_VELOCITY_THRESHOLD,
     RUBBER_BAND_MAX_LIMIT, SPRING_DAMPING, SPRING_STIFFNESS,

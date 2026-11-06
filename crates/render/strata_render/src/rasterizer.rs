@@ -368,9 +368,12 @@ impl FrameBuffer {
                         let row_start = (y * self.width + min_x) * 4;
                         let row_end = (y * self.width + max_x) * 4;
                         for chunk in self.pixels[row_start..row_end].chunks_exact_mut(4) {
-                            chunk[0] = (chunk[0] as f32 * inv + (255 - chunk[0]) as f32 * amt).round() as u8;
-                            chunk[1] = (chunk[1] as f32 * inv + (255 - chunk[1]) as f32 * amt).round() as u8;
-                            chunk[2] = (chunk[2] as f32 * inv + (255 - chunk[2]) as f32 * amt).round() as u8;
+                            chunk[0] = (chunk[0] as f32 * inv + (255 - chunk[0]) as f32 * amt)
+                                .round() as u8;
+                            chunk[1] = (chunk[1] as f32 * inv + (255 - chunk[1]) as f32 * amt)
+                                .round() as u8;
+                            chunk[2] = (chunk[2] as f32 * inv + (255 - chunk[2]) as f32 * amt)
+                                .round() as u8;
                         }
                     }
                 }
@@ -456,6 +459,7 @@ impl FrameBuffer {
                     widths,
                     color,
                     border_radius,
+                    ..
                 } => {
                     self.draw_rounded_rect(
                         transform_rect_fn(*bounds),
@@ -481,31 +485,72 @@ impl FrameBuffer {
                     self.draw_text(pt, text, *font_size, *color, current_clip);
                 }
                 DrawCommand::DrawViewport3D { bounds, scene } => {
-                    crate::rasterizer3d::render_scene_3d(self, transform_rect_fn(*bounds), scene, current_clip);
+                    crate::rasterizer3d::render_scene_3d(
+                        self,
+                        transform_rect_fn(*bounds),
+                        scene,
+                        current_clip,
+                    );
                 }
                 DrawCommand::DrawCanvas2D { bounds, commands } => {
                     let tb = transform_rect_fn(*bounds);
-                    crate::canvas2d::rasterize_canvas_commands(self, commands, tb.x, tb.y, current_clip);
+                    crate::canvas2d::rasterize_canvas_commands(
+                        self,
+                        commands,
+                        tb.x,
+                        tb.y,
+                        current_clip,
+                    );
                 }
                 DrawCommand::DrawTextFragments { fragments } => {
                     for frag in fragments {
                         if !frag.text.is_empty() {
                             let fb = transform_rect_fn(frag.bounds);
-                            self.draw_text((fb.x, fb.y), &frag.text, frag.style.font_size, frag.style.color, current_clip);
+                            self.draw_text(
+                                (fb.x, fb.y),
+                                &frag.text,
+                                frag.style.font_size,
+                                frag.style.color,
+                                current_clip,
+                            );
                         }
                     }
                 }
                 DrawCommand::DrawInsetShadow { bounds, shadow, .. } => {
                     self.draw_shadow(transform_rect_fn(*bounds), shadow, current_clip);
                 }
-                DrawCommand::DrawLinearGradient { bounds, stops, border_radius, .. } => {
+                DrawCommand::DrawLinearGradient {
+                    bounds,
+                    stops,
+                    border_radius,
+                    ..
+                } => {
                     if let Some(first) = stops.first() {
-                        self.draw_rounded_rect(transform_rect_fn(*bounds), first.color, border_radius.top_left, 0.0, None, current_clip);
+                        self.draw_rounded_rect(
+                            transform_rect_fn(*bounds),
+                            first.color,
+                            border_radius.top_left,
+                            0.0,
+                            None,
+                            current_clip,
+                        );
                     }
                 }
-                DrawCommand::DrawRadialGradient { bounds, stops, border_radius, .. } => {
+                DrawCommand::DrawRadialGradient {
+                    bounds,
+                    stops,
+                    border_radius,
+                    ..
+                } => {
                     if let Some(first) = stops.first() {
-                        self.draw_rounded_rect(transform_rect_fn(*bounds), first.color, border_radius.top_left, 0.0, None, current_clip);
+                        self.draw_rounded_rect(
+                            transform_rect_fn(*bounds),
+                            first.color,
+                            border_radius.top_left,
+                            0.0,
+                            None,
+                            current_clip,
+                        );
                     }
                 }
                 DrawCommand::PushBackdropFilter { .. } | DrawCommand::PopBackdropFilter => {}
@@ -522,11 +567,17 @@ impl FrameBuffer {
                 | DrawCommand::PushBlendMode { .. }
                 | DrawCommand::PopBlendMode
                 | DrawCommand::PushIsolation { .. }
-                | DrawCommand::PopIsolation => {}
-                DrawCommand::DrawSvgPath { .. } => {}
+                | DrawCommand::PopIsolation
+                | DrawCommand::PushOpacity { .. }
+                | DrawCommand::PopOpacity
+                | DrawCommand::DrawSvgPath { .. }
+                | DrawCommand::DrawGpuPath { .. }
+                | DrawCommand::DrawImage { .. } => {}
                 DrawCommand::PushClip { bounds, .. } => {
                     let combined = match current_clip {
-                        Some(prev) => prev.intersect(bounds.clone()).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
+                        Some(prev) => prev
+                            .intersect(bounds.clone())
+                            .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
                         None => *bounds,
                     };
                     clip_stack.push(combined);
@@ -562,7 +613,9 @@ impl FrameBuffer {
         for cmd in list.commands() {
             if let DrawCommand::PushClip { bounds, .. } = cmd {
                 let combined = match clip_stack.last() {
-                    Some(prev) => prev.intersect(*bounds).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
+                    Some(prev) => prev
+                        .intersect(*bounds)
+                        .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
                     None => *bounds,
                 };
                 clip_stack.push(combined);
@@ -636,6 +689,7 @@ impl FrameBuffer {
                     widths,
                     color,
                     border_radius,
+                    ..
                 } => {
                     self.draw_rounded_rect(
                         transform_rect_fn(*bounds),
@@ -661,31 +715,72 @@ impl FrameBuffer {
                     self.draw_text((ox, oy), text, *font_size, *color, Some(effective_clip));
                 }
                 DrawCommand::DrawViewport3D { bounds, scene } => {
-                    crate::rasterizer3d::render_scene_3d(self, transform_rect_fn(*bounds), scene, Some(effective_clip));
+                    crate::rasterizer3d::render_scene_3d(
+                        self,
+                        transform_rect_fn(*bounds),
+                        scene,
+                        Some(effective_clip),
+                    );
                 }
                 DrawCommand::DrawCanvas2D { bounds, commands } => {
                     let tb = transform_rect_fn(*bounds);
-                    crate::canvas2d::rasterize_canvas_commands(self, commands, tb.x, tb.y, Some(effective_clip));
+                    crate::canvas2d::rasterize_canvas_commands(
+                        self,
+                        commands,
+                        tb.x,
+                        tb.y,
+                        Some(effective_clip),
+                    );
                 }
                 DrawCommand::DrawTextFragments { fragments } => {
                     for frag in fragments {
                         if !frag.text.is_empty() {
                             let fb = transform_rect_fn(frag.bounds);
-                            self.draw_text((fb.x, fb.y), &frag.text, frag.style.font_size, frag.style.color, Some(effective_clip));
+                            self.draw_text(
+                                (fb.x, fb.y),
+                                &frag.text,
+                                frag.style.font_size,
+                                frag.style.color,
+                                Some(effective_clip),
+                            );
                         }
                     }
                 }
                 DrawCommand::DrawInsetShadow { bounds, shadow, .. } => {
                     self.draw_shadow(transform_rect_fn(*bounds), shadow, Some(effective_clip));
                 }
-                DrawCommand::DrawLinearGradient { bounds, stops, border_radius, .. } => {
+                DrawCommand::DrawLinearGradient {
+                    bounds,
+                    stops,
+                    border_radius,
+                    ..
+                } => {
                     if let Some(first) = stops.first() {
-                        self.draw_rounded_rect(transform_rect_fn(*bounds), first.color, border_radius.top_left, 0.0, None, Some(effective_clip));
+                        self.draw_rounded_rect(
+                            transform_rect_fn(*bounds),
+                            first.color,
+                            border_radius.top_left,
+                            0.0,
+                            None,
+                            Some(effective_clip),
+                        );
                     }
                 }
-                DrawCommand::DrawRadialGradient { bounds, stops, border_radius, .. } => {
+                DrawCommand::DrawRadialGradient {
+                    bounds,
+                    stops,
+                    border_radius,
+                    ..
+                } => {
                     if let Some(first) = stops.first() {
-                        self.draw_rounded_rect(transform_rect_fn(*bounds), first.color, border_radius.top_left, 0.0, None, Some(effective_clip));
+                        self.draw_rounded_rect(
+                            transform_rect_fn(*bounds),
+                            first.color,
+                            border_radius.top_left,
+                            0.0,
+                            None,
+                            Some(effective_clip),
+                        );
                     }
                 }
                 DrawCommand::PushBackdropFilter { .. } | DrawCommand::PopBackdropFilter => {}
@@ -702,8 +797,12 @@ impl FrameBuffer {
                 | DrawCommand::PushBlendMode { .. }
                 | DrawCommand::PopBlendMode
                 | DrawCommand::PushIsolation { .. }
-                | DrawCommand::PopIsolation => {}
-                DrawCommand::DrawSvgPath { .. } => {}
+                | DrawCommand::PopIsolation
+                | DrawCommand::PushOpacity { .. }
+                | DrawCommand::PopOpacity
+                | DrawCommand::DrawSvgPath { .. }
+                | DrawCommand::DrawGpuPath { .. }
+                | DrawCommand::DrawImage { .. } => {}
                 DrawCommand::PushClip { .. }
                 | DrawCommand::PopClip
                 | DrawCommand::PushTransform { .. }
@@ -712,16 +811,24 @@ impl FrameBuffer {
         }
     }
 
-    fn compute_clamped_bounds(&self, bounds: Rect, clip: Option<Rect>) -> (usize, usize, usize, usize) {
+    fn compute_clamped_bounds(
+        &self,
+        bounds: Rect,
+        clip: Option<Rect>,
+    ) -> (usize, usize, usize, usize) {
         let rect = match clip {
             Some(c) => bounds.intersect(c).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
             None => bounds,
         };
 
         let min_x = (rect.x.floor() as isize).max(0).min(self.width as isize) as usize;
-        let max_x = (rect.max_x().ceil() as isize).max(0).min(self.width as isize) as usize;
+        let max_x = (rect.max_x().ceil() as isize)
+            .max(0)
+            .min(self.width as isize) as usize;
         let min_y = (rect.y.floor() as isize).max(0).min(self.height as isize) as usize;
-        let max_y = (rect.max_y().ceil() as isize).max(0).min(self.height as isize) as usize;
+        let max_y = (rect.max_y().ceil() as isize)
+            .max(0)
+            .min(self.height as isize) as usize;
 
         (min_x, max_x, min_y, max_y)
     }
