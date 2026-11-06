@@ -1,17 +1,17 @@
-//! Strata vs Tauri 2 Visual Parity Benchmark and Differential Analysis Harness.
-
-pub mod fixture;
-pub mod strata_runner;
-pub mod tauri_runner;
-pub mod diff;
-pub mod capture;
-pub mod raw_bench;
-pub mod chromium_parity;
+//! Strata three-engine visual parity harness.
+//!
+//! Chromium is the visual ground truth. Tauri on Linux is WebKitGTK, not
+//! Chromium, and the Strata renderer is the native engine under test.
 
 use std::env;
+use std::fs;
 use std::path::Path;
 use std::process::Command;
-use crate::fixture::ParityLevel;
+
+use strata_parity_tauri::fixture::ParityLevel;
+use strata_parity_tauri::{
+    chromium_parity, components, diff, parity_suite, raw_bench, strata_runner, tauri_runner,
+};
 
 fn get_level_from_args(args: &[String]) -> ParityLevel {
     if let Some(pos) = args.iter().position(|a| a == "--level") {
@@ -36,8 +36,127 @@ fn level_index(level: ParityLevel) -> u32 {
     }
 }
 
+fn required_arg(args: &[String], index: usize, flag: &str) -> String {
+    match args.get(index) {
+        Some(value) => value.clone(),
+        None => {
+            eprintln!("[ERROR] {} requires more arguments", flag);
+            std::process::exit(2);
+        }
+    }
+}
+
+fn required_u32(args: &[String], index: usize, flag: &str) -> u32 {
+    let value = required_arg(args, index, flag);
+    match value.parse::<u32>() {
+        Ok(number) => number,
+        Err(error) => {
+            eprintln!(
+                "[ERROR] {} expected an integer, got '{}': {}",
+                flag, value, error
+            );
+            std::process::exit(2);
+        }
+    }
+}
+
+fn required_f32(args: &[String], index: usize, flag: &str) -> f32 {
+    let value = required_arg(args, index, flag);
+    match value.parse::<f32>() {
+        Ok(number) => number,
+        Err(error) => {
+            eprintln!(
+                "[ERROR] {} expected a number, got '{}': {}",
+                flag, value, error
+            );
+            std::process::exit(2);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    if let Some(position) = args.iter().position(|arg| arg == "--capture-strata") {
+        let html_path = required_arg(&args, position + 1, "--capture-strata");
+        let output_png = required_arg(&args, position + 2, "--capture-strata");
+        let width = required_u32(&args, position + 3, "--capture-strata");
+        let height = required_u32(&args, position + 4, "--capture-strata");
+        let scroll_y = required_f32(&args, position + 5, "--capture-strata");
+        let html = match fs::read_to_string(&html_path) {
+            Ok(html) => html,
+            Err(error) => {
+                eprintln!("[ERROR] Failed to read {}: {}", html_path, error);
+                std::process::exit(1);
+            }
+        };
+        match chromium_parity::render_strata_web_viewport(
+            &html,
+            width,
+            height,
+            scroll_y,
+            &output_png,
+        ) {
+            Ok(()) => return,
+            Err(error) => {
+                eprintln!("[ERROR] Strata capture failed: {}", error);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(position) = args.iter().position(|arg| arg == "--capture-tauri") {
+        let html_path = required_arg(&args, position + 1, "--capture-tauri");
+        let output_png = required_arg(&args, position + 2, "--capture-tauri");
+        let width = required_u32(&args, position + 3, "--capture-tauri");
+        let height = required_u32(&args, position + 4, "--capture-tauri");
+        let title = args
+            .get(position + 5)
+            .cloned()
+            .unwrap_or_else(|| "Strata Parity Tauri".to_string());
+        let captured =
+            tauri_runner::run_tauri_capture(&html_path, &output_png, width, height, &title);
+        if !captured {
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if args.iter().any(|arg| arg == "--list-fixtures") {
+        println!(
+            "{:<24} {:<9} {:<7} {:<9} {:<8} Description",
+            "Name", "In scope", "SSIM", "Perceptual", "Scroll"
+        );
+        println!("----------------------------------------------------------------------------------------------------");
+        for fixture in components::suite_fixtures() {
+            println!(
+                "{:<24} {:<9} {:<7.4} {:<9.2} {:<8.1} {}",
+                fixture.name,
+                if fixture.in_scope { "yes" } else { "no" },
+                fixture.ssim_threshold,
+                fixture.perceptual_threshold,
+                fixture.scroll_y,
+                fixture.description
+            );
+        }
+        return;
+    }
+
+    let wants_suite = args.iter().any(|arg| arg == "--parity-suite")
+        || args
+            .iter()
+            .any(|arg| arg == "--fixture" || arg.starts_with("--fixture="));
+    if wants_suite {
+        match parity_suite::run_from_args(&args) {
+            Ok(true) => return,
+            Ok(false) => std::process::exit(1),
+            Err(error) => {
+                eprintln!("[ERROR] {}", error);
+                std::process::exit(2);
+            }
+        }
+    }
+
     let level = get_level_from_args(&args);
     let level_num = level_index(level);
 
@@ -88,7 +207,11 @@ fn main() {
   </div>
 </body>
 </html>"#;
-        match chromium_parity::run_synchronized_parity_suite(sample_html, "viewport_parity", &config) {
+        match chromium_parity::run_synchronized_parity_suite(
+            sample_html,
+            "viewport_parity",
+            &config,
+        ) {
             Ok(results) => {
                 for r in results {
                     println!("[Parity Result] {}x{} (y={:.0}): SSIM = {:.4}, Exact = {:.2}%, Perceptual = {:.2}%, Mean Delta E = {:.2}",
@@ -109,9 +232,22 @@ fn main() {
         println!("=============================================================");
         println!("  Strata Kinetic Wheel Scrolling & Telemetry Benchmark       ");
         println!("=============================================================");
-        let sample_html = "<div style='height: 10000px;'><h1 style='padding: 24px;'>Long Document</h1></div>";
-        let scorecard_60hz = chromium_parity::run_synthetic_wheel_scroll_benchmark(sample_html, 1920, 1080, 60.0, 120);
-        let scorecard_120hz = chromium_parity::run_synthetic_wheel_scroll_benchmark(sample_html, 1920, 1080, 120.0, 120);
+        let sample_html =
+            "<div style='height: 10000px;'><h1 style='padding: 24px;'>Long Document</h1></div>";
+        let scorecard_60hz = chromium_parity::run_synthetic_wheel_scroll_benchmark(
+            sample_html,
+            1920,
+            1080,
+            60.0,
+            120,
+        );
+        let scorecard_120hz = chromium_parity::run_synthetic_wheel_scroll_benchmark(
+            sample_html,
+            1920,
+            1080,
+            120.0,
+            120,
+        );
         println!("[60Hz Telemetry] p50: {:.2}ms, p95: {:.2}ms, p99: {:.2}ms, Dropped: {}, Monotonic: {}, CPU: {:.2}%",
             scorecard_60hz.p50_frame_time_ms, scorecard_60hz.p95_frame_time_ms, scorecard_60hz.p99_frame_time_ms,
             scorecard_60hz.dropped_frames, scorecard_60hz.monotonic_convergence, scorecard_60hz.cpu_utilization_pct);
@@ -124,7 +260,10 @@ fn main() {
     if args.contains(&"--tauri-only".to_string()) {
         let html_path = format!("/tmp/parity_tauri_fixture_l{}.html", level_num);
         let tauri_shot = format!("/tmp/tauri_rendered_l{}.png", level_num);
-        println!("[Execution] Starting Tauri 2 WebKitGTK window for Level {}...", level_num);
+        println!(
+            "[Execution] Starting Tauri 2 WebKitGTK window for Level {}...",
+            level_num
+        );
         tauri_runner::run_tauri_window(level, &html_path, &tauri_shot);
         return;
     }
@@ -132,7 +271,10 @@ fn main() {
     if args.contains(&"--strata-only".to_string()) {
         let strata_shot = format!("/tmp/strata_rendered_l{}.png", level_num);
         let strata_fb = format!("/tmp/strata_framebuffer_l{}.png", level_num);
-        println!("[Execution] Starting Strata Native GTK window for Level {}...", level_num);
+        println!(
+            "[Execution] Starting Strata Native GTK window for Level {}...",
+            level_num
+        );
         strata_runner::run_strata_window(level, &strata_shot);
         strata_runner::render_strata_software_framebuffer(level, 1920, 1080, &strata_fb);
         return;
@@ -172,7 +314,10 @@ fn main() {
         println!("\n=========================================================================================");
         println!("  PROGRESSIVE VISUAL PARITY SUITE SUMMARY REPORT");
         println!("=========================================================================================");
-        println!("{:<8} | {:<28} | {:<12} | {:<14} | {:<14} | {:<10}", "Level", "Stage", "Resolution", "Exact Match", "Perceptual", "SSIM");
+        println!(
+            "{:<8} | {:<28} | {:<12} | {:<14} | {:<14} | {:<10}",
+            "Level", "Stage", "Resolution", "Exact Match", "Perceptual", "SSIM"
+        );
         println!("-----------------------------------------------------------------------------------------");
         for (l, m) in &results {
             println!(
@@ -213,7 +358,10 @@ fn run_parity_benchmark(level: ParityLevel) -> Option<diff::ParityMetrics> {
         .expect("Failed to execute Tauri child process");
 
     if !tauri_status.success() {
-        eprintln!("[!] Tauri process failed with exit code: {:?}", tauri_status.code());
+        eprintln!(
+            "[!] Tauri process failed with exit code: {:?}",
+            tauri_status.code()
+        );
     }
 
     // Stage 2: Launch Strata window in isolated process
@@ -226,7 +374,10 @@ fn run_parity_benchmark(level: ParityLevel) -> Option<diff::ParityMetrics> {
         .expect("Failed to execute Strata child process");
 
     if !strata_status.success() {
-        eprintln!("[!] Strata process failed with exit code: {:?}", strata_status.code());
+        eprintln!(
+            "[!] Strata process failed with exit code: {:?}",
+            strata_status.code()
+        );
     }
 
     // Stage 3: Differential Analysis
@@ -253,7 +404,10 @@ fn run_diff_analysis_for_level(
         return None;
     }
     if !path_strata.exists() {
-        eprintln!("[!] Strata screenshot not found at {}", path_strata.display());
+        eprintln!(
+            "[!] Strata screenshot not found at {}",
+            path_strata.display()
+        );
         return None;
     }
 
@@ -262,9 +416,18 @@ fn run_diff_analysis_for_level(
             println!("-------------------------------------------------------------");
             println!("  PARITY BENCHMARK REPORT - Level {}", level_num);
             println!("-------------------------------------------------------------");
-            println!("  Resolution:             {}x{} ({} pixels)", metrics.width, metrics.height, metrics.total_pixels);
-            println!("  Exact Match Pixels:     {} ({:.2}%)", metrics.exact_match_pixels, metrics.exact_match_percentage);
-            println!("  Perceptual Match:       {} ({:.2}%)", metrics.perceptual_match_pixels, metrics.perceptual_match_percentage);
+            println!(
+                "  Resolution:             {}x{} ({} pixels)",
+                metrics.width, metrics.height, metrics.total_pixels
+            );
+            println!(
+                "  Exact Match Pixels:     {} ({:.2}%)",
+                metrics.exact_match_pixels, metrics.exact_match_percentage
+            );
+            println!(
+                "  Perceptual Match:       {} ({:.2}%)",
+                metrics.perceptual_match_pixels, metrics.perceptual_match_percentage
+            );
             println!("  SSIM Similarity Score:  {:.5}", metrics.ssim_score);
             println!("  Mean Delta E (Color):   {:.4}", metrics.mean_delta_e);
             println!("  Max Delta E (Color):    {:.4}", metrics.max_delta_e);
@@ -281,7 +444,7 @@ fn run_diff_analysis_for_level(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use strata_parity_tauri::fixture;
 
     #[test]
     fn test_level5_layout_geometry_parity() {
@@ -307,5 +470,14 @@ mod tests {
         let val1 = &card1.children[1];
         assert_eq!(val1.geometry.border_box.y, 166.0);
         assert_eq!(val1.geometry.border_box.height, 36.0);
+    }
+
+    #[test]
+    fn test_strata_raw_benchmarks() {
+        let timing = strata_parity_tauri::raw_bench::measure_strata_level(
+            fixture::ParityLevel::Level1BoxModel,
+            5,
+        );
+        assert!(timing.total_us > 0);
     }
 }

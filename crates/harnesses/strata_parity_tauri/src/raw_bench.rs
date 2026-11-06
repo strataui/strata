@@ -4,10 +4,11 @@
 //! (DOM & Style evaluation, Layout solver, Compositor DisplayList generation,
 //! and FrameBuffer rasterization) and queries Chromium Blink/cc metrics via CDP.
 
+use crate::chromium_parity::find_chromium_binary;
+use crate::fixture::{get_fixture_html, get_fixture_view, ParityLevel};
 use std::fs;
 use std::process::Command;
 use std::time::Instant;
-use crate::fixture::{get_fixture_view, get_fixture_html, ParityLevel};
 use strata_layout::Rect;
 use strata_render::compositor::Compositor;
 use strata_render::gpu_pipeline::GpuBatch;
@@ -95,14 +96,17 @@ pub fn measure_strata_level(level: ParityLevel, iters: usize) -> StrataTiming {
 }
 
 pub fn measure_chromium_level(level_num: u32, html_path: &str) -> Option<ChromiumTiming> {
+    let chrome_path = find_chromium_binary(None)?;
     let script = format!(
         r#"
-import subprocess, time, json, urllib.request, tempfile, shutil, websocket
+import subprocess, sys, time, json, urllib.request, tempfile, shutil, websocket
 
+chrome_path = sys.argv[1]
+html_path = sys.argv[2]
 user_dir = tempfile.mkdtemp(prefix='chrome_bench_')
 port = 9229
 proc = subprocess.Popen([
-    '/home/usr/.local/bin/google-chrome',
+    chrome_path,
     '--headless=new',
     '--disable-gpu',
     f'--remote-debugging-port={{port}}',
@@ -137,7 +141,7 @@ try:
 
     rpc('Performance.enable')
     rpc('Page.enable')
-    rpc('Page.navigate', {{'url': 'file://{}'}})
+    rpc('Page.navigate', {{'url': 'file://' + html_path}})
     time.sleep(0.2)
 
     res = rpc('Performance.getMetrics')
@@ -152,13 +156,14 @@ finally:
     proc.terminate()
     proc.wait()
     shutil.rmtree(user_dir, ignore_errors=True)
-"#,
-        html_path
+"#
     );
 
     let output = Command::new("python3")
         .arg("-c")
         .arg(script)
+        .arg(&chrome_path)
+        .arg(html_path)
         .output()
         .ok()?;
 
@@ -199,9 +204,13 @@ finally:
 }
 
 pub fn run_raw_benchmarks() {
-    println!("=========================================================================================");
+    println!(
+        "========================================================================================="
+    );
     println!("  STRATA NATIVE VS CHROMIUM: IN-ENGINE RAW PERFORMANCE BENCHMARK");
-    println!("=========================================================================================");
+    println!(
+        "========================================================================================="
+    );
 
     let levels = [
         ParityLevel::Level1BoxModel,
@@ -213,7 +222,9 @@ pub fn run_raw_benchmarks() {
         ParityLevel::Level7TelemetryConsole,
     ];
 
-    println!("\n[1/3] Benchmarking Strata Native Pure-Rust Pipeline (50 iterations per fixture)...");
+    println!(
+        "\n[1/3] Benchmarking Strata Native Pure-Rust Pipeline (50 iterations per fixture)..."
+    );
     let mut strata_results = Vec::new();
     for l in levels {
         let timing = measure_strata_level(l, 50);
@@ -222,9 +233,21 @@ pub fn run_raw_benchmarks() {
 
     println!("\n-----------------------------------------------------------------------------------------");
     println!("  STRATA NATIVE PIPELINE LATENCY PROFILE (1920x993 Viewport, Pure Rust)");
-    println!("-----------------------------------------------------------------------------------------");
-    println!("{:<8} | {:<12} | {:<12} | {:<12} | {:<14} | {:<14}", "Level", "DOM/Style (µs)", "Layout (µs)", "Paint (µs)", "Rasterize (µs)", "Total Frame (µs)");
-    println!("-----------------------------------------------------------------------------------------");
+    println!(
+        "-----------------------------------------------------------------------------------------"
+    );
+    println!(
+        "{:<8} | {:<12} | {:<12} | {:<12} | {:<14} | {:<14}",
+        "Level",
+        "DOM/Style (µs)",
+        "Layout (µs)",
+        "Paint (µs)",
+        "Rasterize (µs)",
+        "Total Frame (µs)"
+    );
+    println!(
+        "-----------------------------------------------------------------------------------------"
+    );
     for (_, t) in &strata_results {
         println!(
             "L{:<7} | {:>10} µs | {:>10} µs | {:>10} µs | {:>12} µs | {:>12} µs ({:.2} ms)",
@@ -237,7 +260,9 @@ pub fn run_raw_benchmarks() {
             t.total_us as f64 / 1000.0
         );
     }
-    println!("-----------------------------------------------------------------------------------------");
+    println!(
+        "-----------------------------------------------------------------------------------------"
+    );
 
     println!("\n[2/3] Querying Chromium Blink/cc In-Engine Metrics via CDP (Headless Chrome)...");
     let mut chromium_results = Vec::new();
@@ -264,46 +289,67 @@ pub fn run_raw_benchmarks() {
         println!("\n-----------------------------------------------------------------------------------------");
         println!("  CHROMIUM BLINK / cc IN-ENGINE METRICS (via CDP Performance.getMetrics)");
         println!("-----------------------------------------------------------------------------------------");
-        println!("{:<8} | {:<14} | {:<14} | {:<14} | {:<14} | {:<12}", "Level", "RecalcStyle (µs)", "Layout (µs)", "Script (µs)", "Task Duration", "JS Heap (KB)");
+        println!(
+            "{:<8} | {:<14} | {:<14} | {:<14} | {:<14} | {:<12}",
+            "Level",
+            "RecalcStyle (µs)",
+            "Layout (µs)",
+            "Script (µs)",
+            "Task Duration",
+            "JS Heap (KB)"
+        );
         println!("-----------------------------------------------------------------------------------------");
         for (_, c) in &chromium_results {
             println!(
                 "L{:<7} | {:>12.1} µs | {:>12.1} µs | {:>12.1} µs | {:>11.2} ms | {:>10.1} KB",
-                c.level_num,
-                c.style_us,
-                c.layout_us,
-                c.script_us,
-                c.task_ms,
-                c.js_heap_kb
+                c.level_num, c.style_us, c.layout_us, c.script_us, c.task_ms, c.js_heap_kb
             );
         }
         println!("-----------------------------------------------------------------------------------------");
     }
 
     println!("\n[3/3] SIDE-BY-SIDE ARCHITECTURAL COMPARISON SUMMARY");
-    println!("-----------------------------------------------------------------------------------------");
-    println!("{:<8} | {:<24} | {:<24} | {:<14}", "Level", "Strata Layout+Paint", "Chromium Style+Layout", "Strata Speedup");
-    println!("-----------------------------------------------------------------------------------------");
+    println!(
+        "-----------------------------------------------------------------------------------------"
+    );
+    println!(
+        "{:<8} | {:<24} | {:<24} | {:<14}",
+        "Level", "Strata Layout+Paint", "Chromium Style+Layout", "Strata Speedup"
+    );
+    println!(
+        "-----------------------------------------------------------------------------------------"
+    );
     for (l, st) in &strata_results {
         let strata_frontend_us = (st.layout_us + st.paint_us) as f64;
         if let Some((_, ct)) = chromium_results.iter().find(|(cl, _)| *cl == *l) {
             let chrome_frontend_us = ct.style_us + ct.layout_us;
-            let ratio = if strata_frontend_us > 0.0 { chrome_frontend_us / strata_frontend_us } else { 1.0 };
+            let ratio = if strata_frontend_us > 0.0 {
+                chrome_frontend_us / strata_frontend_us
+            } else {
+                1.0
+            };
             println!(
                 "L{:<7} | {:>20.1} µs | {:>20.1} µs | {:>12.1}x",
-                st.level_num,
-                strata_frontend_us,
-                chrome_frontend_us,
-                ratio
+                st.level_num, strata_frontend_us, chrome_frontend_us, ratio
             );
         }
     }
-    println!("-----------------------------------------------------------------------------------------");
-    println!("Memory Footprint: Strata ~2.8 MB (single process) vs Chromium >85.0 MB (4 processes)");
-    println!("Cold Startup:     Strata <15 ms (instant) vs Chromium 250-450 ms (IPC / V8 bootstrap)");
-    println!("Key Takeaway:     Strata resolves Layout + Paint in <0.29 ms (faster than Chromium).");
+    println!(
+        "-----------------------------------------------------------------------------------------"
+    );
+    println!(
+        "Memory Footprint: Strata ~2.8 MB (single process) vs Chromium >85.0 MB (4 processes)"
+    );
+    println!(
+        "Cold Startup:     Strata <15 ms (instant) vs Chromium 250-450 ms (IPC / V8 bootstrap)"
+    );
+    println!(
+        "Key Takeaway:     Strata resolves Layout + Paint in <0.29 ms (faster than Chromium)."
+    );
     println!("                  Software FrameBuffer rasterization dominates total frame time;");
-    println!("                  dirty-rect damage tracking and GPU presentation will reach 120 FPS.");
+    println!(
+        "                  dirty-rect damage tracking and GPU presentation will reach 120 FPS."
+    );
     println!("=========================================================================================\n");
 
     // Automatically run damage scissoring profile
@@ -394,9 +440,13 @@ pub fn measure_damage_scenario(
 }
 
 pub fn run_damage_benchmarks() {
-    println!("=========================================================================================");
+    println!(
+        "========================================================================================="
+    );
     println!("  STRATA DIRTY-RECT DAMAGE SCISSORING & GPU PRESENTATION BENCHMARK");
-    println!("=========================================================================================");
+    println!(
+        "========================================================================================="
+    );
 
     let scenarios = [
         (
@@ -433,7 +483,12 @@ pub fn run_damage_benchmarks() {
     println!("------------------------------------------------------------------------------------------------------------------");
     println!(
         "{:<32} | {:<14} | {:<14} | {:<14} | {:<14} | {:<12}",
-        "Mutation Scenario", "Damaged Pixels", "Full Software", "Scissored Soft", "GPU Quad Batch", "Speedup"
+        "Mutation Scenario",
+        "Damaged Pixels",
+        "Full Software",
+        "Scissored Soft",
+        "GPU Quad Batch",
+        "Speedup"
     );
     println!("------------------------------------------------------------------------------------------------------------------");
     for r in &results {

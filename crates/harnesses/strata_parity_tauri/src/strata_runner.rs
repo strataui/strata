@@ -1,21 +1,14 @@
 //! Native Strata GTK/Cairo Window Runner and Software FrameBuffer Renderer.
 
+use crate::fixture::{get_fixture_view, ParityLevel};
+use gtk::prelude::*;
 use std::thread;
 use std::time::Duration;
-use gtk::prelude::*;
 use strata_render::compositor::{Compositor, DisplayList, DrawCommand};
 use strata_render::rasterizer::FrameBuffer;
-use crate::fixture::{get_fixture_view, ParityLevel};
 
 /// Draws a rounded rectangle path into a Cairo graphics context.
-pub fn cairo_rounded_rect(
-    cr: &cairo::Context,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    r: f64,
-) {
+pub fn cairo_rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
     let r = r.min(w / 2.0).min(h / 2.0);
     let degrees = std::f64::consts::PI / 180.0;
 
@@ -30,7 +23,7 @@ pub fn cairo_rounded_rect(
 /// Executes a Strata DisplayList into a Cairo graphics context.
 pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
     for cmd in list.commands() {
-        if !cmd.is_clip() {
+        if !cmd.is_clip() && !cmd.is_state_command() {
             if let Ok((cx1, cy1, cx2, cy2)) = cr.clip_extents() {
                 if let Some(b) = cmd.bounds() {
                     let bx1 = b.x as f64;
@@ -111,6 +104,7 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                 widths,
                 color,
                 border_radius,
+                ..
             } => {
                 cr.set_source_rgba(
                     color.r() as f64,
@@ -149,7 +143,10 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                         let w = widths.bottom as f64;
                         cr.set_line_width(w);
                         cr.move_to(bounds.x as f64, (bounds.y + bounds.height) as f64 - w / 2.0);
-                        cr.line_to((bounds.x + bounds.width) as f64, (bounds.y + bounds.height) as f64 - w / 2.0);
+                        cr.line_to(
+                            (bounds.x + bounds.width) as f64,
+                            (bounds.y + bounds.height) as f64 - w / 2.0,
+                        );
                         let _ = cr.stroke();
                     }
                     if widths.left > 0.0 {
@@ -163,7 +160,10 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                         let w = widths.right as f64;
                         cr.set_line_width(w);
                         cr.move_to((bounds.x + bounds.width) as f64 - w / 2.0, bounds.y as f64);
-                        cr.line_to((bounds.x + bounds.width) as f64 - w / 2.0, (bounds.y + bounds.height) as f64);
+                        cr.line_to(
+                            (bounds.x + bounds.width) as f64 - w / 2.0,
+                            (bounds.y + bounds.height) as f64,
+                        );
                         let _ = cr.stroke();
                     }
                 }
@@ -185,7 +185,11 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                     | strata_style::types::FontWeight::SemiBold => cairo::FontWeight::Bold,
                     _ => cairo::FontWeight::Normal,
                 };
-                let font_family = if *is_monospace { "monospace" } else { "sans-serif" };
+                let font_family = if *is_monospace {
+                    "monospace"
+                } else {
+                    "sans-serif"
+                };
                 cr.select_font_face(font_family, cairo::FontSlant::Normal, weight);
                 cr.set_font_size(*font_size as f64);
                 cr.set_source_rgba(
@@ -244,10 +248,16 @@ pub fn run_strata_window(level: ParityLevel, screenshot_path: &str) {
 
     let path_str = screenshot_path.to_string();
     thread::spawn(move || {
-        println!("[Strata] Window opened maximized (decorated: false). Waiting 2.0s for presentation...");
+        println!(
+            "[Strata] Window opened maximized (decorated: false). Waiting 2.0s for presentation..."
+        );
         thread::sleep(Duration::from_millis(2000));
-        println!("[Strata] Capturing window-scoped snapshot to {}...", path_str);
-        let captured = crate::capture::capture_window_by_title("Parity Benchmark - Strata", &path_str);
+        println!(
+            "[Strata] Capturing window-scoped snapshot to {}...",
+            path_str
+        );
+        let captured =
+            crate::capture::capture_window_by_title("Parity Benchmark - Strata", &path_str);
         println!("[Strata] Window capture result: {}", captured);
         thread::sleep(Duration::from_millis(500));
         gtk::glib::idle_add(|| {
@@ -260,7 +270,12 @@ pub fn run_strata_window(level: ParityLevel, screenshot_path: &str) {
 }
 
 /// Also produces the pure-Rust software rasterized FrameBuffer image.
-pub fn render_strata_software_framebuffer(level: ParityLevel, width: usize, height: usize, output_path: &str) {
+pub fn render_strata_software_framebuffer(
+    level: ParityLevel,
+    width: usize,
+    height: usize,
+    output_path: &str,
+) {
     let view = get_fixture_view(level);
     let mut layout_root = strata::AppRuntime::build_layout_tree(&view.root);
     layout_root.compute_layout(width as f32, height as f32);
@@ -272,8 +287,9 @@ pub fn render_strata_software_framebuffer(level: ParityLevel, width: usize, heig
     fb.execute_display_list(&display_list);
 
     // Save as PNG
-    let img: image::RgbaImage = image::ImageBuffer::from_raw(width as u32, height as u32, fb.pixels)
-        .expect("Buffer size matches dimensions");
+    let img: image::RgbaImage =
+        image::ImageBuffer::from_raw(width as u32, height as u32, fb.pixels)
+            .expect("Buffer size matches dimensions");
     let _ = img.save(output_path);
     println!("[Strata] Software FrameBuffer saved to: {}", output_path);
 }

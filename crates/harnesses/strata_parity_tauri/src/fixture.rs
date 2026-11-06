@@ -41,7 +41,9 @@ impl ParityLevel {
             Self::Level4FlexRow => "Level 4: Flexbox 1D Row Alignment & Space-Between",
             Self::Level5FullDashboard => "Level 5: Full Multi-Card Infrastructure Dashboard",
             Self::Level6CssGrid2D => "Level 6: 2D CSS Grid (Gaps, MinMax Tracks & Multi-Span)",
-            Self::Level7TelemetryConsole => "Level 7: High-Complexity Multi-Section Telemetry Console",
+            Self::Level7TelemetryConsole => {
+                "Level 7: High-Complexity Multi-Section Telemetry Console"
+            }
         }
     }
 }
@@ -539,14 +541,21 @@ mod tests {
         let card2 = &grid.children[1];
         assert_eq!(card1.geometry.border_box.x, 32.0);
         assert!((card1.geometry.border_box.width - 1229.34).abs() < 0.1);
-        assert_eq!(card2.geometry.border_box.x, 32.0 + card1.geometry.border_box.width + 24.0);
-        assert!((card2.geometry.border_box.x + card2.geometry.border_box.width - 1888.0).abs() < 0.1);
+        assert_eq!(
+            card2.geometry.border_box.x,
+            32.0 + card1.geometry.border_box.width + 24.0
+        );
+        assert!(
+            (card2.geometry.border_box.x + card2.geometry.border_box.width - 1888.0).abs() < 0.1
+        );
 
         // Row 2
         let card3 = &grid.children[2];
         let card5 = &grid.children[4];
         assert_eq!(card3.geometry.border_box.x, 32.0);
-        assert!((card5.geometry.border_box.x + card5.geometry.border_box.width - 1888.0).abs() < 0.1);
+        assert!(
+            (card5.geometry.border_box.x + card5.geometry.border_box.width - 1888.0).abs() < 0.1
+        );
     }
 
     #[test]
@@ -572,7 +581,9 @@ mod tests {
         let card1 = &metrics_grid.children[0];
         let card3 = &metrics_grid.children[2];
         assert!((card1.geometry.border_box.width - 517.33).abs() < 0.1);
-        assert!((card3.geometry.border_box.x + card3.geometry.border_box.width - 1888.0).abs() < 0.1);
+        assert!(
+            (card3.geometry.border_box.x + card3.geometry.border_box.width - 1888.0).abs() < 0.1
+        );
 
         let table_card = &main.children[2];
         assert_eq!(table_card.geometry.border_box.width, 1600.0);
@@ -583,4 +594,3 @@ mod tests {
         assert!(timing.total_us > 0);
     }
 }
-
