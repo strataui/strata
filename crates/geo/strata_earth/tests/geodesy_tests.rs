@@ -1,0 +1,176 @@
+//! Geodesy, camera control, and tile resolution.
+//!
+//! The Earth plugin must work at Earth scale in f64, resolve missing tiles to
+//! their nearest loaded ancestor, and keep the camera contract the reference
+//! defines.
+
+use strata_earth::{
+    clamp_latitude, geodetic_to_ecef, level_for_altitude, resolve_tile_imagery, wrap_longitude,
+    EarthCamera, Geodetic, LocalFrame, TileKey,
+};
+
+const R: f64 = 6_378_137.0;
+
+#[test]
+fn equator_prime_meridian_is_on_the_x_axis() {
+    let p = geodetic_to_ecef(Geodetic::new(0.0, 0.0, 0.0));
+    assert!((p.x - R).abs() < 1.0, "got {p:?}");
+    assert!(p.y.abs() < 1e-6);
+    assert!(p.z.abs() < 1e-6);
+}
+
+#[test]
+fn north_pole_is_on_the_z_axis() {
+    let p = geodetic_to_ecef(Geodetic::new(90.0, 0.0, 0.0));
+    assert!(p.x.abs() < 1e-6);
+    assert!(p.y.abs() < 1e-6);
+    assert!((p.z - 6_356_752.3).abs() < 1.0, "polar radius was {}", p.z);
+}
+
+#[test]
+fn altitude_lifts_the_point_radially() {
+    let ground = geodetic_to_ecef(Geodetic::new(45.0, 10.0, 0.0));
+    let high = geodetic_to_ecef(Geodetic::new(45.0, 10.0, 1_000.0));
+    let delta = high.sub(ground).length();
+    assert!((delta - 1_000.0).abs() < 1e-3, "altitude delta was {delta}");
+}
+
+#[test]
+fn local_frame_is_orthonormal_and_points_up() {
+    let frame = LocalFrame::at(51.4778, -0.0015);
+    assert!((frame.up.length() - 1.0).abs() < 1e-12);
+    assert!((frame.east.length() - 1.0).abs() < 1e-12);
+    assert!(frame.east.dot(frame.up).abs() < 1e-12);
+    assert!(frame.north.dot(frame.up).abs() < 1e-12);
+    assert!((frame.east.cross(frame.north).sub(frame.up)).length() < 1e-12);
+}
+
+#[test]
+fn camera_placement_puts_the_eye_above_the_focus() {
+    let camera = EarthCamera {
+        focus: Geodetic::new(0.0, 0.0, 0.0),
+        ..EarthCamera::default()
+    };
+    let placement = camera.placement();
+    let ground = geodetic_to_ecef(camera.focus);
+    // The eye sits three Earth radii above the focus, straight up, and the
+    // reported altitude applies the spherical excess of that vertical chord.
+    let chord = 3.0 * 6_378_137.0;
+    let height = placement.eye.sub(ground).length();
+    assert!(
+        (height - chord).abs() < 1e-3,
+        "eye distance was {height}"
+    );
+    let expected = chord + chord * chord / (2.0 * R);
+    assert!(
+        (camera.altitude_m() - expected).abs() < 1.0,
+        "altitude was {}, expected about {expected}",
+        camera.altitude_m()
+    );
+    // Over the focus point the altitude is the eye offset along `up` plus the
+    // spherical excess of that vertical chord.
+    let overhead = EarthCamera {
+        focus: Geodetic::new(0.0, 0.0, 0.0),
+        eye_offset_m: [0.0, 0.0, 10_000.0],
+        ..EarthCamera::default()
+    };
+    let vertical = 10_000.0 + 10_000.0 * 10_000.0 / (2.0 * R);
+    assert!(
+        (overhead.altitude_m() - vertical).abs() < 1e-6,
+        "a vertical offset of 10 km was {}, expected {vertical}",
+        overhead.altitude_m()
+    );
+    let lifted = EarthCamera {
+        focus: Geodetic::new(0.0, 0.0, 0.0),
+        eye_offset_m: [30_000_000.0, 0.0, 10_000.0],
+        ..EarthCamera::default()
+    };
+    let lift = 30_000_000.0f64 * 30_000_000.0 / (2.0 * R);
+    assert!(
+        (lifted.altitude_m() - (lift + 10_000.0)).abs() < 50.0,
+        "a horizontal chord of 30 000 km plus a 10 km lift was {}, expected about {}",
+        lifted.altitude_m(),
+        lift + 10_000.0
+    );
+}
+
+#[test]
+fn tile_key_parent_and_child_round_trip() {
+    let key = TileKey::new(5, 13, 9);
+    let parent = key.parent().expect("parent");
+    assert_eq!(parent, TileKey::new(4, 6, 4));
+    let child = parent
+        .child(((key.y & 1) << 1 | (key.x & 1)) as u8)
+        .expect("child");
+    assert_eq!(child, key);
+    assert!(TileKey::new(0, 0, 0).parent().is_none());
+}
+
+#[test]
+fn exact_tile_resolution_uses_the_whole_image() {
+    let target = TileKey::new(8, 100, 60);
+    let resolution = resolve_tile_imagery(target, |k| k == target).expect("resolution");
+    assert!(resolution.exact);
+    assert_eq!(resolution.source, target);
+    assert_eq!(resolution.uv_rect, (0.0, 0.0, 1.0, 1.0));
+}
+
+#[test]
+fn missing_tile_resolves_to_a_quadrant_of_its_ancestor() {
+    // Zoom 5 tile (17, 9): its level-4 parent is (8, 4). An odd x selects the
+    // right half and an odd y the bottom half of the parent image.
+    let target = TileKey::new(5, 17, 9);
+    let resolution =
+        resolve_tile_imagery(target, |k| k == TileKey::new(4, 8, 4)).expect("resolution");
+    assert!(!resolution.exact);
+    assert_eq!(resolution.source, TileKey::new(4, 8, 4));
+    assert_eq!(resolution.uv_rect, (0.5, 0.5, 1.0, 1.0));
+}
+
+#[test]
+fn resolution_walks_multiple_levels() {
+    // Each level strips one low bit, so level 9 to level 4 is five steps down.
+    let target = TileKey::new(9, 0b1010_10101, 0b0110_10011);
+    let ancestor = target
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    assert_eq!(ancestor.level, 4);
+    let resolution = resolve_tile_imagery(target, |k| k == ancestor).expect("resolution");
+    assert_eq!(resolution.source, ancestor);
+    let (u0, v0, u1, v1) = resolution.uv_rect;
+    assert!(u1 > u0 && v1 > v0);
+    assert!(
+        (u1 - u0 - 1.0 / 32.0).abs() < 1e-9,
+        "5 levels deep is a 1/32 sub-rect"
+    );
+    assert!((v1 - v0 - 1.0 / 32.0).abs() < 1e-9);
+}
+
+#[test]
+fn resolution_is_none_when_nothing_is_loaded() {
+    assert!(resolve_tile_imagery(TileKey::new(3, 1, 1), |_| false).is_none());
+}
+
+#[test]
+fn zoom_level_follows_altitude() {
+    assert_eq!(level_for_altitude(3.0 * R, 18), 0);
+    assert_eq!(level_for_altitude(1.5 * R, 18), 1);
+    assert!(level_for_altitude(1_000.0, 18) > level_for_altitude(100_000.0, 18));
+    assert_eq!(level_for_altitude(1.0, 6), 6, "the max level clamps");
+}
+
+#[test]
+fn longitude_and_latitude_clamp() {
+    assert!((wrap_longitude(190.0) + 170.0).abs() < 1e-9);
+    assert!((wrap_longitude(-190.0) - 170.0).abs() < 1e-9);
+    assert_eq!(clamp_latitude(95.0), 90.0);
+    assert_eq!(clamp_latitude(-95.0), -90.0);
+}
