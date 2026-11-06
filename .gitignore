@@ -10,7 +10,7 @@ AGENTS.md
 info/agent_tasks/
 
 # Rust Cargo build artifacts
-/target/
+target/
 **/*.rs.bk
 
 # Distribution and compiled bundles
