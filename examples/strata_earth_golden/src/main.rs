@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use strata_earth::{
     requested_tile, surrounding_patches, tile_patch_span_deg, EarthCamera, EarthInput, EarthScene,
-    EntityMarker, Geodetic, MemoryTileSource, TileElevation, TileImage, TileKey,
+    EntityMarker, FrameDescriptor, Geodetic, MemoryTileSource, TileElevation, TileImage, TileKey,
 };
 use strata_layout::Rect;
 use strata_render::rasterizer::FrameBuffer;
@@ -131,7 +131,7 @@ fn input_for(regime: &Regime, focus: Geodetic) -> EarthInput {
     }
 }
 
-fn render(input: &EarthInput) -> (FrameBuffer, String) {
+fn capture(input: &EarthInput) -> (FrameBuffer, FrameDescriptor, strata_earth::FrameStats, u8) {
     let level = strata_earth::level_for_altitude(input.camera.altitude_m(), input.max_tile_level);
     let span = tile_patch_span_deg(&input.camera, input.patch_scale);
     let patches = surrounding_patches(input.camera.focus, span);
@@ -139,9 +139,7 @@ fn render(input: &EarthInput) -> (FrameBuffer, String) {
 
     let mut source = MemoryTileSource::new();
     for (index, key) in requested.iter().enumerate() {
-        let image = procedural_tile(index as u8);
-        // Every level loads its own image so the regime exercises real tiles.
-        source.insert_imagery(*key, image.clone());
+        source.insert_imagery(*key, procedural_tile(index as u8));
         source.insert_elevation(
             *key,
             TileElevation {
@@ -151,10 +149,10 @@ fn render(input: &EarthInput) -> (FrameBuffer, String) {
             },
         );
     }
-
     let mut scene = EarthScene::new();
     scene.build(input, &mut source);
-
+    let descriptor = FrameDescriptor::capture(&scene, input);
+    let stats = scene.stats();
     let mut fb = FrameBuffer::new(W, H);
     render_scene_3d_with_textures(
         &mut fb,
@@ -163,19 +161,7 @@ fn render(input: &EarthInput) -> (FrameBuffer, String) {
         None,
         Some(scene.tile_registry().store()),
     );
-
-    let stats = scene.stats();
-    let summary = format!(
-        "tiles={} exact={} ancestor={} terrain_tris={} building_tris={} overlay_prims={} level={}",
-        stats.tiles_requested,
-        stats.tiles_exact,
-        stats.tiles_from_ancestor,
-        stats.terrain_triangles,
-        stats.building_triangles,
-        stats.overlay_primitives,
-        level
-    );
-    (fb, summary)
+    (fb, descriptor, stats, level)
 }
 
 /// Minimal PNG writer (RGBA8, no filtering) so goldens need no image crate.
@@ -263,11 +249,13 @@ fn main() -> std::io::Result<()> {
     println!("Earth goldens at {W}x{H} -> {}", out_dir.display());
     for regime in REGIMES {
         let input = input_for(regime, focus);
-        let (first, summary) = render(&input);
-        let (second, _) = render(&input);
+        let (first, descriptor, stats, level) = capture(&input);
+        let (second, second_descriptor, _, _) = capture(&input);
 
         let identical = first.pixels == second.pixels;
-        if !identical {
+        let descriptor_identical =
+            descriptor.to_json_string() == second_descriptor.to_json_string();
+        if !identical || !descriptor_identical {
             failures += 1;
         }
 
@@ -276,12 +264,27 @@ fn main() -> std::io::Result<()> {
             .chunks_exact(4)
             .filter(|p| p[3] > 0 && p[1] > 150 && p[0] > 100)
             .count();
+        let summary = format!(
+            "tiles={} exact={} ancestor={} terrain_tris={} building_tris={} overlay_prims={} draws={} level={}",
+            stats.tiles_requested,
+            stats.tiles_exact,
+            stats.tiles_from_ancestor,
+            stats.terrain_triangles,
+            stats.building_triangles,
+            stats.overlay_primitives,
+            stats.draw_calls,
+            level
+        );
         let png_path = out_dir.join(format!("{}.png", regime.name));
         write_png(&png_path, &first)?;
         std::fs::write(
+            out_dir.join(format!("{}.json", regime.name)),
+            descriptor.to_json_string(),
+        )?;
+        std::fs::write(
             out_dir.join(format!("{}.txt", regime.name)),
             format!(
-                "regime={} altitude_m={} sim_time={} cloud={} daylight={} {}\nterrain_cover_px={}\ndeterministic={}\n",
+                "regime={} altitude_m={} sim_time={} cloud={} daylight={} {}\nterrain_cover_px={}\ndeterministic={} descriptor_deterministic={}\n",
                 regime.name,
                 regime.altitude_m,
                 regime.sim_time_unix_s,
@@ -289,7 +292,8 @@ fn main() -> std::io::Result<()> {
                 regime.daylight,
                 summary,
                 cover,
-                identical
+                identical,
+                descriptor_identical
             ),
         )?;
         println!(

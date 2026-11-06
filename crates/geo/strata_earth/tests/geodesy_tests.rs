@@ -5,8 +5,8 @@
 //! defines.
 
 use strata_earth::{
-    clamp_latitude, geodetic_to_ecef, level_for_altitude, resolve_tile_imagery, wrap_longitude,
-    EarthCamera, Geodetic, LocalFrame, TileKey,
+    clamp_latitude, depth_range, geodetic_to_ecef, horizon_distance_m, level_for_altitude,
+    resolve_tile_imagery, wrap_longitude, EarthCamera, Geodetic, LocalFrame, TileKey,
 };
 
 const R: f64 = 6_378_137.0;
@@ -53,31 +53,24 @@ fn camera_placement_puts_the_eye_above_the_focus() {
     };
     let placement = camera.placement();
     let ground = geodetic_to_ecef(camera.focus);
-    // The eye sits three Earth radii above the focus, straight up, and the
-    // reported altitude applies the spherical excess of that vertical chord.
+    // The eye sits three Earth radii above the focus, straight up.
     let chord = 3.0 * 6_378_137.0;
     let height = placement.eye.sub(ground).length();
+    assert!((height - chord).abs() < 1e-3, "eye distance was {height}");
     assert!(
-        (height - chord).abs() < 1e-3,
-        "eye distance was {height}"
-    );
-    let expected = chord + chord * chord / (2.0 * R);
-    assert!(
-        (camera.altitude_m() - expected).abs() < 1.0,
-        "altitude was {}, expected about {expected}",
+        (camera.altitude_m() - chord).abs() < 1e-3,
+        "a purely vertical offset is the altitude, got {}",
         camera.altitude_m()
     );
-    // Over the focus point the altitude is the eye offset along `up` plus the
-    // spherical excess of that vertical chord.
+    // Over the focus point a purely vertical offset is exactly the height.
     let overhead = EarthCamera {
         focus: Geodetic::new(0.0, 0.0, 0.0),
         eye_offset_m: [0.0, 0.0, 10_000.0],
         ..EarthCamera::default()
     };
-    let vertical = 10_000.0 + 10_000.0 * 10_000.0 / (2.0 * R);
     assert!(
-        (overhead.altitude_m() - vertical).abs() < 1e-6,
-        "a vertical offset of 10 km was {}, expected {vertical}",
+        (overhead.altitude_m() - 10_000.0).abs() < 1e-6,
+        "a vertical offset of 10 km was {}, expected 10000",
         overhead.altitude_m()
     );
     let lifted = EarthCamera {
@@ -173,4 +166,50 @@ fn longitude_and_latitude_clamp() {
     assert!((wrap_longitude(-190.0) - 170.0).abs() < 1e-9);
     assert_eq!(clamp_latitude(95.0), 90.0);
     assert_eq!(clamp_latitude(-95.0), -90.0);
+}
+
+#[test]
+fn depth_policy_keeps_a_workable_near_far_ratio() {
+    // Terrain altitude: 4 km up, horizon about 226 km.
+    let (near, far) = depth_range(4_000.0, horizon_distance_m(4_000.0), 1.0);
+    assert!((near - 40.0).abs() < 1e-6, "near was {near}");
+    assert!(far > 200_000.0 && far < 500_000.0, "far was {far}");
+    assert!(
+        far / near < 20_000.0,
+        "a local view must not carry a planet-scale ratio, got {}",
+        far / near
+    );
+
+    // Globe altitude: the far plane still reaches the limb twice over.
+    let horizon = horizon_distance_m(12_000_000.0);
+    let (near, far) = depth_range(12_000_000.0, horizon, 1.0);
+    assert!((near - 120_000.0).abs() < 1e-6, "near was {near}");
+    assert!(
+        far >= horizon * 2.0,
+        "the globe far plane must reach the limb"
+    );
+}
+
+#[test]
+fn camera_placement_uses_the_altitude_depth_policy() {
+    let terrain = EarthCamera {
+        focus: Geodetic::new(37.0, -122.0, 0.0),
+        eye_offset_m: [0.0, 0.0, 4_000.0],
+        ..EarthCamera::default()
+    };
+    let placement = terrain.placement();
+    assert!((placement.near_m - 40.0).abs() < 1e-6);
+    assert!(
+        placement.far_m < 1_000_000.0,
+        "a terrain camera must not keep a 51 000 km far plane, got {}",
+        placement.far_m
+    );
+
+    let globe = EarthCamera {
+        focus: Geodetic::new(37.0, -122.0, 0.0),
+        eye_offset_m: [0.0, 0.0, 12_000_000.0],
+        ..EarthCamera::default()
+    };
+    let placement = globe.placement();
+    assert!(placement.far_m > 20_000_000.0);
 }

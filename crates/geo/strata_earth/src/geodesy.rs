@@ -103,7 +103,35 @@ impl Default for EarthCamera {
     }
 }
 
-/// A resolved eye/aim pair in ECEF with the far plane set beyond the globe.
+/// Altitude at or above which the camera is treated as a globe view.
+pub const GLOBE_ALTITUDE_M: f64 = 2_400_000.0;
+
+/// Distance from the eye to the horizon of a sphere of Earth radius.
+///
+/// `sqrt(2 R h + h^2)` is exact for an eye `h` above the surface; it is zero at
+/// sea level and grows as the eye climbs.
+pub fn horizon_distance_m(altitude_m: f64) -> f64 {
+    let h = altitude_m.max(0.0);
+    (2.0 * EARTH_RADIUS_M * h + h * h).sqrt()
+}
+
+/// Picks the near and far planes for an altitude.
+///
+/// Kept separate from [`EarthCamera::placement`] so the policy can be tested
+/// directly. `requested_near` is honoured only when it is larger than the
+/// altitude-derived value.
+pub fn depth_range(altitude_m: f64, horizon_m: f64, requested_near: f64) -> (f64, f64) {
+    let altitude = altitude_m.max(0.0);
+    let near = (altitude / 100.0).max(requested_near).clamp(0.05, 1.0e6);
+    let far = if altitude >= GLOBE_ALTITUDE_M {
+        horizon_m * 2.0 + 100_000.0
+    } else {
+        horizon_m * 1.5 + 50_000.0
+    };
+    (near, far.max(near * 100.0))
+}
+
+/// A resolved eye/aim pair in ECEF with a depth range matched to its altitude.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CameraPlacement {
     pub eye: DVec3,
@@ -123,20 +151,14 @@ impl EarthCamera {
 
     /// Altitude of the eye above the ellipsoid in metres.
     ///
-    /// A mostly-vertical offset uses its up component; a horizontal component
-    /// additionally lifts the eye above the tangent plane through the focus.
+    /// The up component is the height over the focus point; a horizontal
+    /// offset is a chord along the tangent plane and lifts the eye by
+    /// `horizontal^2 / 2R` above that plane.
     pub fn altitude_m(&self) -> f64 {
         let [e, n, u] = self.eye_offset_m;
-        let horizontal = (e * e + n * n).sqrt();
-        let chord = (horizontal * horizontal + u * u).sqrt();
-        // A horizontal offset is a chord, so it lifts the eye by
-        // chord^2 / (2R) above the focus tangent plane.
-        let lift = if chord > f64::EPSILON {
-            chord * chord / (2.0 * EARTH_RADIUS_M)
-        } else {
-            0.0
-        };
-        (u + lift).max(0.0) + self.focus.height_m.max(0.0)
+        let horizontal_sq = e * e + n * n;
+        let radius = EARTH_RADIUS_M + self.focus.height_m.max(0.0);
+        (self.focus.height_m + u + horizontal_sq / (2.0 * radius)).max(0.0)
     }
 
     /// Ground width covered by the horizontal field of view, in metres.
@@ -148,7 +170,21 @@ impl EarthCamera {
         2.0 * altitude * (self.fov_y_deg.to_radians() * 0.5).tan()
     }
 
-    /// Resolves the camera to ECEF positions.
+    /// Resolves the camera to ECEF positions and a depth range suited to the
+    /// altitude.
+    ///
+    /// Depth precision is governed by the near-to-far ratio, not by the far
+    /// plane alone. Two regimes are used:
+    ///
+    /// - Below [`GLOBE_ALTITUDE_M`] the camera is local, so the far plane only
+    ///   has to reach the local horizon (plus the cloud shell and a margin).
+    /// - At or above it the camera is a globe view, so the far plane reaches
+    ///   the limb twice over.
+    ///
+    /// In both cases the near plane is `altitude / 100`, so the closest
+    /// geometry the camera can see sits at least a hundred near planes away.
+    /// That keeps a one-metre offset resolvable at terrain altitudes while
+    /// never clipping the surface below the eye.
     pub fn placement(&self) -> CameraPlacement {
         let anchor = geodetic_to_ecef(self.focus);
         let frame = LocalFrame::at(self.focus.lat_deg, self.focus.lon_deg);
@@ -164,13 +200,15 @@ impl EarthCamera {
         // The camera's up vector is the local up, so the globe's north stays
         // up in the frame.
         let up = frame.up;
-        let far = self.eye_distance_m() + 8.0 * EARTH_RADIUS_M;
+        let altitude = self.altitude_m();
+        let horizon = horizon_distance_m(altitude);
+        let (near, far) = depth_range(altitude, horizon, self.near_m);
         CameraPlacement {
             eye,
             aim,
             up,
             fov_y_deg: self.fov_y_deg,
-            near_m: self.near_m,
+            near_m: near,
             far_m: far,
         }
     }

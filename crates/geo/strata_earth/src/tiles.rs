@@ -51,8 +51,74 @@ impl TileImage {
 pub struct TileElevation {
     pub width: u32,
     pub height: u32,
-    /// Height in metres, row-major, `width * height` entries.
+    /// Height in metres, row-major, `width * height` entries. Row 0 is the
+    /// north edge of the tile, matching the imagery orientation.
     pub heights_m: Vec<f32>,
+}
+
+impl TileElevation {
+    /// Whether the grid is usable.
+    pub fn is_valid(&self) -> bool {
+        self.width > 0
+            && self.height > 0
+            && self.heights_m.len() == (self.width as usize * self.height as usize)
+    }
+
+    #[inline]
+    fn sample_at(&self, x: usize, y: usize) -> f32 {
+        self.heights_m[y * self.width as usize + x]
+    }
+
+    /// Bilinearly samples elevation at tile UV `(u, v)` in `[0, 1]^2`.
+    ///
+    /// This mirrors the reference `HeightmapTile::sample_bilinear`: the sample
+    /// grid covers the tile corners inclusive, so a normalized coordinate maps
+    /// onto `0..=width-1` and `0..=height-1`.
+    pub fn sample_bilinear(&self, u: f32, v: f32) -> f32 {
+        if !self.is_valid() {
+            return 0.0;
+        }
+        let max_x = (self.width - 1) as f32;
+        let max_y = (self.height - 1) as f32;
+        let fx = u.clamp(0.0, 1.0) * max_x;
+        let fy = v.clamp(0.0, 1.0) * max_y;
+
+        let x0 = (fx.floor() as usize).min(self.width as usize - 1);
+        let y0 = (fy.floor() as usize).min(self.height as usize - 1);
+        let x1 = (x0 + 1).min(self.width as usize - 1);
+        let y1 = (y0 + 1).min(self.height as usize - 1);
+        let tx = fx - x0 as f32;
+        let ty = fy - y0 as f32;
+
+        let s00 = self.sample_at(x0, y0);
+        let s10 = self.sample_at(x1, y0);
+        let s01 = self.sample_at(x0, y1);
+        let s11 = self.sample_at(x1, y1);
+        let top = s00 + (s10 - s00) * tx;
+        let bottom = s01 + (s11 - s01) * tx;
+        top + (bottom - top) * ty
+    }
+
+    /// Samples elevation and its local UV partial derivatives.
+    ///
+    /// The derivatives are in metres per normalized UV unit, matching the
+    /// reference `sample_bilinear_with_gradient` used for hillshading. They are
+    /// central differences one sample cell wide, clamped at the tile edge.
+    pub fn sample_bilinear_with_gradient(&self, u: f32, v: f32) -> (f32, f32, f32) {
+        if !self.is_valid() {
+            return (0.0, 0.0, 0.0);
+        }
+        let eps_u = 1.0 / self.width.max(2) as f32;
+        let eps_v = 1.0 / self.height.max(2) as f32;
+        let centre = self.sample_bilinear(u, v);
+        let east = self.sample_bilinear((u + eps_u).min(1.0), v);
+        let west = self.sample_bilinear((u - eps_u).max(0.0), v);
+        let north = self.sample_bilinear(u, (v - eps_v).max(0.0));
+        let south = self.sample_bilinear(u, (v + eps_v).min(1.0));
+        let du = (east - west) / (2.0 * eps_u);
+        let dv = (south - north) / (2.0 * eps_v);
+        (centre, du, dv)
+    }
 }
 
 /// Errors a tile source can report.
@@ -97,18 +163,36 @@ pub fn tile_sampler() -> SamplerDesc {
 }
 
 /// Owns uploaded tile textures and hands out stable handles.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TileRegistry {
     store: TextureStore,
     slots: std::collections::HashMap<TextureSlot, TextureId>,
+    /// One-texel neutral texture drawn when a patch has no imagery.
+    fallback: TextureId,
+}
+
+impl Default for TileRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TileRegistry {
     pub fn new() -> Self {
+        let mut store = TextureStore::new();
+        let fallback = store
+            .insert_rgba8(1, 1, vec![255u8, 255, 255, 255])
+            .expect("a one-texel texture is always valid");
         Self {
-            store: TextureStore::new(),
+            store,
             slots: std::collections::HashMap::new(),
+            fallback,
         }
+    }
+
+    /// Neutral texture used for patches that have no imagery yet.
+    pub fn fallback_texture(&self) -> TextureId {
+        self.fallback
     }
 
     /// Returns the store the renderer samples from.
