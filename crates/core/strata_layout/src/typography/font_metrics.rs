@@ -190,11 +190,8 @@ impl CssStrut {
             _ => font_metrics.default_line_height(),
         };
 
-        let (leading_above, leading_below) = compute_half_leading(
-            line_height,
-            font_metrics.ascent,
-            font_metrics.descent,
-        );
+        let (leading_above, leading_below) =
+            compute_half_leading(line_height, font_metrics.ascent, font_metrics.descent);
 
         let metrics = FontHeight::new(
             font_metrics.ascent + leading_above,

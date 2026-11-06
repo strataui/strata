@@ -3,8 +3,8 @@
 //! Evaluates code ligatures (e.g., `===`, `!=`, `=>`), typographic ligatures (`fi`, `fl`),
 //! optical pair kerning adjustments, and subpixel glyph advance positioning.
 
-use strata_primitives::geom::LayoutUnit;
 use super::font_metrics::FontMetrics;
+use strata_primitives::geom::LayoutUnit;
 
 /// Single positioned glyph resulting from text shaping.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -38,26 +38,98 @@ struct LigatureRule {
 
 static KNOWN_LIGATURES: &[LigatureRule] = &[
     // 4-character ligatures
-    LigatureRule { pattern: "<!--", glyph_id: 0xF001, advance_factor: 2.4 },
+    LigatureRule {
+        pattern: "<!--",
+        glyph_id: 0xF001,
+        advance_factor: 2.4,
+    },
     // 3-character code ligatures
-    LigatureRule { pattern: "===", glyph_id: 0xF002, advance_factor: 1.8 },
-    LigatureRule { pattern: "!==", glyph_id: 0xF003, advance_factor: 1.8 },
-    LigatureRule { pattern: "-->", glyph_id: 0xF004, advance_factor: 1.8 },
-    LigatureRule { pattern: "...", glyph_id: 0xF005, advance_factor: 1.2 },
-    LigatureRule { pattern: "ffi", glyph_id: 0xFB03, advance_factor: 1.4 },
-    LigatureRule { pattern: "ffl", glyph_id: 0xFB04, advance_factor: 1.4 },
+    LigatureRule {
+        pattern: "===",
+        glyph_id: 0xF002,
+        advance_factor: 1.8,
+    },
+    LigatureRule {
+        pattern: "!==",
+        glyph_id: 0xF003,
+        advance_factor: 1.8,
+    },
+    LigatureRule {
+        pattern: "-->",
+        glyph_id: 0xF004,
+        advance_factor: 1.8,
+    },
+    LigatureRule {
+        pattern: "...",
+        glyph_id: 0xF005,
+        advance_factor: 1.2,
+    },
+    LigatureRule {
+        pattern: "ffi",
+        glyph_id: 0xFB03,
+        advance_factor: 1.4,
+    },
+    LigatureRule {
+        pattern: "ffl",
+        glyph_id: 0xFB04,
+        advance_factor: 1.4,
+    },
     // 2-character code & typographic ligatures
-    LigatureRule { pattern: "==", glyph_id: 0xF006, advance_factor: 1.3 },
-    LigatureRule { pattern: "!=", glyph_id: 0xF007, advance_factor: 1.3 },
-    LigatureRule { pattern: "<=", glyph_id: 0xF008, advance_factor: 1.3 },
-    LigatureRule { pattern: ">=", glyph_id: 0xF009, advance_factor: 1.3 },
-    LigatureRule { pattern: "=>", glyph_id: 0xF00A, advance_factor: 1.3 },
-    LigatureRule { pattern: "->", glyph_id: 0xF00B, advance_factor: 1.3 },
-    LigatureRule { pattern: "<-", glyph_id: 0xF00C, advance_factor: 1.3 },
-    LigatureRule { pattern: "::", glyph_id: 0xF00D, advance_factor: 1.0 },
-    LigatureRule { pattern: "fi", glyph_id: 0xFB01, advance_factor: 0.95 },
-    LigatureRule { pattern: "fl", glyph_id: 0xFB02, advance_factor: 0.95 },
-    LigatureRule { pattern: "ff", glyph_id: 0xFB00, advance_factor: 0.95 },
+    LigatureRule {
+        pattern: "==",
+        glyph_id: 0xF006,
+        advance_factor: 1.3,
+    },
+    LigatureRule {
+        pattern: "!=",
+        glyph_id: 0xF007,
+        advance_factor: 1.3,
+    },
+    LigatureRule {
+        pattern: "<=",
+        glyph_id: 0xF008,
+        advance_factor: 1.3,
+    },
+    LigatureRule {
+        pattern: ">=",
+        glyph_id: 0xF009,
+        advance_factor: 1.3,
+    },
+    LigatureRule {
+        pattern: "=>",
+        glyph_id: 0xF00A,
+        advance_factor: 1.3,
+    },
+    LigatureRule {
+        pattern: "->",
+        glyph_id: 0xF00B,
+        advance_factor: 1.3,
+    },
+    LigatureRule {
+        pattern: "<-",
+        glyph_id: 0xF00C,
+        advance_factor: 1.3,
+    },
+    LigatureRule {
+        pattern: "::",
+        glyph_id: 0xF00D,
+        advance_factor: 1.0,
+    },
+    LigatureRule {
+        pattern: "fi",
+        glyph_id: 0xFB01,
+        advance_factor: 0.95,
+    },
+    LigatureRule {
+        pattern: "fl",
+        glyph_id: 0xFB02,
+        advance_factor: 0.95,
+    },
+    LigatureRule {
+        pattern: "ff",
+        glyph_id: 0xFB00,
+        advance_factor: 0.95,
+    },
 ];
 
 /// Known optical pair kerning adjustment rules (fractions of em).
@@ -68,24 +140,96 @@ struct KerningPair {
 }
 
 static KNOWN_KERNING_PAIRS: &[KerningPair] = &[
-    KerningPair { first: 'A', second: 'V', delta_em: -0.085 },
-    KerningPair { first: 'V', second: 'A', delta_em: -0.085 },
-    KerningPair { first: 'A', second: 'W', delta_em: -0.070 },
-    KerningPair { first: 'W', second: 'A', delta_em: -0.070 },
-    KerningPair { first: 'A', second: 'T', delta_em: -0.075 },
-    KerningPair { first: 'T', second: 'A', delta_em: -0.075 },
-    KerningPair { first: 'T', second: 'o', delta_em: -0.070 },
-    KerningPair { first: 'T', second: 'e', delta_em: -0.065 },
-    KerningPair { first: 'W', second: 'e', delta_em: -0.045 },
-    KerningPair { first: 'P', second: 'a', delta_em: -0.055 },
-    KerningPair { first: 'P', second: 'o', delta_em: -0.050 },
-    KerningPair { first: 'Y', second: 'o', delta_em: -0.080 },
-    KerningPair { first: 'Y', second: 'a', delta_em: -0.075 },
-    KerningPair { first: 'F', second: 'a', delta_em: -0.060 },
-    KerningPair { first: 'L', second: 'T', delta_em: -0.065 },
-    KerningPair { first: 'L', second: 'V', delta_em: -0.070 },
-    KerningPair { first: 'r', second: 'c', delta_em: -0.025 },
-    KerningPair { first: 'f', second: 'i', delta_em: -0.020 },
+    KerningPair {
+        first: 'A',
+        second: 'V',
+        delta_em: -0.085,
+    },
+    KerningPair {
+        first: 'V',
+        second: 'A',
+        delta_em: -0.085,
+    },
+    KerningPair {
+        first: 'A',
+        second: 'W',
+        delta_em: -0.070,
+    },
+    KerningPair {
+        first: 'W',
+        second: 'A',
+        delta_em: -0.070,
+    },
+    KerningPair {
+        first: 'A',
+        second: 'T',
+        delta_em: -0.075,
+    },
+    KerningPair {
+        first: 'T',
+        second: 'A',
+        delta_em: -0.075,
+    },
+    KerningPair {
+        first: 'T',
+        second: 'o',
+        delta_em: -0.070,
+    },
+    KerningPair {
+        first: 'T',
+        second: 'e',
+        delta_em: -0.065,
+    },
+    KerningPair {
+        first: 'W',
+        second: 'e',
+        delta_em: -0.045,
+    },
+    KerningPair {
+        first: 'P',
+        second: 'a',
+        delta_em: -0.055,
+    },
+    KerningPair {
+        first: 'P',
+        second: 'o',
+        delta_em: -0.050,
+    },
+    KerningPair {
+        first: 'Y',
+        second: 'o',
+        delta_em: -0.080,
+    },
+    KerningPair {
+        first: 'Y',
+        second: 'a',
+        delta_em: -0.075,
+    },
+    KerningPair {
+        first: 'F',
+        second: 'a',
+        delta_em: -0.060,
+    },
+    KerningPair {
+        first: 'L',
+        second: 'T',
+        delta_em: -0.065,
+    },
+    KerningPair {
+        first: 'L',
+        second: 'V',
+        delta_em: -0.070,
+    },
+    KerningPair {
+        first: 'r',
+        second: 'c',
+        delta_em: -0.025,
+    },
+    KerningPair {
+        first: 'f',
+        second: 'i',
+        delta_em: -0.020,
+    },
 ];
 
 /// Pure-Rust OpenType text shaping engine.
@@ -98,12 +242,7 @@ impl TextShaper {
     }
 
     /// Shapes a text run into positioned glyphs, applying ligatures and pair kerning.
-    pub fn shape(
-        &self,
-        text: &str,
-        metrics: &FontMetrics,
-        is_monospace: bool,
-    ) -> Vec<ShapedGlyph> {
+    pub fn shape(&self, text: &str, metrics: &FontMetrics, is_monospace: bool) -> Vec<ShapedGlyph> {
         if text.is_empty() {
             return Vec::new();
         }

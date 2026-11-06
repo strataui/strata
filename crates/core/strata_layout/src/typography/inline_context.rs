@@ -3,14 +3,128 @@
 //! Organizes shaped glyph runs into line boxes, resolves vertical alignments,
 //! and computes final subpixel layout bounds with full Blink LayoutNG parity.
 
-use strata_primitives::geom::LayoutUnit;
-use crate::geometry::Rect;
-use crate::exclusions::{ExclusionSpace, LineOpportunity};
-use strata_style::types::{Color, FontStyle, FontWeight, TextDecoration};
 use super::bidi::BidiEngine;
 use super::font_metrics::{compute_half_leading, CssStrut, FontHeight, FontMetrics};
 use super::line_breaker::{LineBreaker, WhiteSpaceMode};
 use super::shaper::{ShapedGlyph, TextShaper};
+use crate::exclusions::{ExclusionSpace, LineOpportunity};
+use crate::geometry::Rect;
+use std::cell::RefCell;
+use strata_primitives::geom::LayoutUnit;
+use strata_style::types::{Color, FontStyle, FontWeight, TextDecoration};
+
+thread_local! {
+    static INLINE_LAYOUT_CACHE: std::cell::RefCell<std::collections::HashMap<u64, InlineLayoutResult>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    static FONT_METRICS_CACHE: std::cell::RefCell<std::collections::HashMap<(u32, u32, bool, u64), FontMetrics>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Hashes an inline item stream and option set into a deterministic layout cache key.
+fn inline_layout_cache_key(items: &[InlineItem], options: &InlineLayoutOptions) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    options.font_size.to_bits().hash(&mut hasher);
+    options
+        .line_height
+        .map(|v| v.to_bits())
+        .unwrap_or(u32::MAX)
+        .hash(&mut hasher);
+    options
+        .max_width
+        .map(|v| v.to_bits())
+        .unwrap_or(u32::MAX)
+        .hash(&mut hasher);
+    (options.white_space as u8).hash(&mut hasher);
+    (options.vertical_align as u8).hash(&mut hasher);
+    options.is_monospace.hash(&mut hasher);
+    options.bfc_offset_y.to_bits().hash(&mut hasher);
+    items.len().hash(&mut hasher);
+    for item in items {
+        match item {
+            InlineItem::Text { text, style } => {
+                1u8.hash(&mut hasher);
+                text.hash(&mut hasher);
+                style.font_family.0.hash(&mut hasher);
+                style.font_size.to_bits().hash(&mut hasher);
+                (style.font_weight as u8).hash(&mut hasher);
+                (style.font_style as u8).hash(&mut hasher);
+                style.letter_spacing.to_bits().hash(&mut hasher);
+                style
+                    .line_height
+                    .map(|v| v.to_bits())
+                    .unwrap_or(u32::MAX)
+                    .hash(&mut hasher);
+                style.is_monospace.hash(&mut hasher);
+                (style.vertical_align as u8).hash(&mut hasher);
+            }
+            InlineItem::Atomic {
+                node_index,
+                width,
+                height,
+                margin_left,
+                margin_right,
+                vertical_align,
+            } => {
+                2u8.hash(&mut hasher);
+                node_index.hash(&mut hasher);
+                width.to_bits().hash(&mut hasher);
+                height.to_bits().hash(&mut hasher);
+                margin_left.to_bits().hash(&mut hasher);
+                margin_right.to_bits().hash(&mut hasher);
+                (*vertical_align as u8).hash(&mut hasher);
+            }
+            InlineItem::HardBreak => 3u8.hash(&mut hasher),
+        }
+    }
+    hasher.finish()
+}
+
+/// Builds font metrics from the registered platform callback, falling back to the
+/// synthetic design-ratio metrics when no platform font backend is active.
+fn metrics_for_style(
+    font_family: strata_primitives::AtomId,
+    font_size: f32,
+    is_monospace: bool,
+) -> FontMetrics {
+    let cache_key = (
+        font_family.0,
+        font_size.to_bits(),
+        is_monospace,
+        crate::text::font_generation(),
+    );
+    if let Some(hit) = FONT_METRICS_CACHE.with(|cache| cache.borrow().get(&cache_key).copied()) {
+        return hit;
+    }
+    if let Some(callback) = crate::text::get_font_metrics() {
+        let (ascent, descent, line_gap) = callback(font_family, font_size, is_monospace);
+        if ascent > 0.0 && descent >= 0.0 {
+            let metrics = FontMetrics {
+                ascent: LayoutUnit::from_f32(ascent),
+                descent: LayoutUnit::from_f32(descent),
+                line_gap: LayoutUnit::from_f32(line_gap.max(0.0)),
+                x_height: LayoutUnit::from_f32(ascent * 0.56),
+                cap_height: LayoutUnit::from_f32(ascent * 0.78),
+                units_per_em: 1000,
+                font_size,
+            };
+            FONT_METRICS_CACHE.with(|cache| {
+                let mut map = cache.borrow_mut();
+                if map.len() >= 4096 {
+                    map.clear();
+                }
+                map.insert(cache_key, metrics);
+            });
+            return metrics;
+        }
+    }
+
+    if is_monospace {
+        FontMetrics::default_mono(font_size)
+    } else {
+        FontMetrics::default_sans(font_size)
+    }
+}
 
 /// CSS vertical-align property values for inline formatting context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -37,7 +151,7 @@ pub enum VerticalAlignment {
 /// Typographic styling applied to an individual inline text run within an IFC.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InlineTextStyle {
-    pub font_family: String,
+    pub font_family: strata_primitives::AtomId,
     pub font_size: f32,
     pub font_weight: FontWeight,
     pub font_style: FontStyle,
@@ -54,7 +168,7 @@ pub struct InlineTextStyle {
 impl Default for InlineTextStyle {
     fn default() -> Self {
         Self {
-            font_family: "system-ui, sans-serif".to_string(),
+            font_family: strata_primitives::AtomId::FONT_SANS,
             font_size: 16.0,
             font_weight: FontWeight::Normal,
             font_style: FontStyle::Normal,
@@ -133,6 +247,8 @@ pub struct TextFragment {
     pub baseline_y: f32,
     /// Typographic style applied to this fragment.
     pub style: InlineTextStyle,
+    /// Requested font family atom used for glyph advances and paint selection.
+    pub font_family: strata_primitives::AtomId,
     /// Originating inline item index in the IFC stream.
     pub item_index: usize,
 }
@@ -214,6 +330,62 @@ pub struct InlineLayoutResult {
     pub line_count: usize,
 }
 
+/// Returns true if a token cannot begin a new line per Unicode UAX#14 (e.g. closing punctuation, comma, colon, period).
+#[inline]
+pub fn is_prohibited_line_start(text: &str) -> bool {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(c) => matches!(
+            c,
+            ')' | ']'
+                | '}'
+                | '>'
+                | ','
+                | '.'
+                | ';'
+                | ':'
+                | '!'
+                | '?'
+                | '%'
+                | '‰'
+                | '’'
+                | '”'
+                | '»'
+                | '…'
+                | '\u{00B0}'
+        ),
+        None => false,
+    }
+}
+
+/// Returns true if a token cannot end a line per Unicode UAX#14 (e.g. opening brackets, quotes, currency symbols).
+#[inline]
+pub fn is_prohibited_line_end(text: &str) -> bool {
+    let trimmed = text.trim_end_matches(|c: char| c == ' ' || c == '\t');
+    if trimmed.len() != text.len() {
+        return false;
+    }
+    match trimmed.chars().last() {
+        Some(c) => matches!(
+            c,
+            '(' | '[' | '{' | '<' | '“' | '‘' | '«' | '$' | '£' | '¥' | '€'
+        ),
+        None => false,
+    }
+}
+
+/// Returns true if a soft line break is permitted between two adjacent inline tokens.
+#[inline]
+fn can_break_between(prev: &InlineToken, next: &InlineToken) -> bool {
+    if prev.is_hard_break || next.is_hard_break {
+        return true;
+    }
+    if is_prohibited_line_start(&next.text) || is_prohibited_line_end(&prev.text) {
+        return false;
+    }
+    prev.can_break_after || next.atomic.is_some()
+}
+
 /// Internal intermediate token for breaking and measuring the inline stream.
 #[derive(Debug, Clone)]
 struct InlineToken {
@@ -222,7 +394,6 @@ struct InlineToken {
     style: InlineTextStyle,
     glyphs: Vec<ShapedGlyph>,
     width: f32,
-    #[allow(dead_code)]
     can_break_after: bool,
     is_hard_break: bool,
     is_whitespace_only: bool,
@@ -279,7 +450,9 @@ impl InlineFormattingContext {
 
         for run in bidi_runs {
             let run_slice = &text[run.start..run.end];
-            let mut run_glyphs = self.shaper.shape(run_slice, font_metrics, style.is_monospace);
+            let mut run_glyphs = self
+                .shaper
+                .shape(run_slice, font_metrics, style.is_monospace);
             if run.is_rtl {
                 run_glyphs.reverse();
             }
@@ -292,6 +465,98 @@ impl InlineFormattingContext {
                 g.x_advance = LayoutUnit::from_f32(g.x_advance.to_f32() * weight_multiplier);
             }
             token_width += g.x_advance.to_f32();
+        }
+
+        if crate::text::get_family_styled_text_measurer().is_some() {
+            let (meas_w, _) = crate::text::measure_text_bounds_styled_with_family(
+                &text,
+                style.font_size,
+                1.0,
+                None,
+                style.is_monospace,
+                style.font_family,
+                style.font_weight,
+                style.font_style,
+            );
+            if token_width > 0.0 && meas_w > 0.0 {
+                let scale = meas_w / token_width;
+                for g in &mut shaped {
+                    g.x_advance = LayoutUnit::from_f32(g.x_advance.to_f32() * scale);
+                }
+                token_width = meas_w;
+            } else if meas_w > 0.0 {
+                token_width = meas_w;
+            }
+        } else if crate::text::get_family_text_measurer().is_some() {
+            let (meas_w, _) = crate::text::measure_text_bounds_with_family(
+                &text,
+                style.font_size,
+                1.0,
+                None,
+                style.is_monospace,
+                style.font_family,
+            );
+            let weight_factor = match style.font_weight {
+                FontWeight::SemiBold => 1.03,
+                FontWeight::Bold => 1.06,
+                FontWeight::ExtraBold => 1.08,
+                FontWeight::Black => 1.10,
+                _ => 1.0,
+            };
+            let target_w = meas_w * weight_factor;
+            if token_width > 0.0 && target_w > 0.0 {
+                let scale = target_w / token_width;
+                for g in &mut shaped {
+                    g.x_advance = LayoutUnit::from_f32(g.x_advance.to_f32() * scale);
+                }
+                token_width = target_w;
+            } else if target_w > 0.0 {
+                token_width = target_w;
+            }
+        } else if let Some(styled_measurer) = crate::text::get_styled_text_measurer() {
+            let (meas_w, _) = styled_measurer(
+                &text,
+                style.font_size,
+                1.0,
+                None,
+                style.is_monospace,
+                style.font_weight,
+                style.font_style,
+            );
+            if token_width > 0.0 && meas_w > 0.0 {
+                let scale = meas_w / token_width;
+                for g in &mut shaped {
+                    g.x_advance = LayoutUnit::from_f32(g.x_advance.to_f32() * scale);
+                }
+                token_width = meas_w;
+            } else if meas_w > 0.0 {
+                token_width = meas_w;
+            }
+        } else if crate::text::get_text_measurer().is_some() {
+            let (meas_w, _) = crate::text::measure_text_bounds_ext(
+                &text,
+                style.font_size,
+                1.0,
+                None,
+                style.is_monospace,
+            );
+            let weight_factor = match style.font_weight {
+                FontWeight::SemiBold => 1.03,
+                FontWeight::Bold => 1.06,
+                FontWeight::ExtraBold => 1.08,
+                FontWeight::Black => 1.10,
+                _ => 1.0,
+            };
+            let target_w = meas_w * weight_factor;
+            if token_width > 0.0 && target_w > 0.0 {
+                let scale = target_w / token_width;
+                for g in &mut shaped {
+                    g.x_advance = LayoutUnit::from_f32(g.x_advance.to_f32() * scale);
+                }
+                token_width = target_w;
+            } else if target_w > 0.0 {
+                token_width = target_w;
+            }
         }
 
         InlineToken {
@@ -313,11 +578,51 @@ impl InlineFormattingContext {
         items: &[InlineItem],
         options: &InlineLayoutOptions,
     ) -> InlineLayoutResult {
-        let strut_metrics = if options.is_monospace {
-            FontMetrics::default_mono(options.font_size)
+        let _prof = crate::prof::Scope::new(crate::prof::Slot::Inline);
+        let cacheable = options.exclusion_space.is_none();
+        let cache_key = if cacheable {
+            Some(inline_layout_cache_key(items, options))
         } else {
-            FontMetrics::default_sans(options.font_size)
+            None
         };
+        if let Some(key) = cache_key {
+            let cached = INLINE_LAYOUT_CACHE.with(|cache| {
+                let cache: &RefCell<std::collections::HashMap<u64, InlineLayoutResult>> = cache;
+                cache.borrow().get(&key).cloned()
+            });
+            if let Some(result) = cached {
+                return result;
+            }
+        }
+
+        let result = self.layout_inline_stream_inner(items, options);
+        if let (Some(key), true) = (cache_key, cacheable) {
+            INLINE_LAYOUT_CACHE.with(|cache| {
+                let cache: &RefCell<std::collections::HashMap<u64, InlineLayoutResult>> = cache;
+                let mut map = cache.borrow_mut();
+                if map.len() >= 512 {
+                    map.clear();
+                }
+                map.insert(key, result.clone());
+            });
+        }
+        result
+    }
+
+    fn layout_inline_stream_inner(
+        &self,
+        items: &[InlineItem],
+        options: &InlineLayoutOptions,
+    ) -> InlineLayoutResult {
+        let strut_family = items
+            .iter()
+            .find_map(|item| match item {
+                InlineItem::Text { style, .. } => Some(style.font_family),
+                _ => None,
+            })
+            .unwrap_or(strata_primitives::AtomId::FONT_SANS);
+        let strut_metrics =
+            metrics_for_style(strut_family, options.font_size, options.is_monospace);
         let strut = CssStrut::new(&strut_metrics, options.line_height);
 
         if items.is_empty() {
@@ -379,11 +684,8 @@ impl InlineFormattingContext {
                         continue;
                     }
 
-                    let font_metrics = if style.is_monospace {
-                        FontMetrics::default_mono(style.font_size)
-                    } else {
-                        FontMetrics::default_sans(style.font_size)
-                    };
+                    let font_metrics =
+                        metrics_for_style(style.font_family, style.font_size, style.is_monospace);
 
                     let mut current_word = String::new();
                     for ch in text.chars() {
@@ -504,7 +806,8 @@ impl InlineFormattingContext {
 
         // 2. Line breaking and assembly pass with dynamic exclusion opportunities
         let container_w = options.max_width.unwrap_or(f32::MAX);
-        let allows_soft_wrap = options.white_space.allows_soft_wrap() && options.max_width.is_some();
+        let allows_soft_wrap =
+            options.white_space.allows_soft_wrap() && options.max_width.is_some();
 
         let mut line_boxes: Vec<LineBox> = Vec::new();
         let mut current_y = 0.0f32;
@@ -553,19 +856,43 @@ impl InlineFormattingContext {
                     break;
                 }
 
-                if allows_soft_wrap
-                    && !line_tokens.is_empty()
-                    && (line_width + tok.width > opp.available_width)
+                // Skip leading whitespace on newly wrapped line
+                if line_tokens.is_empty()
+                    && tok.is_whitespace_only
+                    && options.white_space.collapses_spaces()
                 {
-                    // Soft wrap opportunity reached for this line
-                    break;
+                    token_idx += 1;
+                    continue;
                 }
 
-                // If line is empty and single token exceeds available_width:
+                // Group contiguous tokens without a valid break point between them (e.g. "version.[30]")
+                let mut cluster_end = token_idx + 1;
+                while cluster_end < num_tokens
+                    && !tokens[cluster_end].is_hard_break
+                    && !can_break_between(&tokens[cluster_end - 1], &tokens[cluster_end])
+                {
+                    cluster_end += 1;
+                }
+                let cluster_width: f32 =
+                    tokens[token_idx..cluster_end].iter().map(|t| t.width).sum();
+
+                if allows_soft_wrap
+                    && !line_tokens.is_empty()
+                    && (line_width + cluster_width > opp.available_width + 0.5)
+                {
+                    if line_tokens
+                        .last()
+                        .map_or(true, |prev| can_break_between(prev, tok))
+                    {
+                        break;
+                    }
+                }
+
+                // If line is empty and unbreakable cluster exceeds available_width:
                 // Check if dropping past float gives more width
                 if line_tokens.is_empty()
                     && allows_soft_wrap
-                    && tok.width > opp.available_width
+                    && cluster_width > opp.available_width + 0.5
                     && opp.available_width < container_w
                 {
                     if let Some(es) = options.exclusion_space {
@@ -576,18 +903,11 @@ impl InlineFormattingContext {
                     }
                 }
 
-                // Skip leading whitespace on newly wrapped line
-                if line_tokens.is_empty()
-                    && tok.is_whitespace_only
-                    && options.white_space.collapses_spaces()
-                {
-                    token_idx += 1;
-                    continue;
+                for i in token_idx..cluster_end {
+                    line_width += tokens[i].width;
+                    line_tokens.push(tokens[i].clone());
                 }
-
-                line_width += tok.width;
-                line_tokens.push(tok.clone());
-                token_idx += 1;
+                token_idx = cluster_end;
             }
 
             // If we broke because of float drop-down on empty line, retry
@@ -602,9 +922,14 @@ impl InlineFormattingContext {
             }
 
             // Assemble LineBox for this line
-            let has_text_tokens = line_tokens.iter().any(|tok| tok.atomic.is_none() && !tok.is_whitespace_only);
+            let has_text_tokens = line_tokens
+                .iter()
+                .any(|tok| tok.atomic.is_none() && !tok.is_whitespace_only);
             let (mut line_max_ascent, mut line_max_descent) = if has_text_tokens {
-                (strut.metrics.ascent.to_f32(), strut.metrics.descent.to_f32())
+                (
+                    strut.metrics.ascent.to_f32(),
+                    strut.metrics.descent.to_f32(),
+                )
             } else {
                 (0.0f32, 0.0f32)
             };
@@ -613,14 +938,15 @@ impl InlineFormattingContext {
                 if let Some(ref at) = tok.atomic {
                     line_max_ascent = line_max_ascent.max(at.height);
                 } else {
-                    let tok_metrics = if tok.style.is_monospace {
-                        FontMetrics::default_mono(tok.style.font_size)
-                    } else {
-                        FontMetrics::default_sans(tok.style.font_size)
-                    };
-                    let lh = tok.style.line_height.unwrap_or_else(|| {
-                        tok_metrics.default_line_height().to_f32()
-                    });
+                    let tok_metrics = metrics_for_style(
+                        tok.style.font_family,
+                        tok.style.font_size,
+                        tok.style.is_monospace,
+                    );
+                    let lh = tok
+                        .style
+                        .line_height
+                        .unwrap_or_else(|| tok_metrics.default_line_height().to_f32());
                     let (la, lb) = compute_half_leading(
                         LayoutUnit::from_f32(lh),
                         tok_metrics.ascent,
@@ -636,9 +962,15 @@ impl InlineFormattingContext {
             let actual_line_height = line_max_ascent + line_max_descent;
             let base_vertical_shift = match options.vertical_align {
                 VerticalAlignment::Baseline => 0.0,
-                VerticalAlignment::Top => -((strut.line_height - strut_metrics.natural_height()).to_f32() / 2.0),
-                VerticalAlignment::Bottom => (strut.line_height - strut_metrics.natural_height()).to_f32() / 2.0,
-                VerticalAlignment::Middle => (strut_metrics.x_height.to_f32() / 2.0) - (options.font_size * 0.25),
+                VerticalAlignment::Top => {
+                    -((strut.line_height - strut_metrics.natural_height()).to_f32() / 2.0)
+                }
+                VerticalAlignment::Bottom => {
+                    (strut.line_height - strut_metrics.natural_height()).to_f32() / 2.0
+                }
+                VerticalAlignment::Middle => {
+                    (strut_metrics.x_height.to_f32() / 2.0) - (options.font_size * 0.25)
+                }
                 VerticalAlignment::Sub => options.font_size * 0.20,
                 VerticalAlignment::Super => -(options.font_size * 0.35),
                 VerticalAlignment::TextTop => 0.0,
@@ -685,11 +1017,38 @@ impl InlineFormattingContext {
                         idx += 1;
                     }
 
-                    let tok_metrics = if target_style.is_monospace {
-                        FontMetrics::default_mono(target_style.font_size)
+                    // Pango paints the merged fragment as one continuously shaped
+                    // string, whose advance is slightly wider than the sum of the
+                    // individually measured token widths. Measure the merged run so
+                    // the fragment width and the cursor advance match paint.
+                    let frag_width = if crate::text::get_family_styled_text_measurer().is_some() {
+                        let (measured_w, _) = crate::text::measure_text_bounds_styled_with_family(
+                            &merged_text,
+                            target_style.font_size,
+                            1.0,
+                            None,
+                            target_style.is_monospace,
+                            target_style.font_family,
+                            target_style.font_weight,
+                            target_style.font_style,
+                        );
+                        if measured_w > 0.0 {
+                            measured_w
+                        } else {
+                            merged_width
+                        }
                     } else {
-                        FontMetrics::default_sans(target_style.font_size)
+                        merged_width
                     };
+                    // Replace the accumulated token-sum advance with the continuous
+                    // width so the next fragment starts at the painted position.
+                    cur_x += frag_width - merged_width;
+
+                    let tok_metrics = metrics_for_style(
+                        target_style.font_family,
+                        target_style.font_size,
+                        target_style.is_monospace,
+                    );
 
                     let vertical_shift = match target_style.vertical_align {
                         VerticalAlignment::Baseline => 0.0,
@@ -711,9 +1070,10 @@ impl InlineFormattingContext {
                     let frag_h = (tok_metrics.ascent + tok_metrics.descent).to_f32();
 
                     text_fragments.push(TextFragment {
-                        bounds: Rect::from_xywh(start_x, frag_y, merged_width, frag_h),
+                        bounds: Rect::from_xywh(start_x, frag_y, frag_width, frag_h),
                         text: merged_text,
                         baseline_y: frag_baseline,
+                        font_family: target_style.font_family,
                         style: target_style,
                         item_index: target_item,
                     });

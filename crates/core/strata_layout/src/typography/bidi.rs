@@ -148,7 +148,11 @@ impl BidiEngine {
         let mut levels: Vec<u8> = vec![base_level; n];
 
         // 1. Weak type resolution (Simplified W1-W7)
-        let mut last_strong = if base_level == 1 { BidiClass::R } else { BidiClass::L };
+        let mut last_strong = if base_level == 1 {
+            BidiClass::R
+        } else {
+            BidiClass::L
+        };
         for i in 0..n {
             let c = resolved_classes[i];
             if c.is_strong() {
@@ -172,7 +176,11 @@ impl BidiEngine {
         // 2. Resolve neutral types (N1-N2)
         for i in 0..n {
             let cl = resolved_classes[i];
-            if cl == BidiClass::ON || cl == BidiClass::WS || cl == BidiClass::ES || cl == BidiClass::CS {
+            if cl == BidiClass::ON
+                || cl == BidiClass::WS
+                || cl == BidiClass::ES
+                || cl == BidiClass::CS
+            {
                 // If adjacent to strong, adopt strong; else adopt base
                 resolved_classes[i] = last_strong;
             }

@@ -64,6 +64,14 @@ impl SvgItem {
 
 use crate::typography::{InlineItem, LineBox};
 
+/// An encoded raster image carried on a layout node.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageResource {
+    pub data: std::sync::Arc<Vec<u8>>,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Compact layout result cache for O(1) subtree re-entry during multi-pass formatting.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct LayoutCacheEntry {
@@ -71,6 +79,8 @@ pub struct LayoutCacheEntry {
     pub available_h: f32,
     pub result_w: f32,
     pub result_h: f32,
+    pub origin_x: f32,
+    pub origin_y: f32,
     pub is_valid: bool,
 }
 
@@ -82,6 +92,8 @@ impl LayoutCacheEntry {
             available_h: 0.0,
             result_w: 0.0,
             result_h: 0.0,
+            origin_x: 0.0,
+            origin_y: 0.0,
             is_valid: false,
         }
     }
@@ -96,9 +108,18 @@ pub struct LayoutNode {
     pub text: Option<String>,
     pub svg_path: Option<String>,
     pub svg_items: Vec<SvgItem>,
+    pub image: Option<ImageResource>,
     pub inline_items: Vec<InlineItem>,
     pub line_boxes: Vec<LineBox>,
     pub layout_cache: LayoutCacheEntry,
+    /// Content-box size used the last time this node formatted its children.
+    ///
+    /// Multi-pass flex layout can stretch or shrink an item's border box after a
+    /// previous pass formatted its descendants. This records the content size
+    /// the descendants were actually laid out for, so the final placement pass
+    /// can detect stale child geometry and re-run `layout_children` even when
+    /// the border box itself did not change.
+    pub last_child_layout_content: Option<(f32, f32)>,
 }
 
 impl LayoutNode {
@@ -111,9 +132,11 @@ impl LayoutNode {
             text: None,
             svg_path: None,
             svg_items: Vec::new(),
+            image: None,
             inline_items: Vec::new(),
             line_boxes: Vec::new(),
             layout_cache: LayoutCacheEntry::invalid(),
+            last_child_layout_content: None,
         }
     }
 
@@ -126,9 +149,11 @@ impl LayoutNode {
             text: None,
             svg_path: None,
             svg_items: Vec::new(),
+            image: None,
             inline_items: Vec::new(),
             line_boxes: Vec::new(),
             layout_cache: LayoutCacheEntry::invalid(),
+            last_child_layout_content: None,
         }
     }
 
@@ -141,9 +166,11 @@ impl LayoutNode {
             text: Some(text),
             svg_path: None,
             svg_items: Vec::new(),
+            image: None,
             inline_items: Vec::new(),
             line_boxes: Vec::new(),
             layout_cache: LayoutCacheEntry::invalid(),
+            last_child_layout_content: None,
         }
     }
 
@@ -156,9 +183,11 @@ impl LayoutNode {
             text: None,
             svg_path: None,
             svg_items: Vec::new(),
+            image: None,
             inline_items,
             line_boxes: Vec::new(),
             layout_cache: LayoutCacheEntry::invalid(),
+            last_child_layout_content: None,
         }
     }
 
@@ -181,9 +210,11 @@ impl LayoutNode {
                 fill_rule: FillRule::NonZero,
                 view_box: (24.0, 24.0),
             }],
+            image: None,
             inline_items: Vec::new(),
             line_boxes: Vec::new(),
             layout_cache: LayoutCacheEntry::invalid(),
+            last_child_layout_content: None,
         }
     }
 
@@ -197,9 +228,28 @@ impl LayoutNode {
             text: None,
             svg_path: first_path,
             svg_items,
+            image: None,
             inline_items: Vec::new(),
             line_boxes: Vec::new(),
             layout_cache: LayoutCacheEntry::invalid(),
+            last_child_layout_content: None,
+        }
+    }
+
+    /// Constructs a replaced raster image leaf node with intrinsic dimensions.
+    pub fn with_image(style: ComputedStyle, image: ImageResource) -> Self {
+        Self {
+            style,
+            geometry: LayoutGeometry::default(),
+            children: Vec::new(),
+            text: None,
+            svg_path: None,
+            svg_items: Vec::new(),
+            image: Some(image),
+            inline_items: Vec::new(),
+            line_boxes: Vec::new(),
+            layout_cache: LayoutCacheEntry::invalid(),
+            last_child_layout_content: None,
         }
     }
 
@@ -211,6 +261,8 @@ impl LayoutNode {
     /// Translates this node's geometry and all descendants recursively by (dx, dy).
     pub fn translate(&mut self, dx: f32, dy: f32) {
         self.geometry.translate(dx, dy);
+        self.layout_cache.origin_x += dx;
+        self.layout_cache.origin_y += dy;
         for line in &mut self.line_boxes {
             line.bounds.x += dx;
             line.bounds.y += dy;
@@ -239,12 +291,39 @@ impl LayoutNode {
         let content_h = self.geometry.content_box.height;
         let preserved_geom = self.geometry.clone();
 
-        let container_avail_w = preserved_geom.border_box.width + self.style.margin.left + self.style.margin.right;
-        let container_avail_h = preserved_geom.border_box.height + self.style.margin.top + self.style.margin.bottom;
+        let container_avail_w =
+            preserved_geom.border_box.width + self.style.margin.left + self.style.margin.right;
+        let container_avail_h =
+            preserved_geom.border_box.height + self.style.margin.top + self.style.margin.bottom;
 
         match self.style.display {
             Display::Flex | Display::InlineFlex => {
-                solve_flexbox(self, container_avail_w, container_avail_h);
+                // An absolutely positioned flex container whose height is
+                // derived from `top`/`bottom` insets already has its final
+                // border box here. Treat that inner cross size as definite so
+                // the single flex line can distribute cross-axis free space.
+                let inset_stretched = matches!(
+                    self.style.position,
+                    strata_style::types::Position::Absolute | strata_style::types::Position::Fixed
+                ) && self.style.height
+                    == strata_style::types::Dimension::Auto
+                    && !matches!(self.style.insets.top, strata_style::types::Dimension::Auto)
+                    && !matches!(
+                        self.style.insets.bottom,
+                        strata_style::types::Dimension::Auto
+                    )
+                    && content_h > 0.0;
+                let definite_cross = if inset_stretched {
+                    Some(content_h)
+                } else {
+                    None
+                };
+                crate::flexbox::solve_flexbox_with_definite_cross(
+                    self,
+                    container_avail_w,
+                    container_avail_h,
+                    definite_cross,
+                );
             }
             Display::Grid | Display::InlineGrid => {
                 solve_grid(self, container_avail_w, container_avail_h);
@@ -271,7 +350,10 @@ impl LayoutNode {
 
         let clips_y = self.style.overflow_y != strata_style::types::Overflow::Visible;
         let final_h = if self.style.height == strata_style::types::Dimension::Auto && !clips_y {
-            self.geometry.border_box.height.max(preserved_geom.border_box.height)
+            self.geometry
+                .border_box
+                .height
+                .max(preserved_geom.border_box.height)
         } else if preserved_geom.border_box.height > 0.0 {
             preserved_geom.border_box.height
         } else {
@@ -280,7 +362,10 @@ impl LayoutNode {
 
         let clips_x = self.style.overflow_x != strata_style::types::Overflow::Visible;
         let final_w = if self.style.width == strata_style::types::Dimension::Auto && !clips_x {
-            self.geometry.border_box.width.max(preserved_geom.border_box.width)
+            self.geometry
+                .border_box
+                .width
+                .max(preserved_geom.border_box.width)
         } else if preserved_geom.border_box.width > 0.0 {
             preserved_geom.border_box.width
         } else {
@@ -303,12 +388,16 @@ impl LayoutNode {
             solve_positioning(self, content_w, content_h);
         }
         self.geometry.snap_to_pixel();
+        self.last_child_layout_content = Some((content_w, content_h));
         self.layout_cache.is_valid = false;
     }
 
     /// Computes layout geometry for this node and all descendants given available bounds.
     pub fn compute_layout(&mut self, available_width: f32, available_height: f32) {
+        let session_root = crate::intrinsic::begin_layout_session();
+        let _guard = crate::prof::LayoutGuard::new();
         self.compute_layout_with_exclusions(available_width, available_height, None, 0.0);
+        crate::intrinsic::end_layout_session(session_root);
     }
 
     /// Computes layout geometry passing an active exclusion space for float obstructions.
@@ -316,27 +405,61 @@ impl LayoutNode {
         &mut self,
         available_width: f32,
         available_height: f32,
-        exclusions: Option<&crate::exclusions::ExclusionSpace>,
+        exclusions: Option<&mut crate::exclusions::ExclusionSpace>,
         bfc_offset_y: f32,
     ) {
+        let _guard = crate::prof::LayoutGuard::new();
+        crate::prof::observe_width(self.children.len());
         if self.style.display == Display::None {
             self.geometry = LayoutGeometry::default();
             self.layout_cache.is_valid = false;
             return;
         }
 
+        let is_unconstrained_root = exclusions.is_none();
+
         // Subtree layout cache hit: skip re-traversal if available dimensions are unchanged
         let height_independent = self.style.height == strata_style::types::Dimension::Auto
-            && !matches!(self.style.min_height, strata_style::types::Dimension::Percent(_))
-            && !matches!(self.style.max_height, strata_style::types::Dimension::Percent(_));
+            && !matches!(
+                self.style.min_height,
+                strata_style::types::Dimension::Percent(_)
+            )
+            && !matches!(
+                self.style.max_height,
+                strata_style::types::Dimension::Percent(_)
+            );
         let height_matches = (available_height - self.layout_cache.available_h).abs() < 0.01
-            || (height_independent && (self.style.content_visibility == strata_style::types::ContentVisibility::Auto || self.layout_cache.is_valid));
+            || (height_independent
+                && (self.style.content_visibility == strata_style::types::ContentVisibility::Auto
+                    || self.layout_cache.is_valid));
 
-        if exclusions.is_none()
+        if is_unconstrained_root
             && self.layout_cache.is_valid
             && (available_width - self.layout_cache.available_w).abs() < 0.01
             && height_matches
         {
+            let dx = self.geometry.border_box.x - self.layout_cache.origin_x;
+            let dy = self.geometry.border_box.y - self.layout_cache.origin_y;
+            if dx.abs() > 0.001 || dy.abs() > 0.001 {
+                for line in &mut self.line_boxes {
+                    line.bounds.x += dx;
+                    line.bounds.y += dy;
+                    for frag in &mut line.text_fragments {
+                        frag.bounds.x += dx;
+                        frag.bounds.y += dy;
+                        frag.baseline_y += dy;
+                    }
+                    for at in &mut line.atomic_fragments {
+                        at.bounds.x += dx;
+                        at.bounds.y += dy;
+                    }
+                }
+                for child in &mut self.children {
+                    child.translate(dx, dy);
+                }
+                self.layout_cache.origin_x = self.geometry.border_box.x;
+                self.layout_cache.origin_y = self.geometry.border_box.y;
+            }
             return;
         }
 
@@ -363,7 +486,13 @@ impl LayoutNode {
             | Display::TableCaption
             | Display::TableColumnGroup
             | Display::TableColumn => {
-                crate::box_model::solve_block_with_exclusions(self, available_width, available_height, exclusions, bfc_offset_y);
+                crate::box_model::solve_block_with_exclusions(
+                    self,
+                    available_width,
+                    available_height,
+                    exclusions,
+                    bfc_offset_y,
+                );
             }
             Display::None => unreachable!(),
         }
@@ -374,13 +503,22 @@ impl LayoutNode {
         // Subpixel snapping
         self.geometry.snap_to_pixel();
 
+        if !self.children.is_empty() || !self.inline_items.is_empty() || self.text.is_some() {
+            self.last_child_layout_content = Some((
+                self.geometry.content_box.width,
+                self.geometry.content_box.height,
+            ));
+        }
+
         // Record layout result in cache for subsequent multi-pass probes
-        if exclusions.is_none() {
+        if is_unconstrained_root {
             self.layout_cache = LayoutCacheEntry {
                 available_w: available_width,
                 available_h: available_height,
                 result_w: self.geometry.border_box.width,
                 result_h: self.geometry.border_box.height,
+                origin_x: self.geometry.border_box.x,
+                origin_y: self.geometry.border_box.y,
                 is_valid: true,
             };
         }

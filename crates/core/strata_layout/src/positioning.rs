@@ -7,7 +7,9 @@
 use crate::box_model::{clamp_dimension, resolve_dimension};
 use crate::geometry::{LayoutGeometry, Rect};
 use crate::tree::LayoutNode;
-use strata_style::types::{Dimension, Position};
+use strata_style::types::{
+    AlignItems, AlignSelf, Dimension, Display, FlexDirection, JustifyContent, Position,
+};
 
 /// Active containing block context propagated down the layout hierarchy.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,7 +43,12 @@ impl ContainingBlock {
     }
 
     /// Creates a containing block with an explicit scroll offset.
-    pub const fn with_scroll(padding_box: Rect, viewport: Rect, scroll_x: f32, scroll_y: f32) -> Self {
+    pub const fn with_scroll(
+        padding_box: Rect,
+        viewport: Rect,
+        scroll_x: f32,
+        scroll_y: f32,
+    ) -> Self {
         Self {
             padding_box,
             viewport,
@@ -53,7 +60,9 @@ impl ContainingBlock {
 /// Resolves out-of-flow and relative positioning offsets for a container's children
 /// and recursively propagates containing blocks down through all descendants.
 pub fn solve_positioning(container: &mut LayoutNode, viewport_width: f32, viewport_height: f32) {
-    let padding_box = if container.geometry.padding_box.width > 0.0 || container.geometry.padding_box.height > 0.0 {
+    let padding_box = if container.geometry.padding_box.width > 0.0
+        || container.geometry.padding_box.height > 0.0
+    {
         container.geometry.padding_box
     } else {
         Rect::new(0.0, 0.0, viewport_width, viewport_height)
@@ -65,6 +74,115 @@ pub fn solve_positioning(container: &mut LayoutNode, viewport_width: f32, viewpo
     );
 
     solve_positioning_children(container, initial_cb);
+
+    // W3C CSS Flexbox Level 1 §4.1: the static position of an absolutely
+    // positioned child of a flex container is resolved as if the child were
+    // the sole flex item, honoring `justify-content` on the main axis and
+    // `align-self`/`align-items` on the cross axis. Only axes whose insets
+    // are `auto` use the static position.
+    if matches!(container.style.display, Display::Flex | Display::InlineFlex) {
+        apply_flex_static_positions(container);
+    }
+}
+
+/// Repositions absolutely positioned flex children that rely on the static
+/// position on one or both axes.
+fn apply_flex_static_positions(container: &mut LayoutNode) {
+    let content = container.geometry.content_box;
+    if content.width <= 0.0 && content.height <= 0.0 {
+        return;
+    }
+    let is_row = matches!(
+        container.style.flex_direction,
+        FlexDirection::Row | FlexDirection::RowReverse
+    );
+
+    for child in &mut container.children {
+        if child.style.position != Position::Absolute {
+            continue;
+        }
+        let left_auto = matches!(child.style.insets.left, Dimension::Auto);
+        let right_auto = matches!(child.style.insets.right, Dimension::Auto);
+        let top_auto = matches!(child.style.insets.top, Dimension::Auto);
+        let bottom_auto = matches!(child.style.insets.bottom, Dimension::Auto);
+        if !(left_auto || right_auto || top_auto || bottom_auto) {
+            continue;
+        }
+
+        let item_w =
+            child.geometry.border_box.width + child.style.margin.left + child.style.margin.right;
+        let item_h =
+            child.geometry.border_box.height + child.style.margin.top + child.style.margin.bottom;
+
+        let main_offset = if is_row {
+            justify_offset(container.style.justify_content, content.width, item_w)
+        } else {
+            justify_offset(container.style.justify_content, content.height, item_h)
+        };
+
+        let effective_align = match child.style.align_self {
+            AlignSelf::Auto => container.style.align_items,
+            AlignSelf::Stretch => AlignItems::Stretch,
+            AlignSelf::FlexStart => AlignItems::FlexStart,
+            AlignSelf::FlexEnd => AlignItems::FlexEnd,
+            AlignSelf::Center => AlignItems::Center,
+            AlignSelf::Baseline => AlignItems::Baseline,
+        };
+        let cross_offset = if is_row {
+            align_offset(effective_align, content.height, item_h)
+        } else {
+            align_offset(effective_align, content.width, item_w)
+        };
+
+        let static_x = if is_row {
+            content.x + main_offset + child.style.margin.left
+        } else {
+            content.x + cross_offset + child.style.margin.left
+        };
+        let static_y = if is_row {
+            content.y + cross_offset + child.style.margin.top
+        } else {
+            content.y + main_offset + child.style.margin.top
+        };
+
+        // A specified inset wins; only `auto` insets fall back to the
+        // flex-derived static position.
+        let dx = if left_auto {
+            static_x - child.geometry.border_box.x
+        } else {
+            0.0
+        };
+        let dy = if top_auto {
+            static_y - child.geometry.border_box.y
+        } else {
+            0.0
+        };
+        if dx != 0.0 || dy != 0.0 {
+            child.translate(dx, dy);
+        }
+    }
+}
+
+/// Resolves a `justify-content` offset for a single flex item.
+fn justify_offset(justify: JustifyContent, available: f32, item: f32) -> f32 {
+    let free = (available - item).max(0.0);
+    match justify {
+        JustifyContent::FlexStart => 0.0,
+        JustifyContent::FlexEnd => free,
+        JustifyContent::Center => free / 2.0,
+        JustifyContent::SpaceBetween => 0.0,
+        JustifyContent::SpaceAround | JustifyContent::SpaceEvenly => free / 2.0,
+    }
+}
+
+/// Resolves a cross-axis `align-items` offset for a single flex item.
+fn align_offset(align: AlignItems, available: f32, item: f32) -> f32 {
+    let free = (available - item).max(0.0);
+    match align {
+        AlignItems::FlexStart | AlignItems::Stretch | AlignItems::Baseline => 0.0,
+        AlignItems::FlexEnd => free,
+        AlignItems::Center => free / 2.0,
+    }
 }
 
 /// Recursively traverses child nodes, resolving positioning and propagating the containing block.
@@ -83,15 +201,23 @@ pub fn solve_positioning_children(container: &mut LayoutNode, cb: ContainingBloc
                 let mut dx = 0.0;
                 let mut dy = 0.0;
 
-                if let Some(top_px) = resolve_dimension(child.style.insets.top, cb.padding_box.height) {
+                if let Some(top_px) =
+                    resolve_dimension(child.style.insets.top, cb.padding_box.height)
+                {
                     dy += top_px;
-                } else if let Some(bot_px) = resolve_dimension(child.style.insets.bottom, cb.padding_box.height) {
+                } else if let Some(bot_px) =
+                    resolve_dimension(child.style.insets.bottom, cb.padding_box.height)
+                {
                     dy -= bot_px;
                 }
 
-                if let Some(left_px) = resolve_dimension(child.style.insets.left, cb.padding_box.width) {
+                if let Some(left_px) =
+                    resolve_dimension(child.style.insets.left, cb.padding_box.width)
+                {
                     dx += left_px;
-                } else if let Some(right_px) = resolve_dimension(child.style.insets.right, cb.padding_box.width) {
+                } else if let Some(right_px) =
+                    resolve_dimension(child.style.insets.right, cb.padding_box.width)
+                {
                     dx -= right_px;
                 }
 
@@ -173,31 +299,59 @@ pub fn solve_out_of_flow_box(
     // 1. Horizontal Sizing & Inset Resolution (W3C CSS 2.1 §10.3.7)
     let item_w = match (left, right, child.style.width) {
         (Some(l), Some(r), Dimension::Auto) => {
-            let available = (cb_rect.width - l - r - child.style.margin.left - child.style.margin.right).max(0.0);
-            clamp_dimension(available, child.style.min_width, child.style.max_width, cb_rect.width)
+            let available =
+                (cb_rect.width - l - r - child.style.margin.left - child.style.margin.right)
+                    .max(0.0);
+            clamp_dimension(
+                available,
+                child.style.min_width,
+                child.style.max_width,
+                cb_rect.width,
+            )
         }
         _ => {
             let w = resolve_dimension(child.style.width, cb_rect.width)
                 .unwrap_or(child.geometry.border_box.width);
-            clamp_dimension(w, child.style.min_width, child.style.max_width, cb_rect.width)
+            clamp_dimension(
+                w,
+                child.style.min_width,
+                child.style.max_width,
+                cb_rect.width,
+            )
         }
     };
 
     // 2. Vertical Sizing & Inset Resolution (W3C CSS 2.1 §10.6.4)
     let item_h = match (top, bottom, child.style.height) {
         (Some(t), Some(b), Dimension::Auto) => {
-            let available = (cb_rect.height - t - b - child.style.margin.top - child.style.margin.bottom).max(0.0);
-            clamp_dimension(available, child.style.min_height, child.style.max_height, cb_rect.height)
+            let available =
+                (cb_rect.height - t - b - child.style.margin.top - child.style.margin.bottom)
+                    .max(0.0);
+            clamp_dimension(
+                available,
+                child.style.min_height,
+                child.style.max_height,
+                cb_rect.height,
+            )
         }
         _ => {
             let h = resolve_dimension(child.style.height, cb_rect.height)
                 .unwrap_or(child.geometry.border_box.height);
-            clamp_dimension(h, child.style.min_height, child.style.max_height, cb_rect.height)
+            clamp_dimension(
+                h,
+                child.style.min_height,
+                child.style.max_height,
+                cb_rect.height,
+            )
         }
     };
 
     // 3. Horizontal Position & Auto-Margin Centering (mx-auto / m-auto)
-    let item_x = if left.is_some() && right.is_some() && child.style.margin_auto_left && child.style.margin_auto_right {
+    let item_x = if left.is_some()
+        && right.is_some()
+        && child.style.margin_auto_left
+        && child.style.margin_auto_right
+    {
         let l = left.unwrap();
         let r = right.unwrap();
         let free_space = (cb_rect.width - l - r) - item_w;
@@ -216,7 +370,11 @@ pub fn solve_out_of_flow_box(
     };
 
     // 4. Vertical Position & Auto-Margin Centering (my-auto / m-auto)
-    let item_y = if top.is_some() && bottom.is_some() && child.style.margin_auto_top && child.style.margin_auto_bottom {
+    let item_y = if top.is_some()
+        && bottom.is_some()
+        && child.style.margin_auto_top
+        && child.style.margin_auto_bottom
+    {
         let t = top.unwrap();
         let b = bottom.unwrap();
         let free_space = (cb_rect.height - t - b) - item_h;
@@ -258,11 +416,14 @@ fn solve_sticky_box(child: &mut LayoutNode, cb: ContainingBlock) {
     if let Some(top_px) = resolve_dimension(child.style.insets.top, cb.viewport.height) {
         let target_y = cb.scroll_offset.1 + top_px;
         let sticky_y = normal_y.max(target_y);
-        let max_sticky_y = cb.padding_box.y + cb.padding_box.height - child.geometry.border_box.height - child.style.margin.bottom;
+        let max_sticky_y = cb.padding_box.y + cb.padding_box.height
+            - child.geometry.border_box.height
+            - child.style.margin.bottom;
         let clamped_y = sticky_y.min(max_sticky_y.max(normal_y));
         dy = clamped_y - normal_y;
     } else if let Some(bot_px) = resolve_dimension(child.style.insets.bottom, cb.viewport.height) {
-        let target_y = cb.scroll_offset.1 + cb.viewport.height - bot_px - child.geometry.border_box.height;
+        let target_y =
+            cb.scroll_offset.1 + cb.viewport.height - bot_px - child.geometry.border_box.height;
         let sticky_y = normal_y.min(target_y);
         let min_sticky_y = cb.padding_box.y + child.style.margin.top;
         let clamped_y = sticky_y.max(min_sticky_y.min(normal_y));
@@ -273,11 +434,14 @@ fn solve_sticky_box(child: &mut LayoutNode, cb: ContainingBlock) {
     if let Some(left_px) = resolve_dimension(child.style.insets.left, cb.viewport.width) {
         let target_x = cb.scroll_offset.0 + left_px;
         let sticky_x = normal_x.max(target_x);
-        let max_sticky_x = cb.padding_box.x + cb.padding_box.width - child.geometry.border_box.width - child.style.margin.right;
+        let max_sticky_x = cb.padding_box.x + cb.padding_box.width
+            - child.geometry.border_box.width
+            - child.style.margin.right;
         let clamped_x = sticky_x.min(max_sticky_x.max(normal_x));
         dx = clamped_x - normal_x;
     } else if let Some(right_px) = resolve_dimension(child.style.insets.right, cb.viewport.width) {
-        let target_x = cb.scroll_offset.0 + cb.viewport.width - right_px - child.geometry.border_box.width;
+        let target_x =
+            cb.scroll_offset.0 + cb.viewport.width - right_px - child.geometry.border_box.width;
         let sticky_x = normal_x.min(target_x);
         let min_sticky_x = cb.padding_box.x + child.style.margin.left;
         let clamped_x = sticky_x.max(min_sticky_x.min(normal_x));

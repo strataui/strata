@@ -3,10 +3,9 @@
 //! Evaluates `min-content`, `max-content`, and `fit-content` across text leaves,
 //! block containers, flexbox items, and grid tracks before geometric layout resolution.
 
-use strata_style::types::{Display, FlexDirection};
 use crate::box_model::resolve_dimension;
 use crate::tree::LayoutNode;
-use crate::typography::{FontMetrics, InlineFormattingContext, InlineLayoutOptions, WhiteSpaceMode};
+use strata_style::types::{Display, FlexDirection};
 
 /// Intrinsic dimension bounds (min-content and max-content inline sizes).
 /// Mirrors Chromium's `MinMaxSizes` in `third_party/blink/renderer/core/layout/min_max_sizes.h`.
@@ -20,15 +19,24 @@ pub struct MinMaxSizes {
 
 impl MinMaxSizes {
     pub const fn new(min_content: f32, max_content: f32) -> Self {
-        Self { min_content, max_content }
+        Self {
+            min_content,
+            max_content,
+        }
     }
 
     pub const fn zero() -> Self {
-        Self { min_content: 0.0, max_content: 0.0 }
+        Self {
+            min_content: 0.0,
+            max_content: 0.0,
+        }
     }
 
     pub const fn exact(val: f32) -> Self {
-        Self { min_content: val, max_content: val }
+        Self {
+            min_content: val,
+            max_content: val,
+        }
     }
 
     /// Evaluates the standard CSS shrink-to-fit sizing formula:
@@ -76,14 +84,108 @@ impl MinMaxSizes {
 }
 
 /// Recursively computes intrinsic min-content and max-content sizes for a layout node.
+///
+/// Results are memoized for the duration of one root layout session. Layout
+/// nodes never change their style, text, or child identity while a layout pass
+/// is running, so a `(node, available parent size)` pair is a stable key and the
+/// cache is cleared when the outermost layout call finishes.
 pub fn compute_min_max_sizes(node: &LayoutNode, parent_size: Option<f32>) -> MinMaxSizes {
+    let _prof = crate::prof::Scope::new(crate::prof::Slot::Intrinsic);
+    if let Some(hit) = memo_lookup(node, parent_size) {
+        return hit;
+    }
+    let result = compute_min_max_sizes_uncached(node, parent_size);
+    memo_store(node, parent_size, result);
+    result
+}
+
+fn memo_key(node: &LayoutNode, parent_size: Option<f32>) -> (usize, u32) {
+    (
+        node as *const LayoutNode as usize,
+        parent_size.map(f32::to_bits).unwrap_or(u32::MAX),
+    )
+}
+
+fn memo_lookup(node: &LayoutNode, parent_size: Option<f32>) -> Option<MinMaxSizes> {
+    if !in_session() {
+        return None;
+    }
+    let key = memo_key(node, parent_size);
+    MIN_MAX_MEMO.with(|memo| {
+        memo.borrow()
+            .as_ref()
+            .and_then(|map| map.get(&key).copied())
+    })
+}
+
+fn memo_store(node: &LayoutNode, parent_size: Option<f32>, sizes: MinMaxSizes) {
+    if !in_session() {
+        return;
+    }
+    let key = memo_key(node, parent_size);
+    MIN_MAX_MEMO.with(|memo| {
+        if let Some(map) = memo.borrow_mut().as_mut() {
+            map.insert(key, sizes);
+        }
+    });
+}
+
+thread_local! {
+    static MIN_MAX_MEMO: std::cell::RefCell<Option<std::collections::HashMap<(usize, u32), MinMaxSizes>>> =
+        const { std::cell::RefCell::new(None) };
+    static SESSION_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn in_session() -> bool {
+    SESSION_DEPTH.with(|depth| depth.get() > 0)
+}
+
+/// Opens a layout session, returning true when this call is the outermost one.
+pub fn begin_layout_session() -> bool {
+    let is_root = SESSION_DEPTH.with(|depth| {
+        let current = depth.get();
+        depth.set(current + 1);
+        current == 0
+    });
+    if is_root {
+        MIN_MAX_MEMO.with(|memo| {
+            let mut slot = memo.borrow_mut();
+            if let Some(map) = slot.as_mut() {
+                map.clear();
+            } else {
+                *slot = Some(std::collections::HashMap::new());
+            }
+        });
+    }
+    is_root
+}
+
+/// Closes the layout session and drops memoized intrinsic sizes at the root.
+pub fn end_layout_session(is_root: bool) {
+    if is_root {
+        MIN_MAX_MEMO.with(|memo| {
+            if let Some(map) = memo.borrow_mut().as_mut() {
+                map.clear();
+            }
+        });
+    }
+    SESSION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+}
+
+fn compute_min_max_sizes_uncached(node: &LayoutNode, parent_size: Option<f32>) -> MinMaxSizes {
     let avail = parent_size.unwrap_or(0.0);
 
-    // 1. Definite width: If width is explicitly set (px, calc, percent with parent), return exact
-    if let Some(exact_w) = resolve_dimension(node.style.width, avail) {
-        let min_w = resolve_dimension(node.style.min_width, avail);
-        let max_w = resolve_dimension(node.style.max_width, avail);
-        return MinMaxSizes::exact(exact_w).clamp(min_w, max_w);
+    // 1. Definite non-percentage width on element containers:
+    // Only element containers without direct text content obey explicit CSS width in intrinsic sizing.
+    // Per W3C CSS Sizing Level 3 §5.1, percentage widths are treated as auto for intrinsic sizing.
+    if node.text.is_none()
+        && !matches!(node.style.width, strata_style::types::Dimension::Percent(_))
+    {
+        if let Some(exact_w) = resolve_dimension(node.style.width, avail) {
+            let min_w = resolve_dimension(node.style.min_width, avail);
+            let max_w = resolve_dimension(node.style.max_width, avail);
+            return MinMaxSizes::exact(exact_w).clamp(min_w, max_w);
+        }
     }
 
     let inline_insets = node.style.padding.left
@@ -93,43 +195,50 @@ pub fn compute_min_max_sizes(node: &LayoutNode, parent_size: Option<f32>) -> Min
 
     let mut result = MinMaxSizes::zero();
 
-    // 2. Leaf text node or container with direct text
+    // 2. Leaf text node or container with direct text / inline_items
     if let Some(ref text) = node.text {
         if !text.is_empty() {
-            let ifc = InlineFormattingContext::new();
-
-            // Max content: unbroken single line with unlimited width
-            let max_opt = InlineLayoutOptions {
-                font_size: node.style.font_size,
-                line_height: Some(node.style.line_height * node.style.font_size),
-                max_width: None,
-                white_space: WhiteSpaceMode::NoWrap,
-                ..Default::default()
-            };
-            let max_res = ifc.layout_text(text, &max_opt);
-            result.max_content = max_res.total_width;
-
-            // Min content: break on every opportunity (narrowest word)
-            let mut max_word_w = 0.0f32;
-            let metrics = FontMetrics::default_sans(node.style.font_size);
-            let shaper = crate::typography::TextShaper::new();
-
-            for word in text.split_whitespace() {
-                let glyphs = shaper.shape(word, &metrics, false);
-                let word_w: f32 = glyphs.iter().map(|g| g.x_advance.to_f32()).sum();
-                if word_w > max_word_w {
-                    max_word_w = word_w;
+            let inline_style = crate::box_model::inline_style_from_computed_style(&node.style);
+            result.max_content = measure_inline_text_width(text, &inline_style);
+            result.min_content = widest_word_width(text, &inline_style);
+        }
+    } else if node.children.is_empty() && !node.inline_items.is_empty() {
+        let mut max_line = 0.0f32;
+        let mut current_line = 0.0f32;
+        let mut widest_unit = 0.0f32;
+        for item in &node.inline_items {
+            match item {
+                crate::typography::InlineItem::Text { text, style } => {
+                    current_line += measure_inline_text_width(text, style);
+                    widest_unit = widest_unit.max(widest_word_width(text, style));
+                }
+                crate::typography::InlineItem::Atomic {
+                    width,
+                    margin_left,
+                    margin_right,
+                    ..
+                } => {
+                    let unit = width + margin_left + margin_right;
+                    current_line += unit;
+                    widest_unit = widest_unit.max(unit);
+                }
+                crate::typography::InlineItem::HardBreak => {
+                    max_line = max_line.max(current_line);
+                    current_line = 0.0;
                 }
             }
-            result.min_content = max_word_w;
         }
+        result.max_content = max_line.max(current_line);
+        result.min_content = widest_unit;
     }
 
     // 3. Children contribution
     if !node.children.is_empty() {
         match node.style.display {
             Display::Flex | Display::InlineFlex => {
-                if node.style.flex_direction == FlexDirection::Row || node.style.flex_direction == FlexDirection::RowReverse {
+                if node.style.flex_direction == FlexDirection::Row
+                    || node.style.flex_direction == FlexDirection::RowReverse
+                {
                     // Flex Row: items add up along inline axis
                     let mut sum_min = 0.0f32;
                     let mut sum_max = 0.0f32;
@@ -153,19 +262,41 @@ pub fn compute_min_max_sizes(node: &LayoutNode, parent_size: Option<f32>) -> Min
                     for child in &node.children {
                         let child_sizes = compute_min_max_sizes(child, parent_size);
                         let child_margin = child.style.margin.left + child.style.margin.right;
-                        result.min_content = result.min_content.max(child_sizes.min_content + child_margin);
-                        result.max_content = result.max_content.max(child_sizes.max_content + child_margin);
+                        result.min_content = result
+                            .min_content
+                            .max(child_sizes.min_content + child_margin);
+                        result.max_content = result
+                            .max_content
+                            .max(child_sizes.max_content + child_margin);
                     }
                 }
             }
             _ => {
-                // Standard Block Layout: inline size is maximum of in-flow children
+                // Standard Block & Inline Formatting Context Layout:
+                // Contiguous inline phrasing children accumulate horizontally along the same line,
+                // while block children stack vertically.
+                let mut inline_run_max = 0.0f32;
                 for child in &node.children {
+                    if child.style.display == Display::None {
+                        continue;
+                    }
                     let child_sizes = compute_min_max_sizes(child, parent_size);
                     let child_margin = child.style.margin.left + child.style.margin.right;
-                    result.min_content = result.min_content.max(child_sizes.min_content + child_margin);
-                    result.max_content = result.max_content.max(child_sizes.max_content + child_margin);
+                    result.min_content = result
+                        .min_content
+                        .max(child_sizes.min_content + child_margin);
+
+                    if crate::box_model::is_inline_phrasing_node(child) {
+                        inline_run_max += child_sizes.max_content + child_margin;
+                    } else {
+                        result.max_content = result.max_content.max(inline_run_max);
+                        inline_run_max = 0.0;
+                        result.max_content = result
+                            .max_content
+                            .max(child_sizes.max_content + child_margin);
+                    }
                 }
+                result.max_content = result.max_content.max(inline_run_max);
             }
         }
     }
@@ -177,4 +308,35 @@ pub fn compute_min_max_sizes(node: &LayoutNode, parent_size: Option<f32>) -> Min
     let min_w = resolve_dimension(node.style.min_width.clone(), avail);
     let max_w = resolve_dimension(node.style.max_width.clone(), avail);
     result.clamp(min_w, max_w)
+}
+
+/// Resolves the line-height multiplier for an inline text style.
+fn inline_line_height_multiplier(style: &crate::typography::InlineTextStyle) -> f32 {
+    match style.line_height {
+        Some(line_height) if style.font_size > 0.0 => (line_height / style.font_size).max(0.01),
+        _ => 1.2,
+    }
+}
+
+/// Measures the unbroken inline width of a text run using platform font metrics.
+fn measure_inline_text_width(text: &str, style: &crate::typography::InlineTextStyle) -> f32 {
+    let (width, _) = crate::text::measure_text_bounds_styled_with_family(
+        text,
+        style.font_size,
+        inline_line_height_multiplier(style),
+        None,
+        style.is_monospace,
+        style.font_family,
+        style.font_weight,
+        style.font_style,
+    );
+    let tracking = style.letter_spacing * text.chars().count().saturating_sub(1) as f32;
+    width + tracking
+}
+
+/// Returns the widest unbreakable word in a text run.
+fn widest_word_width(text: &str, style: &crate::typography::InlineTextStyle) -> f32 {
+    text.split_whitespace()
+        .map(|word| measure_inline_text_width(word, style))
+        .fold(0.0f32, f32::max)
 }

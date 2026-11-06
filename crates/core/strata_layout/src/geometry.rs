@@ -16,27 +16,50 @@ pub struct Rect {
 impl Rect {
     #[inline(always)]
     pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     #[inline(always)]
     pub const fn from_xywh(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     #[inline(always)]
     pub const fn zero() -> Self {
-        Self { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }
+        Self {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }
     }
 
     #[inline(always)]
-    pub fn min_x(self) -> f32 { self.x }
+    pub fn min_x(self) -> f32 {
+        self.x
+    }
     #[inline(always)]
-    pub fn max_x(self) -> f32 { self.x + self.width }
+    pub fn max_x(self) -> f32 {
+        self.x + self.width
+    }
     #[inline(always)]
-    pub fn min_y(self) -> f32 { self.y }
+    pub fn min_y(self) -> f32 {
+        self.y
+    }
     #[inline(always)]
-    pub fn max_y(self) -> f32 { self.y + self.height }
+    pub fn max_y(self) -> f32 {
+        self.y + self.height
+    }
 
     /// Computes intersection with another rectangle if overlapping.
     #[inline]
@@ -125,7 +148,8 @@ impl LayoutGeometry {
             border_box.x + border.left + padding.left,
             border_box.y + border.top + padding.top,
             (border_box.width - border.left - border.right - padding.left - padding.right).max(0.0),
-            (border_box.height - border.top - border.bottom - padding.top - padding.bottom).max(0.0),
+            (border_box.height - border.top - border.bottom - padding.top - padding.bottom)
+                .max(0.0),
         );
 
         let padding_box = Rect::new(
@@ -164,6 +188,7 @@ impl LayoutGeometry {
 
     /// Snaps all concentric rectangles to Chromium subpixel coordinates.
     pub fn snap_to_pixel(&mut self) {
+        let _prof = crate::prof::Scope::new(crate::prof::Slot::Geometry);
         self.content_box = self.content_box.snap_to_pixel();
         self.padding_box = self.padding_box.snap_to_pixel();
         self.border_box = self.border_box.snap_to_pixel();

@@ -3,12 +3,12 @@
 //! Validates Chromium/Blink specification parity across Box Model, Flexbox L1, Grid L2,
 //! Positioning, Box-Sizing, Margin Collapsing, and 1/64th Subpixel Snapping.
 
-use crate::prelude::*;
 use crate::box_model::collapse_margins;
+use crate::prelude::*;
 use strata_primitives::geom::EdgeInsets;
 use strata_style::types::{
-    AlignItems, BoxSizing, ComputedStyle, Dimension, Display, FlexDirection, FlexWrap,
-    GridTrack, Position,
+    AlignItems, BoxSizing, ComputedStyle, Dimension, Display, FlexDirection, FlexWrap, GridTrack,
+    Position,
 };
 
 /// A single W3C Web Platform Test verification vector.
@@ -239,10 +239,8 @@ impl WptSuite {
         item_style.width = Dimension::Px(100.0);
         item_style.height = Dimension::Auto;
 
-        let mut container = LayoutNode::with_children(
-            container_style,
-            vec![LayoutNode::new(item_style)],
-        );
+        let mut container =
+            LayoutNode::with_children(container_style, vec![LayoutNode::new(item_style)]);
 
         container.compute_layout(400.0, 200.0);
 
@@ -385,10 +383,8 @@ impl WptSuite {
         abs_style.width = Dimension::Px(100.0);
         abs_style.height = Dimension::Px(80.0);
 
-        let mut container = LayoutNode::with_children(
-            container_style,
-            vec![LayoutNode::new(abs_style)],
-        );
+        let mut container =
+            LayoutNode::with_children(container_style, vec![LayoutNode::new(abs_style)]);
 
         container.compute_layout(400.0, 300.0);
 

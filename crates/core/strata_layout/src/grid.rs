@@ -7,23 +7,42 @@ use strata_style::types::{GridTrack, Position};
 
 /// Solves W3C CSS Grid Layout Level 2 for a container and its items.
 pub fn solve_grid(container: &mut LayoutNode, available_width: f32, available_height: f32) {
+    let _prof = crate::prof::Scope::new(crate::prof::Slot::Grid);
     let padding = container.style.padding;
     let border = container.style.border_width;
     let margin = container.style.margin;
 
     // 1. Resolve container dimensions
     let resolved_width = match resolve_dimension(container.style.width, available_width) {
-        Some(w) => clamp_dimension(w, container.style.min_width, container.style.max_width, available_width),
+        Some(w) => clamp_dimension(
+            w,
+            container.style.min_width,
+            container.style.max_width,
+            available_width,
+        ),
         None => {
             let auto_w = (available_width - margin.left - margin.right).max(0.0);
-            clamp_dimension(auto_w, container.style.min_width, container.style.max_width, available_width)
+            clamp_dimension(
+                auto_w,
+                container.style.min_width,
+                container.style.max_width,
+                available_width,
+            )
         }
     };
 
-    let inner_width = (resolved_width - padding.left - padding.right - border.left - border.right).max(0.0);
-    let resolved_height = resolve_dimension(container.style.height, available_height)
-        .map(|h| clamp_dimension(h, container.style.min_height, container.style.max_height, available_height));
-    let inner_height = resolved_height.map(|h| (h - padding.top - padding.bottom - border.top - border.bottom).max(0.0));
+    let inner_width =
+        (resolved_width - padding.left - padding.right - border.left - border.right).max(0.0);
+    let resolved_height = resolve_dimension(container.style.height, available_height).map(|h| {
+        clamp_dimension(
+            h,
+            container.style.min_height,
+            container.style.max_height,
+            available_height,
+        )
+    });
+    let inner_height = resolved_height
+        .map(|h| (h - padding.top - padding.bottom - border.top - border.bottom).max(0.0));
 
     let gap_col = container.style.gap_col.max(container.style.gap);
     let gap_row = container.style.gap_row.max(container.style.gap);
@@ -58,8 +77,26 @@ pub fn solve_grid(container: &mut LayoutNode, available_width: f32, available_he
             continue;
         }
 
-        let span_col = (child.style.grid_column_span.unwrap_or(1) as usize).min(num_cols).max(1);
+        let span_col = (child.style.grid_column_span.unwrap_or(1) as usize)
+            .min(num_cols)
+            .max(1);
         let span_row = child.style.grid_row_span.unwrap_or(1) as usize;
+
+        // Explicit grid placement overrides the current auto-placement cursor.
+        // CSS grid lines are 1-based, so line 1 maps to track index 0.
+        if let Some(line) = child.style.grid_column_start {
+            if line >= 1 {
+                cursor_col = ((line - 1) as usize).min(num_cols.saturating_sub(1));
+            }
+        }
+        if let Some(line) = child.style.grid_row_start {
+            if line >= 1 {
+                cursor_row = (line - 1) as usize;
+                while grid_occupancy.len() < cursor_row + span_row {
+                    grid_occupancy.push(vec![false; num_cols]);
+                }
+            }
+        }
 
         // Auto placement: find first available slot
         loop {
@@ -126,16 +163,30 @@ pub fn solve_grid(container: &mut LayoutNode, available_width: f32, available_he
     let row_sizes = if let Some(h) = inner_height {
         resolve_tracks(&row_tracks, h, gap_row)
     } else {
-        // Compute intrinsic content height for auto rows
-        let mut sizes = vec![0.0f32; total_rows];
+        // Explicit absolute row tracks keep their authored size even when the
+        // container height is indefinite; remaining rows size to their content.
+        let mut sizes: Vec<f32> = row_tracks
+            .iter()
+            .map(|track| match *track {
+                GridTrack::Px(px) => px.max(0.0),
+                _ => 0.0,
+            })
+            .collect();
         for item in &placed_items {
             let child = &mut container.children[item.child_index];
-            let item_width = calculate_span_size(&col_sizes, item.col_start, item.col_span, gap_col);
+            let item_width =
+                calculate_span_size(&col_sizes, item.col_start, item.col_span, gap_col);
             child.compute_layout(item_width, available_height);
-            let item_h = child.geometry.border_box.height + child.style.margin.top + child.style.margin.bottom;
+            let item_h = child.geometry.border_box.height
+                + child.style.margin.top
+                + child.style.margin.bottom;
             let h_per_row = item_h / item.row_span as f32;
             for r in 0..item.row_span {
-                sizes[item.row_start + r] = sizes[item.row_start + r].max(h_per_row);
+                let row = item.row_start + r;
+                if row >= sizes.len() || matches!(row_tracks.get(row), Some(GridTrack::Px(_))) {
+                    continue;
+                }
+                sizes[row] = sizes[row].max(h_per_row);
             }
         }
         sizes
@@ -143,10 +194,15 @@ pub fn solve_grid(container: &mut LayoutNode, available_width: f32, available_he
 
     // 5. Finalize container geometry
     let total_rows_h: f32 = row_sizes.iter().sum();
-    let total_row_gaps = if total_rows > 1 { (total_rows - 1) as f32 * gap_row } else { 0.0 };
+    let total_row_gaps = if total_rows > 1 {
+        (total_rows - 1) as f32 * gap_row
+    } else {
+        0.0
+    };
     let content_height = total_rows_h + total_row_gaps;
 
-    let final_height = resolved_height.unwrap_or(content_height + padding.top + padding.bottom + border.top + border.bottom);
+    let final_height = resolved_height
+        .unwrap_or(content_height + padding.top + padding.bottom + border.top + border.bottom);
 
     let border_box = Rect::new(
         container.geometry.border_box.x,
@@ -192,7 +248,11 @@ fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f
         return Vec::new();
     }
 
-    let total_gaps = if count > 1 { (count - 1) as f32 * gap } else { 0.0 };
+    let total_gaps = if count > 1 {
+        (count - 1) as f32 * gap
+    } else {
+        0.0
+    };
     let mut resolved = vec![0.0f32; count];
     let mut total_fixed = 0.0;
     let mut total_fr = 0.0;
@@ -224,7 +284,10 @@ fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f
             .iter()
             .enumerate()
             .filter_map(|(i, t)| match *t {
-                GridTrack::Fr(_) | GridTrack::Auto | GridTrack::MinContent | GridTrack::MaxContent => Some(i),
+                GridTrack::Fr(_)
+                | GridTrack::Auto
+                | GridTrack::MinContent
+                | GridTrack::MaxContent => Some(i),
                 _ => None,
             })
             .collect();

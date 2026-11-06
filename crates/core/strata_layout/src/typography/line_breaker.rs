@@ -2,8 +2,8 @@
 //!
 //! Provides opportunistic break detection, whitespace collapsing, and line boundary segmentation.
 
-use strata_primitives::geom::LayoutUnit;
 use super::shaper::ShapedGlyph;
+use strata_primitives::geom::LayoutUnit;
 
 /// CSS white-space property mode controlling whitespace collapsing and wrapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -25,19 +25,28 @@ impl WhiteSpaceMode {
     /// Whether consecutive whitespace characters are collapsed into a single space.
     #[inline(always)]
     pub fn collapses_spaces(self) -> bool {
-        matches!(self, WhiteSpaceMode::Normal | WhiteSpaceMode::NoWrap | WhiteSpaceMode::PreLine)
+        matches!(
+            self,
+            WhiteSpaceMode::Normal | WhiteSpaceMode::NoWrap | WhiteSpaceMode::PreLine
+        )
     }
 
     /// Whether soft wrapping is allowed when line exceeds container width.
     #[inline(always)]
     pub fn allows_soft_wrap(self) -> bool {
-        matches!(self, WhiteSpaceMode::Normal | WhiteSpaceMode::PreWrap | WhiteSpaceMode::PreLine)
+        matches!(
+            self,
+            WhiteSpaceMode::Normal | WhiteSpaceMode::PreWrap | WhiteSpaceMode::PreLine
+        )
     }
 
     /// Whether explicit newline characters (\n) force a line break.
     #[inline(always)]
     pub fn preserves_newlines(self) -> bool {
-        matches!(self, WhiteSpaceMode::Pre | WhiteSpaceMode::PreWrap | WhiteSpaceMode::PreLine)
+        matches!(
+            self,
+            WhiteSpaceMode::Pre | WhiteSpaceMode::PreWrap | WhiteSpaceMode::PreLine
+        )
     }
 }
 
@@ -137,7 +146,10 @@ impl LineBreaker {
 
                     // Resume with remainder + current glyph
                     current_glyphs = remainder;
-                    current_width = current_glyphs.iter().map(|g| g.x_advance).fold(LayoutUnit::ZERO, |a, b| a + b);
+                    current_width = current_glyphs
+                        .iter()
+                        .map(|g| g.x_advance)
+                        .fold(LayoutUnit::ZERO, |a, b| a + b);
                     last_break_idx = None;
                 } else {
                     // Forced emergency break on overflow (overflow-wrap: anywhere)
@@ -154,7 +166,9 @@ impl LineBreaker {
             }
 
             // Record soft break opportunities (after spaces or hyphens)
-            if glyph.is_space || glyph.glyph_id == 45 /* '-' */ || glyph.glyph_id == 0x200B /* ZWSP */ {
+            if glyph.is_space || glyph.glyph_id == 45 /* '-' */ || glyph.glyph_id == 0x200B
+            /* ZWSP */
+            {
                 last_break_idx = Some(current_glyphs.len() + 1);
             }
 
@@ -193,7 +207,10 @@ impl LineBreaker {
             }
         }
 
-        let total_w = glyphs.iter().map(|g| g.x_advance).fold(LayoutUnit::ZERO, |a, b| a + b);
+        let total_w = glyphs
+            .iter()
+            .map(|g| g.x_advance)
+            .fold(LayoutUnit::ZERO, |a, b| a + b);
         let content_w = total_w - trailing_w;
 
         (content_w, trailing_w)
