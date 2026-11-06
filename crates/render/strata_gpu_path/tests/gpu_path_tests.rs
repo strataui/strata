@@ -105,3 +105,133 @@ fn test_gpu_command_buffer_and_font_cache() {
     let sdf_val = cache.evaluate_glyph_sdf('A', Point2D::new(50.0, 40.0));
     assert!(sdf_val.is_some());
 }
+
+#[test]
+fn test_gpu_compute_memory_layout_and_alignment() {
+    use strata_gpu_path::{
+        GpuPathSegment, GpuPathUniforms, RawCurveInput,
+        FLAG_CLOSED, FLAG_EVEN_ODD, FLAG_FILL, FLAG_STROKE,
+    };
+
+    assert_eq!(std::mem::size_of::<RawCurveInput>(), 64);
+    assert_eq!(std::mem::size_of::<GpuPathSegment>(), 64);
+    assert_eq!(std::mem::size_of::<GpuPathUniforms>(), 16);
+
+    // Flags are distinct bitmasks
+    assert_eq!(FLAG_FILL, 1);
+    assert_eq!(FLAG_STROKE, 2);
+    assert_eq!(FLAG_EVEN_ODD, 4);
+    assert_eq!(FLAG_CLOSED, 8);
+
+    let raw = RawCurveInput {
+        p0: [10.0, 20.0],
+        p1: [30.0, 40.0],
+        p2: [50.0, 60.0],
+        p3: [70.0, 80.0],
+        stroke_width: 2.5,
+        flags: FLAG_STROKE | FLAG_CLOSED,
+        z_index: 3.0,
+        _pad: 0.0,
+        color: [0.1, 0.2, 0.3, 1.0],
+    };
+
+    let bytes = raw.as_bytes();
+    assert_eq!(bytes.len(), 64);
+
+    let seg = GpuPathSegment {
+        p0: [10.0, 20.0],
+        p1: [40.0, 50.0],
+        p2: [70.0, 80.0],
+        stroke_width: 2.5,
+        flags: FLAG_STROKE,
+        color: [0.1, 0.2, 0.3, 1.0],
+        z_index: 3.0,
+        _pad0: 0.0,
+        _pad1: 0.0,
+        _pad2: 0.0,
+    };
+    assert_eq!(seg.as_bytes().len(), 64);
+}
+
+#[test]
+fn test_curve_compute_dispatcher() {
+    use strata_gpu_path::{
+        CubicBezier, CurveComputeDispatcher, Point2D, QuadraticBezier,
+        FLAG_FILL, FLAG_STROKE,
+    };
+
+    let mut dispatcher = CurveComputeDispatcher::new(0.5);
+
+    // Add a cubic S-curve
+    let cubic = CubicBezier::new(
+        Point2D::new(0.0, 0.0),
+        Point2D::new(50.0, 100.0),
+        Point2D::new(50.0, -100.0),
+        Point2D::new(100.0, 0.0),
+    );
+    dispatcher.push_cubic(&cubic, 0.0, FLAG_FILL, [0.0, 1.0, 0.0, 1.0], 1.0);
+
+    // Add a quadratic curve
+    let quad = QuadraticBezier::new(
+        Point2D::new(100.0, 0.0),
+        Point2D::new(150.0, 50.0),
+        Point2D::new(200.0, 0.0),
+    );
+    dispatcher.push_quadratic(&quad, 2.0, FLAG_STROKE, [1.0, 0.0, 0.0, 1.0], 1.0);
+
+    // Add a straight line
+    dispatcher.push_line(
+        Point2D::new(200.0, 0.0),
+        Point2D::new(300.0, 0.0),
+        1.5,
+        FLAG_STROKE,
+        [0.0, 0.0, 1.0, 1.0],
+        1.0,
+    );
+
+    assert_eq!(dispatcher.len(), 3);
+    assert_eq!(dispatcher.input_bytes().len(), 3 * 64);
+
+    let segments = dispatcher.dispatch_compute();
+    assert!(segments.len() >= 3, "Compute dispatch should produce flattened segments");
+
+    // Start point of first segment must match start of cubic
+    assert_eq!(segments[0].p0, [0.0, 0.0]);
+    // Color of first segment must match
+    assert_eq!(segments[0].color, [0.0, 1.0, 0.0, 1.0]);
+}
+
+#[test]
+fn test_analytical_stroke_expansion() {
+    use strata_gpu_path::{
+        expand_stroke_quadratics, LineCap, LineJoin, Point2D, QuadraticBezier, StrokeOptions,
+    };
+
+    let curve = QuadraticBezier::new(
+        Point2D::new(0.0, 0.0),
+        Point2D::new(50.0, 0.0),
+        Point2D::new(100.0, 0.0),
+    );
+
+    let options = StrokeOptions::new(10.0)
+        .with_cap(LineCap::Round)
+        .with_join(LineJoin::Round);
+
+    let expanded = expand_stroke_quadratics(&[curve], &options);
+    assert!(!expanded.is_empty(), "Expanded stroke must yield outline curves");
+
+    // Should contain outer curve, end cap, inner curve, start cap
+    assert!(expanded.len() >= 4);
+}
+
+#[test]
+fn test_wgsl_shader_constants_validity() {
+    use strata_gpu_path::{WGSL_ANALYTICAL_PATH_RASTER_SHADER, WGSL_PATH_COMPUTE_FLATTEN_SHADER};
+
+    assert!(WGSL_PATH_COMPUTE_FLATTEN_SHADER.contains("@compute @workgroup_size(64)"));
+    assert!(WGSL_PATH_COMPUTE_FLATTEN_SHADER.contains("cs_flatten_curves"));
+    assert!(WGSL_ANALYTICAL_PATH_RASTER_SHADER.contains("@vertex"));
+    assert!(WGSL_ANALYTICAL_PATH_RASTER_SHADER.contains("@fragment"));
+    assert!(WGSL_ANALYTICAL_PATH_RASTER_SHADER.contains("sd_quadratic_bezier"));
+}
+
