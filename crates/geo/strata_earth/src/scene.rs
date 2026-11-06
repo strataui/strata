@@ -177,11 +177,12 @@ impl EarthScene {
         // Scene coordinates are relative to the focus point, so the frame's
         // camera must use the same origin.
         let origin = geodetic_to_ecef(input.camera.focus);
+        let aspect = (input.viewport.width / input.viewport.height.max(1.0)).max(0.01);
         let camera = Camera64 {
             eye: placement.eye.sub(origin),
             target: placement.aim.sub(origin),
             up: placement.up,
-            fov_y_deg: placement.fov_y_deg,
+            fov_horizontal_deg: horizontal_fov_deg(placement.fov_y_deg, aspect as f64),
             near: placement.near_m,
             far: placement.far_m,
         };
@@ -204,10 +205,11 @@ impl EarthScene {
         // let the f32 rasterizer work on small coordinates.
         let origin = geodetic_to_ecef(input.camera.focus);
 
-        // 1. Camera
+        // 1. Camera. The engine camera declares a horizontal field of view, so
+        // the plugin's vertical FOV is converted at this boundary.
+        let aspect = (input.viewport.width / input.viewport.height.max(1.0)).max(0.01);
         let scene_camera = Camera3D::Perspective {
-            fov: placement.fov_y_deg as f32,
-            aspect: (input.viewport.width / input.viewport.height.max(1.0)).max(0.01),
+            fov_horizontal_deg: horizontal_fov_deg(placement.fov_y_deg, aspect as f64) as f32,
             near: placement.near_m as f32,
             far: placement.far_m as f32,
             position: placement.eye.sub(origin).as_f32(),
@@ -515,6 +517,19 @@ pub fn celestial_bodies(sim_time_unix_s: f64, daylight: f32) -> Vec<CelestialBod
             depth_test: false,
         },
     ]
+}
+
+/// Converts a vertical field of view to the horizontal field the scene camera
+/// declares at `aspect`.
+pub fn horizontal_fov_deg(vertical_fov_deg: f64, aspect: f64) -> f64 {
+    let half = (vertical_fov_deg.to_radians() * 0.5).tan() * aspect.max(1e-6);
+    2.0 * half.atan().to_degrees()
+}
+
+/// Converts a horizontal field of view to the vertical field at `aspect`.
+pub fn vertical_fov_deg(horizontal_fov_deg: f64, aspect: f64) -> f64 {
+    let half = (horizontal_fov_deg.to_radians() * 0.5).tan() / aspect.max(1e-6);
+    2.0 * half.atan().to_degrees()
 }
 
 /// Width of one terrain patch in degrees of longitude.

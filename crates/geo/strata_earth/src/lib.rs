@@ -20,23 +20,23 @@ pub mod json;
 pub mod scene;
 pub mod tiles;
 
-pub use geodesy::{
-    clamp_latitude, depth_range, geodetic_to_ecef, horizon_distance_m, level_for_altitude,
-    resolve_tile_imagery, wrap_longitude, CameraPlacement, EarthCamera, Geodetic, GLOBE_ALTITUDE_M,
-    LocalFrame, TileKey, TileTextureResolution,
-};
 pub use descriptor::{
     compare, replay, CameraDelta, DeltaSummary, DescriptorCamera, DescriptorCelestial,
     DescriptorClouds, DescriptorDelta, DescriptorMarker, DescriptorPatch, FrameDescriptor,
     PatchDelta, DESCRIPTOR_FORMAT, DESCRIPTOR_VERSION,
 };
+pub use geodesy::{
+    clamp_latitude, depth_range, geodetic_to_ecef, horizon_distance_m, level_for_altitude,
+    resolve_tile_imagery, wrap_longitude, CameraPlacement, EarthCamera, Geodetic, LocalFrame,
+    TileKey, TileTextureResolution, GLOBE_ALTITUDE_M,
+};
 pub use scene::{
-    requested_tile,
-    building_triangle_count, celestial_bodies, sky_gradient, surrounding_patches,
+    building_triangle_count, celestial_bodies, requested_tile, sky_gradient, surrounding_patches,
     surrounding_tiles, terrain_triangle_count, tile_patch_span_deg, EarthInput, EarthScene,
     EntityMarker, FrameStats, LayerToggles, PatchBounds, PatchFrame,
 };
+pub use scene::{horizontal_fov_deg, vertical_fov_deg};
 pub use tiles::{
-    tile_sampler, MemoryTileSource, TextureSlot, TileError, TileElevation, TileImage,
-    TileRegistry, TileSource,
+    tile_sampler, MemoryTileSource, TextureSlot, TileElevation, TileError, TileImage, TileRegistry,
+    TileSource,
 };

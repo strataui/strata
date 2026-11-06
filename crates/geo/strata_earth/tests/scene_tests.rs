@@ -614,8 +614,7 @@ fn local_depth_policy_lets_a_twenty_kilometre_quad_paint() {
         .expect("texture");
     let mut scene = Scene3D::new();
     scene.camera = Camera3D::Perspective {
-        fov: placement.fov_y_deg as f32,
-        aspect: 1.6,
+        fov_horizontal_deg: strata_earth::horizontal_fov_deg(placement.fov_y_deg, 1.6) as f32,
         near: placement.near_m as f32,
         far: placement.far_m as f32,
         position: eye.as_f32(),
@@ -736,5 +735,48 @@ fn graticule_only_emits_the_eye_facing_hemisphere() {
     assert!(
         points > 100,
         "the visible graticule must have sampled points"
+    );
+}
+
+#[test]
+fn vertical_field_of_view_projects_to_the_top_edge() {
+    // The reference derives one focal length from height, so its vertical FOV
+    // is 2*atan(0.5/0.95) = 55.52 degrees at every aspect.
+    let reference_fov_y = 2.0 * (0.5f64 / 0.95).atan().to_degrees();
+    assert!((reference_fov_y - 55.52).abs() < 0.01);
+
+    let mut input = viewpoint(4_000.0);
+    input.camera.fov_y_deg = reference_fov_y;
+    // Offset the eye horizontally so the view direction is not parallel to the
+    // up hint. The aim stays at the focus, which keeps the RTC target at zero.
+    input.camera.eye_offset_m = [0.0, -2_000.0, 4_000.0];
+    let mut source = MemoryTileSource::new();
+    let mut scene = EarthScene::new();
+    scene.build(&input, &mut source);
+
+    let origin = strata_earth::geodetic_to_ecef(input.camera.focus);
+    let placement = input.camera.placement();
+    let eye = placement.eye.sub(origin);
+    let target = placement.aim.sub(origin);
+    let forward = target.sub(eye).normalize();
+    let right = forward.cross(placement.up).normalize();
+    let up = right.cross(forward).normalize();
+
+    let frame = scene.renderer_overlay_frame();
+    let half = reference_fov_y.to_radians() * 0.5;
+    let direction = forward.scale(half.cos()).add(up.scale(half.sin()));
+    // Place the sample beyond the aim point, so it is in front of the camera.
+    let point = eye.add(direction.scale(10_000.0));
+    let projected = frame.project(point);
+
+    assert!(
+        (projected.x - W as f64 * 0.5).abs() < 1.0,
+        "a point straight above the axis must stay horizontally centred, got x={}",
+        projected.x
+    );
+    assert!(
+        projected.y.abs() < 1.0,
+        "a point at half the vertical FOV must land on the top edge, got y={}",
+        projected.y
     );
 }

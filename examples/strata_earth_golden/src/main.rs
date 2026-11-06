@@ -39,12 +39,15 @@ struct Regime {
 }
 
 const REGIMES: &[Regime] = &[
+    // Cloud cover is zero for the parity captures: the software rasterizer has
+    // no cloud pass yet, and the first comparison is on geometry, UVs, and the
+    // sky ramp. Raise these values once the pass lands.
     // Full globe: d > 2400 km.
     Regime {
         name: "full_globe",
         altitude_m: 12_000_000.0,
         sim_time_unix_s: 1_767_225_600.0,
-        cloud_cover: 0.25,
+        cloud_cover: 0.0,
         daylight: 0.85,
         tile_grid: 5,
         patch_scale: 1.0,
@@ -54,7 +57,7 @@ const REGIMES: &[Regime] = &[
         name: "mid_morph",
         altitude_m: 1_200_000.0,
         sim_time_unix_s: 1_767_225_600.0,
-        cloud_cover: 0.4,
+        cloud_cover: 0.0,
         daylight: 0.7,
         tile_grid: 5,
         patch_scale: 1.0,
@@ -64,7 +67,7 @@ const REGIMES: &[Regime] = &[
         name: "terrain_z18",
         altitude_m: 4_000.0,
         sim_time_unix_s: 1_767_225_600.0,
-        cloud_cover: 0.55,
+        cloud_cover: 0.0,
         daylight: 0.6,
         tile_grid: 9,
         patch_scale: 1.0,
@@ -74,7 +77,7 @@ const REGIMES: &[Regime] = &[
         name: "night_twilight",
         altitude_m: 900_000.0,
         sim_time_unix_s: 1_767_225_600.0 + 43_200.0,
-        cloud_cover: 0.3,
+        cloud_cover: 0.0,
         daylight: 0.08,
         tile_grid: 5,
         patch_scale: 1.0,

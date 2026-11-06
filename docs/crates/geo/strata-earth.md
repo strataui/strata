@@ -69,6 +69,13 @@ The camera and all geometry are expressed relative to the focus point. The scene
 camera is narrowed to f32 only after the f64 subtraction, which is the same RTC
 contract `RenderFrame64` uses for the overlay.
 
+`EarthCamera::fov_y_deg` is vertical, matching the reference's fixed focal
+length. The engine camera declares `fov_horizontal_deg` and derives the
+projection from the viewport aspect, so the plugin converts at the boundary with
+`horizontal_fov_deg`. `Camera3D::Perspective` no longer has an `aspect` field:
+the viewport is authoritative. A regression test projects a point at half the
+reference vertical FOV and requires it to land on the top edge.
+
 ## Layers and statistics
 
 `LayerToggles` switch terrain, buildings, graticule, labels, clouds, and celestial
@@ -98,6 +105,11 @@ The plugin separates the decision from the upload:
   returns the nearest loaded ancestor plus the exact UV sub-rect.
 - `TileSource` supplies decoded imagery and elevation. Implement it over your
   own cache and transport; the crate never spawns a process.
+
+Cloud shells are declarations today: the software rasterizer has no cloud pass,
+so parity captures use `cloud_cover = 0` and the first comparison covers
+geometry, UVs, and the sky ramp. A translucent shell pass is the follow-up before
+clouds ship.
 - `TileRegistry` maps a `(tile, revision)` slot onto a stable `TextureId`.
 
 Patches that have no imagery yet draw with a neutral fallback texture, so the
@@ -178,8 +190,8 @@ mesh and buildings are one mesh.
 
 | Profile | Median across runs | Gate | Strict target |
 | --- | --- | --- | --- |
-| test profile (`cargo test`) | 7.3-10.6 ms | 25 ms | 16.6 ms |
-| release | 6.3-8.4 ms | 25 ms | 16.6 ms |
+| test profile (`cargo test`) | 5.7-6.1 ms | 25 ms | 16.6 ms |
+| release | 5.0-5.3 ms | 25 ms | 16.6 ms |
 
 The release figure moves with host load because the rasterizer uses every
 available core. The per-run gate allows 25 ms so a noisy CI neighbour does not

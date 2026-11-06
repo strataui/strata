@@ -910,17 +910,19 @@ pub fn compare(descriptor: &FrameDescriptor, scene: &EarthScene) -> DescriptorDe
         eye_m: [descriptor_eye.x, descriptor_eye.y, descriptor_eye.z],
     };
     if let Camera3D::Perspective {
-        fov,
+        fov_horizontal_deg,
         near,
         far,
         position,
         ..
     } = scene.scene().camera
     {
+        let aspect = descriptor.viewport[0] / descriptor.viewport[1].max(1.0);
         camera.scene_camera_present = true;
         camera.near_m = near as f64 - descriptor.camera.near_m;
         camera.far_m = far as f64 - descriptor.camera.far_m;
-        camera.fov_y_deg = fov as f64 - descriptor.camera.fov_y_deg;
+        camera.fov_y_deg = crate::scene::vertical_fov_deg(fov_horizontal_deg as f64, aspect)
+            - descriptor.camera.fov_y_deg;
         camera.eye_m = [
             position[0] as f64 - descriptor_eye.x,
             position[1] as f64 - descriptor_eye.y,
