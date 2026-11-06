@@ -13,6 +13,7 @@ pub use strata_style as style;
 pub use strata_vfs as fs;
 pub use strata_storage as storage;
 pub use strata_web_api as web_api;
+pub use strata_gpu_path as gpu_path;
 
 #[cfg(feature = "icons")]
 pub use strata_icons as icons;

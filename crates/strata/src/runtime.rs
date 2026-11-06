@@ -34,6 +34,73 @@ fn font_weight_scale(weight: FontWeight) -> f32 {
     }
 }
 
+/// Returns the base64 payload of a `data:` URI, if the URI declares base64 encoding.
+fn data_uri_base64_payload(src: &str) -> Option<&str> {
+    let trimmed = src.trim();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() < 5 || !bytes[..5].eq_ignore_ascii_case(b"data:") {
+        return None;
+    }
+    let needle = b";base64,";
+    bytes
+        .windows(needle.len())
+        .position(|window| window.eq_ignore_ascii_case(needle))
+        .map(|index| &trimmed[index + needle.len()..])
+}
+
+/// Decodes a standard-alphabet base64 payload, ignoring ASCII whitespace.
+fn decode_base64(input: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let mut accumulator: u32 = 0;
+    let mut bits: u32 = 0;
+    let mut padding = 0usize;
+    for &byte in input.as_bytes() {
+        if byte.is_ascii_whitespace() {
+            continue;
+        }
+        if byte == b'=' {
+            padding += 1;
+            continue;
+        }
+        if padding > 0 {
+            return None;
+        }
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        accumulator = (accumulator << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((accumulator >> bits) as u8);
+            accumulator &= (1u32 << bits) - 1;
+        }
+    }
+    if padding > 2 {
+        return None;
+    }
+    Some(out)
+}
+
+/// Reads the intrinsic width and height from a PNG signature and IHDR chunk.
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    const SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+    if bytes.len() < 24 || bytes[..8] != SIGNATURE || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some((width, height))
+}
+
 /// Hit-test target result representing a clickable text input element in the blueprint tree.
 #[derive(Clone)]
 pub struct InputHitTarget {
@@ -43,8 +110,10 @@ pub struct InputHitTarget {
     pub font_size: f32,
     pub line_height: f32,
     pub is_mono: bool,
+    pub font_family: strata_primitives::AtomId,
     pub content_box_x: f32,
     pub content_box_y: f32,
+    pub content_box_width: f32,
     pub on_input: Option<std::rc::Rc<dyn Fn(strata_dom::Event)>>,
     pub on_change: Option<std::rc::Rc<dyn Fn(strata_dom::Event)>>,
     pub on_submit: Option<std::rc::Rc<dyn Fn(strata_dom::Event)>>,
@@ -77,6 +146,7 @@ impl std::fmt::Debug for ActiveInput {
 #[derive(Debug, Clone)]
 pub struct ActiveScrollbar {
     pub bounds: strata_layout::Rect,
+    pub track_bounds: strata_layout::Rect,
     pub thumb_bounds: strata_layout::Rect,
     pub scroll_y: f32,
     pub max_scroll_y: f32,
@@ -147,6 +217,8 @@ pub struct AppRuntime {
     pub active_focus: Option<ActiveInput>,
     pub input_states: std::collections::HashMap<String, strata_dom::text_input::TextInputState>,
     pub caret_blink_epoch: std::time::Instant,
+    pub last_caret_blink_state: bool,
+    pub current_cursor: strata_platform::window::CursorIcon,
     pub drag_selection_active: bool,
     pub last_click_info: Option<(std::time::Instant, f32, f32, usize)>,
     /// Press origin of a possible window drag started on a `data-app-region="drag"` surface.
@@ -187,6 +259,12 @@ pub struct AppRuntime {
     pub view_transition_manager: crate::view_transition::ViewTransitionManager,
     /// Whether animations or transitions were active in the prior frame (to allow clean final state settlement).
     pub had_active_animations: bool,
+    /// Hardware GPU path compilation pipeline for direct compute shader execution.
+    pub gpu_path_pipeline: strata_render::GpuPathPipeline,
+    /// Number of full layout computations performed by this runtime (test/profiling hook).
+    layout_computations: u64,
+    /// True when the most recent hover transition only needed a paint refresh.
+    hover_paint_only: bool,
 }
 
 /// Computes a deterministic 64-bit ID from a hierarchical tree path.
@@ -212,11 +290,54 @@ pub enum EditCommand {
 
 thread_local! {
     static EDIT_COMMAND_QUEUE: std::cell::RefCell<Vec<EditCommand>> = const { std::cell::RefCell::new(Vec::new()) };
+    static FALLBACK_CLIPBOARD: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
 }
 
 /// Queues an edit command for the focused input; the runtime applies it right after the current event.
 pub fn queue_edit_command(cmd: EditCommand) {
     EDIT_COMMAND_QUEUE.with(|q| q.borrow_mut().push(cmd));
+}
+
+/// Whether opt-in `[perf]` timing output is enabled through `STRATA_PERF_LOG`.
+fn perf_logging_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("STRATA_PERF_LOG").is_some())
+}
+
+/// Emits a gated duration measurement for the `[perf]` diagnostic channel.
+fn perf_log_ms(label: &str, start: std::time::Instant, detail: impl std::fmt::Display) {
+    if perf_logging_enabled() {
+        eprintln!(
+            "[perf] {}: {:.3} ms ({})",
+            label,
+            start.elapsed().as_secs_f64() * 1000.0,
+            detail
+        );
+    }
+}
+
+fn perf_count_layout_nodes(node: &strata_layout::LayoutNode) -> usize {
+    1 + node
+        .children
+        .iter()
+        .map(perf_count_layout_nodes)
+        .sum::<usize>()
+}
+
+fn perf_count_blueprint_nodes(node: &NodeBlueprint) -> usize {
+    match node {
+        NodeBlueprint::Element { children, .. } => {
+            1 + children
+                .iter()
+                .map(perf_count_blueprint_nodes)
+                .sum::<usize>()
+        }
+        NodeBlueprint::Fragment(children) => children
+            .iter()
+            .map(perf_count_blueprint_nodes)
+            .sum::<usize>(),
+        _ => 1,
+    }
 }
 
 impl AppRuntime {
@@ -226,9 +347,25 @@ impl AppRuntime {
         strata_platform::init_pango_text_measurement();
 
         let root_blueprint = root_view.root;
+        let build_start = std::time::Instant::now();
         let mut layout_root = Self::build_layout_tree(&root_blueprint);
+        if perf_logging_enabled() {
+            perf_log_ms(
+                "build_layout_tree_initial",
+                build_start,
+                format!("{} layout nodes", perf_count_layout_nodes(&layout_root)),
+            );
+        }
 
+        let compute_start = std::time::Instant::now();
         layout_root.compute_layout(viewport_width, viewport_height);
+        if perf_logging_enabled() {
+            perf_log_ms(
+                "compute_layout_initial",
+                compute_start,
+                format!("{}x{}", viewport_width, viewport_height),
+            );
+        }
 
         let mut runtime = Self {
             root_blueprint,
@@ -241,6 +378,8 @@ impl AppRuntime {
             active_focus: None,
             input_states: std::collections::HashMap::new(),
             caret_blink_epoch: std::time::Instant::now(),
+            last_caret_blink_state: true,
+            current_cursor: strata_platform::window::CursorIcon::Default,
             drag_selection_active: false,
             last_click_info: None,
             pending_window_drag: None,
@@ -262,6 +401,9 @@ impl AppRuntime {
             node_paths: std::collections::HashMap::new(),
             view_transition_manager: crate::view_transition::ViewTransitionManager::new(),
             had_active_animations: false,
+            gpu_path_pipeline: strata_render::GpuPathPipeline::new(viewport_width, viewport_height),
+            layout_computations: 1,
+            hover_paint_only: false,
         };
 
         runtime.sync_tree_animations(0.0);
@@ -275,13 +417,47 @@ impl AppRuntime {
     #[inline]
     pub fn reset_caret_blink(&mut self) {
         self.caret_blink_epoch = std::time::Instant::now();
+        self.last_caret_blink_state = true;
+    }
+
+    /// Polls caret blink phase and returns true if blink state toggled (requiring a redraw).
+    pub fn poll_caret_blink(&mut self) -> bool {
+        if self.active_focus.is_none() {
+            return false;
+        }
+        let elapsed_ms = self.caret_blink_epoch.elapsed().as_millis();
+        let is_blink_on = (elapsed_ms / 530) % 2 == 0;
+        if is_blink_on != self.last_caret_blink_state {
+            self.last_caret_blink_state = is_blink_on;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns the currently active platform mouse cursor icon.
+    pub fn current_cursor(&self) -> strata_platform::window::CursorIcon {
+        self.current_cursor
     }
 
     /// Re-evaluates layout and compiles display commands for the current frame.
     pub fn tick_frame(&mut self) -> &DisplayList {
         self.frame_count += 1;
         self.unapply_scroll_offsets();
-        self.layout_root.compute_layout(self.viewport_width, self.viewport_height);
+        let compute_start = std::time::Instant::now();
+        self.layout_root
+            .compute_layout(self.viewport_width, self.viewport_height);
+        self.layout_computations += 1;
+        if perf_logging_enabled() {
+            perf_log_ms(
+                "compute_layout_tick",
+                compute_start,
+                format!(
+                    "{} layout nodes",
+                    perf_count_layout_nodes(&self.layout_root)
+                ),
+            );
+        }
         self.apply_viewport_clamps();
         self.apply_scroll_offsets();
         self.compile_display_list();
@@ -292,12 +468,29 @@ impl AppRuntime {
     pub fn update_view(&mut self, new_view: View) {
         self.applied_scroll_offsets.clear();
         self.root_blueprint = new_view.root;
+        let build_start = std::time::Instant::now();
         self.layout_root = Self::build_layout_tree_with_hover(
             &self.root_blueprint,
             self.current_hover_path.as_deref(),
         );
+        if perf_logging_enabled() {
+            perf_log_ms(
+                "build_layout_tree_update",
+                build_start,
+                format!(
+                    "{} blueprint nodes -> {} layout nodes",
+                    perf_count_blueprint_nodes(&self.root_blueprint),
+                    perf_count_layout_nodes(&self.layout_root)
+                ),
+            );
+        }
+        self.sync_active_input_layout();
         let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
+        let sync_start = std::time::Instant::now();
         self.sync_tree_animations(now_ms);
+        if perf_logging_enabled() {
+            perf_log_ms("sync_tree_animations", sync_start, "update_view");
+        }
         self.tick_frame();
     }
 
@@ -365,7 +558,12 @@ impl AppRuntime {
 
         if let Some(old_style) = effective_old_style {
             if !node.style.transitions.is_empty() {
-                trans_events.extend(transition_manager.update_styles(node_id, old_style, &node.style, now_ms));
+                trans_events.extend(transition_manager.update_styles(
+                    node_id,
+                    old_style,
+                    &node.style,
+                    now_ms,
+                ));
             }
         }
 
@@ -427,31 +625,56 @@ impl AppRuntime {
 
         for (idx, child) in node.children.iter_mut().enumerate() {
             path.push(idx);
-            Self::apply_animations_rec(child, path, base_styles, transition_manager, animation_manager);
+            Self::apply_animations_rec(
+                child,
+                path,
+                base_styles,
+                transition_manager,
+                animation_manager,
+            );
             path.pop();
         }
     }
 
     /// Evaluates all active scroll-driven animations based on current container scroll positions.
-    pub fn evaluate_scroll_animations(&mut self, anim_events: &mut Vec<strata_style::animation::AnimationLifecycleEvent>) {
+    pub fn evaluate_scroll_animations(
+        &mut self,
+        anim_events: &mut Vec<strata_style::animation::AnimationLifecycleEvent>,
+    ) {
         for (node_id, path) in &self.node_paths {
             if let Some(style) = self.base_node_styles.get(node_id) {
                 for anim in &style.animations {
                     match &anim.timeline {
                         strata_style::AnimationTimeline::Scroll(src, _axis) => {
                             let scroll_progress = match src {
-                                strata_style::ScrollTimelineSource::Root => {
-                                    self.active_scrollbars.iter()
-                                        .max_by(|a, b| (a.bounds.width * a.bounds.height).partial_cmp(&(b.bounds.width * b.bounds.height)).unwrap_or(std::cmp::Ordering::Equal))
-                                        .map(|b| if b.max_scroll_y > 0.0 { (b.scroll_y / b.max_scroll_y).clamp(0.0, 1.0) } else { 0.0 })
-                                        .unwrap_or(0.0)
-                                }
-                                strata_style::ScrollTimelineSource::Nearest | strata_style::ScrollTimelineSource::SelfNode => {
+                                strata_style::ScrollTimelineSource::Root => self
+                                    .active_scrollbars
+                                    .iter()
+                                    .max_by(|a, b| {
+                                        (a.bounds.width * a.bounds.height)
+                                            .partial_cmp(&(b.bounds.width * b.bounds.height))
+                                            .unwrap_or(std::cmp::Ordering::Equal)
+                                    })
+                                    .map(|b| {
+                                        if b.max_scroll_y > 0.0 {
+                                            (b.scroll_y / b.max_scroll_y).clamp(0.0, 1.0)
+                                        } else {
+                                            0.0
+                                        }
+                                    })
+                                    .unwrap_or(0.0),
+                                strata_style::ScrollTimelineSource::Nearest
+                                | strata_style::ScrollTimelineSource::SelfNode => {
                                     let mut p = 0.0;
                                     let mut check_path = path.clone();
                                     while !check_path.is_empty() {
-                                        if let Some((_, sy)) = self.scroll_offsets.get(&check_path) {
-                                            if let Some(bar) = self.active_scrollbars.iter().find(|b| b.path == check_path) {
+                                        if let Some((_, sy)) = self.scroll_offsets.get(&check_path)
+                                        {
+                                            if let Some(bar) = self
+                                                .active_scrollbars
+                                                .iter()
+                                                .find(|b| b.path == check_path)
+                                            {
                                                 if bar.max_scroll_y > 0.0 {
                                                     p = (*sy / bar.max_scroll_y).clamp(0.0, 1.0);
                                                     break;
@@ -463,11 +686,18 @@ impl AppRuntime {
                                     p
                                 }
                             };
-                            anim_events.extend(self.animation_manager.step_node_scroll_progress(*node_id, scroll_progress, style));
+                            anim_events.extend(self.animation_manager.step_node_scroll_progress(
+                                *node_id,
+                                scroll_progress,
+                                style,
+                            ));
                         }
                         strata_style::AnimationTimeline::View(_axis, _start, _end) => {
                             let p = 0.5;
-                            anim_events.extend(self.animation_manager.step_node_scroll_progress(*node_id, p, style));
+                            anim_events.extend(
+                                self.animation_manager
+                                    .step_node_scroll_progress(*node_id, p, style),
+                            );
                         }
                         _ => {}
                     }
@@ -498,10 +728,14 @@ impl AppRuntime {
         let mut named = Vec::new();
         Self::collect_view_transition_elements(&self.layout_root, &mut named);
         let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
-        self.view_transition_manager.start_transition(&named, now_ms, duration_ms);
+        self.view_transition_manager
+            .start_transition(&named, now_ms, duration_ms);
     }
 
-    fn collect_view_transition_elements(node: &LayoutNode, out: &mut Vec<(String, strata_primitives::geom::Rect)>) {
+    fn collect_view_transition_elements(
+        node: &LayoutNode,
+        out: &mut Vec<(String, strata_primitives::geom::Rect)>,
+    ) {
         if let Some(name) = &node.style.view_transition_name {
             if name != "none" {
                 out.push((name.clone(), node.geometry.border_box.into()));
@@ -526,9 +760,17 @@ impl AppRuntime {
             return false;
         }
 
+        // Capture this before advancing: a transition or animation that finishes on this
+        // tick is removed/settled by `advance`, but the final layout value it produced still
+        // has to be laid out once.
+        let layout_affecting = self.transition_manager.has_layout_affecting_transitions()
+            || self.animation_manager.has_layout_affecting_animations();
+
         let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
         let trans_events = self.transition_manager.advance(now_ms);
-        let anim_events = self.animation_manager.advance(now_ms, &self.base_node_styles);
+        let anim_events = self
+            .animation_manager
+            .advance(now_ms, &self.base_node_styles);
         let _vt_active = self.view_transition_manager.step(now_ms);
 
         for ev in trans_events {
@@ -539,35 +781,79 @@ impl AppRuntime {
         }
 
         self.apply_animations_to_layout_tree();
-        self.tick_frame();
+
+        // Paint-only animations (colour, opacity, transform, shadow, ...) write new style
+        // values onto the existing layout tree. Only properties that feed box layout require
+        // a fresh layout pass; everything else just needs the display list recompiled.
+        if layout_affecting {
+            self.tick_frame();
+        } else {
+            self.compile_display_list();
+        }
 
         true
     }
 
     /// Dispatches a synthetic W3C animation lifecycle event to matching RSX element event listeners.
-    pub fn dispatch_animation_event(&self, event: strata_style::animation::AnimationLifecycleEvent) {
+    pub fn dispatch_animation_event(
+        &self,
+        event: strata_style::animation::AnimationLifecycleEvent,
+    ) {
         let (node_id, name, elapsed, event_type) = match event {
-            strata_style::animation::AnimationLifecycleEvent::Start { node_id, name, elapsed_time_sec } => {
-                (node_id, name, elapsed_time_sec, strata_dom::EventType::AnimationStart)
-            }
-            strata_style::animation::AnimationLifecycleEvent::Iteration { node_id, name, elapsed_time_sec } => {
-                (node_id, name, elapsed_time_sec, strata_dom::EventType::AnimationIteration)
-            }
-            strata_style::animation::AnimationLifecycleEvent::End { node_id, name, elapsed_time_sec } => {
-                (node_id, name, elapsed_time_sec, strata_dom::EventType::AnimationEnd)
-            }
-            strata_style::animation::AnimationLifecycleEvent::Cancel { node_id, name, elapsed_time_sec } => {
-                (node_id, name, elapsed_time_sec, strata_dom::EventType::AnimationCancel)
-            }
+            strata_style::animation::AnimationLifecycleEvent::Start {
+                node_id,
+                name,
+                elapsed_time_sec,
+            } => (
+                node_id,
+                name,
+                elapsed_time_sec,
+                strata_dom::EventType::AnimationStart,
+            ),
+            strata_style::animation::AnimationLifecycleEvent::Iteration {
+                node_id,
+                name,
+                elapsed_time_sec,
+            } => (
+                node_id,
+                name,
+                elapsed_time_sec,
+                strata_dom::EventType::AnimationIteration,
+            ),
+            strata_style::animation::AnimationLifecycleEvent::End {
+                node_id,
+                name,
+                elapsed_time_sec,
+            } => (
+                node_id,
+                name,
+                elapsed_time_sec,
+                strata_dom::EventType::AnimationEnd,
+            ),
+            strata_style::animation::AnimationLifecycleEvent::Cancel {
+                node_id,
+                name,
+                elapsed_time_sec,
+            } => (
+                node_id,
+                name,
+                elapsed_time_sec,
+                strata_dom::EventType::AnimationCancel,
+            ),
         };
 
         if let Some(path) = self.node_paths.get(&node_id) {
             if let Some(bp) = Self::find_blueprint_at_path(&self.root_blueprint, path) {
                 if let NodeBlueprint::Element { attributes, .. } = bp {
                     for attr in attributes {
-                        if let strata_dom::Attribute::EventListener { event: ev_type, handler } = attr {
+                        if let strata_dom::Attribute::EventListener {
+                            event: ev_type,
+                            handler,
+                        } = attr
+                        {
                             if *ev_type == event_type {
-                                let ev = strata_dom::Event::animation(event_type, name.clone(), elapsed);
+                                let ev =
+                                    strata_dom::Event::animation(event_type, name.clone(), elapsed);
                                 handler(ev);
                             }
                         }
@@ -578,29 +864,68 @@ impl AppRuntime {
     }
 
     /// Dispatches a synthetic W3C transition lifecycle event to matching RSX element event listeners.
-    pub fn dispatch_transition_event(&self, event: strata_style::transition::TransitionLifecycleEvent) {
+    pub fn dispatch_transition_event(
+        &self,
+        event: strata_style::transition::TransitionLifecycleEvent,
+    ) {
         let (node_id, name, elapsed, event_type) = match event {
-            strata_style::transition::TransitionLifecycleEvent::Run { node_id, property, elapsed_time_sec } => {
-                (node_id, property, elapsed_time_sec, strata_dom::EventType::TransitionRun)
-            }
-            strata_style::transition::TransitionLifecycleEvent::Start { node_id, property, elapsed_time_sec } => {
-                (node_id, property, elapsed_time_sec, strata_dom::EventType::TransitionStart)
-            }
-            strata_style::transition::TransitionLifecycleEvent::End { node_id, property, elapsed_time_sec } => {
-                (node_id, property, elapsed_time_sec, strata_dom::EventType::TransitionEnd)
-            }
-            strata_style::transition::TransitionLifecycleEvent::Cancel { node_id, property, elapsed_time_sec } => {
-                (node_id, property, elapsed_time_sec, strata_dom::EventType::TransitionCancel)
-            }
+            strata_style::transition::TransitionLifecycleEvent::Run {
+                node_id,
+                property,
+                elapsed_time_sec,
+            } => (
+                node_id,
+                property,
+                elapsed_time_sec,
+                strata_dom::EventType::TransitionRun,
+            ),
+            strata_style::transition::TransitionLifecycleEvent::Start {
+                node_id,
+                property,
+                elapsed_time_sec,
+            } => (
+                node_id,
+                property,
+                elapsed_time_sec,
+                strata_dom::EventType::TransitionStart,
+            ),
+            strata_style::transition::TransitionLifecycleEvent::End {
+                node_id,
+                property,
+                elapsed_time_sec,
+            } => (
+                node_id,
+                property,
+                elapsed_time_sec,
+                strata_dom::EventType::TransitionEnd,
+            ),
+            strata_style::transition::TransitionLifecycleEvent::Cancel {
+                node_id,
+                property,
+                elapsed_time_sec,
+            } => (
+                node_id,
+                property,
+                elapsed_time_sec,
+                strata_dom::EventType::TransitionCancel,
+            ),
         };
 
         if let Some(path) = self.node_paths.get(&node_id) {
             if let Some(bp) = Self::find_blueprint_at_path(&self.root_blueprint, path) {
                 if let NodeBlueprint::Element { attributes, .. } = bp {
                     for attr in attributes {
-                        if let strata_dom::Attribute::EventListener { event: ev_type, handler } = attr {
+                        if let strata_dom::Attribute::EventListener {
+                            event: ev_type,
+                            handler,
+                        } = attr
+                        {
                             if *ev_type == event_type {
-                                let ev = strata_dom::Event::transition(event_type, name.clone(), elapsed);
+                                let ev = strata_dom::Event::transition(
+                                    event_type,
+                                    name.clone(),
+                                    elapsed,
+                                );
                                 handler(ev);
                             }
                         }
@@ -612,7 +937,9 @@ impl AppRuntime {
 
     /// Registers all parsed `@keyframes` rules from a stylesheet into the runtime animation registry.
     pub fn register_keyframes_stylesheet(&mut self, sheet: &strata_style::StyleSheet) {
-        self.animation_manager.registry_mut().register_stylesheet(sheet);
+        self.animation_manager
+            .registry_mut()
+            .register_stylesheet(sheet);
     }
 
     /// Registers a single compiled `@keyframes` rule into the runtime animation registry.
@@ -702,6 +1029,8 @@ impl AppRuntime {
                 // 1. Vector SVG handling: extract path data from d attribute or child path
                 if matches!(tag, Tag::Svg | Tag::Path) {
                     let mut view_box = (24.0f32, 24.0f32);
+                    let mut explicit_svg_w = None;
+                    let mut explicit_svg_h = None;
                     for attr in attributes {
                         if let strata_dom::Attribute::Property { key, value } = attr {
                             if key == "viewBox" {
@@ -712,6 +1041,14 @@ impl AppRuntime {
                                     .collect();
                                 if parts.len() >= 4 {
                                     view_box = (parts[2], parts[3]);
+                                }
+                            } else if key == "width" {
+                                if let Ok(w) = value.trim_end_matches("px").parse::<f32>() {
+                                    explicit_svg_w = Some(w);
+                                }
+                            } else if key == "height" {
+                                if let Ok(h) = value.trim_end_matches("px").parse::<f32>() {
+                                    explicit_svg_h = Some(h);
                                 }
                             }
                         }
@@ -732,10 +1069,20 @@ impl AppRuntime {
 
                     if !svg_items.is_empty() {
                         if style.width == Dimension::Auto {
-                            style.width = Dimension::Px(16.0);
+                            style.width =
+                                Dimension::Px(explicit_svg_w.unwrap_or(if view_box.0 > 24.0 {
+                                    view_box.0.min(80.0)
+                                } else {
+                                    16.0
+                                }));
                         }
                         if style.height == Dimension::Auto {
-                            style.height = Dimension::Px(16.0);
+                            style.height =
+                                Dimension::Px(explicit_svg_h.unwrap_or(if view_box.1 > 24.0 {
+                                    view_box.1.min(80.0)
+                                } else {
+                                    16.0
+                                }));
                         }
                         return LayoutNode::with_svg_items(style, svg_items);
                     }
@@ -758,27 +1105,37 @@ impl AppRuntime {
                         }
                     }
                     let is_mono = strata_layout::is_monospace_family(style.font_family);
-                    let char_w = if is_mono { style.font_size * 0.60 } else { style.font_size * 0.55 };
+                    let char_w = if is_mono {
+                        style.font_size * 0.60
+                    } else {
+                        style.font_size * 0.55
+                    };
                     if style.height == Dimension::Auto {
                         let text_h = style.font_size * style.line_height;
-                        style.height = Dimension::Px(text_h + style.padding.top + style.padding.bottom);
+                        style.height =
+                            Dimension::Px(text_h + style.padding.top + style.padding.bottom);
                     }
                     if let Some(val) = value_text {
                         let approx_width = (val.len() as f32 * char_w).max(40.0);
                         if style.width == Dimension::Auto && style.flex_grow <= 0.0 {
-                            style.width = Dimension::Px(approx_width + style.padding.left + style.padding.right);
+                            style.width = Dimension::Px(
+                                approx_width + style.padding.left + style.padding.right,
+                            );
                         }
                         return LayoutNode::with_text(style, val);
                     } else if let Some(ph) = placeholder_text {
                         let approx_width = (ph.len() as f32 * char_w).max(40.0);
                         if style.width == Dimension::Auto && style.flex_grow <= 0.0 {
-                            style.width = Dimension::Px(approx_width + style.padding.left + style.padding.right);
+                            style.width = Dimension::Px(
+                                approx_width + style.padding.left + style.padding.right,
+                            );
                         }
                         style.color = strata_style::types::Color::new(140, 145, 155, 255);
                         return LayoutNode::with_text(style, ph);
                     } else {
                         if style.width == Dimension::Auto && style.flex_grow <= 0.0 {
-                            style.width = Dimension::Px(60.0 + style.padding.left + style.padding.right);
+                            style.width =
+                                Dimension::Px(60.0 + style.padding.left + style.padding.right);
                         }
                         return LayoutNode::with_text(style, String::new());
                     }
@@ -843,12 +1200,7 @@ impl AppRuntime {
                         Tag::P => {
                             style.display = Display::Block;
                         }
-                        Tag::H1
-                        | Tag::H2
-                        | Tag::H3
-                        | Tag::H4
-                        | Tag::H5
-                        | Tag::H6 => {
+                        Tag::H1 | Tag::H2 | Tag::H3 | Tag::H4 | Tag::H5 | Tag::H6 => {
                             style.display = Display::Flex;
                             style.flex_direction = FlexDirection::Column;
                         }
@@ -860,10 +1212,14 @@ impl AppRuntime {
                         Tag::Span => {
                             style.display = Display::Inline;
                         }
+                        Tag::Img => {
+                            style.display = Display::InlineBlock;
+                        }
                         Tag::A => {
                             style.display = Display::Inline;
                             if style.text_decoration == strata_style::types::TextDecoration::None {
-                                style.text_decoration = strata_style::types::TextDecoration::Underline;
+                                style.text_decoration =
+                                    strata_style::types::TextDecoration::Underline;
                             }
                         }
                         _ => {
@@ -876,12 +1232,18 @@ impl AppRuntime {
                 for attr in attributes {
                     match attr {
                         strata_dom::Attribute::DirectStyle(any) => {
-                            if let Some(decls) = any.downcast_ref::<Vec<strata_style::Declaration>>() {
+                            if let Some(decls) =
+                                any.downcast_ref::<Vec<strata_style::Declaration>>()
+                            {
                                 for decl in decls {
-                                    strata_style::CascadeSolver::apply_declaration(&mut style, decl);
+                                    strata_style::CascadeSolver::apply_declaration(
+                                        &mut style, decl,
+                                    );
                                 }
                                 has_direct_style = true;
-                            } else if let Some(cs) = any.downcast_ref::<strata_style::types::ComputedStyle>() {
+                            } else if let Some(cs) =
+                                any.downcast_ref::<strata_style::types::ComputedStyle>()
+                            {
                                 style = cs.clone();
                                 has_direct_style = true;
                             }
@@ -889,8 +1251,11 @@ impl AppRuntime {
                         strata_dom::Attribute::Property { key, value } => {
                             if key.eq_ignore_ascii_case("href") && !value.is_empty() {
                                 let val_atom = strata_primitives::atom::intern(value);
-                                style.set_custom_property(strata_primitives::AtomId::HREF, val_atom);
-                                if matches!(tag, Tag::A) && style.color == strata_style::types::Color::new(0, 0, 0, 255) {
+                                style
+                                    .set_custom_property(strata_primitives::AtomId::HREF, val_atom);
+                                if matches!(tag, Tag::A)
+                                    && style.color == strata_style::types::Color::new(0, 0, 0, 255)
+                                {
                                     style.color = strata_style::types::Color::new(37, 99, 235, 255);
                                 }
                             } else if key.eq_ignore_ascii_case("colspan") {
@@ -905,7 +1270,9 @@ impl AppRuntime {
                                 if !has_direct_style {
                                     let decls = strata_style::parse_declarations(value);
                                     for decl in &decls {
-                                        strata_style::CascadeSolver::apply_declaration(&mut style, decl);
+                                        strata_style::CascadeSolver::apply_declaration(
+                                            &mut style, decl,
+                                        );
                                     }
                                 }
                             }
@@ -922,6 +1289,42 @@ impl AppRuntime {
                     style.display = Display::InlineFlex;
                 }
 
+                // Replaced raster images: decode a base64 PNG data URI and carry
+                // its intrinsic dimensions on the layout node for painting.
+                if matches!(tag, Tag::Img) {
+                    let mut src_value = None;
+                    for attr in attributes {
+                        if let strata_dom::Attribute::Property { key, value } = attr {
+                            if key.eq_ignore_ascii_case("src") && !value.is_empty() {
+                                src_value = Some(value.as_str());
+                            }
+                        }
+                    }
+                    if let Some(src) = src_value {
+                        if let Some(payload) = data_uri_base64_payload(src) {
+                            if let Some(decoded) = decode_base64(payload) {
+                                if let Some((width, height)) = png_dimensions(&decoded) {
+                                    if style.width == Dimension::Auto {
+                                        style.width = Dimension::Px(width as f32);
+                                    }
+                                    if style.height == Dimension::Auto {
+                                        style.height = Dimension::Px(height as f32);
+                                    }
+                                    if style.display == Display::Inline {
+                                        style.display = Display::InlineBlock;
+                                    }
+                                    let image = strata_layout::ImageResource {
+                                        data: std::sync::Arc::new(decoded),
+                                        width,
+                                        height,
+                                    };
+                                    return LayoutNode::with_image(style, image);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let is_inline = matches!(
                     style.display,
                     Display::Inline | Display::InlineFlex | Display::InlineBlock
@@ -932,7 +1335,14 @@ impl AppRuntime {
                     if let NodeBlueprint::Text(t) = &children[0] {
                         let is_mono = strata_layout::is_monospace_family(style.font_family);
                         let weight_scale = font_weight_scale(style.font_weight);
-                        let (raw_w, raw_h) = strata_layout::measure_text_bounds_ext(t, style.font_size, style.line_height, None, is_mono);
+                        let (raw_w, raw_h) = strata_layout::measure_text_bounds_with_family(
+                            t,
+                            style.font_size,
+                            style.line_height,
+                            None,
+                            is_mono,
+                            style.font_family,
+                        );
                         let text_w = raw_w * weight_scale;
                         let total_w = text_w
                             + style.padding.left
@@ -974,7 +1384,14 @@ impl AppRuntime {
                 style.display = Display::Inline;
                 let is_mono = strata_layout::is_monospace_family(style.font_family);
                 let weight_scale = font_weight_scale(style.font_weight);
-                let (raw_w, h) = strata_layout::measure_text_bounds_ext(text, style.font_size, style.line_height, None, is_mono);
+                let (raw_w, h) = strata_layout::measure_text_bounds_with_family(
+                    text,
+                    style.font_size,
+                    style.line_height,
+                    None,
+                    is_mono,
+                    style.font_family,
+                );
                 let w = raw_w * weight_scale;
                 style.width = Dimension::Px(w);
                 style.height = Dimension::Px(h);
@@ -989,7 +1406,14 @@ impl AppRuntime {
                 style.display = Display::Inline;
                 let is_mono = strata_layout::is_monospace_family(style.font_family);
                 let weight_scale = font_weight_scale(style.font_weight);
-                let (raw_w, h) = strata_layout::measure_text_bounds_ext(&text, style.font_size, style.line_height, None, is_mono);
+                let (raw_w, h) = strata_layout::measure_text_bounds_with_family(
+                    &text,
+                    style.font_size,
+                    style.line_height,
+                    None,
+                    is_mono,
+                    style.font_family,
+                );
                 let w = raw_w * weight_scale;
                 style.width = Dimension::Px(w);
                 style.height = Dimension::Px(h);
@@ -1023,178 +1447,414 @@ impl AppRuntime {
                 style.display = Display::None;
                 LayoutNode::new(style)
             }
-    }
-}
-
-/// Helper to convert SVG points attribute into path commands.
-fn parse_points_to_path(points_str: &str, closed: bool) -> Option<String> {
-    let coords: Vec<f32> = points_str
-        .replace(',', " ")
-        .split_whitespace()
-        .filter_map(|s| s.parse::<f32>().ok())
-        .collect();
-    if coords.len() < 2 {
-        return None;
-    }
-    let mut path = format!("M {} {}", coords[0], coords[1]);
-    for chunk in coords[2..].chunks(2) {
-        if chunk.len() == 2 {
-            path.push_str(&format!(" L {} {}", chunk[0], chunk[1]));
         }
     }
-    if closed {
-        path.push_str(" Z");
+
+    /// Helper to convert SVG points attribute into path commands.
+    fn parse_points_to_path(points_str: &str, closed: bool) -> Option<String> {
+        let coords: Vec<f32> = points_str
+            .replace(',', " ")
+            .split_whitespace()
+            .filter_map(|s| s.parse::<f32>().ok())
+            .collect();
+        if coords.len() < 2 {
+            return None;
+        }
+        let mut path = format!("M {} {}", coords[0], coords[1]);
+        for chunk in coords[2..].chunks(2) {
+            if chunk.len() == 2 {
+                path.push_str(&format!(" L {} {}", chunk[0], chunk[1]));
+            }
+        }
+        if closed {
+            path.push_str(" Z");
+        }
+        Some(path)
     }
-    Some(path)
-}
 
-/// Helper function to extract all SVG vector shapes from a blueprint hierarchy.
-fn collect_svg_items_from_blueprint(
-    blueprint: &NodeBlueprint,
-    default_view_box: (f32, f32),
-    inherited_stroke: Option<strata_style::types::Color>,
-    inherited_fill: Option<strata_style::types::Color>,
-    inherited_stroke_width: f32,
-    inherited_linecap: strata_layout::StrokeLineCap,
-    inherited_linejoin: strata_layout::StrokeLineJoin,
-    inherited_dasharray: Vec<f32>,
-    inherited_fill_rule: strata_layout::FillRule,
-    parent_color: strata_style::types::Color,
-) -> Vec<strata_layout::SvgItem> {
-    let mut items = Vec::new();
-    match blueprint {
-        NodeBlueprint::Element {
-            tag,
-            attributes,
-            children,
-            ..
-        } => {
-            let mut d = None;
-            let mut stroke = inherited_stroke;
-            let mut fill = inherited_fill;
-            let mut stroke_width = inherited_stroke_width;
-            let mut stroke_linecap = inherited_linecap;
-            let mut stroke_linejoin = inherited_linejoin;
-            let mut stroke_dasharray = inherited_dasharray.clone();
-            let mut fill_rule = inherited_fill_rule;
+    /// Helper to parse a color or CSS `var(--token, fallback)` string.
+    fn parse_svg_color_attr(value: &str) -> Option<strata_style::types::Color> {
+        let trimmed = value.trim();
+        if let Some(inner) = trimmed
+            .strip_prefix("var(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            if let Some((_, fallback)) = inner.split_once(',') {
+                return strata_style::parser::parse_color(fallback.trim());
+            }
+        }
+        strata_style::parser::parse_color(trimmed)
+    }
 
-            let mut x1 = 0.0f32;
-            let mut y1 = 0.0f32;
-            let mut x2 = 0.0f32;
-            let mut y2 = 0.0f32;
-            let mut has_line = false;
+    /// Converts a possibly-rotated ellipse (or circle when rx == ry) into an exact 4-segment cubic Bezier SVG path.
+    fn ellipse_to_cubic_bezier_path(
+        cx: f32,
+        cy: f32,
+        rx: f32,
+        ry: f32,
+        rot_deg: f32,
+        rot_cx: f32,
+        rot_cy: f32,
+    ) -> String {
+        const KAPPA: f32 = 0.552_284_8;
+        let theta = rot_deg.to_radians();
+        let cos_t = theta.cos();
+        let sin_t = theta.sin();
 
-            let mut cx = 0.0f32;
-            let mut cy = 0.0f32;
-            let mut r = 0.0f32;
-            let mut rx = 0.0f32;
-            let mut ry = 0.0f32;
-            let mut has_circle = false;
-            let mut has_ellipse = false;
+        // Rotate ellipse center around (rot_cx, rot_cy) if needed
+        let dx = cx - rot_cx;
+        let dy = cy - rot_cy;
+        let ecx = rot_cx + dx * cos_t - dy * sin_t;
+        let ecy = rot_cy + dx * sin_t + dy * cos_t;
 
-            let mut rect_x = 0.0f32;
-            let mut rect_y = 0.0f32;
-            let mut rect_w = 0.0f32;
-            let mut rect_h = 0.0f32;
-            let mut rect_rx = 0.0f32;
-            let mut has_rect = false;
+        // Semi-axis vectors in rotated frame
+        let ux = rx * cos_t;
+        let uy = rx * sin_t;
+        let vx = -ry * sin_t;
+        let vy = ry * cos_t;
 
-            let mut points = None;
-            let is_polygon = match tag {
-                Tag::Custom(s) => *s == "polygon",
-                _ => false,
-            };
+        let p0 = (ecx + ux, ecy + uy);
+        let p1 = (ecx + vx, ecy + vy);
+        let p2 = (ecx - ux, ecy - uy);
+        let p3 = (ecx - vx, ecy - vy);
 
-            for attr in attributes {
-                if let strata_dom::Attribute::Property { key, value } = attr {
-                    match key.as_str() {
-                        "d" => d = Some(value.clone()),
-                        "stroke" => {
-                            if value == "currentColor" {
-                                stroke = Some(parent_color);
-                            } else if value == "none" {
-                                stroke = None;
-                            } else if let Some(c) = strata_style::parser::parse_color(value) {
-                                stroke = Some(c);
+        let c0_1 = (p0.0 + KAPPA * vx, p0.1 + KAPPA * vy);
+        let c0_2 = (p1.0 + KAPPA * ux, p1.1 + KAPPA * uy);
+
+        let c1_1 = (p1.0 - KAPPA * ux, p1.1 - KAPPA * uy);
+        let c1_2 = (p2.0 + KAPPA * vx, p2.1 + KAPPA * vy);
+
+        let c2_1 = (p2.0 - KAPPA * vx, p2.1 - KAPPA * vy);
+        let c2_2 = (p3.0 - KAPPA * ux, p3.1 - KAPPA * uy);
+
+        let c3_1 = (p3.0 + KAPPA * ux, p3.1 + KAPPA * uy);
+        let c3_2 = (p0.0 - KAPPA * vx, p0.1 - KAPPA * vy);
+
+        format!(
+        "M {:.3} {:.3} C {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} C {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} C {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} C {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} Z",
+        p0.0, p0.1,
+        c0_1.0, c0_1.1, c0_2.0, c0_2.1, p1.0, p1.1,
+        c1_1.0, c1_1.1, c1_2.0, c1_2.1, p2.0, p2.1,
+        c2_1.0, c2_1.1, c2_2.0, c2_2.1, p3.0, p3.1,
+        c3_1.0, c3_1.1, c3_2.0, c3_2.1, p0.0, p0.1,
+    )
+    }
+
+    /// Helper function to extract all SVG vector shapes from a blueprint hierarchy.
+    fn collect_svg_items_from_blueprint(
+        blueprint: &NodeBlueprint,
+        default_view_box: (f32, f32),
+        inherited_stroke: Option<strata_style::types::Color>,
+        inherited_fill: Option<strata_style::types::Color>,
+        inherited_stroke_width: f32,
+        inherited_linecap: strata_layout::StrokeLineCap,
+        inherited_linejoin: strata_layout::StrokeLineJoin,
+        inherited_dasharray: Vec<f32>,
+        inherited_fill_rule: strata_layout::FillRule,
+        parent_color: strata_style::types::Color,
+    ) -> Vec<strata_layout::SvgItem> {
+        Self::collect_svg_items_with_transform(
+            blueprint,
+            default_view_box,
+            inherited_stroke,
+            inherited_fill,
+            inherited_stroke_width,
+            inherited_linecap,
+            inherited_linejoin,
+            inherited_dasharray,
+            inherited_fill_rule,
+            parent_color,
+            (0.0, default_view_box.0 * 0.5, default_view_box.1 * 0.5),
+        )
+    }
+
+    fn collect_svg_items_with_transform(
+        blueprint: &NodeBlueprint,
+        default_view_box: (f32, f32),
+        inherited_stroke: Option<strata_style::types::Color>,
+        inherited_fill: Option<strata_style::types::Color>,
+        inherited_stroke_width: f32,
+        inherited_linecap: strata_layout::StrokeLineCap,
+        inherited_linejoin: strata_layout::StrokeLineJoin,
+        inherited_dasharray: Vec<f32>,
+        inherited_fill_rule: strata_layout::FillRule,
+        parent_color: strata_style::types::Color,
+        inherited_rotation: (f32, f32, f32),
+    ) -> Vec<strata_layout::SvgItem> {
+        let mut items = Vec::new();
+        match blueprint {
+            NodeBlueprint::Element {
+                tag,
+                attributes,
+                children,
+                ..
+            } => {
+                let mut d = None;
+                let mut stroke = inherited_stroke;
+                let mut fill = inherited_fill;
+                let mut stroke_width = inherited_stroke_width;
+                let mut stroke_linecap = inherited_linecap;
+                let mut stroke_linejoin = inherited_linejoin;
+                let mut stroke_dasharray = inherited_dasharray.clone();
+                let mut fill_rule = inherited_fill_rule;
+                let mut rotation = inherited_rotation;
+
+                let mut x1 = 0.0f32;
+                let mut y1 = 0.0f32;
+                let mut x2 = 0.0f32;
+                let mut y2 = 0.0f32;
+                let mut has_line = false;
+
+                let mut cx = 0.0f32;
+                let mut cy = 0.0f32;
+                let mut r = 0.0f32;
+                let mut rx = 0.0f32;
+                let mut ry = 0.0f32;
+                let mut has_circle = false;
+                let mut has_ellipse = false;
+
+                let mut rect_x = 0.0f32;
+                let mut rect_y = 0.0f32;
+                let mut rect_w = 0.0f32;
+                let mut rect_h = 0.0f32;
+                let mut rect_rx = 0.0f32;
+                let mut has_rect = false;
+
+                let mut points = None;
+                let is_polygon = match tag {
+                    Tag::Custom(s) => *s == "polygon",
+                    _ => false,
+                };
+                let is_rect_tag = match tag {
+                    Tag::Custom(s) => *s == "rect",
+                    _ => false,
+                };
+
+                for attr in attributes {
+                    if let strata_dom::Attribute::Property { key, value } = attr {
+                        match key.as_str() {
+                            "d" => d = Some(value.clone()),
+                            "stroke" => {
+                                if value == "currentColor" {
+                                    stroke = Some(parent_color);
+                                } else if value == "none" {
+                                    stroke = None;
+                                } else if let Some(c) = Self::parse_svg_color_attr(value) {
+                                    stroke = Some(c);
+                                }
                             }
-                        }
-                        "fill" => {
-                            if value == "currentColor" {
-                                fill = Some(parent_color);
-                            } else if value == "none" {
-                                fill = None;
-                            } else if let Some(c) = strata_style::parser::parse_color(value) {
-                                fill = Some(c);
+                            "fill" => {
+                                if value == "currentColor" {
+                                    fill = Some(parent_color);
+                                } else if value == "none" {
+                                    fill = None;
+                                } else if let Some(c) = Self::parse_svg_color_attr(value) {
+                                    fill = Some(c);
+                                }
                             }
-                        }
-                        "stroke-width" => {
-                            if let Ok(w) = value.parse::<f32>() {
-                                stroke_width = w;
+                            "transform" => {
+                                let trimmed = value.trim();
+                                if let Some(inner) = trimmed
+                                    .strip_prefix("rotate(")
+                                    .and_then(|s| s.strip_suffix(')'))
+                                {
+                                    let nums: Vec<f32> = inner
+                                        .replace(',', " ")
+                                        .split_whitespace()
+                                        .filter_map(|s| s.parse::<f32>().ok())
+                                        .collect();
+                                    if let Some(&deg) = nums.first() {
+                                        let rcx = nums
+                                            .get(1)
+                                            .copied()
+                                            .unwrap_or(default_view_box.0 * 0.5);
+                                        let rcy = nums
+                                            .get(2)
+                                            .copied()
+                                            .unwrap_or(default_view_box.1 * 0.5);
+                                        rotation = (rotation.0 + deg, rcx, rcy);
+                                    }
+                                }
                             }
-                        }
-                        "stroke-linecap" => match value.as_str() {
-                            "round" => stroke_linecap = strata_layout::StrokeLineCap::Round,
-                            "square" => stroke_linecap = strata_layout::StrokeLineCap::Square,
-                            "butt" => stroke_linecap = strata_layout::StrokeLineCap::Butt,
+                            "stroke-width" => {
+                                if let Ok(w) = value.parse::<f32>() {
+                                    stroke_width = w;
+                                }
+                            }
+                            "stroke-linecap" => match value.as_str() {
+                                "round" => stroke_linecap = strata_layout::StrokeLineCap::Round,
+                                "square" => stroke_linecap = strata_layout::StrokeLineCap::Square,
+                                "butt" => stroke_linecap = strata_layout::StrokeLineCap::Butt,
+                                _ => {}
+                            },
+                            "stroke-linejoin" => match value.as_str() {
+                                "round" => stroke_linejoin = strata_layout::StrokeLineJoin::Round,
+                                "bevel" => stroke_linejoin = strata_layout::StrokeLineJoin::Bevel,
+                                "miter" => stroke_linejoin = strata_layout::StrokeLineJoin::Miter,
+                                _ => {}
+                            },
+                            "stroke-dasharray" => {
+                                stroke_dasharray = value
+                                    .replace(',', " ")
+                                    .split_whitespace()
+                                    .filter_map(|s| s.parse::<f32>().ok())
+                                    .collect();
+                            }
+                            "fill-rule" => match value.as_str() {
+                                "evenodd" => fill_rule = strata_layout::FillRule::EvenOdd,
+                                "nonzero" => fill_rule = strata_layout::FillRule::NonZero,
+                                _ => {}
+                            },
+                            "points" => points = Some(value.clone()),
+                            "x1" => {
+                                x1 = value.parse().unwrap_or(0.0);
+                                has_line = true;
+                            }
+                            "y1" => {
+                                y1 = value.parse().unwrap_or(0.0);
+                                has_line = true;
+                            }
+                            "x2" => {
+                                x2 = value.parse().unwrap_or(0.0);
+                                has_line = true;
+                            }
+                            "y2" => {
+                                y2 = value.parse().unwrap_or(0.0);
+                                has_line = true;
+                            }
+                            "cx" => {
+                                cx = value.parse().unwrap_or(0.0);
+                            }
+                            "cy" => {
+                                cy = value.parse().unwrap_or(0.0);
+                            }
+                            "r" => {
+                                r = value.parse().unwrap_or(0.0);
+                                has_circle = true;
+                            }
+                            "rx" => {
+                                let v = value.parse().unwrap_or(0.0);
+                                rx = v;
+                                rect_rx = v;
+                            }
+                            "ry" => {
+                                ry = value.parse().unwrap_or(0.0);
+                                has_ellipse = true;
+                            }
+                            "x" => {
+                                rect_x = value.parse().unwrap_or(0.0);
+                            }
+                            "y" => {
+                                rect_y = value.parse().unwrap_or(0.0);
+                            }
+                            "width" => {
+                                rect_w = value.parse().unwrap_or(0.0);
+                                has_rect = true;
+                            }
+                            "height" => {
+                                rect_h = value.parse().unwrap_or(0.0);
+                                has_rect = true;
+                            }
                             _ => {}
-                        },
-                        "stroke-linejoin" => match value.as_str() {
-                            "round" => stroke_linejoin = strata_layout::StrokeLineJoin::Round,
-                            "bevel" => stroke_linejoin = strata_layout::StrokeLineJoin::Bevel,
-                            "miter" => stroke_linejoin = strata_layout::StrokeLineJoin::Miter,
-                            _ => {}
-                        },
-                        "stroke-dasharray" => {
-                            stroke_dasharray = value
-                                .replace(',', " ")
-                                .split_whitespace()
-                                .filter_map(|s| s.parse::<f32>().ok())
-                                .collect();
                         }
-                        "fill-rule" => match value.as_str() {
-                            "evenodd" => fill_rule = strata_layout::FillRule::EvenOdd,
-                            "nonzero" => fill_rule = strata_layout::FillRule::NonZero,
-                            _ => {}
-                        },
-                        "points" => points = Some(value.clone()),
-                        "x1" => { x1 = value.parse().unwrap_or(0.0); has_line = true; }
-                        "y1" => { y1 = value.parse().unwrap_or(0.0); has_line = true; }
-                        "x2" => { x2 = value.parse().unwrap_or(0.0); has_line = true; }
-                        "y2" => { y2 = value.parse().unwrap_or(0.0); has_line = true; }
-                        "cx" => { cx = value.parse().unwrap_or(0.0); }
-                        "cy" => { cy = value.parse().unwrap_or(0.0); }
-                        "r" => { r = value.parse().unwrap_or(0.0); has_circle = true; }
-                        "rx" => {
-                            let v = value.parse().unwrap_or(0.0);
-                            rx = v;
-                            rect_rx = v;
-                        }
-                        "ry" => { ry = value.parse().unwrap_or(0.0); has_ellipse = true; }
-                        "x" => { rect_x = value.parse().unwrap_or(0.0); }
-                        "y" => { rect_y = value.parse().unwrap_or(0.0); }
-                        "width" => { rect_w = value.parse().unwrap_or(0.0); has_rect = true; }
-                        "height" => { rect_h = value.parse().unwrap_or(0.0); has_rect = true; }
-                        _ => {}
                     }
                 }
-            }
 
-            if let Some(path_str) = d {
-                items.push(strata_layout::SvgItem {
-                    path_data: path_str,
-                    stroke_color: stroke,
-                    fill_color: fill,
-                    stroke_width,
-                    stroke_linecap,
-                    stroke_linejoin,
-                    stroke_dasharray: stroke_dasharray.clone(),
-                    fill_rule,
-                    view_box: default_view_box,
-                });
-            } else if let Some(pts) = points {
-                if let Some(poly_path) = Self::parse_points_to_path(&pts, is_polygon) {
+                if let Some(path_str) = d {
                     items.push(strata_layout::SvgItem {
-                        path_data: poly_path,
+                        path_data: path_str,
+                        stroke_color: stroke,
+                        fill_color: fill,
+                        stroke_width,
+                        stroke_linecap,
+                        stroke_linejoin,
+                        stroke_dasharray: stroke_dasharray.clone(),
+                        fill_rule,
+                        view_box: default_view_box,
+                    });
+                } else if let Some(pts) = points {
+                    if let Some(poly_path) = Self::parse_points_to_path(&pts, is_polygon) {
+                        items.push(strata_layout::SvgItem {
+                            path_data: poly_path,
+                            stroke_color: stroke,
+                            fill_color: fill,
+                            stroke_width,
+                            stroke_linecap,
+                            stroke_linejoin,
+                            stroke_dasharray: stroke_dasharray.clone(),
+                            fill_rule,
+                            view_box: default_view_box,
+                        });
+                    }
+                } else if has_line {
+                    items.push(strata_layout::SvgItem {
+                        path_data: format!("M {} {} L {} {}", x1, y1, x2, y2),
+                        stroke_color: stroke.or(Some(parent_color)),
+                        fill_color: None,
+                        stroke_width,
+                        stroke_linecap,
+                        stroke_linejoin,
+                        stroke_dasharray: stroke_dasharray.clone(),
+                        fill_rule,
+                        view_box: default_view_box,
+                    });
+                } else if has_circle && r > 0.0 {
+                    items.push(strata_layout::SvgItem {
+                        path_data: Self::ellipse_to_cubic_bezier_path(
+                            cx, cy, r, r, rotation.0, rotation.1, rotation.2,
+                        ),
+                        stroke_color: stroke,
+                        fill_color: fill,
+                        stroke_width,
+                        stroke_linecap,
+                        stroke_linejoin,
+                        stroke_dasharray: stroke_dasharray.clone(),
+                        fill_rule,
+                        view_box: default_view_box,
+                    });
+                } else if has_ellipse && rx > 0.0 && ry > 0.0 {
+                    items.push(strata_layout::SvgItem {
+                        path_data: Self::ellipse_to_cubic_bezier_path(
+                            cx, cy, rx, ry, rotation.0, rotation.1, rotation.2,
+                        ),
+                        stroke_color: stroke,
+                        fill_color: fill,
+                        stroke_width,
+                        stroke_linecap,
+                        stroke_linejoin,
+                        stroke_dasharray: stroke_dasharray.clone(),
+                        fill_rule,
+                        view_box: default_view_box,
+                    });
+                } else if is_rect_tag && has_rect && rect_w > 0.0 && rect_h > 0.0 {
+                    let rect_path = if rect_rx > 0.0 {
+                        const K: f32 = 0.552_284_8;
+                        let r = rect_rx.min(rect_w * 0.5).min(rect_h * 0.5);
+                        let x0 = rect_x;
+                        let y0 = rect_y;
+                        let x1 = rect_x + rect_w;
+                        let y1 = rect_y + rect_h;
+                        let c = r * (1.0 - K);
+                        format!(
+                        "M {:.3} {:.3} L {:.3} {:.3} C {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} L {:.3} {:.3} C {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} L {:.3} {:.3} C {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} L {:.3} {:.3} C {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} Z",
+                        x0 + r, y0,
+                        x1 - r, y0,
+                        x1 - c, y0, x1, y0 + c, x1, y0 + r,
+                        x1, y1 - r,
+                        x1, y1 - c, x1 - c, y1, x1 - r, y1,
+                        x0 + r, y1,
+                        x0 + c, y1, x0, y1 - c, x0, y1 - r,
+                        x0, y0 + r,
+                        x0, y0 + c, x0 + c, y0, x0 + r, y0,
+                    )
+                    } else {
+                        format!(
+                            "M {} {} h {} v {} h {} Z",
+                            rect_x, rect_y, rect_w, rect_h, -rect_w
+                        )
+                    };
+                    items.push(strata_layout::SvgItem {
+                        path_data: rect_path,
                         stroke_color: stroke,
                         fill_color: fill,
                         stroke_width,
@@ -1205,93 +1865,47 @@ fn collect_svg_items_from_blueprint(
                         view_box: default_view_box,
                     });
                 }
-            } else if has_line {
-                items.push(strata_layout::SvgItem {
-                    path_data: format!("M {} {} L {} {}", x1, y1, x2, y2),
-                    stroke_color: stroke.or(Some(parent_color)),
-                    fill_color: None,
-                    stroke_width,
-                    stroke_linecap,
-                    stroke_linejoin,
-                    stroke_dasharray: stroke_dasharray.clone(),
-                    fill_rule,
-                    view_box: default_view_box,
-                });
-            } else if has_circle && r > 0.0 {
-                items.push(strata_layout::SvgItem {
-                    path_data: format!("M {} {} a {} {} 0 1 0 {} 0 a {} {} 0 1 0 {} 0 Z", cx - r, cy, r, r, 2.0 * r, r, r, -2.0 * r),
-                    stroke_color: stroke,
-                    fill_color: fill,
-                    stroke_width,
-                    stroke_linecap,
-                    stroke_linejoin,
-                    stroke_dasharray: stroke_dasharray.clone(),
-                    fill_rule,
-                    view_box: default_view_box,
-                });
-            } else if has_ellipse && rx > 0.0 && ry > 0.0 {
-                items.push(strata_layout::SvgItem {
-                    path_data: format!("M {} {} a {} {} 0 1 0 {} 0 a {} {} 0 1 0 {} 0 Z", cx - rx, cy, rx, ry, 2.0 * rx, rx, ry, -2.0 * rx),
-                    stroke_color: stroke,
-                    fill_color: fill,
-                    stroke_width,
-                    stroke_linecap,
-                    stroke_linejoin,
-                    stroke_dasharray: stroke_dasharray.clone(),
-                    fill_rule,
-                    view_box: default_view_box,
-                });
-            } else if has_rect && rect_w > 0.0 && rect_h > 0.0 {
-                let rect_path = if rect_rx > 0.0 {
-                    format!(
-                        "M {} {} h {} a {} {} 0 0 1 {} {} v {} a {} {} 0 0 1 {} {} h {} a {} {} 0 0 1 {} {} v {} a {} {} 0 0 1 {} {} Z",
-                        rect_x + rect_rx, rect_y,
-                        rect_w - 2.0 * rect_rx,
-                        rect_rx, rect_rx, rect_rx, rect_rx,
-                        rect_h - 2.0 * rect_rx,
-                        rect_rx, rect_rx, -rect_rx, rect_rx,
-                        -(rect_w - 2.0 * rect_rx),
-                        rect_rx, rect_rx, -rect_rx, -rect_rx,
-                        -(rect_h - 2.0 * rect_rx),
-                        rect_rx, rect_rx, rect_rx, -rect_rx,
-                    )
-                } else {
-                    format!("M {} {} h {} v {} h {} Z", rect_x, rect_y, rect_w, rect_h, -rect_w)
-                };
-                items.push(strata_layout::SvgItem {
-                    path_data: rect_path,
-                    stroke_color: stroke,
-                    fill_color: fill,
-                    stroke_width,
-                    stroke_linecap,
-                    stroke_linejoin,
-                    stroke_dasharray: stroke_dasharray.clone(),
-                    fill_rule,
-                    view_box: default_view_box,
-                });
-            }
 
-            // Recurse for children (e.g. <g>, or nested paths)
-            for child in children {
-                let child_items = Self::collect_svg_items_from_blueprint(
-                    child,
-                    default_view_box,
-                    stroke,
-                    fill,
-                    stroke_width,
-                    stroke_linecap,
-                    stroke_linejoin,
-                    stroke_dasharray.clone(),
-                    fill_rule,
-                    parent_color,
-                );
-                items.extend(child_items);
+                // Recurse for children (e.g. <g>, or nested paths)
+                for child in children {
+                    let child_items = Self::collect_svg_items_with_transform(
+                        child,
+                        default_view_box,
+                        stroke,
+                        fill,
+                        stroke_width,
+                        stroke_linecap,
+                        stroke_linejoin,
+                        stroke_dasharray.clone(),
+                        fill_rule,
+                        parent_color,
+                        rotation,
+                    );
+                    items.extend(child_items);
+                }
             }
+            NodeBlueprint::Fragment(children) => {
+                for child in children {
+                    let child_items = Self::collect_svg_items_with_transform(
+                        child,
+                        default_view_box,
+                        inherited_stroke,
+                        inherited_fill,
+                        inherited_stroke_width,
+                        inherited_linecap,
+                        inherited_linejoin,
+                        inherited_dasharray.clone(),
+                        inherited_fill_rule,
+                        parent_color,
+                        inherited_rotation,
+                    );
+                    items.extend(child_items);
+                }
+            }
+            _ => {}
         }
-        _ => {}
+        items
     }
-    items
-}
 
     /// Recursively flattens Fragment blueprints so child elements splice directly into parent layout contexts.
     fn append_child_layout_nodes_with_context(
@@ -1412,7 +2026,10 @@ fn collect_svg_items_from_blueprint(
         px: f32,
         py: f32,
         event_type: strata_dom::EventType,
-    ) -> Option<(std::rc::Rc<dyn Fn(strata_dom::Event)>, &'a strata_layout::Rect)> {
+    ) -> Option<(
+        std::rc::Rc<dyn Fn(strata_dom::Event)>,
+        &'a strata_layout::Rect,
+    )> {
         let (px, py) = Self::unproject_point(layout, px, py);
 
         // If element clips overflow, coordinates outside its border box are clipped
@@ -1430,10 +2047,20 @@ fn collect_svg_items_from_blueprint(
                 children,
                 ..
             } => {
-                let has_fragments = children.iter().any(|c| matches!(c, NodeBlueprint::Fragment(_)));
+                let has_fragments = children
+                    .iter()
+                    .any(|c| matches!(c, NodeBlueprint::Fragment(_)));
                 if !has_fragments {
-                    for (child_bp, child_layout) in children.iter().zip(layout.children.iter()).rev() {
-                        if let Some(res) = Self::hit_test_event_with_box(child_bp, child_layout, px, py, event_type) {
+                    for (child_bp, child_layout) in
+                        children.iter().zip(layout.children.iter()).rev()
+                    {
+                        if let Some(res) = Self::hit_test_event_with_box(
+                            child_bp,
+                            child_layout,
+                            px,
+                            py,
+                            event_type,
+                        ) {
                             return Some(res);
                         }
                     }
@@ -1443,8 +2070,16 @@ fn collect_svg_items_from_blueprint(
                         Self::flatten_blueprints(c, &mut flat_children);
                     }
 
-                    for (&child_bp, child_layout) in flat_children.iter().zip(layout.children.iter()).rev() {
-                        if let Some(res) = Self::hit_test_event_with_box(child_bp, child_layout, px, py, event_type) {
+                    for (&child_bp, child_layout) in
+                        flat_children.iter().zip(layout.children.iter()).rev()
+                    {
+                        if let Some(res) = Self::hit_test_event_with_box(
+                            child_bp,
+                            child_layout,
+                            px,
+                            py,
+                            event_type,
+                        ) {
                             return Some(res);
                         }
                     }
@@ -1452,11 +2087,7 @@ fn collect_svg_items_from_blueprint(
 
                 if layout.geometry.border_box.contains_point(px, py) {
                     for attr in attributes {
-                        if let strata_dom::Attribute::EventListener {
-                            event: ev,
-                            handler,
-                        } = attr
-                        {
+                        if let strata_dom::Attribute::EventListener { event: ev, handler } = attr {
                             if *ev != event_type {
                                 continue;
                             }
@@ -1468,7 +2099,9 @@ fn collect_svg_items_from_blueprint(
             }
             NodeBlueprint::Fragment(children) => {
                 for (child_bp, child_layout) in children.iter().zip(layout.children.iter()).rev() {
-                    if let Some(res) = Self::hit_test_event_with_box(child_bp, child_layout, px, py, event_type) {
+                    if let Some(res) =
+                        Self::hit_test_event_with_box(child_bp, child_layout, px, py, event_type)
+                    {
                         return Some(res);
                     }
                 }
@@ -1525,9 +2158,13 @@ fn collect_svg_items_from_blueprint(
                 attributes,
                 children,
             } => {
-                let has_fragments = children.iter().any(|c| matches!(c, NodeBlueprint::Fragment(_)));
+                let has_fragments = children
+                    .iter()
+                    .any(|c| matches!(c, NodeBlueprint::Fragment(_)));
                 if !has_fragments {
-                    for (child_bp, child_layout) in children.iter().zip(layout.children.iter()).rev() {
+                    for (child_bp, child_layout) in
+                        children.iter().zip(layout.children.iter()).rev()
+                    {
                         let child_cur = Self::hit_test_cursor(child_bp, child_layout, px, py);
                         if child_cur != strata_platform::window::CursorIcon::Default {
                             return child_cur;
@@ -1539,7 +2176,9 @@ fn collect_svg_items_from_blueprint(
                         Self::flatten_blueprints(c, &mut flat_children);
                     }
 
-                    for (&child_bp, child_layout) in flat_children.iter().zip(layout.children.iter()).rev() {
+                    for (&child_bp, child_layout) in
+                        flat_children.iter().zip(layout.children.iter()).rev()
+                    {
                         let child_cur = Self::hit_test_cursor(child_bp, child_layout, px, py);
                         if child_cur != strata_platform::window::CursorIcon::Default {
                             return child_cur;
@@ -1549,31 +2188,69 @@ fn collect_svg_items_from_blueprint(
 
                 if layout.geometry.border_box.contains_point(px, py) {
                     match layout.style.cursor {
-                        strata_style::types::Cursor::Pointer => return strata_platform::window::CursorIcon::Pointer,
-                        strata_style::types::Cursor::Text => return strata_platform::window::CursorIcon::Text,
-                        strata_style::types::Cursor::Crosshair => return strata_platform::window::CursorIcon::Crosshair,
-                        strata_style::types::Cursor::Move => return strata_platform::window::CursorIcon::Move,
-                        strata_style::types::Cursor::NotAllowed => return strata_platform::window::CursorIcon::NotAllowed,
-                        strata_style::types::Cursor::Wait => return strata_platform::window::CursorIcon::Wait,
-                        strata_style::types::Cursor::Grab => return strata_platform::window::CursorIcon::Grab,
-                        strata_style::types::Cursor::Grabbing => return strata_platform::window::CursorIcon::Grabbing,
-                        strata_style::types::Cursor::ColResize => return strata_platform::window::CursorIcon::ColResize,
-                        strata_style::types::Cursor::RowResize => return strata_platform::window::CursorIcon::RowResize,
-                        strata_style::types::Cursor::Help => return strata_platform::window::CursorIcon::Help,
-                        strata_style::types::Cursor::None => return strata_platform::window::CursorIcon::None,
+                        strata_style::types::Cursor::Pointer => {
+                            return strata_platform::window::CursorIcon::Pointer
+                        }
+                        strata_style::types::Cursor::Text => {
+                            return strata_platform::window::CursorIcon::Text
+                        }
+                        strata_style::types::Cursor::Crosshair => {
+                            return strata_platform::window::CursorIcon::Crosshair
+                        }
+                        strata_style::types::Cursor::Move => {
+                            return strata_platform::window::CursorIcon::Move
+                        }
+                        strata_style::types::Cursor::NotAllowed => {
+                            return strata_platform::window::CursorIcon::NotAllowed
+                        }
+                        strata_style::types::Cursor::Wait => {
+                            return strata_platform::window::CursorIcon::Wait
+                        }
+                        strata_style::types::Cursor::Grab => {
+                            return strata_platform::window::CursorIcon::Grab
+                        }
+                        strata_style::types::Cursor::Grabbing => {
+                            return strata_platform::window::CursorIcon::Grabbing
+                        }
+                        strata_style::types::Cursor::ColResize => {
+                            return strata_platform::window::CursorIcon::ColResize
+                        }
+                        strata_style::types::Cursor::RowResize => {
+                            return strata_platform::window::CursorIcon::RowResize
+                        }
+                        strata_style::types::Cursor::Help => {
+                            return strata_platform::window::CursorIcon::Help
+                        }
+                        strata_style::types::Cursor::None => {
+                            return strata_platform::window::CursorIcon::None
+                        }
                         strata_style::types::Cursor::Default => {}
                     }
 
                     let has_pointer = matches!(tag, Tag::Button | Tag::A)
-                        || classes.iter().any(|c| c.split_whitespace().any(|tok| tok == "cursor-pointer" || tok == "pointer"))
-                        || attributes.iter().any(|a| matches!(a, strata_dom::Attribute::EventListener { event: strata_dom::EventType::Click, .. }));
+                        || classes.iter().any(|c| {
+                            c.split_whitespace()
+                                .any(|tok| tok == "cursor-pointer" || tok == "pointer")
+                        })
+                        || attributes.iter().any(|a| {
+                            matches!(
+                                a,
+                                strata_dom::Attribute::EventListener {
+                                    event: strata_dom::EventType::Click,
+                                    ..
+                                }
+                            )
+                        });
 
                     if has_pointer {
                         return strata_platform::window::CursorIcon::Pointer;
                     }
 
                     let has_text_cursor = matches!(tag, Tag::Input | Tag::Textarea)
-                        || classes.iter().any(|c| c.split_whitespace().any(|tok| tok == "cursor-text" || tok == "select-text"));
+                        || classes.iter().any(|c| {
+                            c.split_whitespace()
+                                .any(|tok| tok == "cursor-text" || tok == "select-text")
+                        });
 
                     if has_text_cursor {
                         return strata_platform::window::CursorIcon::Text;
@@ -1623,6 +2300,7 @@ fn collect_svg_items_from_blueprint(
         match blueprint {
             NodeBlueprint::Element {
                 tag,
+                classes,
                 attributes,
                 children,
                 ..
@@ -1649,14 +2327,24 @@ fn collect_svg_items_from_blueprint(
                                     input_id = Some(value.clone());
                                 }
                             }
-                            strata_dom::Attribute::EventListener { event, handler } => match event {
-                                strata_dom::EventType::Input => on_input = Some(handler.clone()),
-                                strata_dom::EventType::Change => on_change = Some(handler.clone()),
-                                strata_dom::EventType::Submit => on_submit = Some(handler.clone()),
-                                strata_dom::EventType::Focus => on_focus = Some(handler.clone()),
-                                strata_dom::EventType::Blur => on_blur = Some(handler.clone()),
-                                _ => {}
-                            },
+                            strata_dom::Attribute::EventListener { event, handler } => {
+                                match event {
+                                    strata_dom::EventType::Input => {
+                                        on_input = Some(handler.clone())
+                                    }
+                                    strata_dom::EventType::Change => {
+                                        on_change = Some(handler.clone())
+                                    }
+                                    strata_dom::EventType::Submit => {
+                                        on_submit = Some(handler.clone())
+                                    }
+                                    strata_dom::EventType::Focus => {
+                                        on_focus = Some(handler.clone())
+                                    }
+                                    strata_dom::EventType::Blur => on_blur = Some(handler.clone()),
+                                    _ => {}
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -1670,8 +2358,10 @@ fn collect_svg_items_from_blueprint(
                             font_size: layout.style.font_size,
                             line_height: layout.style.line_height,
                             is_mono,
+                            font_family: layout.style.font_family,
                             content_box_x: layout.geometry.content_box.x,
                             content_box_y: layout.geometry.content_box.y,
+                            content_box_width: layout.geometry.content_box.width,
                             on_input,
                             on_change,
                             on_submit,
@@ -1682,6 +2372,7 @@ fn collect_svg_items_from_blueprint(
                     ));
                 }
 
+                let start_idx = out.len();
                 let mut flat = Vec::new();
                 for c in children {
                     Self::flatten_blueprints(c, &mut flat);
@@ -1689,6 +2380,19 @@ fn collect_svg_items_from_blueprint(
 
                 for (&child_bp, child_layout) in flat.iter().zip(layout.children.iter()) {
                     Self::collect_input_candidates(child_bp, child_layout, counter, out);
+                }
+
+                // If this is a container with cursor-text or wrapping an input, register a fallback candidate
+                if !is_input && out.len() > start_idx {
+                    let has_cursor_text = classes
+                        .iter()
+                        .any(|c| c.split_whitespace().any(|tok| tok == "cursor-text"))
+                        || layout.style.cursor == strata_style::types::Cursor::Text
+                        || matches!(tag, Tag::Label);
+                    if has_cursor_text {
+                        let child_target = out[start_idx].0.clone();
+                        out.insert(start_idx, (child_target, layout.geometry.border_box));
+                    }
                 }
             }
             NodeBlueprint::Fragment(children) => {
@@ -1753,7 +2457,13 @@ fn collect_svg_items_from_blueprint(
                 }
 
                 for (&child_bp, child_layout) in flat.iter().zip(layout.children.iter()) {
-                    if let Some(found) = Self::find_input_layout(child_bp, child_layout, target_index, target_id, counter) {
+                    if let Some(found) = Self::find_input_layout(
+                        child_bp,
+                        child_layout,
+                        target_index,
+                        target_id,
+                        counter,
+                    ) {
                         return Some(found);
                     }
                 }
@@ -1765,7 +2475,13 @@ fn collect_svg_items_from_blueprint(
                     let mut flat = Vec::new();
                     Self::flatten_blueprints(c, &mut flat);
                     for (&child_bp, child_layout) in flat.iter().zip(layout.children.iter()) {
-                        if let Some(found) = Self::find_input_layout(child_bp, child_layout, target_index, target_id, counter) {
+                        if let Some(found) = Self::find_input_layout(
+                            child_bp,
+                            child_layout,
+                            target_index,
+                            target_id,
+                            counter,
+                        ) {
                             return Some(found);
                         }
                     }
@@ -1776,6 +2492,227 @@ fn collect_svg_items_from_blueprint(
         }
     }
 
+    /// Locates the mutable LayoutNode corresponding to a target input index or id in document order.
+    pub fn find_input_layout_mut<'a>(
+        blueprint: &NodeBlueprint,
+        layout: &'a mut LayoutNode,
+        target_index: usize,
+        target_id: Option<&str>,
+        counter: &mut usize,
+    ) -> Option<&'a mut LayoutNode> {
+        match blueprint {
+            NodeBlueprint::Element {
+                tag,
+                attributes,
+                children,
+                ..
+            } => {
+                let is_input = matches!(tag, Tag::Input | Tag::Textarea);
+                if is_input {
+                    let this_idx = *counter;
+                    *counter += 1;
+
+                    let mut matches_id = false;
+                    if let Some(tid) = target_id {
+                        for attr in attributes {
+                            if let strata_dom::Attribute::Property { key, value } = attr {
+                                if key == "id" && value == tid {
+                                    matches_id = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    let is_match = if target_id.is_some() {
+                        matches_id
+                    } else {
+                        this_idx == target_index
+                    };
+
+                    if is_match {
+                        return Some(layout);
+                    }
+                }
+
+                let mut flat = Vec::new();
+                for c in children {
+                    Self::flatten_blueprints(c, &mut flat);
+                }
+
+                for (&child_bp, child_layout) in flat.iter().zip(layout.children.iter_mut()) {
+                    if let Some(found) = Self::find_input_layout_mut(
+                        child_bp,
+                        child_layout,
+                        target_index,
+                        target_id,
+                        counter,
+                    ) {
+                        return Some(found);
+                    }
+                }
+
+                None
+            }
+            NodeBlueprint::Fragment(children) => {
+                let mut flat = Vec::new();
+                for c in children {
+                    Self::flatten_blueprints(c, &mut flat);
+                }
+                for (&child_bp, child_layout) in flat.iter().zip(layout.children.iter_mut()) {
+                    if let Some(found) = Self::find_input_layout_mut(
+                        child_bp,
+                        child_layout,
+                        target_index,
+                        target_id,
+                        counter,
+                    ) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Locates the blueprint element corresponding to a target input index or ID.
+    pub fn find_input_blueprint<'a>(
+        blueprint: &'a NodeBlueprint,
+        target_index: usize,
+        target_id: Option<&str>,
+        counter: &mut usize,
+    ) -> Option<&'a NodeBlueprint> {
+        match blueprint {
+            NodeBlueprint::Element {
+                tag,
+                attributes,
+                children,
+                ..
+            } => {
+                let is_input = matches!(tag, Tag::Input | Tag::Textarea);
+                if is_input {
+                    let this_idx = *counter;
+                    *counter += 1;
+
+                    let mut matches_id = false;
+                    if let Some(tid) = target_id {
+                        for attr in attributes {
+                            if let strata_dom::Attribute::Property { key, value } = attr {
+                                if key == "id" && value == tid {
+                                    matches_id = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    let is_match = if target_id.is_some() {
+                        matches_id
+                    } else {
+                        this_idx == target_index
+                    };
+
+                    if is_match {
+                        return Some(blueprint);
+                    }
+                }
+
+                let mut flat = Vec::new();
+                for c in children {
+                    Self::flatten_blueprints(c, &mut flat);
+                }
+
+                for child_bp in flat {
+                    if let Some(found) =
+                        Self::find_input_blueprint(child_bp, target_index, target_id, counter)
+                    {
+                        return Some(found);
+                    }
+                }
+
+                None
+            }
+            NodeBlueprint::Fragment(children) => {
+                for c in children {
+                    let mut flat = Vec::new();
+                    Self::flatten_blueprints(c, &mut flat);
+                    for child_bp in flat {
+                        if let Some(found) =
+                            Self::find_input_blueprint(child_bp, target_index, target_id, counter)
+                        {
+                            return Some(found);
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Synchronizes the active focused text input's live buffer and styling into the layout tree.
+    pub fn sync_active_input_layout(&mut self) {
+        let Some(ref active) = self.active_focus else {
+            return;
+        };
+        let target_idx = active.input_index;
+        let target_id = active.input_id.clone();
+        let mut counter = 0;
+        let text_val = active.state.text.get();
+
+        if let Some(layout) = Self::find_input_layout_mut(
+            &self.root_blueprint,
+            &mut self.layout_root,
+            target_idx,
+            target_id.as_deref(),
+            &mut counter,
+        ) {
+            let is_mono = strata_layout::is_monospace_family(layout.style.font_family);
+            if !text_val.is_empty() {
+                layout.text = Some(text_val.clone());
+                if let Some(c) = layout.style.caret_color {
+                    layout.style.color = c;
+                }
+                let (tw, th) = strata_layout::text::measure_text_bounds_with_family(
+                    &text_val,
+                    layout.style.font_size,
+                    layout.style.line_height,
+                    None,
+                    is_mono,
+                    layout.style.font_family,
+                );
+                layout.geometry.content_box.width = tw.max(layout.geometry.content_box.width);
+                layout.geometry.content_box.height = th.max(layout.geometry.content_box.height);
+            } else {
+                let mut ph = None;
+                let mut bp_counter = 0;
+                if let Some(bp) = Self::find_input_blueprint(
+                    &self.root_blueprint,
+                    target_idx,
+                    target_id.as_deref(),
+                    &mut bp_counter,
+                ) {
+                    if let NodeBlueprint::Element { attributes, .. } = bp {
+                        for attr in attributes {
+                            if let strata_dom::Attribute::Property { key, value } = attr {
+                                if key == "placeholder" && !value.is_empty() {
+                                    ph = Some(value.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(ph_str) = ph {
+                    layout.text = Some(ph_str);
+                    layout.style.color = strata_style::types::Color::new(140, 145, 155, 255);
+                } else {
+                    layout.text = Some(String::new());
+                }
+            }
+        }
+    }
+
     /// Calculates the exact character index from an x offset within an input using active font metrics and character advances.
     pub fn calculate_exact_char_index_at_offset(
         text: &str,
@@ -1783,6 +2720,7 @@ fn collect_svg_items_from_blueprint(
         font_size: f32,
         line_height: f32,
         is_mono: bool,
+        font_family: strata_primitives::AtomId,
     ) -> usize {
         if rel_x <= 0.0 || text.is_empty() {
             return 0;
@@ -1790,7 +2728,14 @@ fn collect_svg_items_from_blueprint(
         let chars: Vec<char> = text.chars().collect();
         let total = chars.len();
 
-        let (full_w, _) = strata_layout::text::measure_text_bounds_ext(text, font_size, line_height, None, is_mono);
+        let (full_w, _) = strata_layout::text::measure_text_bounds_with_family(
+            text,
+            font_size,
+            line_height,
+            None,
+            is_mono,
+            font_family,
+        );
         if rel_x >= full_w {
             return total;
         }
@@ -1798,7 +2743,14 @@ fn collect_svg_items_from_blueprint(
         let mut prev_w = 0.0f32;
         for i in 1..=total {
             let prefix: String = chars[..i].iter().collect();
-            let (w, _) = strata_layout::text::measure_text_bounds_ext(&prefix, font_size, line_height, None, is_mono);
+            let (w, _) = strata_layout::text::measure_text_bounds_with_family(
+                &prefix,
+                font_size,
+                line_height,
+                None,
+                is_mono,
+                font_family,
+            );
             let mid = (prev_w + w) / 2.0;
             if rel_x < mid {
                 return i - 1;
@@ -1810,21 +2762,48 @@ fn collect_svg_items_from_blueprint(
         total
     }
 
-    /// Dispatches pointer down at (px, py) coordinates to manage native input element focus, multi-click, and text selection.
+    /// Dispatches pointer down at (px, py) coordinates with no active modifier keys.
     /// Returns true if focus or selection state changed.
     pub fn dispatch_pointer_down(&mut self, px: f32, py: f32) -> bool {
+        self.dispatch_pointer_down_with_modifiers(px, py, strata_platform::Modifiers::default())
+    }
+
+    /// Dispatches pointer down at (px, py) coordinates to manage native input element focus, multi-click,
+    /// Shift+click range extension, and text selection.
+    /// Returns true if focus or selection state changed.
+    pub fn dispatch_pointer_down_with_modifiers(
+        &mut self,
+        px: f32,
+        py: f32,
+        modifiers: strata_platform::Modifiers,
+    ) -> bool {
         // Surfaces marked `data-keep-focus` (context menus, toolbars) never steal focus from the
         // active text input, so commands such as Cut/Paste act on the field the user was editing.
-        if Self::hit_test_property(&self.root_blueprint, &self.layout_root, px, py, "data-keep-focus").is_some() {
+        if Self::hit_test_property(
+            &self.root_blueprint,
+            &self.layout_root,
+            px,
+            py,
+            "data-keep-focus",
+        )
+        .is_some()
+        {
             self.drag_selection_active = false;
             return false;
         }
 
         let mut input_handled = false;
-        if let Some(target) = Self::hit_test_input(&self.root_blueprint, &self.layout_root, px, py) {
-            let target_key = target.input_id.clone().unwrap_or_else(|| format!("input:{}", target.input_index));
+        if let Some(target) = Self::hit_test_input(&self.root_blueprint, &self.layout_root, px, py)
+        {
+            let target_key = target
+                .input_id
+                .clone()
+                .unwrap_or_else(|| format!("input:{}", target.input_index));
             let text_val = if let Some(ref active) = self.active_focus {
-                let current_key = active.input_id.clone().unwrap_or_else(|| format!("input:{}", active.input_index));
+                let current_key = active
+                    .input_id
+                    .clone()
+                    .unwrap_or_else(|| format!("input:{}", active.input_index));
                 if current_key == target_key {
                     active.state.text.get()
                 } else {
@@ -1833,18 +2812,30 @@ fn collect_svg_items_from_blueprint(
             } else {
                 target.current_value.clone()
             };
-            let rel_x = (px - target.content_box_x).max(0.0);
+            let content_box_width = target.content_box_width;
+            let rel_x = if px < target.content_box_x {
+                0.0
+            } else if content_box_width > 0.0 && px > target.content_box_x + content_box_width {
+                100000.0
+            } else {
+                px - target.content_box_x
+            };
             let char_idx = Self::calculate_exact_char_index_at_offset(
                 &text_val,
                 rel_x,
                 target.font_size,
                 target.line_height,
                 target.is_mono,
+                target.font_family,
             );
 
             let now = std::time::Instant::now();
-            let click_count = if let Some((last_time, last_x, last_y, count)) = self.last_click_info {
-                if now.duration_since(last_time).as_millis() < 400 && (px - last_x).abs() < 5.0 && (py - last_y).abs() < 5.0 {
+            let click_count = if let Some((last_time, last_x, last_y, count)) = self.last_click_info
+            {
+                if now.duration_since(last_time).as_millis() < 400
+                    && (px - last_x).abs() < 5.0
+                    && (py - last_y).abs() < 5.0
+                {
                     count + 1
                 } else {
                     1
@@ -1855,16 +2846,29 @@ fn collect_svg_items_from_blueprint(
             self.last_click_info = Some((now, px, py, click_count));
             self.reset_caret_blink();
 
-            let target_key = target.input_id.clone().unwrap_or_else(|| format!("input:{}", target.input_index));
+            let target_key = target
+                .input_id
+                .clone()
+                .unwrap_or_else(|| format!("input:{}", target.input_index));
 
             // If the same input is already active, handle multi-click or reposition caret
             if let Some(ref mut active) = self.active_focus {
-                let current_key = active.input_id.clone().unwrap_or_else(|| format!("input:{}", active.input_index));
+                let current_key = active
+                    .input_id
+                    .clone()
+                    .unwrap_or_else(|| format!("input:{}", active.input_index));
                 if current_key == target_key {
-                    if click_count == 2 {
+                    if modifiers.shift {
+                        // Shift+click extends the existing selection from its anchor to the clicked index.
+                        active.state.update_selection_drag(char_idx);
+                        self.drag_selection_active = true;
+                    } else if click_count == 2 {
                         active.state.select_word_at_index(char_idx);
                         self.drag_selection_active = false;
-                    } else if click_count >= 3 {
+                    } else if click_count == 3 {
+                        active.state.select_line_at_index(char_idx);
+                        self.drag_selection_active = false;
+                    } else if click_count >= 4 {
                         active.state.select_all();
                         self.drag_selection_active = false;
                     } else {
@@ -1872,6 +2876,7 @@ fn collect_svg_items_from_blueprint(
                         active.state.selection_anchor.set(Some(char_idx));
                         self.drag_selection_active = true;
                     }
+                    self.sync_active_input_layout();
                     return true;
                 }
 
@@ -1895,7 +2900,10 @@ fn collect_svg_items_from_blueprint(
             if click_count == 2 {
                 state.select_word_at_index(char_idx);
                 self.drag_selection_active = false;
-            } else if click_count >= 3 {
+            } else if click_count == 3 {
+                state.select_line_at_index(char_idx);
+                self.drag_selection_active = false;
+            } else if click_count >= 4 {
                 state.select_all();
                 self.drag_selection_active = false;
             } else {
@@ -1918,15 +2926,20 @@ fn collect_svg_items_from_blueprint(
                 on_submit: target.on_submit,
                 on_blur: target.on_blur,
             });
+            self.sync_active_input_layout();
             input_handled = true;
         } else if let Some(active) = self.active_focus.take() {
-            let key = active.input_id.clone().unwrap_or_else(|| format!("input:{}", active.input_index));
+            let key = active
+                .input_id
+                .clone()
+                .unwrap_or_else(|| format!("input:{}", active.input_index));
             self.input_states.insert(key, active.state.clone());
             self.drag_selection_active = false;
             self.last_click_info = None;
             if let Some(ref blur_cb) = active.on_blur {
                 blur_cb(strata_dom::Event::new(strata_dom::EventType::Blur));
             }
+            self.sync_active_input_layout();
             input_handled = true;
         } else {
             self.drag_selection_active = false;
@@ -1934,13 +2947,39 @@ fn collect_svg_items_from_blueprint(
 
         // Also dispatch PointerDown and MouseDown to DOM listeners
         let mut dom_handled = false;
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(&self.root_blueprint, &self.layout_root, px, py, strata_dom::EventType::PointerDown) {
-            let ev = self.create_mouse_event(strata_dom::EventType::PointerDown, px, py, 0, 1, Some(target_box));
+        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+            &self.root_blueprint,
+            &self.layout_root,
+            px,
+            py,
+            strata_dom::EventType::PointerDown,
+        ) {
+            let ev = self.create_mouse_event(
+                strata_dom::EventType::PointerDown,
+                px,
+                py,
+                0,
+                1,
+                Some(target_box),
+            );
             handler(ev);
             dom_handled = true;
         }
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(&self.root_blueprint, &self.layout_root, px, py, strata_dom::EventType::MouseDown) {
-            let ev = self.create_mouse_event(strata_dom::EventType::MouseDown, px, py, 0, 1, Some(target_box));
+        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+            &self.root_blueprint,
+            &self.layout_root,
+            px,
+            py,
+            strata_dom::EventType::MouseDown,
+        ) {
+            let ev = self.create_mouse_event(
+                strata_dom::EventType::MouseDown,
+                px,
+                py,
+                0,
+                1,
+                Some(target_box),
+            );
             handler(ev);
             dom_handled = true;
         }
@@ -1972,6 +3011,7 @@ fn collect_svg_items_from_blueprint(
                         layout.style.font_size,
                         layout.style.line_height,
                         is_mono,
+                        layout.style.font_family,
                     );
                     active.state.cursor_index.set(char_idx);
                     self.reset_caret_blink();
@@ -1980,13 +3020,39 @@ fn collect_svg_items_from_blueprint(
             }
         }
 
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(&self.root_blueprint, &self.layout_root, px, py, strata_dom::EventType::PointerMove) {
-            let ev = self.create_mouse_event(strata_dom::EventType::PointerMove, px, py, 0, 0, Some(target_box));
+        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+            &self.root_blueprint,
+            &self.layout_root,
+            px,
+            py,
+            strata_dom::EventType::PointerMove,
+        ) {
+            let ev = self.create_mouse_event(
+                strata_dom::EventType::PointerMove,
+                px,
+                py,
+                0,
+                0,
+                Some(target_box),
+            );
             handler(ev);
             handled = true;
         }
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(&self.root_blueprint, &self.layout_root, px, py, strata_dom::EventType::MouseMove) {
-            let ev = self.create_mouse_event(strata_dom::EventType::MouseMove, px, py, 0, 0, Some(target_box));
+        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+            &self.root_blueprint,
+            &self.layout_root,
+            px,
+            py,
+            strata_dom::EventType::MouseMove,
+        ) {
+            let ev = self.create_mouse_event(
+                strata_dom::EventType::MouseMove,
+                px,
+                py,
+                0,
+                0,
+                Some(target_box),
+            );
             handler(ev);
             handled = true;
         }
@@ -2009,13 +3075,39 @@ fn collect_svg_items_from_blueprint(
             handled = true;
         }
 
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(&self.root_blueprint, &self.layout_root, px, py, strata_dom::EventType::PointerUp) {
-            let ev = self.create_mouse_event(strata_dom::EventType::PointerUp, px, py, 0, 1, Some(target_box));
+        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+            &self.root_blueprint,
+            &self.layout_root,
+            px,
+            py,
+            strata_dom::EventType::PointerUp,
+        ) {
+            let ev = self.create_mouse_event(
+                strata_dom::EventType::PointerUp,
+                px,
+                py,
+                0,
+                1,
+                Some(target_box),
+            );
             handler(ev);
             handled = true;
         }
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(&self.root_blueprint, &self.layout_root, px, py, strata_dom::EventType::MouseUp) {
-            let ev = self.create_mouse_event(strata_dom::EventType::MouseUp, px, py, 0, 1, Some(target_box));
+        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+            &self.root_blueprint,
+            &self.layout_root,
+            px,
+            py,
+            strata_dom::EventType::MouseUp,
+        ) {
+            let ev = self.create_mouse_event(
+                strata_dom::EventType::MouseUp,
+                px,
+                py,
+                0,
+                1,
+                Some(target_box),
+            );
             handler(ev);
             handled = true;
         }
@@ -2030,7 +3122,21 @@ fn collect_svg_items_from_blueprint(
             &self.root_blueprint,
             self.current_hover_path.as_deref(),
         );
-        self.layout_root.compute_layout(self.viewport_width, self.viewport_height);
+        self.sync_active_input_layout();
+        let compute_start = std::time::Instant::now();
+        self.layout_root
+            .compute_layout(self.viewport_width, self.viewport_height);
+        self.layout_computations += 1;
+        if perf_logging_enabled() {
+            perf_log_ms(
+                "compute_layout_rebuild",
+                compute_start,
+                format!(
+                    "{} layout nodes",
+                    perf_count_layout_nodes(&self.layout_root)
+                ),
+            );
+        }
         self.apply_viewport_clamps();
         self.apply_scroll_offsets();
         self.compile_display_list();
@@ -2098,10 +3204,16 @@ fn collect_svg_items_from_blueprint(
         if matches!(layout.style.display, strata_style::types::Display::None) {
             return None;
         }
-        if matches!(layout.style.visibility, strata_style::types::Visibility::Hidden) {
+        if matches!(
+            layout.style.visibility,
+            strata_style::types::Visibility::Hidden
+        ) {
             return None;
         }
-        if matches!(layout.style.pointer_events, strata_style::types::PointerEvents::None) {
+        if matches!(
+            layout.style.pointer_events,
+            strata_style::types::PointerEvents::None
+        ) {
             return None;
         }
 
@@ -2118,11 +3230,24 @@ fn collect_svg_items_from_blueprint(
 
         match blueprint {
             NodeBlueprint::Element { children, .. } => {
-                let has_fragments = children.iter().any(|c| matches!(c, NodeBlueprint::Fragment(_)));
+                let has_fragments = children
+                    .iter()
+                    .any(|c| matches!(c, NodeBlueprint::Fragment(_)));
                 if !has_fragments {
-                    for (i, (child_bp, child_layout)) in children.iter().zip(layout.children.iter()).enumerate().rev() {
+                    for (i, (child_bp, child_layout)) in children
+                        .iter()
+                        .zip(layout.children.iter())
+                        .enumerate()
+                        .rev()
+                    {
                         current_path.push(i);
-                        if let Some(res) = Self::hit_test_node_path_rec(child_bp, child_layout, px, py, current_path) {
+                        if let Some(res) = Self::hit_test_node_path_rec(
+                            child_bp,
+                            child_layout,
+                            px,
+                            py,
+                            current_path,
+                        ) {
                             return Some(res);
                         }
                         current_path.pop();
@@ -2134,9 +3259,20 @@ fn collect_svg_items_from_blueprint(
                     }
 
                     // Check children in reverse order (front-to-back stacking order)
-                    for (i, (&child_bp, child_layout)) in flat_children.iter().zip(layout.children.iter()).enumerate().rev() {
+                    for (i, (&child_bp, child_layout)) in flat_children
+                        .iter()
+                        .zip(layout.children.iter())
+                        .enumerate()
+                        .rev()
+                    {
                         current_path.push(i);
-                        if let Some(res) = Self::hit_test_node_path_rec(child_bp, child_layout, px, py, current_path) {
+                        if let Some(res) = Self::hit_test_node_path_rec(
+                            child_bp,
+                            child_layout,
+                            px,
+                            py,
+                            current_path,
+                        ) {
                             return Some(res);
                         }
                         current_path.pop();
@@ -2155,9 +3291,16 @@ fn collect_svg_items_from_blueprint(
                     Self::flatten_blueprints(c, &mut flat_children);
                 }
 
-                for (i, (&child_bp, child_layout)) in flat_children.iter().zip(layout.children.iter()).enumerate().rev() {
+                for (i, (&child_bp, child_layout)) in flat_children
+                    .iter()
+                    .zip(layout.children.iter())
+                    .enumerate()
+                    .rev()
+                {
                     current_path.push(i);
-                    if let Some(res) = Self::hit_test_node_path_rec(child_bp, child_layout, px, py, current_path) {
+                    if let Some(res) =
+                        Self::hit_test_node_path_rec(child_bp, child_layout, px, py, current_path)
+                    {
                         return Some(res);
                     }
                     current_path.pop();
@@ -2189,21 +3332,33 @@ fn collect_svg_items_from_blueprint(
 
         let mut common_len = 0;
         if old_path.is_some() && new_path.is_some() {
-            while common_len < old_slice.len() && common_len < new_slice.len() && old_slice[common_len] == new_slice[common_len] {
+            while common_len < old_slice.len()
+                && common_len < new_slice.len()
+                && old_slice[common_len] == new_slice[common_len]
+            {
                 common_len += 1;
             }
         }
 
         // Dispatches exit events for nodes no longer hovered (from deepest child up)
         if old_path.is_some() {
-            let min_len = if new_path.is_some() { common_len + 1 } else { 0 };
+            let min_len = if new_path.is_some() {
+                common_len + 1
+            } else {
+                0
+            };
             for len in (min_len..=old_slice.len()).rev() {
                 let subpath = &old_slice[..len];
-                if let Some((bp, layout)) = Self::find_node_by_path(&self.root_blueprint, &self.layout_root, subpath) {
+                if let Some((bp, layout)) =
+                    Self::find_node_by_path(&self.root_blueprint, &self.layout_root, subpath)
+                {
                     self.dispatch_node_events(
                         bp,
                         layout,
-                        &[strata_dom::EventType::MouseOut, strata_dom::EventType::MouseLeave],
+                        &[
+                            strata_dom::EventType::MouseOut,
+                            strata_dom::EventType::MouseLeave,
+                        ],
                         px,
                         py,
                     );
@@ -2213,14 +3368,23 @@ fn collect_svg_items_from_blueprint(
 
         // Dispatches enter events for newly hovered nodes (from shallowest ancestor down)
         if new_path.is_some() {
-            let start_len = if old_path.is_some() { common_len + 1 } else { 0 };
+            let start_len = if old_path.is_some() {
+                common_len + 1
+            } else {
+                0
+            };
             for len in start_len..=new_slice.len() {
                 let subpath = &new_slice[..len];
-                if let Some((bp, layout)) = Self::find_node_by_path(&self.root_blueprint, &self.layout_root, subpath) {
+                if let Some((bp, layout)) =
+                    Self::find_node_by_path(&self.root_blueprint, &self.layout_root, subpath)
+                {
                     self.dispatch_node_events(
                         bp,
                         layout,
-                        &[strata_dom::EventType::MouseOver, strata_dom::EventType::MouseEnter],
+                        &[
+                            strata_dom::EventType::MouseOver,
+                            strata_dom::EventType::MouseEnter,
+                        ],
                         px,
                         py,
                     );
@@ -2242,7 +3406,14 @@ fn collect_svg_items_from_blueprint(
             for attr in attributes {
                 if let strata_dom::Attribute::EventListener { event, handler } = attr {
                     if event_types.contains(event) {
-                        let ev = self.create_mouse_event(*event, px, py, 0, 0, Some(&layout.geometry.border_box));
+                        let ev = self.create_mouse_event(
+                            *event,
+                            px,
+                            py,
+                            0,
+                            0,
+                            Some(&layout.geometry.border_box),
+                        );
                         handler(ev);
                     }
                 }
@@ -2292,10 +3463,14 @@ fn collect_svg_items_from_blueprint(
     /// Checks if a single blueprint node has hover utility classes or boundary event listeners.
     pub fn node_has_hover_effects(node: &NodeBlueprint) -> bool {
         match node {
-            NodeBlueprint::Element { classes, attributes, .. } => {
-                let has_hover_class = classes.iter().any(|c| {
-                    c.split_whitespace().any(|tok| tok.starts_with("hover:"))
-                });
+            NodeBlueprint::Element {
+                classes,
+                attributes,
+                ..
+            } => {
+                let has_hover_class = classes
+                    .iter()
+                    .any(|c| c.split_whitespace().any(|tok| tok.starts_with("hover:")));
                 if has_hover_class {
                     return true;
                 }
@@ -2329,15 +3504,284 @@ fn collect_svg_items_from_blueprint(
 
         self.dispatch_boundary_events(old_path.as_deref(), new_path.as_deref(), px, py);
 
-        let old_has_effects = old_path.as_deref().map_or(false, |p| Self::node_path_has_hover_effects(&self.root_blueprint, p));
-        let new_has_effects = new_path.as_deref().map_or(false, |p| Self::node_path_has_hover_effects(&self.root_blueprint, p));
+        let old_has_effects = old_path.as_deref().map_or(false, |p| {
+            Self::node_path_has_hover_effects(&self.root_blueprint, p)
+        });
+        let new_has_effects = new_path.as_deref().map_or(false, |p| {
+            Self::node_path_has_hover_effects(&self.root_blueprint, p)
+        });
 
         if old_has_effects || new_has_effects {
-            self.rebuild_layout_tree();
+            let has_listeners = old_path.as_deref().map_or(false, |p| {
+                Self::path_has_hover_listeners(&self.root_blueprint, p)
+            }) || new_path.as_deref().map_or(false, |p| {
+                Self::path_has_hover_listeners(&self.root_blueprint, p)
+            });
+            let layout_required = old_path.as_deref().map_or(false, |p| {
+                Self::path_hover_affects_layout(&self.root_blueprint, p)
+            }) || new_path.as_deref().map_or(false, |p| {
+                Self::path_hover_affects_layout(&self.root_blueprint, p)
+            });
+            if layout_required || has_listeners {
+                self.hover_paint_only = false;
+                self.rebuild_layout_tree();
+            } else {
+                self.hover_paint_only = true;
+                let hover_start = std::time::Instant::now();
+                self.restyle_for_hover_paint();
+                if perf_logging_enabled() {
+                    perf_log_ms("hover_repaint", hover_start, "paint-only hover");
+                }
+            }
             true
         } else {
+            self.hover_paint_only = false;
             false
         }
+    }
+
+    /// Re-applies hover styles and recompiles paint commands without re-running layout.
+    ///
+    /// Paint-only hover variants (`hover:bg-*`, `hover:text-*`, `hover:underline`,
+    /// shadows, opacity) do not change box geometry. Rebuilding the tree carries
+    /// the new styles; the previous geometry, line boxes, and inline item streams
+    /// are transplanted so the display list can be recompiled immediately.
+    pub fn restyle_for_hover_paint(&mut self) {
+        let new_tree = Self::build_layout_tree_with_hover(
+            &self.root_blueprint,
+            self.current_hover_path.as_deref(),
+        );
+        let mut previous = std::mem::replace(&mut self.layout_root, new_tree);
+        if Self::transplant_layout_state(&mut previous, &mut self.layout_root) {
+            strata_layout::box_model::refresh_inline_fragment_styles(&mut self.layout_root);
+        } else {
+            self.applied_scroll_offsets.clear();
+            self.layout_root
+                .compute_layout(self.viewport_width, self.viewport_height);
+            self.layout_computations += 1;
+            self.apply_viewport_clamps();
+            self.apply_scroll_offsets();
+        }
+        self.sync_active_input_layout();
+        self.compile_display_list();
+    }
+
+    /// Copies resolved geometry and text state from a previous tree into a newly styled tree.
+    fn transplant_layout_state(previous: &mut LayoutNode, next: &mut LayoutNode) -> bool {
+        if previous.children.len() != next.children.len() {
+            return false;
+        }
+        next.geometry = previous.geometry;
+        next.line_boxes = std::mem::take(&mut previous.line_boxes);
+        next.inline_items = std::mem::take(&mut previous.inline_items);
+        next.layout_cache = previous.layout_cache;
+        for (prev_child, next_child) in previous.children.iter_mut().zip(next.children.iter_mut()) {
+            if !Self::transplant_layout_state(prev_child, next_child) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Number of full layout computations performed by this runtime.
+    pub fn layout_compute_count(&self) -> u64 {
+        self.layout_computations
+    }
+
+    /// Returns true when any element on the path has mouse boundary listeners.
+    fn path_has_hover_listeners(blueprint: &NodeBlueprint, path: &[usize]) -> bool {
+        let mut current = blueprint;
+        if Self::node_has_hover_listeners(current) {
+            return true;
+        }
+        for &idx in path {
+            let mut flat = Vec::new();
+            match current {
+                NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children) => {
+                    for child in children {
+                        Self::flatten_blueprints(child, &mut flat);
+                    }
+                }
+                _ => return false,
+            }
+            if idx >= flat.len() {
+                return false;
+            }
+            current = flat[idx];
+            if Self::node_has_hover_listeners(current) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn node_has_hover_listeners(node: &NodeBlueprint) -> bool {
+        match node {
+            NodeBlueprint::Element { attributes, .. } => attributes.iter().any(|attr| match attr {
+                strata_dom::Attribute::EventListener { event, .. } => matches!(
+                    event,
+                    strata_dom::EventType::MouseEnter
+                        | strata_dom::EventType::MouseLeave
+                        | strata_dom::EventType::MouseOver
+                        | strata_dom::EventType::MouseOut
+                ),
+                _ => false,
+            }),
+            _ => false,
+        }
+    }
+
+    /// Returns true when the last hover transition was resolved by a paint-only restyle.
+    pub fn hover_is_paint_only(&self) -> bool {
+        self.hover_paint_only
+    }
+
+    /// Returns true when any `hover:` utility on the path mutates box geometry.
+    fn path_hover_affects_layout(blueprint: &NodeBlueprint, path: &[usize]) -> bool {
+        let mut current = blueprint;
+        if Self::node_hover_classes_affect_layout(current) {
+            return true;
+        }
+        for &idx in path {
+            let mut flat = Vec::new();
+            match current {
+                NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children) => {
+                    for child in children {
+                        Self::flatten_blueprints(child, &mut flat);
+                    }
+                }
+                _ => return false,
+            }
+            if idx >= flat.len() {
+                return false;
+            }
+            current = flat[idx];
+            if Self::node_hover_classes_affect_layout(current) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn node_hover_classes_affect_layout(node: &NodeBlueprint) -> bool {
+        match node {
+            NodeBlueprint::Element { classes, .. } => classes.iter().any(|class| {
+                class.split_whitespace().any(|token| {
+                    token
+                        .strip_prefix("hover:")
+                        .map_or(false, |rest| !Self::hover_token_is_paint_only(rest))
+                })
+            }),
+            _ => false,
+        }
+    }
+
+    /// Classifies a hover utility suffix as paint-only.
+    ///
+    /// The allowlist is deliberately conservative: any token not recognized as
+    /// a paint, filter, transform, or interaction property forces a full
+    /// relayout so unknown geometry changes always take the safe path.
+    fn hover_token_is_paint_only(rest: &str) -> bool {
+        if rest.starts_with("bg-") {
+            return true;
+        }
+        if let Some(value) = rest.strip_prefix("text-") {
+            return Self::text_utility_is_color(value);
+        }
+        if let Some(value) = rest.strip_prefix("border-") {
+            return Self::border_utility_is_color(value);
+        }
+        if rest.starts_with("decoration-") {
+            return true;
+        }
+        const PREFIXES: &[&str] = &[
+            "opacity-",
+            "shadow-",
+            "ring-",
+            "outline-",
+            "fill-",
+            "stroke-",
+            "cursor-",
+            "transition-",
+            "duration-",
+            "ease-",
+            "delay-",
+            "animate-",
+            "scale-",
+            "rotate-",
+            "translate-",
+            "filter-",
+            "backdrop-",
+            "blur-",
+            "brightness-",
+            "contrast-",
+            "saturate-",
+            "hue-rotate-",
+            "z-",
+            "pointer-events-",
+            "select-",
+            "will-change-",
+        ];
+        if PREFIXES.iter().any(|prefix| rest.starts_with(prefix)) {
+            return true;
+        }
+        matches!(
+            rest,
+            "underline"
+                | "no-underline"
+                | "overline"
+                | "line-through"
+                | "transform"
+                | "transform-gpu"
+                | "grayscale"
+                | "invert"
+                | "sepia"
+                | "visible"
+                | "invisible"
+                | "drop-shadow"
+        )
+    }
+
+    fn text_utility_is_color(value: &str) -> bool {
+        const NON_COLOR: &[&str] = &[
+            "xs", "sm", "base", "lg", "xl", "2xl", "3xl", "4xl", "5xl", "6xl", "7xl", "8xl", "9xl",
+            "left", "center", "right", "justify", "start", "end", "wrap", "nowrap", "balance",
+            "pretty", "ellipsis", "clip",
+        ];
+        if NON_COLOR.contains(&value) {
+            return false;
+        }
+        if value.starts_with('[') {
+            return value.contains('#')
+                || value.contains("rgb")
+                || value.contains("hsl")
+                || value.contains("oklch")
+                || value.contains("color(");
+        }
+        true
+    }
+
+    fn border_utility_is_color(value: &str) -> bool {
+        let mut value = value;
+        for side in ["t-", "r-", "b-", "l-", "x-", "y-", "s-", "e-"] {
+            if let Some(stripped) = value.strip_prefix(side) {
+                value = stripped;
+                break;
+            }
+        }
+        if value.starts_with('[') {
+            return value.contains('#')
+                || value.contains("rgb")
+                || value.contains("hsl")
+                || value.contains("oklch");
+        }
+        if matches!(value, "transparent" | "current" | "black" | "white") {
+            return true;
+        }
+        value
+            .rsplit_once('-')
+            .map(|(_, shade)| !shade.is_empty() && shade.chars().all(|c| c.is_ascii_digit()))
+            .unwrap_or(false)
     }
 
     /// Clears any active hover state when the pointer departs the window surface.
@@ -2346,12 +3790,36 @@ fn collect_svg_items_from_blueprint(
             return false;
         }
         let old_path = self.current_hover_path.take();
-        self.dispatch_boundary_events(old_path.as_deref(), None, self.last_mouse_pos.0, self.last_mouse_pos.1);
-        let old_has_effects = old_path.as_deref().map_or(false, |p| Self::node_path_has_hover_effects(&self.root_blueprint, p));
+        self.dispatch_boundary_events(
+            old_path.as_deref(),
+            None,
+            self.last_mouse_pos.0,
+            self.last_mouse_pos.1,
+        );
+        let old_has_effects = old_path.as_deref().map_or(false, |p| {
+            Self::node_path_has_hover_effects(&self.root_blueprint, p)
+        });
         if old_has_effects {
-            self.rebuild_layout_tree();
+            let has_listeners = old_path.as_deref().map_or(false, |p| {
+                Self::path_has_hover_listeners(&self.root_blueprint, p)
+            });
+            let layout_required = old_path.as_deref().map_or(false, |p| {
+                Self::path_hover_affects_layout(&self.root_blueprint, p)
+            });
+            if layout_required || has_listeners {
+                self.hover_paint_only = false;
+                self.rebuild_layout_tree();
+            } else {
+                self.hover_paint_only = true;
+                let hover_start = std::time::Instant::now();
+                self.restyle_for_hover_paint();
+                if perf_logging_enabled() {
+                    perf_log_ms("hover_repaint", hover_start, "paint-only hover");
+                }
+            }
             true
         } else {
+            self.hover_paint_only = false;
             false
         }
     }
@@ -2395,8 +3863,12 @@ fn collect_svg_items_from_blueprint(
                     active.state.insert_text(&ch.to_string());
                     let val = active.state.text.get();
                     if let Some(ref on_input) = active.on_input {
-                        on_input(strata_dom::Event::with_value(strata_dom::EventType::Input, val));
+                        on_input(strata_dom::Event::with_value(
+                            strata_dom::EventType::Input,
+                            val,
+                        ));
                     }
+                    self.sync_active_input_layout();
                     true
                 } else {
                     false
@@ -2408,19 +3880,24 @@ fn collect_svg_items_from_blueprint(
                 let mut submit = false;
                 let mut blur = false;
 
-                if modifiers.ctrl {
+                let is_cmd = modifiers.ctrl || modifiers.meta;
+                if is_cmd {
                     let cmd = match key {
                         strata_platform::KeyCode::KeyA => Some(EditCommand::SelectAll),
                         strata_platform::KeyCode::KeyC => Some(EditCommand::Copy),
                         strata_platform::KeyCode::KeyX => Some(EditCommand::Cut),
                         strata_platform::KeyCode::KeyV => Some(EditCommand::Paste),
-                        strata_platform::KeyCode::KeyZ if modifiers.shift => Some(EditCommand::Redo),
+                        strata_platform::KeyCode::KeyZ if modifiers.shift => {
+                            Some(EditCommand::Redo)
+                        }
                         strata_platform::KeyCode::KeyZ => Some(EditCommand::Undo),
                         strata_platform::KeyCode::KeyY => Some(EditCommand::Redo),
                         _ => None,
                     };
                     if let Some(cmd) = cmd {
-                        return self.apply_edit_command(cmd);
+                        let res = self.apply_edit_command(cmd);
+                        self.sync_active_input_layout();
+                        return res;
                     }
                 }
 
@@ -2429,19 +3906,27 @@ fn collect_svg_items_from_blueprint(
                 if !text_changed && !nav_or_sel {
                     match key {
                         strata_platform::KeyCode::Backspace => {
-                            active.state.delete_backward();
+                            if is_cmd {
+                                active.state.delete_word_backward();
+                            } else {
+                                active.state.delete_backward();
+                            }
                             text_changed = true;
                         }
                         strata_platform::KeyCode::Delete => {
-                            active.state.delete_forward();
+                            if is_cmd {
+                                active.state.delete_word_forward();
+                            } else {
+                                active.state.delete_forward();
+                            }
                             text_changed = true;
                         }
                         strata_platform::KeyCode::ArrowLeft => {
-                            active.state.move_left(modifiers.shift, modifiers.ctrl);
+                            active.state.move_left(modifiers.shift, is_cmd);
                             nav_or_sel = true;
                         }
                         strata_platform::KeyCode::ArrowRight => {
-                            active.state.move_right(modifiers.shift, modifiers.ctrl);
+                            active.state.move_right(modifiers.shift, is_cmd);
                             nav_or_sel = true;
                         }
                         strata_platform::KeyCode::Home => {
@@ -2469,8 +3954,12 @@ fn collect_svg_items_from_blueprint(
                 if text_changed {
                     let val = active.state.text.get();
                     if let Some(ref on_input) = active.on_input {
-                        on_input(strata_dom::Event::with_value(strata_dom::EventType::Input, val));
+                        on_input(strata_dom::Event::with_value(
+                            strata_dom::EventType::Input,
+                            val,
+                        ));
                     }
+                    self.sync_active_input_layout();
                     return true;
                 }
 
@@ -2481,10 +3970,16 @@ fn collect_svg_items_from_blueprint(
                 if submit {
                     let val = active.state.text.get();
                     if let Some(ref on_submit) = active.on_submit {
-                        on_submit(strata_dom::Event::with_value(strata_dom::EventType::Submit, val.clone()));
+                        on_submit(strata_dom::Event::with_value(
+                            strata_dom::EventType::Submit,
+                            val.clone(),
+                        ));
                     }
                     if let Some(ref on_change) = active.on_change {
-                        on_change(strata_dom::Event::with_value(strata_dom::EventType::Change, val));
+                        on_change(strata_dom::Event::with_value(
+                            strata_dom::EventType::Change,
+                            val,
+                        ));
                     }
                     return true;
                 }
@@ -2562,14 +4057,29 @@ fn collect_svg_items_from_blueprint(
             strata_dom::EventType::AuxClick
         };
 
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(&self.root_blueprint, &self.layout_root, px, py, ev_type) {
+        if let Some((handler, target_box)) =
+            Self::hit_test_event_with_box(&self.root_blueprint, &self.layout_root, px, py, ev_type)
+        {
             let ev = self.create_mouse_event(ev_type, px, py, button, detail, Some(target_box));
             handler(ev);
             true
         } else if button != 0 {
             // Fallback to Click listener if AuxClick had no explicit listener
-            if let Some((handler, target_box)) = Self::hit_test_event_with_box(&self.root_blueprint, &self.layout_root, px, py, strata_dom::EventType::Click) {
-                let ev = self.create_mouse_event(strata_dom::EventType::Click, px, py, button, detail, Some(target_box));
+            if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+                &self.root_blueprint,
+                &self.layout_root,
+                px,
+                py,
+                strata_dom::EventType::Click,
+            ) {
+                let ev = self.create_mouse_event(
+                    strata_dom::EventType::Click,
+                    px,
+                    py,
+                    button,
+                    detail,
+                    Some(target_box),
+                );
                 handler(ev);
                 true
             } else {
@@ -2582,8 +4092,21 @@ fn collect_svg_items_from_blueprint(
 
     /// Dispatches a standard W3C `dblclick` event at (x, y) coordinates to the nearest element with an `ondblclick` listener.
     pub fn dispatch_dblclick(&self, px: f32, py: f32) -> bool {
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(&self.root_blueprint, &self.layout_root, px, py, strata_dom::EventType::DblClick) {
-            let ev = self.create_mouse_event(strata_dom::EventType::DblClick, px, py, 0, 2, Some(target_box));
+        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+            &self.root_blueprint,
+            &self.layout_root,
+            px,
+            py,
+            strata_dom::EventType::DblClick,
+        ) {
+            let ev = self.create_mouse_event(
+                strata_dom::EventType::DblClick,
+                px,
+                py,
+                0,
+                2,
+                Some(target_box),
+            );
             handler(ev);
             true
         } else {
@@ -2602,7 +4125,14 @@ fn collect_svg_items_from_blueprint(
             py,
             strata_dom::EventType::ContextMenu,
         ) {
-            let ev = self.create_mouse_event(strata_dom::EventType::ContextMenu, px, py, 2, 1, Some(target_box));
+            let ev = self.create_mouse_event(
+                strata_dom::EventType::ContextMenu,
+                px,
+                py,
+                2,
+                1,
+                Some(target_box),
+            );
             handler(ev);
             true
         } else {
@@ -2630,11 +4160,21 @@ fn collect_svg_items_from_blueprint(
             }
         }
         match blueprint {
-            NodeBlueprint::Element { attributes, children, .. } => {
-                let has_fragments = children.iter().any(|c| matches!(c, NodeBlueprint::Fragment(_)));
+            NodeBlueprint::Element {
+                attributes,
+                children,
+                ..
+            } => {
+                let has_fragments = children
+                    .iter()
+                    .any(|c| matches!(c, NodeBlueprint::Fragment(_)));
                 if !has_fragments {
-                    for (child_bp, child_layout) in children.iter().zip(layout.children.iter()).rev() {
-                        if let Some(v) = Self::hit_test_property(child_bp, child_layout, px, py, key) {
+                    for (child_bp, child_layout) in
+                        children.iter().zip(layout.children.iter()).rev()
+                    {
+                        if let Some(v) =
+                            Self::hit_test_property(child_bp, child_layout, px, py, key)
+                        {
                             return Some(v);
                         }
                     }
@@ -2643,8 +4183,12 @@ fn collect_svg_items_from_blueprint(
                     for c in children {
                         Self::flatten_blueprints(c, &mut flat_children);
                     }
-                    for (&child_bp, child_layout) in flat_children.iter().zip(layout.children.iter()).rev() {
-                        if let Some(v) = Self::hit_test_property(child_bp, child_layout, px, py, key) {
+                    for (&child_bp, child_layout) in
+                        flat_children.iter().zip(layout.children.iter()).rev()
+                    {
+                        if let Some(v) =
+                            Self::hit_test_property(child_bp, child_layout, px, py, key)
+                        {
                             return Some(v);
                         }
                     }
@@ -2676,14 +4220,23 @@ fn collect_svg_items_from_blueprint(
     /// surface (the equivalent of `-webkit-app-region: drag`). Interactive children opt out with
     /// `data-app-region="no-drag"`. A quick second press toggles maximize, as native title bars do.
     pub fn begin_window_drag_candidate(&mut self, px: f32, py: f32) -> bool {
-        let region = Self::hit_test_property(&self.root_blueprint, &self.layout_root, px, py, "data-app-region");
+        let region = Self::hit_test_property(
+            &self.root_blueprint,
+            &self.layout_root,
+            px,
+            py,
+            "data-app-region",
+        );
         if region.as_deref() != Some("drag") {
             self.pending_window_drag = None;
             return false;
         }
         let now = std::time::Instant::now();
         if let Some((t, lx, ly)) = self.last_drag_click.take() {
-            if now.duration_since(t).as_millis() < 400 && (px - lx).abs() < 5.0 && (py - ly).abs() < 5.0 {
+            if now.duration_since(t).as_millis() < 400
+                && (px - lx).abs() < 5.0
+                && (py - ly).abs() < 5.0
+            {
                 // Cancel pending drag candidate on double-click gesture so movement doesn't interfere
                 self.pending_window_drag = None;
                 return true;
@@ -2723,9 +4276,13 @@ fn collect_svg_items_from_blueprint(
         match cmd {
             EditCommand::SelectAll => active.state.select_all(),
             EditCommand::Copy => {
-                let text = active.state.selected_text().unwrap_or_else(|| active.state.text.get());
+                let text = active
+                    .state
+                    .selected_text()
+                    .unwrap_or_else(|| active.state.text.get());
                 #[cfg(target_os = "linux")]
                 strata_platform::gtk_set_clipboard_text(&text);
+                FALLBACK_CLIPBOARD.with(|cb| *cb.borrow_mut() = text.clone());
                 let _ = text;
             }
             EditCommand::Cut => {
@@ -2733,19 +4290,33 @@ fn collect_svg_items_from_blueprint(
                 if let Some(sel) = text {
                     #[cfg(target_os = "linux")]
                     strata_platform::gtk_set_clipboard_text(&sel);
+                    FALLBACK_CLIPBOARD.with(|cb| *cb.borrow_mut() = sel.clone());
                     let _ = sel;
                     active.state.delete_selection();
                 } else {
+                    let cur_text = active.state.text.get();
                     #[cfg(target_os = "linux")]
-                    strata_platform::gtk_set_clipboard_text(&active.state.text.get());
+                    strata_platform::gtk_set_clipboard_text(&cur_text);
+                    FALLBACK_CLIPBOARD.with(|cb| *cb.borrow_mut() = cur_text.clone());
                     active.state.replace_all_text("");
                 }
                 text_changed = true;
             }
             EditCommand::Paste => {
                 #[cfg(target_os = "linux")]
-                if let Some(clip) = strata_platform::gtk_get_clipboard_text() {
-                    active.state.insert_text(&clip);
+                let clip = strata_platform::gtk_get_clipboard_text();
+                #[cfg(not(target_os = "linux"))]
+                let clip: Option<String> = None;
+                let clip = clip.or_else(|| {
+                    let t = FALLBACK_CLIPBOARD.with(|cb| cb.borrow().clone());
+                    if t.is_empty() {
+                        None
+                    } else {
+                        Some(t)
+                    }
+                });
+                if let Some(clip_text) = clip {
+                    active.state.insert_text(&clip_text);
                     text_changed = true;
                 }
             }
@@ -2757,15 +4328,20 @@ fn collect_svg_items_from_blueprint(
         if text_changed {
             let val = active.state.text.get();
             if let Some(ref on_input) = active.on_input {
-                on_input(strata_dom::Event::with_value(strata_dom::EventType::Input, val));
+                on_input(strata_dom::Event::with_value(
+                    strata_dom::EventType::Input,
+                    val,
+                ));
             }
+            self.sync_active_input_layout();
         }
         true
     }
 
     /// Runs every edit command queued through [`queue_edit_command`] (e.g. from a context menu).
     pub fn drain_edit_commands(&mut self) -> bool {
-        let cmds: Vec<EditCommand> = EDIT_COMMAND_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
+        let cmds: Vec<EditCommand> =
+            EDIT_COMMAND_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
         let mut changed = false;
         for c in cmds {
             if self.apply_edit_command(c) {
@@ -2785,7 +4361,11 @@ fn collect_svg_items_from_blueprint(
     fn clamp_walk(blueprint: &NodeBlueprint, layout: &mut LayoutNode, vw: f32, vh: f32) {
         const MARGIN: f32 = 8.0;
         match blueprint {
-            NodeBlueprint::Element { attributes, children, .. } => {
+            NodeBlueprint::Element {
+                attributes,
+                children,
+                ..
+            } => {
                 let clamp = attributes.iter().any(|a| {
                     matches!(a, strata_dom::Attribute::Property { key, .. } if key == "data-clamp-viewport")
                 });
@@ -2812,7 +4392,9 @@ fn collect_svg_items_from_blueprint(
                 for c in children {
                     Self::flatten_blueprints(c, &mut flat_children);
                 }
-                for (&child_bp, child_layout) in flat_children.iter().zip(layout.children.iter_mut()) {
+                for (&child_bp, child_layout) in
+                    flat_children.iter().zip(layout.children.iter_mut())
+                {
                     Self::clamp_walk(child_bp, child_layout, vw, vh);
                 }
             }
@@ -2826,7 +4408,10 @@ fn collect_svg_items_from_blueprint(
     }
 
     /// Traverses the LayoutNode hierarchy down a slice of child indices in O(depth).
-    pub fn get_layout_node_mut<'a>(root: &'a mut LayoutNode, path: &[usize]) -> Option<&'a mut LayoutNode> {
+    pub fn get_layout_node_mut<'a>(
+        root: &'a mut LayoutNode,
+        path: &[usize],
+    ) -> Option<&'a mut LayoutNode> {
         let mut current = root;
         for &idx in path {
             if idx < current.children.len() {
@@ -2908,19 +4493,17 @@ fn collect_svg_items_from_blueprint(
         );
 
         let elem_id = match blueprint {
-            NodeBlueprint::Element { attributes, .. } => {
-                attributes.iter().find_map(|a| {
-                    if let strata_dom::Attribute::Property { key, value } = a {
-                        if key == "id" {
-                            Some(value.clone())
-                        } else {
-                            None
-                        }
+            NodeBlueprint::Element { attributes, .. } => attributes.iter().find_map(|a| {
+                if let strata_dom::Attribute::Property { key, value } = a {
+                    if key == "id" {
+                        Some(value.clone())
                     } else {
                         None
                     }
-                })
-            }
+                } else {
+                    None
+                }
+            }),
             _ => None,
         };
 
@@ -2937,8 +4520,10 @@ fn collect_svg_items_from_blueprint(
                 {
                     continue;
                 }
-                max_child_x = max_child_x.max(child.geometry.border_box.x + child.geometry.border_box.width);
-                max_child_y = max_child_y.max(child.geometry.border_box.y + child.geometry.border_box.height);
+                max_child_x =
+                    max_child_x.max(child.geometry.border_box.x + child.geometry.border_box.width);
+                max_child_y =
+                    max_child_y.max(child.geometry.border_box.y + child.geometry.border_box.height);
             }
             for line in &layout.line_boxes {
                 max_child_x = max_child_x.max(line.bounds.x + line.bounds.width);
@@ -2957,7 +4542,10 @@ fn collect_svg_items_from_blueprint(
                     .or_else(|| scroll_offsets.get(current_path).copied())
                     .unwrap_or((0.0, 0.0))
             } else {
-                scroll_offsets.get(current_path).copied().unwrap_or((0.0, 0.0))
+                scroll_offsets
+                    .get(current_path)
+                    .copied()
+                    .unwrap_or((0.0, 0.0))
             };
 
             let clamped_x = stored_x.clamp(0.0, max_scroll_x);
@@ -2985,9 +4573,12 @@ fn collect_svg_items_from_blueprint(
 
             if is_scroll_y && max_scroll_y > 1.0 && viewport_h > 20.0 {
                 let border_box = layout.geometry.border_box;
-                let track_x = border_box.x + border_box.width - 8.0;
-                let track_y = border_box.y + 2.0;
-                let track_h = (border_box.height - 4.0).max(10.0);
+                let track_width = 10.0;
+                let track_x = border_box.x + border_box.width - track_width;
+                let track_y = border_box.y;
+                let track_h = border_box.height;
+                let track_bounds = strata_layout::Rect::new(track_x, track_y, track_width, track_h);
+
                 let thumb_h = ((viewport_h / content_h) * track_h).clamp(24.0, track_h);
                 let available_travel = (track_h - thumb_h).max(0.0);
                 let thumb_y = if max_scroll_y > 0.0 && available_travel > 0.0 {
@@ -2996,9 +4587,10 @@ fn collect_svg_items_from_blueprint(
                     track_y
                 };
 
-                let thumb_bounds = strata_layout::Rect::new(track_x, thumb_y, 6.0, thumb_h);
+                let thumb_bounds = strata_layout::Rect::new(track_x, thumb_y, track_width, thumb_h);
                 active_scrollbars.push(ActiveScrollbar {
                     bounds: border_box,
+                    track_bounds,
                     thumb_bounds,
                     scroll_y: clamped_y,
                     max_scroll_y,
@@ -3018,7 +4610,11 @@ fn collect_svg_items_from_blueprint(
                 for c in children {
                     Self::flatten_blueprints(c, &mut flat_children);
                 }
-                for (i, (&child_bp, child_layout)) in flat_children.iter().zip(layout.children.iter_mut()).enumerate() {
+                for (i, (&child_bp, child_layout)) in flat_children
+                    .iter()
+                    .zip(layout.children.iter_mut())
+                    .enumerate()
+                {
                     current_path.push(i);
                     Self::apply_scroll_walk(
                         child_bp,
@@ -3037,7 +4633,11 @@ fn collect_svg_items_from_blueprint(
                 for c in children {
                     Self::flatten_blueprints(c, &mut flat_children);
                 }
-                for (i, (&child_bp, child_layout)) in flat_children.iter().zip(layout.children.iter_mut()).enumerate() {
+                for (i, (&child_bp, child_layout)) in flat_children
+                    .iter()
+                    .zip(layout.children.iter_mut())
+                    .enumerate()
+                {
                     current_path.push(i);
                     Self::apply_scroll_walk(
                         child_bp,
@@ -3068,15 +4668,18 @@ fn collect_svg_items_from_blueprint(
         bounds_y: f32,
     ) {
         if is_id {
-            self.scroll_offsets_by_id.insert(id.to_string(), (0.0, new_scroll_y));
+            self.scroll_offsets_by_id
+                .insert(id.to_string(), (0.0, new_scroll_y));
         }
-        self.scroll_offsets.insert(path.to_vec(), (0.0, new_scroll_y));
-        self.applied_scroll_offsets.insert(path.to_vec(), (0.0, new_scroll_y));
+        self.scroll_offsets
+            .insert(path.to_vec(), (0.0, new_scroll_y));
+        self.applied_scroll_offsets
+            .insert(path.to_vec(), (0.0, new_scroll_y));
 
         if let Some(b) = self.active_scrollbars.iter_mut().find(|b| b.path == path) {
             b.scroll_y = new_scroll_y;
             if max_scroll_y > 0.0 && available_travel > 0.0 {
-                b.thumb_bounds.y = bounds_y + 2.0 + (new_scroll_y / max_scroll_y) * available_travel;
+                b.thumb_bounds.y = bounds_y + (new_scroll_y / max_scroll_y) * available_travel;
             }
         }
 
@@ -3102,20 +4705,22 @@ fn collect_svg_items_from_blueprint(
         let (mx, my) = self.last_mouse_pos;
         let is_dragging = self.scrollbar_drag.is_some();
         let is_kinetic = self.active_smooth_scroll.is_some();
-        let is_recent_scroll = self.last_scroll_interaction
+        let is_recent_scroll = self
+            .last_scroll_interaction
             .map_or(false, |t| t.elapsed().as_millis() < 700);
 
         for bar in &self.active_scrollbars {
             if bar.max_scroll_y <= 1.0 {
                 continue;
             }
-            let is_hovered = bar.thumb_bounds.contains_point(mx, my);
+            let is_hovered = bar.thumb_bounds.contains_point(mx, my)
+                || bar.track_bounds.contains_point(mx, my)
+                || (mx >= bar.track_bounds.x
+                    && mx <= bar.bounds.x + bar.bounds.width + 1.0
+                    && my >= bar.track_bounds.y
+                    && my <= bar.track_bounds.y + bar.track_bounds.height);
             let is_active = is_dragging || is_hovered || is_kinetic || is_recent_scroll;
-            let alpha = if is_active {
-                140u8
-            } else {
-                56u8
-            };
+            let alpha = if is_active { 150u8 } else { 60u8 };
 
             let mut thumb_bounds = bar.thumb_bounds;
             if is_active {
@@ -3124,13 +4729,14 @@ fn collect_svg_items_from_blueprint(
                 thumb_bounds.width += expand_px;
             }
 
-            self.display_list.push(strata_render::compositor::DrawCommand::DrawRoundedRect {
-                bounds: thumb_bounds,
-                color: strata_style::types::Color::rgba(255, 255, 255, alpha),
-                border_radius: strata_style::types::BorderRadius::all(3.5),
-                border_width: strata_style::types::EdgeInsets::all(0.0),
-                border_color: None,
-            });
+            self.display_list
+                .push(strata_render::compositor::DrawCommand::DrawRoundedRect {
+                    bounds: thumb_bounds,
+                    color: strata_style::types::Color::rgba(255, 255, 255, alpha),
+                    border_radius: strata_style::types::BorderRadius::all(3.0),
+                    border_width: strata_style::types::EdgeInsets::all(0.0),
+                    border_color: None,
+                });
         }
     }
 
@@ -3141,7 +4747,8 @@ fn collect_svg_items_from_blueprint(
         self.last_mouse_pos = (px, py);
         self.active_smooth_scroll = None;
 
-        let mut matching_bars: Vec<ActiveScrollbar> = self.active_scrollbars
+        let mut matching_bars: Vec<ActiveScrollbar> = self
+            .active_scrollbars
             .iter()
             .filter(|bar| bar.bounds.contains_point(px, py))
             .cloned()
@@ -3171,7 +4778,11 @@ fn collect_svg_items_from_blueprint(
                     .map(|(_, y)| y)
                     .unwrap_or(bar.scroll_y)
             } else {
-                self.scroll_offsets.get(&bar.path).copied().map(|(_, y)| y).unwrap_or(bar.scroll_y)
+                self.scroll_offsets
+                    .get(&bar.path)
+                    .copied()
+                    .map(|(_, y)| y)
+                    .unwrap_or(bar.scroll_y)
             };
 
             let candidate_y = (cur_y + delta_y).clamp(0.0, bar.max_scroll_y);
@@ -3198,13 +4809,20 @@ fn collect_svg_items_from_blueprint(
     /// Dispatches a smooth kinetic scroll impulse to the innermost scrollable container under (px, py).
     /// Accumulates velocity for rapid consecutive wheel events and initiates a critically damped
     /// kinetic transition curve with Chromium Blink parity.
-    pub fn dispatch_smooth_scroll(&mut self, px: f32, py: f32, _delta_x: f32, delta_y: f32) -> bool {
+    pub fn dispatch_smooth_scroll(
+        &mut self,
+        px: f32,
+        py: f32,
+        _delta_x: f32,
+        delta_y: f32,
+    ) -> bool {
         self.last_mouse_pos = (px, py);
         if delta_y.abs() < 0.01 {
             return false;
         }
 
-        let mut matching_bars: Vec<ActiveScrollbar> = self.active_scrollbars
+        let mut matching_bars: Vec<ActiveScrollbar> = self
+            .active_scrollbars
             .iter()
             .filter(|bar| bar.bounds.contains_point(px, py))
             .cloned()
@@ -3220,7 +4838,40 @@ fn collect_svg_items_from_blueprint(
             }
         }
 
-        let Some(bar) = matching_bars.into_iter().rev().find(|b| b.max_scroll_y > 0.0) else {
+        // Scroll chaining: target the innermost container that can still absorb the delta.
+        // When every matching container is already at its limit, fall back to the outermost
+        // container so the event is not trapped by the innermost saturated scroller.
+        let target_bar = matching_bars
+            .iter()
+            .rev()
+            .find(|b| {
+                if b.max_scroll_y <= 0.0 {
+                    return false;
+                }
+                let cur_y = if b.is_id {
+                    self.scroll_offsets_by_id
+                        .get(&b.id)
+                        .copied()
+                        .or_else(|| self.scroll_offsets.get(&b.path).copied())
+                        .map(|(_, y)| y)
+                        .unwrap_or(b.scroll_y)
+                } else {
+                    self.scroll_offsets
+                        .get(&b.path)
+                        .copied()
+                        .map(|(_, y)| y)
+                        .unwrap_or(b.scroll_y)
+                };
+                if delta_y < 0.0 {
+                    cur_y > 0.01
+                } else {
+                    cur_y < b.max_scroll_y - 0.01
+                }
+            })
+            .cloned()
+            .or_else(|| matching_bars.iter().find(|b| b.max_scroll_y > 0.0).cloned());
+
+        let Some(bar) = target_bar else {
             return false;
         };
 
@@ -3235,7 +4886,11 @@ fn collect_svg_items_from_blueprint(
                 .map(|(_, y)| y)
                 .unwrap_or(bar.scroll_y)
         } else {
-            self.scroll_offsets.get(&bar.path).copied().map(|(_, y)| y).unwrap_or(bar.scroll_y)
+            self.scroll_offsets
+                .get(&bar.path)
+                .copied()
+                .map(|(_, y)| y)
+                .unwrap_or(bar.scroll_y)
         };
 
         if let Some(ref mut tracker) = self.active_smooth_scroll {
@@ -3252,7 +4907,8 @@ fn collect_svg_items_from_blueprint(
                 let e0 = tracker.start_y - tracker.target_y;
                 let c2 = tracker.initial_velocity + omega * e0;
                 let decay = (-omega * t_prev).exp();
-                let y_now = (tracker.target_y + (e0 + c2 * t_prev) * decay).clamp(0.0, bar.max_scroll_y);
+                let y_now =
+                    (tracker.target_y + (e0 + c2 * t_prev) * decay).clamp(0.0, bar.max_scroll_y);
                 let v_now = (tracker.initial_velocity - omega * c2 * t_prev) * decay;
 
                 let impulse = delta_y * accel;
@@ -3308,7 +4964,8 @@ fn collect_svg_items_from_blueprint(
         let clamped_y = raw_y.clamp(0.0, tracker.max_scroll_y);
         let vel = (tracker.initial_velocity - omega * c2 * t) * decay;
 
-        let is_settled = t >= 0.40 || ((clamped_y - tracker.target_y).abs() < 0.25 && vel.abs() < 1.0);
+        let is_settled =
+            t >= 0.40 || ((clamped_y - tracker.target_y).abs() < 0.25 && vel.abs() < 1.0);
         let new_y = if is_settled {
             tracker.target_y
         } else {
@@ -3347,10 +5004,27 @@ fn collect_svg_items_from_blueprint(
         self.poll_smooth_scroll_at(std::time::Instant::now())
     }
 
-    /// Checks if a pointer press landed on any active scrollbar thumb and starts dragging.
+    /// Checks if a pointer press landed on any active scrollbar thumb or track and starts dragging.
     pub fn check_scrollbar_thumb_press(&mut self, px: f32, py: f32) -> bool {
         for bar in &self.active_scrollbars {
-            if bar.max_scroll_y > 1.0 && bar.thumb_bounds.contains_point(px, py) {
+            if bar.max_scroll_y <= 1.0 {
+                continue;
+            }
+
+            // Hit test check with edge-right pixel snapping tolerance (+1.0px for window edge)
+            let in_x_thumb =
+                px >= bar.thumb_bounds.x && px <= bar.bounds.x + bar.bounds.width + 1.0;
+            let in_y_thumb =
+                py >= bar.thumb_bounds.y && py <= bar.thumb_bounds.y + bar.thumb_bounds.height;
+            let on_thumb = in_x_thumb && in_y_thumb;
+
+            let in_x_track =
+                px >= bar.track_bounds.x && px <= bar.bounds.x + bar.bounds.width + 1.0;
+            let in_y_track =
+                py >= bar.track_bounds.y && py <= bar.track_bounds.y + bar.track_bounds.height;
+            let on_track = in_x_track && in_y_track;
+
+            if on_thumb {
                 self.active_smooth_scroll = None;
                 self.last_scroll_interaction = Some(std::time::Instant::now());
                 self.scrollbar_drag = Some(ScrollbarDrag {
@@ -3361,6 +5035,47 @@ fn collect_svg_items_from_blueprint(
                     start_scroll_y: bar.scroll_y,
                     available_travel: bar.available_travel,
                     max_scroll_y: bar.max_scroll_y,
+                });
+                return true;
+            } else if on_track {
+                // Click landed on track gutter (above or below thumb):
+                // Jump thumb center to clicked position and start dragging immediately.
+                self.active_smooth_scroll = None;
+                self.last_scroll_interaction = Some(std::time::Instant::now());
+                let click_travel = (py - bar.track_bounds.y - bar.thumb_bounds.height / 2.0)
+                    .clamp(0.0, bar.available_travel);
+                let target_scroll_y = if bar.available_travel > 0.0 {
+                    (click_travel / bar.available_travel) * bar.max_scroll_y
+                } else {
+                    0.0
+                };
+                let dy = target_scroll_y - bar.scroll_y;
+                let path = bar.path.clone();
+                let is_id = bar.is_id;
+                let id = bar.id.clone();
+                let max_scroll_y = bar.max_scroll_y;
+                let available_travel = bar.available_travel;
+                let bounds_y = bar.bounds.y;
+
+                self.apply_scroll_delta_to_container(
+                    &path,
+                    is_id,
+                    &id,
+                    target_scroll_y,
+                    dy,
+                    max_scroll_y,
+                    available_travel,
+                    bounds_y,
+                );
+
+                self.scrollbar_drag = Some(ScrollbarDrag {
+                    is_id,
+                    id,
+                    path,
+                    start_pointer_y: py,
+                    start_scroll_y: target_scroll_y,
+                    available_travel,
+                    max_scroll_y,
                 });
                 return true;
             }
@@ -3406,7 +5121,8 @@ fn collect_svg_items_from_blueprint(
     /// Scrolls the innermost scroll container under (px, py) to the very top.
     pub fn scroll_to_top(&mut self, px: f32, py: f32) -> bool {
         self.active_smooth_scroll = None;
-        let mut matching_bars: Vec<ActiveScrollbar> = self.active_scrollbars
+        let mut matching_bars: Vec<ActiveScrollbar> = self
+            .active_scrollbars
             .iter()
             .filter(|bar| bar.bounds.contains_point(px, py))
             .cloned()
@@ -3446,7 +5162,8 @@ fn collect_svg_items_from_blueprint(
     /// Scrolls the innermost scroll container under (px, py) to the very bottom.
     pub fn scroll_to_bottom(&mut self, px: f32, py: f32) -> bool {
         self.active_smooth_scroll = None;
-        let mut matching_bars: Vec<ActiveScrollbar> = self.active_scrollbars
+        let mut matching_bars: Vec<ActiveScrollbar> = self
+            .active_scrollbars
             .iter()
             .filter(|bar| bar.bounds.contains_point(px, py))
             .cloned()
@@ -3487,14 +5204,55 @@ fn collect_svg_items_from_blueprint(
 
     /// Generates draw commands for all computed layout rectangles using the 7-layer CSS compositor with spatial viewport scissoring.
     pub fn compile_display_list(&mut self) {
+        let compile_start = std::time::Instant::now();
         let viewport = if self.viewport_width > 0.0 && self.viewport_height > 0.0 {
-            Some(strata_layout::Rect::new(0.0, 0.0, self.viewport_width, self.viewport_height))
+            Some(strata_layout::Rect::new(
+                0.0,
+                0.0,
+                self.viewport_width,
+                self.viewport_height,
+            ))
         } else {
             None
         };
-        self.display_list = strata_render::compositor::Compositor::build_display_list_with_viewport(&self.layout_root, viewport);
+        self.display_list = strata_render::compositor::Compositor::build_display_list_with_viewport(
+            &self.layout_root,
+            viewport,
+        );
         self.render_scrollbars();
         self.render_active_input_caret();
+        self.gpu_path_pipeline
+            .resize(self.viewport_width, self.viewport_height);
+        self.gpu_path_pipeline
+            .compile_frame(&self.display_list, None);
+
+        static COMPILE_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let frame = COMPILE_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if frame < 6 || frame % 120 == 0 {
+            perf_log_ms(
+                "compile_display_list",
+                compile_start,
+                format!(
+                    "frame {} {}x{} {} commands",
+                    frame,
+                    self.viewport_width,
+                    self.viewport_height,
+                    self.display_list.commands.len()
+                ),
+            );
+        }
+    }
+
+    /// Returns the compiled GPU path segments from the latest frame.
+    #[inline]
+    pub fn gpu_path_segments(&self) -> &[strata_render::gpu_path::GpuPathSegment] {
+        &self.gpu_path_pipeline.batch.segments
+    }
+
+    /// Returns the raw uniform bytes for the GPU path compute pipeline.
+    #[inline]
+    pub fn gpu_path_uniform_bytes(&self) -> &[u8] {
+        self.gpu_path_pipeline.uniform_bytes()
     }
 
     /// Renders the visible insertion caret cursor and selection highlight for the currently focused text input.
@@ -3525,8 +5283,12 @@ fn collect_svg_items_from_blueprint(
         let font_size = layout.style.font_size;
         let line_height = layout.style.line_height;
         let is_mono = strata_layout::is_monospace_family(layout.style.font_family);
+        let font_family = layout.style.font_family;
         let text_color = layout.style.color;
-        let caret_color = layout.style.caret_color.unwrap_or(text_color);
+        let mut caret_color = layout.style.caret_color.unwrap_or(text_color);
+        if caret_color.a == 0 {
+            caret_color = strata_style::types::Color::new(236, 233, 225, 255);
+        }
         let text = active.state.text.get();
         let total_chars = text.chars().count();
         let cursor_idx = active.state.cursor_index.get().min(total_chars);
@@ -3534,18 +5296,32 @@ fn collect_svg_items_from_blueprint(
         // Alignment offset for text-align: center / right
         let align_offset = match layout.style.text_align {
             strata_style::types::TextAlign::Center => {
-                let (tw, _) = strata_layout::text::measure_text_bounds_ext(&text, font_size, line_height, None, is_mono);
+                let (tw, _) = strata_layout::text::measure_text_bounds_with_family(
+                    &text,
+                    font_size,
+                    line_height,
+                    None,
+                    is_mono,
+                    font_family,
+                );
                 ((content_box.width - tw) / 2.0).max(0.0)
             }
             strata_style::types::TextAlign::Right => {
-                let (tw, _) = strata_layout::text::measure_text_bounds_ext(&text, font_size, line_height, None, is_mono);
+                let (tw, _) = strata_layout::text::measure_text_bounds_with_family(
+                    &text,
+                    font_size,
+                    line_height,
+                    None,
+                    is_mono,
+                    font_family,
+                );
                 (content_box.width - tw).max(0.0)
             }
             _ => 0.0,
         };
 
         let caret_w = 2.0f32;
-        let caret_h = (font_size * 1.2).min(content_box.height);
+        let caret_h = (font_size * 1.2).min(content_box.height).max(14.0);
         let caret_y = content_box.y + ((content_box.height - caret_h) / 2.0).max(0.0);
 
         // 1. Selection range highlight (CSS ::selection)
@@ -3554,18 +5330,37 @@ fn collect_svg_items_from_blueprint(
             let end_clamped = end.min(total_chars);
             if start_clamped < end_clamped {
                 let start_prefix: String = text.chars().take(start_clamped).collect();
-                let (start_w, _) = strata_layout::text::measure_text_bounds_ext(&start_prefix, font_size, line_height, None, is_mono);
-                let sel_slice: String = text.chars().skip(start_clamped).take(end_clamped - start_clamped).collect();
-                let (sel_w, _) = strata_layout::text::measure_text_bounds_ext(&sel_slice, font_size, line_height, None, is_mono);
+                let (start_w, _) = strata_layout::text::measure_text_bounds_with_family(
+                    &start_prefix,
+                    font_size,
+                    line_height,
+                    None,
+                    is_mono,
+                    font_family,
+                );
+                let sel_slice: String = text
+                    .chars()
+                    .skip(start_clamped)
+                    .take(end_clamped - start_clamped)
+                    .collect();
+                let (sel_w, _) = strata_layout::text::measure_text_bounds_with_family(
+                    &sel_slice,
+                    font_size,
+                    line_height,
+                    None,
+                    is_mono,
+                    font_family,
+                );
 
                 let sel_h = (font_size * 1.25).min(content_box.height);
                 let sel_y = content_box.y + ((content_box.height - sel_h) / 2.0).max(0.0);
                 let sel_x = content_box.x + align_offset + start_w;
 
-                self.display_list.push(strata_render::compositor::DrawCommand::DrawRect {
-                    bounds: strata_layout::Rect::new(sel_x, sel_y, sel_w, sel_h),
-                    color: strata_style::types::Color::rgba(59, 130, 246, 120), // Standard CSS selection blue
-                });
+                self.display_list
+                    .push(strata_render::compositor::DrawCommand::DrawRect {
+                        bounds: strata_layout::Rect::new(sel_x, sel_y, sel_w, sel_h),
+                        color: strata_style::types::Color::rgba(59, 130, 246, 120), // Standard CSS selection blue
+                    });
             }
         }
 
@@ -3576,13 +5371,22 @@ fn collect_svg_items_from_blueprint(
 
         if !has_sel && is_blink_on {
             let prefix: String = text.chars().take(cursor_idx).collect();
-            let (cursor_w, _) = strata_layout::text::measure_text_bounds_ext(&prefix, font_size, line_height, None, is_mono);
-            let caret_x = (content_box.x + align_offset + cursor_w).min(content_box.x + content_box.width - caret_w);
+            let (cursor_w, _) = strata_layout::text::measure_text_bounds_with_family(
+                &prefix,
+                font_size,
+                line_height,
+                None,
+                is_mono,
+                font_family,
+            );
+            let caret_x = (content_box.x + align_offset + cursor_w)
+                .min(content_box.x + content_box.width - caret_w);
 
-            self.display_list.push(strata_render::compositor::DrawCommand::DrawRect {
-                bounds: strata_layout::Rect::new(caret_x, caret_y, caret_w, caret_h),
-                color: caret_color,
-            });
+            self.display_list
+                .push(strata_render::compositor::DrawCommand::DrawRect {
+                    bounds: strata_layout::Rect::new(caret_x, caret_y, caret_w, caret_h),
+                    color: caret_color,
+                });
         }
     }
 
@@ -3603,14 +5407,35 @@ fn collect_svg_items_from_blueprint(
             }
             PlatformEvent::WindowFocused(_) => false,
             PlatformEvent::WindowCloseRequested => false,
-            PlatformEvent::Scroll { delta_x, delta_y, .. } => {
-                self.dispatch_smooth_scroll(self.last_mouse_pos.0, self.last_mouse_pos.1, *delta_x, *delta_y)
-            }
+            PlatformEvent::Scroll {
+                delta_x, delta_y, ..
+            } => self.dispatch_smooth_scroll(
+                self.last_mouse_pos.0,
+                self.last_mouse_pos.1,
+                *delta_x,
+                *delta_y,
+            ),
             PlatformEvent::AnimationTick => {
                 let scroll_changed = self.poll_smooth_scroll();
                 let anim_changed = self.poll_animations();
-                scroll_changed || anim_changed
+                let caret_changed = self.poll_caret_blink();
+                scroll_changed || anim_changed || caret_changed
             }
+            PlatformEvent::MouseMove { x, y } => {
+                self.last_mouse_pos = (*x, *y);
+                let cur = Self::hit_test_cursor(&self.root_blueprint, &self.layout_root, *x, *y);
+                self.current_cursor = cur;
+                self.dispatch_pointer_move(*x, *y)
+            }
+            PlatformEvent::MouseDown { x, y, .. } => self.dispatch_pointer_down(*x, *y),
+            PlatformEvent::MouseUp { x, y, .. } => self.dispatch_pointer_up(*x, *y),
+            PlatformEvent::CursorLeft => {
+                self.current_cursor = strata_platform::window::CursorIcon::Default;
+                self.clear_hover()
+            }
+            PlatformEvent::KeyDown { .. }
+            | PlatformEvent::KeyUp { .. }
+            | PlatformEvent::ReceivedCharacter(_) => self.handle_key_event(event),
             _ => false,
         }
     }
@@ -3648,7 +5473,11 @@ fn collect_svg_items_from_blueprint(
                     let _ = presenter.resize(width, height);
                 }
                 PlatformEvent::ScaleFactorChanged { scale_factor } => {
-                    compositor.resize(self.viewport_width as u32, self.viewport_height as u32, scale_factor);
+                    compositor.resize(
+                        self.viewport_width as u32,
+                        self.viewport_height as u32,
+                        scale_factor,
+                    );
                 }
                 PlatformEvent::WindowCloseRequested => {
                     *control = EventLoopControl::Exit;
@@ -3658,6 +5487,7 @@ fn collect_svg_items_from_blueprint(
             }
 
             let needs_redraw = self.step_event(&event);
+            window.set_cursor(self.current_cursor());
 
             if needs_redraw || window.is_redraw_requested() {
                 let _ = self.render_frame(compositor, presenter, false);
@@ -3700,18 +5530,25 @@ where
 }
 
 /// Launches a live interactive Strata window with surface presentation and frame pacing.
-pub fn launch_window<F>(root: F, config: WindowConfig) -> (AppRuntime, LivePlatformWindow, SoftwareSurfacePresenter)
+pub fn launch_window<F>(
+    root: F,
+    config: WindowConfig,
+) -> (AppRuntime, LivePlatformWindow, SoftwareSurfacePresenter)
 where
     F: FnOnce() -> View + 'static,
 {
-    println!("[+] Launching Strata Live Native Window: \"{}\"...", config.title);
+    println!(
+        "[+] Launching Strata Live Native Window: \"{}\"...",
+        config.title
+    );
     let view = root();
     let width = config.width as f32;
     let height = config.height as f32;
     let mut runtime = AppRuntime::new(view, width, height, 1.0);
 
     let window = LivePlatformWindow::new(config.clone());
-    let mut presenter = SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
+    let mut presenter =
+        SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
     let mut compositor = SwapchainCompositor::new(config.width, config.height, 1.0);
 
     let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
@@ -3746,13 +5583,17 @@ where
     F: FnMut() -> View + 'static,
     E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
 {
-    println!("[+] Launching Strata Native Desktop Window on X11: \"{}\"...", config.title);
+    println!(
+        "[+] Launching Strata Native Desktop Window on X11: \"{}\"...",
+        config.title
+    );
     let mut x11_window = strata_platform::x11_window::X11Window::new(config.clone())?;
     let view = root_fn();
     let width = config.width as f32;
     let height = config.height as f32;
     let mut runtime = AppRuntime::new(view, width, height, 1.0);
-    let mut presenter = SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
+    let mut presenter =
+        SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
     let mut compositor = SwapchainCompositor::new(config.width, config.height, 1.0);
 
     // Initial frame presentation
@@ -3782,26 +5623,41 @@ where
                     running = false;
                     break;
                 }
-                strata_platform::PlatformEvent::WindowResized { width: w, height: h } => {
+                strata_platform::PlatformEvent::WindowResized {
+                    width: w,
+                    height: h,
+                } => {
                     compositor.resize(w, h, runtime.dpr);
                     let _ = presenter.resize(w, h);
                     runtime.viewport_width = w as f32;
                     runtime.viewport_height = h as f32;
                     needs_redraw = true;
                 }
-                strata_platform::PlatformEvent::MouseDown { x, y, button: strata_platform::MouseButton::Left } => {
+                strata_platform::PlatformEvent::MouseDown {
+                    x,
+                    y,
+                    button: strata_platform::MouseButton::Left,
+                } => {
                     if runtime.dispatch_click(x, y) {
                         needs_rebuild = true;
                     }
                 }
                 strata_platform::PlatformEvent::MouseMove { x, y } => {
                     if runtime.update_hover(x, y) {
-                        needs_rebuild = true;
+                        if runtime.hover_is_paint_only() {
+                            needs_redraw = true;
+                        } else {
+                            needs_rebuild = true;
+                        }
                     }
                 }
                 strata_platform::PlatformEvent::CursorLeft => {
                     if runtime.clear_hover() {
-                        needs_rebuild = true;
+                        if runtime.hover_is_paint_only() {
+                            needs_redraw = true;
+                        } else {
+                            needs_rebuild = true;
+                        }
                     }
                 }
                 _ => {}
@@ -3818,10 +5674,18 @@ where
             let new_view = root_fn();
             runtime.update_view(new_view);
             let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-            let _ = x11_window.present_bgra(&presenter.backing_buffer, presenter.width, presenter.height);
+            let _ = x11_window.present_bgra(
+                &presenter.backing_buffer,
+                presenter.width,
+                presenter.height,
+            );
         } else if needs_redraw || x11_window.redraw_requested {
             let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
-            let _ = x11_window.present_bgra(&presenter.backing_buffer, presenter.width, presenter.height);
+            let _ = x11_window.present_bgra(
+                &presenter.backing_buffer,
+                presenter.width,
+                presenter.height,
+            );
         }
 
         std::thread::sleep(std::time::Duration::from_millis(16));
@@ -3839,6 +5703,20 @@ where
     launch_gtk_with_events(root_fn, config, |_, _| false)
 }
 
+/// Invokes the application's platform event hook and returns its redraw/rebuild decision.
+/// This is the single dispatch seam used by the native window event pumps, so tray,
+/// single-instance, and window events all flow through the same user callback.
+pub fn invoke_user_event_hook<E>(
+    event: &strata_platform::PlatformEvent,
+    runtime: &mut AppRuntime,
+    hook: &mut E,
+) -> bool
+where
+    E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool,
+{
+    hook(event, runtime)
+}
+
 #[cfg(target_os = "linux")]
 /// Launches an interactive native GTK3/Cairo desktop window on Linux with a custom event hook.
 pub fn launch_gtk_with_events<F, E>(
@@ -3850,6 +5728,30 @@ where
     F: FnMut() -> View + 'static,
     E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
 {
+    let _single_instance_lock = if let Some(ref app_id) = config.single_instance_id {
+        let args: Vec<String> = std::env::args().collect();
+        match strata_platform::SingleInstanceLock::acquire(app_id, &args, |forwarded_args| {
+            #[cfg(target_os = "linux")]
+            {
+                strata_platform::gtk_focus_window();
+                strata_platform::post_platform_event(
+                    strata_platform::PlatformEvent::SingleInstanceTriggered(forwarded_args),
+                );
+            }
+        }) {
+            Ok(strata_platform::SingleInstanceStatus::Primary(lock)) => Some(lock),
+            Ok(strata_platform::SingleInstanceStatus::SecondaryExited) => {
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("[Strata] SingleInstanceLock warning: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let root_fn_rc = std::rc::Rc::new(std::cell::RefCell::new(root_fn));
     let event_handler_rc = std::rc::Rc::new(std::cell::RefCell::new(event_handler));
 
@@ -3864,7 +5766,8 @@ where
     let runtime_draw = runtime.clone();
     let on_draw = move |width: f32, height: f32, cr: &strata_platform::cairo::Context| {
         let mut rt = runtime_draw.borrow_mut();
-        let size_changed = (rt.viewport_width - width).abs() > 0.01 || (rt.viewport_height - height).abs() > 0.01;
+        let size_changed =
+            (rt.viewport_width - width).abs() > 0.01 || (rt.viewport_height - height).abs() > 0.01;
         rt.viewport_width = width;
         rt.viewport_height = height;
         if size_changed {
@@ -3890,10 +5793,13 @@ where
         let mut needs_redraw = false;
         {
             let mut rt = runtime_event.borrow_mut();
-            if (event_handler_event.borrow_mut())(event, &mut rt) {
+            if invoke_user_event_hook(event, &mut rt, &mut *event_handler_event.borrow_mut()) {
                 needs_rebuild = true;
             }
-            if let strata_platform::PlatformEvent::Scroll { delta_x, delta_y, .. } = event {
+            if let strata_platform::PlatformEvent::Scroll {
+                delta_x, delta_y, ..
+            } = event
+            {
                 let (px, py) = rt.last_mouse_pos;
                 if rt.dispatch_smooth_scroll(px, py, *delta_x, *delta_y) {
                     needs_redraw = true;
@@ -3902,19 +5808,30 @@ where
             if let strata_platform::PlatformEvent::AnimationTick = event {
                 let scroll_changed = rt.poll_smooth_scroll();
                 let anim_changed = rt.poll_animations();
-                if scroll_changed || anim_changed {
+                let caret_changed = rt.poll_caret_blink();
+                if scroll_changed || anim_changed || caret_changed {
                     needs_redraw = true;
                 }
             }
             if let strata_platform::PlatformEvent::DoubleClick { button, x, y } = event {
                 let _btn_idx = button.to_button_index();
                 if *button == strata_platform::MouseButton::Left {
-                    let region = AppRuntime::hit_test_property(&rt.root_blueprint, &rt.layout_root, *x, *y, "data-app-region");
+                    let region = AppRuntime::hit_test_property(
+                        &rt.root_blueprint,
+                        &rt.layout_root,
+                        *x,
+                        *y,
+                        "data-app-region",
+                    );
                     if region.as_deref() == Some("drag") {
                         #[cfg(target_os = "linux")]
                         {
                             let new_max = strata_platform::gtk_toggle_maximize();
-                            let _ = (event_handler_event.borrow_mut())(&strata_platform::PlatformEvent::WindowMaximized(new_max), &mut rt);
+                            let _ = invoke_user_event_hook(
+                                &strata_platform::PlatformEvent::WindowMaximized(new_max),
+                                &mut rt,
+                                &mut *event_handler_event.borrow_mut(),
+                            );
                         }
                         needs_rebuild = true;
                     }
@@ -3930,7 +5847,11 @@ where
                         needs_redraw = true;
                     } else {
                         rt.begin_window_drag_candidate(*x, *y);
-                        if rt.dispatch_pointer_down(*x, *y) {
+                        if rt.dispatch_pointer_down_with_modifiers(
+                            *x,
+                            *y,
+                            strata_platform::gtk_current_modifiers(),
+                        ) {
                             needs_rebuild = true;
                         }
                         if rt.dispatch_mouse_click(*x, *y, btn_idx, 1) {
@@ -3976,7 +5897,11 @@ where
                         #[cfg(target_os = "linux")]
                         {
                             let is_max = strata_platform::gtk_is_maximized();
-                            let _ = (event_handler_event.borrow_mut())(&strata_platform::PlatformEvent::WindowMaximized(is_max), &mut rt);
+                            let _ = invoke_user_event_hook(
+                                &strata_platform::PlatformEvent::WindowMaximized(is_max),
+                                &mut rt,
+                                &mut *event_handler_event.borrow_mut(),
+                            );
                         }
                         needs_rebuild = true;
                     }
@@ -3984,22 +5909,52 @@ where
                         needs_rebuild = true;
                     }
                     if rt.update_hover(*x, *y) {
-                        needs_rebuild = true;
+                        if rt.hover_is_paint_only() {
+                            needs_redraw = true;
+                        } else {
+                            needs_rebuild = true;
+                        }
                     }
-                    let cur = AppRuntime::hit_test_cursor(&rt.root_blueprint, &rt.layout_root, *x, *y);
+                    let is_over_scrollbar = rt.active_scrollbars.iter().any(|bar| {
+                        bar.max_scroll_y > 1.0
+                            && (*x >= bar.track_bounds.x
+                                && *x <= bar.bounds.x + bar.bounds.width + 1.0
+                                && *y >= bar.track_bounds.y
+                                && *y <= bar.track_bounds.y + bar.track_bounds.height)
+                    });
+                    let cur = if is_over_scrollbar {
+                        strata_platform::window::CursorIcon::Default
+                    } else {
+                        AppRuntime::hit_test_cursor(&rt.root_blueprint, &rt.layout_root, *x, *y)
+                    };
                     strata_platform::gtk_set_cursor(cur);
                 }
             }
             if matches!(event, strata_platform::PlatformEvent::CursorLeft) {
+                rt.current_cursor = strata_platform::window::CursorIcon::Default;
+                strata_platform::gtk_set_cursor(strata_platform::window::CursorIcon::Default);
                 if rt.clear_hover() {
-                    needs_rebuild = true;
+                    if rt.hover_is_paint_only() {
+                        needs_redraw = true;
+                    } else {
+                        needs_rebuild = true;
+                    }
                 }
             }
-            if matches!(event, strata_platform::PlatformEvent::KeyDown { .. } | strata_platform::PlatformEvent::KeyUp { .. } | strata_platform::PlatformEvent::ReceivedCharacter(_)) {
+            if matches!(
+                event,
+                strata_platform::PlatformEvent::KeyDown { .. }
+                    | strata_platform::PlatformEvent::KeyUp { .. }
+                    | strata_platform::PlatformEvent::ReceivedCharacter(_)
+            ) {
                 if rt.handle_key_event(event) {
                     needs_rebuild = true;
                 }
             }
+        }
+
+        if perf_logging_enabled() && needs_rebuild {
+            eprintln!("[perf] rebuild_trigger: {:?}", event);
         }
 
         if needs_rebuild {
@@ -4022,7 +5977,14 @@ where
     };
 
     let decorated = config.decoration == strata_platform::WindowDecoration::NativeOs;
-    strata_platform::launch_gtk_window(&config.title, config.width, config.height, decorated, on_draw, on_event)
+    strata_platform::launch_gtk_window(
+        &config.title,
+        config.width,
+        config.height,
+        decorated,
+        on_draw,
+        on_event,
+    )
 }
 
 /// Frame timing and metrics information passed to frame lifecycle callbacks.
@@ -4093,7 +6055,11 @@ impl StrataApp {
     /// Renders current frame to internal software surface buffer and returns immutable slice of BGRA pixels.
     pub fn render_to_buffer(&mut self) -> Result<&[u8], PresentError> {
         self.step_frame();
-        self.compositor.render_and_present(&self.runtime.display_list, &mut self.presenter, true)?;
+        self.compositor.render_and_present(
+            &self.runtime.display_list,
+            &mut self.presenter,
+            true,
+        )?;
         Ok(&self.presenter.backing_buffer)
     }
 
@@ -4125,14 +6091,19 @@ impl StrataApp {
 
     /// Runs the platform window event loop with surface presentation.
     pub fn run_with_event_loop<E: EventLoop>(mut self, event_loop: &mut E) {
-        println!("[+] Launching Strata Native App: \"{}\"...", self.window_config.title);
+        println!(
+            "[+] Launching Strata Native App: \"{}\"...",
+            self.window_config.title
+        );
         let window = LivePlatformWindow::new(self.window_config.clone());
 
         if let Some(ref mut on_start) = self.hooks.on_start {
             on_start(&mut self.runtime);
         }
 
-        let _ = self.runtime.render_frame(&mut self.compositor, &mut self.presenter, true);
+        let _ = self
+            .runtime
+            .render_frame(&mut self.compositor, &mut self.presenter, true);
 
         let hooks = &mut self.hooks;
         let runtime = &mut self.runtime;
@@ -4150,7 +6121,11 @@ impl StrataApp {
                     let _ = presenter.resize(width, height);
                 }
                 PlatformEvent::ScaleFactorChanged { scale_factor } => {
-                    compositor.resize(runtime.viewport_width as u32, runtime.viewport_height as u32, scale_factor);
+                    compositor.resize(
+                        runtime.viewport_width as u32,
+                        runtime.viewport_height as u32,
+                        scale_factor,
+                    );
                 }
                 PlatformEvent::WindowCloseRequested => {
                     *control = EventLoopControl::Exit;
@@ -4230,7 +6205,10 @@ impl StrataAppBuilder {
         self
     }
 
-    pub fn on_event<F: FnMut(&PlatformEvent, &mut EventLoopControl, &mut AppRuntime) + 'static>(mut self, cb: F) -> Self {
+    pub fn on_event<F: FnMut(&PlatformEvent, &mut EventLoopControl, &mut AppRuntime) + 'static>(
+        mut self,
+        cb: F,
+    ) -> Self {
         self.hooks.on_event = Some(Box::new(cb));
         self
     }
@@ -4255,8 +6233,16 @@ impl StrataAppBuilder {
         let width = self.window_config.width as f32;
         let height = self.window_config.height as f32;
         let runtime = AppRuntime::new(view, width, height, self.dpr);
-        let presenter = SoftwareSurfacePresenter::new(self.window_config.width, self.window_config.height, SwapchainFormat::Bgra8Unorm);
-        let compositor = SwapchainCompositor::new(self.window_config.width, self.window_config.height, self.dpr);
+        let presenter = SoftwareSurfacePresenter::new(
+            self.window_config.width,
+            self.window_config.height,
+            SwapchainFormat::Bgra8Unorm,
+        );
+        let compositor = SwapchainCompositor::new(
+            self.window_config.width,
+            self.window_config.height,
+            self.dpr,
+        );
 
         StrataApp {
             runtime,

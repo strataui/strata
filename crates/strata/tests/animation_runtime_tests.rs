@@ -45,10 +45,7 @@ fn TransitionApp(active: bool) -> View {
 }
 
 #[component]
-fn LifecycleEventsApp(
-    start_fired: Rc<Cell<bool>>,
-    iteration_fired: Rc<Cell<bool>>,
-) -> View {
+fn LifecycleEventsApp(start_fired: Rc<Cell<bool>>, iteration_fired: Rc<Cell<bool>>) -> View {
     let on_start = {
         let flag = start_fired.clone();
         move |_ev: strata_dom::Event| {
@@ -170,6 +167,61 @@ fn test_runtime_css_transition_on_state_update() {
     } else {
         panic!("Width must be Dimension::Px");
     }
+}
+
+#[test]
+fn test_keyframe_animation_ticks_are_layout_free() {
+    let view = SpinningIconApp();
+    let mut runtime = AppRuntime::new(view, 400.0, 300.0, 1.0);
+
+    assert!(
+        runtime.has_active_animations(),
+        "animate-spin must register an active keyframe animation"
+    );
+
+    let baseline = runtime.layout_compute_count();
+    for _ in 0..8 {
+        std::thread::sleep(Duration::from_millis(2));
+        assert!(
+            runtime.poll_animations(),
+            "paint-only keyframe animation must request a redraw"
+        );
+    }
+    assert_eq!(
+        runtime.layout_compute_count(),
+        baseline,
+        "poll_animations must not recompute layout for transform/opacity animations"
+    );
+
+    let baseline = runtime.layout_compute_count();
+    for _ in 0..8 {
+        std::thread::sleep(Duration::from_millis(2));
+        assert!(
+            runtime.step_event(&PlatformEvent::AnimationTick),
+            "AnimationTick must request a redraw while the spinner is active"
+        );
+    }
+    assert_eq!(
+        runtime.layout_compute_count(),
+        baseline,
+        "AnimationTick must not recompute layout for paint-only animations"
+    );
+}
+
+#[test]
+fn test_width_transition_still_recomputes_layout() {
+    let view = TransitionApp(false);
+    let mut runtime = AppRuntime::new(view, 400.0, 300.0, 1.0);
+    runtime.update_view(TransitionApp(true));
+
+    assert!(runtime.has_active_animations());
+    let baseline = runtime.layout_compute_count();
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(runtime.poll_animations());
+    assert!(
+        runtime.layout_compute_count() > baseline,
+        "width transitions participate in box layout and must recompute layout"
+    );
 }
 
 #[test]

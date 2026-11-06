@@ -19,6 +19,7 @@ strata_primitives = { workspace = true }
 strata_vfs = { workspace = true }
 strata_storage = { workspace = true }
 strata_web_api = { workspace = true }
+strata_gpu_path = { workspace = true }
 
 # Decoupled optional ecosystem crates
 strata_ui = { workspace = true, optional = true }
@@ -107,3 +108,4 @@ full = [
 strata_ui = { workspace = true }
 strata_icons = { workspace = true }
 strata_device = { workspace = true }
+strata_web_reader = { workspace = true }

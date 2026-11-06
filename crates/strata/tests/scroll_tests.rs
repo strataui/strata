@@ -346,3 +346,54 @@ fn test_smooth_scroll_interrupted_by_manual_thumb_drag() {
     assert!(runtime.active_smooth_scroll.is_none(), "Manual thumb press must immediately cancel kinetic scroll");
     assert!(runtime.scrollbar_drag.is_some());
 }
+
+#[test]
+fn test_scrollbar_right_edge_pixel_perfect_hit_testing() {
+    let mut runtime = AppRuntime::new(
+        rsx! {
+            <div id="edge-scroll" class="flex flex-col w-[800px] h-[400px] overflow-y-auto">
+                <div class="h-[2000px] w-full" />
+            </div>
+        },
+        800.0,
+        400.0,
+        1.0,
+    );
+
+    assert_eq!(runtime.active_scrollbars.len(), 1);
+    let bar = runtime.active_scrollbars[0].clone();
+
+    // Verify track bounds and thumb bounds are flush with the container's right edge
+    let expected_right = 800.0;
+    assert_eq!(bar.track_bounds.x + bar.track_bounds.width, expected_right, "Track right edge must be exactly at 800.0px");
+    assert_eq!(bar.thumb_bounds.x + bar.thumb_bounds.width, expected_right, "Thumb right edge must be exactly at 800.0px");
+    assert_eq!(bar.track_bounds.y, 0.0, "Track top edge must be exactly at 0.0px");
+    assert_eq!(bar.track_bounds.height, 400.0, "Track height must match container height 400.0px");
+
+    let thumb_center_y = bar.thumb_bounds.y + bar.thumb_bounds.height / 2.0;
+
+    // Slam mouse to the very edge right (x = 800.0): must pick the scrollbar thumb without moving left!
+    assert!(runtime.check_scrollbar_thumb_press(800.0, thumb_center_y), "Must pick scrollbar at x = 800.0px (very edge right)");
+    assert!(runtime.scrollbar_drag.is_some());
+    runtime.scrollbar_drag = None;
+
+    // Subpixel right boundary (x = 799.5 and x = 799.0): must pick scrollbar
+    assert!(runtime.check_scrollbar_thumb_press(799.5, thumb_center_y));
+    assert!(runtime.scrollbar_drag.is_some());
+    runtime.scrollbar_drag = None;
+
+    assert!(runtime.check_scrollbar_thumb_press(799.0, thumb_center_y));
+    assert!(runtime.scrollbar_drag.is_some());
+    runtime.scrollbar_drag = None;
+
+    // Clicking track gutter at the very right edge (x = 800.0, py = 350.0): must pick scrollbar and jump/drag
+    assert!(runtime.check_scrollbar_thumb_press(800.0, 350.0), "Must pick scrollbar track at x = 800.0px");
+    assert!(runtime.scrollbar_drag.is_some());
+    assert!(runtime.active_scrollbars[0].scroll_y > 0.0, "Clicking track must scroll towards click point");
+    runtime.scrollbar_drag = None;
+
+    // Coordinates to the left of the scrollbar track must not pick scrollbar
+    assert!(!runtime.check_scrollbar_thumb_press(780.0, thumb_center_y), "Coordinates left of track must return false");
+    assert!(runtime.scrollbar_drag.is_none());
+}
+

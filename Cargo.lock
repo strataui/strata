@@ -3041,6 +3041,7 @@ dependencies = [
  "strata_dom",
  "strata_editor",
  "strata_form",
+ "strata_gpu_path",
  "strata_i18n",
  "strata_icons",
  "strata_js",
@@ -3065,6 +3066,7 @@ dependencies = [
  "strata_vfs",
  "strata_virtual",
  "strata_web_api",
+ "strata_web_reader",
 ]
 
 [[package]]
