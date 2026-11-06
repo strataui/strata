@@ -301,6 +301,52 @@ pub fn sample_texture(texture: &Texture, uv: (f32, f32)) -> [u8; 4] {
     }
 }
 
+/// Bilinear sample with clamped addressing, the tile path.
+///
+/// This is the specialized form of [`sample_texture`] for the sampler every
+/// tile uses. Hoisting the filter and address-mode branches out of the
+/// reference function matters when terrain fills a 1440x900 viewport.
+#[inline(always)]
+pub fn sample_bilinear_clamped(texture: &Texture, u: f32, v: f32) -> [u8; 4] {
+    let width = texture.data.desc.width as usize;
+    let height = texture.data.desc.height as usize;
+    let pixels = &texture.data.pixels;
+    let u = u.clamp(0.0, 1.0);
+    let v = v.clamp(0.0, 1.0);
+
+    let fx = u * width as f32 - 0.5;
+    let fy = v * height as f32 - 0.5;
+    let x0 = fx.floor();
+    let y0 = fy.floor();
+    let tx = fx - x0;
+    let ty = fy - y0;
+
+    let x0u = x0.clamp(0.0, width as f32 - 1.0) as usize;
+    let x1u = (x0 + 1.0).clamp(0.0, width as f32 - 1.0) as usize;
+    let y0u = y0.clamp(0.0, height as f32 - 1.0) as usize;
+    let y1u = (y0 + 1.0).clamp(0.0, height as f32 - 1.0) as usize;
+
+    let c00 = texel(pixels, width, x0u, y0u);
+    let c10 = texel(pixels, width, x1u, y0u);
+    let c01 = texel(pixels, width, x0u, y1u);
+    let c11 = texel(pixels, width, x1u, y1u);
+
+    let w00 = (1.0 - tx) * (1.0 - ty);
+    let w10 = tx * (1.0 - ty);
+    let w01 = (1.0 - tx) * ty;
+    let w11 = tx * ty;
+    let mix = |c00: u8, c10: u8, c01: u8, c11: u8| -> u8 {
+        let value = c00 as f32 * w00 + c10 as f32 * w10 + c01 as f32 * w01 + c11 as f32 * w11;
+        value.round().clamp(0.0, 255.0) as u8
+    };
+    [
+        mix(c00[0], c10[0], c01[0], c11[0]),
+        mix(c00[1], c10[1], c01[1], c11[1]),
+        mix(c00[2], c10[2], c01[2], c11[2]),
+        mix(c00[3], c10[3], c01[3], c11[3]),
+    ]
+}
+
 #[inline(always)]
 fn texel(pixels: &[u8], width: usize, x: usize, y: usize) -> [u8; 4] {
     let idx = (y * width + x) * 4;

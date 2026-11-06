@@ -315,13 +315,7 @@ pub fn text_size(text: &str, scale: u32) -> (f32, f32) {
 }
 
 /// Signature of a text rasterizer installed by the platform layer.
-pub type TextRasterizer = fn(
-    &mut FrameBuffer,
-    Rect,
-    [f32; 2],
-    &str,
-    OverlayTextStyle,
-);
+pub type TextRasterizer = fn(&mut FrameBuffer, Rect, [f32; 2], &str, OverlayTextStyle);
 
 /// Rasterizes projected overlay commands into `frame_buffer`, clipped to
 /// `clip` when present and to `viewport` always. Labels are drawn with the
@@ -404,6 +398,46 @@ fn plot(frame_buffer: &mut FrameBuffer, region: Rect, x: i32, y: i32, color: Col
     frame_buffer.set_pixel(x as usize, y as usize, color);
 }
 
+/// Clips a segment to a rectangle with Liang-Barsky.
+///
+/// Projected globe-scale polylines can have endpoints millions of pixels
+/// outside the frame. Clipping first keeps the Bresenham loop proportional to
+/// the visible part instead of the full off-screen span.
+fn clip_segment_to_rect(a: [f32; 2], b: [f32; 2], region: Rect) -> Option<([f32; 2], [f32; 2])> {
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let p = [-dx, dx, -dy, dy];
+    let q = [
+        a[0] - region.x,
+        region.max_x() - a[0],
+        a[1] - region.y,
+        region.max_y() - a[1],
+    ];
+    let mut t0 = 0.0f32;
+    let mut t1 = 1.0f32;
+    for index in 0..4 {
+        if p[index].abs() < 1e-9 {
+            if q[index] < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let t = q[index] / p[index];
+        if p[index] < 0.0 {
+            t0 = t0.max(t);
+        } else {
+            t1 = t1.min(t);
+        }
+        if t0 > t1 {
+            return None;
+        }
+    }
+    Some((
+        [a[0] + dx * t0, a[1] + dy * t0],
+        [a[0] + dx * t1, a[1] + dy * t1],
+    ))
+}
+
 /// Bresenham line with a square brush so widths above one pixel are visible.
 fn draw_line(
     frame_buffer: &mut FrameBuffer,
@@ -413,6 +447,9 @@ fn draw_line(
     color: Color,
     width: f32,
 ) {
+    let Some((a, b)) = clip_segment_to_rect(a, b, region) else {
+        return;
+    };
     let half = ((width.max(1.0) / 2.0).round() as i32).max(0);
     let (mut x0, mut y0) = (a[0].round() as i32, a[1].round() as i32);
     let (x1, y1) = (b[0].round() as i32, b[1].round() as i32);

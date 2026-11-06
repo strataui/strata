@@ -70,6 +70,11 @@ impl MeshBuilder {
         self.indices.len() / 3
     }
 
+    /// Number of indices appended so far, for batching index ranges.
+    pub fn index_count(&self) -> usize {
+        self.indices.len()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
     }
@@ -125,6 +130,42 @@ impl MeshBuilder {
                 let u = u0 + (u1 - u0) * (col as f32 / (cols - 1) as f32);
                 let position = heights[row * cols + col];
                 self.push_vertex(position, [0.0, 0.0, 1.0], (u, v));
+            }
+        }
+        for row in 0..rows - 1 {
+            for col in 0..cols - 1 {
+                let i = base + (row * cols + col) as u32;
+                let right = i + 1;
+                let down = i + cols as u32;
+                let down_right = down + 1;
+                self.push_quad(i, right, down_right, down);
+            }
+        }
+    }
+
+    /// Appends a grid patch with explicit per-vertex normals.
+    ///
+    /// Use this for relief, where the surface normal is derived from the
+    /// height field rather than being the sphere radial.
+    pub fn push_grid_with_normals(
+        &mut self,
+        positions: &[DVec3],
+        normals: &[[f32; 3]],
+        cols: usize,
+        rows: usize,
+        uv_rect: (f32, f32, f32, f32),
+    ) {
+        if cols < 2 || rows < 2 || positions.len() != cols * rows || normals.len() != cols * rows {
+            return;
+        }
+        let (u0, v0, u1, v1) = uv_rect;
+        let base = self.vertex_count() as u32;
+        for row in 0..rows {
+            let v = v0 + (v1 - v0) * (row as f32 / (rows - 1) as f32);
+            for col in 0..cols {
+                let u = u0 + (u1 - u0) * (col as f32 / (cols - 1) as f32);
+                let index = row * cols + col;
+                self.push_vertex(positions[index], normals[index], (u, v));
             }
         }
         for row in 0..rows - 1 {

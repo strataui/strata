@@ -2,8 +2,8 @@
 
 #![allow(unused_variables)]
 
-use std::collections::BTreeMap;
 use crate::overlay3d::Overlay3D;
+use std::collections::BTreeMap;
 use strata_style::Color;
 
 pub use crate::texture3d::{
@@ -149,6 +149,52 @@ pub struct TexturedMaterial3D {
     pub opacity: f32,
 }
 
+/// One index range of a batched textured mesh, with its own material.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TexturedDraw3D {
+    pub material: TexturedMaterial3D,
+    /// First index in the shared index buffer.
+    pub index_start: u32,
+    /// Number of indices, a multiple of three.
+    pub index_count: u32,
+}
+
+impl TexturedDraw3D {
+    pub fn new(material: TexturedMaterial3D, index_start: u32, index_count: u32) -> Self {
+        Self {
+            material,
+            index_start,
+            index_count,
+        }
+    }
+}
+
+/// A textured mesh with several texture draws sharing one vertex and index
+/// buffer.
+///
+/// Terrain patches each need their own image, but setting up one mesh per patch
+/// repeats the vertex transform for every patch. A batch transforms the shared
+/// buffer once and switches textures per index range.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TexturedBatchMaterial3D {
+    pub draws: Vec<TexturedDraw3D>,
+}
+
+impl TexturedBatchMaterial3D {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, draw: TexturedDraw3D) -> &mut Self {
+        self.draws.push(draw);
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.draws.is_empty()
+    }
+}
+
 impl TexturedMaterial3D {
     pub fn new(texture: TextureId) -> Self {
         Self {
@@ -209,6 +255,8 @@ pub enum Material3D {
     },
     /// Textured surface sampled from a [`TextureId`].
     Textured(TexturedMaterial3D),
+    /// Several textured index ranges sharing one vertex buffer.
+    TexturedBatch(TexturedBatchMaterial3D),
 }
 
 impl Default for Material3D {
@@ -334,6 +382,8 @@ pub struct Scene3D {
     celestial: Vec<CelestialBody3D>,
     cloud_shells: Vec<CloudShell3D>,
     overlay: Option<Overlay3D>,
+    /// Camera up hint in world space. `None` uses the renderer's fallback.
+    camera_up: Option<[f64; 3]>,
 }
 
 impl Scene3D {
@@ -375,6 +425,18 @@ impl Scene3D {
 
     pub fn overlay(&self) -> Option<&Overlay3D> {
         self.overlay.as_ref()
+    }
+
+    /// Sets the camera's up direction. A downward-looking camera has no unique
+    /// screen up from the world Y axis, so scenes that care about roll should
+    /// declare it, for example the local east-north-up frame at a ground focus.
+    pub fn with_camera_up(mut self, up: [f64; 3]) -> Self {
+        self.camera_up = Some(up);
+        self
+    }
+
+    pub fn camera_up(&self) -> Option<[f64; 3]> {
+        self.camera_up
     }
 
     pub fn background(&self) -> Background3D {
