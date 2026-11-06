@@ -154,7 +154,7 @@ fn capture_is_deterministic() {
 fn malformed_descriptors_are_reported() {
     assert!(FrameDescriptor::from_json_str("{}").is_err());
     let mut text = FrameDescriptor::capture(&EarthScene::new(), &input()).to_json_string();
-    text = text.replace("\"version\":1", "\"version\":99");
+    text = text.replace("\"version\":2", "\"version\":99");
     assert!(
         FrameDescriptor::from_json_str(&text).is_err(),
         "an unsupported version must be rejected"
@@ -171,7 +171,8 @@ fn compare_reports_no_delta_for_the_same_frame() {
 
     let delta = strata_earth::compare(&descriptor, &scene);
     assert_eq!(delta.summary.patches, descriptor.patches.len());
-    assert_eq!(delta.summary.patches_missing, 0);
+    assert_eq!(delta.summary.patches_key_matched, descriptor.patches.len());
+    assert_eq!(delta.summary.patches_uncovered, 0);
     assert_eq!(delta.summary.patches_extra, 0);
     assert_eq!(delta.summary.uv_mismatches, 0);
     assert_eq!(delta.summary.requested_mismatches, 0);
@@ -192,13 +193,14 @@ fn compare_reports_a_foreign_descriptor_as_a_delta_not_a_failure() {
     // parse, and replay should reject it while compare measures the difference.
     descriptor.patches[0].key = TileKey::new(3, 1, 1);
     descriptor.patches[0].requested = TileKey::new(3, 1, 1);
+    descriptor.patches[0].bounds = [0.0, 1.0, 0.0, 1.0];
     descriptor.patches[0].uv_rect = Some([0.25, 0.25, 0.5, 0.5]);
     let text = descriptor.to_json_string();
     let parsed = FrameDescriptor::from_json_str(&text).expect("foreign patch keys must parse");
 
     let delta = strata_earth::compare(&parsed, &scene);
     assert_eq!(
-        delta.summary.patches_missing, 1,
+        delta.summary.patches_uncovered, 1,
         "one descriptor patch is absent from the scene"
     );
     assert_eq!(
@@ -208,10 +210,10 @@ fn compare_reports_a_foreign_descriptor_as_a_delta_not_a_failure() {
     let missing = delta
         .patches
         .iter()
-        .find(|patch| patch.missing_in_scene)
-        .expect("missing patch entry");
+        .find(|patch| patch.match_kind == strata_earth::PatchMatch::Uncovered)
+        .expect("uncovered patch entry");
     assert_eq!(missing.key, TileKey::new(3, 1, 1));
-    assert!(missing.uv_mismatch());
+    assert_eq!(missing.reference_uv_rect, Some([0.25, 0.25, 0.5, 0.5]));
 
     let (mut replay_source, _) = source();
     let mut replayed = EarthScene::new();
@@ -241,4 +243,100 @@ fn compare_surfaces_a_camera_policy_difference() {
         "scene far is smaller than 51 000 km"
     );
     assert!((delta.camera.fov_y_deg - 15.0).abs() < 1e-3);
+}
+
+#[test]
+fn a_one_level_difference_reads_as_overlap_not_a_missing_patch() {
+    let (mut source, _) = source();
+    let input = input();
+    let mut scene = EarthScene::new();
+    scene.build(&input, &mut source);
+    let mut descriptor = FrameDescriptor::capture(&scene, &input);
+
+    // Give the reference patch the child level while keeping the same bounds,
+    // which is what a one-level resolver difference looks like.
+    let original = descriptor.patches[0].key;
+    descriptor.patches[0].key = TileKey::new(original.level + 1, original.x * 2, original.y * 2);
+    descriptor.patches[0].requested = descriptor.patches[0].key;
+
+    let delta = strata_earth::compare(&descriptor, &scene);
+    let patch = delta
+        .patches
+        .iter()
+        .find(|patch| patch.reference_key == Some(descriptor.patches[0].key))
+        .expect("reference patch entry");
+    assert_eq!(patch.match_kind, strata_earth::PatchMatch::Overlap);
+    assert!(
+        patch.overlap_fraction >= 0.95,
+        "overlap was {}",
+        patch.overlap_fraction
+    );
+    assert_eq!(patch.level_delta, 1);
+    assert_eq!(delta.summary.patches_uncovered, 0);
+    assert_eq!(delta.summary.max_level_delta, 1);
+}
+
+#[test]
+fn the_v1_reader_still_accepts_a_descriptor_without_tiles() {
+    use strata_earth::json::Json;
+
+    let (mut source, _) = source();
+    let input = input();
+    let mut scene = EarthScene::new();
+    scene.build(&input, &mut source);
+    let descriptor = FrameDescriptor::capture(&scene, &input);
+
+    let mut value = descriptor.to_json();
+    if let Json::Object(entries) = &mut value {
+        entries.retain(|(key, _)| key != "tiles");
+        for (key, value) in entries.iter_mut() {
+            if key == "version" {
+                *value = Json::Number(1.0);
+            }
+        }
+    }
+    let text = value.to_string();
+    let parsed = FrameDescriptor::from_json_str(&text).expect("v1 must still parse");
+    assert!(parsed.tiles.is_empty());
+    assert!(parsed.surface.is_none());
+    assert!(!parsed.patches.is_empty());
+    assert_eq!(parsed.patches.len(), descriptor.patches.len());
+}
+
+#[test]
+fn a_sphere_descriptor_omits_patches_and_round_trips() {
+    let (mut source, _) = source();
+    let input = input();
+    let mut scene = EarthScene::new();
+    scene.build(&input, &mut source);
+    let mut descriptor = FrameDescriptor::capture(&scene, &input);
+    descriptor.patches.clear();
+    descriptor.tiles.clear();
+    descriptor.surface = Some(strata_earth::DescriptorSphere {
+        centre: [0.0, 0.0, 0.0],
+        radius_m: 6_378_137.0,
+        segments: [128, 64],
+    });
+    descriptor.rings = vec![strata_earth::DescriptorRing {
+        level: 2,
+        subdiv: 8,
+        tiles: vec![strata_earth::DescriptorTile {
+            level: 2,
+            key: TileKey::new(2, 1, 1),
+            source: TileKey::new(2, 1, 1),
+            uv_rect: Some([0.0, 0.0, 1.0, 1.0]),
+            exact: true,
+        }],
+    }];
+
+    let text = descriptor.to_json_string();
+    assert!(
+        !text.contains("\"patches\""),
+        "a sphere frame omits patches"
+    );
+    assert!(text.contains("\"surface\""));
+    assert!(text.contains("\"rings\""));
+    let parsed = FrameDescriptor::from_json_str(&text).expect("sphere descriptor parses");
+    assert_eq!(parsed, descriptor);
+    assert_eq!(parsed.rings[0].tiles[0].key, TileKey::new(2, 1, 1));
 }

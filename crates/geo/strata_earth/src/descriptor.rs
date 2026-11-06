@@ -20,7 +20,9 @@ use strata_style::types::Color;
 /// Format tag written into every descriptor.
 pub const DESCRIPTOR_FORMAT: &str = "strata-earth-frame";
 /// Descriptor schema version.
-pub const DESCRIPTOR_VERSION: u32 = 1;
+pub const DESCRIPTOR_VERSION: u32 = 2;
+/// First schema version, still accepted by the reader.
+pub const DESCRIPTOR_VERSION_V1: u32 = 1;
 
 fn round_f32(value: f32) -> f64 {
     // Keep f32-derived inputs readable and stable across languages instead of
@@ -80,6 +82,80 @@ fn tile_to_json(key: TileKey) -> Json {
     Json::numbers(&[key.level as f64, key.x as f64, key.y as f64])
 }
 
+fn uv_rect_from_json(value: Option<&Json>) -> Result<Option<[f64; 4]>, String> {
+    match value {
+        Some(Json::Null) | None => Ok(None),
+        Some(value) => {
+            let values = numbers_from(
+                value
+                    .as_array()
+                    .ok_or_else(|| "uv_rect must be an array".to_string())?,
+                4,
+                "uv_rect",
+            )?;
+            Ok(Some([values[0], values[1], values[2], values[3]]))
+        }
+    }
+}
+
+fn tile_from_descriptor_json(value: &Json) -> Result<DescriptorTile, String> {
+    let key = tile_from_json(
+        value
+            .get("key")
+            .ok_or_else(|| "missing tile.key".to_string())?,
+    )?;
+    let level = value
+        .get("level")
+        .and_then(Json::as_f64)
+        .map(|level| level.clamp(0.0, 30.0) as u8)
+        .unwrap_or(key.level);
+    Ok(DescriptorTile {
+        level,
+        key,
+        source: tile_from_json(
+            value
+                .get("source")
+                .ok_or_else(|| "missing tile.source".to_string())?,
+        )?,
+        uv_rect: uv_rect_from_json(value.get("uv_rect"))?,
+        exact: value.get("exact").and_then(Json::as_bool).unwrap_or(false),
+    })
+}
+
+fn surface_from_json(value: &Json) -> Result<DescriptorSphere, String> {
+    let kind = value
+        .get("kind")
+        .and_then(Json::as_str)
+        .ok_or_else(|| "missing surface.kind".to_string())?;
+    if kind != "sphere" {
+        return Err(format!("unsupported surface kind '{kind}'"));
+    }
+    let centre = numbers_from(
+        value
+            .get("centre")
+            .and_then(Json::as_array)
+            .ok_or_else(|| "missing surface.centre".to_string())?,
+        3,
+        "surface.centre",
+    )?;
+    let segments = numbers_from(
+        value
+            .get("segments")
+            .and_then(Json::as_array)
+            .ok_or_else(|| "missing surface.segments".to_string())?,
+        2,
+        "surface.segments",
+    )?;
+    Ok(DescriptorSphere {
+        centre: [centre[0], centre[1], centre[2]],
+        radius_m: value
+            .get("radius_m")
+            .and_then(Json::as_f64)
+            .ok_or_else(|| "missing surface.radius_m".to_string())?,
+        segments: [segments[0].max(3.0) as u32, segments[1].max(2.0) as u32],
+    })
+}
+
 /// Camera fields needed to rebuild the frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DescriptorCamera {
@@ -103,6 +179,36 @@ pub struct DescriptorPatch {
     pub uv_rect: Option<[f64; 4]>,
     /// True when the patch's own tile supplied the image.
     pub exact: bool,
+}
+
+/// One texture bound to visible geometry, at the patch's clipmap level.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DescriptorTile {
+    pub level: u8,
+    pub key: TileKey,
+    /// The tile actually sampled: `key` when exact, an ancestor otherwise.
+    pub source: TileKey,
+    /// `[u0, v0, u1, v1]`, or `None` when no imagery resolved.
+    pub uv_rect: Option<[f64; 4]>,
+    /// True only when `source == key`.
+    pub exact: bool,
+}
+
+/// A spherical globe surface.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DescriptorSphere {
+    pub centre: [f64; 3],
+    pub radius_m: f64,
+    /// `[longitude_segments, latitude_segments]`.
+    pub segments: [u32; 2],
+}
+
+/// One clipmap ring of a spherical surface.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DescriptorRing {
+    pub level: u8,
+    pub subdiv: u32,
+    pub tiles: Vec<DescriptorTile>,
 }
 
 /// One overlay marker.
@@ -147,11 +253,72 @@ pub struct FrameDescriptor {
     pub tile_grid: u32,
     pub patch_scale: f64,
     pub patches: Vec<DescriptorPatch>,
+    /// Every texture bound to visible geometry in this frame.
+    pub tiles: Vec<DescriptorTile>,
+    /// Present for a spherical globe frame; `patches` is empty in that case.
+    pub surface: Option<DescriptorSphere>,
+    /// Per-level tile supply for a spherical surface.
+    pub rings: Vec<DescriptorRing>,
     pub markers: Vec<DescriptorMarker>,
     pub sky_top: [f64; 4],
     pub sky_bottom: [f64; 4],
     pub celestial: Vec<DescriptorCelestial>,
     pub clouds: Option<DescriptorClouds>,
+}
+
+fn patch_to_json(patch: &DescriptorPatch) -> Json {
+    Json::object(vec![
+        ("key", tile_to_json(patch.key)),
+        ("requested", tile_to_json(patch.requested)),
+        ("bounds", Json::numbers(&patch.bounds)),
+        (
+            "uv_rect",
+            match patch.uv_rect {
+                Some(rect) => Json::numbers(&rect),
+                None => Json::Null,
+            },
+        ),
+        ("exact", Json::Bool(patch.exact)),
+    ])
+}
+
+fn tile_to_descriptor_json(tile: &DescriptorTile) -> Json {
+    Json::object(vec![
+        ("level", Json::number(tile.level as f64)),
+        ("key", tile_to_json(tile.key)),
+        ("source", tile_to_json(tile.source)),
+        (
+            "uv_rect",
+            match tile.uv_rect {
+                Some(rect) => Json::numbers(&rect),
+                None => Json::Null,
+            },
+        ),
+        ("exact", Json::Bool(tile.exact)),
+    ])
+}
+
+fn surface_to_json(surface: &DescriptorSphere) -> Json {
+    Json::object(vec![
+        ("kind", Json::string("sphere")),
+        ("centre", Json::numbers(&surface.centre)),
+        ("radius_m", Json::number(surface.radius_m)),
+        (
+            "segments",
+            Json::numbers(&[surface.segments[0] as f64, surface.segments[1] as f64]),
+        ),
+    ])
+}
+
+fn ring_to_json(ring: &DescriptorRing) -> Json {
+    Json::object(vec![
+        ("level", Json::number(ring.level as f64)),
+        ("subdiv", Json::number(ring.subdiv as f64)),
+        (
+            "tiles",
+            Json::array(ring.tiles.iter().map(tile_to_descriptor_json).collect()),
+        ),
+    ])
 }
 
 impl FrameDescriptor {
@@ -183,7 +350,7 @@ impl FrameDescriptor {
         });
         let resolved: Vec<(TileKey, crate::geodesy::TileTextureResolution)> =
             scene.tile_resolutions();
-        let patches = scene
+        let patches: Vec<DescriptorPatch> = scene
             .patches()
             .iter()
             .map(|patch| {
@@ -204,6 +371,26 @@ impl FrameDescriptor {
                         .map(|r| [r.uv_rect.0, r.uv_rect.1, r.uv_rect.2, r.uv_rect.3]),
                     exact: resolution.map(|r| r.exact).unwrap_or(false),
                 }
+            })
+            .collect();
+        let tiles = patches
+            .iter()
+            .filter_map(|patch| {
+                resolved
+                    .iter()
+                    .find(|(key, _)| *key == patch.key)
+                    .map(|(_, resolution)| DescriptorTile {
+                        level: patch.key.level,
+                        key: patch.key,
+                        source: resolution.source,
+                        uv_rect: Some([
+                            resolution.uv_rect.0,
+                            resolution.uv_rect.1,
+                            resolution.uv_rect.2,
+                            resolution.uv_rect.3,
+                        ]),
+                        exact: resolution.source == patch.key,
+                    })
             })
             .collect();
         Self {
@@ -236,6 +423,9 @@ impl FrameDescriptor {
             tile_grid: input.tile_grid,
             patch_scale: input.patch_scale,
             patches,
+            tiles,
+            surface: None,
+            rings: Vec::new(),
             markers: input
                 .markers
                 .iter()
@@ -310,7 +500,7 @@ impl FrameDescriptor {
 
     /// Serializes to canonical JSON.
     pub fn to_json(&self) -> Json {
-        Json::object(vec![
+        let mut entries: Vec<(&str, Json)> = vec![
             ("format", Json::string(DESCRIPTOR_FORMAT)),
             ("version", Json::number(DESCRIPTOR_VERSION as f64)),
             ("viewport", Json::numbers(&self.viewport)),
@@ -343,29 +533,26 @@ impl FrameDescriptor {
             ("max_tile_level", Json::number(self.max_tile_level as f64)),
             ("tile_grid", Json::number(self.tile_grid as f64)),
             ("patch_scale", Json::number(self.patch_scale)),
-            (
+        ];
+        // A sphere frame omits patches; a ground frame omits surface and rings.
+        if self.surface.is_none() {
+            entries.push((
                 "patches",
-                Json::array(
-                    self.patches
-                        .iter()
-                        .map(|patch| {
-                            Json::object(vec![
-                                ("key", tile_to_json(patch.key)),
-                                ("requested", tile_to_json(patch.requested)),
-                                ("bounds", Json::numbers(&patch.bounds)),
-                                (
-                                    "uv_rect",
-                                    match patch.uv_rect {
-                                        Some(rect) => Json::numbers(&rect),
-                                        None => Json::Null,
-                                    },
-                                ),
-                                ("exact", Json::Bool(patch.exact)),
-                            ])
-                        })
-                        .collect(),
-                ),
-            ),
+                Json::array(self.patches.iter().map(patch_to_json).collect()),
+            ));
+        }
+        entries.push((
+            "tiles",
+            Json::array(self.tiles.iter().map(tile_to_descriptor_json).collect()),
+        ));
+        if let Some(surface) = &self.surface {
+            entries.push(("surface", surface_to_json(surface)));
+            entries.push((
+                "rings",
+                Json::array(self.rings.iter().map(ring_to_json).collect()),
+            ));
+        }
+        entries.extend([
             (
                 "markers",
                 Json::array(
@@ -418,7 +605,8 @@ impl FrameDescriptor {
                     None => Json::Null,
                 },
             ),
-        ])
+        ]);
+        Json::object(entries)
     }
 
     /// Serializes to a JSON string.
@@ -439,7 +627,8 @@ impl FrameDescriptor {
             .get("version")
             .and_then(Json::as_f64)
             .ok_or_else(|| "missing version".to_string())?;
-        if version as u32 != DESCRIPTOR_VERSION {
+        let version = version as u32;
+        if version != DESCRIPTOR_VERSION && version != DESCRIPTOR_VERSION_V1 {
             return Err(format!("unsupported version {version}"));
         }
         let viewport = numbers_from(
@@ -491,7 +680,7 @@ impl FrameDescriptor {
         let patches = value
             .get("patches")
             .and_then(Json::as_array)
-            .ok_or_else(|| "missing patches".to_string())?
+            .unwrap_or(&[])
             .iter()
             .map(|patch| {
                 let bounds = numbers_from(
@@ -502,19 +691,7 @@ impl FrameDescriptor {
                     4,
                     "patch.bounds",
                 )?;
-                let uv_rect = match patch.get("uv_rect") {
-                    Some(Json::Null) | None => None,
-                    Some(value) => {
-                        let values = numbers_from(
-                            value
-                                .as_array()
-                                .ok_or_else(|| "patch.uv_rect must be an array".to_string())?,
-                            4,
-                            "patch.uv_rect",
-                        )?;
-                        Some([values[0], values[1], values[2], values[3]])
-                    }
-                };
+                let uv_rect = uv_rect_from_json(patch.get("uv_rect"))?;
                 Ok(DescriptorPatch {
                     key: tile_from_json(
                         patch
@@ -529,6 +706,44 @@ impl FrameDescriptor {
                     bounds: [bounds[0], bounds[1], bounds[2], bounds[3]],
                     uv_rect,
                     exact: patch.get("exact").and_then(Json::as_bool).unwrap_or(false),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let tiles = value
+            .get("tiles")
+            .and_then(Json::as_array)
+            .unwrap_or(&[])
+            .iter()
+            .map(tile_from_descriptor_json)
+            .collect::<Result<Vec<_>, String>>()?;
+        let surface = match value.get("surface") {
+            Some(Json::Null) | None => None,
+            Some(value) => Some(surface_from_json(value)?),
+        };
+        let rings = value
+            .get("rings")
+            .and_then(Json::as_array)
+            .unwrap_or(&[])
+            .iter()
+            .map(|ring| {
+                Ok(DescriptorRing {
+                    level: ring
+                        .get("level")
+                        .and_then(Json::as_f64)
+                        .unwrap_or(0.0)
+                        .clamp(0.0, 30.0) as u8,
+                    subdiv: ring
+                        .get("subdiv")
+                        .and_then(Json::as_f64)
+                        .unwrap_or(1.0)
+                        .max(1.0) as u32,
+                    tiles: ring
+                        .get("tiles")
+                        .and_then(Json::as_array)
+                        .unwrap_or(&[])
+                        .iter()
+                        .map(tile_from_descriptor_json)
+                        .collect::<Result<Vec<_>, String>>()?,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -676,6 +891,9 @@ impl FrameDescriptor {
                 .and_then(Json::as_f64)
                 .unwrap_or(0.25),
             patches,
+            tiles,
+            surface,
+            rings,
             markers,
             sky_top: [sky_top[0], sky_top[1], sky_top[2], sky_top[3]],
             sky_bottom: [sky_bottom[0], sky_bottom[1], sky_bottom[2], sky_bottom[3]],
@@ -692,6 +910,11 @@ impl FrameDescriptor {
     /// Whether the most recent build reproduced this descriptor's tile keys and
     /// UV sub-rects.
     pub fn matches(&self, scene: &EarthScene) -> bool {
+        // A spherical surface has no plugin geometry yet, so strict replay
+        // cannot certify it.
+        if self.surface.is_some() {
+            return false;
+        }
         let resolved = scene.tile_resolutions();
         if scene.patches().len() != self.patches.len() {
             return false;
@@ -785,44 +1008,92 @@ impl CameraDelta {
     }
 }
 
-/// Difference for one patch key, including keys present on only one side.
+/// How a reference patch matched the plugin's patch set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatchMatch {
+    /// Both sides use the same tile key.
+    Key,
+    /// Keys differ but the bounds overlap.
+    Overlap,
+    /// No plugin patch overlaps this reference patch.
+    Uncovered,
+    /// A plugin patch with no reference counterpart.
+    Extra,
+}
+
+/// Difference for one reference patch, or one extra plugin patch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PatchDelta {
+    /// The reference key, or the plugin key for an extra patch.
     pub key: TileKey,
-    pub descriptor_requested: Option<TileKey>,
+    pub reference_key: Option<TileKey>,
+    pub scene_key: Option<TileKey>,
+    pub reference_requested: Option<TileKey>,
     pub scene_requested: Option<TileKey>,
-    pub descriptor_uv_rect: Option<[f64; 4]>,
+    pub reference_bounds: Option<[f64; 4]>,
+    pub scene_bounds: Option<[f64; 4]>,
+    pub reference_uv_rect: Option<[f64; 4]>,
     pub scene_uv_rect: Option<[f64; 4]>,
-    /// The descriptor lists this patch but the scene does not.
-    pub missing_in_scene: bool,
-    /// The scene lists this patch but the descriptor does not.
-    pub extra_in_scene: bool,
+    /// Per-component `scene - reference` UV delta, only for a key match.
+    pub uv_delta: Option<[f64; 4]>,
+    /// Bounds intersection as a fraction of the reference patch area.
+    pub overlap_fraction: f64,
+    /// `reference.level - scene.level`, zero for an extra patch.
+    pub level_delta: i64,
+    pub match_kind: PatchMatch,
 }
 
 impl PatchDelta {
     /// Whether both sides request the same tile.
     pub fn requested_mismatch(&self) -> bool {
-        self.descriptor_requested != self.scene_requested
+        self.reference_requested != self.scene_requested
     }
 
-    /// Whether both sides resolved imagery to a different UV sub-rect.
+    /// Whether a key-matched patch resolved imagery to a different UV sub-rect.
     pub fn uv_mismatch(&self) -> bool {
-        match (self.descriptor_uv_rect, self.scene_uv_rect) {
-            (None, None) => false,
-            (Some(a), Some(b)) => a.iter().zip(b.iter()).any(|(a, b)| (a - b).abs() > 1e-9),
-            _ => true,
+        match self.uv_delta {
+            Some(delta) => delta.iter().any(|value| value.abs() > 1e-9),
+            None => false,
         }
     }
+}
+
+/// Difference for one tile key in the supply list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TileDelta {
+    pub key: TileKey,
+    pub reference_source: Option<TileKey>,
+    pub scene_source: Option<TileKey>,
+    pub reference_uv_rect: Option<[f64; 4]>,
+    pub scene_uv_rect: Option<[f64; 4]>,
+    pub uv_delta: Option<[f64; 4]>,
+}
+
+/// Supply coverage of the reference tile list against the plugin's bound tiles.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TileSupply {
+    pub matched: usize,
+    pub reference_only: usize,
+    pub plugin_only: usize,
+    pub uv_mismatches: usize,
+    pub tiles: Vec<TileDelta>,
 }
 
 /// Counts over a [`DescriptorDelta`].
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct DeltaSummary {
+    /// Number of reference patches (zero for a sphere frame).
     pub patches: usize,
-    pub patches_missing: usize,
+    pub patches_key_matched: usize,
+    pub patches_overlapping: usize,
+    pub patches_uncovered: usize,
     pub patches_extra: usize,
     pub uv_mismatches: usize,
     pub requested_mismatches: usize,
+    /// Largest absolute level difference among key and overlap matches.
+    pub max_level_delta: i64,
+    /// Smallest reference-patch overlap fraction; 1.0 when there are no patches.
+    pub min_overlap_fraction: f64,
     pub camera_matches: bool,
 }
 
@@ -834,67 +1105,177 @@ pub struct DeltaSummary {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DescriptorDelta {
     pub patches: Vec<PatchDelta>,
+    pub tiles: TileSupply,
     pub camera: CameraDelta,
     pub summary: DeltaSummary,
 }
 
-/// Compares a descriptor against a built scene without failing.
-///
-/// `replay` stays strict for tamper detection; `compare` reports the difference
-/// between a reference frame and the plugin's own decisions.
-pub fn compare(descriptor: &FrameDescriptor, scene: &EarthScene) -> DescriptorDelta {
-    let resolved = scene.tile_resolutions();
-    let mut patches = Vec::new();
+fn bounds_area(bounds: [f64; 4]) -> f64 {
+    let width = (bounds[1] - bounds[0]).max(0.0);
+    let height = (bounds[3] - bounds[2]).max(0.0);
+    width * height
+}
 
-    for expected in &descriptor.patches {
-        let actual = scene.patches().iter().find(|p| p.key == expected.key);
-        let scene_uv = actual.and_then(|patch| {
+fn overlap_fraction(reference: [f64; 4], scene: [f64; 4]) -> f64 {
+    let area = bounds_area(reference);
+    if area <= 0.0 {
+        return 0.0;
+    }
+    let lon = (reference[1].min(scene[1]) - reference[0].max(scene[0])).max(0.0);
+    let lat = (reference[3].min(scene[3]) - reference[2].max(scene[2])).max(0.0);
+    (lon * lat / area).clamp(0.0, 1.0)
+}
+
+fn uv_delta(reference: Option<[f64; 4]>, scene: Option<[f64; 4]>) -> Option<[f64; 4]> {
+    match (reference, scene) {
+        (Some(a), Some(b)) => Some([b[0] - a[0], b[1] - a[1], b[2] - a[2], b[3] - a[3]]),
+        _ => None,
+    }
+}
+
+fn patch_bounds(patch: &crate::scene::PatchFrame) -> [f64; 4] {
+    [
+        patch.bounds.lon0,
+        patch.bounds.lon1,
+        patch.bounds.lat0,
+        patch.bounds.lat1,
+    ]
+}
+
+fn scene_tiles(scene: &EarthScene) -> Vec<DescriptorTile> {
+    let resolved = scene.tile_resolutions();
+    scene
+        .patches()
+        .iter()
+        .filter_map(|patch| {
             resolved
                 .iter()
                 .find(|(key, _)| *key == patch.key)
-                .map(|(_, resolution)| {
-                    [
+                .map(|(_, resolution)| DescriptorTile {
+                    level: patch.key.level,
+                    key: patch.key,
+                    source: resolution.source,
+                    uv_rect: Some([
                         resolution.uv_rect.0,
                         resolution.uv_rect.1,
                         resolution.uv_rect.2,
                         resolution.uv_rect.3,
-                    ]
+                    ]),
+                    exact: resolution.source == patch.key,
                 })
-        });
-        patches.push(PatchDelta {
-            key: expected.key,
-            descriptor_requested: Some(expected.requested),
-            scene_requested: actual.map(|patch| patch.requested),
-            descriptor_uv_rect: expected.uv_rect,
-            scene_uv_rect: scene_uv,
-            missing_in_scene: actual.is_none(),
-            extra_in_scene: false,
-        });
+        })
+        .collect()
+}
+
+/// Compares a descriptor against a built scene without failing.
+///
+/// Patches match by key first, then by bounds overlap; a one-level difference
+/// reads as a full-overlap match with a level delta, not a missing patch.
+/// `replay` stays strict for tamper detection.
+pub fn compare(descriptor: &FrameDescriptor, scene: &EarthScene) -> DescriptorDelta {
+    let scene_patches = scene.patches();
+    let mut used = vec![false; scene_patches.len()];
+    let mut patches = Vec::with_capacity(descriptor.patches.len() + scene_patches.len());
+
+    for expected in &descriptor.patches {
+        let mut exact = None;
+        let mut best: Option<(usize, f64)> = None;
+        for (index, actual) in scene_patches.iter().enumerate() {
+            if used[index] {
+                continue;
+            }
+            if actual.key == expected.key {
+                exact = Some(index);
+                break;
+            }
+            let fraction = overlap_fraction(expected.bounds, patch_bounds(actual));
+            if fraction > 0.0 && best.map(|(_, f)| fraction > f).unwrap_or(true) {
+                best = Some((index, fraction));
+            }
+        }
+        if let Some(index) = exact {
+            used[index] = true;
+            let actual = &scene_patches[index];
+            let scene_uv = scene_tiles(scene)
+                .into_iter()
+                .find(|tile| tile.key == actual.key)
+                .and_then(|tile| tile.uv_rect);
+            patches.push(PatchDelta {
+                key: expected.key,
+                reference_key: Some(expected.key),
+                scene_key: Some(actual.key),
+                reference_requested: Some(expected.requested),
+                scene_requested: Some(actual.requested),
+                reference_bounds: Some(expected.bounds),
+                scene_bounds: Some(patch_bounds(actual)),
+                reference_uv_rect: expected.uv_rect,
+                scene_uv_rect: scene_uv,
+                uv_delta: uv_delta(expected.uv_rect, scene_uv),
+                overlap_fraction: 1.0,
+                level_delta: 0,
+                match_kind: PatchMatch::Key,
+            });
+        } else if let Some((index, fraction)) = best {
+            used[index] = true;
+            let actual = &scene_patches[index];
+            patches.push(PatchDelta {
+                key: expected.key,
+                reference_key: Some(expected.key),
+                scene_key: Some(actual.key),
+                reference_requested: Some(expected.requested),
+                scene_requested: Some(actual.requested),
+                reference_bounds: Some(expected.bounds),
+                scene_bounds: Some(patch_bounds(actual)),
+                reference_uv_rect: expected.uv_rect,
+                scene_uv_rect: scene_tiles(scene)
+                    .into_iter()
+                    .find(|tile| tile.key == actual.key)
+                    .and_then(|tile| tile.uv_rect),
+                uv_delta: None,
+                overlap_fraction: fraction,
+                level_delta: expected.key.level as i64 - actual.key.level as i64,
+                match_kind: PatchMatch::Overlap,
+            });
+        } else {
+            patches.push(PatchDelta {
+                key: expected.key,
+                reference_key: Some(expected.key),
+                scene_key: None,
+                reference_requested: Some(expected.requested),
+                scene_requested: None,
+                reference_bounds: Some(expected.bounds),
+                scene_bounds: None,
+                reference_uv_rect: expected.uv_rect,
+                scene_uv_rect: None,
+                uv_delta: None,
+                overlap_fraction: 0.0,
+                level_delta: 0,
+                match_kind: PatchMatch::Uncovered,
+            });
+        }
     }
 
-    for patch in scene.patches() {
-        if descriptor.patches.iter().any(|p| p.key == patch.key) {
+    for (index, actual) in scene_patches.iter().enumerate() {
+        if used[index] {
             continue;
         }
-        let scene_uv = resolved
-            .iter()
-            .find(|(key, _)| *key == patch.key)
-            .map(|(_, resolution)| {
-                [
-                    resolution.uv_rect.0,
-                    resolution.uv_rect.1,
-                    resolution.uv_rect.2,
-                    resolution.uv_rect.3,
-                ]
-            });
         patches.push(PatchDelta {
-            key: patch.key,
-            descriptor_requested: None,
-            scene_requested: Some(patch.requested),
-            descriptor_uv_rect: None,
-            scene_uv_rect: scene_uv,
-            missing_in_scene: false,
-            extra_in_scene: true,
+            key: actual.key,
+            reference_key: None,
+            scene_key: Some(actual.key),
+            reference_requested: None,
+            scene_requested: Some(actual.requested),
+            reference_bounds: None,
+            scene_bounds: Some(patch_bounds(actual)),
+            reference_uv_rect: None,
+            scene_uv_rect: scene_tiles(scene)
+                .into_iter()
+                .find(|tile| tile.key == actual.key)
+                .and_then(|tile| tile.uv_rect),
+            uv_delta: None,
+            overlap_fraction: 0.0,
+            level_delta: 0,
+            match_kind: PatchMatch::Extra,
         });
     }
 
@@ -930,19 +1311,105 @@ pub fn compare(descriptor: &FrameDescriptor, scene: &EarthScene) -> DescriptorDe
         ];
     }
 
+    let mut tiles = TileSupply::default();
+    let plugin_tiles = scene_tiles(scene);
+    let mut tile_used = vec![false; plugin_tiles.len()];
+    for reference in &descriptor.tiles {
+        let index = plugin_tiles
+            .iter()
+            .enumerate()
+            .position(|(index, tile)| !tile_used[index] && tile.key == reference.key);
+        match index {
+            Some(index) => {
+                tile_used[index] = true;
+                let plugin = &plugin_tiles[index];
+                let delta = uv_delta(reference.uv_rect, plugin.uv_rect);
+                if delta
+                    .map(|delta| delta.iter().any(|value| value.abs() > 1e-9))
+                    .unwrap_or(false)
+                {
+                    tiles.uv_mismatches += 1;
+                }
+                tiles.matched += 1;
+                tiles.tiles.push(TileDelta {
+                    key: reference.key,
+                    reference_source: Some(reference.source),
+                    scene_source: Some(plugin.source),
+                    reference_uv_rect: reference.uv_rect,
+                    scene_uv_rect: plugin.uv_rect,
+                    uv_delta: delta,
+                });
+            }
+            None => {
+                tiles.reference_only += 1;
+                tiles.tiles.push(TileDelta {
+                    key: reference.key,
+                    reference_source: Some(reference.source),
+                    scene_source: None,
+                    reference_uv_rect: reference.uv_rect,
+                    scene_uv_rect: None,
+                    uv_delta: None,
+                });
+            }
+        }
+    }
+    for (index, plugin) in plugin_tiles.iter().enumerate() {
+        if tile_used[index] {
+            continue;
+        }
+        tiles.plugin_only += 1;
+        tiles.tiles.push(TileDelta {
+            key: plugin.key,
+            reference_source: None,
+            scene_source: Some(plugin.source),
+            reference_uv_rect: None,
+            scene_uv_rect: plugin.uv_rect,
+            uv_delta: None,
+        });
+    }
+
+    let reference_patches: Vec<&PatchDelta> = patches
+        .iter()
+        .filter(|patch| patch.reference_key.is_some())
+        .collect();
     let summary = DeltaSummary {
-        patches: patches.len(),
-        patches_missing: patches.iter().filter(|p| p.missing_in_scene).count(),
-        patches_extra: patches.iter().filter(|p| p.extra_in_scene).count(),
-        uv_mismatches: patches.iter().filter(|p| p.uv_mismatch()).count(),
-        requested_mismatches: patches.iter().filter(|p| p.requested_mismatch()).count(),
-        // The scene camera is f32, so a far plane of a few hundred kilometres
-        // is only reproducible to a few millimetres.
+        patches: reference_patches.len(),
+        patches_key_matched: patches
+            .iter()
+            .filter(|patch| patch.match_kind == PatchMatch::Key)
+            .count(),
+        patches_overlapping: patches
+            .iter()
+            .filter(|patch| patch.match_kind == PatchMatch::Overlap)
+            .count(),
+        patches_uncovered: patches
+            .iter()
+            .filter(|patch| patch.match_kind == PatchMatch::Uncovered)
+            .count(),
+        patches_extra: patches
+            .iter()
+            .filter(|patch| patch.match_kind == PatchMatch::Extra)
+            .count(),
+        uv_mismatches: patches.iter().filter(|patch| patch.uv_mismatch()).count(),
+        requested_mismatches: patches
+            .iter()
+            .filter(|patch| patch.reference_key.is_some() && patch.requested_mismatch())
+            .count(),
+        max_level_delta: reference_patches
+            .iter()
+            .map(|patch| patch.level_delta.abs())
+            .max()
+            .unwrap_or(0),
+        min_overlap_fraction: reference_patches
+            .iter()
+            .map(|patch| patch.overlap_fraction)
+            .fold(1.0f64, f64::min),
         camera_matches: camera.matches(0.1),
     };
 
     DescriptorDelta {
         patches,
+        tiles,
         camera,
         summary,
     }

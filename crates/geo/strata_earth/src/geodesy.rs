@@ -161,13 +161,16 @@ impl EarthCamera {
         (self.focus.height_m + u + horizontal_sq / (2.0 * radius)).max(0.0)
     }
 
-    /// Ground width covered by the horizontal field of view, in metres.
+    /// Ground width covered by the vertical field of view, in metres.
     ///
     /// The texture rasterizer keeps only the frame around each triangle, so
-    /// terrain patches are sized from this so they stay partly on screen.
+    /// terrain patches are sized from this so they stay partly on screen. The
+    /// eye-to-aim distance is used rather than altitude: an oblique camera sees
+    /// a wider footprint at the same altitude, and an altitude-only span leaves
+    /// the patch sheet too small to cover the view.
     pub fn ground_span_m(&self) -> f64 {
-        let altitude = self.altitude_m().max(1e-3);
-        2.0 * altitude * (self.fov_y_deg.to_radians() * 0.5).tan()
+        let distance = self.eye_distance_m().max(1e-3);
+        2.0 * distance * (self.fov_y_deg.to_radians() * 0.5).tan()
     }
 
     /// Resolves the camera to ECEF positions and a depth range suited to the

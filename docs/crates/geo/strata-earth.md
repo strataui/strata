@@ -110,9 +110,9 @@ The globe and mid-morph regimes currently draw the same 3x3 patch sheet as the
 ground regimes. At 12 000 km that sheet is smaller than the Earth's apparent
 disc, so there is no limb and no far-side occlusion. The chosen parity path is a
 real sphere surface at Earth radius, tessellated at the tile grid, with the
-descriptor gaining a `surface` field to describe it. Until that lands, the
-acceptance pair is `terrain_z18` and `night_twilight`; globe and mid-morph deltas
-are held.
+descriptor carrying a `surface` field to describe it. Until that lands, the
+acceptance pair is `terrain_z18` and `terrain_oblique`; globe and mid-morph
+deltas are held.
 
 Cloud shells are declarations today: the software rasterizer has no cloud pass,
 so parity captures use `cloud_cover = 0` and the first comparison covers
@@ -141,30 +141,39 @@ installed.
 cargo run -p strata_earth_golden --release -- target/earth-goldens
 ```
 
-Renders four regimes (full globe, mid morph, terrain at Z18, night/twilight),
-writes a PNG, a metrics sidecar, and a canonical JSON descriptor, and exits
-non-zero if two consecutive runs differ in either pixels or descriptor.
+Renders the four fixed scenarios: `terrain_z18`, `terrain_oblique`,
+`full_globe`, and `mid_morph`. It writes a PNG, a metrics sidecar, and a
+canonical JSON descriptor, and exits non-zero if two consecutive runs differ in
+pixels, coverage, or descriptor.
+
+The acceptance pair is the two ground frames, `terrain_z18` and
+`terrain_oblique`. The globe frames are informational until the sphere surface
+lands. The dropped `night_twilight` frame compared a two-stop sky lerp with the
+reference's twilight model, so it measured a model difference rather than a
+defect.
 
 The sidecar's `terrain_layer_cover_px` is structural: the capture renders the
 same frame again with `layers.terrain = false` and counts the pixels that
-change. The Z18 regime must cover at least half the frame, so a silently missing
+change. A ground regime must cover at least half the frame, so a silently missing
 terrain layer fails the run.
 
 The descriptor (`strata_earth::descriptor::FrameDescriptor`) records everything
 that decides the frame: camera placement, the near/far policy, resolved tile keys
 and UV sub-rects, patch bounds, layer toggles, markers, sky ramp, and celestial
 and cloud declarations. It is canonical JSON, so two runs serialize identically.
+Schema version 2 carries both `patches` and `tiles`; the v1 reader still accepts
+descriptors without `tiles`.
 
 ```json
 {
   "format": "strata-earth-frame",
-  "version": 1,
+  "version": 2,
   "viewport": [1440, 900],
   "camera": {
     "focus": [37.6, -122, 0],
     "aim_offset_m": [0, 0, 0],
     "eye_offset_m": [0, 0, 4000],
-    "fov_y_deg": 60,
+    "fov_y_deg": 55.52,
     "near_m": 40,
     "far_m": 388884.14834571414
   },
@@ -177,23 +186,50 @@ and cloud declarations. It is canonical JSON, so two runs serialize identically.
       "exact": true
     }
   ],
+  "tiles": [
+    {
+      "level": 13,
+      "key": [13, 1318, 2383],
+      "source": [13, 1318, 2383],
+      "uv_rect": [0, 0, 1, 1],
+      "exact": true
+    }
+  ],
   "sky": { "top": [30, 64, 140, 255], "bottom": [120, 180, 255, 255] },
   "celestial": [],
   "clouds": null
 }
 ```
 
-`FrameDescriptor::from_json_str` parses it back, `earth_input()` rebuilds the
-input, and `replay()` rebuilds the scene and checks that every tile key and UV
-sub-rect matches. `strata_earth::json` is a small in-house reader/writer; no JSON
-crate is added to the workspace.
+`patches` is the canonical 3x3 coverage set and is normative for key and UV
+comparison. `tiles` lists every texture bound to visible geometry; `source` is
+the sampled tile, equal to `key` when exact and an ancestor otherwise. A sphere
+frame omits `patches` and carries `surface` (`kind`, `centre`, `radius_m`,
+`segments`) plus `rings` of per-level tile supply. Sphere geometry is not built
+yet, so replay rejects a sphere descriptor rather than claiming parity.
+
+`FrameDescriptor::from_json_str` parses either schema version, `earth_input()`
+rebuilds the input, and `replay()` rebuilds the scene and checks that every tile
+key and UV sub-rect matches. `strata_earth::json` is a small in-house
+reader/writer; no JSON crate is added to the workspace.
 
 `replay` is deliberately strict, for tamper detection. A reference descriptor may
 legitimately resolve different tiles, request different keys, or declare another
-depth range, so parity reporting uses `compare()` instead. It returns a
-`DescriptorDelta` with per-patch missing/extra/UV entries, a `CameraDelta` of
-near, far, FOV, and eye differences, and a `DeltaSummary` of counts. It never
-fails and never rejects a descriptor whose keys differ from the plugin resolver.
+depth range, so parity reporting uses `compare()` instead. It never fails:
+
+- same key: per-component `uv_delta`;
+- different key with overlapping bounds: bounds intersection as a fraction of the
+  reference patch area, plus `reference.level - scene.level`;
+- disjoint bounds: `Uncovered` with a zero overlap fraction;
+- plugin-only patches: `Extra`;
+- `tiles` supply: matched keys, reference-only, plugin-only, and per-tile UV
+  delta.
+
+`strata_earth::acceptance` evaluates the five ground criteria: camera near/far,
+FOV and eye; patch overlap at least 95 percent with a level delta of at most one;
+UV components within one texel; mean absolute pixel difference at most 6/255 with
+no connected region above 24/255 covering more than 0.5 percent; and a reported,
+non-gated median frame time. A frame without a pixel comparison cannot pass.
 
 ## Budget
 

@@ -14,16 +14,21 @@
 //! - World coordinates stay f64 until the render hand-off.
 //! - Mesh rebuilds reuse buffers; steady-state frames do not allocate.
 
+pub mod acceptance;
 pub mod descriptor;
 pub mod geodesy;
 pub mod json;
 pub mod scene;
 pub mod tiles;
 
+pub use acceptance::{
+    evaluate as evaluate_acceptance, AcceptanceCriteria, AcceptanceReport, PixelDelta,
+};
 pub use descriptor::{
     compare, replay, CameraDelta, DeltaSummary, DescriptorCamera, DescriptorCelestial,
-    DescriptorClouds, DescriptorDelta, DescriptorMarker, DescriptorPatch, FrameDescriptor,
-    PatchDelta, DESCRIPTOR_FORMAT, DESCRIPTOR_VERSION,
+    DescriptorClouds, DescriptorDelta, DescriptorMarker, DescriptorPatch, DescriptorRing,
+    DescriptorSphere, DescriptorTile, FrameDescriptor, PatchDelta, PatchMatch, TileDelta,
+    TileSupply, DESCRIPTOR_FORMAT, DESCRIPTOR_VERSION, DESCRIPTOR_VERSION_V1,
 };
 pub use geodesy::{
     clamp_latitude, depth_range, geodetic_to_ecef, horizon_distance_m, level_for_altitude,

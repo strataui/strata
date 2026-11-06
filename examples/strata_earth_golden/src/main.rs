@@ -31,8 +31,8 @@ const H: usize = 900;
 struct Regime {
     name: &'static str,
     altitude_m: f64,
-    sim_time_unix_s: f64,
-    cloud_cover: f32,
+    heading_deg: f64,
+    look_down_deg: f64,
     daylight: f32,
     tile_grid: u32,
     patch_scale: f64,
@@ -42,49 +42,64 @@ const REGIMES: &[Regime] = &[
     // Cloud cover is zero for the parity captures: the software rasterizer has
     // no cloud pass yet, and the first comparison is on geometry, UVs, and the
     // sky ramp. Raise these values once the pass lands.
-    // Full globe: d > 2400 km.
+    //
+    // The acceptance pair is the two ground frames. The globe frames are
+    // informational until a sphere surface lands.
+    Regime {
+        name: "terrain_z18",
+        altitude_m: 4_000.0,
+        heading_deg: 0.0,
+        look_down_deg: 0.0,
+        daylight: 0.60,
+        tile_grid: 9,
+        patch_scale: 1.0,
+    },
+    Regime {
+        name: "terrain_oblique",
+        altitude_m: 1_500.0,
+        heading_deg: 135.0,
+        look_down_deg: 25.0,
+        daylight: 0.75,
+        tile_grid: 9,
+        patch_scale: 1.0,
+    },
     Regime {
         name: "full_globe",
         altitude_m: 12_000_000.0,
-        sim_time_unix_s: 1_767_225_600.0,
-        cloud_cover: 0.0,
+        heading_deg: 0.0,
+        look_down_deg: 0.0,
         daylight: 0.85,
         tile_grid: 5,
         patch_scale: 1.0,
     },
-    // Mid morph: 350..2400 km.
     Regime {
         name: "mid_morph",
         altitude_m: 1_200_000.0,
-        sim_time_unix_s: 1_767_225_600.0,
-        cloud_cover: 0.0,
-        daylight: 0.7,
-        tile_grid: 5,
-        patch_scale: 1.0,
-    },
-    // 2.5D terrain at Z18.
-    Regime {
-        name: "terrain_z18",
-        altitude_m: 4_000.0,
-        sim_time_unix_s: 1_767_225_600.0,
-        cloud_cover: 0.0,
-        daylight: 0.6,
-        tile_grid: 9,
-        patch_scale: 1.0,
-    },
-    // Night and twilight.
-    Regime {
-        name: "night_twilight",
-        altitude_m: 900_000.0,
-        sim_time_unix_s: 1_767_225_600.0 + 43_200.0,
-        cloud_cover: 0.0,
-        daylight: 0.08,
+        heading_deg: 0.0,
+        look_down_deg: 0.0,
+        daylight: 0.70,
         tile_grid: 5,
         patch_scale: 1.0,
     },
 ];
 
-/// Deterministic procedural tile: a soft grid so seams and UV mapping show up.
+/// Eye offset in the local ENU basis for a heading and look-down angle.
+///
+/// A nadir camera sits straight above the focus. An oblique camera sits
+/// opposite the look direction, far enough back that the view is `look_down`
+/// degrees below horizontal, with the up component reduced by the spherical
+/// lift of the horizontal chord so the reported altitude matches the scenario.
+fn eye_offset_m(altitude_m: f64, heading_deg: f64, look_down_deg: f64) -> [f64; 3] {
+    if look_down_deg <= 0.0 {
+        return [0.0, 0.0, altitude_m];
+    }
+    const EARTH_RADIUS_M: f64 = 6_378_137.0;
+    let distance = altitude_m / look_down_deg.to_radians().tan();
+    let up = (altitude_m - distance * distance / (2.0 * EARTH_RADIUS_M)).max(0.0);
+    let (sin, cos) = heading_deg.to_radians().sin_cos();
+    [-sin * distance, -cos * distance, up]
+}
+
 fn procedural_tile(seed: u8) -> TileImage {
     const SIZE: u32 = 64;
     let mut pixels = Vec::with_capacity((SIZE * SIZE * 4) as usize);
@@ -109,15 +124,18 @@ fn input_for(regime: &Regime, focus: Geodetic) -> EarthInput {
     EarthInput {
         camera: EarthCamera {
             focus,
-            eye_offset_m: [0.0, 0.0, regime.altitude_m],
+            eye_offset_m: eye_offset_m(regime.altitude_m, regime.heading_deg, regime.look_down_deg),
+            fov_y_deg: 55.52,
             ..Default::default()
         },
         viewport: Rect::new(0.0, 0.0, W as f32, H as f32),
-        sim_time_unix_s: regime.sim_time_unix_s,
-        cloud_cover: regime.cloud_cover,
+        sim_time_unix_s: 1_767_225_600.0,
+        cloud_cover: 0.0,
         daylight: regime.daylight,
         tile_grid: regime.tile_grid,
         patch_scale: regime.patch_scale,
+        graticule_step_deg: 30.0,
+        max_tile_level: 18,
         markers: vec![
             EntityMarker {
                 position: Geodetic::new(37.7749, -122.4194, 0.0),
@@ -294,7 +312,7 @@ fn main() -> std::io::Result<()> {
         }
         // A ground frame is mostly terrain; if the layer silently stops
         // drawing, this must fail instead of writing a false golden.
-        if regime.name == "terrain_z18" && cover < W * H / 2 {
+        if regime.name.starts_with("terrain") && cover < W * H / 2 {
             eprintln!(
                 "  {} terrain layer covers only {} of {} pixels",
                 regime.name,
@@ -326,8 +344,8 @@ fn main() -> std::io::Result<()> {
                 "regime={} altitude_m={} sim_time={} cloud={} daylight={} {}\nterrain_layer_cover_px={}\ndeterministic={} descriptor_deterministic={} coverage_deterministic={}\n",
                 regime.name,
                 regime.altitude_m,
-                regime.sim_time_unix_s,
-                regime.cloud_cover,
+                1_767_225_600.0,
+                0.0,
                 regime.daylight,
                 summary,
                 cover,
