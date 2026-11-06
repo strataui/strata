@@ -134,7 +134,15 @@ fn input_for(regime: &Regime, focus: Geodetic) -> EarthInput {
     }
 }
 
-fn capture(input: &EarthInput) -> (FrameBuffer, FrameDescriptor, strata_earth::FrameStats, u8) {
+fn capture(
+    input: &EarthInput,
+) -> (
+    FrameBuffer,
+    FrameDescriptor,
+    strata_earth::FrameStats,
+    u8,
+    usize,
+) {
     let level = strata_earth::level_for_altitude(input.camera.altitude_m(), input.max_tile_level);
     let span = tile_patch_span_deg(&input.camera, input.patch_scale);
     let patches = surrounding_patches(input.camera.focus, span);
@@ -164,7 +172,30 @@ fn capture(input: &EarthInput) -> (FrameBuffer, FrameDescriptor, strata_earth::F
         None,
         Some(scene.tile_registry().store()),
     );
-    (fb, descriptor, stats, level)
+
+    // Terrain coverage is structural: render the same frame with the terrain
+    // layer disabled and count the pixels that change. A bright-colour proxy
+    // reports zero for a dim but fully covered frame.
+    let mut without_terrain = input.clone();
+    without_terrain.layers.terrain = false;
+    let mut bare_scene = EarthScene::new();
+    bare_scene.build(&without_terrain, &mut source);
+    let mut bare = FrameBuffer::new(W, H);
+    render_scene_3d_with_textures(
+        &mut bare,
+        without_terrain.viewport,
+        bare_scene.scene(),
+        None,
+        Some(bare_scene.tile_registry().store()),
+    );
+    let cover = fb
+        .pixels
+        .chunks_exact(4)
+        .zip(bare.pixels.chunks_exact(4))
+        .filter(|(a, b)| a != b)
+        .count();
+
+    (fb, descriptor, stats, level, cover)
 }
 
 /// Minimal PNG writer (RGBA8, no filtering) so goldens need no image crate.
@@ -252,21 +283,26 @@ fn main() -> std::io::Result<()> {
     println!("Earth goldens at {W}x{H} -> {}", out_dir.display());
     for regime in REGIMES {
         let input = input_for(regime, focus);
-        let (first, descriptor, stats, level) = capture(&input);
-        let (second, second_descriptor, _, _) = capture(&input);
+        let (first, descriptor, stats, level, cover) = capture(&input);
+        let (second, second_descriptor, _, _, second_cover) = capture(&input);
 
         let identical = first.pixels == second.pixels;
         let descriptor_identical =
             descriptor.to_json_string() == second_descriptor.to_json_string();
-        if !identical || !descriptor_identical {
+        if !identical || !descriptor_identical || cover != second_cover {
             failures += 1;
         }
-
-        let cover = first
-            .pixels
-            .chunks_exact(4)
-            .filter(|p| p[3] > 0 && p[1] > 150 && p[0] > 100)
-            .count();
+        // A ground frame is mostly terrain; if the layer silently stops
+        // drawing, this must fail instead of writing a false golden.
+        if regime.name == "terrain_z18" && cover < W * H / 2 {
+            eprintln!(
+                "  {} terrain layer covers only {} of {} pixels",
+                regime.name,
+                cover,
+                W * H
+            );
+            failures += 1;
+        }
         let summary = format!(
             "tiles={} exact={} ancestor={} terrain_tris={} building_tris={} overlay_prims={} draws={} level={}",
             stats.tiles_requested,
@@ -287,7 +323,7 @@ fn main() -> std::io::Result<()> {
         std::fs::write(
             out_dir.join(format!("{}.txt", regime.name)),
             format!(
-                "regime={} altitude_m={} sim_time={} cloud={} daylight={} {}\nterrain_cover_px={}\ndeterministic={} descriptor_deterministic={}\n",
+                "regime={} altitude_m={} sim_time={} cloud={} daylight={} {}\nterrain_layer_cover_px={}\ndeterministic={} descriptor_deterministic={} coverage_deterministic={}\n",
                 regime.name,
                 regime.altitude_m,
                 regime.sim_time_unix_s,
@@ -296,11 +332,12 @@ fn main() -> std::io::Result<()> {
                 summary,
                 cover,
                 identical,
-                descriptor_identical
+                descriptor_identical,
+                cover == second_cover
             ),
         )?;
         println!(
-            "  {:<16} deterministic={:<5} terrain_px={:<7} {}",
+            "  {:<16} deterministic={:<5} terrain_cover={:<7} {}",
             regime.name, identical, cover, summary
         );
     }

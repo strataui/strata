@@ -106,6 +106,14 @@ The plugin separates the decision from the upload:
 - `TileSource` supplies decoded imagery and elevation. Implement it over your
   own cache and transport; the crate never spawns a process.
 
+The globe and mid-morph regimes currently draw the same 3x3 patch sheet as the
+ground regimes. At 12 000 km that sheet is smaller than the Earth's apparent
+disc, so there is no limb and no far-side occlusion. The chosen parity path is a
+real sphere surface at Earth radius, tessellated at the tile grid, with the
+descriptor gaining a `surface` field to describe it. Until that lands, the
+acceptance pair is `terrain_z18` and `night_twilight`; globe and mid-morph deltas
+are held.
+
 Cloud shells are declarations today: the software rasterizer has no cloud pass,
 so parity captures use `cloud_cover = 0` and the first comparison covers
 geometry, UVs, and the sky ramp. A translucent shell pass is the follow-up before
@@ -136,6 +144,11 @@ cargo run -p strata_earth_golden --release -- target/earth-goldens
 Renders four regimes (full globe, mid morph, terrain at Z18, night/twilight),
 writes a PNG, a metrics sidecar, and a canonical JSON descriptor, and exits
 non-zero if two consecutive runs differ in either pixels or descriptor.
+
+The sidecar's `terrain_layer_cover_px` is structural: the capture renders the
+same frame again with `layers.terrain = false` and counts the pixels that
+change. The Z18 regime must cover at least half the frame, so a silently missing
+terrain layer fails the run.
 
 The descriptor (`strata_earth::descriptor::FrameDescriptor`) records everything
 that decides the frame: camera placement, the near/far policy, resolved tile keys
