@@ -167,6 +167,28 @@ impl TextInputState {
         self.cursor_index.set(end);
     }
 
+    /// Selects the entire line surrounding the given character index (triple-click contract).
+    /// The newline terminator itself is excluded from the selected range.
+    pub fn select_line_at_index(&self, index: usize) {
+        let cur_text = self.text.get();
+        let chars: Vec<char> = cur_text.chars().collect();
+        let len = chars.len();
+        let clamped = index.min(len);
+
+        let mut start = clamped;
+        while start > 0 && chars[start - 1] != '\n' {
+            start -= 1;
+        }
+
+        let mut end = clamped;
+        while end < len && chars[end] != '\n' {
+            end += 1;
+        }
+
+        self.selection_anchor.set(Some(start));
+        self.cursor_index.set(end);
+    }
+
     /// Calculates character index from an x offset in pixels.
     pub fn calculate_char_index_at_offset(text: &str, x_offset: f32, font_size: f32) -> usize {
         if x_offset <= 0.0 || text.is_empty() {
@@ -434,7 +456,8 @@ impl TextInputState {
 
     /// Pushes current text and cursor position to the undo stack.
     fn push_undo_snapshot(&mut self) {
-        self.undo_stack.push((self.text.get(), self.cursor_index.get()));
+        self.undo_stack
+            .push((self.text.get(), self.cursor_index.get()));
         if self.undo_stack.len() > 100 {
             self.undo_stack.remove(0);
         }
@@ -444,7 +467,8 @@ impl TextInputState {
     /// Reverts to the previous state on the undo stack.
     pub fn undo(&mut self) -> bool {
         if let Some((prev_text, prev_cursor)) = self.undo_stack.pop() {
-            self.redo_stack.push((self.text.get(), self.cursor_index.get()));
+            self.redo_stack
+                .push((self.text.get(), self.cursor_index.get()));
             self.text.set(prev_text);
             self.cursor_index.set(prev_cursor);
             self.selection_anchor.set(None);
@@ -457,7 +481,8 @@ impl TextInputState {
     /// Re-applies the next state on the redo stack.
     pub fn redo(&mut self) -> bool {
         if let Some((next_text, next_cursor)) = self.redo_stack.pop() {
-            self.undo_stack.push((self.text.get(), self.cursor_index.get()));
+            self.undo_stack
+                .push((self.text.get(), self.cursor_index.get()));
             self.text.set(next_text);
             self.cursor_index.set(next_cursor);
             self.selection_anchor.set(None);

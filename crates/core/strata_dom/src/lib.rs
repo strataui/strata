@@ -301,7 +301,7 @@ impl IntoNodeBlueprint for () {
     }
 }
 
-impl IntoNodeBlueprint for &'static str {
+impl<'a> IntoNodeBlueprint for &'a str {
     #[inline]
     fn into_node_blueprint(self) -> NodeBlueprint {
         NodeBlueprint::Text(self.to_string())

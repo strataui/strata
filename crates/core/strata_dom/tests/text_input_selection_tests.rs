@@ -1,8 +1,6 @@
 //! Exhaustive tests for text input mouse selection, hit testing, and keyboard editing contracts.
 
-use strata_dom::text_input::{
-    InputKey, InputKeyResult, InputModifiers, TextInputState,
-};
+use strata_dom::text_input::{InputKey, InputKeyResult, InputModifiers, TextInputState};
 
 #[test]
 fn test_mouse_selection_and_drag() {
@@ -24,11 +22,7 @@ fn test_mouse_selection_and_drag() {
     assert_eq!(input.selected_text(), Some("World".to_string()));
 
     // Typing a char replaces selection
-    let res = input.handle_key(
-        InputKey::Char('R'),
-        InputModifiers::default(),
-        None,
-    );
+    let res = input.handle_key(InputKey::Char('R'), InputModifiers::default(), None);
     assert_eq!(res, InputKeyResult::Handled);
     assert_eq!(input.text.get(), "Hello R from Strata");
     assert_eq!(input.cursor_index.get(), 7);
@@ -60,7 +54,50 @@ fn test_triple_click_select_all() {
     let input = TextInputState::with_text("Select all this content");
     input.select_all();
     assert_eq!(input.selection_range(), Some((0, 23)));
-    assert_eq!(input.selected_text(), Some("Select all this content".to_string()));
+    assert_eq!(
+        input.selected_text(),
+        Some("Select all this content".to_string())
+    );
+}
+
+#[test]
+fn test_select_line_at_index_middle_line() {
+    let input = TextInputState::with_text("alpha\nbeta\ngamma");
+    input.select_line_at_index(7);
+    assert_eq!(input.selection_range(), Some((6, 10)));
+    assert_eq!(input.selected_text(), Some("beta".to_string()));
+}
+
+#[test]
+fn test_select_line_at_index_first_line() {
+    let input = TextInputState::with_text("alpha\nbeta\ngamma");
+    input.select_line_at_index(2);
+    assert_eq!(input.selection_range(), Some((0, 5)));
+    assert_eq!(input.selected_text(), Some("alpha".to_string()));
+}
+
+#[test]
+fn test_select_line_at_index_last_line() {
+    let input = TextInputState::with_text("alpha\nbeta\ngamma");
+    input.select_line_at_index(13);
+    assert_eq!(input.selection_range(), Some((11, 16)));
+    assert_eq!(input.selected_text(), Some("gamma".to_string()));
+}
+
+#[test]
+fn test_select_line_at_index_single_line() {
+    let input = TextInputState::with_text("hello world");
+    input.select_line_at_index(4);
+    assert_eq!(input.selection_range(), Some((0, 11)));
+    assert_eq!(input.selected_text(), Some("hello world".to_string()));
+}
+
+#[test]
+fn test_select_line_at_index_out_of_range() {
+    let input = TextInputState::with_text("alpha\nbeta\ngamma");
+    input.select_line_at_index(999);
+    assert_eq!(input.selection_range(), Some((11, 16)));
+    assert_eq!(input.selected_text(), Some("gamma".to_string()));
 }
 
 #[test]
@@ -68,10 +105,22 @@ fn test_char_index_at_offset_calculation() {
     let text = "HelloWorld";
     let font_size = 14.0;
     // char_w is approx 14.0 * 0.55 = 7.7
-    assert_eq!(TextInputState::calculate_char_index_at_offset(text, 0.0, font_size), 0);
-    assert_eq!(TextInputState::calculate_char_index_at_offset(text, 7.7, font_size), 1);
-    assert_eq!(TextInputState::calculate_char_index_at_offset(text, 77.0, font_size), 10);
-    assert_eq!(TextInputState::calculate_char_index_at_offset(text, 200.0, font_size), 10);
+    assert_eq!(
+        TextInputState::calculate_char_index_at_offset(text, 0.0, font_size),
+        0
+    );
+    assert_eq!(
+        TextInputState::calculate_char_index_at_offset(text, 7.7, font_size),
+        1
+    );
+    assert_eq!(
+        TextInputState::calculate_char_index_at_offset(text, 77.0, font_size),
+        10
+    );
+    assert_eq!(
+        TextInputState::calculate_char_index_at_offset(text, 200.0, font_size),
+        10
+    );
 }
 
 #[test]
@@ -79,7 +128,10 @@ fn test_shift_arrows_selection_extension() {
     let mut input = TextInputState::with_text("Engine");
     input.cursor_index.set(2);
 
-    let shift = InputModifiers { shift: true, ..Default::default() };
+    let shift = InputModifiers {
+        shift: true,
+        ..Default::default()
+    };
 
     // Shift + Right -> selects 'g'
     input.handle_key(InputKey::Right, shift, None);
@@ -102,7 +154,10 @@ fn test_ctrl_word_jumping_and_deletion() {
     let mut input = TextInputState::with_text("alpha beta gamma");
     input.cursor_index.set(16);
 
-    let ctrl = InputModifiers { ctrl: true, ..Default::default() };
+    let ctrl = InputModifiers {
+        ctrl: true,
+        ..Default::default()
+    };
 
     // Ctrl + Left -> jump before 'gamma'
     input.handle_key(InputKey::Left, ctrl, None);
