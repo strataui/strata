@@ -9,9 +9,19 @@ use std::sync::OnceLock;
 /// Complete W3C HTML5 User-Agent default stylesheet per HTML Standard Section 15.
 pub const W3C_UA_STYLESHEET_CSS: &str = r#"
 /* Document & Canvas Defaults */
-html, body {
+html {
     display: block;
     margin: 0;
+}
+
+body {
+    display: block;
+    margin: 8px;
+}
+
+center {
+    display: block;
+    text-align: center;
 }
 
 /* Block-level Structural Elements */
@@ -207,6 +217,16 @@ caption {
 /* Embedded Content */
 img {
     display: inline-block;
+}
+
+/* Form Controls & Replaced Elements */
+button, input, select, textarea {
+    display: inline-block;
+    white-space: nowrap;
+}
+
+option {
+    display: none;
 }
 
 /* Interactive & Hidden */

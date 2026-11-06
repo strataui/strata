@@ -4,7 +4,7 @@ use crate::selector::Selector;
 use crate::types::{
     AnimationDirection, AnimationFillMode, AnimationIterationCount, AnimationPlayState,
     AnimationRange, AnimationRangeName, AnimationSpec, AnimationTimeline, BackfaceVisibility,
-    BorderStyle, BoxShadow, Color, ColorStop, Cursor, Dimension, EdgeInsets, Gradient,
+    BorderStyle, BoxShadow, Color, ColorStop, Cursor, Dimension, EdgeInsets, Gradient, GridTrack,
     PointerEvents, ScrollAxis, ScrollTimelineSource, TextDecoration, TextTransform, TransformOp,
     TransformOrigin, TransformStyle, TransitionBehavior, TransitionEasing, TransitionProperty,
     TransitionSpec, UserSelect, VerticalAlign, Visibility, WhiteSpace,
@@ -66,7 +66,10 @@ impl StyleSheet {
     }
 
     /// Parses a complete CSS stylesheet string evaluating media queries against a specific device context.
-    pub fn parse_with_context(css: &str, context: &crate::media::MediaContext) -> Result<Self, String> {
+    pub fn parse_with_context(
+        css: &str,
+        context: &crate::media::MediaContext,
+    ) -> Result<Self, String> {
         let stripped = strip_css_comments(css);
         let mut rules = Vec::new();
         let mut keyframes = Vec::new();
@@ -80,28 +83,51 @@ impl StyleSheet {
                 break;
             }
 
-            // Read selectors or at-rule header up to '{'
+            // Read selectors or at-rule header up to '{' or ';'
             let mut selector_buf = String::new();
             let mut found_brace = false;
+            let mut in_quotes: Option<char> = None;
 
             while let Some(c) = chars.next() {
-                if c == '{' {
+                if let Some(q) = in_quotes {
+                    if c == q {
+                        in_quotes = None;
+                    }
+                    selector_buf.push(c);
+                } else if c == '"' || c == '\'' {
+                    in_quotes = Some(c);
+                    selector_buf.push(c);
+                } else if c == '{' {
                     found_brace = true;
                     break;
+                } else if c == ';' {
+                    // Semicolon-terminated statement outside braces (e.g. @charset, @import, stray ;)
+                    break;
+                } else {
+                    selector_buf.push(c);
                 }
-                selector_buf.push(c);
             }
 
             if !found_brace {
-                break;
+                // Semicolon-terminated at-rule (like @charset "UTF-8";) or stray semicolon consumed
+                continue;
             }
 
-            // Read body block up to matching '}'
+            // Read body block up to matching '}' respecting quotes
             let mut decl_buf = String::new();
             let mut depth = 1;
+            let mut in_decl_quotes: Option<char> = None;
 
             while let Some(c) = chars.next() {
-                if c == '{' {
+                if let Some(q) = in_decl_quotes {
+                    if c == q {
+                        in_decl_quotes = None;
+                    }
+                    decl_buf.push(c);
+                } else if c == '"' || c == '\'' {
+                    in_decl_quotes = Some(c);
+                    decl_buf.push(c);
+                } else if c == '{' {
                     depth += 1;
                     decl_buf.push(c);
                 } else if c == '}' {
@@ -133,6 +159,28 @@ impl StyleSheet {
                 continue;
             }
 
+            // Evaluate @layer
+            if trimmed_sel.starts_with("@layer") {
+                if let Ok(inner_sheet) = Self::parse_with_context(&decl_buf, context) {
+                    rules.extend(inner_sheet.rules);
+                    keyframes.extend(inner_sheet.keyframes);
+                    starting_styles.extend(inner_sheet.starting_styles);
+                    registered_properties.extend(inner_sheet.registered_properties);
+                }
+                continue;
+            }
+
+            // Evaluate @supports
+            if trimmed_sel.starts_with("@supports") {
+                if let Ok(inner_sheet) = Self::parse_with_context(&decl_buf, context) {
+                    rules.extend(inner_sheet.rules);
+                    keyframes.extend(inner_sheet.keyframes);
+                    starting_styles.extend(inner_sheet.starting_styles);
+                    registered_properties.extend(inner_sheet.registered_properties);
+                }
+                continue;
+            }
+
             // Evaluate @starting-style
             if trimmed_sel == "@starting-style" || trimmed_sel.starts_with("@starting-style") {
                 if let Ok(inner_sheet) = Self::parse_with_context(&decl_buf, context) {
@@ -153,7 +201,8 @@ impl StyleSheet {
             if let Some(prop_name) = trimmed_sel.strip_prefix("@property") {
                 let prop_name = prop_name.trim();
                 if !prop_name.is_empty() {
-                    let reg_prop = crate::properties::parse_property_rule_body(prop_name, &decl_buf);
+                    let reg_prop =
+                        crate::properties::parse_property_rule_body(prop_name, &decl_buf);
                     registered_properties.push(reg_prop);
                 }
                 continue;
@@ -177,9 +226,9 @@ impl StyleSheet {
                 continue;
             }
 
-            // Parse comma-separated selectors
+            // Parse comma-separated selectors respecting parentheses, brackets, and quotes
             let mut selectors = Vec::new();
-            for sel_str in selector_buf.split(',') {
+            for sel_str in split_selector_list(&selector_buf) {
                 let trimmed = sel_str.trim();
                 if !trimmed.is_empty() {
                     if let Ok(sel) = Selector::parse(trimmed) {
@@ -287,7 +336,10 @@ pub fn parse_keyframe_stop_offset(s: &str) -> Option<f32> {
     } else if s.eq_ignore_ascii_case("to") {
         Some(1.0)
     } else if let Some(pct) = s.strip_suffix('%') {
-        pct.trim().parse::<f32>().map(|p| (p / 100.0).clamp(0.0, 1.0)).ok()
+        pct.trim()
+            .parse::<f32>()
+            .map(|p| (p / 100.0).clamp(0.0, 1.0))
+            .ok()
     } else if let Ok(p) = s.parse::<f32>() {
         Some((p / 100.0).clamp(0.0, 1.0))
     } else {
@@ -356,7 +408,11 @@ pub fn parse_keyframe_rule_body(name: &str, body: &str) -> KeyframeRule {
         }
     }
 
-    stops.sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal));
+    stops.sort_by(|a, b| {
+        a.offset
+            .partial_cmp(&b.offset)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     KeyframeRule {
         name: name.to_string(),
@@ -441,6 +497,202 @@ pub fn parse_dimension(val: &str) -> Option<Dimension> {
     None
 }
 
+/// Maximum number of tracks expanded from a single template list.
+const MAX_GRID_TRACKS: usize = 4096;
+
+/// Parses a CSS `grid-template-columns` or `grid-template-rows` track list.
+///
+/// Accepted track forms are `auto`, `min-content`, `max-content`,
+/// `fit-content(<length>)`, unitless `0`, `<n>px`, `<n>%`, and `<n>fr`.
+/// Square-bracket line names such as `[content-start]` are stripped from the
+/// token stream.
+///
+/// `repeat(<count>, <track list>)` expands the inner list `<count>` times.
+/// `repeat(auto-fill, ...)` and `repeat(auto-fit, ...)` expand the inner list
+/// exactly once because intrinsic repetition needs a layout pass; the tracks are
+/// not duplicated to fill the container.
+///
+/// `minmax(<min>, <max>)` is reduced to a single track: a `1fr` maximum or a
+/// `0`/`auto` minimum becomes `1fr`, a fixed minimum paired with an `auto`
+/// maximum keeps the minimum, and every other combination keeps the maximum
+/// track. Full minimum and maximum track sizing is deferred to the grid solver.
+pub fn parse_grid_tracks(value: &str) -> Vec<GridTrack> {
+    let mut tracks = Vec::new();
+    for token in tokenize_grid_track_tokens(value) {
+        expand_grid_track_token(&token, &mut tracks);
+        if tracks.len() >= MAX_GRID_TRACKS {
+            tracks.truncate(MAX_GRID_TRACKS);
+            break;
+        }
+    }
+    tracks
+}
+
+fn tokenize_grid_track_tokens(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut paren_depth = 0usize;
+    let mut in_line_names = false;
+
+    for ch in value.chars() {
+        if in_line_names {
+            if ch == ']' {
+                in_line_names = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '[' if paren_depth == 0 => {
+                in_line_names = true;
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            '(' => {
+                paren_depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                paren_depth = paren_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            c if c.is_whitespace() && paren_depth == 0 => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens
+}
+
+fn expand_grid_track_token(token: &str, out: &mut Vec<GridTrack>) {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    if let Some((name, inner)) = split_grid_function(trimmed) {
+        if name.eq_ignore_ascii_case("repeat") {
+            if let Some((count_part, list_part)) = split_top_level_comma(inner) {
+                let inner_tokens = tokenize_grid_track_tokens(list_part);
+                match count_part.trim().parse::<u32>() {
+                    Ok(count) if count > 0 => {
+                        for _ in 0..count {
+                            for inner_token in &inner_tokens {
+                                expand_grid_track_token(inner_token, out);
+                                if out.len() >= MAX_GRID_TRACKS {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        // `auto-fill` / `auto-fit` and invalid counts expand once.
+                        for inner_token in &inner_tokens {
+                            expand_grid_track_token(inner_token, out);
+                            if out.len() >= MAX_GRID_TRACKS {
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        if name.eq_ignore_ascii_case("minmax") {
+            if let Some((min_part, max_part)) = split_top_level_comma(inner) {
+                out.push(resolve_minmax_track(min_part.trim(), max_part.trim()));
+            }
+            return;
+        }
+    }
+
+    if let Some(track) = parse_single_grid_track(trimmed) {
+        out.push(track);
+    }
+}
+
+fn split_grid_function(token: &str) -> Option<(&str, &str)> {
+    let open = token.find('(')?;
+    if !token.ends_with(')') {
+        return None;
+    }
+    Some((&token[..open], &token[open + 1..token.len() - 1]))
+}
+
+fn split_top_level_comma(value: &str) -> Option<(&str, &str)> {
+    let mut depth = 0usize;
+    for (index, ch) in value.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => return Some((&value[..index], &value[index + 1..])),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_single_grid_track(token: &str) -> Option<GridTrack> {
+    let lower = token.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return None;
+    }
+
+    match lower.as_str() {
+        "auto" => return Some(GridTrack::Auto),
+        "min-content" => return Some(GridTrack::MinContent),
+        "max-content" => return Some(GridTrack::MaxContent),
+        _ => {}
+    }
+
+    if lower.starts_with("fit-content(") && lower.ends_with(')') {
+        return Some(GridTrack::MaxContent);
+    }
+
+    if lower == "0" || lower == "0.0" {
+        return Some(GridTrack::Px(0.0));
+    }
+
+    if let Some(px) = lower.strip_suffix("px") {
+        return px.trim().parse::<f32>().ok().map(GridTrack::Px);
+    }
+    if let Some(pct) = lower.strip_suffix('%') {
+        return pct.trim().parse::<f32>().ok().map(GridTrack::Percent);
+    }
+    if let Some(fr) = lower.strip_suffix("fr") {
+        return fr.trim().parse::<f32>().ok().map(GridTrack::Fr);
+    }
+
+    None
+}
+
+fn resolve_minmax_track(min: &str, max: &str) -> GridTrack {
+    let min_lower = min.trim().to_ascii_lowercase();
+    let max_lower = max.trim().to_ascii_lowercase();
+
+    if max_lower == "1fr" || min_lower == "0" || min_lower == "auto" {
+        return GridTrack::Fr(1.0);
+    }
+
+    if max_lower == "auto" {
+        if let Some(GridTrack::Px(px)) = parse_single_grid_track(&min_lower) {
+            return GridTrack::Px(px);
+        }
+    }
+
+    parse_single_grid_track(&max_lower).unwrap_or(GridTrack::Auto)
+}
+
 /// Decodes CSS colors: `#hex`, `rgb(...)`, `rgba(...)`, `hsl(...)`, `hsla(...)`, or named colors.
 pub fn parse_color(val: &str) -> Option<Color> {
     let s = val.trim();
@@ -485,14 +737,18 @@ pub fn parse_color(val: &str) -> Option<Color> {
     }
 }
 
-/// Decodes CSS 4-directional insets shorthand with font-size context (e.g. `10px`, `1em 2em`, `10px 20px 30px 40px`).
-pub fn parse_edge_insets_with_font_size(val: &str, font_size: f32) -> Option<EdgeInsets<f32>> {
+/// Decodes CSS 4-directional insets shorthand with font-size and root-font-size context.
+pub fn parse_edge_insets_with_context(
+    val: &str,
+    font_size: f32,
+    root_font_size: f32,
+) -> Option<EdgeInsets<f32>> {
     let parts: Vec<f32> = val
         .split_whitespace()
         .filter_map(|p| match parse_dimension(p) {
             Some(Dimension::Px(px)) => Some(px),
             Some(Dimension::Em(em)) => Some(em * font_size),
-            Some(Dimension::Rem(rem)) => Some(rem * 16.0),
+            Some(Dimension::Rem(rem)) => Some(rem * root_font_size),
             Some(Dimension::Percent(pct)) => Some(font_size * (pct / 100.0)),
             _ => None,
         })
@@ -507,9 +763,14 @@ pub fn parse_edge_insets_with_font_size(val: &str, font_size: f32) -> Option<Edg
     }
 }
 
+/// Decodes CSS 4-directional insets shorthand with font-size context (e.g. `10px`, `1em 2em`, `10px 20px 30px 40px`).
+pub fn parse_edge_insets_with_font_size(val: &str, font_size: f32) -> Option<EdgeInsets<f32>> {
+    parse_edge_insets_with_context(val, font_size, 16.0)
+}
+
 /// Decodes CSS 4-directional insets shorthand (e.g. `10px`, `10px 20px`, `10px 20px 30px 40px`).
 pub fn parse_edge_insets_px(val: &str) -> Option<EdgeInsets<f32>> {
-    parse_edge_insets_with_font_size(val, 16.0)
+    parse_edge_insets_with_context(val, 16.0, 16.0)
 }
 
 /// Parses CSS `text-decoration` or `text-decoration-line`.
@@ -753,7 +1014,11 @@ fn parse_single_box_shadow(s: &str) -> Option<BoxShadow> {
 
     let offset_x = lengths[0];
     let offset_y = lengths[1];
-    let blur_radius = if lengths.len() >= 3 { lengths[2].max(0.0) } else { 0.0 };
+    let blur_radius = if lengths.len() >= 3 {
+        lengths[2].max(0.0)
+    } else {
+        0.0
+    };
     let spread_radius = if lengths.len() >= 4 { lengths[3] } else { 0.0 };
     let color = color.unwrap_or(Color::BLACK);
 
@@ -770,11 +1035,20 @@ fn parse_single_box_shadow(s: &str) -> Option<BoxShadow> {
 /// Parses CSS `linear-gradient(...)`, `radial-gradient(...)`, or `conic-gradient(...)`.
 pub fn parse_gradient(val: &str) -> Option<Gradient> {
     let s = val.trim();
-    if let Some(inner) = s.strip_prefix("linear-gradient(").and_then(|t| t.strip_suffix(')')) {
+    if let Some(inner) = s
+        .strip_prefix("linear-gradient(")
+        .and_then(|t| t.strip_suffix(')'))
+    {
         parse_linear_gradient_body(inner)
-    } else if let Some(inner) = s.strip_prefix("radial-gradient(").and_then(|t| t.strip_suffix(')')) {
+    } else if let Some(inner) = s
+        .strip_prefix("radial-gradient(")
+        .and_then(|t| t.strip_suffix(')'))
+    {
         parse_radial_gradient_body(inner)
-    } else if let Some(inner) = s.strip_prefix("conic-gradient(").and_then(|t| t.strip_suffix(')')) {
+    } else if let Some(inner) = s
+        .strip_prefix("conic-gradient(")
+        .and_then(|t| t.strip_suffix(')'))
+    {
         parse_conic_gradient_body(inner)
     } else {
         None
@@ -879,7 +1153,11 @@ fn parse_conic_gradient_body(inner: &str) -> Option<Gradient> {
         return None;
     }
 
-    Some(Gradient::Conic { angle_deg, center, stops })
+    Some(Gradient::Conic {
+        angle_deg,
+        center,
+        stops,
+    })
 }
 
 fn parse_gradient_angle_or_direction(s: &str) -> Option<f32> {
@@ -1024,49 +1302,63 @@ pub fn parse_filter_list(val: &str) -> Option<crate::effects::BackdropFilter> {
                     "brightness" => {
                         if let Ok(v) = arg.parse::<f32>() {
                             ops.push(crate::effects::FilterOp::Brightness(v));
-                        } else if let Some(pct) = arg.strip_suffix('%').and_then(|t| t.parse::<f32>().ok()) {
+                        } else if let Some(pct) =
+                            arg.strip_suffix('%').and_then(|t| t.parse::<f32>().ok())
+                        {
                             ops.push(crate::effects::FilterOp::Brightness(pct / 100.0));
                         }
                     }
                     "contrast" => {
                         if let Ok(v) = arg.parse::<f32>() {
                             ops.push(crate::effects::FilterOp::Contrast(v));
-                        } else if let Some(pct) = arg.strip_suffix('%').and_then(|t| t.parse::<f32>().ok()) {
+                        } else if let Some(pct) =
+                            arg.strip_suffix('%').and_then(|t| t.parse::<f32>().ok())
+                        {
                             ops.push(crate::effects::FilterOp::Contrast(pct / 100.0));
                         }
                     }
                     "grayscale" => {
                         if let Ok(v) = arg.parse::<f32>() {
                             ops.push(crate::effects::FilterOp::Grayscale(v));
-                        } else if let Some(pct) = arg.strip_suffix('%').and_then(|t| t.parse::<f32>().ok()) {
+                        } else if let Some(pct) =
+                            arg.strip_suffix('%').and_then(|t| t.parse::<f32>().ok())
+                        {
                             ops.push(crate::effects::FilterOp::Grayscale(pct / 100.0));
                         }
                     }
                     "invert" => {
                         if let Ok(v) = arg.parse::<f32>() {
                             ops.push(crate::effects::FilterOp::Invert(v));
-                        } else if let Some(pct) = arg.strip_suffix('%').and_then(|t| t.parse::<f32>().ok()) {
+                        } else if let Some(pct) =
+                            arg.strip_suffix('%').and_then(|t| t.parse::<f32>().ok())
+                        {
                             ops.push(crate::effects::FilterOp::Invert(pct / 100.0));
                         }
                     }
                     "opacity" => {
                         if let Ok(v) = arg.parse::<f32>() {
                             ops.push(crate::effects::FilterOp::Opacity(v));
-                        } else if let Some(pct) = arg.strip_suffix('%').and_then(|t| t.parse::<f32>().ok()) {
+                        } else if let Some(pct) =
+                            arg.strip_suffix('%').and_then(|t| t.parse::<f32>().ok())
+                        {
                             ops.push(crate::effects::FilterOp::Opacity(pct / 100.0));
                         }
                     }
                     "saturate" => {
                         if let Ok(v) = arg.parse::<f32>() {
                             ops.push(crate::effects::FilterOp::Saturate(v));
-                        } else if let Some(pct) = arg.strip_suffix('%').and_then(|t| t.parse::<f32>().ok()) {
+                        } else if let Some(pct) =
+                            arg.strip_suffix('%').and_then(|t| t.parse::<f32>().ok())
+                        {
                             ops.push(crate::effects::FilterOp::Saturate(pct / 100.0));
                         }
                     }
                     "sepia" => {
                         if let Ok(v) = arg.parse::<f32>() {
                             ops.push(crate::effects::FilterOp::Sepia(v));
-                        } else if let Some(pct) = arg.strip_suffix('%').and_then(|t| t.parse::<f32>().ok()) {
+                        } else if let Some(pct) =
+                            arg.strip_suffix('%').and_then(|t| t.parse::<f32>().ok())
+                        {
                             ops.push(crate::effects::FilterOp::Sepia(pct / 100.0));
                         }
                     }
@@ -1075,7 +1367,8 @@ pub fn parse_filter_list(val: &str) -> Option<crate::effects::BackdropFilter> {
                         let deg = if let Some(d) = arg_lower.strip_suffix("deg") {
                             d.trim().parse::<f32>().unwrap_or(0.0)
                         } else if let Some(rad) = arg_lower.strip_suffix("rad") {
-                            rad.trim().parse::<f32>().unwrap_or(0.0) * (180.0 / std::f32::consts::PI)
+                            rad.trim().parse::<f32>().unwrap_or(0.0)
+                                * (180.0 / std::f32::consts::PI)
                         } else if let Some(turn) = arg_lower.strip_suffix("turn") {
                             turn.trim().parse::<f32>().unwrap_or(0.0) * 360.0
                         } else {
@@ -1174,20 +1467,43 @@ pub fn parse_clip_path(val: &str) -> Option<crate::effects::ClipPath> {
                 .collect();
 
             let (top, right, bottom, left) = match inset_tokens.len() {
-                1 => (inset_tokens[0], inset_tokens[0], inset_tokens[0], inset_tokens[0]),
-                2 => (inset_tokens[0], inset_tokens[1], inset_tokens[0], inset_tokens[1]),
-                3 => (inset_tokens[0], inset_tokens[1], inset_tokens[2], inset_tokens[1]),
-                4 => (inset_tokens[0], inset_tokens[1], inset_tokens[2], inset_tokens[3]),
+                1 => (
+                    inset_tokens[0],
+                    inset_tokens[0],
+                    inset_tokens[0],
+                    inset_tokens[0],
+                ),
+                2 => (
+                    inset_tokens[0],
+                    inset_tokens[1],
+                    inset_tokens[0],
+                    inset_tokens[1],
+                ),
+                3 => (
+                    inset_tokens[0],
+                    inset_tokens[1],
+                    inset_tokens[2],
+                    inset_tokens[1],
+                ),
+                4 => (
+                    inset_tokens[0],
+                    inset_tokens[1],
+                    inset_tokens[2],
+                    inset_tokens[3],
+                ),
                 _ => (0.0, 0.0, 0.0, 0.0),
             };
 
             let border_radius = if let Some(rp) = round_part {
-                rp.split_whitespace().next().and_then(|t| match parse_dimension(t) {
-                    Some(Dimension::Px(p)) => Some(p),
-                    Some(Dimension::Em(em)) => Some(em * 16.0),
-                    Some(Dimension::Rem(rem)) => Some(rem * 16.0),
-                    _ => t.parse::<f32>().ok(),
-                }).unwrap_or(0.0)
+                rp.split_whitespace()
+                    .next()
+                    .and_then(|t| match parse_dimension(t) {
+                        Some(Dimension::Px(p)) => Some(p),
+                        Some(Dimension::Em(em)) => Some(em * 16.0),
+                        Some(Dimension::Rem(rem)) => Some(rem * 16.0),
+                        _ => t.parse::<f32>().ok(),
+                    })
+                    .unwrap_or(0.0)
             } else {
                 0.0
             };
@@ -1256,29 +1572,47 @@ pub fn parse_clip_path(val: &str) -> Option<crate::effects::ClipPath> {
                 let r_tokens: Vec<&str> = r_part.split_whitespace().collect();
                 if r_tokens.len() >= 2 {
                     if let Some(rx) = parse_dimension(r_tokens[0]) {
-                        radius_x = match rx { Dimension::Px(p) => p, _ => 50.0 };
+                        radius_x = match rx {
+                            Dimension::Px(p) => p,
+                            _ => 50.0,
+                        };
                     }
                     if let Some(ry) = parse_dimension(r_tokens[1]) {
-                        radius_y = match ry { Dimension::Px(p) => p, _ => 50.0 };
+                        radius_y = match ry {
+                            Dimension::Px(p) => p,
+                            _ => 50.0,
+                        };
                     }
                 }
                 let c_tokens: Vec<&str> = center_part.split_whitespace().collect();
                 if c_tokens.len() >= 2 {
                     if let Some(cx) = parse_dimension(c_tokens[0]) {
-                        center_x = match cx { Dimension::Px(p) => p, _ => 50.0 };
+                        center_x = match cx {
+                            Dimension::Px(p) => p,
+                            _ => 50.0,
+                        };
                     }
                     if let Some(cy) = parse_dimension(c_tokens[1]) {
-                        center_y = match cy { Dimension::Px(p) => p, _ => 50.0 };
+                        center_y = match cy {
+                            Dimension::Px(p) => p,
+                            _ => 50.0,
+                        };
                     }
                 }
             } else if !arg.is_empty() {
                 let r_tokens: Vec<&str> = arg.split_whitespace().collect();
                 if r_tokens.len() >= 2 {
                     if let Some(rx) = parse_dimension(r_tokens[0]) {
-                        radius_x = match rx { Dimension::Px(p) => p, _ => 50.0 };
+                        radius_x = match rx {
+                            Dimension::Px(p) => p,
+                            _ => 50.0,
+                        };
                     }
                     if let Some(ry) = parse_dimension(r_tokens[1]) {
-                        radius_y = match ry { Dimension::Px(p) => p, _ => 50.0 };
+                        radius_y = match ry {
+                            Dimension::Px(p) => p,
+                            _ => 50.0,
+                        };
                     }
                 }
             }
@@ -1296,16 +1630,20 @@ pub fn parse_clip_path(val: &str) -> Option<crate::effects::ClipPath> {
                 let pt_str = pair.trim();
                 let coords: Vec<&str> = pt_str.split_whitespace().collect();
                 if coords.len() >= 2 {
-                    let x = parse_dimension(coords[0]).map(|d| match d {
-                        Dimension::Px(p) => p,
-                        Dimension::Percent(pct) => pct,
-                        _ => 0.0,
-                    }).unwrap_or(0.0);
-                    let y = parse_dimension(coords[1]).map(|d| match d {
-                        Dimension::Px(p) => p,
-                        Dimension::Percent(pct) => pct,
-                        _ => 0.0,
-                    }).unwrap_or(0.0);
+                    let x = parse_dimension(coords[0])
+                        .map(|d| match d {
+                            Dimension::Px(p) => p,
+                            Dimension::Percent(pct) => pct,
+                            _ => 0.0,
+                        })
+                        .unwrap_or(0.0);
+                    let y = parse_dimension(coords[1])
+                        .map(|d| match d {
+                            Dimension::Px(p) => p,
+                            Dimension::Percent(pct) => pct,
+                            _ => 0.0,
+                        })
+                        .unwrap_or(0.0);
                     vertices.push(strata_primitives::geom::Point::new(x, y));
                 }
             }
@@ -1694,9 +2032,15 @@ pub fn parse_angle_rad(val: &str) -> Option<f32> {
     } else if let Some(rad) = s.strip_suffix("rad") {
         rad.trim().parse::<f32>().ok()
     } else if let Some(turn) = s.strip_suffix("turn") {
-        turn.trim().parse::<f32>().map(|t| t * 2.0 * std::f32::consts::PI).ok()
+        turn.trim()
+            .parse::<f32>()
+            .map(|t| t * 2.0 * std::f32::consts::PI)
+            .ok()
     } else if let Some(grad) = s.strip_suffix("grad") {
-        grad.trim().parse::<f32>().map(|g| g * (std::f32::consts::PI / 200.0)).ok()
+        grad.trim()
+            .parse::<f32>()
+            .map(|g| g * (std::f32::consts::PI / 200.0))
+            .ok()
     } else if let Ok(n) = s.parse::<f32>() {
         if n == 0.0 {
             Some(0.0)
@@ -1734,7 +2078,11 @@ pub fn parse_transform_op(func_name: &str, args_str: &str) -> Option<TransformOp
         }
         "translatez" => {
             let dz = parse_dimension(parts.first()?)?;
-            Some(TransformOp::Translate3d(Dimension::Px(0.0), Dimension::Px(0.0), dz))
+            Some(TransformOp::Translate3d(
+                Dimension::Px(0.0),
+                Dimension::Px(0.0),
+                dz,
+            ))
         }
         "translate3d" => {
             if parts.len() < 3 {
@@ -1929,11 +2277,26 @@ pub fn parse_transform_origin(val: &str) -> Option<TransformOrigin> {
     let (x, y) = if parts.len() == 1 {
         let p = parts[0].to_ascii_lowercase();
         match p.as_str() {
-            "top" => (Some(Dimension::Percent(50.0)), Some(Dimension::Percent(0.0))),
-            "bottom" => (Some(Dimension::Percent(50.0)), Some(Dimension::Percent(100.0))),
-            "left" => (Some(Dimension::Percent(0.0)), Some(Dimension::Percent(50.0))),
-            "right" => (Some(Dimension::Percent(100.0)), Some(Dimension::Percent(50.0))),
-            "center" => (Some(Dimension::Percent(50.0)), Some(Dimension::Percent(50.0))),
+            "top" => (
+                Some(Dimension::Percent(50.0)),
+                Some(Dimension::Percent(0.0)),
+            ),
+            "bottom" => (
+                Some(Dimension::Percent(50.0)),
+                Some(Dimension::Percent(100.0)),
+            ),
+            "left" => (
+                Some(Dimension::Percent(0.0)),
+                Some(Dimension::Percent(50.0)),
+            ),
+            "right" => (
+                Some(Dimension::Percent(100.0)),
+                Some(Dimension::Percent(50.0)),
+            ),
+            "center" => (
+                Some(Dimension::Percent(50.0)),
+                Some(Dimension::Percent(50.0)),
+            ),
             _ => {
                 let d = parse_dimension(parts[0])?;
                 (Some(d), Some(Dimension::Percent(50.0)))
@@ -2030,7 +2393,10 @@ pub fn parse_animation_timeline(val: &str) -> AnimationTimeline {
         return AnimationTimeline::Named("none".to_string());
     }
 
-    if let Some(args) = trimmed.strip_prefix("scroll(").and_then(|s| s.strip_suffix(')')) {
+    if let Some(args) = trimmed
+        .strip_prefix("scroll(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
         let args = args.trim();
         let mut source = ScrollTimelineSource::Nearest;
         let mut axis = ScrollAxis::Block;
@@ -2050,7 +2416,10 @@ pub fn parse_animation_timeline(val: &str) -> AnimationTimeline {
         return AnimationTimeline::Scroll(source, axis);
     }
 
-    if let Some(args) = trimmed.strip_prefix("view(").and_then(|s| s.strip_suffix(')')) {
+    if let Some(args) = trimmed
+        .strip_prefix("view(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
         let args = args.trim();
         let mut axis = ScrollAxis::Block;
         let mut inset_start = 0.0;
@@ -2147,4 +2516,40 @@ pub fn parse_view_transition_name(val: &str) -> Option<String> {
     }
 }
 
+/// Splits a comma-separated CSS selector list while respecting parentheses, brackets, and quotes.
+pub fn split_selector_list(input: &str) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut prev_idx = 0;
 
+    for (idx, ch) in input.char_indices() {
+        match ch {
+            '\'' if !in_double_quote => in_single_quote = !in_single_quote,
+            '"' if !in_single_quote => in_double_quote = !in_double_quote,
+            '(' if !in_single_quote && !in_double_quote => paren_depth += 1,
+            ')' if !in_single_quote && !in_double_quote => {
+                paren_depth = paren_depth.saturating_sub(1);
+            }
+            '[' if !in_single_quote && !in_double_quote => bracket_depth += 1,
+            ']' if !in_single_quote && !in_double_quote => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+            }
+            ',' if !in_single_quote
+                && !in_double_quote
+                && paren_depth == 0
+                && bracket_depth == 0 =>
+            {
+                result.push(&input[prev_idx..idx]);
+                prev_idx = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    if prev_idx < input.len() {
+        result.push(&input[prev_idx..]);
+    }
+    result
+}

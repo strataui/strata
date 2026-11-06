@@ -134,15 +134,33 @@ impl ClipPath {
     pub fn contains_point(&self, x: f32, y: f32, container_w: f32, container_h: f32) -> bool {
         match self {
             ClipPath::None => true,
-            ClipPath::Inset { top, right, bottom, left, .. } => {
-                x >= *left && x <= (container_w - *right) && y >= *top && y <= (container_h - *bottom)
+            ClipPath::Inset {
+                top,
+                right,
+                bottom,
+                left,
+                ..
+            } => {
+                x >= *left
+                    && x <= (container_w - *right)
+                    && y >= *top
+                    && y <= (container_h - *bottom)
             }
-            ClipPath::Circle { radius, center_x, center_y } => {
+            ClipPath::Circle {
+                radius,
+                center_x,
+                center_y,
+            } => {
                 let dx = x - *center_x;
                 let dy = y - *center_y;
                 (dx * dx + dy * dy) <= (radius * radius)
             }
-            ClipPath::Ellipse { radius_x, radius_y, center_x, center_y } => {
+            ClipPath::Ellipse {
+                radius_x,
+                radius_y,
+                center_x,
+                center_y,
+            } => {
                 if *radius_x <= 0.0 || *radius_y <= 0.0 {
                     return false;
                 }

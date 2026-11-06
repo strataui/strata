@@ -276,3 +276,42 @@ fn test_cascade_specificity_tie_breaking_and_important() {
     // font-size is 20px because inline style beat the p { font-size: 14px; } rule
     assert_eq!(computed_inline.font_size, 20.0);
 }
+
+#[test]
+fn test_at_rules_charset_and_tachyons_parsing() {
+    let css = r#"
+        @charset "UTF-8";
+        @media screen and (min-width: 60em) {
+            .w-auto-l { width: auto; }
+            .flex-row-l { flex-direction: row; }
+        }
+        .flex { display: flex; }
+    "#;
+
+    let ctx = MediaContext {
+        viewport_width: 1280.0,
+        viewport_height: 800.0,
+        is_dark: true,
+    };
+    let sheet = StyleSheet::parse_with_context(css, &ctx).expect("Failed to parse stylesheet");
+    println!("Parsed rules count: {}", sheet.rules.len());
+    for r in &sheet.rules {
+        for s in &r.selectors {
+            println!("Rule selector: {:?}", s);
+        }
+    }
+
+    if let Ok(vendor_css) = std::fs::read_to_string("/tmp/vendor.css") {
+        let vendor_sheet = StyleSheet::parse_with_context(&vendor_css, &ctx).expect("Failed to parse vendor.css");
+        println!("Vendor sheet rules count: {}", vendor_sheet.rules.len());
+        let has_w_auto_l = vendor_sheet.rules.iter().any(|r| r.selectors.iter().any(|s| format!("{:?}", s).contains("w-auto-l")));
+        let has_flex_row_l = vendor_sheet.rules.iter().any(|r| r.selectors.iter().any(|s| format!("{:?}", s).contains("flex-row-l")));
+        println!("Vendor has w-auto-l: {}, flex-row-l: {}", has_w_auto_l, has_flex_row_l);
+    }
+
+    assert!(
+        sheet.rules.iter().any(|r| r.selectors.iter().any(|s| format!("{:?}", s).contains("w-auto-l"))),
+        "Must parse .w-auto-l from inside @media after @charset"
+    );
+}
+

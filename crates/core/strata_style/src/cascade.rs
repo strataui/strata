@@ -4,22 +4,20 @@ use crate::parser::{
     parse_angle_rad, parse_animation_delays, parse_animation_directions, parse_animation_durations,
     parse_animation_fill_modes, parse_animation_iteration_counts, parse_animation_names,
     parse_animation_play_states, parse_animation_range, parse_animation_timeline,
-    parse_animation_timing_functions, parse_animations, parse_aspect_ratio, parse_backface_visibility,
-    parse_border_style, parse_color, parse_cursor, parse_declarations, parse_dimension,
-    parse_edge_insets_px, parse_pointer_events, parse_text_decoration, parse_text_transform,
-    parse_transform_list, parse_transform_origin, parse_transform_style, parse_transition_behaviors,
-    parse_transition_delays, parse_transition_durations, parse_transition_properties,
-    parse_transition_timing_functions, parse_transitions, parse_user_select, parse_vertical_align,
-    parse_view_transition_name, parse_visibility, parse_white_space, Declaration, StyleSheet,
+    parse_animation_timing_functions, parse_animations, parse_aspect_ratio,
+    parse_backface_visibility, parse_border_style, parse_color, parse_cursor, parse_declarations,
+    parse_dimension, parse_pointer_events, parse_text_decoration, parse_text_transform,
+    parse_transform_list, parse_transform_origin, parse_transform_style,
+    parse_transition_behaviors, parse_transition_delays, parse_transition_durations,
+    parse_transition_properties, parse_transition_timing_functions, parse_transitions,
+    parse_user_select, parse_vertical_align, parse_view_transition_name, parse_visibility,
+    parse_white_space, Declaration, StyleSheet,
 };
 use crate::selector::PseudoState;
 use crate::specificity::Specificity;
 use crate::types::*;
 
-fn resolve_var<'a>(
-    val: &'a str,
-    style: &ComputedStyle,
-) -> std::borrow::Cow<'a, str> {
+fn resolve_var<'a>(val: &'a str, style: &ComputedStyle) -> std::borrow::Cow<'a, str> {
     if !val.contains("var(") {
         return std::borrow::Cow::Borrowed(val);
     }
@@ -48,11 +46,11 @@ fn resolve_var<'a>(
 }
 
 #[inline]
-fn resolve_length_px(val: &str, current_font_size: f32) -> Option<f32> {
+fn resolve_length_px(val: &str, current_font_size: f32, root_font_size: f32) -> Option<f32> {
     match parse_dimension(val) {
         Some(Dimension::Px(px)) => Some(px),
         Some(Dimension::Em(em)) => Some(em * current_font_size),
-        Some(Dimension::Rem(rem)) => Some(rem * 16.0),
+        Some(Dimension::Rem(rem)) => Some(rem * root_font_size),
         Some(Dimension::Percent(pct)) => Some(current_font_size * (pct / 100.0)),
         _ => None,
     }
@@ -80,11 +78,17 @@ impl<'a> OriginStyleSheet<'a> {
     }
 
     pub fn user_agent(sheet: &'a StyleSheet) -> Self {
-        Self { sheet, origin: CascadeOrigin::UserAgent }
+        Self {
+            sheet,
+            origin: CascadeOrigin::UserAgent,
+        }
     }
 
     pub fn author(sheet: &'a StyleSheet) -> Self {
-        Self { sheet, origin: CascadeOrigin::Author }
+        Self {
+            sheet,
+            origin: CascadeOrigin::Author,
+        }
     }
 }
 
@@ -138,7 +142,15 @@ impl CascadeSolver {
             id,
             attributes: &[],
         };
-        Self::resolve_with_hierarchy(&target, &[], &[], inline_style, stylesheets, parent_style, state)
+        Self::resolve_with_hierarchy(
+            &target,
+            &[],
+            &[],
+            inline_style,
+            stylesheets,
+            parent_style,
+            state,
+        )
     }
 
     /// Collects and resolves all matching CSS declarations into a sorted list considering hierarchy and specificity.
@@ -271,11 +283,19 @@ impl CascadeSolver {
             Self::apply_declaration_with_parent(&mut computed, decl, parent_style);
         }
 
+        if target.tag.eq_ignore_ascii_case("html") || target.tag.eq_ignore_ascii_case(":root") {
+            computed.root_font_size = computed.font_size;
+        }
+
         // Step 3: Evaluate matching @starting-style rules (W3C CSS Transitions Level 2)
         let mut starting_decls = Vec::new();
         for sheet in stylesheets {
             for s_rule in &sheet.starting_styles {
-                if s_rule.selectors.iter().any(|sel| sel.matches_hierarchy(target, ancestors, preceding_siblings, state)) {
+                if s_rule
+                    .selectors
+                    .iter()
+                    .any(|sel| sel.matches_hierarchy(target, ancestors, preceding_siblings, state))
+                {
                     starting_decls.extend(s_rule.declarations.clone());
                 }
             }
@@ -347,10 +367,14 @@ impl CascadeSolver {
                     "min-height" => style.min_height = p.min_height,
                     "max-width" => style.max_width = p.max_width,
                     "max-height" => style.max_height = p.max_height,
-                    "background" | "background-color" => style.background_color = p.background_color,
+                    "background" | "background-color" => {
+                        style.background_color = p.background_color
+                    }
                     "background-image" => style.background_gradient = p.background_gradient.clone(),
                     "box-shadow" => style.box_shadow = p.box_shadow.clone(),
-                    "backdrop-filter" | "-webkit-backdrop-filter" => style.backdrop_filter = p.backdrop_filter.clone(),
+                    "backdrop-filter" | "-webkit-backdrop-filter" => {
+                        style.backdrop_filter = p.backdrop_filter.clone()
+                    }
                     "filter" => style.filter = p.filter.clone(),
                     "clip-path" => style.clip_path = p.clip_path.clone(),
                     "mix-blend-mode" => style.mix_blend_mode = p.mix_blend_mode,
@@ -403,10 +427,16 @@ impl CascadeSolver {
                 "min-height" => style.min_height = initial.min_height,
                 "max-width" => style.max_width = initial.max_width,
                 "max-height" => style.max_height = initial.max_height,
-                "background" | "background-color" => style.background_color = initial.background_color,
-                "background-image" => style.background_gradient = initial.background_gradient.clone(),
+                "background" | "background-color" => {
+                    style.background_color = initial.background_color
+                }
+                "background-image" => {
+                    style.background_gradient = initial.background_gradient.clone()
+                }
                 "box-shadow" => style.box_shadow = initial.box_shadow.clone(),
-                "backdrop-filter" | "-webkit-backdrop-filter" => style.backdrop_filter = initial.backdrop_filter.clone(),
+                "backdrop-filter" | "-webkit-backdrop-filter" => {
+                    style.backdrop_filter = initial.backdrop_filter.clone()
+                }
                 "filter" => style.filter = initial.filter.clone(),
                 "clip-path" => style.clip_path = initial.clip_path.clone(),
                 "mix-blend-mode" => style.mix_blend_mode = initial.mix_blend_mode,
@@ -469,11 +499,13 @@ impl CascadeSolver {
                         style.border_spacing = (px, px);
                     }
                 } else if parts.len() >= 2 {
-                    if let (Some(Dimension::Px(h)), Some(Dimension::Px(v))) = (parse_dimension(parts[0]), parse_dimension(parts[1])) {
+                    if let (Some(Dimension::Px(h)), Some(Dimension::Px(v))) =
+                        (parse_dimension(parts[0]), parse_dimension(parts[1]))
+                    {
                         style.border_spacing = (h, v);
                     }
                 }
-            },
+            }
             "caption-side" => match val {
                 "top" => style.caption_side = CaptionSide::Top,
                 "bottom" => style.caption_side = CaptionSide::Bottom,
@@ -540,7 +572,11 @@ impl CascadeSolver {
                     style.margin_auto_right = true;
                     style.margin_auto_bottom = true;
                     style.margin_auto_left = true;
-                } else if let Some(insets) = crate::parser::parse_edge_insets_with_font_size(val, style.font_size) {
+                } else if let Some(insets) = crate::parser::parse_edge_insets_with_context(
+                    val,
+                    style.font_size,
+                    style.root_font_size,
+                ) {
                     style.margin = insets;
                     style.margin_auto_top = false;
                     style.margin_auto_right = false;
@@ -551,7 +587,9 @@ impl CascadeSolver {
             "margin-top" => {
                 if val.trim() == "auto" {
                     style.margin_auto_top = true;
-                } else if let Some(px) = resolve_length_px(val, style.font_size) {
+                } else if let Some(px) =
+                    resolve_length_px(val, style.font_size, style.root_font_size)
+                {
                     style.margin.top = px;
                     style.margin_auto_top = false;
                 }
@@ -559,7 +597,9 @@ impl CascadeSolver {
             "margin-right" => {
                 if val.trim() == "auto" {
                     style.margin_auto_right = true;
-                } else if let Some(px) = resolve_length_px(val, style.font_size) {
+                } else if let Some(px) =
+                    resolve_length_px(val, style.font_size, style.root_font_size)
+                {
                     style.margin.right = px;
                     style.margin_auto_right = false;
                 }
@@ -567,7 +607,9 @@ impl CascadeSolver {
             "margin-bottom" => {
                 if val.trim() == "auto" {
                     style.margin_auto_bottom = true;
-                } else if let Some(px) = resolve_length_px(val, style.font_size) {
+                } else if let Some(px) =
+                    resolve_length_px(val, style.font_size, style.root_font_size)
+                {
                     style.margin.bottom = px;
                     style.margin_auto_bottom = false;
                 }
@@ -575,7 +617,9 @@ impl CascadeSolver {
             "margin-left" => {
                 if val.trim() == "auto" {
                     style.margin_auto_left = true;
-                } else if let Some(px) = resolve_length_px(val, style.font_size) {
+                } else if let Some(px) =
+                    resolve_length_px(val, style.font_size, style.root_font_size)
+                {
                     style.margin.left = px;
                     style.margin_auto_left = false;
                 }
@@ -586,7 +630,9 @@ impl CascadeSolver {
                     if parts[0] == "auto" {
                         style.margin_auto_top = true;
                         style.margin_auto_bottom = true;
-                    } else if let Some(px) = resolve_length_px(parts[0], style.font_size) {
+                    } else if let Some(px) =
+                        resolve_length_px(parts[0], style.font_size, style.root_font_size)
+                    {
                         style.margin.top = px;
                         style.margin.bottom = px;
                         style.margin_auto_top = false;
@@ -595,13 +641,17 @@ impl CascadeSolver {
                 } else if parts.len() >= 2 {
                     if parts[0] == "auto" {
                         style.margin_auto_top = true;
-                    } else if let Some(top) = resolve_length_px(parts[0], style.font_size) {
+                    } else if let Some(top) =
+                        resolve_length_px(parts[0], style.font_size, style.root_font_size)
+                    {
                         style.margin.top = top;
                         style.margin_auto_top = false;
                     }
                     if parts[1] == "auto" {
                         style.margin_auto_bottom = true;
-                    } else if let Some(bot) = resolve_length_px(parts[1], style.font_size) {
+                    } else if let Some(bot) =
+                        resolve_length_px(parts[1], style.font_size, style.root_font_size)
+                    {
                         style.margin.bottom = bot;
                         style.margin_auto_bottom = false;
                     }
@@ -610,7 +660,9 @@ impl CascadeSolver {
             "margin-block-start" => {
                 if val.trim() == "auto" {
                     style.margin_auto_top = true;
-                } else if let Some(px) = resolve_length_px(val, style.font_size) {
+                } else if let Some(px) =
+                    resolve_length_px(val, style.font_size, style.root_font_size)
+                {
                     style.margin.top = px;
                     style.margin_auto_top = false;
                 }
@@ -618,7 +670,9 @@ impl CascadeSolver {
             "margin-block-end" => {
                 if val.trim() == "auto" {
                     style.margin_auto_bottom = true;
-                } else if let Some(px) = resolve_length_px(val, style.font_size) {
+                } else if let Some(px) =
+                    resolve_length_px(val, style.font_size, style.root_font_size)
+                {
                     style.margin.bottom = px;
                     style.margin_auto_bottom = false;
                 }
@@ -629,7 +683,9 @@ impl CascadeSolver {
                     if parts[0] == "auto" {
                         style.margin_auto_left = true;
                         style.margin_auto_right = true;
-                    } else if let Some(px) = resolve_length_px(parts[0], style.font_size) {
+                    } else if let Some(px) =
+                        resolve_length_px(parts[0], style.font_size, style.root_font_size)
+                    {
                         style.margin.left = px;
                         style.margin.right = px;
                         style.margin_auto_left = false;
@@ -638,13 +694,17 @@ impl CascadeSolver {
                 } else if parts.len() >= 2 {
                     if parts[0] == "auto" {
                         style.margin_auto_left = true;
-                    } else if let Some(left) = resolve_length_px(parts[0], style.font_size) {
+                    } else if let Some(left) =
+                        resolve_length_px(parts[0], style.font_size, style.root_font_size)
+                    {
                         style.margin.left = left;
                         style.margin_auto_left = false;
                     }
                     if parts[1] == "auto" {
                         style.margin_auto_right = true;
-                    } else if let Some(right) = resolve_length_px(parts[1], style.font_size) {
+                    } else if let Some(right) =
+                        resolve_length_px(parts[1], style.font_size, style.root_font_size)
+                    {
                         style.margin.right = right;
                         style.margin_auto_right = false;
                     }
@@ -653,7 +713,9 @@ impl CascadeSolver {
             "margin-inline-start" => {
                 if val.trim() == "auto" {
                     style.margin_auto_left = true;
-                } else if let Some(px) = resolve_length_px(val, style.font_size) {
+                } else if let Some(px) =
+                    resolve_length_px(val, style.font_size, style.root_font_size)
+                {
                     style.margin.left = px;
                     style.margin_auto_left = false;
                 }
@@ -661,85 +723,103 @@ impl CascadeSolver {
             "margin-inline-end" => {
                 if val.trim() == "auto" {
                     style.margin_auto_right = true;
-                } else if let Some(px) = resolve_length_px(val, style.font_size) {
+                } else if let Some(px) =
+                    resolve_length_px(val, style.font_size, style.root_font_size)
+                {
                     style.margin.right = px;
                     style.margin_auto_right = false;
                 }
             }
             "padding" => {
-                if let Some(insets) = crate::parser::parse_edge_insets_with_font_size(val, style.font_size) {
+                if let Some(insets) = crate::parser::parse_edge_insets_with_context(
+                    val,
+                    style.font_size,
+                    style.root_font_size,
+                ) {
                     style.padding = insets;
                 }
             }
             "padding-top" => {
-                if let Some(px) = resolve_length_px(val, style.font_size) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.padding.top = px;
                 }
             }
             "padding-right" => {
-                if let Some(px) = resolve_length_px(val, style.font_size) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.padding.right = px;
                 }
             }
             "padding-bottom" => {
-                if let Some(px) = resolve_length_px(val, style.font_size) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.padding.bottom = px;
                 }
             }
             "padding-left" => {
-                if let Some(px) = resolve_length_px(val, style.font_size) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.padding.left = px;
                 }
             }
             "padding-block" => {
                 let parts: Vec<&str> = val.split_whitespace().collect();
                 if parts.len() == 1 {
-                    if let Some(px) = resolve_length_px(parts[0], style.font_size) {
+                    if let Some(px) =
+                        resolve_length_px(parts[0], style.font_size, style.root_font_size)
+                    {
                         style.padding.top = px;
                         style.padding.bottom = px;
                     }
                 } else if parts.len() >= 2 {
-                    if let Some(top) = resolve_length_px(parts[0], style.font_size) {
+                    if let Some(top) =
+                        resolve_length_px(parts[0], style.font_size, style.root_font_size)
+                    {
                         style.padding.top = top;
                     }
-                    if let Some(bot) = resolve_length_px(parts[1], style.font_size) {
+                    if let Some(bot) =
+                        resolve_length_px(parts[1], style.font_size, style.root_font_size)
+                    {
                         style.padding.bottom = bot;
                     }
                 }
             }
             "padding-block-start" => {
-                if let Some(px) = resolve_length_px(val, style.font_size) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.padding.top = px;
                 }
             }
             "padding-block-end" => {
-                if let Some(px) = resolve_length_px(val, style.font_size) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.padding.bottom = px;
                 }
             }
             "padding-inline" => {
                 let parts: Vec<&str> = val.split_whitespace().collect();
                 if parts.len() == 1 {
-                    if let Some(px) = resolve_length_px(parts[0], style.font_size) {
+                    if let Some(px) =
+                        resolve_length_px(parts[0], style.font_size, style.root_font_size)
+                    {
                         style.padding.left = px;
                         style.padding.right = px;
                     }
                 } else if parts.len() >= 2 {
-                    if let Some(left) = resolve_length_px(parts[0], style.font_size) {
+                    if let Some(left) =
+                        resolve_length_px(parts[0], style.font_size, style.root_font_size)
+                    {
                         style.padding.left = left;
                     }
-                    if let Some(right) = resolve_length_px(parts[1], style.font_size) {
+                    if let Some(right) =
+                        resolve_length_px(parts[1], style.font_size, style.root_font_size)
+                    {
                         style.padding.right = right;
                     }
                 }
             }
             "padding-inline-start" => {
-                if let Some(px) = resolve_length_px(val, style.font_size) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.padding.left = px;
                 }
             }
             "padding-inline-end" => {
-                if let Some(px) = resolve_length_px(val, style.font_size) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.padding.right = px;
                 }
             }
@@ -822,22 +902,116 @@ impl CascadeSolver {
                     style.flex_basis = dim;
                 }
             }
+            "flex" => {
+                let parts: Vec<&str> = val.split_whitespace().collect();
+                match parts.len() {
+                    1 => {
+                        let single = parts[0].to_ascii_lowercase();
+                        if single == "none" {
+                            style.flex_grow = 0.0;
+                            style.flex_shrink = 0.0;
+                            style.flex_basis = Dimension::Auto;
+                        } else if single == "auto" {
+                            style.flex_grow = 1.0;
+                            style.flex_shrink = 1.0;
+                            style.flex_basis = Dimension::Auto;
+                        } else if single == "initial" {
+                            style.flex_grow = 0.0;
+                            style.flex_shrink = 1.0;
+                            style.flex_basis = Dimension::Auto;
+                        } else if let Ok(num) = single.parse::<f32>() {
+                            style.flex_grow = num;
+                            style.flex_shrink = 1.0;
+                            style.flex_basis = Dimension::Px(0.0);
+                        } else if let Some(dim) = parse_dimension(&single) {
+                            style.flex_basis = dim;
+                        }
+                    }
+                    2 => {
+                        if let (Ok(g), Ok(s)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>()) {
+                            style.flex_grow = g;
+                            style.flex_shrink = s;
+                            style.flex_basis = Dimension::Px(0.0);
+                        } else if let (Ok(g), Some(dim)) =
+                            (parts[0].parse::<f32>(), parse_dimension(parts[1]))
+                        {
+                            style.flex_grow = g;
+                            style.flex_shrink = 1.0;
+                            style.flex_basis = dim;
+                        }
+                    }
+                    3 => {
+                        if let Ok(g) = parts[0].parse::<f32>() {
+                            style.flex_grow = g;
+                        }
+                        if let Ok(s) = parts[1].parse::<f32>() {
+                            style.flex_shrink = s;
+                        }
+                        if parts[2].eq_ignore_ascii_case("auto") {
+                            style.flex_basis = Dimension::Auto;
+                        } else if let Some(dim) = parse_dimension(parts[2]) {
+                            style.flex_basis = dim;
+                        }
+                    }
+                    _ => {}
+                }
+            }
             "gap" => {
-                if let Some(Dimension::Px(px)) = parse_dimension(val) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.gap = px;
                     style.gap_row = px;
                     style.gap_col = px;
                 }
             }
             "row-gap" => {
-                if let Some(Dimension::Px(px)) = parse_dimension(val) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.gap_row = px;
                 }
             }
             "column-gap" => {
-                if let Some(Dimension::Px(px)) = parse_dimension(val) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.gap_col = px;
                 }
+            }
+            "grid-template-columns" => {
+                style.grid_template_columns = crate::parser::parse_grid_tracks(val);
+            }
+            "grid-template-rows" => {
+                style.grid_template_rows = crate::parser::parse_grid_tracks(val);
+            }
+            "grid-auto-flow" => {
+                // Row flow is the supported placement mode. The `dense` keyword
+                // and column flow are accepted but do not alter placement yet.
+            }
+            "grid-column" => {
+                apply_grid_placement_shorthand(
+                    val,
+                    &mut style.grid_column_start,
+                    &mut style.grid_column_span,
+                );
+            }
+            "grid-column-start" => {
+                apply_grid_placement_line(
+                    val,
+                    &mut style.grid_column_start,
+                    &mut style.grid_column_span,
+                );
+            }
+            "grid-column-end" => {
+                apply_grid_placement_end(val, style.grid_column_start, &mut style.grid_column_span);
+            }
+            "grid-row" => {
+                apply_grid_placement_shorthand(
+                    val,
+                    &mut style.grid_row_start,
+                    &mut style.grid_row_span,
+                );
+            }
+            "grid-row-start" => {
+                apply_grid_placement_line(val, &mut style.grid_row_start, &mut style.grid_row_span);
+            }
+            "grid-row-end" => {
+                apply_grid_placement_end(val, style.grid_row_start, &mut style.grid_row_span);
             }
             "background-color" => {
                 if let Some(c) = parse_color(val) {
@@ -876,7 +1050,9 @@ impl CascadeSolver {
                     for part in val.split_whitespace() {
                         if let Some(bs) = parse_border_style(part) {
                             style.border_style = bs;
-                        } else if let Some(Dimension::Px(px)) = parse_dimension(part) {
+                        } else if let Some(px) =
+                            resolve_length_px(part, style.font_size, style.root_font_size)
+                        {
                             style.border_width = EdgeInsets::all(px);
                         } else if let Some(c) = parse_color(part) {
                             style.border_color = Some(c);
@@ -889,38 +1065,45 @@ impl CascadeSolver {
                     style.border_color = Some(c);
                 }
             }
-            "border-top-color" | "border-right-color" | "border-bottom-color" | "border-left-color" => {
+            "border-top-color"
+            | "border-right-color"
+            | "border-bottom-color"
+            | "border-left-color" => {
                 if let Some(c) = parse_color(val) {
                     style.border_color = Some(c);
                 }
             }
             "border-width" => {
-                if let Some(insets) = parse_edge_insets_px(val) {
+                if let Some(insets) = crate::parser::parse_edge_insets_with_context(
+                    val,
+                    style.font_size,
+                    style.root_font_size,
+                ) {
                     style.border_width = insets;
                 }
             }
             "border-top-width" => {
-                if let Some(Dimension::Px(px)) = parse_dimension(val) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.border_width.top = px;
                 }
             }
             "border-right-width" => {
-                if let Some(Dimension::Px(px)) = parse_dimension(val) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.border_width.right = px;
                 }
             }
             "border-bottom-width" => {
-                if let Some(Dimension::Px(px)) = parse_dimension(val) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.border_width.bottom = px;
                 }
             }
             "border-left-width" => {
-                if let Some(Dimension::Px(px)) = parse_dimension(val) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.border_width.left = px;
                 }
             }
             "border-radius" => {
-                if let Some(Dimension::Px(px)) = parse_dimension(val) {
+                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
                     style.border_radius = BorderRadius::all(px);
                 }
             }
@@ -971,30 +1154,32 @@ impl CascadeSolver {
                     style.isolation = iso;
                 }
             }
-            "font-size" => {
-                match val.trim().to_ascii_lowercase().as_str() {
-                    "xx-small" => style.font_size = 9.0,
-                    "x-small" => style.font_size = 10.0,
-                    "small" => style.font_size = 13.0,
-                    "medium" => style.font_size = 16.0,
-                    "large" => style.font_size = 18.0,
-                    "x-large" => style.font_size = 24.0,
-                    "xx-large" => style.font_size = 32.0,
-                    "smaller" => style.font_size = (style.font_size * 0.833).max(8.0),
-                    "larger" => style.font_size = style.font_size * 1.2,
-                    _ => {
-                        if let Some(dim) = parse_dimension(val) {
-                            match dim {
-                                Dimension::Px(px) => style.font_size = px,
-                                Dimension::Em(em) => style.font_size = (style.font_size * em).max(1.0),
-                                Dimension::Rem(rem) => style.font_size = (16.0 * rem).max(1.0),
-                                Dimension::Percent(pct) => style.font_size = (style.font_size * (pct / 100.0)).max(1.0),
-                                _ => {}
+            "font-size" => match val.trim().to_ascii_lowercase().as_str() {
+                "xx-small" => style.font_size = 9.0,
+                "x-small" => style.font_size = 10.0,
+                "small" => style.font_size = 13.0,
+                "medium" => style.font_size = 16.0,
+                "large" => style.font_size = 18.0,
+                "x-large" => style.font_size = 24.0,
+                "xx-large" => style.font_size = 32.0,
+                "smaller" => style.font_size = (style.font_size * 0.833).max(8.0),
+                "larger" => style.font_size = style.font_size * 1.2,
+                _ => {
+                    if let Some(dim) = parse_dimension(val) {
+                        match dim {
+                            Dimension::Px(px) => style.font_size = px,
+                            Dimension::Em(em) => style.font_size = (style.font_size * em).max(1.0),
+                            Dimension::Rem(rem) => {
+                                style.font_size = (style.root_font_size * rem).max(1.0)
                             }
+                            Dimension::Percent(pct) => {
+                                style.font_size = (style.font_size * (pct / 100.0)).max(1.0)
+                            }
+                            _ => {}
                         }
                     }
                 }
-            }
+            },
             "font-weight" => match val.trim().to_ascii_lowercase().as_str() {
                 "bold" => style.font_weight = FontWeight::Bold,
                 "bolder" => style.font_weight = FontWeight::ExtraBold,
@@ -1189,14 +1374,12 @@ impl CascadeSolver {
                     style.outline_offset = px;
                 }
             }
-            "content-visibility" => {
-                match val.trim().to_ascii_lowercase().as_str() {
-                    "auto" => style.content_visibility = ContentVisibility::Auto,
-                    "hidden" => style.content_visibility = ContentVisibility::Hidden,
-                    "visible" => style.content_visibility = ContentVisibility::Visible,
-                    _ => {}
-                }
-            }
+            "content-visibility" => match val.trim().to_ascii_lowercase().as_str() {
+                "auto" => style.content_visibility = ContentVisibility::Auto,
+                "hidden" => style.content_visibility = ContentVisibility::Hidden,
+                "visible" => style.content_visibility = ContentVisibility::Visible,
+                _ => {}
+            },
             "contain-intrinsic-size" | "contain-intrinsic-width" | "contain-intrinsic-height" => {
                 let parts: Vec<&str> = val.split_whitespace().collect();
                 let dims: Vec<Dimension> = parts
@@ -1548,27 +1731,112 @@ impl CascadeSolver {
             }
             "rotate" => {
                 if let Some(rad) = parse_angle_rad(val) {
-                    style.transform.retain(|op| !matches!(op, TransformOp::Rotate(_)));
+                    style
+                        .transform
+                        .retain(|op| !matches!(op, TransformOp::Rotate(_)));
                     style.transform.push(TransformOp::Rotate(rad));
                 }
             }
             "scale" => {
                 let parts: Vec<&str> = val.split_whitespace().collect();
                 if let Some(first) = parts.first().and_then(|s| s.parse::<f32>().ok()) {
-                    let second = parts.get(1).and_then(|s| s.parse::<f32>().ok()).unwrap_or(first);
-                    style.transform.retain(|op| !matches!(op, TransformOp::Scale(_, _)));
+                    let second = parts
+                        .get(1)
+                        .and_then(|s| s.parse::<f32>().ok())
+                        .unwrap_or(first);
+                    style
+                        .transform
+                        .retain(|op| !matches!(op, TransformOp::Scale(_, _)));
                     style.transform.push(TransformOp::Scale(first, second));
                 }
             }
             "translate" => {
                 let parts: Vec<&str> = val.split_whitespace().collect();
                 if let Some(dx) = parts.first().and_then(|s| parse_dimension(s)) {
-                    let dy = parts.get(1).and_then(|s| parse_dimension(s)).unwrap_or(Dimension::Px(0.0));
-                    style.transform.retain(|op| !matches!(op, TransformOp::Translate(_, _)));
+                    let dy = parts
+                        .get(1)
+                        .and_then(|s| parse_dimension(s))
+                        .unwrap_or(Dimension::Px(0.0));
+                    style
+                        .transform
+                        .retain(|op| !matches!(op, TransformOp::Translate(_, _)));
                     style.transform.push(TransformOp::Translate(dx, dy));
                 }
             }
             _ => {}
         }
+    }
+}
+
+fn parse_grid_line(value: &str) -> Option<i32> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+        return None;
+    }
+    trimmed.parse::<i32>().ok()
+}
+
+fn parse_grid_span(value: &str) -> Option<u32> {
+    let mut parts = value.trim().split_whitespace();
+    let keyword = parts.next()?;
+    if !keyword.eq_ignore_ascii_case("span") {
+        return None;
+    }
+    parts.next()?.parse::<u32>().ok()
+}
+
+fn apply_grid_placement_line(value: &str, start: &mut Option<i32>, span: &mut Option<u32>) {
+    if let Some(count) = parse_grid_span(value) {
+        *span = Some(count);
+    } else if value.trim().eq_ignore_ascii_case("auto") {
+        *start = None;
+    } else if let Some(line) = parse_grid_line(value) {
+        *start = Some(line);
+    }
+}
+
+fn apply_grid_placement_end(value: &str, start: Option<i32>, span: &mut Option<u32>) {
+    if let Some(count) = parse_grid_span(value) {
+        *span = Some(count);
+    } else if let Some(end) = parse_grid_line(value) {
+        if let Some(begin) = start {
+            if end > begin {
+                *span = Some((end - begin) as u32);
+            }
+        }
+    }
+}
+
+fn apply_grid_placement_shorthand(value: &str, start: &mut Option<i32>, span: &mut Option<u32>) {
+    let parts: Vec<&str> = value
+        .split('/')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+
+    match parts.as_slice() {
+        [single] => apply_grid_placement_line(single, start, span),
+        [first, second] => {
+            if let Some(count) = parse_grid_span(first) {
+                *span = Some(count);
+                if let Some(end) = parse_grid_line(second) {
+                    *start = Some(end - count as i32);
+                }
+                return;
+            }
+
+            apply_grid_placement_line(first, start, span);
+
+            if let Some(count) = parse_grid_span(second) {
+                *span = Some(count);
+            } else if let Some(end) = parse_grid_line(second) {
+                if let Some(begin) = *start {
+                    if end > begin {
+                        *span = Some((end - begin) as u32);
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }

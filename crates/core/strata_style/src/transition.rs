@@ -6,9 +6,8 @@
 use std::collections::HashMap;
 
 use crate::types::{
-    BorderRadius, BoxShadow, Color, ComputedStyle, Dimension, Display, EdgeInsets,
-    TransformOp, TransitionBehavior, TransitionEasing, TransitionProperty, TransitionSpec,
-    Visibility,
+    BorderRadius, BoxShadow, Color, ComputedStyle, Dimension, Display, EdgeInsets, TransformOp,
+    TransitionBehavior, TransitionEasing, TransitionProperty, TransitionSpec, Visibility,
 };
 
 /// Strongly typed container for any animatable CSS property value.
@@ -113,11 +112,7 @@ pub fn interpolate_edge_insets(
 }
 
 /// Linearly interpolates 4-corner border radius.
-pub fn interpolate_border_radius(
-    from: &BorderRadius,
-    to: &BorderRadius,
-    t: f32,
-) -> BorderRadius {
+pub fn interpolate_border_radius(from: &BorderRadius, to: &BorderRadius, t: f32) -> BorderRadius {
     let t = t.clamp(0.0, 1.0);
     BorderRadius::new(
         from.top_left + (to.top_left - from.top_left) * t,
@@ -205,12 +200,10 @@ pub fn interpolate_single_transform_op(
 ) -> TransformOp {
     let t = t.clamp(0.0, 1.0);
     match (from, to) {
-        (TransformOp::Translate(x1, y1), TransformOp::Translate(x2, y2)) => {
-            TransformOp::Translate(
-                interpolate_dimension(x1, x2, t),
-                interpolate_dimension(y1, y2, t),
-            )
-        }
+        (TransformOp::Translate(x1, y1), TransformOp::Translate(x2, y2)) => TransformOp::Translate(
+            interpolate_dimension(x1, x2, t),
+            interpolate_dimension(y1, y2, t),
+        ),
         (TransformOp::Translate3d(x1, y1, z1), TransformOp::Translate3d(x2, y2, z2)) => {
             TransformOp::Translate3d(
                 interpolate_dimension(x1, x2, t),
@@ -393,9 +386,9 @@ impl ActiveTransition {
         };
 
         let eased_progress = self.easing.evaluate(raw_progress);
-        self.current_value = self
-            .from_value
-            .interpolate(&self.to_value, eased_progress, self.behavior);
+        self.current_value =
+            self.from_value
+                .interpolate(&self.to_value, eased_progress, self.behavior);
 
         // 4. Completion check
         if raw_progress >= 1.0 && !self.end_emitted {
@@ -423,9 +416,7 @@ pub fn extract_animatable_value(
 ) -> Option<AnimatableValue> {
     match prop {
         TransitionProperty::Color => Some(AnimatableValue::Color(style.color)),
-        TransitionProperty::BackgroundColor => {
-            style.background_color.map(AnimatableValue::Color)
-        }
+        TransitionProperty::BackgroundColor => style.background_color.map(AnimatableValue::Color),
         TransitionProperty::Opacity => Some(AnimatableValue::Number(style.opacity)),
         TransitionProperty::Width => Some(AnimatableValue::Dimension(style.width)),
         TransitionProperty::Height => Some(AnimatableValue::Dimension(style.height)),
@@ -436,12 +427,8 @@ pub fn extract_animatable_value(
         TransitionProperty::BorderRadius => {
             Some(AnimatableValue::BorderRadius(style.border_radius))
         }
-        TransitionProperty::BoxShadow => {
-            Some(AnimatableValue::BoxShadow(style.box_shadow.clone()))
-        }
-        TransitionProperty::Transform => {
-            Some(AnimatableValue::Transform(style.transform.clone()))
-        }
+        TransitionProperty::BoxShadow => Some(AnimatableValue::BoxShadow(style.box_shadow.clone())),
+        TransitionProperty::Transform => Some(AnimatableValue::Transform(style.transform.clone())),
         _ => None,
     }
 }
@@ -514,6 +501,23 @@ impl TransitionManager {
     /// Returns true if there are any active running transitions.
     pub fn has_active_transitions(&self) -> bool {
         self.node_transitions.values().any(|v| !v.is_empty())
+    }
+
+    /// Returns true when any running transition targets a property that participates in
+    /// box layout, so the layout tree must be recomputed as the value changes.
+    pub fn has_layout_affecting_transitions(&self) -> bool {
+        self.node_transitions.values().any(|list| {
+            list.iter().any(|transition| {
+                matches!(
+                    transition.property,
+                    TransitionProperty::Width
+                        | TransitionProperty::Height
+                        | TransitionProperty::Margin
+                        | TransitionProperty::Padding
+                        | TransitionProperty::BorderWidth
+                )
+            })
+        })
     }
 
     /// Diffs the previous computed style against the new style for `node_id`,
@@ -601,17 +605,12 @@ impl TransitionManager {
                 let from_val = existing.current_value.clone();
                 let is_reversal = existing.from_value == new_val;
 
-                let mut new_transition = ActiveTransition::new(
-                    prop.clone(),
-                    spec,
-                    from_val,
-                    new_val,
-                    now_ms,
-                );
+                let mut new_transition =
+                    ActiveTransition::new(prop.clone(), spec, from_val, new_val, now_ms);
 
                 if is_reversal {
-                    let elapsed = ((now_ms - existing.start_time_ms) as f32 - existing.delay_ms)
-                        .max(0.0);
+                    let elapsed =
+                        ((now_ms - existing.start_time_ms) as f32 - existing.delay_ms).max(0.0);
                     let p = if existing.duration_ms > 0.0 {
                         (elapsed / existing.duration_ms).clamp(0.0, 1.0)
                     } else {
@@ -626,13 +625,8 @@ impl TransitionManager {
                 active_list[idx] = new_transition;
             } else {
                 // New transition starting from old_val
-                let mut new_transition = ActiveTransition::new(
-                    prop.clone(),
-                    spec,
-                    old_val,
-                    new_val,
-                    now_ms,
-                );
+                let mut new_transition =
+                    ActiveTransition::new(prop.clone(), spec, old_val, new_val, now_ms);
                 events.extend(new_transition.step(node_id, now_ms));
                 active_list.push(new_transition);
             }

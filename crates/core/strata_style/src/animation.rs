@@ -13,7 +13,8 @@ use crate::transition::{
 };
 use crate::types::{
     AnimationDirection, AnimationFillMode, AnimationIterationCount, AnimationPlayState,
-    AnimationSpec, AnimationTimeline, ComputedStyle, Dimension, TransformOp, TransitionEasing, TransitionProperty,
+    AnimationSpec, AnimationTimeline, ComputedStyle, Dimension, TransformOp, TransitionEasing,
+    TransitionProperty,
 };
 
 /// A compiled stop in a keyframe animation timeline.
@@ -53,7 +54,11 @@ impl KeyframeTrack {
             });
         }
 
-        stops.sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal));
+        stops.sort_by(|a, b| {
+            a.offset
+                .partial_cmp(&b.offset)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         Self {
             name: rule.name.clone(),
@@ -95,7 +100,11 @@ impl KeyframeTrack {
         }
 
         let span = k2.offset - k1.offset;
-        let mut alpha = if span > 0.0 { (p - k1.offset) / span } else { 0.0 };
+        let mut alpha = if span > 0.0 {
+            (p - k1.offset) / span
+        } else {
+            0.0
+        };
 
         // Apply segment timing function if specified on the starting keyframe
         if let Some(easing) = k1.timing_function {
@@ -145,7 +154,10 @@ fn declaration_to_animatable(decl: &Declaration) -> Option<(TransitionProperty, 
         }
         "transform" => {
             let ops = parse_transform_list(val_str);
-            Some((TransitionProperty::Transform, AnimatableValue::Transform(ops)))
+            Some((
+                TransitionProperty::Transform,
+                AnimatableValue::Transform(ops),
+            ))
         }
         "rotate" => {
             let rad = parse_angle_rad(val_str)?;
@@ -157,7 +169,10 @@ fn declaration_to_animatable(decl: &Declaration) -> Option<(TransitionProperty, 
         "scale" => {
             let parts: Vec<&str> = val_str.split_whitespace().collect();
             let first = parts.first().and_then(|s| s.parse::<f32>().ok())?;
-            let second = parts.get(1).and_then(|s| s.parse::<f32>().ok()).unwrap_or(first);
+            let second = parts
+                .get(1)
+                .and_then(|s| s.parse::<f32>().ok())
+                .unwrap_or(first);
             Some((
                 TransitionProperty::Transform,
                 AnimatableValue::Transform(vec![TransformOp::Scale(first, second)]),
@@ -189,7 +204,10 @@ fn declaration_to_animatable(decl: &Declaration) -> Option<(TransitionProperty, 
         }
         "background-color" | "background" => {
             let c = parse_color(val_str)?;
-            Some((TransitionProperty::BackgroundColor, AnimatableValue::Color(c)))
+            Some((
+                TransitionProperty::BackgroundColor,
+                AnimatableValue::Color(c),
+            ))
         }
         "border-color" => {
             let c = parse_color(val_str)?;
@@ -197,8 +215,16 @@ fn declaration_to_animatable(decl: &Declaration) -> Option<(TransitionProperty, 
         }
         "border-radius" => {
             let insets = parse_edge_insets_px(val_str)?;
-            let br = crate::types::BorderRadius::new(insets.top, insets.right, insets.bottom, insets.left);
-            Some((TransitionProperty::BorderRadius, AnimatableValue::BorderRadius(br)))
+            let br = crate::types::BorderRadius::new(
+                insets.top,
+                insets.right,
+                insets.bottom,
+                insets.left,
+            );
+            Some((
+                TransitionProperty::BorderRadius,
+                AnimatableValue::BorderRadius(br),
+            ))
         }
         "margin" => {
             let m = parse_edge_insets_px(val_str)?;
@@ -711,10 +737,30 @@ impl AnimationManager {
             .any(|anims| anims.iter().any(|a| !a.is_finished))
     }
 
+    /// Returns true when any running keyframe animation targets a property that participates in
+    /// box layout, so the layout tree must be recomputed as the value changes.
+    pub fn has_layout_affecting_animations(&self) -> bool {
+        self.node_animations.values().any(|list| {
+            list.iter().filter(|anim| !anim.is_finished).any(|anim| {
+                anim.current_values.keys().any(|property| {
+                    matches!(
+                        property,
+                        TransitionProperty::Width
+                            | TransitionProperty::Height
+                            | TransitionProperty::Margin
+                            | TransitionProperty::Padding
+                            | TransitionProperty::BorderWidth
+                    )
+                })
+            })
+        })
+    }
+
     /// Returns true if there are any active time-based animations (requiring continuous timer ticks).
     pub fn has_time_based_animations(&self) -> bool {
         self.node_animations.values().any(|list| {
-            list.iter().any(|a| !a.is_finished && matches!(a.spec.timeline, AnimationTimeline::Time))
+            list.iter()
+                .any(|a| !a.is_finished && matches!(a.spec.timeline, AnimationTimeline::Time))
         })
     }
 
@@ -728,7 +774,10 @@ impl AnimationManager {
         let mut events = Vec::new();
         if let Some(list) = self.node_animations.get_mut(&node_id) {
             for anim in list.iter_mut() {
-                if matches!(anim.spec.timeline, AnimationTimeline::Scroll(..) | AnimationTimeline::View(..)) {
+                if matches!(
+                    anim.spec.timeline,
+                    AnimationTimeline::Scroll(..) | AnimationTimeline::View(..)
+                ) {
                     events.extend(anim.step_progress(node_id, progress, base_style));
                 }
             }
@@ -767,7 +816,11 @@ impl AnimationManager {
         let mut i = 0;
         while i < active_list.len() {
             let active_name = &active_list[i].name;
-            if !style.animations.iter().any(|spec| &spec.name == active_name) {
+            if !style
+                .animations
+                .iter()
+                .any(|spec| &spec.name == active_name)
+            {
                 let removed = active_list.remove(i);
                 if !removed.end_emitted {
                     events.push(AnimationLifecycleEvent::Cancel {

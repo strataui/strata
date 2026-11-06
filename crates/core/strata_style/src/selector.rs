@@ -139,9 +139,25 @@ impl CompoundSelector {
                     if chars.peek() == Some(&':') {
                         chars.next();
                     }
-                    let ident = parse_ident(&mut chars);
+                    let mut ident = parse_ident(&mut chars);
                     if ident.is_empty() {
                         return Err("Empty pseudo-class after ':' in CSS".to_string());
+                    }
+                    if chars.peek() == Some(&'(') {
+                        chars.next();
+                        let mut depth = 1;
+                        ident.push('(');
+                        while let Some(ch) = chars.next() {
+                            ident.push(ch);
+                            if ch == '(' {
+                                depth += 1;
+                            } else if ch == ')' {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                        }
                     }
                     parts.push(SelectorPart::PseudoClass(ident));
                     spec += Specificity::CLASS;
@@ -158,12 +174,18 @@ impl CompoundSelector {
                     spec += Specificity::TYPE;
                 }
                 _ => {
-                    return Err(format!("Unexpected character '{}' in compound selector '{}'", c, trimmed));
+                    return Err(format!(
+                        "Unexpected character '{}' in compound selector '{}'",
+                        c, trimmed
+                    ));
                 }
             }
         }
 
-        Ok(Self { parts, specificity: spec })
+        Ok(Self {
+            parts,
+            specificity: spec,
+        })
     }
 
     /// Evaluates whether this compound selector matches an element's attributes and pseudo-state.
@@ -188,7 +210,10 @@ impl CompoundSelector {
                     _ => return false,
                 },
                 SelectorPart::Class(expected_class) => {
-                    if !classes.iter().any(|c| c.as_ref() == expected_class.as_str()) {
+                    if !classes
+                        .iter()
+                        .any(|c| c.as_ref() == expected_class.as_str())
+                    {
                         return false;
                     }
                 }
@@ -374,7 +399,13 @@ impl Selector {
     }
 
     /// Evaluates whether this selector matches an element without ancestors (simple matching).
-    pub fn matches(&self, tag: &str, classes: &[&str], id: Option<&str>, state: &PseudoState) -> bool {
+    pub fn matches(
+        &self,
+        tag: &str,
+        classes: &[&str],
+        id: Option<&str>,
+        state: &PseudoState,
+    ) -> bool {
         self.target.matches(tag, classes, id, &[], state)
     }
 
@@ -387,7 +418,13 @@ impl Selector {
         state: &PseudoState,
     ) -> bool {
         // Step 1: Target element must match target compound selector
-        if !self.target.matches(target.tag, target.classes, target.id, target.attributes, state) {
+        if !self.target.matches(
+            target.tag,
+            target.classes,
+            target.id,
+            target.attributes,
+            state,
+        ) {
             return false;
         }
 
@@ -407,7 +444,13 @@ impl Selector {
                     }
                     cur_ancestor_idx -= 1;
                     let parent = &ancestors[cur_ancestor_idx];
-                    if !compound.matches(parent.tag, parent.classes, parent.id, parent.attributes, state) {
+                    if !compound.matches(
+                        parent.tag,
+                        parent.classes,
+                        parent.id,
+                        parent.attributes,
+                        state,
+                    ) {
                         return false;
                     }
                 }

@@ -99,7 +99,10 @@ impl MediaQuery {
         let mut negated = false;
         let mut rest = trimmed;
 
-        if let Some(after_not) = rest.strip_prefix("not").or_else(|| rest.strip_prefix("NOT")) {
+        if let Some(after_not) = rest
+            .strip_prefix("not")
+            .or_else(|| rest.strip_prefix("NOT"))
+        {
             if after_not.starts_with(char::is_whitespace) {
                 negated = true;
                 rest = after_not.trim();
@@ -107,7 +110,10 @@ impl MediaQuery {
         }
 
         // Optional `only` prefix per CSS syntax
-        if let Some(after_only) = rest.strip_prefix("only").or_else(|| rest.strip_prefix("ONLY")) {
+        if let Some(after_only) = rest
+            .strip_prefix("only")
+            .or_else(|| rest.strip_prefix("ONLY"))
+        {
             if after_only.starts_with(char::is_whitespace) {
                 rest = after_only.trim();
             }
@@ -117,7 +123,11 @@ impl MediaQuery {
         let mut features = Vec::new();
 
         // Split by 'and' or 'AND'
-        let parts: Vec<&str> = rest.split(" and ").flat_map(|p| p.split(" AND ")).map(|s| s.trim()).collect();
+        let parts: Vec<&str> = rest
+            .split(" and ")
+            .flat_map(|p| p.split(" AND "))
+            .map(|s| s.trim())
+            .collect();
 
         for (idx, part) in parts.iter().enumerate() {
             if part.starts_with('(') && part.ends_with(')') {
@@ -164,7 +174,9 @@ impl MediaQueryList {
     pub fn parse(input: &str) -> Result<Self, String> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
-            return Ok(Self { queries: Vec::new() });
+            return Ok(Self {
+                queries: Vec::new(),
+            });
         }
 
         let mut queries = Vec::new();

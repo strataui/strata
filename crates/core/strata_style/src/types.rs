@@ -1,9 +1,9 @@
 //! Core CSS style types, layout enums, and ComputedStyle representation.
 
+use std::sync::Arc;
 pub use strata_primitives::color::Rgba;
 pub use strata_primitives::geom::{EdgeInsets, Matrix4x4};
 pub use strata_primitives::AtomId;
-use std::sync::Arc;
 
 pub type Color = Rgba;
 pub type CustomPropertyMap = Arc<Vec<(AtomId, AtomId)>>;
@@ -115,7 +115,12 @@ impl Dimension {
     }
 
     /// Resolves the dimension into concrete pixels given a context.
-    pub fn resolve_px(&self, parent_size: f32, root_font_size: f32, current_font_size: f32) -> Option<f32> {
+    pub fn resolve_px(
+        &self,
+        parent_size: f32,
+        root_font_size: f32,
+        current_font_size: f32,
+    ) -> Option<f32> {
         match *self {
             Self::Auto => None,
             Self::Px(px) => Some(px),
@@ -124,18 +129,16 @@ impl Dimension {
             Self::Vh(vh) => Some(vh),
             Self::Rem(rem) => Some(rem * root_font_size),
             Self::Em(em) => Some(em * current_font_size),
-            Self::Calc(id) => {
-                crate::calc::get_calc(id).map(|expr| {
-                    let ctx = crate::calc::CalcContext {
-                        parent_size,
-                        root_font_size,
-                        current_font_size,
-                        viewport_width: 1920.0,
-                        viewport_height: 1080.0,
-                    };
-                    expr.eval(&ctx)
-                })
-            }
+            Self::Calc(id) => crate::calc::get_calc(id).map(|expr| {
+                let ctx = crate::calc::CalcContext {
+                    parent_size,
+                    root_font_size,
+                    current_font_size,
+                    viewport_width: 1920.0,
+                    viewport_height: 1080.0,
+                };
+                expr.eval(&ctx)
+            }),
             Self::MinContent | Self::MaxContent | Self::FitContent(_) => None,
         }
     }
@@ -228,7 +231,12 @@ impl BorderRadius {
     pub const ZERO: Self = Self::all(0.0);
 
     pub const fn new(top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32) -> Self {
-        Self { top_left, top_right, bottom_right, bottom_left }
+        Self {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        }
     }
 
     pub const fn all(radius: f32) -> Self {
@@ -310,7 +318,10 @@ impl BlendMode {
     /// Returns true if this blend mode evaluates color channels independently.
     #[inline]
     pub fn is_separable(&self) -> bool {
-        !matches!(self, Self::Hue | Self::Saturation | Self::Color | Self::Luminosity)
+        !matches!(
+            self,
+            Self::Hue | Self::Saturation | Self::Color | Self::Luminosity
+        )
     }
 }
 
@@ -599,8 +610,20 @@ impl TransitionEasing {
             Self::EaseIn => cubic_bezier_solve(t, 0.42, 0.0, 1.0, 1.0),
             Self::EaseOut => cubic_bezier_solve(t, 0.0, 0.0, 0.58, 1.0),
             Self::EaseInOut => cubic_bezier_solve(t, 0.42, 0.0, 0.58, 1.0),
-            Self::StepStart => if t > 0.0 { 1.0 } else { 0.0 },
-            Self::StepEnd => if t >= 1.0 { 1.0 } else { 0.0 },
+            Self::StepStart => {
+                if t > 0.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Self::StepEnd => {
+                if t >= 1.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             Self::Steps(n, pos) => evaluate_steps(t, *n, *pos),
             Self::CubicBezier(x1, y1, x2, y2) => cubic_bezier_solve(t, *x1, *y1, *x2, *y2),
         }
@@ -680,9 +703,8 @@ pub fn cubic_bezier_solve(x: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
     let mut u = x;
     for _ in 0..8 {
         let one_minus_u = 1.0 - u;
-        let bx = 3.0 * one_minus_u * one_minus_u * u * x1
-            + 3.0 * one_minus_u * u * u * x2
-            + u * u * u;
+        let bx =
+            3.0 * one_minus_u * one_minus_u * u * x1 + 3.0 * one_minus_u * u * u * x2 + u * u * u;
         let error = bx - x;
         if error.abs() < 1e-5 {
             break;
@@ -698,9 +720,7 @@ pub fn cubic_bezier_solve(x: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
     }
 
     let one_minus_u = 1.0 - u;
-    3.0 * one_minus_u * one_minus_u * u * y1
-        + 3.0 * one_minus_u * u * u * y2
-        + u * u * u
+    3.0 * one_minus_u * one_minus_u * u * y1 + 3.0 * one_minus_u * u * u * y2 + u * u * u
 }
 
 /// Evaluates stepped progress for `steps(n, position)`.
@@ -1101,8 +1121,8 @@ pub enum TransformOp {
     RotateY(f32),
     RotateZ(f32),
     Rotate3d(f32, f32, f32, f32), // x, y, z, rad
-    Skew(f32, f32), // Radians (ax, ay)
-    Perspective(f32), // Pixels
+    Skew(f32, f32),               // Radians (ax, ay)
+    Perspective(f32),             // Pixels
     Matrix([f32; 6]),
     Matrix3d([f32; 16]),
 }
@@ -1168,11 +1188,9 @@ impl TransformOp {
     pub fn to_identity(&self) -> Self {
         match self {
             Self::Translate(..) => Self::Translate(Dimension::Px(0.0), Dimension::Px(0.0)),
-            Self::Translate3d(..) => Self::Translate3d(
-                Dimension::Px(0.0),
-                Dimension::Px(0.0),
-                Dimension::Px(0.0),
-            ),
+            Self::Translate3d(..) => {
+                Self::Translate3d(Dimension::Px(0.0), Dimension::Px(0.0), Dimension::Px(0.0))
+            }
             Self::Scale(..) => Self::Scale(1.0, 1.0),
             Self::Scale3d(..) => Self::Scale3d(1.0, 1.0, 1.0),
             Self::Rotate(..) => Self::Rotate(0.0),
@@ -1184,10 +1202,7 @@ impl TransformOp {
             Self::Perspective(d) => Self::Perspective(*d),
             Self::Matrix(..) => Self::Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
             Self::Matrix3d(..) => Self::Matrix3d([
-                1.0, 0.0, 0.0, 0.0,
-                0.0, 1.0, 0.0, 0.0,
-                0.0, 0.0, 1.0, 0.0,
-                0.0, 0.0, 0.0, 1.0,
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
             ]),
         }
     }
@@ -1336,6 +1351,7 @@ pub struct ComputedStyle {
     pub color: Color,
     pub font_family: AtomId,
     pub font_size: f32,
+    pub root_font_size: f32,
     pub font_weight: FontWeight,
     pub font_style: FontStyle,
     pub text_align: TextAlign,
@@ -1418,7 +1434,12 @@ impl Default for ComputedStyle {
             margin_auto_bottom: false,
             margin_auto_left: false,
             padding: EdgeInsets::ZERO,
-            insets: EdgeInsets::new(Dimension::Auto, Dimension::Auto, Dimension::Auto, Dimension::Auto),
+            insets: EdgeInsets::new(
+                Dimension::Auto,
+                Dimension::Auto,
+                Dimension::Auto,
+                Dimension::Auto,
+            ),
             z_index: None,
 
             flex_direction: FlexDirection::Row,
@@ -1460,6 +1481,7 @@ impl Default for ComputedStyle {
             color: Color::BLACK,
             font_family: AtomId::FONT_SANS,
             font_size: 16.0,
+            root_font_size: 16.0,
             font_weight: FontWeight::Normal,
             font_style: FontStyle::Normal,
             text_align: TextAlign::Left,
@@ -1529,7 +1551,10 @@ impl ComputedStyle {
         self.mix_blend_mode != BlendMode::Normal
             || self.isolation == Isolation::Isolate
             || self.filter.as_ref().map_or(false, |f| !f.is_empty())
-            || self.backdrop_filter.as_ref().map_or(false, |b| !b.is_empty())
+            || self
+                .backdrop_filter
+                .as_ref()
+                .map_or(false, |b| !b.is_empty())
             || self.clip_path.as_ref().map_or(false, |c| !c.is_none())
     }
 
@@ -1557,6 +1582,7 @@ impl ComputedStyle {
         child.color = parent.color;
         child.font_family = parent.font_family;
         child.font_size = parent.font_size;
+        child.root_font_size = parent.root_font_size;
         child.font_weight = parent.font_weight;
         child.font_style = parent.font_style;
         child.text_align = parent.text_align;

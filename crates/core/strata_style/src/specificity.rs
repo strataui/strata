@@ -16,14 +16,44 @@ pub struct Specificity {
 }
 
 impl Specificity {
-    pub const ZERO: Self = Self { inline: 0, id_count: 0, class_count: 0, type_count: 0 };
-    pub const INLINE: Self = Self { inline: 1, id_count: 0, class_count: 0, type_count: 0 };
-    pub const ID: Self = Self { inline: 0, id_count: 1, class_count: 0, type_count: 0 };
-    pub const CLASS: Self = Self { inline: 0, id_count: 0, class_count: 1, type_count: 0 };
-    pub const TYPE: Self = Self { inline: 0, id_count: 0, class_count: 0, type_count: 1 };
+    pub const ZERO: Self = Self {
+        inline: 0,
+        id_count: 0,
+        class_count: 0,
+        type_count: 0,
+    };
+    pub const INLINE: Self = Self {
+        inline: 1,
+        id_count: 0,
+        class_count: 0,
+        type_count: 0,
+    };
+    pub const ID: Self = Self {
+        inline: 0,
+        id_count: 1,
+        class_count: 0,
+        type_count: 0,
+    };
+    pub const CLASS: Self = Self {
+        inline: 0,
+        id_count: 0,
+        class_count: 1,
+        type_count: 0,
+    };
+    pub const TYPE: Self = Self {
+        inline: 0,
+        id_count: 0,
+        class_count: 0,
+        type_count: 1,
+    };
 
     pub const fn new(inline: u8, id_count: u16, class_count: u16, type_count: u16) -> Self {
-        Self { inline, id_count, class_count, type_count }
+        Self {
+            inline,
+            id_count,
+            class_count,
+            type_count,
+        }
     }
 }
 

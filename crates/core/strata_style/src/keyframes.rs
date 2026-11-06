@@ -45,7 +45,9 @@ impl CubicBezier {
     #[inline(always)]
     fn sample_x_derivative(&self, t: f32) -> f32 {
         let inv_t = 1.0 - t;
-        3.0 * inv_t * inv_t * self.x1 + 6.0 * inv_t * t * (self.x2 - self.x1) + 3.0 * t * t * (1.0 - self.x2)
+        3.0 * inv_t * inv_t * self.x1
+            + 6.0 * inv_t * t * (self.x2 - self.x1)
+            + 3.0 * t * t * (1.0 - self.x2)
     }
 
     /// Evaluates Bézier Y coordinate at parameter t.
@@ -182,7 +184,11 @@ impl KeyframeAnimation {
         timing_function: CubicBezier,
         mut keyframes: Vec<Keyframe>,
     ) -> Self {
-        keyframes.sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal));
+        keyframes.sort_by(|a, b| {
+            a.offset
+                .partial_cmp(&b.offset)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         Self {
             name: name.into(),
             duration_seconds,
@@ -235,7 +241,11 @@ impl KeyframeAnimation {
         }
 
         let span = k2.offset - k1.offset;
-        let alpha = if span > 0.0 { (progress - k1.offset) / span } else { 0.0 };
+        let alpha = if span > 0.0 {
+            (progress - k1.offset) / span
+        } else {
+            0.0
+        };
 
         let mut result = Vec::new();
 

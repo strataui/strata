@@ -611,6 +611,21 @@ impl TailwindEngine {
             }
         }
         if let Some(rest) = class.strip_prefix("text-") {
+            if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                if let Some(px_str) = inner.strip_suffix("px") {
+                    if let Ok(px) = px_str.parse::<f32>() {
+                        style.font_size = px;
+                        style.line_height = 1.35;
+                        return;
+                    }
+                } else if let Some(rem_str) = inner.strip_suffix("rem") {
+                    if let Ok(rem) = rem_str.parse::<f32>() {
+                        style.font_size = rem * 16.0;
+                        style.line_height = 1.35;
+                        return;
+                    }
+                }
+            }
             let (color_part, opacity) = split_opacity(rest);
             if let Some(c) = lookup_color_or_arbitrary(color_part, opacity) {
                 style.color = c;
@@ -919,12 +934,60 @@ impl TailwindEngine {
                 style.border_width = EdgeInsets::ZERO;
                 return;
             }
+            "border-t-0" => {
+                style.border_width.top = 0.0;
+                return;
+            }
+            "border-b-0" => {
+                style.border_width.bottom = 0.0;
+                return;
+            }
+            "border-l-0" => {
+                style.border_width.left = 0.0;
+                return;
+            }
+            "border-r-0" => {
+                style.border_width.right = 0.0;
+                return;
+            }
             "border-2" => {
                 style.border_width = EdgeInsets::all(2.0);
                 return;
             }
+            "border-t-2" => {
+                style.border_width.top = 2.0;
+                return;
+            }
+            "border-b-2" => {
+                style.border_width.bottom = 2.0;
+                return;
+            }
+            "border-l-2" => {
+                style.border_width.left = 2.0;
+                return;
+            }
+            "border-r-2" => {
+                style.border_width.right = 2.0;
+                return;
+            }
             "border-4" => {
                 style.border_width = EdgeInsets::all(4.0);
+                return;
+            }
+            "border-t-4" => {
+                style.border_width.top = 4.0;
+                return;
+            }
+            "border-b-4" => {
+                style.border_width.bottom = 4.0;
+                return;
+            }
+            "border-l-4" => {
+                style.border_width.left = 4.0;
+                return;
+            }
+            "border-r-4" => {
+                style.border_width.right = 4.0;
                 return;
             }
             "border-8" => {
@@ -1613,15 +1676,18 @@ impl TailwindEngine {
             return;
         }
         if class == "timeline-scroll" {
-            style.animation_timeline = AnimationTimeline::Scroll(ScrollTimelineSource::Nearest, ScrollAxis::Block);
+            style.animation_timeline =
+                AnimationTimeline::Scroll(ScrollTimelineSource::Nearest, ScrollAxis::Block);
             return;
         }
         if class == "timeline-scroll-root" {
-            style.animation_timeline = AnimationTimeline::Scroll(ScrollTimelineSource::Root, ScrollAxis::Block);
+            style.animation_timeline =
+                AnimationTimeline::Scroll(ScrollTimelineSource::Root, ScrollAxis::Block);
             return;
         }
         if class == "timeline-scroll-inline" {
-            style.animation_timeline = AnimationTimeline::Scroll(ScrollTimelineSource::Nearest, ScrollAxis::Inline);
+            style.animation_timeline =
+                AnimationTimeline::Scroll(ScrollTimelineSource::Nearest, ScrollAxis::Inline);
             return;
         }
         if class == "timeline-view" {
@@ -1700,7 +1766,9 @@ impl TailwindEngine {
                 }
             };
             if let Some(f) = factor {
-                style.transform.retain(|op| !matches!(op, TransformOp::Scale(_, _)));
+                style
+                    .transform
+                    .retain(|op| !matches!(op, TransformOp::Scale(_, _)));
                 style.transform.push(TransformOp::Scale(f, f));
                 return;
             }
@@ -1723,7 +1791,9 @@ impl TailwindEngine {
                 }
             };
             if let Some(rad) = angle_rad {
-                style.transform.retain(|op| !matches!(op, TransformOp::Rotate(_)));
+                style
+                    .transform
+                    .retain(|op| !matches!(op, TransformOp::Rotate(_)));
                 style.transform.push(TransformOp::Rotate(rad));
                 return;
             }
@@ -1744,7 +1814,9 @@ impl TailwindEngine {
                 }
             };
             if let Some(rad) = angle_rad {
-                style.transform.retain(|op| !matches!(op, TransformOp::Rotate(_)));
+                style
+                    .transform
+                    .retain(|op| !matches!(op, TransformOp::Rotate(_)));
                 style.transform.push(TransformOp::Rotate(rad));
                 return;
             }
@@ -1761,7 +1833,9 @@ impl TailwindEngine {
                 other => resolve_sizing_dimension(other),
             };
             if let Some(d) = dim {
-                style.transform.push(TransformOp::Translate(d, Dimension::Px(0.0)));
+                style
+                    .transform
+                    .push(TransformOp::Translate(d, Dimension::Px(0.0)));
                 return;
             }
         }
@@ -1776,7 +1850,9 @@ impl TailwindEngine {
                 other => resolve_spacing(other).map(|px| Dimension::Px(-px)),
             };
             if let Some(d) = dim {
-                style.transform.push(TransformOp::Translate(d, Dimension::Px(0.0)));
+                style
+                    .transform
+                    .push(TransformOp::Translate(d, Dimension::Px(0.0)));
                 return;
             }
         }
@@ -1791,7 +1867,9 @@ impl TailwindEngine {
                 other => resolve_sizing_dimension(other),
             };
             if let Some(d) = dim {
-                style.transform.push(TransformOp::Translate(Dimension::Px(0.0), d));
+                style
+                    .transform
+                    .push(TransformOp::Translate(Dimension::Px(0.0), d));
                 return;
             }
         }
@@ -1806,22 +1884,60 @@ impl TailwindEngine {
                 other => resolve_spacing(other).map(|px| Dimension::Px(-px)),
             };
             if let Some(d) = dim {
-                style.transform.push(TransformOp::Translate(Dimension::Px(0.0), d));
+                style
+                    .transform
+                    .push(TransformOp::Translate(Dimension::Px(0.0), d));
                 return;
             }
         }
 
         if let Some(rest) = class.strip_prefix("origin-") {
             let origin = match rest {
-                "center" => Some(TransformOrigin { x: Dimension::Percent(50.0), y: Dimension::Percent(50.0), z: 0.0 }),
-                "top" => Some(TransformOrigin { x: Dimension::Percent(50.0), y: Dimension::Percent(0.0), z: 0.0 }),
-                "top-right" => Some(TransformOrigin { x: Dimension::Percent(100.0), y: Dimension::Percent(0.0), z: 0.0 }),
-                "right" => Some(TransformOrigin { x: Dimension::Percent(100.0), y: Dimension::Percent(50.0), z: 0.0 }),
-                "bottom-right" => Some(TransformOrigin { x: Dimension::Percent(100.0), y: Dimension::Percent(100.0), z: 0.0 }),
-                "bottom" => Some(TransformOrigin { x: Dimension::Percent(50.0), y: Dimension::Percent(100.0), z: 0.0 }),
-                "bottom-left" => Some(TransformOrigin { x: Dimension::Percent(0.0), y: Dimension::Percent(100.0), z: 0.0 }),
-                "left" => Some(TransformOrigin { x: Dimension::Percent(0.0), y: Dimension::Percent(50.0), z: 0.0 }),
-                "top-left" => Some(TransformOrigin { x: Dimension::Percent(0.0), y: Dimension::Percent(0.0), z: 0.0 }),
+                "center" => Some(TransformOrigin {
+                    x: Dimension::Percent(50.0),
+                    y: Dimension::Percent(50.0),
+                    z: 0.0,
+                }),
+                "top" => Some(TransformOrigin {
+                    x: Dimension::Percent(50.0),
+                    y: Dimension::Percent(0.0),
+                    z: 0.0,
+                }),
+                "top-right" => Some(TransformOrigin {
+                    x: Dimension::Percent(100.0),
+                    y: Dimension::Percent(0.0),
+                    z: 0.0,
+                }),
+                "right" => Some(TransformOrigin {
+                    x: Dimension::Percent(100.0),
+                    y: Dimension::Percent(50.0),
+                    z: 0.0,
+                }),
+                "bottom-right" => Some(TransformOrigin {
+                    x: Dimension::Percent(100.0),
+                    y: Dimension::Percent(100.0),
+                    z: 0.0,
+                }),
+                "bottom" => Some(TransformOrigin {
+                    x: Dimension::Percent(50.0),
+                    y: Dimension::Percent(100.0),
+                    z: 0.0,
+                }),
+                "bottom-left" => Some(TransformOrigin {
+                    x: Dimension::Percent(0.0),
+                    y: Dimension::Percent(100.0),
+                    z: 0.0,
+                }),
+                "left" => Some(TransformOrigin {
+                    x: Dimension::Percent(0.0),
+                    y: Dimension::Percent(50.0),
+                    z: 0.0,
+                }),
+                "top-left" => Some(TransformOrigin {
+                    x: Dimension::Percent(0.0),
+                    y: Dimension::Percent(0.0),
+                    z: 0.0,
+                }),
                 _ => None,
             };
             if let Some(o) = origin {
@@ -2007,41 +2123,68 @@ fn resolve_visual_effects(class: &str, style: &mut ComputedStyle) -> bool {
         return true;
     }
     if class == "backdrop-blur-none" {
-        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(0.0));
+        add_filter_op(
+            &mut style.backdrop_filter,
+            crate::effects::FilterOp::Blur(0.0),
+        );
         return true;
     }
     if class == "backdrop-blur-sm" {
-        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(4.0));
+        add_filter_op(
+            &mut style.backdrop_filter,
+            crate::effects::FilterOp::Blur(4.0),
+        );
         return true;
     }
     if class == "backdrop-blur" {
-        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(8.0));
+        add_filter_op(
+            &mut style.backdrop_filter,
+            crate::effects::FilterOp::Blur(8.0),
+        );
         return true;
     }
     if class == "backdrop-blur-md" {
-        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(12.0));
+        add_filter_op(
+            &mut style.backdrop_filter,
+            crate::effects::FilterOp::Blur(12.0),
+        );
         return true;
     }
     if class == "backdrop-blur-lg" {
-        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(16.0));
+        add_filter_op(
+            &mut style.backdrop_filter,
+            crate::effects::FilterOp::Blur(16.0),
+        );
         return true;
     }
     if class == "backdrop-blur-xl" {
-        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(24.0));
+        add_filter_op(
+            &mut style.backdrop_filter,
+            crate::effects::FilterOp::Blur(24.0),
+        );
         return true;
     }
     if class == "backdrop-blur-2xl" {
-        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(40.0));
+        add_filter_op(
+            &mut style.backdrop_filter,
+            crate::effects::FilterOp::Blur(40.0),
+        );
         return true;
     }
     if class == "backdrop-blur-3xl" {
-        add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(64.0));
+        add_filter_op(
+            &mut style.backdrop_filter,
+            crate::effects::FilterOp::Blur(64.0),
+        );
         return true;
     }
     if let Some(rest) = class.strip_prefix("backdrop-blur-[") {
         if let Some(inner) = rest.strip_suffix(']') {
             if let Some(px) = resolve_pixel_length(inner) {
-                add_filter_op(&mut style.backdrop_filter, crate::effects::FilterOp::Blur(px));
+                add_filter_op(
+                    &mut style.backdrop_filter,
+                    crate::effects::FilterOp::Blur(px),
+                );
                 return true;
             }
         }
@@ -2059,7 +2202,10 @@ fn resolve_visual_effects(class: &str, style: &mut ComputedStyle) -> bool {
     false
 }
 
-fn add_filter_op(target: &mut Option<crate::effects::BackdropFilter>, op: crate::effects::FilterOp) {
+fn add_filter_op(
+    target: &mut Option<crate::effects::BackdropFilter>,
+    op: crate::effects::FilterOp,
+) {
     if let Some(filter) = target.as_mut() {
         filter.operations.push(op);
     } else {
@@ -2167,6 +2313,10 @@ fn resolve_sizing_dimension(token: &str) -> Option<Dimension> {
     match token {
         "full" => return Some(Dimension::Percent(100.0)),
         "screen" => return Some(Dimension::Vh(100.0)),
+        "none" => return Some(Dimension::Auto),
+        "min" => return Some(Dimension::MinContent),
+        "max" => return Some(Dimension::MaxContent),
+        "fit" => return Some(Dimension::FitContent(0.0)),
         "0" => return Some(Dimension::Px(0.0)),
         "xs" => return Some(Dimension::Px(320.0)),
         "sm" => return Some(Dimension::Px(384.0)),

@@ -10,9 +10,8 @@ use std::sync::{Arc, RwLock};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CalcId(pub u32);
 
-static CALC_INTERNER: std::sync::LazyLock<RwLock<Vec<Arc<CalcExpr>>>> = std::sync::LazyLock::new(|| {
-    RwLock::new(Vec::new())
-});
+static CALC_INTERNER: std::sync::LazyLock<RwLock<Vec<Arc<CalcExpr>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(Vec::new()));
 
 /// Interns a calc expression AST into the global cache and returns its lightweight CalcId.
 pub fn intern_calc(expr: CalcExpr) -> CalcId {
@@ -141,7 +140,10 @@ pub fn parse_calc(input: &str) -> Result<CalcExpr, String> {
     let expr = parse_add_sub(&mut cursor)?;
 
     if !cursor.is_eof() {
-        return Err(format!("Unexpected tokens remaining in calc(): {:?}", cursor.peek()));
+        return Err(format!(
+            "Unexpected tokens remaining in calc(): {:?}",
+            cursor.peek()
+        ));
     }
 
     Ok(expr)
@@ -216,7 +218,12 @@ fn tokenize_calc(s: &str) -> Result<Vec<Token>, String> {
             }
             _ if b.is_ascii_digit() || b == b'.' => {
                 let start = i;
-                while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.' || bytes[i].is_ascii_alphabetic() || bytes[i] == b'%') {
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_digit()
+                        || bytes[i] == b'.'
+                        || bytes[i].is_ascii_alphabetic()
+                        || bytes[i] == b'%')
+                {
                     i += 1;
                 }
                 let raw = &s[start..i];
@@ -241,7 +248,10 @@ fn parse_dimension_token(raw: &str) -> Option<Dimension> {
     if raw.ends_with("px") {
         raw[..raw.len() - 2].parse::<f32>().ok().map(Dimension::Px)
     } else if raw.ends_with('%') {
-        raw[..raw.len() - 1].parse::<f32>().ok().map(Dimension::Percent)
+        raw[..raw.len() - 1]
+            .parse::<f32>()
+            .ok()
+            .map(Dimension::Percent)
     } else if raw.ends_with("rem") {
         raw[..raw.len() - 3].parse::<f32>().ok().map(Dimension::Rem)
     } else if raw.ends_with("em") {
@@ -290,7 +300,12 @@ fn parse_mul_div(cursor: &mut TokenCursor) -> Result<CalcExpr, String> {
                     Some(Token::Number(scalar)) => {
                         left = CalcExpr::Mul(Box::new(left), scalar);
                     }
-                    other => return Err(format!("Expected scalar number after '*', found {:?}", other)),
+                    other => {
+                        return Err(format!(
+                            "Expected scalar number after '*', found {:?}",
+                            other
+                        ))
+                    }
                 }
             }
             Token::Slash => {
@@ -299,7 +314,12 @@ fn parse_mul_div(cursor: &mut TokenCursor) -> Result<CalcExpr, String> {
                     Some(Token::Number(scalar)) => {
                         left = CalcExpr::Div(Box::new(left), scalar);
                     }
-                    other => return Err(format!("Expected scalar number after '/', found {:?}", other)),
+                    other => {
+                        return Err(format!(
+                            "Expected scalar number after '/', found {:?}",
+                            other
+                        ))
+                    }
                 }
             }
             _ => break,

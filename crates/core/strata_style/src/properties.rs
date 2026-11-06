@@ -1,7 +1,7 @@
 //! CSS Properties and Values API Level 1 (Houdini `@property`) registration and syntax engine.
 
-use std::collections::HashMap;
 use crate::types::Dimension;
+use std::collections::HashMap;
 
 /// Syntax descriptor for a registered custom CSS property.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,7 +100,13 @@ impl PropertyRegistry {
                 let c1 = crate::parser::parse_color(from)?;
                 let c2 = crate::parser::parse_color(to)?;
                 let res = crate::transition::interpolate_color(c1, c2, t);
-                Some(format!("rgba({}, {}, {}, {:.3})", res.r, res.g, res.b, res.a as f32 / 255.0))
+                Some(format!(
+                    "rgba({}, {}, {}, {:.3})",
+                    res.r,
+                    res.g,
+                    res.b,
+                    res.a as f32 / 255.0
+                ))
             }
             PropertySyntax::Number | PropertySyntax::Angle | PropertySyntax::Time => {
                 let n1 = from.trim().parse::<f32>().ok()?;
