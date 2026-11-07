@@ -82,6 +82,7 @@ strata_devtools = { path = "crates/tooling/strata_devtools" }
 strata_build = { path = "crates/tooling/strata_build" }
 strata_hot_reload = { path = "crates/tooling/strata_hot_reload" }
 strata_mdbook = { path = "crates/tooling/strata_mdbook" }
+strata_mcp = { path = "crates/tooling/strata_mcp" }
 
 # Harnesses
 strata_parity_tauri = { path = "crates/harnesses/strata_parity_tauri" }

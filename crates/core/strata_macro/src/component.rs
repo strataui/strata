@@ -2,8 +2,8 @@
 //! Generates a companion builder struct in the type namespace to power named JSX props
 //! with defaults and children while preserving the callable function in the value namespace.
 
-use proc_macro::{Delimiter, TokenStream, TokenTree};
 use crate::cursor::TokenCursor;
+use proc_macro::{Delimiter, TokenStream, TokenTree};
 
 struct ParamInfo {
     name: String,

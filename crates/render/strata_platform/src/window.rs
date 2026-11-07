@@ -35,7 +35,7 @@ pub enum ThemeMode {
 }
 
 /// Cursor icon style.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CursorIcon {
     #[default]
     Default,

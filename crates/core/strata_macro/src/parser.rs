@@ -1,12 +1,12 @@
 //! Recursive-descent RSX parser converting TokenCursor into an RSX AST.
 
-use proc_macro::{Delimiter, TokenStream};
 use crate::ast::*;
 use crate::cursor::TokenCursor;
+use proc_macro::{Delimiter, TokenStream};
 
 const VOID_TAGS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input",
-    "link", "meta", "param", "source", "track", "wbr",
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
 ];
 
 pub fn parse_rsx(cursor: &mut TokenCursor) -> Result<Vec<RsxNode>, String> {
@@ -236,10 +236,7 @@ fn parse_fragment(cursor: &mut TokenCursor) -> Result<RsxNode, String> {
             return Err("Unclosed fragment '<>': reached end of input without '</>'".to_string());
         }
 
-        if cursor.peek_punct('<')
-            && cursor.peek_punct_at(1, '/')
-            && cursor.peek_punct_at(2, '>')
-        {
+        if cursor.peek_punct('<') && cursor.peek_punct_at(1, '/') && cursor.peek_punct_at(2, '>') {
             cursor.consume_punct('<');
             cursor.consume_punct('/');
             cursor.consume_punct('>');

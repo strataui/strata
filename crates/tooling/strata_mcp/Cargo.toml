@@ -1,0 +1,23 @@
+[package]
+name = "strata_mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Professional Model Context Protocol (MCP) Server for Strata development sessions"
+
+[dependencies]
+strata_primitives = { workspace = true }
+strata_platform = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[[bin]]
+name = "strata-mcp"
+path = "src/main.rs"
+
+[dev-dependencies]
+strata = { workspace = true }
+strata_dom = { workspace = true }
+strata_cli = { workspace = true }
+

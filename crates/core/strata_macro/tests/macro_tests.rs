@@ -1,8 +1,8 @@
-use strata_macro::{component, dynamic, rsx, Store};
-use strata_dom::{Attribute, Effect, NodeBlueprint, Tag, View};
-use strata_js::JsValue;
 use std::cell::Cell;
 use std::rc::Rc;
+use strata_dom::{Attribute, Effect, EventType, NodeBlueprint, Tag, View};
+use strata_js::JsValue;
+use strata_macro::{component, dynamic, rsx, Store};
 
 #[component]
 fn Header(title: &'static str, subtitle: Option<&'static str>) -> View {
@@ -32,13 +32,22 @@ fn test_rsx_simple_elements() {
     };
 
     match node.root {
-        NodeBlueprint::Element { tag, classes, attributes, children } => {
+        NodeBlueprint::Element {
+            tag,
+            classes,
+            attributes,
+            children,
+        } => {
             assert_eq!(tag, Tag::Div);
             assert_eq!(classes, vec!["container".to_string()]);
             assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "id" && value == "main")));
             assert_eq!(children.len(), 1);
             match &children[0] {
-                NodeBlueprint::Element { tag: child_tag, classes: child_classes, .. } => {
+                NodeBlueprint::Element {
+                    tag: child_tag,
+                    classes: child_classes,
+                    ..
+                } => {
                     assert_eq!(*child_tag, Tag::Span);
                     assert_eq!(*child_classes, vec!["text".to_string()]);
                 }
@@ -107,10 +116,44 @@ fn test_rsx_event_listeners() {
     };
 
     match node.root {
-        NodeBlueprint::Element { tag, attributes, .. } => {
+        NodeBlueprint::Element {
+            tag, attributes, ..
+        } => {
             assert_eq!(tag, Tag::Button);
-            let has_listener = attributes.iter().any(|a| matches!(a, Attribute::EventListener { .. }));
+            let has_listener = attributes
+                .iter()
+                .any(|a| matches!(a, Attribute::EventListener { .. }));
             assert!(has_listener);
+        }
+        _ => panic!("Expected element node"),
+    }
+}
+
+#[test]
+fn test_rsx_snake_case_event_names_normalize() {
+    let node = rsx! {
+        <button
+            on_click={|_| {}}
+            on_pointer_down={|_| {}}
+            on_input={|_value: String| {}}
+        >
+            {"Click me"}
+        </button>
+    };
+
+    match node.root {
+        NodeBlueprint::Element { attributes, .. } => {
+            let events: Vec<EventType> = attributes
+                .iter()
+                .filter_map(|a| match a {
+                    Attribute::EventListener { event, .. } => Some(*event),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                events,
+                vec![EventType::Click, EventType::PointerDown, EventType::Input]
+            );
         }
         _ => panic!("Expected element node"),
     }
@@ -234,7 +277,11 @@ fn test_derive_store_macro_atomic_reactivity_and_transactions() {
 
     // Mutate only connections (cpu subscriber MUST NOT run)
     store.connections.set(1350);
-    assert_eq!(cpu_runs.get(), 1, "Unrelated field mutation must not trigger cpu effect");
+    assert_eq!(
+        cpu_runs.get(),
+        1,
+        "Unrelated field mutation must not trigger cpu effect"
+    );
     assert_eq!(store.connections.get(), 1350);
 
     // Mutate cpu
@@ -264,7 +311,11 @@ fn test_derive_store_macro_atomic_reactivity_and_transactions() {
     });
 
     // Despite 2 field writes, the effect must run only ONCE after the batch completes!
-    assert_eq!(batch_runs.get(), 2, "Batch must coalesce notifications to exactly one flush");
+    assert_eq!(
+        batch_runs.get(),
+        2,
+        "Batch must coalesce notifications to exactly one flush"
+    );
     assert_eq!(store.node_id.get(), "node-eu-west-1b");
     assert_eq!(store.connections.get(), 4500);
 
@@ -284,4 +335,3 @@ fn test_derive_store_macro_atomic_reactivity_and_transactions() {
     assert_eq!(store.cpu_percent.get(), 78.2);
     assert!(store.is_healthy.get());
 }
-

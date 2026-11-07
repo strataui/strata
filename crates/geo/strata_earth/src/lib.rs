@@ -31,17 +31,18 @@ pub use descriptor::{
     TileSupply, DESCRIPTOR_FORMAT, DESCRIPTOR_VERSION, DESCRIPTOR_VERSION_V1,
 };
 pub use geodesy::{
-    clamp_latitude, depth_range, geodetic_to_ecef, horizon_distance_m, level_for_altitude,
-    resolve_tile_imagery, wrap_longitude, CameraPlacement, EarthCamera, Geodetic, LocalFrame,
-    TileKey, TileTextureResolution, GLOBE_ALTITUDE_M,
+    clamp_latitude, depth_range, ecef_to_geodetic, geodetic_to_ecef, horizon_distance_m,
+    level_for_altitude, pick_geodetic, raycast_ellipsoid, resolve_tile_imagery, screen_to_ray,
+    wrap_longitude, CameraPlacement, EarthCamera, Geodetic, LocalFrame, TileKey,
+    TileTextureResolution, GLOBE_ALTITUDE_M,
 };
 pub use scene::{
     building_triangle_count, celestial_bodies, requested_tile, sky_gradient, surrounding_patches,
     surrounding_tiles, terrain_triangle_count, tile_patch_span_deg, EarthInput, EarthScene,
-    EntityMarker, FrameStats, LayerToggles, PatchBounds, PatchFrame,
+    EntityMarker, FrameStats, LayerToggles, PatchBounds, PatchFrame, SurfaceMode,
 };
 pub use scene::{horizontal_fov_deg, vertical_fov_deg};
 pub use tiles::{
-    tile_sampler, MemoryTileSource, TextureSlot, TileElevation, TileError, TileImage, TileRegistry,
-    TileSource,
+    tile_sampler, DirectoryTileSource, MemoryTileSource, TextureSlot, TileElevation, TileError,
+    TileImage, TileRegistry, TileSource,
 };

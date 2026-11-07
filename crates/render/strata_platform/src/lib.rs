@@ -4,9 +4,11 @@
 //! desktop system tray integrations, and headless mock drivers for deterministic CI testing.
 
 pub mod csd;
+pub mod cursor_theme;
 pub mod events;
 #[cfg(target_os = "linux")]
 pub mod gtk_window;
+pub mod mcp_cursor;
 pub mod menu;
 pub mod raw_abi;
 pub mod shortcuts;
@@ -21,7 +23,9 @@ pub mod x11_window;
 #[cfg(target_os = "linux")]
 pub use cairo;
 pub use csd::{ControlPlacement, CsdGeometry, CsdHitZone};
+pub use cursor_theme::{CursorBitmap, CursorTheme};
 pub use events::{KeyCode, Modifiers, MouseButton, PlatformEvent, TouchPhase};
+pub use mcp_cursor::McpCursorState;
 #[cfg(target_os = "linux")]
 pub use gtk;
 #[cfg(target_os = "linux")]
@@ -31,8 +35,17 @@ pub use gtk_window::{
     gtk_set_cursor, gtk_toggle_maximize, init_pango_text_measurement, launch_gtk_window,
     pango_font_metrics, pango_measure_styled_text, pango_measure_styled_text_family,
     pango_measure_text, pango_measure_text_family, post_platform_event,
-    render_display_list_to_cairo, render_to_png, resolved_font_family,
+    render_display_list_to_cairo, render_to_png, render_to_png_bytes, resolved_font_family,
 };
+#[cfg(not(target_os = "linux"))]
+pub fn render_to_png_bytes(
+    _display_list: &strata_render::DisplayList,
+    _width: i32,
+    _height: i32,
+    _cursor_overlay: Option<(&McpCursorState, &CursorTheme)>,
+) -> Result<Vec<u8>, String> {
+    Err("Headless PNG rendering currently requires Linux cairo backend".to_string())
+}
 pub use menu::{AcceleratorModifier, Menu, MenuAccelerator, MenuBar, MenuItem, MenuItemRole};
 #[cfg(target_os = "linux")]
 pub use pango;

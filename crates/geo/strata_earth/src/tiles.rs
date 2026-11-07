@@ -288,3 +288,169 @@ impl TileSource for MemoryTileSource {
         Ok(self.elevation.get(&key).cloned())
     }
 }
+
+/// A tile source backed by a local filesystem directory containing tile files.
+///
+/// Looks up imagery at `{base_dir}/{z}/{x}/{y}.raw` or `{base_dir}/{z}_{x}_{y}.raw` (or `.rgba`).
+/// Looks up elevation at `{base_dir}/{z}/{x}/{y}.elev` or `{base_dir}/{z}_{x}_{y}.elev` (or `.bin`).
+#[derive(Debug, Clone)]
+pub struct DirectoryTileSource {
+    base_dir: std::path::PathBuf,
+    default_tile_size: u32,
+}
+
+impl DirectoryTileSource {
+    pub fn new(base_dir: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            base_dir: base_dir.into(),
+            default_tile_size: 256,
+        }
+    }
+
+    pub fn with_tile_size(mut self, size: u32) -> Self {
+        self.default_tile_size = size;
+        self
+    }
+
+    pub fn base_dir(&self) -> &std::path::Path {
+        &self.base_dir
+    }
+}
+
+impl TileSource for DirectoryTileSource {
+    fn imagery(&mut self, key: TileKey) -> Result<Option<TileImage>, TileError> {
+        let candidates = [
+            self.base_dir
+                .join(format!("{}/{}/{}.raw", key.level, key.x, key.y)),
+            self.base_dir
+                .join(format!("{}/{}/{}.rgba", key.level, key.x, key.y)),
+            self.base_dir
+                .join(format!("{}_{}_{}.raw", key.level, key.x, key.y)),
+            self.base_dir
+                .join(format!("{}_{}_{}.rgba", key.level, key.x, key.y)),
+        ];
+
+        let path = match candidates.into_iter().find(|p| p.is_file()) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let bytes = std::fs::read(&path)
+            .map_err(|e| TileError::Transport(format!("failed reading {}: {e}", path.display())))?;
+
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+
+        // Check if prefixed with [u32 width, u32 height] (8 bytes)
+        if bytes.len() >= 8 {
+            let w = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+            let h = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+            if w > 0 && h > 0 && bytes.len() == 8 + (w as usize * h as usize * 4) {
+                return Ok(Some(TileImage {
+                    width: w,
+                    height: h,
+                    pixels: bytes[8..].to_vec(),
+                }));
+            }
+        }
+
+        // Check if raw RGBA byte buffer of default_tile_size
+        let expected_default =
+            self.default_tile_size as usize * self.default_tile_size as usize * 4;
+        if bytes.len() == expected_default {
+            return Ok(Some(TileImage {
+                width: self.default_tile_size,
+                height: self.default_tile_size,
+                pixels: bytes,
+            }));
+        }
+
+        // Infer square dimensions if bytes length is a multiple of 4
+        if bytes.len() % 4 == 0 {
+            let pixels = bytes.len() / 4;
+            let side = (pixels as f64).sqrt().round() as usize;
+            if side * side == pixels {
+                return Ok(Some(TileImage {
+                    width: side as u32,
+                    height: side as u32,
+                    pixels: bytes,
+                }));
+            }
+        }
+
+        Err(TileError::Decode(format!(
+            "invalid image tile data length {} at {}",
+            bytes.len(),
+            path.display()
+        )))
+    }
+
+    fn elevation(&mut self, key: TileKey) -> Result<Option<TileElevation>, TileError> {
+        let candidates = [
+            self.base_dir
+                .join(format!("{}/{}/{}.elev", key.level, key.x, key.y)),
+            self.base_dir
+                .join(format!("{}/{}/{}.bin", key.level, key.x, key.y)),
+            self.base_dir
+                .join(format!("{}_{}_{}.elev", key.level, key.x, key.y)),
+            self.base_dir
+                .join(format!("{}_{}_{}.bin", key.level, key.x, key.y)),
+        ];
+
+        let path = match candidates.into_iter().find(|p| p.is_file()) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let bytes = std::fs::read(&path)
+            .map_err(|e| TileError::Transport(format!("failed reading {}: {e}", path.display())))?;
+
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+
+        let (w, h, data_bytes) = if bytes.len() >= 8 {
+            let w = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+            let h = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+            if w > 0 && h > 0 && bytes.len() == 8 + (w as usize * h as usize * 4) {
+                (w, h, &bytes[8..])
+            } else {
+                let count = bytes.len() / 4;
+                let side = (count as f64).sqrt().round() as u32;
+                if (side as usize * side as usize * 4) == bytes.len() {
+                    (side, side, bytes.as_slice())
+                } else {
+                    return Err(TileError::Decode(format!(
+                        "invalid elevation tile data length {} at {}",
+                        bytes.len(),
+                        path.display()
+                    )));
+                }
+            }
+        } else {
+            let count = bytes.len() / 4;
+            let side = (count as f64).sqrt().round() as u32;
+            if side > 0 && (side as usize * side as usize * 4) == bytes.len() {
+                (side, side, bytes.as_slice())
+            } else {
+                return Err(TileError::Decode(format!(
+                    "elevation file length {} invalid at {}",
+                    bytes.len(),
+                    path.display()
+                )));
+            }
+        };
+
+        let heights_m: Vec<f32> = data_bytes
+            .chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+
+        Ok(Some(TileElevation {
+            width: w,
+            height: h,
+            heights_m,
+        }))
+    }
+}

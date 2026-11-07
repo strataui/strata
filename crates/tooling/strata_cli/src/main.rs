@@ -79,21 +79,72 @@ fn main() {
                 process::exit(1);
             }
         }
+        CliCommand::Run {
+            target,
+            release,
+            mcp,
+            example,
+            bin,
+        } => {
+            CliArgs::print_banner();
+            println!(
+                "  \x1b[36m›\x1b[0m Running Strata application [mode: \x1b[1m{}\x1b[0m, target: \x1b[1m{}\x1b[0m, mcp: \x1b[37m{}\x1b[0m]...",
+                if release { "release" } else { "debug" },
+                target.as_str(),
+                if mcp { "enabled" } else { "disabled" }
+            );
+
+            let mut cmd = std::process::Command::new("cargo");
+            cmd.arg("run");
+            if release {
+                cmd.arg("--release");
+            }
+            if let Some(ref ex) = example {
+                cmd.arg("--example").arg(ex);
+            } else if let Some(ref b) = bin {
+                cmd.arg("--bin").arg(b);
+            }
+
+            if mcp {
+                cmd.env("STRATA_MCP_ENABLED", "1");
+                let sock_path = strata::mcp_bridge::default_dev_socket_path();
+                cmd.env("STRATA_DEV_SOCKET", &sock_path);
+                println!("  \x1b[90m• MCP Dev Bridge active at: {:?}\x1b[0m\n", sock_path);
+            }
+
+            let status = cmd.status();
+            match status {
+                Ok(s) if s.success() => {}
+                Ok(s) => process::exit(s.code().unwrap_or(1)),
+                Err(e) => {
+                    eprintln!("\x1b[1;31merror:\x1b[0m Failed to execute application: {}", e);
+                    process::exit(1);
+                }
+            }
+        }
         CliCommand::Build {
             target,
             release,
+            force,
             out_dir,
             env,
         } => {
             CliArgs::print_banner();
+            if !release && !force {
+                eprintln!("\x1b[1;31merror:\x1b[0m Debug builds cannot be built directly — debug mode is run-only in Strata.");
+                eprintln!("  Use '\x1b[36mstrata run\x1b[0m' or '\x1b[36mstrata dev\x1b[0m' to run in debug mode, or pass '\x1b[36m--release\x1b[0m' to build production artifacts.");
+                eprintln!("  To force building a debug binary anyway, pass '\x1b[36m--force\x1b[0m' or '\x1b[36m--force-build\x1b[0m'.\n");
+                process::exit(1);
+            }
+
             let base_dir = out_dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
             println!(
                 "  \x1b[36m›\x1b[0m Compiling \x1b[1m{}\x1b[0m bundle for target: \x1b[1m{}\x1b[0m (env: \x1b[37m{}\x1b[0m)...",
-                if release { "release" } else { "debug" },
+                if release { "release" } else { "debug (forced)" },
                 target.as_str(),
                 env.as_deref().unwrap_or(if release { "production" } else { "development" })
             );
-            match BuildRunner::build_with_env(target, release, &base_dir, env.as_deref()) {
+            match BuildRunner::build_with_options(target, release, force, &base_dir, env.as_deref()) {
                 Ok(report) => {
                     println!("  \x1b[32m√\x1b[0m Build complete! Emitted {} artifacts.", report.artifacts.len());
                     for art in report.artifacts {
@@ -198,6 +249,48 @@ fn main() {
             let view = workspace.render_view();
             println!("  \x1b[32m√\x1b[0m Running in pure Rust (Zero Chromium / Zero QEMU).\n");
             strata::launch(move || view);
+        }
+        CliCommand::Mcp { socket, action } => {
+            let sock_path = socket.unwrap_or_else(strata::mcp_bridge::default_dev_socket_path);
+            match action.as_deref() {
+                Some("info") => {
+                    let client = strata_mcp::StrataDevClient::new(&sock_path);
+                    match client.session_info() {
+                        Ok(info) => {
+                            println!("{}", serde_json::to_string_pretty(&info).unwrap());
+                        }
+                        Err(e) => {
+                            eprintln!("\x1b[1;31merror:\x1b[0m Could not connect to running Strata session: {}", e);
+                            eprintln!("  Make sure a Strata application is running with 'strata run' or 'strata dev'.");
+                            process::exit(1);
+                        }
+                    }
+                }
+                Some("screenshot") => {
+                    let client = strata_mcp::StrataDevClient::new(&sock_path);
+                    match client.take_screenshot() {
+                        Ok(bytes) => {
+                            let out_path = std::path::PathBuf::from("screenshot.png");
+                            if let Err(e) = std::fs::write(&out_path, &bytes) {
+                                eprintln!("\x1b[1;31merror:\x1b[0m Failed to save screenshot: {}", e);
+                                process::exit(1);
+                            }
+                            println!("  \x1b[32m√\x1b[0m Screenshot saved to {:?}", out_path);
+                        }
+                        Err(e) => {
+                            eprintln!("\x1b[1;31merror:\x1b[0m Failed to capture screenshot: {}", e);
+                            process::exit(1);
+                        }
+                    }
+                }
+                _ => {
+                    // Default action: Run stdio JSON-RPC MCP server
+                    if let Err(e) = strata_mcp::run_stdio_server_with_socket(Some(sock_path)) {
+                        eprintln!("\x1b[1;31merror:\x1b[0m MCP server error: {}", e);
+                        process::exit(1);
+                    }
+                }
+            }
         }
         CliCommand::Help(topic) => {
             if let Some(cmd) = topic {

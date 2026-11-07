@@ -27,7 +27,7 @@ impl BuildRunner {
         release: bool,
         out_dir: &Path,
     ) -> Result<BuildReport, String> {
-        Self::build_with_env(target, release, out_dir, None)
+        Self::build_with_options(target, release, false, out_dir, None)
     }
 
     /// Builds application artifacts with an optional environment override.
@@ -37,6 +37,24 @@ impl BuildRunner {
         out_dir: &Path,
         env: Option<&str>,
     ) -> Result<BuildReport, String> {
+        Self::build_with_options(target, release, false, out_dir, env)
+    }
+
+    /// Builds application artifacts with force override and environment options.
+    pub fn build_with_options(
+        target: BuildTarget,
+        release: bool,
+        force: bool,
+        out_dir: &Path,
+        env: Option<&str>,
+    ) -> Result<BuildReport, String> {
+        if !release && !force {
+            return Err(
+                "Debug builds cannot be built directly — debug mode is run-only in Strata to optimize iteration speed and eliminate unneeded artifact generation. Use 'strata run' or 'strata dev' to run in debug mode, or use 'strata build --release' for production bundles. To force building a debug binary, pass '--force' or '--force-build'."
+                    .to_string(),
+            );
+        }
+
         let dist_target = out_dir.join("dist").join(target.as_str());
         fs::create_dir_all(&dist_target)
             .map_err(|e| format!("Failed to create build output directory: {}", e))?;

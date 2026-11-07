@@ -48,6 +48,16 @@ pub struct EntityMarker {
     pub color: Color,
 }
 
+/// Surface geometry mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SurfaceMode {
+    /// 3x3 planar terrain patches tangential to the camera focus point (default).
+    #[default]
+    FlatPatches,
+    /// True spherical Earth globe geometry at WGS84 radius.
+    SphericalGlobe,
+}
+
 /// Everything a frame needs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EarthInput {
@@ -69,6 +79,8 @@ pub struct EarthInput {
     /// values mean fewer, bigger patches.
     pub patch_scale: f64,
     pub markers: Vec<EntityMarker>,
+    /// Geometry mode for surface rendering.
+    pub surface_mode: SurfaceMode,
 }
 
 impl Default for EarthInput {
@@ -85,6 +97,7 @@ impl Default for EarthInput {
             tile_grid: 5,
             patch_scale: 0.25,
             markers: Vec::new(),
+            surface_mode: SurfaceMode::default(),
         }
     }
 }
@@ -266,44 +279,98 @@ impl EarthScene {
         self.buildings.set_origin(origin);
 
         if input.layers.terrain {
-            let span_deg = tile_patch_span_deg(&input.camera, input.patch_scale);
-            let bounds = surrounding_patches(input.camera.focus, span_deg);
-            for mut patch in bounds {
-                stats.tiles_requested += 1;
-                let requested = patch.requested;
-                let resolution = resolve_tile_imagery(requested, |candidate| {
-                    matches!(source.imagery(candidate), Ok(Some(_)))
-                });
-                if let Some(resolution) = resolution {
-                    if resolution.exact {
-                        stats.tiles_exact += 1;
-                    } else {
-                        stats.tiles_from_ancestor += 1;
+            match input.surface_mode {
+                SurfaceMode::FlatPatches => {
+                    let span_deg = tile_patch_span_deg(&input.camera, input.patch_scale);
+                    let bounds = surrounding_patches(input.camera.focus, span_deg);
+                    for mut patch in bounds {
+                        stats.tiles_requested += 1;
+                        let requested = patch.requested;
+                        let resolution = resolve_tile_imagery(requested, |candidate| {
+                            matches!(source.imagery(candidate), Ok(Some(_)))
+                        });
+                        if let Some(resolution) = resolution {
+                            if resolution.exact {
+                                stats.tiles_exact += 1;
+                            } else {
+                                stats.tiles_from_ancestor += 1;
+                            }
+                        }
+
+                        let elevation = source.elevation(requested).ok().flatten();
+                        let (index_start, index_count) = push_tile_patch(
+                            &mut self.terrain,
+                            patch.bounds,
+                            input.tile_grid.max(2),
+                            elevation.as_ref(),
+                            requested,
+                        );
+                        patch.resolution = resolution;
+                        patch.index_start = index_start;
+                        patch.index_count = index_count;
+
+                        if input.layers.buildings {
+                            push_placeholder_buildings(
+                                &mut self.buildings,
+                                origin,
+                                patch.bounds,
+                                elevation.as_ref(),
+                                requested,
+                            );
+                        }
+                        self.patches.push(patch);
                     }
                 }
+                SurfaceMode::SphericalGlobe => {
+                    let level = crate::geodesy::level_for_altitude(input.camera.altitude_m(), 2);
+                    let per_axis = 1u32 << level;
+                    let lon_span = 360.0 / per_axis as f64;
+                    let lat_span = 180.0 / per_axis as f64;
+                    for y in 0..per_axis {
+                        let lat1 = 90.0 - y as f64 * lat_span;
+                        let lat0 = lat1 - lat_span;
+                        for x in 0..per_axis {
+                            let lon0 = -180.0 + x as f64 * lon_span;
+                            let lon1 = lon0 + lon_span;
+                            let key = TileKey::new(level, x, y);
+                            let bounds = PatchBounds {
+                                lon0,
+                                lon1,
+                                lat0,
+                                lat1,
+                            };
+                            stats.tiles_requested += 1;
+                            let requested = key;
+                            let resolution = resolve_tile_imagery(requested, |candidate| {
+                                matches!(source.imagery(candidate), Ok(Some(_)))
+                            });
+                            if let Some(resolution) = resolution {
+                                if resolution.exact {
+                                    stats.tiles_exact += 1;
+                                } else {
+                                    stats.tiles_from_ancestor += 1;
+                                }
+                            }
 
-                let elevation = source.elevation(requested).ok().flatten();
-                let (index_start, index_count) = push_tile_patch(
-                    &mut self.terrain,
-                    patch.bounds,
-                    input.tile_grid.max(2),
-                    elevation.as_ref(),
-                    requested,
-                );
-                patch.resolution = resolution;
-                patch.index_start = index_start;
-                patch.index_count = index_count;
-
-                if input.layers.buildings {
-                    push_placeholder_buildings(
-                        &mut self.buildings,
-                        origin,
-                        patch.bounds,
-                        elevation.as_ref(),
-                        requested,
-                    );
+                            let elevation = source.elevation(requested).ok().flatten();
+                            let (index_start, index_count) = push_tile_patch(
+                                &mut self.terrain,
+                                bounds,
+                                input.tile_grid.max(2),
+                                elevation.as_ref(),
+                                requested,
+                            );
+                            self.patches.push(PatchFrame {
+                                key,
+                                requested,
+                                bounds,
+                                resolution,
+                                index_start,
+                                index_count,
+                            });
+                        }
+                    }
                 }
-                self.patches.push(patch);
             }
         }
 

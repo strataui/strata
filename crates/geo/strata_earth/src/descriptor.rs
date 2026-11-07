@@ -1,4 +1,4 @@
-//! Deterministic golden-frame descriptor exchanged with the reference renderer.
+//! Deterministic golden-frame descriptor for Earth rendering parity and validation.
 //!
 //! The descriptor records every input that decides the rendered frame: camera
 //! placement, resolved tile keys and UV sub-rects, terrain tessellation, layer
@@ -373,7 +373,7 @@ impl FrameDescriptor {
                 }
             })
             .collect();
-        let tiles = patches
+        let tiles: Vec<DescriptorTile> = patches
             .iter()
             .filter_map(|patch| {
                 resolved
@@ -422,10 +422,31 @@ impl FrameDescriptor {
             max_tile_level: input.max_tile_level,
             tile_grid: input.tile_grid,
             patch_scale: input.patch_scale,
-            patches,
+            surface: if input.surface_mode == crate::scene::SurfaceMode::SphericalGlobe {
+                Some(DescriptorSphere {
+                    centre: [0.0, 0.0, 0.0],
+                    radius_m: crate::geodesy::wgs84::A,
+                    segments: [input.tile_grid.max(2) * 16, input.tile_grid.max(2) * 8],
+                })
+            } else {
+                None
+            },
+            rings: if input.surface_mode == crate::scene::SurfaceMode::SphericalGlobe {
+                let level = crate::geodesy::level_for_altitude(input.camera.altitude_m(), 2);
+                vec![DescriptorRing {
+                    level,
+                    subdiv: input.tile_grid,
+                    tiles: tiles.clone(),
+                }]
+            } else {
+                Vec::new()
+            },
+            patches: if input.surface_mode == crate::scene::SurfaceMode::SphericalGlobe {
+                Vec::new()
+            } else {
+                patches
+            },
             tiles,
-            surface: None,
-            rings: Vec::new(),
             markers: input
                 .markers
                 .iter()
@@ -495,6 +516,11 @@ impl FrameDescriptor {
                         .unwrap_or(Color::WHITE),
                 })
                 .collect(),
+            surface_mode: if self.surface.is_some() {
+                crate::scene::SurfaceMode::SphericalGlobe
+            } else {
+                crate::scene::SurfaceMode::FlatPatches
+            },
         }
     }
 

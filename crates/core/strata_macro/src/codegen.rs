@@ -2,18 +2,30 @@
 
 use crate::ast::*;
 
-pub fn generate_rsx(nodes: &[RsxNode]) -> String {
+/// Lower an RSX AST into Rust tokens, collecting every invalid attribute as a
+/// diagnostic instead of silently dropping it.
+pub fn generate_rsx(nodes: &[RsxNode]) -> Result<String, Vec<String>> {
+    let mut errors = Vec::new();
+    let code = generate_rsx_inner(nodes, &mut errors);
+    if errors.is_empty() {
+        Ok(code)
+    } else {
+        Err(errors)
+    }
+}
+
+fn generate_rsx_inner(nodes: &[RsxNode], errors: &mut Vec<String>) -> String {
     if nodes.is_empty() {
         return "strata_dom::View::new(strata_dom::NodeBlueprint::Empty)".to_string();
     }
 
     if nodes.len() == 1 {
-        let node_code = lower_node(&nodes[0]);
+        let node_code = lower_node(&nodes[0], errors);
         format!("strata_dom::View::new({})", node_code)
     } else {
         let mut children_code = Vec::new();
         for node in nodes {
-            children_code.push(lower_node(node));
+            children_code.push(lower_node(node, errors));
         }
         format!(
             "strata_dom::View::new(strata_dom::NodeBlueprint::fragment(vec![{}]))",
@@ -22,7 +34,7 @@ pub fn generate_rsx(nodes: &[RsxNode]) -> String {
     }
 }
 
-fn lower_node(node: &RsxNode) -> String {
+fn lower_node(node: &RsxNode, errors: &mut Vec<String>) -> String {
     match node {
         RsxNode::Text(txt) => {
             format!("strata_dom::NodeBlueprint::text({:?})", txt)
@@ -36,19 +48,25 @@ fn lower_node(node: &RsxNode) -> String {
         RsxNode::Fragment(children) => {
             let mut children_code = Vec::new();
             for child in children {
-                children_code.push(lower_node(child));
+                children_code.push(lower_node(child, errors));
             }
             format!(
                 "strata_dom::NodeBlueprint::fragment(vec![{}])",
                 children_code.join(", ")
             )
         }
-        RsxNode::Element(el) => lower_element(el),
-        RsxNode::Component(comp) => lower_component(comp),
+        RsxNode::Element(el) => lower_element(el, errors),
+        RsxNode::Component(comp) => lower_component(comp, errors),
     }
 }
 
-fn lower_element(el: &RsxElement) -> String {
+/// Normalize an event attribute so `onclick`, `onClick`, and `on_click` all
+/// resolve to the same `EventType`.
+fn normalize_event_name(name: &str) -> String {
+    name.to_ascii_lowercase().replace('_', "")
+}
+
+fn lower_element(el: &RsxElement, errors: &mut Vec<String>) -> String {
     let tag_code = match el.tag.to_ascii_lowercase().as_str() {
         "div" => "strata_dom::Tag::Div".to_string(),
         "span" => "strata_dom::Tag::Span".to_string(),
@@ -122,7 +140,8 @@ fn lower_element(el: &RsxElement) -> String {
     let mut attrs_code = Vec::new();
     for attr in other_attrs {
         if attr.name.starts_with("on") {
-            let event_type = match attr.name.to_ascii_lowercase().as_str() {
+            let event_name = normalize_event_name(&attr.name);
+            let event_type = match event_name.as_str() {
                 "onclick" => "strata_dom::EventType::Click".to_string(),
                 "ondblclick" => "strata_dom::EventType::DblClick".to_string(),
                 "oncontextmenu" => "strata_dom::EventType::ContextMenu".to_string(),
@@ -153,12 +172,21 @@ fn lower_element(el: &RsxElement) -> String {
                 "onanimationiteration" => "strata_dom::EventType::AnimationIteration".to_string(),
                 "onanimationend" => "strata_dom::EventType::AnimationEnd".to_string(),
                 "onanimationcancel" => "strata_dom::EventType::AnimationCancel".to_string(),
-                _ => format!("strata_dom::EventType::Custom({:?})", attr.name),
+                _ => {
+                    errors.push(format!(
+                        "unsupported event attribute `{}`; expected a known DOM event such as `onclick` or `on_click`",
+                        attr.name
+                    ));
+                    continue;
+                }
             };
 
             match &attr.value {
                 RsxAttrValue::Expression(stream) => {
-                    let method = if attr.name == "oninput" || attr.name == "onchange" || attr.name == "onsubmit" {
+                    let method = if event_name == "oninput"
+                        || event_name == "onchange"
+                        || event_name == "onsubmit"
+                    {
                         "value_listener"
                     } else {
                         "event_listener"
@@ -168,7 +196,12 @@ fn lower_element(el: &RsxElement) -> String {
                         method, event_type, stream
                     ));
                 }
-                _ => {}
+                RsxAttrValue::Literal(_) | RsxAttrValue::Flag => {
+                    errors.push(format!(
+                        "event attribute `{}` requires a callable expression, e.g. `{0}={{|_event| {{}}}}`; a literal string or flag is not a handler",
+                        attr.name
+                    ));
+                }
             }
         } else {
             match &attr.value {
@@ -197,7 +230,7 @@ fn lower_element(el: &RsxElement) -> String {
     // Lower children
     let mut children_code = Vec::new();
     for child in &el.children {
-        children_code.push(lower_node(child));
+        children_code.push(lower_node(child, errors));
     }
 
     format!(
@@ -209,7 +242,7 @@ fn lower_element(el: &RsxElement) -> String {
     )
 }
 
-fn lower_component(comp: &RsxComponent) -> String {
+fn lower_component(comp: &RsxComponent, errors: &mut Vec<String>) -> String {
     let full_path = comp.path.join("::");
 
     // Case A: Namespaced path (e.g. `Icons::Plus`)
@@ -266,7 +299,7 @@ fn lower_component(comp: &RsxComponent) -> String {
     if !comp.children.is_empty() {
         let mut children_code = Vec::new();
         for child in &comp.children {
-            children_code.push(lower_node(child));
+            children_code.push(lower_node(child, errors));
         }
         builder_calls.push(format!(".children(vec![{}])", children_code.join(", ")));
     }
@@ -276,4 +309,45 @@ fn lower_component(comp: &RsxComponent) -> String {
         full_path,
         builder_calls.join("")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn button_with(name: &str, value: RsxAttrValue) -> Vec<RsxNode> {
+        vec![RsxNode::Element(RsxElement {
+            tag: "button".to_string(),
+            attributes: vec![RsxAttribute {
+                name: name.to_string(),
+                value,
+            }],
+            children: vec![RsxNode::Text("ok".to_string())],
+            self_closing: false,
+        })]
+    }
+
+    #[test]
+    fn unknown_event_attribute_is_rejected() {
+        let nodes = button_with("on_clicky", RsxAttrValue::Literal("f".to_string()));
+        let errors = generate_rsx(&nodes).expect_err("unknown event must be rejected");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("unsupported event attribute `on_clicky`"));
+    }
+
+    #[test]
+    fn literal_event_handler_is_rejected() {
+        let nodes = button_with("on_click", RsxAttrValue::Literal("f".to_string()));
+        let errors = generate_rsx(&nodes).expect_err("literal handler must be rejected");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("requires a callable expression"));
+    }
+
+    #[test]
+    fn flag_event_handler_is_rejected() {
+        let nodes = button_with("onclick", RsxAttrValue::Flag);
+        let errors = generate_rsx(&nodes).expect_err("flag handler must be rejected");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("requires a callable expression"));
+    }
 }

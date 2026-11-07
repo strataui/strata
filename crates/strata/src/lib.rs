@@ -70,6 +70,8 @@ pub mod runtime;
 pub mod benchmarks;
 pub mod low_level;
 pub mod view_transition;
+pub mod mcp_bridge;
+pub use mcp_bridge::{default_dev_socket_path, start_mcp_dev_listener};
 pub use runtime::{
     app, AppFrameInfo, AppLifecycleHooks, AppRuntime, launch, launch_headless, launch_window,
     StrataApp, StrataAppBuilder, EditCommand, queue_edit_command,

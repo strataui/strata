@@ -1,6 +1,6 @@
 //! Minimal deterministic JSON reader and writer.
 //!
-//! The golden descriptor is exchanged with the reference viewport, so it
+//! The golden descriptor is exchanged with external reference viewports, so it
 //! has to be real JSON. The workspace policy forbids heavyweight crates, and a
 //! descriptor only needs objects, arrays, strings, numbers, booleans, and null;
 //! that is the entire surface implemented here.

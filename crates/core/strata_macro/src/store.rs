@@ -3,8 +3,8 @@
 //! Generates a companion `<StructName>Store` struct where each field is an independent
 //! atomic `Signal<FieldType>`, with batch transaction and rollback support.
 
-use proc_macro::{Delimiter, TokenStream};
 use crate::cursor::TokenCursor;
+use proc_macro::{Delimiter, TokenStream};
 
 struct FieldInfo {
     vis: String,
@@ -107,7 +107,10 @@ pub fn expand_derive_store(input: TokenStream) -> TokenStream {
 
         // Expect `:`
         if !field_cursor.consume_punct(':') {
-            panic!("Expected ':' after field name '{}' in struct '{}'", f_name, struct_name);
+            panic!(
+                "Expected ':' after field name '{}' in struct '{}'",
+                f_name, struct_name
+            );
         }
 
         // Field type tokens until `,` or EOF
@@ -153,14 +156,36 @@ pub fn expand_derive_store(input: TokenStream) -> TokenStream {
     let mut restore_fields = String::new();
 
     for f in &fields {
-        let field_vis = if f.vis.is_empty() { "pub ".to_string() } else { f.vis.clone() };
-        store_fields.push_str(&format!("    {}{}: strata_dom::Signal<{}>,\n", field_vis, f.name, f.ty));
-        clone_fields.push_str(&format!("            {}: self.{}.clone(),\n", f.name, f.name));
-        new_fields.push_str(&format!("            {}: strata_dom::Signal::new(initial.{}),\n", f.name, f.name));
+        let field_vis = if f.vis.is_empty() {
+            "pub ".to_string()
+        } else {
+            f.vis.clone()
+        };
+        store_fields.push_str(&format!(
+            "    {}{}: strata_dom::Signal<{}>,\n",
+            field_vis, f.name, f.ty
+        ));
+        clone_fields.push_str(&format!(
+            "            {}: self.{}.clone(),\n",
+            f.name, f.name
+        ));
+        new_fields.push_str(&format!(
+            "            {}: strata_dom::Signal::new(initial.{}),\n",
+            f.name, f.name
+        ));
         get_fields.push_str(&format!("            {}: self.{}.get(),\n", f.name, f.name));
-        set_fields.push_str(&format!("            self.{}.set(next.{});\n", f.name, f.name));
-        snapshot_fields.push_str(&format!("            {}: self.{}.untracked_get(),\n", f.name, f.name));
-        restore_fields.push_str(&format!("            self.{}.set(snapshot.{}.clone());\n", f.name, f.name));
+        set_fields.push_str(&format!(
+            "            self.{}.set(next.{});\n",
+            f.name, f.name
+        ));
+        snapshot_fields.push_str(&format!(
+            "            {}: self.{}.untracked_get(),\n",
+            f.name, f.name
+        ));
+        restore_fields.push_str(&format!(
+            "            self.{}.set(snapshot.{}.clone());\n",
+            f.name, f.name
+        ));
     }
 
     let output = format!(
@@ -231,6 +256,9 @@ impl{generics} {struct_name}{generics} {{
     );
 
     output.parse().unwrap_or_else(|err| {
-        panic!("Failed to parse generated Store tokens: {:?}\nGenerated:\n{}", err, output)
+        panic!(
+            "Failed to parse generated Store tokens: {:?}\nGenerated:\n{}",
+            err, output
+        )
     })
 }

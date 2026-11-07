@@ -87,3 +87,23 @@ fn test_compute_min_max_sizes_clamping() {
     assert!(sizes.min_content >= 200.0, "Must be clamped to min-width 200.0");
     assert!(sizes.max_content >= 200.0);
 }
+
+#[test]
+fn test_compute_min_max_sizes_ignores_out_of_flow_absolute_children() {
+    let mut parent = LayoutNode::new(ComputedStyle::default());
+    parent.style.display = Display::Block;
+
+    let mut in_flow_child = LayoutNode::new(ComputedStyle::default());
+    in_flow_child.style.width = Dimension::Px(60.0);
+
+    let mut out_of_flow_child = LayoutNode::new(ComputedStyle::default());
+    out_of_flow_child.style.position = Position::Absolute;
+    out_of_flow_child.style.width = Dimension::Px(240.0);
+
+    parent.add_child(in_flow_child);
+    parent.add_child(out_of_flow_child);
+
+    let sizes = compute_min_max_sizes(&parent, None);
+    assert_eq!(sizes.min_content, 60.0);
+    assert_eq!(sizes.max_content, 60.0);
+}

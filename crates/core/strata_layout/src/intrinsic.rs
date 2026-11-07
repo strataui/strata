@@ -5,7 +5,7 @@
 
 use crate::box_model::resolve_dimension;
 use crate::tree::LayoutNode;
-use strata_style::types::{Display, FlexDirection};
+use strata_style::types::{Display, FlexDirection, Position};
 
 /// Intrinsic dimension bounds (min-content and max-content inline sizes).
 /// Mirrors Chromium's `MinMaxSizes` in `third_party/blink/renderer/core/layout/min_max_sizes.h`.
@@ -239,16 +239,25 @@ fn compute_min_max_sizes_uncached(node: &LayoutNode, parent_size: Option<f32>) -
                 if node.style.flex_direction == FlexDirection::Row
                     || node.style.flex_direction == FlexDirection::RowReverse
                 {
-                    // Flex Row: items add up along inline axis
+                    // Flex Row: in-flow items add up along inline axis
                     let mut sum_min = 0.0f32;
                     let mut sum_max = 0.0f32;
-                    let gaps = if node.children.len() > 1 {
-                        (node.children.len() - 1) as f32 * node.style.gap_col.max(node.style.gap)
+                    let in_flow_children: Vec<_> = node
+                        .children
+                        .iter()
+                        .filter(|c| {
+                            c.style.display != Display::None
+                                && c.style.position != Position::Absolute
+                                && c.style.position != Position::Fixed
+                        })
+                        .collect();
+                    let gaps = if in_flow_children.len() > 1 {
+                        (in_flow_children.len() - 1) as f32 * node.style.gap_col.max(node.style.gap)
                     } else {
                         0.0
                     };
 
-                    for child in &node.children {
+                    for child in in_flow_children {
                         let child_sizes = compute_min_max_sizes(child, parent_size);
                         let child_margin = child.style.margin.left + child.style.margin.right;
                         sum_min += child_sizes.min_content + child_margin;
@@ -258,8 +267,14 @@ fn compute_min_max_sizes_uncached(node: &LayoutNode, parent_size: Option<f32>) -
                     result.min_content = result.min_content.max(sum_min + gaps);
                     result.max_content = result.max_content.max(sum_max + gaps);
                 } else {
-                    // Flex Column: items stack vertically, inline size is maximum of children
+                    // Flex Column: in-flow items stack vertically, inline size is maximum of children
                     for child in &node.children {
+                        if child.style.display == Display::None
+                            || child.style.position == Position::Absolute
+                            || child.style.position == Position::Fixed
+                        {
+                            continue;
+                        }
                         let child_sizes = compute_min_max_sizes(child, parent_size);
                         let child_margin = child.style.margin.left + child.style.margin.right;
                         result.min_content = result
@@ -277,7 +292,10 @@ fn compute_min_max_sizes_uncached(node: &LayoutNode, parent_size: Option<f32>) -
                 // while block children stack vertically.
                 let mut inline_run_max = 0.0f32;
                 for child in &node.children {
-                    if child.style.display == Display::None {
+                    if child.style.display == Display::None
+                        || child.style.position == Position::Absolute
+                        || child.style.position == Position::Fixed
+                    {
                         continue;
                     }
                     let child_sizes = compute_min_max_sizes(child, parent_size);

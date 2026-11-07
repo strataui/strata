@@ -1,7 +1,7 @@
 //! The dynamic! macro for constructing dynamic JavaScript JsValue hierarchies.
 
-use proc_macro::{Delimiter, TokenStream, TokenTree};
 use crate::cursor::TokenCursor;
+use proc_macro::{Delimiter, TokenStream, TokenTree};
 
 pub fn expand_dynamic(input: TokenStream) -> TokenStream {
     let mut cursor = TokenCursor::new(input);
@@ -12,7 +12,8 @@ pub fn expand_dynamic(input: TokenStream) -> TokenStream {
 
     let tokens = collect_until_comma(&mut cursor);
     let code = lower_tokens(tokens);
-    code.parse().unwrap_or_else(|_| "strata_js::JsValue::Null".parse().unwrap())
+    code.parse()
+        .unwrap_or_else(|_| "strata_js::JsValue::Null".parse().unwrap())
 }
 
 fn collect_until_comma(cursor: &mut TokenCursor) -> Vec<TokenTree> {
@@ -102,8 +103,5 @@ fn parse_dynamic_array(stream: TokenStream) -> String {
         cursor.consume_punct(',');
     }
 
-    format!(
-        "strata_js::JsValue::Array(vec![{}])",
-        items.join(", ")
-    )
+    format!("strata_js::JsValue::Array(vec![{}])", items.join(", "))
 }

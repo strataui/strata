@@ -1654,6 +1654,50 @@ pub fn render_to_png(
     Ok(())
 }
 
+/// Renders a DisplayList into an in-memory Cairo ImageSurface and returns raw PNG bytes.
+/// Optionally composites an emulated MCP cursor with authentic Yaru theme bitmaps.
+pub fn render_to_png_bytes(
+    display_list: &DisplayList,
+    width: i32,
+    height: i32,
+    cursor_overlay: Option<(&crate::mcp_cursor::McpCursorState, &crate::cursor_theme::CursorTheme)>,
+) -> Result<Vec<u8>, String> {
+    let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, width, height)
+        .map_err(|e| format!("Failed to create Cairo image surface: {:?}", e))?;
+    let cr = cairo::Context::new(&surface)
+        .map_err(|e| format!("Failed to create Cairo context: {:?}", e))?;
+
+    cr.set_font_options(&parity_font_options());
+
+    cr.set_source_rgb(0.035, 0.035, 0.043);
+    let _ = cr.paint();
+
+    render_display_list_to_cairo(&cr, display_list);
+
+    if let Some((cursor_state, theme)) = cursor_overlay {
+        if cursor_state.fade_opacity > 0.001 {
+            theme.render_cairo(
+                &cr,
+                cursor_state.cursor_icon,
+                cursor_state.current_x,
+                cursor_state.current_y,
+                cursor_state.fade_opacity,
+                cursor_state.is_down,
+            );
+        }
+    }
+
+    let mut buf = Vec::new();
+    {
+        let mut cursor = std::io::Cursor::new(&mut buf);
+        surface
+            .write_to_png(&mut cursor)
+            .map_err(|e| format!("Failed to write PNG: {:?}", e))?;
+    }
+
+    Ok(buf)
+}
+
 thread_local! {
     static CURRENT_GTK_WINDOW: std::cell::RefCell<Option<gtk::Window>> = const { std::cell::RefCell::new(None) };
     static IS_MAXIMIZED_TRACKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };

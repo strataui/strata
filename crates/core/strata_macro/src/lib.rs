@@ -22,15 +22,24 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn rsx(input: TokenStream) -> TokenStream {
     let mut cursor = cursor::TokenCursor::new(input);
     match parser::parse_rsx(&mut cursor) {
-        Ok(nodes) => {
-            let code = codegen::generate_rsx(&nodes);
-            code.parse().unwrap_or_else(|err| {
+        Ok(nodes) => match codegen::generate_rsx(&nodes) {
+            Ok(code) => code.parse().unwrap_or_else(|err| {
                 panic!(
                     "Strata RSX codegen compilation error: {:?}\nGenerated code was:\n{}",
                     err, code
                 );
-            })
-        }
+            }),
+            Err(errors) => {
+                let message = errors.join("\n");
+                let diagnostic = format!("compile_error!({:?})", message);
+                diagnostic.parse().unwrap_or_else(|err| {
+                    panic!(
+                        "Strata RSX diagnostic emission failed: {:?}\nDiagnostic was:\n{}",
+                        err, diagnostic
+                    );
+                })
+            }
+        },
         Err(err) => {
             panic!("Strata RSX syntax error: {}", err);
         }

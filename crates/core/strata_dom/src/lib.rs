@@ -63,6 +63,14 @@ impl EventHandlerMarker<(Event,)> for Rc<dyn Fn(Event)> {
     }
 }
 
+impl<Args, F: EventHandlerMarker<Args>> EventHandlerMarker<Args> for Option<F> {
+    fn call_handler(&self, event: Event) {
+        if let Some(ref handler) = self {
+            handler.call_handler(event);
+        }
+    }
+}
+
 /// Trait abstracting input/change value handlers accepting `()` or `(String)`.
 pub trait ValueHandlerMarker<Args> {
     fn call_handler(&self, val: String);
@@ -77,6 +85,14 @@ impl<F: Fn(String) + 'static> ValueHandlerMarker<(String,)> for F {
 impl<F: Fn() + 'static> ValueHandlerMarker<()> for F {
     fn call_handler(&self, _val: String) {
         (self)();
+    }
+}
+
+impl<Args, F: ValueHandlerMarker<Args>> ValueHandlerMarker<Args> for Option<F> {
+    fn call_handler(&self, val: String) {
+        if let Some(ref handler) = self {
+            handler.call_handler(val);
+        }
     }
 }
 

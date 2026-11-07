@@ -184,9 +184,17 @@ pub enum CliCommand {
         port: u16,
         watch: bool,
     },
+    Run {
+        target: BuildTarget,
+        release: bool,
+        mcp: bool,
+        example: Option<String>,
+        bin: Option<String>,
+    },
     Build {
         target: BuildTarget,
         release: bool,
+        force: bool,
         out_dir: Option<PathBuf>,
         env: Option<String>,
     },
@@ -205,6 +213,10 @@ pub enum CliCommand {
     },
     Sim {
         device: Option<String>,
+    },
+    Mcp {
+        socket: Option<PathBuf>,
+        action: Option<String>,
     },
     Help(Option<String>),
     Version,
@@ -249,14 +261,46 @@ impl CliArgs {
                    [h]                             Display keyboard shortcuts\n\
                    [q]                             Quit dev server\n".to_string()
             }
+            Some("run") => {
+                "Usage: strata run [OPTIONS]\n\n\
+                 Runs the Strata application directly in debug or release mode.\n\n\
+                 Options:\n\
+                   -t, --target <TARGET>           Target platform: desktop (default), web-wasm, web-js\n\
+                   -r, --release                   Run with release profile optimizations (default: debug)\n\
+                       --debug                     Run in debug mode (default)\n\
+                       --mcp                       Enable Model Context Protocol (MCP) bridge for AI agents (default: enabled)\n\
+                       --no-mcp                    Disable MCP bridge\n\
+                       --example <NAME>            Run a specific example target\n\
+                       --bin <NAME>                Run a specific binary target\n\
+                   -h, --help                      Print this help message\n\n\
+                 Examples:\n\
+                   strata run                      Run local application in debug mode\n\
+                   strata run --release            Run with full release optimizations\n\
+                   strata run --example eda_app    Run the EDA showcase example\n".to_string()
+            }
             Some("build") => {
                 "Usage: strata build [OPTIONS]\n\n\
-                 Compiles the application for production or debugging.\n\n\
+                 Compiles the application for production or distribution.\n\n\
+                 Note: Debug builds are run-only ('strata run'). To build release artifacts, pass '--release'.\n\
+                       To force building a debug binary, pass '--force'.\n\n\
                  Options:\n\
                    -t, --target <TARGET>           Target platform: desktop, android, ios, macos, windows, linux, web-wasm, web-js (default: desktop)\n\
-                   -r, --release                   Compile with release optimizations\n\
+                   -r, --release                   Compile with release optimizations (required for production)\n\
+                       --debug                     Target debug profile (must be combined with --force)\n\
+                   -f, --force, --force-build      Force build even for debug profile\n\
                    -e, --env <ENV>                 Environment profile (development, production, staging, custom)\n\
                    -o, --out-dir <DIR>             Output directory for artifacts\n\
+                   -h, --help                      Print this help message\n".to_string()
+            }
+            Some("mcp") => {
+                "Usage: strata mcp [OPTIONS] [COMMAND]\n\n\
+                 Launches or interacts with the Model Context Protocol (MCP) server for AI assistants (Antigravity, Claude, Cursor).\n\n\
+                 Commands:\n\
+                   stdio                           Run JSON-RPC 2.0 MCP server over stdio (default)\n\
+                   info                            Query active Strata development session info\n\
+                   screenshot [OUT_PATH]           Take PNG screenshot of running session\n\n\
+                 Options:\n\
+                   -s, --socket <PATH>             Custom Unix domain socket path (default: /tmp/strata-dev.sock)\n\
                    -h, --help                      Print this help message\n".to_string()
             }
             Some("package") => {
@@ -298,10 +342,12 @@ impl CliArgs {
                  Commands:\n\
                    new [name]                      Scaffold a new project (interactive wizard if name omitted)\n\
                    dev [OPTIONS]                   Start local dev server with state-preserving HMR\n\
+                   run [OPTIONS]                   Run application in debug or release mode\n\
                    build [OPTIONS]                 Compile optimized binary for target platform\n\
                    package [OPTIONS]               Package application into native OS installer or bundle\n\
                    test [OPTIONS]                  Run visual parity and mobile integration tests\n\
                    sim [OPTIONS]                   Launch native dogfooded mobile device simulator\n\
+                   mcp [OPTIONS]                   Connect AI assistants to live running Strata dev session\n\
                    help [command]                  Display general help or help for a specific command\n\
                    version                         Display version information\n\n\
                  Run 'strata <COMMAND> --help' for detailed usage of any command.\n\n\
@@ -339,10 +385,12 @@ impl CliArgs {
         match subcommand.as_str() {
             "new" => Self::parse_new(sub_args),
             "dev" => Self::parse_dev(sub_args),
+            "run" => Self::parse_run(sub_args),
             "build" => Self::parse_build(sub_args),
             "package" => Self::parse_package(sub_args),
             "test" => Self::parse_test(sub_args),
             "sim" | "simulator" => Self::parse_sim(sub_args),
+            "mcp" => Self::parse_mcp(sub_args),
             "help" => {
                 let topic = sub_args.first().cloned();
                 Ok(CliCommand::Help(topic))
@@ -449,9 +497,73 @@ impl CliArgs {
         })
     }
 
+    fn parse_run(args: &[String]) -> Result<CliCommand, String> {
+        let mut target = BuildTarget::Desktop;
+        let mut release = false;
+        let mut mcp = true;
+        let mut example = None;
+        let mut bin = None;
+
+        let mut i = 0;
+        while i < args.len() {
+            let arg = &args[i];
+            if arg == "--help" || arg == "-h" {
+                return Ok(CliCommand::Help(Some("run".to_string())));
+            } else if arg == "--target" || arg == "-t" {
+                i += 1;
+                if i >= args.len() {
+                    return Err("Expected target after '--target'. Run 'strata run --help' for usage.".to_string());
+                }
+                target = BuildTarget::parse(&args[i])?;
+            } else if arg == "--release" || arg == "-r" {
+                release = true;
+            } else if arg == "--debug" {
+                release = false;
+            } else if arg == "--mcp" {
+                mcp = true;
+            } else if arg == "--no-mcp" {
+                mcp = false;
+            } else if arg == "--example" {
+                i += 1;
+                if i >= args.len() {
+                    return Err("Expected example name after '--example'.".to_string());
+                }
+                example = Some(args[i].clone());
+            } else if arg == "--bin" {
+                i += 1;
+                if i >= args.len() {
+                    return Err("Expected binary name after '--bin'.".to_string());
+                }
+                bin = Some(args[i].clone());
+            } else if arg.starts_with('-') {
+                return Err(format!(
+                    "Unrecognized option '{}' for command 'run'. Run 'strata run --help' for usage.",
+                    arg
+                ));
+            } else if example.is_none() && bin.is_none() {
+                bin = Some(arg.clone());
+            } else {
+                return Err(format!(
+                    "Unexpected argument '{}'. Run 'strata run --help' for usage.",
+                    arg
+                ));
+            }
+            i += 1;
+        }
+
+        Ok(CliCommand::Run {
+            target,
+            release,
+            mcp,
+            example,
+            bin,
+        })
+    }
+
     fn parse_build(args: &[String]) -> Result<CliCommand, String> {
         let mut target = BuildTarget::Desktop;
         let mut release = false;
+        let mut force = false;
         let mut out_dir = None;
         let mut env = None;
 
@@ -468,6 +580,10 @@ impl CliArgs {
                 target = BuildTarget::parse(&args[i])?;
             } else if arg == "--release" || arg == "-r" {
                 release = true;
+            } else if arg == "--debug" {
+                release = false;
+            } else if arg == "--force" || arg == "-f" || arg == "--force-build" {
+                force = true;
             } else if arg == "--env" || arg == "-e" {
                 i += 1;
                 if i >= args.len() {
@@ -497,9 +613,39 @@ impl CliArgs {
         Ok(CliCommand::Build {
             target,
             release,
+            force,
             out_dir,
             env,
         })
+    }
+
+    fn parse_mcp(args: &[String]) -> Result<CliCommand, String> {
+        let mut socket = None;
+        let mut action = None;
+
+        let mut i = 0;
+        while i < args.len() {
+            let arg = &args[i];
+            if arg == "--help" || arg == "-h" {
+                return Ok(CliCommand::Help(Some("mcp".to_string())));
+            } else if arg == "--socket" || arg == "-s" {
+                i += 1;
+                if i >= args.len() {
+                    return Err("Expected path after '--socket'.".to_string());
+                }
+                socket = Some(PathBuf::from(&args[i]));
+            } else if !arg.starts_with('-') && action.is_none() {
+                action = Some(arg.clone());
+            } else if arg.starts_with('-') {
+                return Err(format!(
+                    "Unrecognized option '{}' for command 'mcp'. Run 'strata mcp --help' for usage.",
+                    arg
+                ));
+            }
+            i += 1;
+        }
+
+        Ok(CliCommand::Mcp { socket, action })
     }
 
     fn parse_package(args: &[String]) -> Result<CliCommand, String> {

@@ -297,6 +297,21 @@ pub fn render_scene_3d_with_textures(
         vp_h,
     );
 
+    // 4.5. Cloud shells pass: translucent atmospheric shells drawn over geometry
+    // when coverage and opacity are nonzero.
+    for shell in scene.cloud_shells() {
+        if shell.effective_opacity() > 0.0 {
+            render_cloud_shell(
+                frame_buffer,
+                viewport,
+                clip,
+                &depth.rows,
+                scene,
+                shell,
+            );
+        }
+    }
+
     // 5. Overlay pass: 2D primitives projected with the same camera basis,
     // drawn after depth-tested geometry.
     if let Some(overlay) = scene.overlay() {
@@ -1046,4 +1061,159 @@ pub fn overlay_frame(scene: &Scene3D, viewport: Rect) -> crate::camera64::Render
         },
     };
     RenderFrame64::from_camera(&camera, viewport.width as f64, viewport.height as f64)
+}
+
+fn render_cloud_shell(
+    frame_buffer: &mut FrameBuffer,
+    viewport: Rect,
+    clip: Option<Rect>,
+    depth_buffer: &[f32],
+    scene: &Scene3D,
+    shell: &crate::scene3d::CloudShell3D,
+) {
+    let opacity = shell.effective_opacity();
+    if opacity <= 0.0 {
+        return;
+    }
+
+    let vp_x = viewport.x.max(0.0) as usize;
+    let vp_y = viewport.y.max(0.0) as usize;
+    let vp_w = viewport.width.ceil().max(1.0) as usize;
+    let vp_h = viewport.height.ceil().max(1.0) as usize;
+
+    let (clip_min_x, clip_max_x, clip_min_y, clip_max_y) = match clip {
+        Some(c) => (
+            c.x.max(viewport.x).floor() as usize,
+            (c.x + c.width).min(viewport.x + viewport.width).ceil() as usize,
+            c.y.max(viewport.y).floor() as usize,
+            (c.y + c.height).min(viewport.y + viewport.height).ceil() as usize,
+        ),
+        None => (
+            vp_x,
+            (viewport.x + viewport.width).ceil() as usize,
+            vp_y,
+            (viewport.y + viewport.height).ceil() as usize,
+        ),
+    };
+
+    let (camera_eye, camera_target, near_plane, far_plane, fov_y_rad) = match &scene.camera {
+        crate::scene3d::Camera3D::Perspective {
+            position,
+            target,
+            near,
+            far,
+            fov_horizontal_deg,
+        } => {
+            let eye = crate::camera64::DVec3::new(position[0] as f64, position[1] as f64, position[2] as f64);
+            let tgt = crate::camera64::DVec3::new(target[0] as f64, target[1] as f64, target[2] as f64);
+            let aspect = vp_w as f64 / vp_h.max(1) as f64;
+            let fov_x = fov_horizontal_deg.to_radians() as f64;
+            let fov_y = 2.0 * ((fov_x * 0.5).tan() / aspect).atan();
+            (eye, tgt, *near as f64, *far as f64, fov_y)
+        }
+        _ => return,
+    };
+
+    let forward = camera_target.sub(camera_eye).normalize();
+    let cam_up = scene
+        .camera_up()
+        .map(|u| crate::camera64::DVec3::new(u[0], u[1], u[2]))
+        .unwrap_or(crate::camera64::DVec3::UP);
+    let up_hint = if forward.cross(cam_up).length() < 1e-6 {
+        if forward.cross(crate::camera64::DVec3::new(0.0, 0.0, 1.0)).length() > 1e-6 {
+            crate::camera64::DVec3::new(0.0, 0.0, 1.0)
+        } else {
+            crate::camera64::DVec3::new(0.0, 1.0, 0.0)
+        }
+    } else {
+        cam_up
+    };
+    let right = forward.cross(up_hint).normalize();
+    let up = right.cross(forward).normalize();
+
+    let aspect = vp_w as f64 / vp_h.max(1) as f64;
+    let tan_half_y = (fov_y_rad * 0.5).tan();
+    let tan_half_x = tan_half_y * aspect;
+
+    let sphere_center = crate::camera64::DVec3::new(shell.centre[0], shell.centre[1], shell.centre[2]);
+    let sphere_radius = shell.radius;
+    let sphere_radius_sq = sphere_radius * sphere_radius;
+
+    let shell_color = shell.color;
+    let base_alpha = opacity * shell_color.a();
+
+    for y in clip_min_y..clip_max_y {
+        if y >= frame_buffer.height {
+            break;
+        }
+        let row_ndc_y = 1.0 - ((y as f64 - vp_y as f64 + 0.5) / (vp_h as f64)) * 2.0;
+        let depth_row_offset = (y - vp_y) * vp_w;
+
+        for x in clip_min_x..clip_max_x {
+            if x >= frame_buffer.width {
+                break;
+            }
+            let col_ndc_x = ((x as f64 - vp_x as f64 + 0.5) / (vp_w as f64)) * 2.0 - 1.0;
+
+            let ray_dir = right
+                .scale(col_ndc_x * tan_half_x)
+                .add(up.scale(row_ndc_y * tan_half_y))
+                .add(forward)
+                .normalize();
+
+            let p0 = camera_eye.sub(sphere_center);
+            let b = 2.0 * p0.dot(ray_dir);
+            let c = p0.dot(p0) - sphere_radius_sq;
+            let discriminant = b * b - 4.0 * c;
+
+            if discriminant < 0.0 {
+                continue;
+            }
+
+            let sqrt_disc = discriminant.sqrt();
+            let t1 = (-b - sqrt_disc) * 0.5;
+            let t2 = (-b + sqrt_disc) * 0.5;
+
+            let t = if t1 >= near_plane && t1 <= far_plane {
+                t1
+            } else if t2 >= near_plane && t2 <= far_plane {
+                t2
+            } else {
+                continue;
+            };
+
+            let pixel_sub_x = x - vp_x;
+            if pixel_sub_x < vp_w {
+                let depth_idx = depth_row_offset + pixel_sub_x;
+                if depth_idx < depth_buffer.len() {
+                    let d = depth_buffer[depth_idx];
+                    let view_z = ray_dir.scale(t).dot(forward);
+                    let range = far_plane - near_plane;
+                    let cloud_ndc_depth = if range.abs() > 1e-6 {
+                        ((far_plane / range) * (1.0 - near_plane / view_z.max(near_plane))) as f32
+                    } else {
+                        0.5
+                    };
+                    if d < cloud_ndc_depth {
+                        continue;
+                    }
+                }
+            }
+
+            let hit_point = camera_eye.add(ray_dir.scale(t));
+            let normal = hit_point.sub(sphere_center).normalize();
+            let cos_theta = (-ray_dir.dot(normal)).abs().clamp(0.0, 1.0);
+            let limb_factor = (1.0 - cos_theta * 0.4).clamp(0.6, 1.4);
+            let pixel_alpha = (base_alpha * limb_factor as f32).clamp(0.0, 1.0);
+
+            let (cr, cg, cb, _) = shell_color.to_rgba8();
+            let blend_color = strata_style::types::Color::rgba(
+                cr,
+                cg,
+                cb,
+                (pixel_alpha * 255.0).round() as u8,
+            );
+            frame_buffer.set_pixel(x, y, blend_color);
+        }
+    }
 }

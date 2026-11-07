@@ -33,6 +33,7 @@ fn test_cli_args_parsing_commands() {
         CliCommand::Build {
             target: BuildTarget::WebJs,
             release: true,
+            force: false,
             out_dir: None,
             env: None,
         }
@@ -44,8 +45,44 @@ fn test_cli_args_parsing_commands() {
         CliCommand::Build {
             target: BuildTarget::Desktop,
             release: false,
+            force: false,
             out_dir: None,
             env: Some("staging".to_string()),
+        }
+    );
+
+    let cmd = CliArgs::parse_from(&["strata", "build", "--target", "desktop", "--force"]).unwrap();
+    assert_eq!(
+        cmd,
+        CliCommand::Build {
+            target: BuildTarget::Desktop,
+            release: false,
+            force: true,
+            out_dir: None,
+            env: None,
+        }
+    );
+
+    // 4. Run command
+    let cmd = CliArgs::parse_from(&["strata", "run", "--release", "--example", "eda_studio"]).unwrap();
+    assert_eq!(
+        cmd,
+        CliCommand::Run {
+            target: BuildTarget::Desktop,
+            release: true,
+            mcp: true,
+            example: Some("eda_studio".to_string()),
+            bin: None,
+        }
+    );
+
+    // 5. MCP command
+    let cmd = CliArgs::parse_from(&["strata", "mcp", "--socket", "/tmp/test.sock", "info"]).unwrap();
+    assert_eq!(
+        cmd,
+        CliCommand::Mcp {
+            socket: Some(std::path::PathBuf::from("/tmp/test.sock")),
+            action: Some("info".to_string()),
         }
     );
 

@@ -7,8 +7,8 @@
 
 use std::time::Instant;
 use strata_earth::{
-    surrounding_tiles, tile_sampler, EarthInput, EarthScene, EntityMarker, Geodetic,
-    MemoryTileSource, TileImage, TileKey,
+    surrounding_tiles, tile_sampler, EarthInput, EarthScene, EntityMarker, FrameDescriptor,
+    Geodetic, MemoryTileSource, TileImage, TileKey, TileSource,
 };
 use strata_render::overlay3d::OverlayPrimitive;
 use strata_render::rasterizer::FrameBuffer;
@@ -384,7 +384,6 @@ fn plugin_has_no_widget_or_shell_dependency() {
         "egui",
         "strata-egui",
         "strata_egui",
-        "winit",
         "git2",
         "reqwest",
     ] {
@@ -779,4 +778,80 @@ fn vertical_field_of_view_projects_to_the_top_edge() {
         "a point at half the vertical FOV must land on the top edge, got y={}",
         projected.y
     );
+}
+
+#[test]
+fn spherical_globe_mode_builds_closed_sphere_and_surface_descriptor() {
+    let mut input = viewpoint(12_000_000.0);
+    input.surface_mode = strata_earth::SurfaceMode::SphericalGlobe;
+    input.tile_grid = 4;
+    let mut source = MemoryTileSource::new();
+    let mut scene = EarthScene::new();
+    scene.build(&input, &mut source);
+
+    assert!(!scene.patches().is_empty(), "must build sphere tile patches");
+    assert!(scene.stats().terrain_triangles > 0, "must emit sphere triangles");
+
+    let descriptor = FrameDescriptor::capture(&scene, &input);
+    assert!(descriptor.surface.is_some(), "must declare a surface sphere in descriptor");
+    let sphere = descriptor.surface.as_ref().unwrap();
+    assert!((sphere.radius_m - 6_378_137.0).abs() < 1e-3);
+    assert_eq!(descriptor.patches.len(), 0, "sphere frame omits planar patches");
+    assert!(!descriptor.rings.is_empty(), "must declare tile rings");
+    assert_eq!(descriptor.rings[0].tiles.len(), descriptor.tiles.len());
+
+    let json_str = descriptor.to_json_string();
+    assert!(json_str.contains("\"surface\""));
+    assert!(json_str.contains("\"rings\""));
+    assert!(!json_str.contains("\"patches\""));
+
+    let restored = descriptor.earth_input();
+    assert_eq!(restored.surface_mode, strata_earth::SurfaceMode::SphericalGlobe);
+}
+
+#[test]
+fn directory_tile_source_round_trips_images_and_elevation() {
+    let dir = std::env::temp_dir().join(format!("strata_tile_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("2/1")).expect("create test tile dir");
+
+    let key = TileKey::new(2, 1, 1);
+    let mut test_image_bytes = vec![0u8; 8 + 64 * 64 * 4];
+    test_image_bytes[0..4].copy_from_slice(&64u32.to_le_bytes());
+    test_image_bytes[4..8].copy_from_slice(&64u32.to_le_bytes());
+    for (i, byte) in test_image_bytes[8..].iter_mut().enumerate() {
+        *byte = (i % 255) as u8;
+    }
+    let image_path = dir.join("2/1/1.raw");
+    std::fs::write(&image_path, &test_image_bytes).expect("write test image tile");
+
+    let mut test_elev_bytes = vec![0u8; 8 + 16 * 16 * 4];
+    test_elev_bytes[0..4].copy_from_slice(&16u32.to_le_bytes());
+    test_elev_bytes[4..8].copy_from_slice(&16u32.to_le_bytes());
+    for i in 0..(16 * 16) {
+        let val = (i as f32) * 10.5;
+        let offset = 8 + i * 4;
+        test_elev_bytes[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
+    }
+    let elev_path = dir.join("2/1/1.elev");
+    std::fs::write(&elev_path, &test_elev_bytes).expect("write test elevation tile");
+
+    let mut source = strata_earth::DirectoryTileSource::new(&dir);
+    assert_eq!(source.base_dir(), dir.as_path());
+
+    let loaded_img = source.imagery(key).expect("read ok").expect("tile exists");
+    assert_eq!(loaded_img.width, 64);
+    assert_eq!(loaded_img.height, 64);
+    assert_eq!(&loaded_img.pixels[..], &test_image_bytes[8..]);
+
+    let loaded_elev = source.elevation(key).expect("read ok").expect("elev exists");
+    assert_eq!(loaded_elev.width, 16);
+    assert_eq!(loaded_elev.height, 16);
+    assert_eq!(loaded_elev.sample_bilinear(0.0, 0.0), 0.0);
+
+    let missing_key = TileKey::new(5, 10, 10);
+    assert!(source.imagery(missing_key).expect("read ok").is_none());
+    assert!(source.elevation(missing_key).expect("read ok").is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

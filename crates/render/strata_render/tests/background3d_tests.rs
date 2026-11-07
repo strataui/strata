@@ -6,7 +6,7 @@
 
 use strata_layout::Rect;
 use strata_render::rasterizer::FrameBuffer;
-use strata_render::rasterizer3d::render_scene_3d;
+use strata_render::rasterizer3d::{render_scene_3d, render_scene_3d_with_textures};
 use strata_render::scene3d::{Background3D, Camera3D, CelestialBody3D, CloudShell3D, Scene3D};
 use strata_style::types::Color;
 
@@ -234,5 +234,45 @@ fn background_precedes_geometry() {
         centre,
         (255, 0, 0, 255),
         "the mesh must draw over the background"
+    );
+}
+
+#[test]
+fn cloud_shell_rasterizes_translucent_layer_over_background() {
+    let mut scene = Scene3D::new();
+    scene.camera = Camera3D::Perspective {
+        fov_horizontal_deg: 60.0,
+        near: 0.1,
+        far: 100.0,
+        position: [0.0, 0.0, 5.0],
+        target: [0.0, 0.0, 0.0],
+    };
+    scene = scene
+        .with_background(Background3D::Solid(Color::rgba(0, 0, 0, 255)))
+        .with_cloud_shell(CloudShell3D {
+            centre: [0.0, 0.0, 0.0],
+            radius: 2.0,
+            color: Color::rgba(255, 255, 255, 255),
+            coverage: 1.0,
+            opacity: 0.5,
+        });
+
+    let viewport = Rect::new(0.0, 0.0, 64.0, 64.0);
+    let mut fb = FrameBuffer::new(64, 64);
+    render_scene_3d_with_textures(&mut fb, viewport, &scene, None, None);
+
+    let centre = rgba8(fb.get_pixel(32, 32));
+    assert!(
+        centre.0 > 50,
+        "cloud shell must brighten the center pixel, got {:?}",
+        centre
+    );
+    assert_eq!(centre.3, 255);
+
+    let corner = rgba8(fb.get_pixel(0, 0));
+    assert_eq!(
+        corner,
+        (0, 0, 0, 255),
+        "corner outside shell must stay background"
     );
 }

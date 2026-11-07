@@ -213,3 +213,86 @@ fn camera_placement_uses_the_altitude_depth_policy() {
     let placement = globe.placement();
     assert!(placement.far_m > 20_000_000.0);
 }
+
+#[test]
+fn ecef_geodetic_round_trip_accuracy() {
+    let test_points = [
+        Geodetic::new(0.0, 0.0, 0.0),
+        Geodetic::new(0.0, 90.0, 500.0),
+        Geodetic::new(90.0, 0.0, 0.0),
+        Geodetic::new(-90.0, 0.0, 100.0),
+        Geodetic::new(37.7749, -122.4194, 150.0),
+        Geodetic::new(51.5074, -0.1278, -30.0),
+        Geodetic::new(-33.8688, 151.2093, 2_500.0),
+        Geodetic::new(45.0, 45.0, 800_000.0),
+    ];
+
+    for point in test_points {
+        let ecef = strata_earth::geodetic_to_ecef(point);
+        let inverted = strata_earth::ecef_to_geodetic(ecef);
+
+        let lat_err = (inverted.lat_deg - point.lat_deg).abs();
+        let lon_err = if point.lat_deg.abs() > 89.99 {
+            0.0 // Longitude is degenerate at the exact poles
+        } else {
+            (inverted.lon_deg - point.lon_deg).abs()
+        };
+        let height_err = (inverted.height_m - point.height_m).abs();
+
+        assert!(lat_err < 1e-7, "latitude error {lat_err} for point {point:?}");
+        assert!(lon_err < 1e-7, "longitude error {lon_err} for point {point:?}");
+        assert!(height_err < 1e-3, "height error {height_err} m for point {point:?}");
+    }
+}
+
+#[test]
+fn raycast_ellipsoid_hits_and_misses() {
+    use strata_render::camera64::DVec3;
+
+    // Ray from space looking directly down at the prime meridian equator
+    let origin = DVec3::new(10_000_000.0, 0.0, 0.0);
+    let dir = DVec3::new(-1.0, 0.0, 0.0);
+    let hit = strata_earth::raycast_ellipsoid(origin, dir).expect("nadir ray must hit");
+    assert!((hit.x - 6_378_137.0).abs() < 1e-3);
+    assert!(hit.y.abs() < 1e-3);
+    assert!(hit.z.abs() < 1e-3);
+
+    // Ray pointing away into space
+    let away_dir = DVec3::new(1.0, 0.0, 0.0);
+    assert!(strata_earth::raycast_ellipsoid(origin, away_dir).is_none());
+
+    // Ray tangential outside the limb
+    let miss_origin = DVec3::new(10_000_000.0, 7_000_000.0, 0.0);
+    let miss_dir = DVec3::new(-1.0, 0.0, 0.0);
+    assert!(strata_earth::raycast_ellipsoid(miss_origin, miss_dir).is_none());
+}
+
+#[test]
+fn screen_to_ray_and_pick_geodetic_center_accuracy() {
+    let camera = EarthCamera {
+        focus: Geodetic::new(37.7749, -122.4194, 0.0),
+        eye_offset_m: [0.0, 0.0, 50_000.0],
+        fov_y_deg: 45.0,
+        ..Default::default()
+    };
+    let w = 1440.0;
+    let h = 900.0;
+
+    // Center of screen (720, 450) must pick the focus point
+    let picked = strata_earth::pick_geodetic(w * 0.5, h * 0.5, w, h, &camera)
+        .expect("center of screen must pick the focus");
+
+    assert!((picked.lat_deg - camera.focus.lat_deg).abs() < 1e-4);
+    assert!((picked.lon_deg - camera.focus.lon_deg).abs() < 1e-4);
+
+    // Extreme corner off-screen when high or looking at space
+    let space_camera = EarthCamera {
+        focus: Geodetic::new(0.0, 0.0, 0.0),
+        eye_offset_m: [0.0, 0.0, 20_000_000.0],
+        fov_y_deg: 90.0,
+        ..Default::default()
+    };
+    // Ray at top-left corner (0, 0) misses the planet
+    let corner_pick = strata_earth::pick_geodetic(0.0, 0.0, w, h, &space_camera);
+    assert!(corner_pick.is_none(), "far corner of wide FOV must miss the globe");
+}

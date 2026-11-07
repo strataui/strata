@@ -10,7 +10,7 @@ pub mod wgs84 {
     pub const A: f64 = 6_378_137.0;
     pub const F: f64 = 1.0 / 298.257_223_563;
     pub const B: f64 = A * (1.0 - F);
-    pub const E2: f64 = F * (2.0 - F - F * F);
+    pub const E2: f64 = F * (2.0 - F);
 }
 
 /// WGS84 geodetic position.
@@ -47,6 +47,86 @@ pub fn geodetic_to_ecef(position: Geodetic) -> DVec3 {
     let y = (n + position.height_m) * cos_lat * sin_lon;
     let z = (n * (1.0 - wgs84::E2) + position.height_m) * sin_lat;
     DVec3::new(x, y, z)
+}
+
+/// Converts an ECEF Cartesian position in metres to WGS84 geodetic coordinates using
+/// Bowring's vector inversion algorithm.
+///
+/// Accurate to sub-millimetre precision worldwide across all terrestrial and orbital
+/// altitudes.
+pub fn ecef_to_geodetic(ecef: DVec3) -> Geodetic {
+    let p = (ecef.x * ecef.x + ecef.y * ecef.y).sqrt();
+    if p < 1e-6 {
+        let lat = if ecef.z >= 0.0 { 90.0 } else { -90.0 };
+        let height = ecef.z.abs() - wgs84::B;
+        return Geodetic::new(lat, 0.0, height);
+    }
+
+    let a = wgs84::A;
+    let b = wgs84::B;
+    let e2 = wgs84::E2;
+    let ep2 = (a * a - b * b) / (b * b);
+
+    let theta = (ecef.z * a).atan2(p * b);
+    let (sin_theta, cos_theta) = theta.sin_cos();
+
+    let mut lat = (ecef.z + ep2 * b * sin_theta.powi(3)).atan2(p - e2 * a * cos_theta.powi(3));
+    for _ in 0..2 {
+        let sin_l = lat.sin();
+        let n_cur = a / (1.0 - e2 * sin_l * sin_l).sqrt();
+        lat = (ecef.z + e2 * n_cur * sin_l).atan2(p);
+    }
+    let lon = ecef.y.atan2(ecef.x);
+
+    let (sin_lat, cos_lat) = lat.sin_cos();
+    let n = a / (1.0 - e2 * sin_lat * sin_lat).sqrt();
+    let height = if cos_lat.abs() > 1e-6 {
+        p / cos_lat - n
+    } else {
+        ecef.z.abs() / sin_lat.abs() - n * (1.0 - e2)
+    };
+
+    Geodetic::new(lat.to_degrees(), lon.to_degrees(), height)
+}
+
+/// Intersects a 3D ray `(ray_origin, ray_dir)` with the WGS84 reference ellipsoid.
+///
+/// Returns the closest forward intersection point in ECEF coordinates, or `None`
+/// if the ray misses the planet.
+pub fn raycast_ellipsoid(ray_origin: DVec3, ray_dir: DVec3) -> Option<DVec3> {
+    let dir = ray_dir.normalize();
+    if dir.length() < 1e-6 {
+        return None;
+    }
+
+    let inv_a = 1.0 / wgs84::A;
+    let inv_b = 1.0 / wgs84::B;
+
+    let p0 = DVec3::new(ray_origin.x * inv_a, ray_origin.y * inv_a, ray_origin.z * inv_b);
+    let d = DVec3::new(dir.x * inv_a, dir.y * inv_a, dir.z * inv_b);
+
+    let a_coeff = d.x * d.x + d.y * d.y + d.z * d.z;
+    let b_coeff = 2.0 * (p0.x * d.x + p0.y * d.y + p0.z * d.z);
+    let c_coeff = p0.x * p0.x + p0.y * p0.y + p0.z * p0.z - 1.0;
+
+    let discriminant = b_coeff * b_coeff - 4.0 * a_coeff * c_coeff;
+    if discriminant < 0.0 {
+        return None;
+    }
+
+    let sqrt_disc = discriminant.sqrt();
+    let t1 = (-b_coeff - sqrt_disc) / (2.0 * a_coeff);
+    let t2 = (-b_coeff + sqrt_disc) / (2.0 * a_coeff);
+
+    let t = if t1 > 1e-4 {
+        t1
+    } else if t2 > 1e-4 {
+        t2
+    } else {
+        return None;
+    };
+
+    Some(ray_origin.add(dir.scale(t)))
 }
 
 /// The local east/north/up basis at a geodetic position, in ECEF.
@@ -215,6 +295,82 @@ impl EarthCamera {
             far_m: far,
         }
     }
+}
+
+/// Unprojects a 2D screen coordinate in the viewport to a 3D ray in ECEF world space.
+///
+/// Returns `(ray_origin, ray_direction)` in ECEF metres.
+pub fn screen_to_ray(
+    screen_x: f64,
+    screen_y: f64,
+    viewport_width: f64,
+    viewport_height: f64,
+    camera: &EarthCamera,
+) -> (DVec3, DVec3) {
+    let placement = camera.placement();
+    let eye = placement.eye;
+    let aim = placement.aim;
+
+    let forward = aim.sub(eye).normalize();
+    let cam_up = if forward.cross(placement.up).length() < 1e-6 {
+        let frame = LocalFrame::at(camera.focus.lat_deg, camera.focus.lon_deg);
+        if forward.cross(frame.north).length() > 1e-6 {
+            frame.north
+        } else if forward.cross(frame.east).length() > 1e-6 {
+            frame.east
+        } else if forward.cross(DVec3::new(0.0, 0.0, 1.0)).length() > 1e-6 {
+            DVec3::new(0.0, 0.0, 1.0)
+        } else {
+            DVec3::new(0.0, 1.0, 0.0)
+        }
+    } else {
+        placement.up
+    };
+    let right = forward.cross(cam_up).normalize();
+    let up = right.cross(forward).normalize();
+
+    let aspect = if viewport_height.abs() > 1e-6 {
+        viewport_width / viewport_height
+    } else {
+        1.0
+    };
+
+    let fov_y = placement.fov_y_deg.to_radians();
+    let tan_half_y = (fov_y * 0.5).tan();
+    let tan_half_x = tan_half_y * aspect;
+
+    let ndc_x = (screen_x / viewport_width.max(1.0)) * 2.0 - 1.0;
+    let ndc_y = 1.0 - (screen_y / viewport_height.max(1.0)) * 2.0;
+
+    let dir = right
+        .scale(ndc_x * tan_half_x)
+        .add(up.scale(ndc_y * tan_half_y))
+        .add(forward)
+        .normalize();
+
+    (eye, dir)
+}
+
+/// Picks a geographic coordinate on the WGS84 ellipsoid under a screen position.
+///
+/// Returns `Some(Geodetic)` with surface height if the ray intersects the planet,
+/// or `None` if the cursor is pointed at space.
+pub fn pick_geodetic(
+    screen_x: f64,
+    screen_y: f64,
+    viewport_width: f64,
+    viewport_height: f64,
+    camera: &EarthCamera,
+) -> Option<Geodetic> {
+    let (ray_origin, ray_dir) = screen_to_ray(
+        screen_x,
+        screen_y,
+        viewport_width,
+        viewport_height,
+        camera,
+    );
+    let hit_ecef = raycast_ellipsoid(ray_origin, ray_dir)?;
+    Some(ecef_to_geodetic(hit_ecef))
 }
 
 /// A node in the tile quadtree.

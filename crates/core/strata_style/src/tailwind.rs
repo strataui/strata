@@ -1280,77 +1280,126 @@ impl TailwindEngine {
                 return;
             }
         }
+        if let Some(rest) = class.strip_prefix("inset-x-") {
+            if let Some(dim) = resolve_sizing_dimension(rest) {
+                style.insets.left = dim;
+                style.insets.right = dim;
+                return;
+            }
+        }
+        if let Some(rest) = class.strip_prefix("-inset-x-") {
+            if let Some(dim) = resolve_sizing_dimension(rest) {
+                let neg = match dim {
+                    Dimension::Px(px) => Dimension::Px(-px),
+                    Dimension::Percent(pct) => Dimension::Percent(-pct),
+                    other => other,
+                };
+                style.insets.left = neg;
+                style.insets.right = neg;
+                return;
+            }
+        }
         if let Some(rest) = class.strip_prefix("inset-y-") {
-            if let Some(px) = resolve_spacing(rest) {
-                style.insets.top = Dimension::Px(px);
-                style.insets.bottom = Dimension::Px(px);
+            if let Some(dim) = resolve_sizing_dimension(rest) {
+                style.insets.top = dim;
+                style.insets.bottom = dim;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("-inset-y-") {
-            if let Some(px) = resolve_spacing(rest) {
-                style.insets.top = Dimension::Px(-px);
-                style.insets.bottom = Dimension::Px(-px);
+            if let Some(dim) = resolve_sizing_dimension(rest) {
+                let neg = match dim {
+                    Dimension::Px(px) => Dimension::Px(-px),
+                    Dimension::Percent(pct) => Dimension::Percent(-pct),
+                    other => other,
+                };
+                style.insets.top = neg;
+                style.insets.bottom = neg;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("inset-") {
-            if let Some(px) = resolve_spacing(rest) {
-                style.insets = EdgeInsets::all(Dimension::Px(px));
+            if let Some(dim) = resolve_sizing_dimension(rest) {
+                style.insets = EdgeInsets::all(dim);
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("-inset-") {
-            if let Some(px) = resolve_spacing(rest) {
-                style.insets = EdgeInsets::all(Dimension::Px(-px));
+            if let Some(dim) = resolve_sizing_dimension(rest) {
+                let neg = match dim {
+                    Dimension::Px(px) => Dimension::Px(-px),
+                    Dimension::Percent(pct) => Dimension::Percent(-pct),
+                    other => other,
+                };
+                style.insets = EdgeInsets::all(neg);
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("top-") {
-            if let Some(px) = resolve_spacing(rest) {
-                style.insets.top = Dimension::Px(px);
+            if let Some(dim) = resolve_sizing_dimension(rest) {
+                style.insets.top = dim;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("-top-") {
-            if let Some(px) = resolve_spacing(rest) {
-                style.insets.top = Dimension::Px(-px);
+            if let Some(dim) = resolve_sizing_dimension(rest) {
+                let neg = match dim {
+                    Dimension::Px(px) => Dimension::Px(-px),
+                    Dimension::Percent(pct) => Dimension::Percent(-pct),
+                    other => other,
+                };
+                style.insets.top = neg;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("left-") {
-            if let Some(px) = resolve_spacing(rest) {
-                style.insets.left = Dimension::Px(px);
+            if let Some(dim) = resolve_sizing_dimension(rest) {
+                style.insets.left = dim;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("-left-") {
-            if let Some(px) = resolve_spacing(rest) {
-                style.insets.left = Dimension::Px(-px);
+            if let Some(dim) = resolve_sizing_dimension(rest) {
+                let neg = match dim {
+                    Dimension::Px(px) => Dimension::Px(-px),
+                    Dimension::Percent(pct) => Dimension::Percent(-pct),
+                    other => other,
+                };
+                style.insets.left = neg;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("right-") {
-            if let Some(px) = resolve_spacing(rest) {
-                style.insets.right = Dimension::Px(px);
+            if let Some(dim) = resolve_sizing_dimension(rest) {
+                style.insets.right = dim;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("-right-") {
-            if let Some(px) = resolve_spacing(rest) {
-                style.insets.right = Dimension::Px(-px);
+            if let Some(dim) = resolve_sizing_dimension(rest) {
+                let neg = match dim {
+                    Dimension::Px(px) => Dimension::Px(-px),
+                    Dimension::Percent(pct) => Dimension::Percent(-pct),
+                    other => other,
+                };
+                style.insets.right = neg;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("bottom-") {
-            if let Some(px) = resolve_spacing(rest) {
-                style.insets.bottom = Dimension::Px(px);
+            if let Some(dim) = resolve_sizing_dimension(rest) {
+                style.insets.bottom = dim;
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("-bottom-") {
-            if let Some(px) = resolve_spacing(rest) {
-                style.insets.bottom = Dimension::Px(-px);
+            if let Some(dim) = resolve_sizing_dimension(rest) {
+                let neg = match dim {
+                    Dimension::Px(px) => Dimension::Px(-px),
+                    Dimension::Percent(pct) => Dimension::Percent(-pct),
+                    other => other,
+                };
+                style.insets.bottom = neg;
                 return;
             }
         }
