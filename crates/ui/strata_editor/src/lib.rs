@@ -15,9 +15,10 @@ pub mod history;
 pub mod ime;
 pub mod markdown;
 pub mod model;
+pub mod soft_wrap;
 pub mod syntax;
 
-pub use buffer::LineBuffer;
+pub use buffer::{LineBuffer, TextRope};
 pub use clipboard::{ClipboardBridge, ClipboardPayload};
 pub use code_editor::CodeEditor;
 pub use cursor::{MultiCursor, Position, Selection};
@@ -26,10 +27,11 @@ pub use history::{EditOperation, EditorTransaction, HistoryStack};
 pub use ime::{ImeComposition, ImeState};
 pub use markdown::{from_markdown, to_markdown};
 pub use model::{BlockKind, BlockNode, Document, InlineMark, InlineSpan};
+pub use soft_wrap::{logical_to_visual, visual_to_logical, wrap_logical_line, VisualLine};
 pub use syntax::{FoldRange, Language, SyntaxHighlighter, SyntaxToken, TokenType};
 
 pub mod prelude {
-    pub use crate::buffer::LineBuffer;
+    pub use crate::buffer::{LineBuffer, TextRope};
     pub use crate::clipboard::{ClipboardBridge, ClipboardPayload};
     pub use crate::code_editor::CodeEditor;
     pub use crate::cursor::{MultiCursor, Position, Selection};
@@ -38,5 +40,6 @@ pub mod prelude {
     pub use crate::ime::{ImeComposition, ImeState};
     pub use crate::markdown::{from_markdown, to_markdown};
     pub use crate::model::{BlockKind, BlockNode, Document, InlineMark, InlineSpan};
+    pub use crate::soft_wrap::{logical_to_visual, visual_to_logical, wrap_logical_line, VisualLine};
     pub use crate::syntax::{FoldRange, Language, SyntaxHighlighter, SyntaxToken, TokenType};
 }

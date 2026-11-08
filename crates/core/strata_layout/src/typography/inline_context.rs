@@ -354,51 +354,30 @@ pub struct InlineLayoutResult {
     pub line_count: usize,
 }
 
-/// Returns true if a token cannot begin a new line per Unicode UAX#14 (e.g. closing punctuation, comma, colon, period).
+/// Returns true if a token cannot begin a new line per Unicode UAX #14 (Japanese Kinsoku Shori Gyoto Kinsoku).
 #[inline]
 pub fn is_prohibited_line_start(text: &str) -> bool {
     let mut chars = text.chars();
     match chars.next() {
-        Some(c) => matches!(
-            c,
-            ')' | ']'
-                | '}'
-                | '>'
-                | ','
-                | '.'
-                | ';'
-                | ':'
-                | '!'
-                | '?'
-                | '%'
-                | '‰'
-                | '’'
-                | '”'
-                | '»'
-                | '…'
-                | '\u{00B0}'
-        ),
+        Some(c) => super::line_breaker::is_prohibited_start(c),
         None => false,
     }
 }
 
-/// Returns true if a token cannot end a line per Unicode UAX#14 (e.g. opening brackets, quotes, currency symbols).
+/// Returns true if a token cannot end a line per Unicode UAX #14 (Japanese Kinsoku Shori Gyomatsu Kinsoku).
 #[inline]
 pub fn is_prohibited_line_end(text: &str) -> bool {
-    let trimmed = text.trim_end_matches(|c: char| c == ' ' || c == '\t');
+    let trimmed = text.trim_end_matches([' ', '\t']);
     if trimmed.len() != text.len() {
         return false;
     }
     match trimmed.chars().last() {
-        Some(c) => matches!(
-            c,
-            '(' | '[' | '{' | '<' | '“' | '‘' | '«' | '$' | '£' | '¥' | '€'
-        ),
+        Some(c) => super::line_breaker::is_prohibited_end(c),
         None => false,
     }
 }
 
-/// Returns true if a soft line break is permitted between two adjacent inline tokens.
+/// Returns true if a soft line break is permitted between two adjacent inline tokens per UAX #14.
 #[inline]
 fn can_break_between(prev: &InlineToken, next: &InlineToken) -> bool {
     if prev.is_hard_break || next.is_hard_break {
@@ -406,6 +385,11 @@ fn can_break_between(prev: &InlineToken, next: &InlineToken) -> bool {
     }
     if is_prohibited_line_start(&next.text) || is_prohibited_line_end(&prev.text) {
         return false;
+    }
+    if let (Some(p_ch), Some(n_ch)) = (prev.text.chars().last(), next.text.chars().next()) {
+        if super::line_breaker::can_break_between_chars(p_ch, n_ch) {
+            return true;
+        }
     }
     prev.can_break_after || next.atomic.is_some()
 }
@@ -466,17 +450,19 @@ impl InlineFormattingContext {
         let bidi_runs = self.bidi.resolve_runs(&text);
         let mut shaped = Vec::new();
 
-        let weight_multiplier = match style.font_weight {
-            FontWeight::Bold | FontWeight::ExtraBold | FontWeight::Black => 1.05,
-            FontWeight::SemiBold => 1.025,
-            _ => 1.0,
-        };
+        let opt_font = super::opentype::lookup_font_for_style(
+            style.font_family,
+            style.font_weight,
+            style.font_style,
+        );
 
         for run in bidi_runs {
             let run_slice = &text[run.start..run.end];
-            let mut run_glyphs = self
-                .shaper
-                .shape(run_slice, font_metrics, style.is_monospace);
+            let mut run_glyphs = if let Some(ref font) = opt_font {
+                self.shaper.shape_with_font(run_slice, font, style.font_size)
+            } else {
+                self.shaper.shape(run_slice, font_metrics, style.is_monospace)
+            };
             if run.is_rtl {
                 run_glyphs.reverse();
             }
@@ -484,10 +470,7 @@ impl InlineFormattingContext {
         }
 
         let mut token_width = 0.0f32;
-        for g in &mut shaped {
-            if weight_multiplier != 1.0 {
-                g.x_advance = LayoutUnit::from_f32(g.x_advance.to_f32() * weight_multiplier);
-            }
+        for g in &shaped {
             token_width += g.x_advance.to_f32();
         }
 
@@ -520,22 +503,14 @@ impl InlineFormattingContext {
                 style.is_monospace,
                 style.font_family,
             );
-            let weight_factor = match style.font_weight {
-                FontWeight::SemiBold => 1.03,
-                FontWeight::Bold => 1.06,
-                FontWeight::ExtraBold => 1.08,
-                FontWeight::Black => 1.10,
-                _ => 1.0,
-            };
-            let target_w = meas_w * weight_factor;
-            if token_width > 0.0 && target_w > 0.0 {
-                let scale = target_w / token_width;
+            if token_width > 0.0 && meas_w > 0.0 {
+                let scale = meas_w / token_width;
                 for g in &mut shaped {
                     g.x_advance = LayoutUnit::from_f32(g.x_advance.to_f32() * scale);
                 }
-                token_width = target_w;
-            } else if target_w > 0.0 {
-                token_width = target_w;
+                token_width = meas_w;
+            } else if meas_w > 0.0 {
+                token_width = meas_w;
             }
         } else if let Some(styled_measurer) = crate::text::get_styled_text_measurer() {
             let (meas_w, _) = styled_measurer(
@@ -564,22 +539,14 @@ impl InlineFormattingContext {
                 None,
                 style.is_monospace,
             );
-            let weight_factor = match style.font_weight {
-                FontWeight::SemiBold => 1.03,
-                FontWeight::Bold => 1.06,
-                FontWeight::ExtraBold => 1.08,
-                FontWeight::Black => 1.10,
-                _ => 1.0,
-            };
-            let target_w = meas_w * weight_factor;
-            if token_width > 0.0 && target_w > 0.0 {
-                let scale = target_w / token_width;
+            if token_width > 0.0 && meas_w > 0.0 {
+                let scale = meas_w / token_width;
                 for g in &mut shaped {
                     g.x_advance = LayoutUnit::from_f32(g.x_advance.to_f32() * scale);
                 }
-                token_width = target_w;
-            } else if target_w > 0.0 {
-                token_width = target_w;
+                token_width = meas_w;
+            } else if meas_w > 0.0 {
+                token_width = meas_w;
             }
         }
 
@@ -747,7 +714,7 @@ impl InlineFormattingContext {
                             } else {
                                 if !options.white_space.collapses_spaces()
                                     || tokens.is_empty()
-                                    || !tokens.last().map_or(false, |t| t.text.ends_with(' '))
+                                    || !tokens.last().is_some_and(|t| t.text.ends_with(' '))
                                 {
                                     current_word.push(ch);
                                     tokens.push(self.make_text_token(
@@ -778,9 +745,12 @@ impl InlineFormattingContext {
                                     true,
                                 ));
                             }
-                        } else if (ch >= '\u{4E00}' && ch <= '\u{9FFF}')
-                            || (ch >= '\u{3040}' && ch <= '\u{30FF}')
-                            || (ch >= '\u{AC00}' && ch <= '\u{D7AF}')
+                        } else if ('\u{4E00}'..='\u{9FFF}').contains(&ch)
+                            || ('\u{3400}'..='\u{4DBF}').contains(&ch)
+                            || ('\u{3040}'..='\u{30FF}').contains(&ch)
+                            || ('\u{AC00}'..='\u{D7AF}').contains(&ch)
+                            || ('\u{3000}'..='\u{303F}').contains(&ch)
+                            || ('\u{FF01}'..='\u{FF60}').contains(&ch)
                         {
                             if !current_word.is_empty() {
                                 tokens.push(self.make_text_token(
@@ -791,6 +761,7 @@ impl InlineFormattingContext {
                                     true,
                                 ));
                             }
+                            let can_break_after = !super::line_breaker::is_prohibited_end(ch);
                             let mut cjk_str = String::new();
                             cjk_str.push(ch);
                             tokens.push(self.make_text_token(
@@ -798,7 +769,7 @@ impl InlineFormattingContext {
                                 cjk_str,
                                 style,
                                 &font_metrics,
-                                true,
+                                can_break_after,
                             ));
                         } else {
                             current_word.push(ch);
@@ -903,14 +874,12 @@ impl InlineFormattingContext {
                 if allows_soft_wrap
                     && !line_tokens.is_empty()
                     && (line_width + cluster_width > opp.available_width + 0.5)
-                {
-                    if line_tokens
+                    && line_tokens
                         .last()
-                        .map_or(true, |prev| can_break_between(prev, tok))
+                        .is_none_or(|prev| can_break_between(prev, tok))
                     {
                         break;
                     }
-                }
 
                 // If line is empty and unbreakable cluster exceeds available_width:
                 // Check if dropping past float gives more width
@@ -927,9 +896,9 @@ impl InlineFormattingContext {
                     }
                 }
 
-                for i in token_idx..cluster_end {
-                    line_width += tokens[i].width;
-                    line_tokens.push(tokens[i].clone());
+                for tok in &tokens[token_idx..cluster_end] {
+                    line_width += tok.width;
+                    line_tokens.push(tok.clone());
                 }
                 token_idx = cluster_end;
             }

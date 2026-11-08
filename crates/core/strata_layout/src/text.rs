@@ -38,16 +38,16 @@ pub type FamilyStyledTextMeasurementCallback = fn(
 /// Global font metrics callback returning `(ascent_px, descent_px, line_gap_px)`.
 pub type FontMetricsCallback = fn(strata_primitives::AtomId, f32, bool) -> (f32, f32, f32);
 
-static TEXT_MEASURER: std::sync::atomic::AtomicPtr<()> =
-    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
-static STYLED_TEXT_MEASURER: std::sync::atomic::AtomicPtr<()> =
-    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
-static FAMILY_TEXT_MEASURER: std::sync::atomic::AtomicPtr<()> =
-    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
-static FAMILY_STYLED_TEXT_MEASURER: std::sync::atomic::AtomicPtr<()> =
-    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
-static FONT_METRICS: std::sync::atomic::AtomicPtr<()> =
-    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static TEXT_MEASURER: std::sync::RwLock<Option<TextMeasurementCallback>> =
+    std::sync::RwLock::new(None);
+static STYLED_TEXT_MEASURER: std::sync::RwLock<Option<StyledTextMeasurementCallback>> =
+    std::sync::RwLock::new(None);
+static FAMILY_TEXT_MEASURER: std::sync::RwLock<Option<FamilyTextMeasurementCallback>> =
+    std::sync::RwLock::new(None);
+static FAMILY_STYLED_TEXT_MEASURER: std::sync::RwLock<Option<FamilyStyledTextMeasurementCallback>> =
+    std::sync::RwLock::new(None);
+static FONT_METRICS: std::sync::RwLock<Option<FontMetricsCallback>> =
+    std::sync::RwLock::new(None);
 static FONT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Returns the current font configuration generation. Caches key on this value
@@ -62,82 +62,67 @@ fn bump_font_generation() {
 
 /// Registers a global platform text measurement callback (e.g. PangoCairo).
 pub fn register_text_measurer(measurer: TextMeasurementCallback) {
-    TEXT_MEASURER.store(measurer as *mut (), std::sync::atomic::Ordering::SeqCst);
+    if let Ok(mut lock) = TEXT_MEASURER.write() {
+        *lock = Some(measurer);
+    }
     bump_font_generation();
 }
 
 /// Registers a global platform styled text measurement callback (e.g. PangoCairo).
 pub fn register_styled_text_measurer(measurer: StyledTextMeasurementCallback) {
-    STYLED_TEXT_MEASURER.store(measurer as *mut (), std::sync::atomic::Ordering::SeqCst);
+    if let Ok(mut lock) = STYLED_TEXT_MEASURER.write() {
+        *lock = Some(measurer);
+    }
     bump_font_generation();
 }
 
 /// Registers a global platform text measurement callback that is family aware.
 pub fn register_family_text_measurer(measurer: FamilyTextMeasurementCallback) {
-    FAMILY_TEXT_MEASURER.store(measurer as *mut (), std::sync::atomic::Ordering::SeqCst);
+    if let Ok(mut lock) = FAMILY_TEXT_MEASURER.write() {
+        *lock = Some(measurer);
+    }
     bump_font_generation();
 }
 
 /// Registers a global platform styled text measurement callback that is family aware.
 pub fn register_family_styled_text_measurer(measurer: FamilyStyledTextMeasurementCallback) {
-    FAMILY_STYLED_TEXT_MEASURER.store(measurer as *mut (), std::sync::atomic::Ordering::SeqCst);
+    if let Ok(mut lock) = FAMILY_STYLED_TEXT_MEASURER.write() {
+        *lock = Some(measurer);
+    }
     bump_font_generation();
 }
 
 /// Registers a global platform font metrics callback (ascent, descent, line gap).
 pub fn register_font_metrics(metrics: FontMetricsCallback) {
-    FONT_METRICS.store(metrics as *mut (), std::sync::atomic::Ordering::SeqCst);
+    if let Ok(mut lock) = FONT_METRICS.write() {
+        *lock = Some(metrics);
+    }
     bump_font_generation();
 }
 
 /// Retrieves the active registered text measurer callback, if any.
 pub fn get_text_measurer() -> Option<TextMeasurementCallback> {
-    let ptr = TEXT_MEASURER.load(std::sync::atomic::Ordering::SeqCst);
-    if ptr.is_null() {
-        None
-    } else {
-        Some(unsafe { std::mem::transmute(ptr) })
-    }
+    TEXT_MEASURER.read().ok().and_then(|lock| *lock)
 }
 
 /// Retrieves the active registered styled text measurer callback, if any.
 pub fn get_styled_text_measurer() -> Option<StyledTextMeasurementCallback> {
-    let ptr = STYLED_TEXT_MEASURER.load(std::sync::atomic::Ordering::SeqCst);
-    if ptr.is_null() {
-        None
-    } else {
-        Some(unsafe { std::mem::transmute(ptr) })
-    }
+    STYLED_TEXT_MEASURER.read().ok().and_then(|lock| *lock)
 }
 
 /// Retrieves the active registered family-aware text measurer callback, if any.
 pub fn get_family_text_measurer() -> Option<FamilyTextMeasurementCallback> {
-    let ptr = FAMILY_TEXT_MEASURER.load(std::sync::atomic::Ordering::SeqCst);
-    if ptr.is_null() {
-        None
-    } else {
-        Some(unsafe { std::mem::transmute(ptr) })
-    }
+    FAMILY_TEXT_MEASURER.read().ok().and_then(|lock| *lock)
 }
 
 /// Retrieves the active registered family-aware styled text measurer callback, if any.
 pub fn get_family_styled_text_measurer() -> Option<FamilyStyledTextMeasurementCallback> {
-    let ptr = FAMILY_STYLED_TEXT_MEASURER.load(std::sync::atomic::Ordering::SeqCst);
-    if ptr.is_null() {
-        None
-    } else {
-        Some(unsafe { std::mem::transmute(ptr) })
-    }
+    FAMILY_STYLED_TEXT_MEASURER.read().ok().and_then(|lock| *lock)
 }
 
 /// Retrieves the active registered font metrics callback, if any.
 pub fn get_font_metrics() -> Option<FontMetricsCallback> {
-    let ptr = FONT_METRICS.load(std::sync::atomic::Ordering::SeqCst);
-    if ptr.is_null() {
-        None
-    } else {
-        Some(unsafe { std::mem::transmute(ptr) })
-    }
+    FONT_METRICS.read().ok().and_then(|lock| *lock)
 }
 
 pub fn is_monospace_family(font_family: strata_primitives::AtomId) -> bool {
@@ -453,6 +438,7 @@ pub fn measure_text_bounds_with_family(
 ///
 /// Prefers the registered family-aware styled measurer (e.g. PangoCairo) so
 /// intrinsic sizing does not have to run a full inline shaping pass.
+#[allow(clippy::too_many_arguments)]
 pub fn measure_text_bounds_styled_with_family(
     text: &str,
     font_size: f32,
@@ -492,6 +478,43 @@ pub fn measure_text_bounds_styled_with_family(
             font_weight,
             font_style,
         );
+        styled_cache_put(key, bounds);
+        return bounds;
+    }
+
+    if let Some(font) =
+        crate::typography::opentype::lookup_font_for_style(font_family, font_weight, font_style)
+    {
+        let key = styled_measure_key(
+            hash_text(text),
+            text.len(),
+            font_size,
+            line_height_multiplier,
+            max_width,
+            is_monospace,
+            Some(font_family),
+            font_weight,
+            font_style,
+        );
+        if let Some(hit) = styled_cache_get(&key) {
+            return hit;
+        }
+
+        let mut total_w = 0.0f32;
+        let mut prev_gid: Option<u16> = None;
+        for c in text.chars() {
+            let gid = font.glyph_id(c);
+            let adv = font.glyph_advance(gid, font_size);
+            if let Some(pg) = prev_gid {
+                let kern = font.pair_kerning(pg, gid, font_size);
+                total_w += kern;
+            }
+            total_w += adv;
+            prev_gid = Some(gid);
+        }
+
+        let total_h = font_size * line_height_multiplier;
+        let bounds = (total_w, total_h);
         styled_cache_put(key, bounds);
         return bounds;
     }

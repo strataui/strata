@@ -1,6 +1,7 @@
 //! Verifies that merged inline fragments advance by the continuously measured
 //! width of the merged run rather than the sum of isolated token widths.
 //!
+#![allow(clippy::field_reassign_with_default, clippy::too_many_arguments)]
 //! Pango shapes a merged fragment as one string, so its painted advance is
 //! slightly wider than the sum of the per-token measurements. The fragment
 //! assembly pass must therefore re-measure the merged text and use that width

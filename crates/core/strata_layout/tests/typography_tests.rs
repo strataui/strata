@@ -321,3 +321,92 @@ fn test_block_container_ifc_auto_wrapping() {
     assert!(block.line_boxes.len() >= 2, "Prose must wrap into multiple line boxes");
     assert!(block.geometry.border_box.height >= 40.0, "Height must encompass all lines");
 }
+
+#[test]
+fn test_complex_script_shaping_arabic_indic_thai() {
+    let shaper = TextShaper::new();
+    let metrics = FontMetrics::default_sans(16.0);
+
+    // 1. Arabic contextual joining: كتب (Kaf + Teh + Beh)
+    // Initial Kaf (0xFEDB), Medial Teh (0xFE98), Final Beh (0xFE90)
+    let kataba = "كتب";
+    let glyphs = shaper.shape(kataba, &metrics, false);
+    assert_eq!(glyphs.len(), 3);
+    assert_eq!(glyphs[0].glyph_id, 0xFEDB, "Kaf must be Initial form");
+    assert_eq!(glyphs[1].glyph_id, 0xFE98, "Teh must be Medial form");
+    assert_eq!(glyphs[2].glyph_id, 0xFE90, "Beh must be Final form");
+
+    // 2. Arabic Lam-Alef mandatory ligature: سلام (Seen + Lam + Alef + Meem)
+    // Initial Seen (0xFEB3), Lam-Alef Final ligature (0xFEFC), Isolated Meem (0xFEE1)
+    let salam = "سلام";
+    let salam_glyphs = shaper.shape(salam, &metrics, false);
+    assert_eq!(salam_glyphs.len(), 3, "Lam + Alef must merge into a single ligature glyph");
+    assert_eq!(salam_glyphs[0].glyph_id, 0xFEB3, "Seen must be Initial");
+    assert_eq!(salam_glyphs[1].glyph_id, 0xFEFC, "Lam-Alef must be Final ligature form");
+    assert!(salam_glyphs[1].is_ligature, "Lam-Alef must be marked as ligature");
+    assert_eq!(salam_glyphs[2].glyph_id, 0xFEE1, "Meem must be Isolated form");
+
+    // 3. Arabic transparent Harakat / Tashkeel: كَتَبَ
+    let kataba_vowels = "كَتَبَ";
+    let vowel_glyphs = shaper.shape(kataba_vowels, &metrics, false);
+    assert_eq!(vowel_glyphs.len(), 6);
+    let marks: Vec<&ShapedGlyph> = vowel_glyphs.iter().filter(|g| g.is_mark).collect();
+    assert_eq!(marks.len(), 3);
+    for mark in marks {
+        assert_eq!(mark.x_advance, LayoutUnit::ZERO, "Tashkeel vowel must have zero horizontal advance");
+        assert!(mark.y_offset > LayoutUnit::ZERO, "Fatha must have positive y_offset above baseline");
+    }
+
+    // 4. Indic complex conjunct: क्ष (Ksha: Ka + Virama + Ssa) and त्र (Tra: Ta + Virama + Ra)
+    let indic_text = "क्षेत्र";
+    let indic_glyphs = shaper.shape(indic_text, &metrics, false);
+    let has_ksha = indic_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xF050);
+    let has_tra = indic_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xF051);
+    assert!(has_ksha, "Must shape Indic conjunct 'क्ष' (Ksha)");
+    assert!(has_tra, "Must shape Indic conjunct 'त्र' (Tra)");
+
+    // 5. Thai vertical tone mark and vowel stacking
+    let thai_text = "น้ำ";
+    let thai_glyphs = shaper.shape(thai_text, &metrics, false);
+    let thai_mark = thai_glyphs.iter().find(|g| g.glyph_id == '\u{0E49}' as u32);
+    assert!(thai_mark.is_some(), "Thai tone mark Mai Tho must be present");
+    let mark = thai_mark.unwrap();
+    assert!(mark.is_mark);
+    assert_eq!(mark.x_advance, LayoutUnit::ZERO, "Thai tone mark must have zero advance for vertical stacking");
+    assert!(mark.y_offset > LayoutUnit::ZERO, "Thai tone mark must stack vertically above base");
+
+    // 6. Extended code operator ligatures
+    let op_text = "a ||= b &&= c ??= d";
+    let op_glyphs = shaper.shape(op_text, &metrics, false);
+    assert!(op_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xF010), "Must shape '||=' ligature");
+    assert!(op_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xF011), "Must shape '&&=' ligature");
+    assert!(op_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xF012), "Must shape '??=' ligature");
+
+    // 7. Multi-glyph Arabic ligatures: الله (Allah), محمد (Muhammad), أكبر (Akbar)
+    let allah_text = "الله أكبر";
+    let allah_glyphs = shaper.shape(allah_text, &metrics, false);
+    assert!(allah_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xFDF2), "Must shape Allah ligature (0xFDF2)");
+    assert!(allah_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xFDF3), "Must shape Akbar ligature (0xFDF3)");
+
+    let muhammad_text = "محمد";
+    let muhammad_glyphs = shaper.shape(muhammad_text, &metrics, false);
+    assert_eq!(muhammad_glyphs.len(), 1, "Muhammad must shape to a single multi-glyph ligature");
+    assert_eq!(muhammad_glyphs[0].glyph_id, 0xFDF4, "Must shape Muhammad ligature (0xFDF4)");
+
+    // 8. Indic Universal Shaping Engine (USE) pre-base vowel reordering
+    // Input: "कि" (Ka \u{0915} + Short I matra \u{093F})
+    // USE output order: Matra \u{093F} FIRST, followed by Ka \u{0915}
+    let ki_text = "कि";
+    let ki_glyphs = shaper.shape(ki_text, &metrics, false);
+    assert_eq!(ki_glyphs.len(), 2, "Must produce 2 glyphs for 'कि'");
+    assert_eq!(ki_glyphs[0].glyph_id, 0x093F, "Pre-base vowel sign 'ि' must be reordered before consonant");
+    assert_eq!(ki_glyphs[1].glyph_id, 0x0915, "Consonant 'क' must follow reordered pre-base vowel");
+
+    // 9. Indic Reph handling: "धर्म" (Dha \u{0927} + Ra \u{0930} + Virama \u{094D} + Ma \u{092E})
+    let dharma_text = "धर्म";
+    let dharma_glyphs = shaper.shape(dharma_text, &metrics, false);
+    assert!(dharma_glyphs.len() >= 3, "Must produce shaped cluster for 'धर्म'");
+    assert_eq!(dharma_glyphs[0].glyph_id, 0x0927, "Base consonant 'ध'");
+    // Reph mark attaches above 'म'
+    assert!(dharma_glyphs.iter().any(|g| g.glyph_id == 0x094D && g.is_mark), "Reph mark must attach above base consonant");
+}
