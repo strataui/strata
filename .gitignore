@@ -1,14 +1,5 @@
 # Strata Repository Gitignore
 
-# Core internal planning, tracking, and deep architecture analysis (Gitignored per project design)
-info/
-references/
-
-# Local agent configuration, instructions, and task records (kept locally, never committed)
-.opencode/
-AGENTS.md
-info/agent_tasks/
-
 # Rust Cargo build artifacts
 target/
 **/*.rs.bk
@@ -25,7 +16,7 @@ pkg/
 *.app/
 *.dSYM/
 
-# IDE / Editor artifacts
+# IDE and editor artifacts
 .idea/
 .vscode/
 *.swp
@@ -36,7 +27,7 @@ pkg/
 # OS specific files
 Thumbs.db
 
-# Node.js and VitePress documentation build artifacts
+# Documentation build artifacts
 node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
