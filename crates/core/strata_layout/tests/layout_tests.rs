@@ -1,5 +1,7 @@
 //! Integration Tests: Chromium-grade Box Model, Flexbox, CSS Grid, Positioning, and Subpixel Snapping.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use strata_layout::prelude::*;
 use strata_layout::box_model::collapse_margins;
 use strata_primitives::geom::EdgeInsets;
@@ -450,4 +452,127 @@ fn test_subtree_layout_cache_invalidation_and_hit() {
     assert!(!root.layout_cache.is_valid);
     assert!(!root.children[0].layout_cache.is_valid);
 }
+
+#[test]
+fn test_layout_boundary_containment_classification() {
+    use strata_style::types::{Containment, Dimension, Overflow, Position};
+
+    // 1. contain: strict is always a layout boundary
+    let mut strict_style = ComputedStyle::default();
+    strict_style.contain = Containment::STRICT;
+    let strict_node = LayoutNode::new(strict_style);
+    assert!(strict_node.is_layout_boundary(), "contain: strict must be a layout boundary");
+
+    // 2. contain: content is a layout boundary
+    let mut content_style = ComputedStyle::default();
+    content_style.contain = Containment::CONTENT;
+    let content_node = LayoutNode::new(content_style);
+    assert!(content_node.is_layout_boundary(), "contain: content must be a layout boundary");
+
+    // 3. contain: layout + contain: size is a layout boundary
+    let mut layout_size_style = ComputedStyle::default();
+    layout_size_style.contain.layout = true;
+    layout_size_style.contain.size = true;
+    let layout_size_node = LayoutNode::new(layout_size_style);
+    assert!(layout_size_node.is_layout_boundary(), "contain: layout + size must be a layout boundary");
+
+    // 4. contain: layout with definite width and height is a layout boundary
+    let mut layout_definite_style = ComputedStyle::default();
+    layout_definite_style.contain.layout = true;
+    layout_definite_style.width = Dimension::Px(300.0);
+    layout_definite_style.height = Dimension::Px(200.0);
+    let layout_definite_node = LayoutNode::new(layout_definite_style);
+    assert!(layout_definite_node.is_layout_boundary(), "contain: layout with definite dimensions must be a layout boundary");
+
+    // 5. contain: layout with auto height is NOT a layout boundary (height depends on descendants)
+    let mut layout_auto_style = ComputedStyle::default();
+    layout_auto_style.contain.layout = true;
+    layout_auto_style.width = Dimension::Px(300.0);
+    layout_auto_style.height = Dimension::Auto;
+    let layout_auto_node = LayoutNode::new(layout_auto_style);
+    assert!(!layout_auto_node.is_layout_boundary(), "contain: layout with auto height must not be a layout boundary");
+
+    // 6. Absolute positioned box with clipping and definite dimensions is a layout boundary
+    let mut abs_style = ComputedStyle::default();
+    abs_style.position = Position::Absolute;
+    abs_style.overflow_x = Overflow::Hidden;
+    abs_style.overflow_y = Overflow::Hidden;
+    abs_style.width = Dimension::Px(150.0);
+    abs_style.height = Dimension::Px(100.0);
+    let abs_node = LayoutNode::new(abs_style);
+    assert!(abs_node.is_layout_boundary(), "clipped absolute box with definite dimensions must be a layout boundary");
+}
+
+#[test]
+fn test_granular_subtree_layout_invalidation_and_preservation() {
+    use strata_style::types::{Containment, Dimension, Display};
+
+    let mut root_style = ComputedStyle::default();
+    root_style.display = Display::Block;
+    root_style.width = Dimension::Px(600.0);
+    root_style.height = Dimension::Px(400.0);
+
+    // Sibling A: Layout boundary (contain: strict)
+    let mut a_style = ComputedStyle::default();
+    a_style.display = Display::Block;
+    a_style.contain = Containment::STRICT;
+    a_style.width = Dimension::Px(250.0);
+    a_style.height = Dimension::Px(200.0);
+
+    let mut a_child_style = ComputedStyle::default();
+    a_child_style.width = Dimension::Px(100.0);
+    a_child_style.height = Dimension::Px(50.0);
+
+    let sib_a = LayoutNode::with_children(
+        a_style,
+        vec![LayoutNode::new(a_child_style.clone()), LayoutNode::new(a_child_style)],
+    );
+
+    // Sibling B: Independent subtree
+    let mut b_style = ComputedStyle::default();
+    b_style.display = Display::Block;
+    b_style.width = Dimension::Px(250.0);
+    b_style.height = Dimension::Px(200.0);
+
+    let mut b_child_style = ComputedStyle::default();
+    b_child_style.width = Dimension::Px(120.0);
+    b_child_style.height = Dimension::Px(60.0);
+
+    let sib_b = LayoutNode::with_children(
+        b_style,
+        vec![LayoutNode::new(b_child_style.clone()), LayoutNode::new(b_child_style)],
+    );
+
+    let mut root = LayoutNode::with_children(root_style, vec![sib_a, sib_b]);
+
+    // Initial full layout
+    root.compute_layout(600.0, 400.0);
+    assert!(root.layout_cache.is_valid);
+    assert!(root.children[0].layout_cache.is_valid);
+    assert!(root.children[1].layout_cache.is_valid);
+
+    // Invalidate layout ONLY within Sibling A (index path [0, 0] under boundary [0])
+    let invalidated = root.invalidate_layout_boundary(&[0, 0]);
+    assert!(invalidated, "Must locate boundary along path");
+
+    // Sibling A was invalidated
+    assert!(!root.children[0].layout_cache.is_valid);
+
+    // Sibling B was NOT invalidated: its layout cache remains intact
+    assert!(
+        root.children[1].layout_cache.is_valid,
+        "Sibling B layout cache must be preserved across isolated boundary invalidation"
+    );
+
+    // Recompute localized layout within Sibling A boundary
+    let localized = root.compute_subgrid_or_boundary_layout(&[0, 0]);
+    assert!(localized, "Must recompute strictly within layout boundary");
+
+    // Sibling A's children are now validly formatted again
+    assert!(root.children[0].geometry.border_box.width > 0.0);
+    // Sibling B is still valid and uncorrupted
+    assert!(root.children[1].layout_cache.is_valid);
+    assert_eq!(root.children[1].geometry.border_box.width, 250.0);
+}
+
 

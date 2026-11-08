@@ -4,13 +4,173 @@
 //! §17.5.2 (Auto Table Sizing Algorithm), §17.5.3 (Cell Vertical Alignment),
 //! §17.4 (Table Captions & Wrapper Box), and §17.6 (Borders: Separated vs Collapsed).
 
+#![allow(clippy::needless_range_loop)]
+
 use crate::box_model::{clamp_dimension, resolve_dimension};
 use crate::geometry::{LayoutGeometry, Rect};
 use crate::intrinsic::compute_min_max_sizes;
 use crate::tree::LayoutNode;
 use strata_style::types::{
-    BorderCollapse, CaptionSide, Display, Position, TableLayout, VerticalAlign,
+    BorderCollapse, BorderStyle, CaptionSide, Color, Display, Position, TableLayout,
+    VerticalAlign,
 };
+
+/// Origin element type of a border edge in the collapsing border model.
+/// Priority order per CSS 2.1 §17.6.2.1:
+/// cell > row > row group > column > colgroup > table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ElementSource {
+    Table = 0,
+    ColGroup = 1,
+    Col = 2,
+    RowGroup = 3,
+    Row = 4,
+    Cell = 5,
+}
+
+/// A resolved or candidate border edge in the collapsing border model (CSS 2.1 §17.6.2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CollapsedBorderEdge {
+    pub width: f32,
+    pub style: BorderStyle,
+    pub color: Option<Color>,
+    pub source: ElementSource,
+}
+
+impl Default for CollapsedBorderEdge {
+    fn default() -> Self {
+        Self {
+            width: 0.0,
+            style: BorderStyle::None,
+            color: None,
+            source: ElementSource::Table,
+        }
+    }
+}
+
+/// Computes the priority ranking of a border style per CSS 2.1 §17.6.2.1:
+/// 'double' > 'solid' > 'dashed' > 'dotted' > 'none'/'hidden'.
+#[inline]
+pub fn border_style_priority(style: BorderStyle) -> u8 {
+    match style {
+        BorderStyle::Double => 4,
+        BorderStyle::Solid => 3,
+        BorderStyle::Dashed => 2,
+        BorderStyle::Dotted => 1,
+        BorderStyle::None | BorderStyle::Hidden => 0,
+    }
+}
+
+/// Resolves the winning border between two conflicting edges meeting at a grid boundary (CSS 2.1 §17.6.2.1).
+///
+/// `first` is the edge from the top or left element.
+/// `second` is the edge from the bottom or right element.
+pub fn resolve_collapsed_border(
+    first: CollapsedBorderEdge,
+    second: CollapsedBorderEdge,
+) -> CollapsedBorderEdge {
+    // 1. 'border-style: hidden' takes precedence over all other conflicting borders
+    // and suppresses border rendering entirely (width = 0).
+    if first.style == BorderStyle::Hidden || second.style == BorderStyle::Hidden {
+        return CollapsedBorderEdge {
+            width: 0.0,
+            style: BorderStyle::Hidden,
+            color: None,
+            source: if first.style == BorderStyle::Hidden {
+                first.source
+            } else {
+                second.source
+            },
+        };
+    }
+
+    // 2. 'border-style: none' has the lowest priority: any specified border wins over 'none'.
+    let first_is_none = first.style == BorderStyle::None || first.width <= 0.0;
+    let second_is_none = second.style == BorderStyle::None || second.width <= 0.0;
+
+    if first_is_none && !second_is_none {
+        return second;
+    }
+    if !first_is_none && second_is_none {
+        return first;
+    }
+    if first_is_none && second_is_none {
+        return CollapsedBorderEdge::default();
+    }
+
+    // 3. Wider border wins over narrower.
+    const EPSILON: f32 = 0.001;
+    if (first.width - second.width).abs() > EPSILON {
+        return if first.width > second.width {
+            first
+        } else {
+            second
+        };
+    }
+
+    // 4. If widths are identical, style priority: double > solid > dashed > dotted
+    let prio_first = border_style_priority(first.style);
+    let prio_second = border_style_priority(second.style);
+    if prio_first != prio_second {
+        return if prio_first > prio_second {
+            first
+        } else {
+            second
+        };
+    }
+
+    // 5. If styles and widths are identical, element origin priority:
+    // cell > row > row group > column > colgroup > table.
+    if first.source != second.source {
+        return if first.source > second.source {
+            first
+        } else {
+            second
+        };
+    }
+
+    // 6. When two elements of the same type have conflicting borders of the same
+    // width and style, the border from the cell to the left / top wins.
+    first
+}
+
+/// 2D grid matrix storing resolved collapsed borders and boundary coordinates (CSS 2.1 §17.6.2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableBorderGrid {
+    pub num_rows: usize,
+    pub num_cols: usize,
+    /// Horizontal boundary edges: `(num_rows + 1)` rows by `num_cols` columns.
+    pub horizontal_edges: Vec<Vec<CollapsedBorderEdge>>,
+    /// Vertical boundary edges: `num_rows` rows by `(num_cols + 1)` columns.
+    pub vertical_edges: Vec<Vec<CollapsedBorderEdge>>,
+    /// Y coordinates of the `num_rows + 1` horizontal grid lines.
+    pub row_positions: Vec<f32>,
+    /// X coordinates of the `num_cols + 1` vertical grid lines.
+    pub col_positions: Vec<f32>,
+}
+
+impl TableBorderGrid {
+    pub fn new(num_rows: usize, num_cols: usize) -> Self {
+        Self {
+            num_rows,
+            num_cols,
+            horizontal_edges: vec![vec![CollapsedBorderEdge::default(); num_cols]; num_rows + 1],
+            vertical_edges: vec![vec![CollapsedBorderEdge::default(); num_cols + 1]; num_rows],
+            row_positions: vec![0.0; num_rows + 1],
+            col_positions: vec![0.0; num_cols + 1],
+        }
+    }
+
+    pub fn translate(&mut self, dx: f32, dy: f32) {
+        for y in &mut self.row_positions {
+            *y += dy;
+        }
+        for x in &mut self.col_positions {
+            *x += dx;
+        }
+    }
+}
+
 
 /// Location of a table cell within the container's hierarchy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +202,21 @@ struct RowLocation {
 
 /// Solves W3C CSS Table Layout for a table container and its rows/cells.
 pub fn solve_table(container: &mut LayoutNode, available_width: f32, available_height: f32) {
+    solve_table_guarded(
+        container,
+        available_width,
+        available_height,
+        crate::tree::LayoutDepthGuard::root(),
+    );
+}
+
+/// Solves W3C CSS Table Layout with an active depth guard to prevent stack overflow.
+pub fn solve_table_guarded(
+    container: &mut LayoutNode,
+    available_width: f32,
+    available_height: f32,
+    guard: crate::tree::LayoutDepthGuard,
+) {
     let _prof = crate::prof::Scope::new(crate::prof::Slot::Table);
     let padding = container.style.padding;
     let border = container.style.border_width;
@@ -86,15 +261,18 @@ pub fn solve_table(container: &mut LayoutNode, available_width: f32, available_h
         }
     }
 
+    let child_guard = guard.enter();
+
     if rows.is_empty() {
         let mut total_h = padding.top + padding.bottom + border.top + border.bottom;
         let w = resolve_dimension(container.style.width, available_width).unwrap_or(0.0);
         let table_origin_x = container.geometry.border_box.x;
         let table_origin_y = container.geometry.border_box.y;
 
+        let cg = child_guard.unwrap_or(guard);
         for &cap_idx in top_captions.iter().chain(bottom_captions.iter()) {
             let cap = &mut container.children[cap_idx];
-            cap.compute_layout(w, available_height);
+            cap.compute_layout_guarded(w, available_height, None, 0.0, cg);
             let cap_h = cap.geometry.border_box.height;
             let cap_m = cap.style.margin;
             cap.geometry = LayoutGeometry::from_border_box(
@@ -202,21 +380,240 @@ pub fn solve_table(container: &mut LayoutNode, available_width: f32, available_h
         return;
     }
 
-    // Resolve shared horizontal borders once per row boundary (CSS 2.1 §17.6.2).
-    // In the collapsed model the bottom edge of one row and the top edge of the
-    // next describe a single border; each boundary is stored once and later
-    // split evenly between the two adjoining rows.
+    // Resolve shared horizontal and vertical borders (CSS 2.1 §17.6.2).
     let collapsed = container.style.border_collapse == BorderCollapse::Collapse;
+    let mut table_grid = if collapsed {
+        Some(TableBorderGrid::new(num_rows, num_cols))
+    } else {
+        None
+    };
+
+    if collapsed {
+        // Propagate border_collapse = Collapse to cells and rows
+        for row_loc in &rows {
+            let row = get_row_mut(container, *row_loc);
+            row.style.border_collapse = BorderCollapse::Collapse;
+            for cell in &mut row.children {
+                if cell.style.display == Display::TableCell {
+                    cell.style.border_collapse = BorderCollapse::Collapse;
+                }
+            }
+        }
+
+        // Build 2D occupancy mapping for O(1) cell lookup at boundaries
+        let mut cell_at = vec![vec![None; num_cols]; num_rows];
+        for (i, pc) in placed_cells.iter().enumerate() {
+            let end_r = (pc.row_start + pc.row_span).min(num_rows);
+            let end_c = (pc.col_start + pc.col_span).min(num_cols);
+            for r in pc.row_start..end_r {
+                for c in pc.col_start..end_c {
+                    cell_at[r][c] = Some(i);
+                }
+            }
+        }
+
+        if let Some(ref mut grid) = table_grid {
+            // Resolve horizontal edges (num_rows + 1 boundaries, num_cols columns)
+            for r in 0..=num_rows {
+                for c in 0..num_cols {
+                    // 1. Top candidate (from elements above boundary r)
+                    let top_candidate = if r == 0 {
+                        // Table top border
+                        if container.style.border_width.top > 0.0
+                            || container.style.border_style == BorderStyle::Hidden
+                        {
+                            CollapsedBorderEdge {
+                                width: container.style.border_width.top,
+                                style: container.style.border_style,
+                                color: container.style.border_color,
+                                source: ElementSource::Table,
+                            }
+                        } else {
+                            CollapsedBorderEdge::default()
+                        }
+                    } else {
+                        // Check cell above: cell ending at row r
+                        let cell_edge = if let Some(cell_idx) = cell_at[r - 1][c] {
+                            let pc = &placed_cells[cell_idx];
+                            if pc.row_start + pc.row_span == r {
+                                let cell = get_cell(container, pc.loc);
+                                CollapsedBorderEdge {
+                                    width: cell.style.border_width.bottom,
+                                    style: cell.style.border_style,
+                                    color: cell.style.border_color,
+                                    source: ElementSource::Cell,
+                                }
+                            } else {
+                                CollapsedBorderEdge::default()
+                            }
+                        } else {
+                            CollapsedBorderEdge::default()
+                        };
+
+                        // Check row above: row r - 1 bottom border
+                        let row = get_row(container, rows[r - 1]);
+                        let row_edge = if row.style.border_width.bottom > 0.0
+                            || row.style.border_style == BorderStyle::Hidden
+                        {
+                            CollapsedBorderEdge {
+                                width: row.style.border_width.bottom,
+                                style: row.style.border_style,
+                                color: row.style.border_color,
+                                source: ElementSource::Row,
+                            }
+                        } else {
+                            CollapsedBorderEdge::default()
+                        };
+
+                        resolve_collapsed_border(row_edge, cell_edge)
+                    };
+
+                    // 2. Bottom candidate (from elements below boundary r)
+                    let bottom_candidate = if r == num_rows {
+                        // Table bottom border
+                        if container.style.border_width.bottom > 0.0
+                            || container.style.border_style == BorderStyle::Hidden
+                        {
+                            CollapsedBorderEdge {
+                                width: container.style.border_width.bottom,
+                                style: container.style.border_style,
+                                color: container.style.border_color,
+                                source: ElementSource::Table,
+                            }
+                        } else {
+                            CollapsedBorderEdge::default()
+                        }
+                    } else {
+                        // Check cell below: cell starting at row r
+                        let cell_edge = if let Some(cell_idx) = cell_at[r][c] {
+                            let pc = &placed_cells[cell_idx];
+                            if pc.row_start == r {
+                                let cell = get_cell(container, pc.loc);
+                                CollapsedBorderEdge {
+                                    width: cell.style.border_width.top,
+                                    style: cell.style.border_style,
+                                    color: cell.style.border_color,
+                                    source: ElementSource::Cell,
+                                }
+                            } else {
+                                CollapsedBorderEdge::default()
+                            }
+                        } else {
+                            CollapsedBorderEdge::default()
+                        };
+
+                        // Check row below: row r top border
+                        let row = get_row(container, rows[r]);
+                        let row_edge = if row.style.border_width.top > 0.0
+                            || row.style.border_style == BorderStyle::Hidden
+                        {
+                            CollapsedBorderEdge {
+                                width: row.style.border_width.top,
+                                style: row.style.border_style,
+                                color: row.style.border_color,
+                                source: ElementSource::Row,
+                            }
+                        } else {
+                            CollapsedBorderEdge::default()
+                        };
+
+                        resolve_collapsed_border(row_edge, cell_edge)
+                    };
+
+                    grid.horizontal_edges[r][c] =
+                        resolve_collapsed_border(top_candidate, bottom_candidate);
+                }
+            }
+
+            // Resolve vertical edges (num_rows rows, num_cols + 1 boundaries)
+            for r in 0..num_rows {
+                for c in 0..=num_cols {
+                    // 1. Left candidate (from elements left of boundary c)
+                    let left_candidate = if c == 0 {
+                        // Table left border
+                        if container.style.border_width.left > 0.0
+                            || container.style.border_style == BorderStyle::Hidden
+                        {
+                            CollapsedBorderEdge {
+                                width: container.style.border_width.left,
+                                style: container.style.border_style,
+                                color: container.style.border_color,
+                                source: ElementSource::Table,
+                            }
+                        } else {
+                            CollapsedBorderEdge::default()
+                        }
+                    } else {
+                        // Check cell left: cell ending at column c
+                        if let Some(cell_idx) = cell_at[r][c - 1] {
+                            let pc = &placed_cells[cell_idx];
+                            if pc.col_start + pc.col_span == c {
+                                let cell = get_cell(container, pc.loc);
+                                CollapsedBorderEdge {
+                                    width: cell.style.border_width.right,
+                                    style: cell.style.border_style,
+                                    color: cell.style.border_color,
+                                    source: ElementSource::Cell,
+                                }
+                            } else {
+                                CollapsedBorderEdge::default()
+                            }
+                        } else {
+                            CollapsedBorderEdge::default()
+                        }
+                    };
+
+                    // 2. Right candidate (from elements right of boundary c)
+                    let right_candidate = if c == num_cols {
+                        // Table right border
+                        if container.style.border_width.right > 0.0
+                            || container.style.border_style == BorderStyle::Hidden
+                        {
+                            CollapsedBorderEdge {
+                                width: container.style.border_width.right,
+                                style: container.style.border_style,
+                                color: container.style.border_color,
+                                source: ElementSource::Table,
+                            }
+                        } else {
+                            CollapsedBorderEdge::default()
+                        }
+                    } else {
+                        // Check cell right: cell starting at column c
+                        if let Some(cell_idx) = cell_at[r][c] {
+                            let pc = &placed_cells[cell_idx];
+                            if pc.col_start == c {
+                                let cell = get_cell(container, pc.loc);
+                                CollapsedBorderEdge {
+                                    width: cell.style.border_width.left,
+                                    style: cell.style.border_style,
+                                    color: cell.style.border_color,
+                                    source: ElementSource::Cell,
+                                }
+                            } else {
+                                CollapsedBorderEdge::default()
+                            }
+                        } else {
+                            CollapsedBorderEdge::default()
+                        }
+                    };
+
+                    grid.vertical_edges[r][c] =
+                        resolve_collapsed_border(left_candidate, right_candidate);
+                }
+            }
+        }
+    }
+
     let mut row_boundary = vec![0.0f32; num_rows + 1];
     if collapsed {
-        for pc in &placed_cells {
-            let border = get_cell(container, pc.loc).style.border_width;
-            row_boundary[pc.row_start] =
-                resolve_collapsed_border_width(row_boundary[pc.row_start], border.top);
-            let end_row = pc.row_start + pc.row_span;
-            if end_row <= num_rows {
-                row_boundary[end_row] =
-                    resolve_collapsed_border_width(row_boundary[end_row], border.bottom);
+        if let Some(ref grid) = table_grid {
+            for r in 0..=num_rows {
+                let max_w = grid.horizontal_edges[r]
+                    .iter()
+                    .map(|edge| edge.width)
+                    .fold(0.0f32, f32::max);
+                row_boundary[r] = max_w;
             }
         }
     }
@@ -428,7 +825,8 @@ pub fn solve_table(container: &mut LayoutNode, available_width: f32, available_h
                 span_cols.map(|c| col_w[c]).sum::<f32>() + (pc.col_span - 1) as f32 * h_spacing;
 
             let cell = get_cell_mut(container, pc.loc);
-            cell.compute_layout(cell_width, available_height);
+            let cg = child_guard.unwrap_or(guard);
+            cell.compute_layout_guarded(cell_width, available_height, None, 0.0, cg);
             let measured_h = cell.geometry.border_box.height;
             if collapsed {
                 let border = cell.style.border_width;
@@ -464,7 +862,8 @@ pub fn solve_table(container: &mut LayoutNode, available_width: f32, available_h
                 span_cols.map(|c| col_w[c]).sum::<f32>() + (pc.col_span - 1) as f32 * h_spacing;
 
             let cell = get_cell_mut(container, pc.loc);
-            cell.compute_layout(cell_width, available_height);
+            let cg = child_guard.unwrap_or(guard);
+            cell.compute_layout_guarded(cell_width, available_height, None, 0.0, cg);
             let measured_h = cell.geometry.border_box.height;
 
             pc.baseline = if !cell.line_boxes.is_empty() {
@@ -539,7 +938,8 @@ pub fn solve_table(container: &mut LayoutNode, available_width: f32, available_h
     // Layout top captions (§17.4)
     for &cap_idx in &top_captions {
         let cap = &mut container.children[cap_idx];
-        cap.compute_layout(final_table_w, available_height);
+        let cg = child_guard.unwrap_or(guard);
+        cap.compute_layout_guarded(final_table_w, available_height, None, 0.0, cg);
         let cap_h = cap.geometry.border_box.height;
         let cap_m = cap.style.margin;
         let cap_x = table_origin_x + border.left + padding.left + cap_m.left;
@@ -675,7 +1075,8 @@ pub fn solve_table(container: &mut LayoutNode, available_width: f32, available_h
     // Layout bottom captions (§17.4)
     for &cap_idx in &bottom_captions {
         let cap = &mut container.children[cap_idx];
-        cap.compute_layout(final_table_w, available_height);
+        let cg = child_guard.unwrap_or(guard);
+        cap.compute_layout_guarded(final_table_w, available_height, None, 0.0, cg);
         let cap_h = cap.geometry.border_box.height;
         let cap_m = cap.style.margin;
         let cap_x = table_origin_x + border.left + padding.left + cap_m.left;
@@ -690,6 +1091,28 @@ pub fn solve_table(container: &mut LayoutNode, available_width: f32, available_h
 
     let final_table_h = current_offset_y + padding.bottom + border.bottom;
 
+    if collapsed {
+        if let Some(mut grid) = table_grid {
+            grid.row_positions = vec![0.0f32; num_rows + 1];
+            for r in 0..num_rows {
+                grid.row_positions[r] = table_origin_y + grid_origin_y + row_y[r];
+            }
+            grid.row_positions[num_rows] =
+                table_origin_y + grid_origin_y + row_y[num_rows - 1] + row_h[num_rows - 1];
+
+            grid.col_positions = vec![0.0f32; num_cols + 1];
+            for c in 0..num_cols {
+                grid.col_positions[c] = table_origin_x + col_x[c];
+            }
+            grid.col_positions[num_cols] =
+                table_origin_x + col_x[num_cols - 1] + col_w[num_cols - 1];
+
+            container.table_grid = Some(grid);
+        }
+    } else {
+        container.table_grid = None;
+    }
+
     container.geometry = LayoutGeometry::from_border_box(
         Rect::new(table_origin_x, table_origin_y, final_table_w, final_table_h),
         padding,
@@ -698,19 +1121,8 @@ pub fn solve_table(container: &mut LayoutNode, available_width: f32, available_h
     );
 }
 
-/// Resolves the width of a shared collapsed border from its two contributing edges.
-///
-/// CSS 2.1 §17.6.2 collapses the border once for the shared edge; the widest
-/// contributing width wins (border style precedence is not carried by the
-/// current style model). The resolved width is later split evenly between the
-/// two adjoining rows so it is measured exactly once.
-#[inline]
-fn resolve_collapsed_border_width(first: f32, second: f32) -> f32 {
-    first.max(second)
-}
-
 #[inline(always)]
-fn get_row<'a>(container: &'a LayoutNode, loc: RowLocation) -> &'a LayoutNode {
+fn get_row(container: &LayoutNode, loc: RowLocation) -> &LayoutNode {
     match loc.group_idx {
         Some(g) => &container.children[g].children[loc.row_idx],
         None => &container.children[loc.row_idx],
@@ -718,7 +1130,7 @@ fn get_row<'a>(container: &'a LayoutNode, loc: RowLocation) -> &'a LayoutNode {
 }
 
 #[inline(always)]
-fn get_row_mut<'a>(container: &'a mut LayoutNode, loc: RowLocation) -> &'a mut LayoutNode {
+fn get_row_mut(container: &mut LayoutNode, loc: RowLocation) -> &mut LayoutNode {
     match loc.group_idx {
         Some(g) => &mut container.children[g].children[loc.row_idx],
         None => &mut container.children[loc.row_idx],
@@ -726,7 +1138,7 @@ fn get_row_mut<'a>(container: &'a mut LayoutNode, loc: RowLocation) -> &'a mut L
 }
 
 #[inline(always)]
-fn get_cell<'a>(container: &'a LayoutNode, loc: CellLocation) -> &'a LayoutNode {
+fn get_cell(container: &LayoutNode, loc: CellLocation) -> &LayoutNode {
     match loc.group_idx {
         Some(g) => &container.children[g].children[loc.row_idx].children[loc.cell_idx],
         None => &container.children[loc.row_idx].children[loc.cell_idx],
@@ -734,7 +1146,7 @@ fn get_cell<'a>(container: &'a LayoutNode, loc: CellLocation) -> &'a LayoutNode 
 }
 
 #[inline(always)]
-fn get_cell_mut<'a>(container: &'a mut LayoutNode, loc: CellLocation) -> &'a mut LayoutNode {
+fn get_cell_mut(container: &mut LayoutNode, loc: CellLocation) -> &mut LayoutNode {
     match loc.group_idx {
         Some(g) => &mut container.children[g].children[loc.row_idx].children[loc.cell_idx],
         None => &mut container.children[loc.row_idx].children[loc.cell_idx],

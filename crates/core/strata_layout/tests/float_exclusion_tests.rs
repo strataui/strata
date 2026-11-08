@@ -297,3 +297,141 @@ fn test_infobox_table_float_and_nested_rows() {
     assert_eq!(r1.geometry.border_box.y, 0.0);
     assert!(r2.geometry.border_box.y > 15.0, "Row 2 y {} must be > 15.0", r2.geometry.border_box.y);
 }
+
+#[test]
+fn test_bfc_element_overflow_hidden_does_not_overlap_float() {
+    // CSS 2.1 §9.5: The border box of an element establishing a new BFC
+    // must not overlap the margin box of any floats in the same BFC.
+    let mut container = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        width: Dimension::Px(800.0),
+        height: Dimension::Auto,
+        ..Default::default()
+    });
+
+    let float_box = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        float: Float::Left,
+        width: Dimension::Px(200.0),
+        height: Dimension::Px(250.0),
+        ..Default::default()
+    });
+
+    let bfc_box = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        overflow_x: Overflow::Hidden,
+        overflow_y: Overflow::Hidden,
+        width: Dimension::Auto,
+        height: Dimension::Px(100.0),
+        ..Default::default()
+    });
+
+    container.children.push(float_box);
+    container.children.push(bfc_box);
+
+    container.compute_layout(800.0, 1000.0);
+
+    // Float box is at (0, 0) with width 200
+    assert_eq!(container.children[0].geometry.border_box.x, 0.0);
+    assert_eq!(container.children[0].geometry.border_box.y, 0.0);
+    assert_eq!(container.children[0].geometry.border_box.width, 200.0);
+
+    // BFC box must be placed beside the float at x = 200, width = 600
+    assert_eq!(container.children[1].geometry.border_box.x, 200.0);
+    assert_eq!(container.children[1].geometry.border_box.y, 0.0);
+    assert_eq!(container.children[1].geometry.border_box.width, 600.0);
+}
+
+#[test]
+fn test_bfc_element_with_large_width_clears_below_float() {
+    // CSS 2.1 §9.5: If the BFC element cannot fit beside the float,
+    // it must clear by placing itself below preceding floats.
+    let mut container = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        width: Dimension::Px(800.0),
+        height: Dimension::Auto,
+        ..Default::default()
+    });
+
+    let float_box = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        float: Float::Left,
+        width: Dimension::Px(200.0),
+        height: Dimension::Px(250.0),
+        ..Default::default()
+    });
+
+    let bfc_box = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        overflow_x: Overflow::Hidden,
+        overflow_y: Overflow::Hidden,
+        width: Dimension::Px(700.0),
+        height: Dimension::Px(100.0),
+        ..Default::default()
+    });
+
+    container.children.push(float_box);
+    container.children.push(bfc_box);
+
+    container.compute_layout(800.0, 1000.0);
+
+    // Float is at (0, 0), height 250
+    assert_eq!(container.children[0].geometry.border_box.x, 0.0);
+    assert_eq!(container.children[0].geometry.border_box.y, 0.0);
+
+    // BFC box (width 700) cannot fit beside 200px float in 800px container; clears below float!
+    assert_eq!(container.children[1].geometry.border_box.x, 0.0);
+    assert_eq!(container.children[1].geometry.border_box.y, 250.0);
+    assert_eq!(container.children[1].geometry.border_box.width, 700.0);
+}
+
+#[test]
+fn test_bfc_internal_floats_contained_and_do_not_leak() {
+    // CSS 2.1 §10.6.7 & §9.4.1: A BFC root's auto height encloses its internal floats,
+    // and internal floats do not leak out into the parent's formatting context.
+    let mut container = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        width: Dimension::Px(800.0),
+        height: Dimension::Auto,
+        ..Default::default()
+    });
+
+    let mut bfc_box = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        overflow_x: Overflow::Hidden,
+        overflow_y: Overflow::Hidden,
+        width: Dimension::Px(400.0),
+        height: Dimension::Auto,
+        ..Default::default()
+    });
+
+    let internal_float = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        float: Float::Left,
+        width: Dimension::Px(150.0),
+        height: Dimension::Px(120.0),
+        ..Default::default()
+    });
+    bfc_box.children.push(internal_float);
+
+    let subsequent_block = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        width: Dimension::Px(800.0),
+        height: Dimension::Px(50.0),
+        ..Default::default()
+    });
+
+    container.children.push(bfc_box);
+    container.children.push(subsequent_block);
+
+    container.compute_layout(800.0, 1000.0);
+
+    // BFC box height must enclose its 120px internal float
+    assert_eq!(container.children[0].geometry.border_box.height, 120.0);
+
+    // Subsequent block starts after the BFC box at y = 120.0, and since internal float
+    // did not leak out, subsequent block is placed at x = 0 (not shifted by float)
+    assert_eq!(container.children[1].geometry.border_box.x, 0.0);
+    assert_eq!(container.children[1].geometry.border_box.y, 120.0);
+}
+

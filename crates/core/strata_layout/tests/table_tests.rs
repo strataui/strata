@@ -1,5 +1,6 @@
 //! Comprehensive Verification Suite for W3C CSS Table Layout Engine.
 //!
+#![allow(clippy::field_reassign_with_default)]
 //! Verifies:
 //! 1. Column alignment across distinct rows.
 //! 2. Colspan spanning multiple columns and track expansion.
@@ -448,8 +449,8 @@ fn test_table_baseline_alignment() {
     let cell1 = &r.children[1];
 
     // Both cells must have computed baselines and valid layout
-    assert!(cell0.line_boxes.len() >= 1);
-    assert!(cell1.line_boxes.len() >= 1);
+    assert!(!cell0.line_boxes.is_empty());
+    assert!(!cell1.line_boxes.is_empty());
 
     let base0 = cell0.line_boxes[0].bounds.y + cell0.line_boxes[0].baseline;
     let base1 = cell1.line_boxes[0].bounds.y + cell1.line_boxes[0].baseline;
@@ -512,11 +513,243 @@ fn test_table_float_and_clearance_layout() {
     assert_eq!(tbl.geometry.border_box.width, 300.0);
 
     // Paragraph wraps around float
-    assert!(paragraph.line_boxes.len() >= 1);
+    assert!(!paragraph.line_boxes.is_empty());
     // Line 0 width is constrained by the float
     assert!(paragraph.line_boxes[0].bounds.width <= 500.0);
 
     // Cleared box must be placed strictly below the float's bottom margin (150 + 20 = 170.0)
     assert!(clr.geometry.border_box.y >= 170.0, "Cleared box y ({}) must be >= 170.0", clr.geometry.border_box.y);
 }
+
+#[test]
+fn test_table_collapsed_border_conflict_resolution_spec() {
+    use strata_layout::table::{
+        resolve_collapsed_border, CollapsedBorderEdge, ElementSource,
+    };
+    use strata_style::types::{BorderStyle, Color};
+
+    // 1. 'border-style: hidden' takes precedence over all other conflicting borders and sets width = 0
+    let hidden_edge = CollapsedBorderEdge {
+        width: 10.0,
+        style: BorderStyle::Hidden,
+        color: Some(Color::rgb(255, 0, 0)),
+        source: ElementSource::Cell,
+    };
+    let thick_solid = CollapsedBorderEdge {
+        width: 20.0,
+        style: BorderStyle::Solid,
+        color: Some(Color::rgb(0, 0, 255)),
+        source: ElementSource::Table,
+    };
+    let resolved = resolve_collapsed_border(hidden_edge, thick_solid);
+    assert_eq!(resolved.style, BorderStyle::Hidden);
+    assert_eq!(resolved.width, 0.0);
+    assert!(resolved.color.is_none());
+
+    // 2. 'border-style: none' has the lowest priority: any specified border wins over 'none'
+    let none_edge = CollapsedBorderEdge {
+        width: 0.0,
+        style: BorderStyle::None,
+        color: None,
+        source: ElementSource::Cell,
+    };
+    let thin_solid = CollapsedBorderEdge {
+        width: 1.0,
+        style: BorderStyle::Solid,
+        color: Some(Color::rgb(0, 255, 0)),
+        source: ElementSource::Table,
+    };
+    let resolved = resolve_collapsed_border(none_edge, thin_solid);
+    assert_eq!(resolved.style, BorderStyle::Solid);
+    assert_eq!(resolved.width, 1.0);
+    assert_eq!(resolved.color, Some(Color::rgb(0, 255, 0)));
+
+    // 3. Wider border wins over narrower
+    let wide = CollapsedBorderEdge {
+        width: 4.0,
+        style: BorderStyle::Dashed,
+        color: Some(Color::rgb(10, 10, 10)),
+        source: ElementSource::Cell,
+    };
+    let narrow = CollapsedBorderEdge {
+        width: 2.0,
+        style: BorderStyle::Double,
+        color: Some(Color::rgb(20, 20, 20)),
+        source: ElementSource::Cell,
+    };
+    let resolved = resolve_collapsed_border(narrow, wide);
+    assert_eq!(resolved.width, 4.0);
+    assert_eq!(resolved.style, BorderStyle::Dashed);
+
+    // 4. If widths are identical, style priority: double > solid > dashed > dotted
+    let double_edge = CollapsedBorderEdge {
+        width: 3.0,
+        style: BorderStyle::Double,
+        color: Some(Color::rgb(1, 1, 1)),
+        source: ElementSource::Cell,
+    };
+    let solid_edge = CollapsedBorderEdge {
+        width: 3.0,
+        style: BorderStyle::Solid,
+        color: Some(Color::rgb(2, 2, 2)),
+        source: ElementSource::Cell,
+    };
+    let dashed_edge = CollapsedBorderEdge {
+        width: 3.0,
+        style: BorderStyle::Dashed,
+        color: Some(Color::rgb(3, 3, 3)),
+        source: ElementSource::Cell,
+    };
+    let dotted_edge = CollapsedBorderEdge {
+        width: 3.0,
+        style: BorderStyle::Dotted,
+        color: Some(Color::rgb(4, 4, 4)),
+        source: ElementSource::Cell,
+    };
+
+    assert_eq!(resolve_collapsed_border(solid_edge, double_edge).style, BorderStyle::Double);
+    assert_eq!(resolve_collapsed_border(dashed_edge, solid_edge).style, BorderStyle::Solid);
+    assert_eq!(resolve_collapsed_border(dotted_edge, dashed_edge).style, BorderStyle::Dashed);
+
+    // 5. If styles and widths are identical, element origin priority:
+    // cell > row > row group > column > colgroup > table
+    let cell_origin = CollapsedBorderEdge {
+        width: 2.0,
+        style: BorderStyle::Solid,
+        color: Some(Color::rgb(100, 0, 0)),
+        source: ElementSource::Cell,
+    };
+    let row_origin = CollapsedBorderEdge {
+        width: 2.0,
+        style: BorderStyle::Solid,
+        color: Some(Color::rgb(0, 100, 0)),
+        source: ElementSource::Row,
+    };
+    let table_origin = CollapsedBorderEdge {
+        width: 2.0,
+        style: BorderStyle::Solid,
+        color: Some(Color::rgb(0, 0, 100)),
+        source: ElementSource::Table,
+    };
+    assert_eq!(resolve_collapsed_border(row_origin, cell_origin).source, ElementSource::Cell);
+    assert_eq!(resolve_collapsed_border(table_origin, row_origin).source, ElementSource::Row);
+
+    // 6. When two elements of the same type have conflicting borders of the same
+    // width and style, the top / left border wins
+    let top_cell = CollapsedBorderEdge {
+        width: 2.0,
+        style: BorderStyle::Solid,
+        color: Some(Color::rgb(123, 0, 0)),
+        source: ElementSource::Cell,
+    };
+    let bottom_cell = CollapsedBorderEdge {
+        width: 2.0,
+        style: BorderStyle::Solid,
+        color: Some(Color::rgb(0, 123, 0)),
+        source: ElementSource::Cell,
+    };
+    let resolved = resolve_collapsed_border(top_cell, bottom_cell);
+    assert_eq!(resolved.color, Some(Color::rgb(123, 0, 0)));
+}
+
+#[test]
+fn test_table_border_grid_layout_and_hidden_suppression() {
+    use strata_style::types::{BorderStyle, Color, EdgeInsets};
+
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_collapse = BorderCollapse::Collapse;
+    table_style.width = Dimension::Px(400.0);
+    table_style.border_width = EdgeInsets {
+        top: 2.0,
+        right: 2.0,
+        bottom: 2.0,
+        left: 2.0,
+    };
+    table_style.border_style = BorderStyle::Solid;
+    table_style.border_color = Some(Color::rgb(0, 0, 0));
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    // Row 0 Cell 0: standard 1px solid
+    let mut c00_style = ComputedStyle::default();
+    c00_style.display = Display::TableCell;
+    c00_style.border_width = EdgeInsets {
+        top: 1.0,
+        right: 1.0,
+        bottom: 1.0,
+        left: 1.0,
+    };
+    c00_style.border_style = BorderStyle::Solid;
+    c00_style.border_color = Some(Color::rgb(50, 50, 50));
+
+    // Row 0 Cell 1: hidden border
+    let mut c01_style = ComputedStyle::default();
+    c01_style.display = Display::TableCell;
+    c01_style.border_width = EdgeInsets {
+        top: 1.0,
+        right: 1.0,
+        bottom: 1.0,
+        left: 1.0,
+    };
+    c01_style.border_style = BorderStyle::Hidden;
+
+    // Row 1 Cell 0: 3px double
+    let mut c10_style = ComputedStyle::default();
+    c10_style.display = Display::TableCell;
+    c10_style.border_width = EdgeInsets {
+        top: 3.0,
+        right: 3.0,
+        bottom: 3.0,
+        left: 3.0,
+    };
+    c10_style.border_style = BorderStyle::Double;
+    c10_style.border_color = Some(Color::rgb(80, 80, 80));
+
+    // Row 1 Cell 1: standard 1px solid
+    let mut c11_style = ComputedStyle::default();
+    c11_style.display = Display::TableCell;
+    c11_style.border_width = EdgeInsets {
+        top: 1.0,
+        right: 1.0,
+        bottom: 1.0,
+        left: 1.0,
+    };
+    c11_style.border_style = BorderStyle::Solid;
+    c11_style.border_color = Some(Color::rgb(50, 50, 50));
+
+    let r0 = LayoutNode::with_children(
+        row_style.clone(),
+        vec![
+            LayoutNode::with_text(c00_style, "C00".to_string()),
+            LayoutNode::with_text(c01_style, "C01".to_string()),
+        ],
+    );
+    let r1 = LayoutNode::with_children(
+        row_style,
+        vec![
+            LayoutNode::with_text(c10_style, "C10".to_string()),
+            LayoutNode::with_text(c11_style, "C11".to_string()),
+        ],
+    );
+
+    let mut table = LayoutNode::with_children(table_style, vec![r0, r1]);
+    table.compute_layout(400.0, 200.0);
+
+    // Verify TableBorderGrid is populated
+    assert!(table.table_grid.is_some(), "table_grid must be populated on collapsed tables");
+    let grid = table.table_grid.as_ref().unwrap();
+    assert_eq!(grid.num_rows, 2);
+    assert_eq!(grid.num_cols, 2);
+
+    // Boundary between (0,1) and (1,1): c01 has BorderStyle::Hidden, so horizontal edge at (1, 1) is Hidden!
+    assert_eq!(grid.horizontal_edges[1][1].style, BorderStyle::Hidden);
+    assert_eq!(grid.horizontal_edges[1][1].width, 0.0);
+
+    // Boundary between (0,0) and (1,0): c10 has 3px double vs c00 1px solid -> c10 wins (wider: 3px)
+    assert_eq!(grid.horizontal_edges[1][0].width, 3.0);
+    assert_eq!(grid.horizontal_edges[1][0].style, BorderStyle::Double);
+}
+
 

@@ -1,5 +1,7 @@
 //! Focused reproductions for observed layout defects.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use strata_layout::LayoutNode;
 use strata_style::types::{
     AlignItems, ComputedStyle, Dimension, Display, FlexDirection, JustifyContent, Overflow,

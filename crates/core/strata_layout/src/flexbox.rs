@@ -20,16 +20,124 @@ struct FlexItemMeta {
     margin_main_end: f32,
     margin_cross_start: f32,
     margin_cross_end: f32,
+    auto_margin_main_start: bool,
+    auto_margin_main_end: bool,
+    auto_margin_cross_start: bool,
+    auto_margin_cross_end: bool,
+    baseline_offset: f32,
 }
 
 struct FlexLine {
     items: Vec<FlexItemMeta>,
     cross_size: f32,
+    max_baseline_ascent: f32,
+}
+
+/// Computes the first baseline offset from the top border box of a layout node.
+fn compute_first_baseline(node: &LayoutNode) -> f32 {
+    if let Some(first_line) = node.line_boxes.first() {
+        return (first_line.bounds.y - node.geometry.border_box.y).max(0.0) + first_line.baseline;
+    }
+    if node.text.is_some() {
+        return node.style.padding.top + node.style.border_width.top + node.style.font_size * 0.8;
+    }
+    for child in &node.children {
+        if child.style.position == Position::Absolute || child.style.position == Position::Fixed {
+            continue;
+        }
+        let child_baseline = compute_first_baseline(child);
+        let rel_y = (child.geometry.border_box.y - node.geometry.border_box.y).max(0.0);
+        return rel_y + child_baseline;
+    }
+    node.geometry.border_box.height
+}
+
+/// Computes the line cross size and maximum baseline ascent for a flex line.
+fn compute_line_cross_and_baseline(
+    items: &[FlexItemMeta],
+    container_align_items: AlignItems,
+    is_row: bool,
+    use_resolved: bool,
+) -> (f32, f32) {
+    if items.is_empty() {
+        return (0.0, 0.0);
+    }
+    let mut max_non_baseline_cross = 0.0f32;
+    let mut max_baseline_ascent = 0.0f32;
+    let mut max_baseline_descent = 0.0f32;
+    let mut has_baseline = false;
+
+    for it in items {
+        let cross = if use_resolved {
+            it.resolved_cross
+        } else {
+            it.hypothetical_cross
+        };
+        let effective_align = match it.align_self {
+            AlignSelf::Auto => container_align_items,
+            AlignSelf::Stretch => AlignItems::Stretch,
+            AlignSelf::FlexStart => AlignItems::FlexStart,
+            AlignSelf::FlexEnd => AlignItems::FlexEnd,
+            AlignSelf::Center => AlignItems::Center,
+            AlignSelf::Baseline => AlignItems::Baseline,
+        };
+
+        let is_baseline = is_row
+            && effective_align == AlignItems::Baseline
+            && !it.auto_margin_cross_start
+            && !it.auto_margin_cross_end;
+
+        if is_baseline {
+            has_baseline = true;
+            let ascent = it.margin_cross_start + it.baseline_offset;
+            let descent = (cross - it.baseline_offset).max(0.0) + it.margin_cross_end;
+            if ascent > max_baseline_ascent {
+                max_baseline_ascent = ascent;
+            }
+            if descent > max_baseline_descent {
+                max_baseline_descent = descent;
+            }
+        } else {
+            let total_cross = cross + it.margin_cross_start + it.margin_cross_end;
+            if total_cross > max_non_baseline_cross {
+                max_non_baseline_cross = total_cross;
+            }
+        }
+    }
+
+    let cross_size = if has_baseline {
+        max_non_baseline_cross.max(max_baseline_ascent + max_baseline_descent)
+    } else {
+        max_non_baseline_cross
+    };
+
+    (cross_size, max_baseline_ascent)
 }
 
 /// Solves W3C Flexbox Level 1 layout for a flex container and its children.
 pub fn solve_flexbox(container: &mut LayoutNode, available_width: f32, available_height: f32) {
-    solve_flexbox_with_definite_cross(container, available_width, available_height, None);
+    solve_flexbox_guarded(
+        container,
+        available_width,
+        available_height,
+        crate::tree::LayoutDepthGuard::root(),
+    );
+}
+
+/// Solves W3C Flexbox Level 1 layout with an active depth guard to prevent stack overflow.
+pub fn solve_flexbox_guarded(
+    container: &mut LayoutNode,
+    available_width: f32,
+    available_height: f32,
+    guard: crate::tree::LayoutDepthGuard,
+) {
+    solve_flexbox_with_definite_cross_guarded(
+        container,
+        available_width,
+        available_height,
+        None,
+        guard,
+    );
 }
 
 /// Solves flexbox layout with an explicitly definite inner cross size.
@@ -44,6 +152,23 @@ pub fn solve_flexbox_with_definite_cross(
     available_width: f32,
     available_height: f32,
     definite_inner_cross: Option<f32>,
+) {
+    solve_flexbox_with_definite_cross_guarded(
+        container,
+        available_width,
+        available_height,
+        definite_inner_cross,
+        crate::tree::LayoutDepthGuard::root(),
+    );
+}
+
+/// Solves flexbox layout with definite inner cross size and an active depth guard.
+pub fn solve_flexbox_with_definite_cross_guarded(
+    container: &mut LayoutNode,
+    available_width: f32,
+    available_height: f32,
+    definite_inner_cross: Option<f32>,
+    guard: crate::tree::LayoutDepthGuard,
 ) {
     let _prof = crate::prof::Scope::new(crate::prof::Slot::Flex);
     let padding = container.style.padding;
@@ -244,24 +369,25 @@ pub fn solve_flexbox_with_definite_cross(
             }
         }
 
+        let cg = guard.enter().unwrap_or(guard);
         let (mut child_w, mut child_h) = match (
             item_w_opt,
             resolve_dimension(child.style.height, target_avail_h),
         ) {
             (Some(w), Some(h)) => {
-                child.compute_layout(w, h);
+                child.compute_layout_guarded(w, h, None, 0.0, cg);
                 (w, h)
             }
             (Some(w), None) => {
-                child.compute_layout(w, target_avail_h);
+                child.compute_layout_guarded(w, target_avail_h, None, 0.0, cg);
                 (w, child.geometry.border_box.height)
             }
             (None, Some(h)) => {
-                child.compute_layout(inner_width, h);
+                child.compute_layout_guarded(inner_width, h, None, 0.0, cg);
                 (child.geometry.border_box.width, h)
             }
             (None, None) => {
-                child.compute_layout(inner_width, target_avail_h);
+                child.compute_layout_guarded(inner_width, target_avail_h, None, 0.0, cg);
                 (
                     child.geometry.border_box.width,
                     child.geometry.border_box.height,
@@ -307,14 +433,13 @@ pub fn solve_flexbox_with_definite_cross(
         // Per W3C Flexbox Level 1 §9.2: If container main size is indefinite (column with height: auto),
         // percentage or 0 flex-basis falls back to content size.
         let mut has_explicit_basis = false;
-        if child.style.flex_basis != Dimension::Auto {
-            if is_row || resolved_height.is_some() {
+        if child.style.flex_basis != Dimension::Auto
+            && (is_row || resolved_height.is_some()) {
                 if let Some(basis_px) = resolve_dimension(child.style.flex_basis, container_main) {
                     main_size = basis_px;
                     has_explicit_basis = true;
                 }
             }
-        }
 
         // Automatic minimum size per W3C Flexbox Section 4.5:
         // For a flex item with min-size: auto (the initial value) and visible overflow,
@@ -373,6 +498,24 @@ pub fn solve_flexbox_with_definite_cross(
             )
         };
 
+        let (auto_m_main_start, auto_m_main_end, auto_m_cross_start, auto_m_cross_end) = if is_row {
+            (
+                child.style.margin_auto_left,
+                child.style.margin_auto_right,
+                child.style.margin_auto_top,
+                child.style.margin_auto_bottom,
+            )
+        } else {
+            (
+                child.style.margin_auto_top,
+                child.style.margin_auto_bottom,
+                child.style.margin_auto_left,
+                child.style.margin_auto_right,
+            )
+        };
+
+        let baseline_offset = compute_first_baseline(child);
+
         item_metas.push(FlexItemMeta {
             index: idx,
             hypothetical_main: main_size,
@@ -386,6 +529,11 @@ pub fn solve_flexbox_with_definite_cross(
             margin_main_end: m_main_end,
             margin_cross_start: m_cross_start,
             margin_cross_end: m_cross_end,
+            auto_margin_main_start: auto_m_main_start,
+            auto_margin_main_end: auto_m_main_end,
+            auto_margin_cross_start: auto_m_cross_start,
+            auto_margin_cross_end: auto_m_cross_end,
+            baseline_offset,
         });
     }
 
@@ -399,16 +547,17 @@ pub fn solve_flexbox_with_definite_cross(
     if !item_metas.is_empty() {
         if !is_wrap || container_main <= 0.0 {
             // Single line (nowrap)
+            let (cross_size, max_baseline) = compute_line_cross_and_baseline(
+                &item_metas,
+                container.style.align_items,
+                is_row,
+                false,
+            );
             let cross_size = if is_row {
                 if let Some(h) = inner_height {
                     h
                 } else {
-                    item_metas
-                        .iter()
-                        .map(|it| {
-                            it.hypothetical_cross + it.margin_cross_start + it.margin_cross_end
-                        })
-                        .fold(0.0f32, f32::max)
+                    cross_size
                 }
             } else {
                 inner_width
@@ -416,6 +565,7 @@ pub fn solve_flexbox_with_definite_cross(
             lines.push(FlexLine {
                 items: item_metas,
                 cross_size,
+                max_baseline_ascent: max_baseline,
             });
         } else {
             // Multi-line wrapping
@@ -431,15 +581,16 @@ pub fn solve_flexbox_with_definite_cross(
                 };
 
                 if !current_line_items.is_empty() && needed > container_main {
-                    let cross = current_line_items
-                        .iter()
-                        .map(|x: &FlexItemMeta| {
-                            x.hypothetical_cross + x.margin_cross_start + x.margin_cross_end
-                        })
-                        .fold(0.0f32, f32::max);
+                    let (cross, max_baseline) = compute_line_cross_and_baseline(
+                        &current_line_items,
+                        container.style.align_items,
+                        is_row,
+                        false,
+                    );
                     lines.push(FlexLine {
                         items: current_line_items,
                         cross_size: cross,
+                        max_baseline_ascent: max_baseline,
                     });
                     current_line_items = vec![it];
                     current_line_main = item_len;
@@ -450,13 +601,16 @@ pub fn solve_flexbox_with_definite_cross(
             }
 
             if !current_line_items.is_empty() {
-                let cross = current_line_items
-                    .iter()
-                    .map(|x| x.hypothetical_cross + x.margin_cross_start + x.margin_cross_end)
-                    .fold(0.0f32, f32::max);
+                let (cross, max_baseline) = compute_line_cross_and_baseline(
+                    &current_line_items,
+                    container.style.align_items,
+                    is_row,
+                    false,
+                );
                 lines.push(FlexLine {
                     items: current_line_items,
                     cross_size: cross,
+                    max_baseline_ascent: max_baseline,
                 });
             }
         }
@@ -499,10 +653,26 @@ pub fn solve_flexbox_with_definite_cross(
                 // Expansion via flex-grow
                 let total_grow: f32 = line.items.iter().map(|it| it.flex_grow).sum();
                 if total_grow > 0.0 {
-                    for it in &mut line.items {
-                        if it.flex_grow > 0.0 {
-                            let delta = (it.flex_grow / total_grow) * free_space;
-                            it.resolved_main = it.hypothetical_main + delta;
+                    if strata_primitives::target::is_tui_target() {
+                        let grow_shares: Vec<f32> =
+                            line.items.iter().map(|it| it.flex_grow).collect();
+                        let free_cells = free_space.round().max(0.0) as u16;
+                        let quants =
+                            strata_primitives::quantization::largest_remainder_quantization(
+                                &grow_shares,
+                                free_cells,
+                            );
+                        for (it, &q) in line.items.iter_mut().zip(&quants) {
+                            if it.flex_grow > 0.0 {
+                                it.resolved_main = it.hypothetical_main.round() + q as f32;
+                            }
+                        }
+                    } else {
+                        for it in &mut line.items {
+                            if it.flex_grow > 0.0 {
+                                let delta = (it.flex_grow / total_grow) * free_space;
+                                it.resolved_main = it.hypothetical_main + delta;
+                            }
                         }
                     }
                 }
@@ -635,10 +805,26 @@ pub fn solve_flexbox_with_definite_cross(
             if free_space > 0.0 {
                 let total_grow: f32 = line.items.iter().map(|it| it.flex_grow).sum();
                 if total_grow > 0.0 {
-                    for it in &mut line.items {
-                        if it.flex_grow > 0.0 {
-                            let delta = (it.flex_grow / total_grow) * free_space;
-                            it.resolved_main = it.hypothetical_main + delta;
+                    if strata_primitives::target::is_tui_target() {
+                        let grow_shares: Vec<f32> =
+                            line.items.iter().map(|it| it.flex_grow).collect();
+                        let free_cells = free_space.round().max(0.0) as u16;
+                        let quants =
+                            strata_primitives::quantization::largest_remainder_quantization(
+                                &grow_shares,
+                                free_cells,
+                            );
+                        for (it, &q) in line.items.iter_mut().zip(&quants) {
+                            if it.flex_grow > 0.0 {
+                                it.resolved_main = it.hypothetical_main.round() + q as f32;
+                            }
+                        }
+                    } else {
+                        for it in &mut line.items {
+                            if it.flex_grow > 0.0 {
+                                let delta = (it.flex_grow / total_grow) * free_space;
+                                it.resolved_main = it.hypothetical_main + delta;
+                            }
                         }
                     }
                 }
@@ -681,27 +867,32 @@ pub fn solve_flexbox_with_definite_cross(
         }
 
         // Recompute line cross size after main sizing (CSS Flexbox Level 1 §9.4)
+        let cg = guard.enter().unwrap_or(guard);
         for it in &mut line.items {
             if (it.resolved_main - it.hypothetical_main).abs() > 0.5 {
                 let child = &mut container.children[it.index];
                 if is_row {
-                    child.compute_layout(it.resolved_main, target_avail_h);
+                    child.compute_layout_guarded(it.resolved_main, target_avail_h, None, 0.0, cg);
                     it.resolved_cross = child.geometry.border_box.height;
+                    it.baseline_offset = compute_first_baseline(child);
                 } else {
-                    child.compute_layout(inner_width, it.resolved_main);
+                    child.compute_layout_guarded(inner_width, it.resolved_main, None, 0.0, cg);
                     it.resolved_cross = child.geometry.border_box.width;
+                    it.baseline_offset = compute_first_baseline(child);
                 }
             }
         }
-        let item_max_cross = line
-            .items
-            .iter()
-            .map(|it| it.resolved_cross + it.margin_cross_start + it.margin_cross_end)
-            .fold(0.0f32, f32::max);
+        let (recomputed_cross, max_baseline) = compute_line_cross_and_baseline(
+            &line.items,
+            container.style.align_items,
+            is_row,
+            true,
+        );
+        line.max_baseline_ascent = max_baseline;
         line.cross_size = if is_row && inner_height.is_none() {
-            item_max_cross
+            recomputed_cross
         } else {
-            line.cross_size.max(item_max_cross)
+            line.cross_size.max(recomputed_cross)
         };
     }
 
@@ -775,8 +966,8 @@ pub fn solve_flexbox_with_definite_cross(
             continue;
         }
 
-        let total_item_main: f32 = line
-            .items
+        let mut line_items = line.items;
+        let total_item_main: f32 = line_items
             .iter()
             .map(|it| it.resolved_main + it.margin_main_start + it.margin_main_end)
             .sum();
@@ -791,24 +982,47 @@ pub fn solve_flexbox_with_definite_cross(
             0.0
         };
 
+        // Section 8.1: Distribute remaining positive free space to auto margins on main axis
+        let num_auto_main: usize = line_items
+            .iter()
+            .map(|it| (it.auto_margin_main_start as usize) + (it.auto_margin_main_end as usize))
+            .sum();
+
+        let (effective_remaining_main, auto_margin_px) = if num_auto_main > 0 && remaining_main > 0.0 {
+            (0.0, remaining_main / num_auto_main as f32)
+        } else {
+            (remaining_main, 0.0)
+        };
+
+        if num_auto_main > 0 {
+            for it in &mut line_items {
+                if it.auto_margin_main_start {
+                    it.margin_main_start = auto_margin_px;
+                }
+                if it.auto_margin_main_end {
+                    it.margin_main_end = auto_margin_px;
+                }
+            }
+        }
+
         // Main axis alignment distribution
         let (start_offset, step_between) = match container.style.justify_content {
             JustifyContent::FlexStart => (0.0, main_gap),
-            JustifyContent::FlexEnd => (remaining_main, main_gap),
-            JustifyContent::Center => (remaining_main / 2.0, main_gap),
+            JustifyContent::FlexEnd => (effective_remaining_main, main_gap),
+            JustifyContent::Center => (effective_remaining_main / 2.0, main_gap),
             JustifyContent::SpaceBetween => {
                 if count > 1 {
-                    (0.0, main_gap + (remaining_main / (count - 1) as f32))
+                    (0.0, main_gap + (effective_remaining_main / (count - 1) as f32))
                 } else {
                     (0.0, main_gap)
                 }
             }
             JustifyContent::SpaceAround => {
-                let item_space = remaining_main / count as f32;
+                let item_space = effective_remaining_main / count as f32;
                 (item_space / 2.0, main_gap + item_space)
             }
             JustifyContent::SpaceEvenly => {
-                let item_space = remaining_main / (count + 1) as f32;
+                let item_space = effective_remaining_main / (count + 1) as f32;
                 (item_space, main_gap + item_space)
             }
         };
@@ -819,84 +1033,122 @@ pub fn solve_flexbox_with_definite_cross(
             container.geometry.content_box.y + start_offset
         };
 
-        let mut ordered_items = line.items;
+        let mut ordered_items = line_items;
         if is_reverse {
             ordered_items.reverse();
         }
 
-        for it in ordered_items {
+        for mut it in ordered_items {
             let child = &mut container.children[it.index];
 
-            // Cross-axis alignment
-            let effective_align = match it.align_self {
-                AlignSelf::Auto => container.style.align_items,
-                AlignSelf::Stretch => AlignItems::Stretch,
-                AlignSelf::FlexStart => AlignItems::FlexStart,
-                AlignSelf::FlexEnd => AlignItems::FlexEnd,
-                AlignSelf::Center => AlignItems::Center,
-                AlignSelf::Baseline => AlignItems::Baseline,
-            };
+            // Cross-axis auto margins and alignment per Section 8.1 and Section 9.5
+            let has_cross_auto = it.auto_margin_cross_start || it.auto_margin_cross_end;
+            let (cross_offset, final_cross_size, actual_m_cross_start) = if has_cross_auto {
+                let remaining_cross = (line.cross_size
+                    - it.resolved_cross
+                    - (if it.auto_margin_cross_start { 0.0 } else { it.margin_cross_start })
+                    - (if it.auto_margin_cross_end { 0.0 } else { it.margin_cross_end }))
+                    .max(0.0);
+                let (m_start, m_end) = if it.auto_margin_cross_start && it.auto_margin_cross_end {
+                    (remaining_cross / 2.0, remaining_cross / 2.0)
+                } else if it.auto_margin_cross_start {
+                    (remaining_cross, it.margin_cross_end)
+                } else {
+                    (it.margin_cross_start, remaining_cross)
+                };
+                it.margin_cross_start = m_start;
+                it.margin_cross_end = m_end;
+                (0.0, it.resolved_cross, m_start)
+            } else {
+                let effective_align = match it.align_self {
+                    AlignSelf::Auto => container.style.align_items,
+                    AlignSelf::Stretch => AlignItems::Stretch,
+                    AlignSelf::FlexStart => AlignItems::FlexStart,
+                    AlignSelf::FlexEnd => AlignItems::FlexEnd,
+                    AlignSelf::Center => AlignItems::Center,
+                    AlignSelf::Baseline => AlignItems::Baseline,
+                };
 
-            let mut final_cross_size = it.resolved_cross;
-            let cross_offset = match effective_align {
-                AlignItems::FlexStart => 0.0,
-                AlignItems::FlexEnd => {
-                    line.cross_size
-                        - (final_cross_size + it.margin_cross_start + it.margin_cross_end)
-                }
-                AlignItems::Center => {
-                    (line.cross_size
-                        - (final_cross_size + it.margin_cross_start + it.margin_cross_end))
-                        / 2.0
-                }
-                AlignItems::Stretch => {
-                    let has_auto_cross = if is_row {
-                        child.style.height == Dimension::Auto
-                            || matches!(child.style.height, Dimension::Percent(_))
-                    } else {
-                        child.style.width == Dimension::Auto
-                            || matches!(child.style.width, Dimension::Percent(_))
-                    };
-                    if has_auto_cross {
-                        let stretched =
-                            (line.cross_size - it.margin_cross_start - it.margin_cross_end)
-                                .max(0.0);
-                        final_cross_size = if is_row {
-                            clamp_dimension(
-                                stretched,
-                                child.style.min_height,
-                                child.style.max_height,
-                                inner_height.unwrap_or(available_height),
-                            )
-                        } else {
-                            clamp_dimension(
-                                stretched,
-                                child.style.min_width,
-                                child.style.max_width,
-                                inner_width,
-                            )
-                        };
+                let mut size = it.resolved_cross;
+                let offset = match effective_align {
+                    AlignItems::FlexStart => 0.0,
+                    AlignItems::FlexEnd => {
+                        line.cross_size - (size + it.margin_cross_start + it.margin_cross_end)
                     }
-                    0.0
-                }
-                AlignItems::Baseline => 0.0,
+                    AlignItems::Center => {
+                        (line.cross_size - (size + it.margin_cross_start + it.margin_cross_end))
+                            / 2.0
+                    }
+                    AlignItems::Stretch => {
+                        let has_auto_cross = if is_row {
+                            child.style.height == Dimension::Auto
+                                || matches!(child.style.height, Dimension::Percent(_))
+                        } else {
+                            child.style.width == Dimension::Auto
+                                || matches!(child.style.width, Dimension::Percent(_))
+                        };
+                        if has_auto_cross {
+                            let stretched = (line.cross_size
+                                - it.margin_cross_start
+                                - it.margin_cross_end)
+                                .max(0.0);
+                            size = if is_row {
+                                clamp_dimension(
+                                    stretched,
+                                    child.style.min_height,
+                                    child.style.max_height,
+                                    inner_height.unwrap_or(available_height),
+                                )
+                            } else {
+                                clamp_dimension(
+                                    stretched,
+                                    child.style.min_width,
+                                    child.style.max_width,
+                                    inner_width,
+                                )
+                            };
+                        }
+                        0.0
+                    }
+                    AlignItems::Baseline => {
+                        if is_row && line.max_baseline_ascent > 0.0 {
+                            (line.max_baseline_ascent - (it.margin_cross_start + it.baseline_offset)).max(0.0)
+                        } else {
+                            0.0
+                        }
+                    }
+                };
+                (offset, size, it.margin_cross_start)
             };
 
             let (item_x, item_y, item_w, item_h) = if is_row {
                 (
                     current_main + it.margin_main_start,
-                    current_line_cross + it.margin_cross_start + cross_offset,
+                    current_line_cross + actual_m_cross_start + cross_offset,
                     it.resolved_main,
                     final_cross_size,
                 )
             } else {
                 (
-                    current_line_cross + it.margin_cross_start + cross_offset,
+                    current_line_cross + actual_m_cross_start + cross_offset,
                     current_main + it.margin_main_start,
                     final_cross_size,
                     it.resolved_main,
                 )
             };
+
+            let mut child_margin = child.style.margin;
+            if is_row {
+                child_margin.left = it.margin_main_start;
+                child_margin.right = it.margin_main_end;
+                child_margin.top = it.margin_cross_start;
+                child_margin.bottom = it.margin_cross_end;
+            } else {
+                child_margin.top = it.margin_main_start;
+                child_margin.bottom = it.margin_main_end;
+                child_margin.left = it.margin_cross_start;
+                child_margin.right = it.margin_cross_end;
+            }
 
             let old_x = child.geometry.border_box.x;
             let old_y = child.geometry.border_box.y;
@@ -942,7 +1194,7 @@ pub fn solve_flexbox_with_definite_cross(
                     Rect::new(item_x, item_y, item_w, item_h),
                     child.style.padding,
                     child.style.border_width,
-                    child.style.margin,
+                    child_margin,
                 );
                 child.last_child_layout_content = Some((desired_content_w, desired_content_h));
             } else {
@@ -950,14 +1202,20 @@ pub fn solve_flexbox_with_definite_cross(
                     Rect::new(item_x, item_y, item_w, item_h),
                     child.style.padding,
                     child.style.border_width,
-                    child.style.margin,
+                    child_margin,
                 );
                 if !child.children.is_empty() {
-                    child.layout_children();
+                    if let Some(cg) = guard.enter() {
+                        child.layout_children_guarded(cg);
+                    }
                 } else if !child.inline_items.is_empty() || child.text.is_some() {
                     let content_w = child.geometry.content_box.width;
                     let content_h = child.geometry.content_box.height;
-                    crate::box_model::solve_block_children(child, content_w, content_h);
+                    if let Some(cg) = guard.enter() {
+                        crate::box_model::solve_block_children_with_exclusions_guarded(
+                            child, content_w, content_h, None, 0.0, cg,
+                        );
+                    }
                     child.last_child_layout_content = Some((content_w, content_h));
                 } else {
                     child.last_child_layout_content = Some((desired_content_w, desired_content_h));
