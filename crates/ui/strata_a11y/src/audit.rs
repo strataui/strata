@@ -138,8 +138,8 @@ fn audit_node(node: &A11yNode, violations: &mut Vec<AuditViolation>) {
     }
 
     // Rule 4: Sliders must have min, max, and current numeric value defined
-    if node.role == A11yRole::Slider {
-        if node.numeric_value.is_none() || node.min_numeric_value.is_none() || node.max_numeric_value.is_none() {
+    if node.role == A11yRole::Slider
+        && (node.numeric_value.is_none() || node.min_numeric_value.is_none() || node.max_numeric_value.is_none()) {
             violations.push(AuditViolation {
                 rule: "A11Y_RULE_004_SLIDER_MISSING_BOUNDS",
                 severity: AuditSeverity::Error,
@@ -147,5 +147,4 @@ fn audit_node(node: &A11yNode, violations: &mut Vec<AuditViolation>) {
                 message: "Slider element must provide numeric_value, min_numeric_value, and max_numeric_value.".to_string(),
             });
         }
-    }
 }

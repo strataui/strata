@@ -8,6 +8,7 @@ pub mod accordion;
 pub mod dialog;
 pub mod floating;
 pub mod focus_trap;
+pub mod live_region;
 pub mod roving_tabindex;
 pub mod tooltip;
 
@@ -18,6 +19,10 @@ pub use floating::{
     Placement, Rect, Side,
 };
 pub use focus_trap::FocusTrap;
+pub use live_region::{
+    announce_assertive, announce_polite, use_live_region, LiveAnnouncement, LiveRegionAnnouncer,
+    LiveRegionConfig, LiveRegionPoliteness, LiveRegionRelevant, LiveRegionState,
+};
 pub use roving_tabindex::{Orientation, RovingTabIndex};
 pub use tooltip::{use_tooltip, TooltipConfig, TooltipState};
 
@@ -29,6 +34,12 @@ pub mod prelude {
         Placement, Side,
     };
     pub use crate::focus_trap::FocusTrap;
+    pub use crate::live_region::{
+        announce_assertive, announce_polite, use_live_region, LiveAnnouncement,
+        LiveRegionAnnouncer, LiveRegionConfig, LiveRegionPoliteness, LiveRegionRelevant,
+        LiveRegionState,
+    };
     pub use crate::roving_tabindex::{Orientation, RovingTabIndex};
     pub use crate::tooltip::{use_tooltip, TooltipConfig, TooltipState};
 }
+

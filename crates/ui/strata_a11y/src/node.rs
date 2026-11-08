@@ -35,6 +35,33 @@ pub enum A11yAction {
     ScrollDown,
 }
 
+/// Politeness level of a live region for screen-reader speech interruption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum A11yLivePoliteness {
+    #[default]
+    Off,
+    Polite,
+    Assertive,
+}
+
+impl A11yLivePoliteness {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Polite => "polite",
+            Self::Assertive => "assertive",
+        }
+    }
+
+    pub fn from_str_name(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "polite" => Self::Polite,
+            "assertive" => Self::Assertive,
+            _ => Self::Off,
+        }
+    }
+}
+
 /// A single node in the accessibility tree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct A11yNode {
@@ -56,6 +83,9 @@ pub struct A11yNode {
     pub focusable: bool,
     pub focused: bool,
     pub supported_actions: Vec<A11yAction>,
+    pub live: Option<A11yLivePoliteness>,
+    pub live_atomic: bool,
+    pub live_busy: bool,
 }
 
 impl A11yNode {
@@ -80,6 +110,9 @@ impl A11yNode {
             focusable,
             focused: false,
             supported_actions: Vec::new(),
+            live: None,
+            live_atomic: false,
+            live_busy: false,
         }
     }
 
@@ -108,6 +141,47 @@ impl A11yNode {
         self.min_numeric_value = Some(min);
         self.max_numeric_value = Some(max);
         self.numeric_step = Some(step);
+        self
+    }
+
+    pub fn with_live(mut self, politeness: A11yLivePoliteness, atomic: bool) -> Self {
+        self.live = Some(politeness);
+        self.live_atomic = atomic;
+        self
+    }
+
+    pub fn with_busy(mut self, busy: bool) -> Self {
+        self.live_busy = busy;
+        self
+    }
+
+    pub fn with_actions(mut self, actions: Vec<A11yAction>) -> Self {
+        self.supported_actions = actions;
+        self
+    }
+
+    pub fn with_disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    pub fn with_focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
+    }
+
+    pub fn with_selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    pub fn with_checked(mut self, checked: bool) -> Self {
+        self.checked = Some(checked);
+        self
+    }
+
+    pub fn with_expanded(mut self, expanded: bool) -> Self {
+        self.expanded = Some(expanded);
         self
     }
 

@@ -11,7 +11,17 @@ pub struct A11yBridge {
     action_handler: Option<ActionCallback>,
 }
 
+impl std::fmt::Debug for A11yBridge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("A11yBridge")
+            .field("current_tree", &self.current_tree)
+            .field("has_action_handler", &self.action_handler.is_some())
+            .finish()
+    }
+}
+
 impl Default for A11yBridge {
+
     fn default() -> Self {
         Self::new()
     }
