@@ -84,7 +84,7 @@ mod tests {
 
         // 1. Initial creation
         let store = create_persistent_store(opts.clone(), default_settings.clone());
-        assert_eq!(store.get().dark_mode, false);
+        assert!(!store.get().dark_mode);
         assert_eq!(store.get().font_size, 14);
 
         // 2. Mutate state
@@ -92,7 +92,7 @@ mod tests {
             s.dark_mode = true;
             s.font_size = 18;
         });
-        assert_eq!(store.get().dark_mode, true);
+        assert!(store.get().dark_mode);
         assert_eq!(store.get().font_size, 18);
 
         // Verify storage received JSON
@@ -101,7 +101,7 @@ mod tests {
 
         // 3. Re-open store from same WAL: state is restored!
         let rehydrated_store = create_persistent_store(opts, default_settings);
-        assert_eq!(rehydrated_store.get().dark_mode, true);
+        assert!(rehydrated_store.get().dark_mode);
         assert_eq!(rehydrated_store.get().font_size, 18);
 
         let _ = std::fs::remove_dir_all(temp_dir);

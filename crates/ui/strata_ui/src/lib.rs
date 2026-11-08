@@ -1,6 +1,12 @@
 //! Strata UI: High-Level Accessible Component Library and Design System.
 
-#![allow(non_snake_case, dead_code)]
+#![allow(
+    non_snake_case,
+    dead_code,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::field_reassign_with_default
+)]
 
 pub mod primitives;
 pub mod buttons;

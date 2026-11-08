@@ -39,7 +39,7 @@ impl ThreadLocalArena {
 
     /// Allocates space for an item of type `T` and moves `value` into it.
     #[inline(always)]
-    pub fn alloc<T>(&mut self, value: T) -> &'static mut T {
+    pub fn alloc<T>(&mut self, value: T) -> &mut T {
         let align = std::mem::align_of::<T>();
         let size = std::mem::size_of::<T>();
 
@@ -64,9 +64,9 @@ impl ThreadLocalArena {
     }
 
     /// Allocates a contiguous slice of cloned elements.
-    pub fn alloc_slice<T: Clone>(&mut self, slice: &[T]) -> &'static mut [T] {
+    pub fn alloc_slice<T: Clone>(&mut self, slice: &[T]) -> &mut [T] {
         let align = std::mem::align_of::<T>();
-        let size = std::mem::size_of::<T>() * slice.len();
+        let size = std::mem::size_of_val(slice);
 
         let current = self.ptr as usize;
         let aligned = (current + align - 1) & !(align - 1);
@@ -112,3 +112,23 @@ impl Drop for ThreadLocalArena {
         }
     }
 }
+
+thread_local! {
+    static PER_THREAD_ARENA: std::cell::RefCell<ThreadLocalArena> = std::cell::RefCell::new(ThreadLocalArena::new(1024 * 512));
+}
+
+/// Executes a closure with access to the persistent thread-local bump arena.
+pub fn with_thread_local_arena<R>(f: impl FnOnce(&mut ThreadLocalArena) -> R) -> R {
+    PER_THREAD_ARENA.with(|a| {
+        let mut arena = a.borrow_mut();
+        f(&mut arena)
+    })
+}
+
+/// Resets the current thread's thread-local bump arena in 1 CPU cycle.
+pub fn reset_thread_local_arena() {
+    PER_THREAD_ARENA.with(|a| {
+        a.borrow_mut().reset();
+    });
+}
+

@@ -127,9 +127,9 @@ fn extract_string_field(json: &str, field: &str) -> Option<String> {
     let pattern = format!("\"{}\":", field);
     let pos = json.find(&pattern)?;
     let after = json[pos + pattern.len()..].trim_start();
-    if after.starts_with('"') {
-        let end = after[1..].find('"')?;
-        Some(after[1..1 + end].to_string())
+    if let Some(stripped) = after.strip_prefix('"') {
+        let end = stripped.find('"')?;
+        Some(stripped[..end].to_string())
     } else {
         None
     }

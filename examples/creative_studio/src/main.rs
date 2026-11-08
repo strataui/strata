@@ -12,7 +12,20 @@ use strata::prelude::*;
 fn main() {
     println!("[*] Starting Strata Creative Studio in Pure Rust...");
 
-    strata::launch(|| {
-        App()
-    });
+    let config = WindowConfig {
+        title: "Strata Creative Studio".to_string(),
+        width: 1440,
+        height: 900,
+        ..Default::default()
+    };
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = strata::launch_gtk(App, config);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        strata::app().with_window(config).build(App).run();
+    }
 }

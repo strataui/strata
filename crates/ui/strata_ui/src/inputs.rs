@@ -71,8 +71,8 @@ pub fn Input(
                     rsx! { <></> }
                 }}
             </div>
-            {if err && error_message.is_some() {
-                rsx! { <span class="text-xs text-rose-400 font-medium">{error_message.unwrap()}</span> }
+            {if let (true, Some(err_msg)) = (err, error_message) {
+                rsx! { <span class="text-xs text-rose-400 font-medium">{err_msg}</span> }
             } else if let Some(help) = helper_text {
                 rsx! { <span class="text-xs text-neutral-500">{help}</span> }
             } else {

@@ -9,3 +9,5 @@ description = "State-preserving native code hot-reloading orchestrator for Proje
 [dependencies]
 strata_dom = { workspace = true }
 strata_primitives = { workspace = true }
+libloading = "0.8"
+

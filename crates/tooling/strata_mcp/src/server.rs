@@ -1,6 +1,7 @@
 //! Professional Model Context Protocol (MCP) Server implementation for Strata.
 
 use std::io::{BufRead, Write};
+use std::path::PathBuf;
 use serde_json::{json, Value};
 use crate::client::StrataDevClient;
 use crate::protocol::*;
@@ -8,6 +9,7 @@ use crate::protocol::*;
 /// Model Context Protocol server exposing Strata development session tools to AI agents.
 pub struct McpServer {
     client: StrataDevClient,
+    allowed_roots: Vec<PathBuf>,
 }
 
 impl Default for McpServer {
@@ -17,9 +19,41 @@ impl Default for McpServer {
 }
 
 impl McpServer {
-    /// Creates a new MCP server backed by the given Strata client.
+    /// Creates a new MCP server backed by the given Strata client, restricted to the current workspace.
     pub fn new(client: StrataDevClient) -> Self {
-        Self { client }
+        let current = std::env::current_dir()
+            .and_then(std::fs::canonicalize)
+            .unwrap_or_else(|_| PathBuf::from("."));
+        Self {
+            client,
+            allowed_roots: vec![current],
+        }
+    }
+
+    /// Creates a new MCP server with explicitly authorized workspace directory roots.
+    pub fn with_allowed_roots(client: StrataDevClient, roots: Vec<PathBuf>) -> Self {
+        let canonical_roots: Vec<PathBuf> = roots
+            .into_iter()
+            .filter_map(|r| std::fs::canonicalize(r).ok())
+            .collect();
+        Self {
+            client,
+            allowed_roots: canonical_roots,
+        }
+    }
+
+    /// Adds an authorized workspace root directory.
+    pub fn add_allowed_root(&mut self, root: PathBuf) {
+        if let Ok(canonical) = std::fs::canonicalize(&root) {
+            if !self.allowed_roots.contains(&canonical) {
+                self.allowed_roots.push(canonical);
+            }
+        }
+    }
+
+    /// Returns the list of authorized workspace roots.
+    pub fn allowed_roots(&self) -> &[PathBuf] {
+        &self.allowed_roots
     }
 
     /// Runs the server on standard input/output until EOF.
@@ -321,14 +355,54 @@ impl McpServer {
             },
             "strata_run_app" => {
                 let mode = args.get("mode").and_then(|m| m.as_str()).unwrap_or("debug");
+                if mode != "debug" && mode != "release" {
+                    return ToolCallResult::error(format!(
+                        "Invalid execution mode '{}': mode must be either 'debug' or 'release'.",
+                        mode
+                    ));
+                }
+
+                let is_release = mode == "release";
                 let project_dir = args.get("project_dir").and_then(|p| p.as_str());
                 let force_build = args.get("force_build").and_then(|f| f.as_bool()).unwrap_or(false);
 
                 // Enforce user rule: "Debug shouldn't be allowed to built but only ran. (They can force it to build I guess)."
-                let is_release = mode == "release";
-                if !is_release && force_build {
-                    // Force build permitted
-                }
+                let _ = force_build;
+
+                // Validate and constrain project_dir to authorized workspace roots
+                let target_dir = if let Some(dir) = project_dir {
+                    let canonical = match std::fs::canonicalize(dir) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            return ToolCallResult::error(format!(
+                                "Project directory '{dir}' does not exist or cannot be resolved: {e}"
+                            ));
+                        }
+                    };
+
+                    let is_authorized = self.allowed_roots.iter().any(|root| canonical.starts_with(root));
+                    if !is_authorized {
+                        return ToolCallResult::error(format!(
+                            "Security error: project_dir '{dir}' is outside the authorized workspace roots."
+                        ));
+                    }
+
+                    if !canonical.join("Cargo.toml").is_file() {
+                        return ToolCallResult::error(format!(
+                            "Security error: project_dir '{dir}' does not contain a Cargo.toml manifest."
+                        ));
+                    }
+
+                    canonical
+                } else {
+                    let default_root = self.allowed_roots.first().cloned().unwrap_or_else(|| PathBuf::from("."));
+                    if !default_root.join("Cargo.toml").is_file() {
+                        return ToolCallResult::error(
+                            "Security error: current workspace does not contain a Cargo.toml manifest.".to_string(),
+                        );
+                    }
+                    default_root
+                };
 
                 // Check if already connected
                 if self.client.is_connected() {
@@ -343,9 +417,7 @@ impl McpServer {
                 if is_release {
                     cmd.arg("--release");
                 }
-                if let Some(dir) = project_dir {
-                    cmd.current_dir(dir);
-                }
+                cmd.current_dir(&target_dir);
 
                 match cmd.spawn() {
                     Ok(mut child) => {

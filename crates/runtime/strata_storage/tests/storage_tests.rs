@@ -107,7 +107,9 @@ fn test_local_storage_and_session_storage() {
 #[test]
 fn test_secure_keystore() {
     let test_enc = std::env::temp_dir().join("strata_test_keystore.enc");
+    let test_key = test_enc.with_extension("key");
     let _ = std::fs::remove_file(&test_enc);
+    let _ = std::fs::remove_file(&test_key);
 
     SecureKeystore::set_keystore_path(test_enc.clone());
 
@@ -125,9 +127,44 @@ fn test_secure_keystore() {
     let disk_str = String::from_utf8_lossy(&disk_raw);
     assert!(!disk_str.contains("super_secret_oauth_refresh_token_2026"));
 
+    // Verify 0600 permissions on Unix for both keystore and keyfile
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let enc_mode = std::fs::metadata(&test_enc).unwrap().permissions().mode() & 0o777;
+        let key_mode = std::fs::metadata(&test_key).unwrap().permissions().mode() & 0o777;
+        assert_eq!(enc_mode, 0o600, "Keystore file must be restricted to 0600 permissions");
+        assert_eq!(key_mode, 0o600, "Key file must be restricted to 0600 permissions");
+    }
+
+    // Tampering test: AEAD authentication tag validation must reject forged/modified ciphertext
+    let mut tampered = disk_raw.clone();
+    let last_idx = tampered.len() - 1;
+    tampered[last_idx] ^= 0x01; // flip 1 bit
+    std::fs::write(&test_enc, &tampered).unwrap();
+    let tamper_result = SecureKeystore::get_secret("jwt_refresh");
+    assert!(
+        matches!(tamper_result, Err(KeystoreError::DecryptionError(_))),
+        "AEAD must detect corrupted or forged ciphertext"
+    );
+
+    // Restore valid ciphertext and continue
+    std::fs::write(&test_enc, &disk_raw).unwrap();
+
     assert!(SecureKeystore::delete_secret("jwt_refresh").unwrap());
     assert!(!SecureKeystore::has_secret("jwt_refresh"));
 
+    // Test large key (>64KB) support without u16 overflow truncation
+    let large_key = "K".repeat(70_000);
+    let large_val = b"large_payload_value";
+    SecureKeystore::set_secret(&large_key, large_val).expect("Failed to store large key");
+    assert!(SecureKeystore::has_secret(&large_key));
+    let retrieved_large = SecureKeystore::get_secret(&large_key).expect("Failed to get large key");
+    assert_eq!(retrieved_large, Some(large_val.to_vec()));
+
+    assert!(SecureKeystore::delete_secret(&large_key).unwrap());
+
     let _ = std::fs::remove_file(&test_enc);
+    let _ = std::fs::remove_file(&test_key);
     SecureKeystore::clear_keystore_path();
 }

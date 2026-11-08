@@ -14,23 +14,32 @@ impl Complex {
         Self { re, im }
     }
 
-    pub fn add(self, other: Complex) -> Complex {
-        Complex::new(self.re + other.re, self.im + other.im)
+    pub fn magnitude(self) -> f32 {
+        (self.re * self.re + self.im * self.im).sqrt()
     }
+}
 
-    pub fn sub(self, other: Complex) -> Complex {
-        Complex::new(self.re - other.re, self.im - other.im)
+impl std::ops::Add for Complex {
+    type Output = Self;
+    fn add(self, other: Self) -> Self {
+        Self::new(self.re + other.re, self.im + other.im)
     }
+}
 
-    pub fn mul(self, other: Complex) -> Complex {
-        Complex::new(
+impl std::ops::Sub for Complex {
+    type Output = Self;
+    fn sub(self, other: Self) -> Self {
+        Self::new(self.re - other.re, self.im - other.im)
+    }
+}
+
+impl std::ops::Mul for Complex {
+    type Output = Self;
+    fn mul(self, other: Self) -> Self {
+        Self::new(
             self.re * other.re - self.im * other.im,
             self.re * other.im + self.im * other.re,
         )
-    }
-
-    pub fn magnitude(self) -> f32 {
-        (self.re * self.re + self.im * self.im).sqrt()
     }
 }
 
@@ -69,10 +78,10 @@ pub fn fft_radix2(buffer: &mut [Complex]) {
             let mut w = Complex::new(1.0, 0.0);
             for k in 0..half {
                 let u = buffer[i + k];
-                let v = buffer[i + k + half].mul(w);
-                buffer[i + k] = u.add(v);
-                buffer[i + k + half] = u.sub(v);
-                w = w.mul(w_unit);
+                let v = buffer[i + k + half] * w;
+                buffer[i + k] = u + v;
+                buffer[i + k + half] = u - v;
+                w = w * w_unit;
             }
             i += len;
         }
@@ -98,14 +107,12 @@ pub fn compute_magnitude_spectrum(samples: &[f32], fft_size: usize) -> Vec<f32> 
     fft_radix2(&mut complex_buf);
 
     let num_bins = fft_size / 2;
-    let mut magnitudes = Vec::with_capacity(num_bins);
     let norm = 2.0 / fft_size as f32;
 
-    for i in 0..num_bins {
-        magnitudes.push(complex_buf[i].magnitude() * norm);
-    }
-
-    magnitudes
+    complex_buf[..num_bins]
+        .iter()
+        .map(|c| c.magnitude() * norm)
+        .collect()
 }
 
 /// Converts magnitude bins to decibels: 20 * log10(magnitude.max(1e-5)).

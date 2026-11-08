@@ -8,6 +8,47 @@ use strata_dom::{NodeBlueprint, Signal, View};
 use strata_icons::prelude::{Icon, IconName};
 use strata_macro::{component, rsx};
 
+use crate::primitives::{DismissableLayer, FocusTrap};
+
+/// Counts focusable elements (buttons, inputs, selects, textareas, links, or tabindex >= 0) in blueprint tree.
+pub fn count_focusable_elements(nodes: &[NodeBlueprint]) -> usize {
+    let mut count = 0;
+    for node in nodes {
+        match node {
+            NodeBlueprint::Element {
+                tag,
+                attributes,
+                children,
+                ..
+            } => {
+                let is_focusable_tag = matches!(
+                    tag,
+                    strata_dom::Tag::Button
+                        | strata_dom::Tag::Input
+                        | strata_dom::Tag::Select
+                        | strata_dom::Tag::Textarea
+                        | strata_dom::Tag::A
+                );
+                let has_tabindex = attributes.iter().any(|a| match a {
+                    strata_dom::Attribute::Property { key, value } => {
+                        key == "tabindex" && value != "-1"
+                    }
+                    _ => false,
+                });
+                if is_focusable_tag || has_tabindex {
+                    count += 1;
+                }
+                count += count_focusable_elements(children);
+            }
+            NodeBlueprint::Fragment(children) => {
+                count += count_focusable_elements(children);
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
 /// Modal Dialog overlay with backdrop blur, focus trap, and Escape/Backdrop dismissal.
 #[component]
 pub fn Modal(
@@ -23,13 +64,50 @@ pub fn Modal(
 
     let op = open.clone();
     let op_backdrop = open.clone();
+    let op_key = open.clone();
     let custom = class.unwrap_or("");
+
+    static MODAL_COUNTER: AtomicU64 = AtomicU64::new(1);
+    let modal_id = MODAL_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let title_id = format!("strata-modal-title-{modal_id}");
+    let desc_id = format!("strata-modal-desc-{modal_id}");
+
+    let inner_children = children.unwrap_or_default();
+    let child_focus_count = count_focusable_elements(&inner_children);
+    let total_focusable = (1 + child_focus_count).max(1);
+
+    let focus_trap = std::rc::Rc::new(std::cell::RefCell::new(FocusTrap::new(total_focusable)));
+    let trap_clone = focus_trap.clone();
+
+    let on_keydown = move |e: strata_dom::Event| {
+        if DismissableLayer::should_dismiss_on_escape(&e.key)
+            || DismissableLayer::should_dismiss_on_escape(&e.code)
+        {
+            op_key.set(false);
+            e.prevent_default();
+            e.stop_propagation();
+        } else if e.key == "Tab" {
+            e.prevent_default();
+            e.stop_propagation();
+            let mut trap = trap_clone.borrow_mut();
+            if e.shift_key {
+                trap.prev();
+            } else {
+                trap.next();
+            }
+        }
+    };
 
     rsx! {
         <div
             class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
             role="dialog"
             aria-modal="true"
+            aria-labelledby={title_id.clone()}
+            aria-describedby={if description.is_some() { desc_id.clone() } else { String::new() }}
+            tabindex="0"
+            data-focus-trap="true"
+            onkeydown={on_keydown}
         >
             <div
                 class="fixed inset-0"
@@ -38,9 +116,9 @@ pub fn Modal(
             <div class={format!("relative z-10 w-full max-w-lg rounded-2xl bg-neutral-900 border border-neutral-800 shadow-2xl p-6 flex flex-col gap-5 {}", custom)}>
                 <div class="flex items-start justify-between border-b border-neutral-800/80 pb-4">
                     <div class="flex flex-col gap-1">
-                        <h2 class="text-lg font-bold text-white tracking-tight">{title}</h2>
+                        <h2 id={title_id} class="text-lg font-bold text-white tracking-tight">{title}</h2>
                         {if let Some(desc) = description {
-                            rsx! { <p class="text-xs text-neutral-400">{desc}</p> }
+                            rsx! { <p id={desc_id} class="text-xs text-neutral-400">{desc}</p> }
                         } else {
                             rsx! { <></> }
                         }}
@@ -49,12 +127,13 @@ pub fn Modal(
                         type="button"
                         class="text-neutral-400 hover:text-white p-1 rounded-lg hover:bg-neutral-800/60 transition-colors cursor-pointer select-none"
                         onclick={move |_| op.set(false)}
+                        aria-label="Close dialog"
                     >
                         {Icon(IconName::X, Some("w-4 h-4 text-current")).root}
                     </button>
                 </div>
                 <div class="text-sm text-neutral-300">
-                    {children.unwrap_or_default()}
+                    {inner_children}
                 </div>
             </div>
         </div>
@@ -76,7 +155,38 @@ pub fn Drawer(
 
     let op = open.clone();
     let op_backdrop = open.clone();
+    let op_key = open.clone();
     let s = side.unwrap_or("right");
+
+    static DRAWER_COUNTER: AtomicU64 = AtomicU64::new(1);
+    let drawer_id = DRAWER_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let title_id = format!("strata-drawer-title-{drawer_id}");
+
+    let inner_children = children.unwrap_or_default();
+    let child_focus_count = count_focusable_elements(&inner_children);
+    let total_focusable = (1 + child_focus_count).max(1);
+
+    let focus_trap = std::rc::Rc::new(std::cell::RefCell::new(FocusTrap::new(total_focusable)));
+    let trap_clone = focus_trap.clone();
+
+    let on_keydown = move |e: strata_dom::Event| {
+        if DismissableLayer::should_dismiss_on_escape(&e.key)
+            || DismissableLayer::should_dismiss_on_escape(&e.code)
+        {
+            op_key.set(false);
+            e.prevent_default();
+            e.stop_propagation();
+        } else if e.key == "Tab" {
+            e.prevent_default();
+            e.stop_propagation();
+            let mut trap = trap_clone.borrow_mut();
+            if e.shift_key {
+                trap.prev();
+            } else {
+                trap.next();
+            }
+        }
+    };
 
     let placement_classes = match s {
         "left" => "top-0 bottom-0 left-0 w-80 border-r",
@@ -88,7 +198,15 @@ pub fn Drawer(
     let custom = class.unwrap_or("");
 
     rsx! {
-        <div class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+        <div
+            class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={if title.is_some() { title_id.clone() } else { String::new() }}
+            tabindex="0"
+            data-focus-trap="true"
+            onkeydown={on_keydown}
+        >
             <div
                 class="fixed inset-0"
                 onclick={move |_| op_backdrop.set(false)}
@@ -96,7 +214,7 @@ pub fn Drawer(
             <div class={format!("fixed z-10 bg-neutral-900 border-neutral-800 shadow-2xl p-6 flex flex-col gap-4 overflow-y-auto {} {}", placement_classes, custom)}>
                 <div class="flex items-center justify-between border-b border-neutral-800 pb-3">
                     {if let Some(t) = title {
-                        rsx! { <h3 class="text-base font-semibold text-white">{t}</h3> }
+                        rsx! { <h3 id={title_id} class="text-base font-semibold text-white">{t}</h3> }
                     } else {
                         rsx! { <></> }
                     }}
@@ -104,12 +222,13 @@ pub fn Drawer(
                         type="button"
                         class="text-neutral-400 hover:text-white cursor-pointer select-none"
                         onclick={move |_| op.set(false)}
+                        aria-label="Close drawer"
                     >
                         {Icon(IconName::X, Some("w-4 h-4 text-current")).root}
                     </button>
                 </div>
                 <div class="flex-1 text-sm text-neutral-300">
-                    {children.unwrap_or_default()}
+                    {inner_children}
                 </div>
             </div>
         </div>

@@ -7,5 +7,8 @@ pub mod watcher;
 
 pub use protocol::HotReloadMessage;
 pub use reloader::HotReloader;
-pub use snapshot::{ComponentSnapshot, HotReloadSnapshot, SignalSnapshot};
+pub use snapshot::{
+    ComponentSnapshot, FieldAction, FieldMigration, GenerationalFieldValue, HotReloadSnapshot,
+    SignalMigration, SignalSnapshot,
+};
 pub use watcher::FileChangeTracker;

@@ -112,7 +112,7 @@ impl RouterContext {
 
         for pattern in routes.iter() {
             if let Some(m) = match_path(pattern, &loc.pathname) {
-                if best_match.as_ref().map_or(true, |best| m.score > best.score) {
+                if best_match.as_ref().is_none_or(|best| m.score > best.score) {
                     best_match = Some(m);
                 }
             }

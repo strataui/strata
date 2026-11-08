@@ -28,10 +28,10 @@ pub fn match_path(pattern: &str, path: &str) -> Option<RouteMatch> {
     while p_idx < pattern_segments.len() {
         let p_seg = pattern_segments[p_idx];
 
-        if p_seg.starts_with('*') {
+        if let Some(stripped) = p_seg.strip_prefix('*') {
             // Wildcard match for remaining segments
-            let var_name = if p_seg.len() > 1 {
-                &p_seg[1..]
+            let var_name = if !stripped.is_empty() {
+                stripped
             } else {
                 "wildcard"
             };
@@ -52,9 +52,8 @@ pub fn match_path(pattern: &str, path: &str) -> Option<RouteMatch> {
 
         let actual_seg = path_segments[path_idx];
 
-        if p_seg.starts_with(':') {
+        if let Some(var_name) = p_seg.strip_prefix(':') {
             // Dynamic parameter match
-            let var_name = &p_seg[1..];
             params.insert(var_name.to_string(), actual_seg.to_string());
             score += 50; // Dynamic segment weight
         } else if p_seg == actual_seg {

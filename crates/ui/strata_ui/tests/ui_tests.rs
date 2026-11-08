@@ -144,7 +144,7 @@ fn test_form_controls_and_signals() {
         None,
         None,
     );
-    assert_eq!(show_pass.get(), false);
+    assert!(!show_pass.get());
     match &pass_view.root {
         NodeBlueprint::Element { children, .. } => {
             assert_eq!(children.len(), 2);
@@ -175,7 +175,7 @@ fn test_form_controls_and_signals() {
         None,
         None,
     );
-    assert_eq!(chk_sig.get(), true);
+    assert!(chk_sig.get());
     match &chk_view.root {
         NodeBlueprint::Element { tag, .. } => assert_eq!(*tag, Tag::Label),
         _ => panic!("Expected Element"),
@@ -188,7 +188,7 @@ fn test_form_controls_and_signals() {
         switch_sig.clone(),
         None,
     );
-    assert_eq!(switch_sig.get(), false);
+    assert!(!switch_sig.get());
     match &switch_view.root {
         NodeBlueprint::Element { tag, .. } => assert_eq!(*tag, Tag::Div),
         _ => panic!("Expected Element"),
@@ -246,7 +246,7 @@ fn test_data_display_components() {
         None,
         None,
     );
-    assert_eq!(accord_open.get(), true);
+    assert!(accord_open.get());
     match &accordion.root {
         NodeBlueprint::Element { children, .. } => {
             assert_eq!(children.len(), 2); // button + content
@@ -422,7 +422,7 @@ fn test_canvas2d_and_scroll_view_components() {
     match &scroll_view.root {
         NodeBlueprint::Element { tag, children, .. } => {
             assert_eq!(*tag, Tag::Div);
-            assert!(children.len() >= 1);
+            assert!(!children.is_empty());
         }
         _ => panic!("Expected Element"),
     }
@@ -536,4 +536,143 @@ fn test_menu_and_dropdown_components() {
         _ => panic!("Expected Div Element"),
     }
 }
+
+#[test]
+fn test_modal_and_drawer_focus_trap_and_escape_dismissal() {
+    // 1. Modal open and closed states, attributes, and keydown listeners
+    let modal_open = Signal::new(true);
+    let modal_view = Modal(
+        modal_open.clone(),
+        "Delete Project",
+        Some("This action cannot be undone."),
+        Some(vec![
+            Button(
+                Some(ButtonVariant::Destructive),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .root,
+        ]),
+        None,
+    );
+
+    match &modal_view.root {
+        NodeBlueprint::Element { attributes, .. } => {
+            // Verify ARIA dialog attributes and focus trap
+            assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "role" && value == "dialog")));
+            assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "aria-modal" && value == "true")));
+            assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "tabindex" && value == "0")));
+            assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "data-focus-trap" && value == "true")));
+            assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "aria-labelledby" && value.starts_with("strata-modal-title-"))));
+            assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "aria-describedby" && value.starts_with("strata-modal-desc-"))));
+
+            // Find keydown listener and simulate Escape
+            let keydown_attr = attributes.iter().find(|a| {
+                matches!(
+                    a,
+                    Attribute::EventListener {
+                        event: strata_dom::EventType::KeyDown,
+                        ..
+                    }
+                )
+            });
+            assert!(keydown_attr.is_some(), "Modal must have keydown event listener");
+
+            if let Some(Attribute::EventListener { handler, .. }) = keydown_attr {
+                // Test Tab key navigation (does not dismiss)
+                let tab_ev = strata_dom::Event {
+                    event_type: strata_dom::EventType::KeyDown,
+                    key: "Tab".to_string(),
+                    ..Default::default()
+                };
+                handler(tab_ev);
+                assert!(modal_open.get(), "Tab key must not close modal");
+
+                // Test Shift+Tab key navigation (does not dismiss)
+                let shift_tab_ev = strata_dom::Event {
+                    event_type: strata_dom::EventType::KeyDown,
+                    key: "Tab".to_string(),
+                    shift_key: true,
+                    ..Default::default()
+                };
+                handler(shift_tab_ev);
+                assert!(modal_open.get(), "Shift+Tab key must not close modal");
+
+                // Test Escape key dismissal
+                let esc_ev = strata_dom::Event {
+                    event_type: strata_dom::EventType::KeyDown,
+                    key: "Escape".to_string(),
+                    ..Default::default()
+                };
+                handler(esc_ev);
+                assert!(!modal_open.get(), "Escape key must dismiss modal");
+            }
+        }
+        _ => panic!("Expected Element root for open Modal"),
+    }
+
+    // 2. Drawer open and closed states, attributes, and keydown listeners
+    let drawer_open = Signal::new(true);
+    let drawer_view = Drawer(
+        drawer_open.clone(),
+        Some("right"),
+        Some("Navigation Drawer"),
+        Some(vec![
+            Button(
+                Some(ButtonVariant::Secondary),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .root,
+        ]),
+        None,
+    );
+
+    match &drawer_view.root {
+        NodeBlueprint::Element { attributes, .. } => {
+            // Verify ARIA dialog attributes and focus trap
+            assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "role" && value == "dialog")));
+            assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "aria-modal" && value == "true")));
+            assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "tabindex" && value == "0")));
+            assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "data-focus-trap" && value == "true")));
+            assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "aria-labelledby" && value.starts_with("strata-drawer-title-"))));
+
+            // Find keydown listener and simulate Escape
+            let keydown_attr = attributes.iter().find(|a| {
+                matches!(
+                    a,
+                    Attribute::EventListener {
+                        event: strata_dom::EventType::KeyDown,
+                        ..
+                    }
+                )
+            });
+            assert!(keydown_attr.is_some(), "Drawer must have keydown event listener");
+
+            if let Some(Attribute::EventListener { handler, .. }) = keydown_attr {
+                let esc_ev = strata_dom::Event {
+                    event_type: strata_dom::EventType::KeyDown,
+                    key: "Escape".to_string(),
+                    ..Default::default()
+                };
+                handler(esc_ev);
+                assert!(!drawer_open.get(), "Escape key must dismiss drawer");
+            }
+        }
+        _ => panic!("Expected Element root for open Drawer"),
+    }
+}
+
 

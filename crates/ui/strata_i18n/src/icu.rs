@@ -298,8 +298,8 @@ where
         }
 
         // Check for offset:N
-        if selector.starts_with("offset:") {
-            if let Ok(n) = selector["offset:".len()..].trim().parse::<usize>() {
+        if let Some(rest) = selector.strip_prefix("offset:") {
+            if let Ok(n) = rest.trim().parse::<usize>() {
                 *offset = n;
             }
             continue;

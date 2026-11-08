@@ -83,7 +83,7 @@ impl Form {
     pub fn validate_all(&self) -> bool {
         let fields = self.fields.borrow();
         let mut valid = true;
-        for (_, field) in fields.iter() {
+        for field in fields.values() {
             field.is_touched.set(true);
             if !field.validate() {
                 valid = false;
@@ -111,7 +111,7 @@ impl Form {
     /// Reset all fields to their initial values.
     pub fn reset(&self) {
         let fields = self.fields.borrow();
-        for (_, field) in fields.iter() {
+        for field in fields.values() {
             field.reset();
         }
         self.is_valid.set(true);

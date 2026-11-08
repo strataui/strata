@@ -33,7 +33,7 @@ fn test_parametric_oscillators() {
     let mut sine = Oscillator::new(OscillatorType::Sine, 440.0);
     let samples = sine.render_samples(100, 44100);
     assert_eq!(samples.len(), 100);
-    assert!(samples.iter().all(|&s| s >= -1.0 && s <= 1.0));
+    assert!(samples.iter().all(|&s| (-1.0..=1.0).contains(&s)));
 
     // Detune by 100 cents (1 semitone higher)
     let detuned = Oscillator::new(OscillatorType::Sine, 440.0).with_detune(100.0);
@@ -56,7 +56,7 @@ fn test_biquad_lowpass_filter() {
     let initial_rms = buf.rms_level();
 
     // Apply lowpass filter at 1000 Hz
-    let mut lowpass = BiquadFilter::new(BiquadFilterType::Lowpass, 1000.0, 0.7071, 44100);
+    let mut lowpass = BiquadFilter::new(BiquadFilterType::Lowpass, 1000.0, std::f32::consts::FRAC_1_SQRT_2, 44100);
     lowpass.process_buffer(&mut buf);
 
     let filtered_rms = buf.rms_level();

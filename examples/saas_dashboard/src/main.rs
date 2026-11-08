@@ -12,19 +12,20 @@ use strata::prelude::*;
 fn main() {
     println!("[*] Starting Strata Cloud Enterprise Dashboard...");
 
+    let config = WindowConfig {
+        title: "Strata Cloud Enterprise Dashboard".to_string(),
+        width: 1440,
+        height: 900,
+        ..Default::default()
+    };
+
     #[cfg(target_os = "linux")]
     {
-        let mut config = WindowConfig::default();
-        config.title = "Strata Cloud Enterprise Dashboard".to_string();
-        config.width = 1440;
-        config.height = 900;
-        let _ = strata::launch_gtk(|| App(), config);
+        let _ = strata::launch_gtk(App, config);
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        strata::launch(|| {
-            App()
-        });
+        strata::app().with_window(config).build(App).run();
     }
 }
