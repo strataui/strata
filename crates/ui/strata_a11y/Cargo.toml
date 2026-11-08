@@ -7,5 +7,10 @@ license.workspace = true
 description = "Native screen-reader accessibility bridge and WCAG 2.1 AAA auditor for Project Strata"
 
 [dependencies]
+accesskit = "0.25.2"
+uuid = "1.0"
 strata_dom = { workspace = true }
+strata_layout = { workspace = true }
 strata_primitives = { workspace = true }
+
+

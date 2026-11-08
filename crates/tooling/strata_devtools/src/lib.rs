@@ -1,16 +1,27 @@
 //! In-Process Overlay HUD, Frame Profiler, Reactive DAG Inspector, Time-Travel Debugger, and Remote CDP Bridge.
 
+#![allow(
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::field_reassign_with_default
+)]
+
 pub mod cdp;
 pub mod hud;
 pub mod inspector;
 pub mod memory;
 pub mod profiler;
 pub mod reactive_graph;
+pub mod server;
 pub mod time_travel;
 
 pub use cdp::{
-    CdpDispatcher, CdpRequest, CdpResponse, WebSocketCodec, WebSocketFrame, WebSocketOpcode,
+    build_cdp_tree_from_blueprint, build_cdp_tree_from_ir, format_computed_style, CdpDispatcher,
+    CdpDomNode, CdpRequest, CdpResponse, DevToolsState, WebSocketCodec, WebSocketFrame,
+    WebSocketOpcode,
 };
+pub use server::CdpServer;
+
 pub use hud::{DevToolsEventInterceptor, HudController, HudDockMode, HudState, HudTab};
 pub use inspector::{
     BoxModelMetrics, ComponentMeta, LiveTailwindEditor, PropDescriptor, PropValue, ReflectProp,

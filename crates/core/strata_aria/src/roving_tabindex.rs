@@ -81,17 +81,17 @@ impl RovingTabIndex {
             return None;
         }
 
-        let is_forward = match (self.orientation, key) {
-            (Orientation::Horizontal | Orientation::Both, "ArrowRight") => true,
-            (Orientation::Vertical | Orientation::Both, "ArrowDown") => true,
-            _ => false,
-        };
+        let is_forward = matches!(
+            (self.orientation, key),
+            (Orientation::Horizontal | Orientation::Both, "ArrowRight")
+                | (Orientation::Vertical | Orientation::Both, "ArrowDown")
+        );
 
-        let is_backward = match (self.orientation, key) {
-            (Orientation::Horizontal | Orientation::Both, "ArrowLeft") => true,
-            (Orientation::Vertical | Orientation::Both, "ArrowUp") => true,
-            _ => false,
-        };
+        let is_backward = matches!(
+            (self.orientation, key),
+            (Orientation::Horizontal | Orientation::Both, "ArrowLeft")
+                | (Orientation::Vertical | Orientation::Both, "ArrowUp")
+        );
 
         if key == "Home" {
             for i in 0..total {

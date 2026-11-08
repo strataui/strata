@@ -57,3 +57,60 @@ fn test_aria_dropdown_floating_collision_integration() {
     assert_eq!(result.x, 500.0);
     assert_eq!(result.y, 980.0 - 150.0 - 6.0); // 824.0
 }
+
+#[test]
+fn test_w3c_aria_live_regions_and_announcements() {
+    let announcer = LiveRegionAnnouncer::global();
+    announcer.clear();
+
+    // 1. Direct speech announcements
+    let id_polite = announce_polite("Build succeeded in 4.2s");
+    let id_assertive = announce_assertive("CRITICAL: Power supply disconnect detected");
+    assert!(id_polite > 0);
+    assert!(id_assertive > id_polite);
+    assert_eq!(announcer.pending_count(), 2);
+
+    let drained = announcer.drain_announcements();
+    assert_eq!(drained.len(), 2);
+    assert_eq!(drained[0].politeness, LiveRegionPoliteness::Polite);
+    assert_eq!(drained[0].message, "Build succeeded in 4.2s");
+    assert_eq!(drained[1].politeness, LiveRegionPoliteness::Assertive);
+    assert_eq!(drained[1].message, "CRITICAL: Power supply disconnect detected");
+    assert_eq!(announcer.pending_count(), 0);
+
+    // 2. Reactive live region state & attributes
+    let status_region = use_live_region(LiveRegionConfig {
+        id: "status-bar".to_string(),
+        role: Some("status".to_string()),
+        politeness: LiveRegionPoliteness::Polite,
+        atomic: true,
+        relevant: LiveRegionRelevant::AdditionsText,
+    });
+
+    let attrs = status_region.attrs();
+    assert!(attrs.iter().any(|(k, v)| *k == "role" && v == "status"));
+    assert!(attrs.iter().any(|(k, v)| *k == "aria-live" && v == "polite"));
+    assert!(attrs.iter().any(|(k, v)| *k == "aria-atomic" && v == "true"));
+    assert!(attrs.iter().any(|(k, v)| *k == "aria-busy" && v == "false"));
+    assert!(attrs.iter().any(|(k, v)| *k == "aria-relevant" && v == "additions text"));
+
+    // Setting content triggers announcement
+    status_region.set_content("3 new notifications received");
+    assert_eq!(status_region.content.get(), "3 new notifications received");
+    assert_eq!(announcer.pending_count(), 1);
+
+    let drained2 = announcer.drain_announcements();
+    assert_eq!(drained2.len(), 1);
+    assert_eq!(drained2[0].message, "3 new notifications received");
+
+    // When busy is true, announcements are suppressed until busy is cleared
+    status_region.set_busy(true);
+    status_region.set_content("Downloading update (45%)...");
+    assert_eq!(announcer.pending_count(), 0); // suppressed because busy
+
+    status_region.set_busy(false); // clearing busy announces latest content
+    assert_eq!(announcer.pending_count(), 1);
+    let drained3 = announcer.drain_announcements();
+    assert_eq!(drained3[0].message, "Downloading update (45%)...");
+}
+
