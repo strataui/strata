@@ -202,3 +202,178 @@ fn test_workspace_simulator_view_rendering() {
     let runtime = strata::launch_headless(move || view, 1440.0, 900.0);
     assert!(runtime.display_list.commands.len() > 10);
 }
+
+#[test]
+fn test_foldable_to_media_context_integration() {
+    use strata_style::DevicePostureQuery;
+
+    // 1. Galaxy Z Fold 6 starts Flat (180 deg)
+    let mut ws_fold = MobileSimulatorWorkspace::new(DeviceProfile::galaxy_z_fold_6());
+    let ctx_flat = ws_fold.to_media_context();
+    assert_eq!(ctx_flat.horizontal_viewport_segments, 1);
+    assert_eq!(ctx_flat.vertical_viewport_segments, 1);
+    assert_eq!(ctx_flat.device_posture, DevicePostureQuery::Continuous);
+
+    // 2. Fold to 90 deg -> BookMode: 2 horizontal segments, 1 vertical, Folded posture
+    ws_fold.set_hinge_angle(90.0);
+    let ctx_book = ws_fold.to_media_context();
+    assert_eq!(ctx_book.horizontal_viewport_segments, 2);
+    assert_eq!(ctx_book.vertical_viewport_segments, 1);
+    assert_eq!(ctx_book.device_posture, DevicePostureQuery::Folded);
+
+    // 3. Galaxy Z Flip 6 at 90 deg -> TabletopFlex: 1 horizontal segment, 2 vertical, Folded posture
+    let mut ws_flip = MobileSimulatorWorkspace::new(DeviceProfile::galaxy_z_flip_6());
+    ws_flip.set_hinge_angle(90.0);
+    let ctx_tabletop = ws_flip.to_media_context();
+    assert_eq!(ctx_tabletop.horizontal_viewport_segments, 1);
+    assert_eq!(ctx_tabletop.vertical_viewport_segments, 2);
+    assert_eq!(ctx_tabletop.device_posture, DevicePostureQuery::Folded);
+
+    // 4. End-to-end CSS media query evaluation against the simulator workspace context
+    let css = r#"
+        @media (horizontal-viewport-segments: 2) {
+            .dual-pane { display: flex; }
+        }
+        @media (horizontal-viewport-segments: 1) {
+            .dual-pane { display: block; }
+        }
+    "#;
+    let sheet_book = strata_style::StyleSheet::parse_with_context(css, &ctx_book).expect("Parse book");
+    assert!(sheet_book.rules.iter().any(|r| r.declarations.iter().any(|d| d.value.contains("flex"))));
+    assert!(!sheet_book.rules.iter().any(|r| r.declarations.iter().any(|d| d.value.contains("block"))));
+}
+
+#[test]
+fn test_concentric_fillet_sdf_g2_continuity_and_clipping() {
+    let profile = DeviceProfile::iphone_16_pro_max();
+    let sdf = GeometrySolver::build_concentric_fillet_sdf(&profile);
+
+    // 1. Verify concentric radius formula: R_in = R_out - B
+    assert_eq!(
+        sdf.inner_radius,
+        GeometrySolver::derive_concentric_inner_radius(sdf.outer_radius, sdf.bezel_thickness)
+    );
+    assert!(sdf.inner_radius > 0.0);
+
+    // 2. Center point is deeply inside both screen and chassis
+    assert!(sdf.eval_inner(0.0, 0.0) < -100.0);
+    assert!(sdf.eval_outer(0.0, 0.0) < -100.0);
+    assert_eq!(sdf.screen_coverage(0.0, 0.0, 1.0), 1.0);
+
+    // 3. Point strictly on the bezel (outside screen, inside chassis)
+    // Screen boundary is at x = inner_width / 2. Point at inner_width / 2 + 0.5 * bezel:
+    let bezel_x = sdf.inner_width * 0.5 + sdf.bezel_thickness * 0.5;
+    let bezel_y = 0.0;
+    assert!(sdf.eval_inner(bezel_x, bezel_y) > 0.0); // Outside screen
+    assert!(sdf.eval_outer(bezel_x, bezel_y) < 0.0); // Inside outer chassis
+    assert!(sdf.eval_bezel(bezel_x, bezel_y) <= 0.0); // Inside bezel region
+    assert_eq!(sdf.screen_coverage(bezel_x, bezel_y, 1.0), 0.0);
+
+    // 4. Point completely outside chassis
+    let outside_x = sdf.outer_width * 0.5 + 20.0;
+    let outside_y = sdf.outer_height * 0.5 + 20.0;
+    assert!(sdf.eval_outer(outside_x, outside_y) > 0.0);
+    assert!(sdf.eval_inner(outside_x, outside_y) > 0.0);
+    assert_eq!(sdf.screen_coverage(outside_x, outside_y, 1.0), 0.0);
+
+    // 5. Mathematical G^2 curvature continuity verification:
+    // Curvature at boundary tangency parameter t = 0 matches straight edge (kappa = 0)
+    assert!(sdf.verify_g2_continuity());
+
+    // 6. WGSL shader code validation
+    let shader = ConcentricFilletSdf::wgsl_shader();
+    assert!(shader.contains("concentric_fillet_clip"));
+    assert!(shader.contains("sdf_squircle"));
+}
+
+#[test]
+fn test_virtual_hal_to_strata_device_reactive_routing() {
+    let mut hal = VirtualHalBus::new();
+    hal.sync_to_device_runtime();
+
+    let battery = strata_device::use_battery();
+    let thermal = strata_device::use_thermal();
+    let network = strata_device::use_network();
+
+    // 1. Initial HAL state routed into signals
+    assert!((battery.get().level - 0.88).abs() < 1e-4);
+    assert_eq!(thermal.get(), strata_device::ThermalState::Nominal);
+    assert!(network.get().is_online);
+
+    // 2. Battery mutation via Virtual HAL
+    hal.set_battery(0.25, true);
+    assert!((battery.get().level - 0.25).abs() < 1e-4);
+    assert_eq!(battery.get().state, strata_device::BatteryState::Charging);
+
+    // 3. Battery saver mode
+    hal.set_battery_saver(true);
+    assert!(battery.get().is_low_power_mode);
+
+    // 4. Thermal throttling injection
+    hal.set_thermal_state(ThermalState::Serious);
+    assert_eq!(thermal.get(), strata_device::ThermalState::Serious);
+
+    hal.set_thermal_state(ThermalState::Critical);
+    assert_eq!(thermal.get(), strata_device::ThermalState::Critical);
+
+    // 5. Radio mode mutation (Cellular 5G metered)
+    hal.set_radio_mode(NetworkRadioMode::Cellular5G);
+    assert_eq!(network.get().connection_type, strata_device::ConnectionType::Cellular);
+    assert_eq!(network.get().cellular_generation, Some(strata_device::CellularGen::FiveG));
+    assert!(network.get().is_metered);
+
+    // 6. Airplane mode disconnect
+    hal.set_airplane_mode(true);
+    assert!(!network.get().is_online);
+    assert_eq!(network.get().connection_type, strata_device::ConnectionType::None);
+}
+
+#[test]
+fn test_bytecode_sandbox_engine_isolation_and_quotas() {
+    let mut engine = BytecodeSandboxEngine::new(1000, 64 * 1024);
+
+    // 1. Basic arithmetic: 10 + 32 = 42
+    let prog1 = [
+        GuestInstruction::Push(10),
+        GuestInstruction::Push(32),
+        GuestInstruction::Add,
+        GuestInstruction::Halt,
+    ];
+    let res1 = engine.execute(&prog1).expect("Execute prog1");
+    assert_eq!(res1, Some(42));
+
+    // 2. Memory store and load
+    let prog2 = [
+        GuestInstruction::Push(1337),
+        GuestInstruction::Store(4),
+        GuestInstruction::Load(4),
+        GuestInstruction::Halt,
+    ];
+    let res2 = engine.execute(&prog2).expect("Execute prog2");
+    assert_eq!(res2, Some(1337));
+
+    // 3. Division by zero protection
+    let prog_div0 = [
+        GuestInstruction::Push(100),
+        GuestInstruction::Push(0),
+        GuestInstruction::Div,
+        GuestInstruction::Halt,
+    ];
+    let err_div0 = engine.execute(&prog_div0).unwrap_err();
+    assert_eq!(err_div0, SandboxExecutionError::DivisionByZero);
+
+    // 4. Execution cycle quota exhaustion
+    let mut tight_engine = BytecodeSandboxEngine::new(50, 1024);
+    let infinite_loop = [GuestInstruction::Jump(0)];
+    let err_loop = tight_engine.execute(&infinite_loop).unwrap_err();
+    assert_eq!(err_loop, SandboxExecutionError::CycleLimitExceeded);
+
+    // 5. Stack underflow protection
+    let mut underflow_engine = BytecodeSandboxEngine::default();
+    let err_underflow = underflow_engine.execute(&[GuestInstruction::Pop]).unwrap_err();
+    assert_eq!(err_underflow, SandboxExecutionError::StackUnderflow);
+}
+
+
+
+

@@ -97,8 +97,7 @@ pub fn measure_strata_level(level: ParityLevel, iters: usize) -> StrataTiming {
 
 pub fn measure_chromium_level(level_num: u32, html_path: &str) -> Option<ChromiumTiming> {
     let chrome_path = find_chromium_binary(None)?;
-    let script = format!(
-        r#"
+    let script = r#"
 import subprocess, sys, time, json, urllib.request, tempfile, shutil, websocket
 
 chrome_path = sys.argv[1]
@@ -109,9 +108,9 @@ proc = subprocess.Popen([
     chrome_path,
     '--headless=new',
     '--disable-gpu',
-    f'--remote-debugging-port={{port}}',
+    f'--remote-debugging-port={port}',
     '--remote-allow-origins=*',
-    f'--user-data-dir={{user_dir}}',
+    f'--user-data-dir={user_dir}',
     '--no-sandbox',
     '--disable-extensions',
     'about:blank'
@@ -120,44 +119,43 @@ proc = subprocess.Popen([
 try:
     for _ in range(50):
         try:
-            with urllib.request.urlopen(f'http://127.0.0.1:{{port}}/json/list', timeout=0.2) as r:
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}/json/list', timeout=0.2) as r:
                 pages = json.loads(r.read().decode())
                 ws_url = pages[0]['webSocketDebuggerUrl']
                 break
         except Exception:
             time.sleep(0.05)
 
-    ws = websocket.create_connection(ws_url, origin=f'http://127.0.0.1:{{port}}', timeout=5)
+    ws = websocket.create_connection(ws_url, origin=f'http://127.0.0.1:{port}', timeout=5)
     req_id = 0
     def rpc(method, params=None):
         global req_id
         req_id += 1
         cur_id = req_id
-        ws.send(json.dumps({{'id': cur_id, 'method': method, 'params': params or {{}}}}))
+        ws.send(json.dumps({'id': cur_id, 'method': method, 'params': params or {}}))
         while True:
             msg = json.loads(ws.recv())
             if msg.get('id') == cur_id:
-                return msg.get('result', {{}})
+                return msg.get('result', {})
 
     rpc('Performance.enable')
     rpc('Page.enable')
-    rpc('Page.navigate', {{'url': 'file://' + html_path}})
+    rpc('Page.navigate', {'url': 'file://' + html_path})
     time.sleep(0.2)
 
     res = rpc('Performance.getMetrics')
-    metrics = {{m['name']: m['value'] for m in res.get('metrics', [])}}
-    print(f"style_us:{{metrics.get('RecalcStyleDuration', 0.0) * 1e6:.1f}}")
-    print(f"layout_us:{{metrics.get('LayoutDuration', 0.0) * 1e6:.1f}}")
-    print(f"script_us:{{metrics.get('ScriptDuration', 0.0) * 1e6:.1f}}")
-    print(f"task_ms:{{metrics.get('TaskDuration', 0.0) * 1e3:.2f}}")
-    print(f"js_heap_kb:{{metrics.get('JSHeapUsedSize', 0.0) / 1024.0:.1f}}")
+    metrics = {m['name']: m['value'] for m in res.get('metrics', [])}
+    print(f"style_us:{metrics.get('RecalcStyleDuration', 0.0) * 1e6:.1f}")
+    print(f"layout_us:{metrics.get('LayoutDuration', 0.0) * 1e6:.1f}")
+    print(f"script_us:{metrics.get('ScriptDuration', 0.0) * 1e6:.1f}")
+    print(f"task_ms:{metrics.get('TaskDuration', 0.0) * 1e3:.2f}")
+    print(f"js_heap_kb:{metrics.get('JSHeapUsedSize', 0.0) / 1024.0:.1f}")
     ws.close()
 finally:
     proc.terminate()
     proc.wait()
     shutil.rmtree(user_dir, ignore_errors=True)
-"#
-    );
+"#.to_string();
 
     let output = Command::new("python3")
         .arg("-c")

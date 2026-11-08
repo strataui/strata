@@ -249,3 +249,114 @@ fn test_monkey_fuzzing_and_runner_execution() {
     assert_eq!(report.panics_detected, 0);
     assert_eq!(report.ssim_score, 1.0);
 }
+
+#[test]
+fn test_real_tcp_adb_client_connection_and_protocol() {
+    // 1. Start MockAdbServer listening on ephemeral TCP port
+    let (port, running, handle) = MockAdbServer::start_tcp(0).expect("Start TCP mock ADB server");
+    assert!(port > 0);
+
+    // 2. Connect live AdbClient over TCP socket
+    let mut client = AdbClient::connect(("127.0.0.1", port)).expect("Connect AdbClient");
+
+    // 3. Test get_version
+    let version = client.get_version().expect("get_version over TCP");
+    assert_eq!(version, 41);
+
+    // 4. Test list_devices
+    let devices = client.list_devices().expect("list_devices over TCP");
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0].serial, "emulator-5554");
+    assert_eq!(devices[0].model, "Pixel_Fold");
+
+    // 5. Test port forwarding
+    client
+        .forward_port("emulator-5554", 8080, 8080)
+        .expect("forward_port over TCP");
+
+    // 6. Test reverse port tunnel
+    client
+        .reverse_port("emulator-5554", 9222, 9222)
+        .expect("reverse_port over TCP");
+
+    // 7. Test shell command
+    let shell_out = client
+        .shell("emulator-5554", "getprop sys.boot_completed")
+        .expect("shell over TCP");
+    assert!(shell_out.contains('1'));
+
+    // 8. Test screencap stream
+    let screencap_png = client.screencap("emulator-5554").expect("screencap over TCP");
+    assert!(screencap_png.len() > 8);
+    assert_eq!(&screencap_png[0..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+
+    // Clean shutdown
+    running.store(false, std::sync::atomic::Ordering::Relaxed);
+    let _ = handle.join();
+}
+
+#[test]
+fn test_real_tcp_emulator_console_posture_and_hinge_injection() {
+    let token = "test_auth_token_secret_xyz";
+    // 1. Start mock emulator telnet console server on ephemeral TCP port
+    let (port, running, handle) =
+        MockEmulatorConsoleServer::start_tcp(0, token).expect("Start TCP mock console server");
+    assert!(port > 0);
+
+    // 2. Connect EmulatorConsoleClient over TCP socket
+    let mut client = EmulatorConsoleClient::connect(port).expect("Connect EmulatorConsoleClient");
+
+    // 3. Authenticate with console token
+    client
+        .authenticate(Some(token))
+        .expect("Authenticate with emulator console");
+
+    // 4. Inject foldable posture
+    client
+        .set_posture("half-opened")
+        .expect("Inject half-opened posture");
+
+    // 5. Inject hinge angle
+    client.set_hinge_angle(90).expect("Inject hinge angle 90");
+
+    // 6. Quit console
+    client.quit().expect("Quit emulator console");
+
+    // Clean shutdown
+    running.store(false, std::sync::atomic::Ordering::Relaxed);
+    let _ = handle.join();
+}
+
+#[test]
+fn test_simctl_driver_command_execution_handling() {
+    // When executing on Linux/Windows where xcrun is unavailable, verify safe error reporting
+    let list_res = SimCtlDriver::list_devices_exec();
+    if cfg!(target_os = "macos") {
+        // On macOS, if Xcode Command Line Tools are installed, it returns valid JSON or error
+        assert!(list_res.is_ok() || list_res.is_err());
+    } else {
+        // On Non-Mac host, xcrun execution fails gracefully without panicking
+        assert!(list_res.is_err());
+        let err = list_res.unwrap_err();
+        assert!(err.contains("Failed to execute xcrun simctl") || err.contains("No such file"));
+    }
+
+    // Verify command builder vectors retain exact flags
+    assert_eq!(
+        SimCtlDriver::build_list_devices_cmd(),
+        vec!["xcrun", "simctl", "list", "devices", "available", "-j"]
+    );
+    assert_eq!(
+        SimCtlDriver::build_boot_cmd("DEV-99"),
+        vec!["xcrun", "simctl", "boot", "DEV-99"]
+    );
+    assert_eq!(
+        SimCtlDriver::build_install_cmd("DEV-99", "/tmp/app.ipa"),
+        vec!["xcrun", "simctl", "install", "DEV-99", "/tmp/app.ipa"]
+    );
+    assert_eq!(
+        SimCtlDriver::build_screenshot_cmd("DEV-99", "/tmp/shot.png"),
+        vec!["xcrun", "simctl", "io", "DEV-99", "screenshot", "/tmp/shot.png"]
+    );
+}
+

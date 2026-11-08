@@ -1,9 +1,10 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use strata_crdt::{
-    LamportClock, LwwRegister, OrSet, PnCounter, ReplicatedSignal, RgaSequence, SyncMessage,
-    VectorClock,
+    CrdtCounterStore, CrdtSignalStore, LamportClock, LwwRegister, OrSet, PnCounter,
+    ReplicatedSignal, RgaSequence, SyncMessage, VectorClock,
 };
+use strata_dom::reactive::{use_effect, use_memo};
 
 #[test]
 fn test_lamport_and_vector_clock() {
@@ -172,4 +173,73 @@ fn test_sync_message_binary_roundtrip() {
     let encoded3 = msg3.encode();
     let decoded3 = SyncMessage::decode(&encoded3).expect("Decode msg3 failed");
     assert_eq!(msg3, decoded3);
+}
+
+#[test]
+fn test_crdt_signal_store_local_and_remote_reactivity() {
+    let store_a = CrdtSignalStore::new("Initial State".to_string(), 1);
+    assert_eq!(store_a.get(), "Initial State");
+
+    // Bind an effect to store_a's reactive signal
+    let effect_updates = Arc::new(AtomicUsize::new(0));
+    let last_observed = Arc::new(std::sync::Mutex::new(String::new()));
+    let sig = store_a.signal().clone();
+    let eff_updates = Arc::clone(&effect_updates);
+    let eff_last = Arc::clone(&last_observed);
+
+    let _effect = use_effect(move || {
+        let val = sig.get();
+        eff_updates.fetch_add(1, Ordering::SeqCst);
+        *eff_last.lock().unwrap() = val;
+        None
+    });
+
+    assert_eq!(effect_updates.load(Ordering::SeqCst), 1);
+    assert_eq!(*last_observed.lock().unwrap(), "Initial State");
+
+    // Local mutation updates signal and fires effect
+    assert!(store_a.set("Local Update".to_string()));
+    assert_eq!(store_a.get(), "Local Update");
+    assert_eq!(effect_updates.load(Ordering::SeqCst), 2);
+    assert_eq!(*last_observed.lock().unwrap(), "Local Update");
+
+    // Remote merge with newer timestamp updates signal and fires effect
+    let remote_clock = LamportClock::new(100, 2);
+    let remote_reg = LwwRegister::new("Remote Dominant State".to_string(), remote_clock);
+    assert!(store_a.merge_remote(&remote_reg));
+    assert_eq!(store_a.get(), "Remote Dominant State");
+    assert_eq!(effect_updates.load(Ordering::SeqCst), 3);
+    assert_eq!(*last_observed.lock().unwrap(), "Remote Dominant State");
+
+    // Stale remote merge does not update signal or fire effect
+    let stale_clock = LamportClock::new(50, 3);
+    let stale_reg = LwwRegister::new("Stale State".to_string(), stale_clock);
+    assert!(!store_a.merge_remote(&stale_reg));
+    assert_eq!(store_a.get(), "Remote Dominant State");
+    assert_eq!(effect_updates.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn test_crdt_counter_store_reactivity() {
+    let counter_store = CrdtCounterStore::new(1);
+    assert_eq!(counter_store.value(), 0);
+
+    let sig = counter_store.signal().clone();
+    let memo = use_memo(move || sig.get() * 10);
+    assert_eq!(memo.get(), 0);
+
+    counter_store.inc(5);
+    assert_eq!(counter_store.value(), 5);
+    assert_eq!(memo.get(), 50);
+
+    counter_store.dec(2);
+    assert_eq!(counter_store.value(), 3);
+    assert_eq!(memo.get(), 30);
+
+    // Merge from remote peer
+    let mut remote_counter = PnCounter::new();
+    remote_counter.inc(2, 20);
+    counter_store.merge(&remote_counter);
+    assert_eq!(counter_store.value(), 23);
+    assert_eq!(memo.get(), 230);
 }

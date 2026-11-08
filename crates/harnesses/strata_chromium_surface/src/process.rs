@@ -1,9 +1,14 @@
 //! Chromium subprocess manager, lifecycle watchdog, and IPC routing.
 
+use std::path::PathBuf;
+use std::process::Child;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use strata_primitives::geom::Rect;
 use crate::ipc::{ChromiumCommand, ChromiumEvent, NavigationState};
 use crate::surface::{PixelFormat, ShmSurface};
+
+static SIMULATED_PID_COUNTER: AtomicU32 = AtomicU32::new(42001);
 
 /// Subprocess lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +23,8 @@ pub enum ProcessState {
 type EventHandler = Box<dyn Fn(ChromiumEvent) + Send + Sync>;
 
 /// Manages an isolated Chromium worker subprocess with automatic teardown on unmount.
+/// Supports both real OS subprocess execution (via external CEF/Chromium binaries) and
+/// an in-memory headless mock harness for testing environments.
 #[derive(Clone)]
 pub struct ChromiumProcessManager {
     state: Arc<RwLock<ProcessState>>,
@@ -25,11 +32,15 @@ pub struct ChromiumProcessManager {
     navigation_state: Arc<RwLock<NavigationState>>,
     sent_commands: Arc<Mutex<Vec<ChromiumCommand>>>,
     event_handlers: Arc<Mutex<Vec<EventHandler>>>,
-    is_mock: bool,
+    executable_path: Option<PathBuf>,
+    args: Vec<String>,
+    child_process: Arc<Mutex<Option<Child>>>,
+    is_mock: Arc<AtomicBool>,
 }
 
 impl ChromiumProcessManager {
-    /// Creates a new uninitialized process manager for a viewport of specified dimensions.
+    /// Creates a new uninitialized process manager for a viewport of specified dimensions
+    /// using the built-in headless harness mock.
     pub fn new(width: u32, height: u32) -> Self {
         Self {
             state: Arc::new(RwLock::new(ProcessState::Uninitialized)),
@@ -37,7 +48,25 @@ impl ChromiumProcessManager {
             navigation_state: Arc::new(RwLock::new(NavigationState::Idle)),
             sent_commands: Arc::new(Mutex::new(Vec::new())),
             event_handlers: Arc::new(Mutex::new(Vec::new())),
-            is_mock: true, // Default to built-in headless mock for zero-dependency testability
+            executable_path: None,
+            args: Vec::new(),
+            child_process: Arc::new(Mutex::new(None)),
+            is_mock: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// Creates a process manager configured to launch a genuine external Chromium/CEF plugin executable.
+    pub fn with_executable(width: u32, height: u32, executable: impl Into<PathBuf>, args: Vec<String>) -> Self {
+        Self {
+            state: Arc::new(RwLock::new(ProcessState::Uninitialized)),
+            surface: ShmSurface::new(width, height, PixelFormat::Bgra8),
+            navigation_state: Arc::new(RwLock::new(NavigationState::Idle)),
+            sent_commands: Arc::new(Mutex::new(Vec::new())),
+            event_handlers: Arc::new(Mutex::new(Vec::new())),
+            executable_path: Some(executable.into()),
+            args,
+            child_process: Arc::new(Mutex::new(None)),
+            is_mock: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -49,6 +78,11 @@ impl ChromiumProcessManager {
     /// Returns whether the subprocess is currently active and running.
     pub fn is_running(&self) -> bool {
         matches!(*self.state.read().unwrap(), ProcessState::Running { .. })
+    }
+
+    /// Returns whether this manager is backed by a genuine external OS process.
+    pub fn is_external(&self) -> bool {
+        !self.is_mock.load(Ordering::Relaxed)
     }
 
     /// Accesses the underlying shared memory surface.
@@ -66,8 +100,28 @@ impl ChromiumProcessManager {
         let mut st = self.state.write().unwrap();
         *st = ProcessState::Spawning;
 
-        // Simulated process allocation (PID = 42001)
-        *st = ProcessState::Running { pid: 42001 };
+        let (pid, is_real) = if let Some(ref exec) = self.executable_path {
+            match std::process::Command::new(exec)
+                .args(&self.args)
+                .arg(initial_url)
+                .spawn()
+            {
+                Ok(child) => {
+                    let child_pid = child.id();
+                    *self.child_process.lock().unwrap() = Some(child);
+                    (child_pid, true)
+                }
+                Err(err) => {
+                    eprintln!("Strata Chromium Plugin: Failed to spawn executable {:?}: {}. Falling back to harness mock.", exec, err);
+                    (SIMULATED_PID_COUNTER.fetch_add(1, Ordering::SeqCst), false)
+                }
+            }
+        } else {
+            (SIMULATED_PID_COUNTER.fetch_add(1, Ordering::SeqCst), false)
+        };
+
+        self.is_mock.store(!is_real, Ordering::SeqCst);
+        *st = ProcessState::Running { pid };
         drop(st);
 
         self.send_command(ChromiumCommand::Navigate {
@@ -75,7 +129,7 @@ impl ChromiumProcessManager {
         });
 
         // If mock mode, synthesize initial frame and title
-        if self.is_mock {
+        if !is_real {
             self.surface.fill_rect(
                 Rect::from_xywh(0.0, 0.0, self.surface.width() as f32, self.surface.height() as f32),
                 [240, 243, 246, 255],
@@ -103,9 +157,17 @@ impl ChromiumProcessManager {
         if matches!(*st, ProcessState::Running { .. } | ProcessState::Spawning) {
             *st = ProcessState::Terminating;
             self.send_command(ChromiumCommand::Terminate);
-            *st = ProcessState::Terminated;
 
-            self.emit_event(ChromiumEvent::ProcessTerminated { exit_code: 0 });
+            let mut exit_code = 0;
+            if let Some(mut child) = self.child_process.lock().unwrap().take() {
+                let _ = child.kill();
+                if let Ok(status) = child.wait() {
+                    exit_code = status.code().unwrap_or(0);
+                }
+            }
+
+            *st = ProcessState::Terminated;
+            self.emit_event(ChromiumEvent::ProcessTerminated { exit_code });
         }
     }
 
@@ -113,8 +175,8 @@ impl ChromiumProcessManager {
     pub fn send_command(&self, cmd: ChromiumCommand) {
         self.sent_commands.lock().unwrap().push(cmd.clone());
 
-        // Process mock responses
-        if self.is_mock {
+        // Process mock responses if running under the headless harness
+        if self.is_mock.load(Ordering::Relaxed) {
             match cmd {
                 ChromiumCommand::Navigate { url } => {
                     let mut nav = self.navigation_state.write().unwrap();
@@ -124,7 +186,7 @@ impl ChromiumProcessManager {
                     };
                     drop(nav);
 
-                    self.emit_event(ChromiumEvent::UrlChanged { url: url.clone() });
+                    self.emit_event(ChromiumEvent::UrlChanged { url });
                     self.emit_event(ChromiumEvent::LoadingProgress { progress: 1.0 });
                 }
                 ChromiumCommand::Resize { width, height, .. } => {

@@ -993,7 +993,7 @@ fn write_report(
         (None, Some(error)) => {
             out.push_str("{\"available\": false, \"error\": ");
             write_json_string(&mut out, error);
-            out.push_str("}");
+            out.push('}');
         }
         (None, None) => {
             out.push_str("{\"available\": false, \"error\": \"Tauri comparison unavailable\"}")

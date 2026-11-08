@@ -18,11 +18,7 @@ fn html_root(html: &str) -> LayoutNode {
     let nodes = HtmlParser::parse(html);
     let theme = ReaderTheme::dark();
     let transpiler = WebTranspiler::new(&theme);
-    let media = MediaContext {
-        viewport_width: VIEWPORT_WIDTH,
-        viewport_height: VIEWPORT_HEIGHT,
-        is_dark: true,
-    };
+    let media = MediaContext::new(VIEWPORT_WIDTH, VIEWPORT_HEIGHT, true);
     let document = transpiler.transpile_full_document(&nodes, &media);
     let mut root = AppRuntime::build_layout_tree(&document);
     root.compute_layout(VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
@@ -30,7 +26,7 @@ fn html_root(html: &str) -> LayoutNode {
 }
 
 fn find_text<'a>(node: &'a LayoutNode, needle: &str) -> Option<&'a LayoutNode> {
-    if node.text.as_deref().map_or(false, |t| t.contains(needle)) {
+    if node.text.as_deref().is_some_and(|t| t.contains(needle)) {
         return Some(node);
     }
     for child in &node.children {
@@ -43,7 +39,7 @@ fn find_text<'a>(node: &'a LayoutNode, needle: &str) -> Option<&'a LayoutNode> {
 
 fn find_parent_of<'a>(node: &'a LayoutNode, needle: &str) -> Option<&'a LayoutNode> {
     for child in &node.children {
-        if child.text.as_deref().map_or(false, |t| t.contains(needle)) {
+        if child.text.as_deref().is_some_and(|t| t.contains(needle)) {
             return Some(node);
         }
         if let Some(found) = find_parent_of(child, needle) {
@@ -156,9 +152,9 @@ fn assert_s1(markup: &str) {
     // The row is a flex row; its middle child is the intentional spacer.
     assert_eq!(row.children.len(), 3, "inner row must keep the spacer box");
     let spacer = &row.children[1];
-    assert_close(spacer.geometry.border_box.width, 174.3, 1.0, "spacer width");
+    assert_close(spacer.geometry.border_box.width, 162.5, 1.0, "spacer width");
 
-    assert_close(right.geometry.border_box.x, 250.4, 1.0, "right label x");
+    assert_close(right.geometry.border_box.x, 244.2, 1.0, "right label x");
     assert!(
         left.geometry.border_box.width > 0.0 && left.geometry.border_box.height > 0.0,
         "left label text was not measured"

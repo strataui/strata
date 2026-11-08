@@ -125,4 +125,40 @@ impl FoldableState {
     pub fn env_segment_left(&self, x: usize, _y: usize) -> f32 {
         self.viewport_segments.get(x).map(|s| s.x).unwrap_or(0.0)
     }
+
+    /// Returns the active number of horizontal viewport segments (W3C Viewport Segments Level 1).
+    pub fn horizontal_viewport_segments(&self) -> u32 {
+        match self.posture {
+            DevicePosture::BookMode => 2,
+            _ => 1,
+        }
+    }
+
+    /// Returns the active number of vertical viewport segments (W3C Viewport Segments Level 1).
+    pub fn vertical_viewport_segments(&self) -> u32 {
+        match self.posture {
+            DevicePosture::TabletopFlex => 2,
+            _ => 1,
+        }
+    }
+
+    /// Maps the internal physical foldable posture to W3C CSS Device Posture Level 1.
+    pub fn to_device_posture_query(&self) -> strata_style::DevicePostureQuery {
+        match self.posture {
+            DevicePosture::Flat | DevicePosture::Closed => {
+                strata_style::DevicePostureQuery::Continuous
+            }
+            DevicePosture::TabletopFlex
+            | DevicePosture::BookMode
+            | DevicePosture::Tent
+            | DevicePosture::Peeking => strata_style::DevicePostureQuery::Folded,
+        }
+    }
+
+    /// Applies foldable viewport segments and posture to a CSS MediaContext.
+    pub fn apply_to_media_context(&self, ctx: &mut strata_style::MediaContext) {
+        ctx.horizontal_viewport_segments = self.horizontal_viewport_segments();
+        ctx.vertical_viewport_segments = self.vertical_viewport_segments();
+        ctx.device_posture = self.to_device_posture_query();
+    }
 }

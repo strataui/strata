@@ -3,9 +3,12 @@
 use std::collections::BTreeMap;
 use std::ops::Index;
 
+pub mod engine;
 pub mod json;
 pub mod promise;
 pub mod web;
+
+pub use engine::{Document, DomNode, DomNodeType, JsEngine, JsParser, Stmt, Expr};
 
 /// Tagged union representing dynamic JavaScript values.
 #[derive(Debug, Clone, PartialEq)]
@@ -39,7 +42,13 @@ impl JsValue {
             Self::Number(_) => "number",
             Self::String(_) => "string",
             Self::Array(_) => "object",
-            Self::Object(_) => "object",
+            Self::Object(map) => {
+                if map.contains_key("__fn__") || map.contains_key("__is_class__") {
+                    "function"
+                } else {
+                    "object"
+                }
+            }
         }
     }
 
@@ -63,7 +72,7 @@ impl JsValue {
             (Self::Object(a), Self::Object(b)) => {
                 a.len() == b.len()
                     && a.iter().all(|(k, v)| {
-                        b.get(k).map_or(false, |other_v| v.strict_eq(other_v))
+                        b.get(k).is_some_and(|other_v| v.strict_eq(other_v))
                     })
             }
             _ => false,
@@ -285,12 +294,12 @@ impl JsValue {
         }
     }
 
-    pub fn reduce<F>(&self, mut f: F, initial: JsValue) -> JsValue
+    pub fn reduce<F>(&self, f: F, initial: JsValue) -> JsValue
     where
         F: FnMut(JsValue, &JsValue) -> JsValue,
     {
         match self {
-            Self::Array(arr) => arr.iter().fold(initial, |acc, item| f(acc, item)),
+            Self::Array(arr) => arr.iter().fold(initial, f),
             _ => initial,
         }
     }
@@ -621,7 +630,39 @@ impl<T: Into<JsValue>> From<Option<T>> for JsValue {
     }
 }
 
+impl std::fmt::Display for JsValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Undefined => write!(f, "undefined"),
+            Self::Null => write!(f, "null"),
+            Self::Bool(b) => write!(f, "{b}"),
+            Self::Number(n) => {
+                if n.is_nan() {
+                    write!(f, "NaN")
+                } else if n.is_infinite() {
+                    if *n < 0.0 {
+                        write!(f, "-Infinity")
+                    } else {
+                        write!(f, "Infinity")
+                    }
+                } else if n.fract() == 0.0 && n.abs() <= i64::MAX as f64 {
+                    write!(f, "{}", *n as i64)
+                } else {
+                    write!(f, "{n}")
+                }
+            }
+            Self::String(s) => write!(f, "{s}"),
+            Self::Array(arr) => {
+                let items: Vec<String> = arr.iter().map(|item| item.to_string()).collect();
+                write!(f, "{}", items.join(","))
+            }
+            Self::Object(_) => write!(f, "[object Object]"),
+        }
+    }
+}
+
 pub mod prelude {
+    pub use super::engine::{Document, DomNode, DomNodeType, JsEngine};
     pub use super::json::{parse_json, stringify_json};
     pub use super::promise::{drain_microtasks, pending_microtasks_count, queue_microtask, JsPromise, PromiseState};
     pub use super::web::*;

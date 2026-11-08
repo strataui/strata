@@ -28,11 +28,7 @@ fn painted_colors(
     let nodes = HtmlParser::parse(&markup);
     let theme = ReaderTheme::dark();
     let transpiler = WebTranspiler::new(&theme);
-    let media = MediaContext {
-        viewport_width: 300.0,
-        viewport_height: 80.0,
-        is_dark: true,
-    };
+    let media = MediaContext::new(300.0, 80.0, true);
     let document = transpiler.transpile_full_document(&nodes, &media);
     let mut root = AppRuntime::build_layout_tree(&document);
     root.compute_layout(300.0, 80.0);

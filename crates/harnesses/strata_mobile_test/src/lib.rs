@@ -9,7 +9,10 @@ pub mod runner;
 pub mod stress;
 pub mod visual;
 
-pub use adb::{AdbDevice, AdbPacketCodec, AdbPortScanner, MockAdbServer, STANDARD_EMULATOR_PORTS};
+pub use adb::{
+    AdbClient, AdbDevice, AdbPacketCodec, AdbPortScanner, EmulatorConsoleClient, MockAdbServer,
+    MockEmulatorConsoleServer, STANDARD_EMULATOR_PORTS,
+};
 pub use android::{BootStatusChecker, EmulatorConfig, EmulatorGpuMode, HostDetector, HostPlatform};
 pub use foldable::{
     DisplayCreaseFeature, FoldPosture, FoldableProfile, PostureCommandEmitter,

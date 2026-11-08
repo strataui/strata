@@ -77,6 +77,90 @@ impl SimCtlDriver {
             device_id.to_string(),
         ]
     }
+
+    /// Executes `xcrun simctl list devices available -j` and returns available simulators.
+    pub fn list_devices_exec() -> Result<String, String> {
+        let output = std::process::Command::new("xcrun")
+            .args(["simctl", "list", "devices", "available", "-j"])
+            .output()
+            .map_err(|e| format!("Failed to execute xcrun simctl list: {e}"))?;
+        if output.status.success() {
+            String::from_utf8(output.stdout).map_err(|e| e.to_string())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).to_string())
+        }
+    }
+
+    /// Boots the specified iOS simulator device via `xcrun simctl boot <device_id>`.
+    pub fn boot_device_exec(device_id: &str) -> Result<(), String> {
+        let output = std::process::Command::new("xcrun")
+            .args(["simctl", "boot", device_id])
+            .output()
+            .map_err(|e| format!("Failed to execute xcrun simctl boot: {e}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).to_string())
+        }
+    }
+
+    /// Installs an iOS application bundle on the simulator via `xcrun simctl install`.
+    pub fn install_app_exec(device_id: &str, app_path: &str) -> Result<(), String> {
+        let output = std::process::Command::new("xcrun")
+            .args(["simctl", "install", device_id, app_path])
+            .output()
+            .map_err(|e| format!("Failed to execute xcrun simctl install: {e}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).to_string())
+        }
+    }
+
+    /// Launches an installed application via `xcrun simctl launch --console-pty`. Returns the process ID.
+    pub fn launch_app_exec(device_id: &str, bundle_id: &str) -> Result<u32, String> {
+        let output = std::process::Command::new("xcrun")
+            .args(["simctl", "launch", "--console-pty", device_id, bundle_id])
+            .output()
+            .map_err(|e| format!("Failed to execute xcrun simctl launch: {e}"))?;
+        if output.status.success() {
+            let out_str = String::from_utf8_lossy(&output.stdout);
+            let pid = out_str
+                .split_whitespace()
+                .last()
+                .and_then(|p| p.parse::<u32>().ok())
+                .unwrap_or(0);
+            Ok(pid)
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).to_string())
+        }
+    }
+
+    /// Captures a screenshot from the simulator via `xcrun simctl io screenshot`.
+    pub fn capture_screenshot_exec(device_id: &str, out_path: &str) -> Result<(), String> {
+        let output = std::process::Command::new("xcrun")
+            .args(["simctl", "io", device_id, "screenshot", out_path])
+            .output()
+            .map_err(|e| format!("Failed to execute xcrun simctl io screenshot: {e}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).to_string())
+        }
+    }
+
+    /// Shuts down the specified simulator via `xcrun simctl shutdown`.
+    pub fn shutdown_device_exec(device_id: &str) -> Result<(), String> {
+        let output = std::process::Command::new("xcrun")
+            .args(["simctl", "shutdown", device_id])
+            .output()
+            .map_err(|e| format!("Failed to execute xcrun simctl shutdown: {e}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).to_string())
+        }
+    }
 }
 
 /// Supported Apple iOS & iPadOS reference device models.

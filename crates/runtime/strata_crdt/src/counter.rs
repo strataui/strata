@@ -45,4 +45,11 @@ impl PnCounter {
             *entry = (*entry).max(val);
         }
     }
+
+    /// Returns the positive and negative tallies for a specific peer.
+    pub fn peer_values(&self, peer: PeerId) -> (u64, u64) {
+        let pos = self.positive.get(&peer).copied().unwrap_or(0);
+        let neg = self.negative.get(&peer).copied().unwrap_or(0);
+        (pos, neg)
+    }
 }
