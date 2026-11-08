@@ -70,15 +70,15 @@ pub fn from_markdown(md: &str) -> Document {
         block_idx += 1;
         let id = format!("block-{}", block_idx);
 
-        if trimmed.starts_with("# ") {
-            doc.add_block(BlockNode::heading(id, 1, &trimmed[2..]));
-        } else if trimmed.starts_with("## ") {
-            doc.add_block(BlockNode::heading(id, 2, &trimmed[3..]));
-        } else if trimmed.starts_with("### ") {
-            doc.add_block(BlockNode::heading(id, 3, &trimmed[4..]));
-        } else if trimmed.starts_with("> ") {
+        if let Some(stripped) = trimmed.strip_prefix("# ") {
+            doc.add_block(BlockNode::heading(id, 1, stripped));
+        } else if let Some(stripped) = trimmed.strip_prefix("## ") {
+            doc.add_block(BlockNode::heading(id, 2, stripped));
+        } else if let Some(stripped) = trimmed.strip_prefix("### ") {
+            doc.add_block(BlockNode::heading(id, 3, stripped));
+        } else if let Some(stripped) = trimmed.strip_prefix("> ") {
             let mut b = BlockNode::new(id, BlockKind::Blockquote);
-            b.spans.push(InlineSpan::plain(&trimmed[2..]));
+            b.spans.push(InlineSpan::plain(stripped));
             doc.add_block(b);
         } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
             let mut b = BlockNode::new(id, BlockKind::BulletListItem);

@@ -110,6 +110,20 @@ impl MultiCursor {
         }
     }
 
+    /// Constructs a MultiCursor engine directly from a collection of selections.
+    pub fn from_selections(selections: Vec<Selection>) -> Self {
+        if selections.is_empty() {
+            Self::new()
+        } else {
+            let mut mc = Self {
+                selections,
+                primary_idx: 0,
+            };
+            mc.normalize();
+            mc
+        }
+    }
+
     /// Returns the primary active selection.
     pub fn primary(&self) -> &Selection {
         &self.selections[self.primary_idx]
@@ -123,6 +137,12 @@ impl MultiCursor {
     /// Returns mutable slice of all selections.
     pub fn all_mut(&mut self) -> &mut [Selection] {
         &mut self.selections
+    }
+
+    /// Clears all selections.
+    pub fn clear(&mut self) {
+        self.selections.clear();
+        self.primary_idx = 0;
     }
 
     /// Clears secondary cursors and sets single active caret.
@@ -183,5 +203,50 @@ impl MultiCursor {
         if self.primary_idx >= self.selections.len() {
             self.primary_idx = self.selections.len().saturating_sub(1);
         }
+    }
+
+    /// Returns all active selections sorted in descending document order (bottom-to-top, right-to-left).
+    pub fn selections_descending(&self) -> Vec<Selection> {
+        let mut sorted = self.selections.clone();
+        sorted.sort_by_key(|a| std::cmp::Reverse(a.ordered_range().0));
+        sorted
+    }
+}
+
+/// Shifts a position based on a preceding document edit that replaced range `edit_start..edit_end` with `inserted_lines`.
+pub fn shift_position_after_edit(
+    pos: Position,
+    edit_start: Position,
+    edit_end: Position,
+    inserted_lines: &[&str],
+) -> Position {
+    if pos < edit_start {
+        return pos;
+    }
+
+    let delta_lines = (inserted_lines.len() as isize - 1) - (edit_end.line as isize - edit_start.line as isize);
+
+    if pos <= edit_end {
+        if inserted_lines.len() == 1 {
+            Position::new(edit_start.line, edit_start.col + inserted_lines[0].len())
+        } else {
+            let last_line_len = inserted_lines.last().map_or(0, |l| l.len());
+            Position::new(
+                edit_start.line + inserted_lines.len() - 1,
+                last_line_len,
+            )
+        }
+    } else if pos.line == edit_end.line {
+        let col_offset = pos.col - edit_end.col;
+        if inserted_lines.len() == 1 {
+            Position::new(edit_start.line, edit_start.col + inserted_lines[0].len() + col_offset)
+        } else {
+            let last_line_len = inserted_lines.last().map_or(0, |l| l.len());
+            let target_line = (pos.line as isize + delta_lines).max(0) as usize;
+            Position::new(target_line, last_line_len + col_offset)
+        }
+    } else {
+        let target_line = (pos.line as isize + delta_lines).max(0) as usize;
+        Position::new(target_line, pos.col)
     }
 }

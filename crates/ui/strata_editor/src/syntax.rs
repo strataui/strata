@@ -3,6 +3,8 @@
 use crate::buffer::LineBuffer;
 use crate::cursor::Position;
 
+use tree_sitter::{InputEdit, Node, Parser, Tree};
+
 /// Supported language syntaxes for the code editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Language {
@@ -50,17 +52,254 @@ pub struct FoldRange {
     pub collapsed: bool,
 }
 
-/// Syntax analysis engine providing real-time tokenization and structural navigation.
-#[derive(Debug, Clone, Default)]
-pub struct SyntaxHighlighter;
+fn create_parser_for_lang(lang: Language) -> Option<Parser> {
+    let mut parser = Parser::new();
+    match lang {
+        Language::Rust => {
+            parser.set_language(&tree_sitter_rust::LANGUAGE.into()).ok()?;
+            Some(parser)
+        }
+        Language::JavaScript | Language::TypeScript => {
+            parser.set_language(&tree_sitter_javascript::LANGUAGE.into()).ok()?;
+            Some(parser)
+        }
+        _ => None,
+    }
+}
+
+fn classify_tree_sitter_kind(kind: &str, parent_kind: &str) -> TokenType {
+    match kind {
+        "line_comment" | "block_comment" | "comment" => TokenType::Comment,
+
+        "string_literal" | "raw_string_literal" | "char_literal" | "string"
+        | "template_string" | "string_content" | "escape_sequence" => TokenType::String,
+
+        "integer_literal" | "float_literal" | "number" => TokenType::Number,
+
+        "primitive_type" | "type_identifier" => TokenType::Type,
+
+        "identifier"
+            if parent_kind == "call_expression"
+                || parent_kind == "function_item"
+                || parent_kind == "function_declaration"
+                || parent_kind == "function_declarator"
+                || parent_kind == "method_definition" =>
+        {
+            TokenType::Function
+        }
+
+        "fn" | "let" | "mut" | "pub" | "struct" | "enum" | "impl" | "trait" | "match"
+        | "if" | "else" | "return" | "for" | "in" | "while" | "loop" | "async" | "await"
+        | "use" | "mod" | "crate" | "const" | "static" | "type" | "where" | "as" | "ref"
+        | "move" | "unsafe" | "dyn" | "super" | "self" | "Self"
+        | "function" | "var" | "import" | "export" | "default" | "from" | "class"
+        | "interface" | "extends" | "new" | "this" | "try" | "catch" | "finally"
+        | "switch" | "case" | "break" | "continue" | "throw" | "typeof" | "instanceof"
+        | "yield" | "debugger" => TokenType::Keyword,
+
+        "+" | "-" | "*" | "/" | "%" | "=" | "==" | "!=" | "<" | ">" | "<=" | ">="
+        | "&&" | "||" | "!" | "&" | "|" | "^" | "<<" | ">>" | "+=" | "-=" | "*="
+        | "/=" | "%=" | "&=" | "|=" | "^=" | "=>" | "->" => TokenType::Operator,
+
+        "(" | ")" | "[" | "]" | "{" | "}" | ";" | ":" | "::" | "," | "." => TokenType::Punctuation,
+
+        "tag_name" | "jsx_opening_element" | "jsx_closing_element" => TokenType::Tag,
+        "property_identifier" | "field_identifier" | "shorthand_property_identifier" => {
+            TokenType::Attribute
+        }
+
+        _ => TokenType::Identifier,
+    }
+}
+
+fn collect_leaf_tokens(node: Node, line_idx: usize, out: &mut Vec<SyntaxToken>, line_text: &str) {
+    if node.start_position().row > line_idx || node.end_position().row < line_idx {
+        return;
+    }
+
+    if node.child_count() == 0 {
+        let kind = node.kind();
+        let start_pt = node.start_position();
+        let end_pt = node.end_position();
+
+        let start_col = if start_pt.row == line_idx { start_pt.column } else { 0 };
+        let end_col = if end_pt.row == line_idx { end_pt.column } else { line_text.len() };
+
+        if start_col < end_col && start_col < line_text.len() {
+            let clamped_end = end_col.min(line_text.len());
+            let text = line_text[start_col..clamped_end].to_string();
+            if !text.trim().is_empty() {
+                let parent_kind = node.parent().map(|p| p.kind()).unwrap_or("");
+                let token_type = classify_tree_sitter_kind(kind, parent_kind);
+                out.push(SyntaxToken {
+                    token_type,
+                    start_col,
+                    end_col: clamped_end,
+                    text,
+                });
+            }
+        }
+        return;
+    }
+
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            collect_leaf_tokens(child, line_idx, out, line_text);
+        }
+    }
+}
+
+fn collect_ast_fold_ranges(node: Node, out: &mut Vec<FoldRange>) {
+    let start_row = node.start_position().row;
+    let end_row = node.end_position().row;
+
+    if end_row > start_row {
+        let is_foldable = matches!(
+            node.kind(),
+            "block"
+                | "declaration_list"
+                | "match_block"
+                | "statement_block"
+                | "field_declaration_list"
+                | "enum_variant_list"
+                | "object"
+                | "array"
+                | "function_item"
+                | "impl_item"
+                | "struct_item"
+                | "enum_item"
+                | "function_declaration"
+                | "class_declaration"
+        );
+
+        if is_foldable {
+            out.push(FoldRange {
+                start_line: start_row,
+                end_line: end_row,
+                collapsed: false,
+            });
+        }
+    }
+
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            collect_ast_fold_ranges(child, out);
+        }
+    }
+}
+
+/// Syntax analysis engine providing real-time Tree-Sitter AST tokenization, incremental parsing, and structural navigation.
+pub struct SyntaxHighlighter {
+    parser: Option<Parser>,
+    tree: Option<Tree>,
+    language: Language,
+}
+
+impl std::fmt::Debug for SyntaxHighlighter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyntaxHighlighter")
+            .field("has_parser", &self.parser.is_some())
+            .field("has_tree", &self.tree.is_some())
+            .field("language", &self.language)
+            .finish()
+    }
+}
+
+impl Clone for SyntaxHighlighter {
+    fn clone(&self) -> Self {
+        let mut cloned = Self::with_language(self.language);
+        cloned.tree = self.tree.clone();
+        cloned
+    }
+}
+
+impl Default for SyntaxHighlighter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl SyntaxHighlighter {
     pub fn new() -> Self {
-        Self
+        Self::with_language(Language::Rust)
+    }
+
+    pub fn with_language(lang: Language) -> Self {
+        let parser = create_parser_for_lang(lang);
+        Self {
+            parser,
+            tree: None,
+            language: lang,
+        }
+    }
+
+    pub fn set_language(&mut self, lang: Language) {
+        if self.language != lang {
+            self.language = lang;
+            self.parser = create_parser_for_lang(lang);
+            self.tree = None;
+        }
+    }
+
+    pub fn language(&self) -> Language {
+        self.language
+    }
+
+    /// Accesses the active Tree-Sitter AST tree, if parsed.
+    pub fn tree(&self) -> Option<&Tree> {
+        self.tree.as_ref()
+    }
+
+    /// Parses a complete source text into a Tree-Sitter AST.
+    pub fn parse(&mut self, source: &str) {
+        if let Some(ref mut parser) = self.parser {
+            self.tree = parser.parse(source, None);
+        }
+    }
+
+    /// Informs the Tree-Sitter AST of an edit for subsequent incremental parsing.
+    pub fn edit(&mut self, edit: &InputEdit) {
+        if let Some(ref mut tree) = self.tree {
+            tree.edit(edit);
+        }
+    }
+
+    /// Re-parses the document incrementally using the edited previous AST.
+    pub fn parse_incremental(&mut self, source: &str) {
+        if let Some(ref mut parser) = self.parser {
+            self.tree = parser.parse(source, self.tree.as_ref());
+        }
     }
 
     /// Tokenizes a single line for high-speed incremental viewport rendering.
     pub fn highlight_line(&self, line: &str, lang: Language) -> Vec<SyntaxToken> {
+        if line.is_empty() {
+            return Vec::new();
+        }
+
+        Self::tokenize_line_lexical(line, lang)
+    }
+
+    /// Extracts syntax tokens for a line directly from the active Tree-Sitter AST.
+    pub fn highlight_line_ast(&self, line_idx: usize, line: &str) -> Vec<SyntaxToken> {
+        if line.is_empty() {
+            return Vec::new();
+        }
+
+        if let Some(ref tree) = self.tree {
+            let mut tokens = Vec::new();
+            collect_leaf_tokens(tree.root_node(), line_idx, &mut tokens, line);
+            if !tokens.is_empty() {
+                tokens.sort_by_key(|t| t.start_col);
+                return tokens;
+            }
+        }
+
+        Self::tokenize_line_lexical(line, self.language)
+    }
+
+    /// Fast lexical tokenizer fallback for languages without a Tree-Sitter grammar.
+    pub fn tokenize_line_lexical(line: &str, lang: Language) -> Vec<SyntaxToken> {
         if line.is_empty() {
             return Vec::new();
         }
@@ -210,7 +449,7 @@ impl SyntaxHighlighter {
     fn is_type(word: &str, lang: Language) -> bool {
         match lang {
             Language::Rust => {
-                word.chars().next().map_or(false, |c| c.is_uppercase())
+                word.chars().next().is_some_and(|c| c.is_uppercase())
                     || matches!(
                         word,
                         "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
@@ -221,8 +460,45 @@ impl SyntaxHighlighter {
             Language::TypeScript => matches!(
                 word,
                 "string" | "number" | "boolean" | "any" | "void" | "never" | "unknown" | "Record" | "Array"
-            ) || word.chars().next().map_or(false, |c| c.is_uppercase()),
+            ) || word.chars().next().is_some_and(|c| c.is_uppercase()),
             _ => false,
+        }
+    }
+
+    /// Returns the root node of the active Tree-Sitter syntax tree, if available.
+    pub fn root_node(&self) -> Option<Node<'_>> {
+        self.tree.as_ref().map(|t| t.root_node())
+    }
+
+    /// Finds the finest AST node at the given 0-indexed row and column.
+    pub fn node_at_position(&self, line: usize, col: usize) -> Option<Node<'_>> {
+        let tree = self.tree.as_ref()?;
+        let pt = tree_sitter::Point {
+            row: line,
+            column: col,
+        };
+        tree.root_node().descendant_for_point_range(pt, pt)
+    }
+
+    /// Finds the enclosing scope or block range (start_line, end_line) containing the given position.
+    pub fn enclosing_scope_range(&self, line: usize, col: usize) -> Option<(usize, usize)> {
+        let mut node = self.node_at_position(line, col)?;
+        loop {
+            let kind = node.kind();
+            if matches!(
+                kind,
+                "function_item"
+                    | "impl_item"
+                    | "struct_item"
+                    | "enum_item"
+                    | "block"
+                    | "statement_block"
+                    | "class_declaration"
+                    | "function_declaration"
+            ) {
+                return Some((node.start_position().row, node.end_position().row));
+            }
+            node = node.parent()?;
         }
     }
 
@@ -282,8 +558,18 @@ impl SyntaxHighlighter {
         None
     }
 
-    /// Scans buffer to locate multi-line code folding regions (based on `{` and `}`).
+    /// Scans buffer or Tree-Sitter AST to locate multi-line code folding regions.
     pub fn compute_fold_ranges(&self, buffer: &LineBuffer) -> Vec<FoldRange> {
+        if let Some(ref tree) = self.tree {
+            let mut ranges = Vec::new();
+            collect_ast_fold_ranges(tree.root_node(), &mut ranges);
+            if !ranges.is_empty() {
+                ranges.sort_by_key(|r| (r.start_line, r.end_line));
+                ranges.dedup_by_key(|r| (r.start_line, r.end_line));
+                return ranges;
+            }
+        }
+
         let mut ranges = Vec::new();
         let mut stack = Vec::new();
 
@@ -319,6 +605,19 @@ impl SyntaxHighlighter {
 
         let current_indent = prev_line.chars().take_while(|c| *c == ' ').count();
         let trimmed = prev_line.trim_end();
+
+        if let Some(ref tree) = self.tree {
+            let pt = tree_sitter::Point {
+                row: line_idx,
+                column: prev_line.len().saturating_sub(1),
+            };
+            if let Some(node) = tree.root_node().descendant_for_point_range(pt, pt) {
+                let kind = node.kind();
+                if kind == "{" || kind == ":" || kind == "(" || kind == "[" {
+                    return current_indent + 4;
+                }
+            }
+        }
 
         if trimmed.ends_with('{') || trimmed.ends_with(':') || trimmed.ends_with('(') || trimmed.ends_with('[') {
             current_indent + 4
