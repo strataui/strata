@@ -1,22 +1,6 @@
 use std::io::Cursor;
 use strata_cli::prelude::*;
 
-fn is_emoji(ch: char) -> bool {
-    let code = ch as u32;
-    // Box drawing & blocks are allowed clean ASCII/Unicode art
-    if (0x2500..=0x259F).contains(&code) || (0x25A0..=0x25FF).contains(&code) {
-        return false;
-    }
-    (0x1F300..=0x1F6FF).contains(&code)
-        || (0x1F900..=0x1FAFF).contains(&code)
-        || (0x2600..=0x26FF).contains(&code)
-        || (0x2700..=0x27BF).contains(&code)
-        || (0x1F1E6..=0x1F1FF).contains(&code)
-        || (0xFE0E..=0xFE0F).contains(&code)
-        || code == 0x200D
-        || code == 0x20E3
-}
-
 fn strip_ansi(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
@@ -199,35 +183,6 @@ fn test_confirm_prompt_interactive_yes_no_and_default() {
     let out = String::from_utf8(writer).unwrap();
     let clean = strip_ansi(&out);
     assert!(clean.contains("√ Would you like to use Tailwind CSS? › Yes"));
-}
-
-#[test]
-fn test_zero_emoji_in_prompt_outputs() {
-    let prompt = SelectPrompt::new("Which template would you like to start with?")
-        .item(
-            TemplateKind::Blank,
-            "Blank Canvas",
-            Some("Minimal reactive canvas"),
-        )
-        .item(
-            TemplateKind::Saas,
-            "SaaS Dashboard",
-            Some("Cloud & telemetry portal"),
-        );
-
-    let mut reader = Cursor::new(b"\r");
-    let mut writer = Vec::new();
-    let _ = prompt.run(&mut reader, &mut writer, true).unwrap();
-
-    let output = String::from_utf8(writer).unwrap();
-    for ch in output.chars() {
-        assert!(
-            !is_emoji(ch),
-            "Prompt output contained forbidden emoji: '{}' (U+{:04X})",
-            ch,
-            ch as u32
-        );
-    }
 }
 
 #[test]

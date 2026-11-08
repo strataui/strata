@@ -1,5 +1,7 @@
 //! Integration Tests: Semantic HTML5 Tokenizer, Web Transpiler, Wikipedia Engine & Offline Cache.
 
+#![allow(clippy::type_complexity)]
+
 use strata_dom::{NodeBlueprint, Tag};
 use strata_web_reader::prelude::*;
 
@@ -109,8 +111,8 @@ fn test_web_transpiler_node_blueprint_generation() {
     match blueprint {
         strata_dom::NodeBlueprint::Element { tag, classes, children, .. } => {
             assert_eq!(tag, Tag::Div);
-            assert!(classes[0].contains("max-w-[760px]"));
-            assert!(classes[0].contains("bg-neutral-950"));
+            assert!(classes.iter().any(|c| c.contains("max-w-[760px]")));
+            assert!(classes.iter().any(|c| c.contains("bg-neutral-950")));
 
             // Check H1 title injected
             assert!(children.len() >= 2);
@@ -279,7 +281,7 @@ fn test_wikipedia_article_engine_infobox_and_toc() {
 
     match view {
         strata_dom::NodeBlueprint::Element { classes, children, .. } => {
-            assert!(classes[0].contains("bg-[#fbf0d9]"), "Must use sepia background");
+            assert!(classes.iter().any(|c| c.contains("bg-[#fbf0d9]")), "Must use sepia background");
             assert!(children.len() >= 3, "Must contain title, infobox, and sections");
         }
         _ => panic!("Expected element root"),
@@ -365,7 +367,7 @@ fn test_document_style_extraction_and_cascade_transpilation() {
 
     fn find_blueprint_element<'a>(
         node: &'a strata_dom::NodeBlueprint,
-        predicate: &dyn Fn(strata_dom::Tag, &[String], &[strata_dom::Attribute]) -> bool,
+        predicate: &dyn Fn(strata_dom::Tag, &strata_dom::ClassList, &[strata_dom::Attribute]) -> bool,
     ) -> Option<&'a strata_dom::NodeBlueprint> {
         match node {
             strata_dom::NodeBlueprint::Element {
@@ -388,7 +390,7 @@ fn test_document_style_extraction_and_cascade_transpilation() {
         }
     }
 
-    fn get_style_attr<'a>(node: &'a strata_dom::NodeBlueprint) -> Option<&'a str> {
+    fn get_style_attr(node: &strata_dom::NodeBlueprint) -> Option<&str> {
         match node {
             strata_dom::NodeBlueprint::Element { attributes, .. } => {
                 attributes.iter().find_map(|a| match a {
@@ -492,11 +494,10 @@ fn test_wikipedia_citation_inline_phrasing_and_flow() {
             fn check_inline(bp: &NodeBlueprint, all_inline: &mut bool) {
                 if let NodeBlueprint::Element { tag, classes, children, .. } = bp {
                     let cls = classes.join(" ");
-                    if matches!(tag, Tag::Span | Tag::A) {
-                        if !cls.contains("inline") {
+                    if matches!(tag, Tag::Span | Tag::A)
+                        && !cls.contains("inline") {
                             *all_inline = false;
                         }
-                    }
                     for c in children {
                         check_inline(c, all_inline);
                     }

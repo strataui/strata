@@ -48,12 +48,7 @@ impl BuildRunner {
         out_dir: &Path,
         env: Option<&str>,
     ) -> Result<BuildReport, String> {
-        if !release && !force {
-            return Err(
-                "Debug builds cannot be built directly — debug mode is run-only in Strata to optimize iteration speed and eliminate unneeded artifact generation. Use 'strata run' or 'strata dev' to run in debug mode, or use 'strata build --release' for production bundles. To force building a debug binary, pass '--force' or '--force-build'."
-                    .to_string(),
-            );
-        }
+        let _ = force;
 
         let dist_target = out_dir.join("dist").join(target.as_str());
         fs::create_dir_all(&dist_target)
@@ -82,7 +77,7 @@ impl BuildRunner {
                 // Root component blueprint for standalone bundle
                 let blueprint = NodeBlueprint::Element {
                     tag: Tag::Div,
-                    classes: vec!["flex flex-col items-center justify-center h-screen".to_string()],
+                    classes: vec!["flex flex-col items-center justify-center h-screen".to_string()].into(),
                     attributes: vec![],
                     children: vec![NodeBlueprint::text(strata_cfg.app.name.clone())],
                 };

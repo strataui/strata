@@ -494,8 +494,8 @@ pub fn level_for_altitude(altitude_m: f64, max_level: u8) -> u8 {
 
 /// Wraps a longitude into `-180..180`.
 pub fn wrap_longitude(lon_deg: f64) -> f64 {
-    let wrapped = (lon_deg + 180.0).rem_euclid(360.0) - 180.0;
-    wrapped
+    
+    (lon_deg + 180.0).rem_euclid(360.0) - 180.0
 }
 
 /// Clamps a latitude to the polar limit.

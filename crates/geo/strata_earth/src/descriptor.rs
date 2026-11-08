@@ -512,7 +512,7 @@ impl FrameDescriptor {
                         marker.position[2],
                     ),
                     label: marker.label.clone(),
-                    color: color_from_channels(&marker.color.map(Json::Number).to_vec())
+                    color: color_from_channels(marker.color.map(Json::Number).as_ref())
                         .unwrap_or(Color::WHITE),
                 })
                 .collect(),
@@ -951,15 +951,12 @@ impl FrameDescriptor {
             }
             let actual_uv = resolved
                 .iter()
-                .find(|(key, _)| *key == actual.key)
-                .and_then(|(_, resolution)| {
-                    Some([
+                .find(|(key, _)| *key == actual.key).map(|(_, resolution)| [
                         resolution.uv_rect.0,
                         resolution.uv_rect.1,
                         resolution.uv_rect.2,
                         resolution.uv_rect.3,
-                    ])
-                });
+                    ]);
             match (actual_uv, expected.uv_rect) {
                 (None, None) => {}
                 (Some(a), Some(b)) => {

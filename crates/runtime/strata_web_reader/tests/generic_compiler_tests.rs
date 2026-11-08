@@ -75,11 +75,7 @@ fn test_generic_non_hardcoded_html_transpilation() {
 
     let theme = ReaderTheme::dark();
     let transpiler = WebTranspiler::new(&theme);
-    let media_ctx = MediaContext {
-        viewport_width: 1280.0,
-        viewport_height: 800.0,
-        is_dark: true,
-    };
+    let media_ctx = MediaContext::new(1280.0, 800.0, true);
 
     let doc = transpiler.transpile_full_document(&nodes, &media_ctx);
 
@@ -181,11 +177,7 @@ fn test_inline_formatting_context_restructuring() {
     let nodes = HtmlParser::parse(html);
     let theme = ReaderTheme::dark();
     let transpiler = WebTranspiler::new(&theme);
-    let media_ctx = MediaContext {
-        viewport_width: 1280.0,
-        viewport_height: 800.0,
-        is_dark: true,
-    };
+    let media_ctx = MediaContext::new(1280.0, 800.0, true);
 
     let doc = transpiler.transpile_full_document(&nodes, &media_ctx);
 
@@ -294,15 +286,11 @@ fn test_element_id_classes_and_anchors_preservation() {
     let nodes = HtmlParser::parse(html);
     let theme = ReaderTheme::dark();
     let transpiler = WebTranspiler::new(&theme);
-    let media_ctx = MediaContext {
-        viewport_width: 1280.0,
-        viewport_height: 800.0,
-        is_dark: true,
-    };
+    let media_ctx = MediaContext::new(1280.0, 800.0, true);
 
     let doc = transpiler.transpile_full_document(&nodes, &media_ctx);
 
-    fn collect_all_ids<'a>(bp: &'a NodeBlueprint, ids: &mut Vec<String>) {
+    fn collect_all_ids(bp: &NodeBlueprint, ids: &mut Vec<String>) {
         if let NodeBlueprint::Element {
             attributes,
             children,
@@ -322,7 +310,7 @@ fn test_element_id_classes_and_anchors_preservation() {
         }
     }
 
-    fn collect_all_hrefs<'a>(bp: &'a NodeBlueprint, hrefs: &mut Vec<String>) {
+    fn collect_all_hrefs(bp: &NodeBlueprint, hrefs: &mut Vec<String>) {
         if let NodeBlueprint::Element {
             attributes,
             children,
@@ -413,11 +401,7 @@ fn test_rust_lang_org_hero_and_hidden_elements() {
     "##;
 
     let theme = ReaderTheme::dark();
-    let media = MediaContext {
-        viewport_width: 1280.0,
-        viewport_height: 800.0,
-        is_dark: true,
-    };
+    let media = MediaContext::new(1280.0, 800.0, true);
     let nodes = HtmlParser::parse(html);
     let transpiler = WebTranspiler::new(&theme);
     let doc = transpiler.transpile_full_document(&nodes, &media);
@@ -492,7 +476,7 @@ fn test_rust_lang_org_hero_and_hidden_elements() {
     );
 }
 
-fn find_tag<'a>(node: &'a NodeBlueprint, tag: Tag) -> Option<&'a NodeBlueprint> {
+fn find_tag(node: &NodeBlueprint, tag: Tag) -> Option<&NodeBlueprint> {
     match node {
         NodeBlueprint::Element {
             tag: node_tag,
@@ -533,11 +517,7 @@ fn test_generic_document_root_line_height_matches_css_normal() {
     let nodes = HtmlParser::parse(html);
     let theme = ReaderTheme::dark();
     let transpiler = WebTranspiler::new(&theme);
-    let media_ctx = MediaContext {
-        viewport_width: 1280.0,
-        viewport_height: 800.0,
-        is_dark: true,
-    };
+    let media_ctx = MediaContext::new(1280.0, 800.0, true);
 
     let doc = transpiler.transpile_full_document(&nodes, &media_ctx);
 
@@ -581,11 +561,7 @@ fn test_author_line_height_overrides_generic_document_normal() {
     let nodes = HtmlParser::parse(html);
     let theme = ReaderTheme::dark();
     let transpiler = WebTranspiler::new(&theme);
-    let media_ctx = MediaContext {
-        viewport_width: 1280.0,
-        viewport_height: 800.0,
-        is_dark: true,
-    };
+    let media_ctx = MediaContext::new(1280.0, 800.0, true);
 
     let doc = transpiler.transpile_full_document(&nodes, &media_ctx);
 
@@ -622,11 +598,7 @@ fn test_full_document_uses_ua_white_canvas_regardless_of_reader_theme() {
     ] {
         let theme_name = theme.name.clone();
         let transpiler = WebTranspiler::new(&theme);
-        let media_ctx = MediaContext {
-            viewport_width: 1280.0,
-            viewport_height: 800.0,
-            is_dark: false,
-        };
+        let media_ctx = MediaContext::new(1280.0, 800.0, false);
 
         let doc = transpiler.transpile_full_document(&nodes, &media_ctx);
         let root_style = get_direct_style(&doc).expect("root wrapper must carry a direct style");
@@ -672,11 +644,7 @@ fn test_full_document_preserves_author_background_and_color() {
     let nodes = HtmlParser::parse(html);
     let theme = ReaderTheme::light();
     let transpiler = WebTranspiler::new(&theme);
-    let media_ctx = MediaContext {
-        viewport_width: 1280.0,
-        viewport_height: 800.0,
-        is_dark: false,
-    };
+    let media_ctx = MediaContext::new(1280.0, 800.0, false);
 
     let doc = transpiler.transpile_full_document(&nodes, &media_ctx);
 
@@ -753,11 +721,7 @@ fn full_document_canvas(css: &str) -> Option<Color> {
     let nodes = HtmlParser::parse(&html);
     let theme = ReaderTheme::dark();
     let transpiler = WebTranspiler::new(&theme);
-    let media_ctx = MediaContext {
-        viewport_width: 1280.0,
-        viewport_height: 720.0,
-        is_dark: true,
-    };
+    let media_ctx = MediaContext::new(1280.0, 720.0, true);
     let doc = transpiler.transpile_full_document(&nodes, &media_ctx);
     let root_style = get_direct_style(&doc).expect("root wrapper must carry a direct style");
     root_style.background_color
@@ -782,11 +746,7 @@ fn test_full_document_propagates_author_body_background_to_canvas() {
     let nodes = HtmlParser::parse(html);
     let theme = ReaderTheme::dark();
     let transpiler = WebTranspiler::new(&theme);
-    let media_ctx = MediaContext {
-        viewport_width: 1280.0,
-        viewport_height: 720.0,
-        is_dark: true,
-    };
+    let media_ctx = MediaContext::new(1280.0, 720.0, true);
 
     let doc = transpiler.transpile_full_document(&nodes, &media_ctx);
     let root_style = get_direct_style(&doc).expect("root wrapper must carry a direct style");
@@ -856,11 +816,7 @@ fn transpile_fragment(html: &str) -> NodeBlueprint {
     let nodes = HtmlParser::parse(html);
     let theme = ReaderTheme::dark();
     let transpiler = WebTranspiler::new(&theme);
-    let media = MediaContext {
-        viewport_width: 1440.0,
-        viewport_height: 900.0,
-        is_dark: true,
-    };
+    let media = MediaContext::new(1440.0, 900.0, true);
     transpiler.transpile_full_document(&nodes, &media)
 }
 
@@ -935,5 +891,32 @@ fn test_empty_div_with_id_or_data_attribute_survives_transpilation() {
     assert_eq!(
         element_attribute(&data_children[0], "data-app-region"),
         Some("drag")
+    );
+}
+
+#[test]
+fn test_custom_tag_bounded_cache_prevents_dos() {
+    let mut html = String::new();
+    for i in 0..1000 {
+        html.push_str(&format!("<synth-tag-{}>content</synth-tag-{}>", i, i));
+    }
+    let document = transpile_fragment(&html);
+    let children = document_children(&document);
+    assert_eq!(children.len(), 1000);
+
+    let mut custom_fallback_count = 0;
+    for child in children {
+        if let NodeBlueprint::Element { tag, .. } = child {
+            if *tag == Tag::Custom("custom") {
+                custom_fallback_count += 1;
+            }
+        }
+    }
+    // We generated 1000 unique synthetic tags, capacity is 512.
+    // The overflow tags MUST fall back to "custom" to prevent unbounded heap memory leakage.
+    assert!(
+        custom_fallback_count >= 400,
+        "Expected overflow tags to fallback to static custom variant, got {}",
+        custom_fallback_count
     );
 }

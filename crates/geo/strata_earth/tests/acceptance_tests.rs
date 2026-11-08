@@ -20,7 +20,7 @@ fn source_for(input: &EarthInput) -> (MemoryTileSource, Vec<TileKey>) {
             TileImage {
                 width: 2,
                 height: 2,
-                pixels: vec![40, 90, 60, 255].repeat(4),
+                pixels: [40, 90, 60, 255].repeat(4),
             },
         );
         source.insert_elevation(

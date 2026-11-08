@@ -22,11 +22,13 @@ fn main() {
     }
 
     // Configure Native Desktop Window with CSD Frameless mode
-    let mut config = WindowConfig::default();
-    config.title = "Strata Browser (Zero-Chromium Architecture)".to_string();
-    config.width = 1280;
-    config.height = 800;
-    config.decoration = WindowDecoration::ClientSideDecorations;
+    let config = WindowConfig {
+        title: "Strata Browser (Zero-Chromium Architecture)".to_string(),
+        width: 1280,
+        height: 800,
+        decoration: WindowDecoration::ClientSideDecorations,
+        ..Default::default()
+    };
 
     // Check for headless or CI test mode
     if args.iter().any(|a| a == "--headless" || a == "--ci") {
@@ -211,10 +213,13 @@ fn main() {
 
     #[cfg(not(target_os = "linux"))]
     {
-        let (_runtime, _window, presenter) = strata::launch_window(
+        let (mut runtime, mut window, mut presenter) = strata::launch_window(
             move || BrowserApp(state.clone()),
             config,
         );
         println!("[OK] Strata Native Browser surface presenter active: {}x{}.", presenter.width, presenter.height);
+        let mut compositor = strata_render::SwapchainCompositor::new(presenter.width, presenter.height, 1.0);
+        let mut event_loop = strata_platform::MockEventLoop::new();
+        runtime.run_with_window(&mut window, &mut event_loop, &mut compositor, &mut presenter);
     }
 }

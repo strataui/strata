@@ -9,7 +9,7 @@ pub fn process_chapter_markdown(content: &str) -> String {
     while let Some(line) = lines.next() {
         if line.trim().starts_with("```rsx live") {
             let mut snippet = String::new();
-            while let Some(inner_line) = lines.next() {
+            for inner_line in lines.by_ref() {
                 if inner_line.trim() == "```" {
                     break;
                 }

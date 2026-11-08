@@ -4,9 +4,6 @@
 //! with full W3C CSS cascade priority, property inheritance, relative unit resolution, and
 //! Inline Formatting Context restructuring.
 
-use std::collections::HashSet;
-use std::sync::Mutex;
-
 use crate::ast::SemanticNode;
 use crate::reader_theme::ReaderTheme;
 use strata_dom::{Attribute, NodeBlueprint, Tag};
@@ -34,6 +31,7 @@ fn composite_over_white(color: Color) -> Color {
 
 fn intern_static_tag(tag: &str) -> &'static str {
     match tag {
+        // Semantic phrasing and inline elements
         "blockquote" => "blockquote",
         "pre" => "pre",
         "code" => "code",
@@ -66,30 +64,105 @@ fn intern_static_tag(tag: &str) -> &'static str {
         "details" => "details",
         "summary" => "summary",
         "article" => "article",
+        "section" => "section",
+        "nav" => "nav",
+        "aside" => "aside",
+        "header" => "header",
+        "footer" => "footer",
+        "main" => "main",
+        "address" => "address",
+        "dfn" => "dfn",
+        "q" => "q",
+        "ruby" => "ruby",
+        "rt" => "rt",
+        "rp" => "rp",
+        "bdi" => "bdi",
+        "bdo" => "bdo",
+        "wbr" => "wbr",
+        "dialog" => "dialog",
+        "meter" => "meter",
+        "progress" => "progress",
+        "output" => "output",
+        "data" => "data",
+        "datalist" => "datalist",
+        "fieldset" => "fieldset",
+        "legend" => "legend",
+        "optgroup" => "optgroup",
+        "menu" => "menu",
+        "search" => "search",
+        "slot" => "slot",
+        "template" => "template",
+        "portal" => "portal",
+        "video" => "video",
+        "audio" => "audio",
+        "source" => "source",
+        "track" => "track",
+        "picture" => "picture",
+        "col" => "col",
+        "colgroup" => "colgroup",
+        "area" => "area",
+        "map" => "map",
+        "embed" => "embed",
+        "object" => "object",
+        "param" => "param",
+        // SVG elements
         "circle" => "circle",
+        "ellipse" => "ellipse",
         "rect" => "rect",
         "g" => "g",
         "polygon" => "polygon",
         "polyline" => "polyline",
         "line" => "line",
+        "text" => "text",
+        "tspan" => "tspan",
+        "defs" => "defs",
+        "use" => "use",
+        "symbol" => "symbol",
+        "clipPath" => "clipPath",
+        "mask" => "mask",
+        "pattern" => "pattern",
+        "linearGradient" => "linearGradient",
+        "radialGradient" => "radialGradient",
+        "stop" => "stop",
+        "foreignObject" => "foreignObject",
+        // Legacy HTML tags
         "iframe" => "iframe",
         "center" => "center",
         "font" => "font",
         "tt" => "tt",
+        "big" => "big",
+        "nobr" => "nobr",
+        "marquee" => "marquee",
+        "blink" => "blink",
+        // MathML elements
+        "math" => "math",
+        "mrow" => "mrow",
+        "mi" => "mi",
+        "mn" => "mn",
+        "mo" => "mo",
+        "ms" => "ms",
+        "mspace" => "mspace",
+        "mtext" => "mtext",
+        "mfrac" => "mfrac",
+        "msqrt" => "msqrt",
+        "mroot" => "mroot",
+        "mstyle" => "mstyle",
+        "merror" => "merror",
+        "mpadded" => "mpadded",
+        "mphantom" => "mphantom",
+        "mtable" => "mtable",
+        "mtr" => "mtr",
+        "mtd" => "mtd",
+        // Standard structural tags
         "html" => "html",
         "body" => "body",
-        _ => {
-            static TAG_CACHE: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
-            let mut guard = TAG_CACHE.lock().unwrap();
-            let set = guard.get_or_insert_with(HashSet::new);
-            if let Some(&existing) = set.get(tag) {
-                existing
-            } else {
-                let leaked: &'static str = Box::leak(tag.to_string().into_boxed_str());
-                set.insert(leaked);
-                leaked
-            }
-        }
+        "head" => "head",
+        "title" => "title",
+        "meta" => "meta",
+        "link" => "link",
+        "style" => "style",
+        "script" => "script",
+        _ => "custom",
     }
 }
 
@@ -204,7 +277,7 @@ fn blueprint_ends_with_space(bp: &NodeBlueprint) -> bool {
     match bp {
         NodeBlueprint::Text(t) => t.ends_with(' '),
         NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children) => {
-            children.last().map_or(false, blueprint_ends_with_space)
+            children.last().is_some_and(blueprint_ends_with_space)
         }
         _ => false,
     }
@@ -223,8 +296,8 @@ fn normalize_inline_text(text: &str) -> String {
         Some(',' | '.' | ';' | ':' | '!' | '?' | ')' | ']' | '}')
     );
     let has_leading_space =
-        text.chars().next().map_or(false, is_html_whitespace) && !is_leading_punct;
-    let has_trailing_space = text.chars().last().map_or(false, is_html_whitespace);
+        text.chars().next().is_some_and(is_html_whitespace) && !is_leading_punct;
+    let has_trailing_space = text.chars().last().is_some_and(is_html_whitespace);
 
     let mut out = String::with_capacity(text.len());
     if has_leading_space {
@@ -343,7 +416,7 @@ impl<'a> WebTranspiler<'a> {
     }
 
     /// Extracts primary readable content from a raw HTML DOM tree (e.g. MediaWiki, article, main).
-    pub fn extract_primary_content<'b>(nodes: &'b [SemanticNode]) -> &'b [SemanticNode] {
+    pub fn extract_primary_content(nodes: &[SemanticNode]) -> &[SemanticNode] {
         for node in nodes {
             let parser_outputs = node.find_by_class("mw-parser-output");
             if let Some(po) = parser_outputs.into_iter().max_by_key(|n| match n {
@@ -409,28 +482,25 @@ impl<'a> WebTranspiler<'a> {
         out: &mut Vec<StyleSheet>,
     ) {
         for node in nodes {
-            match node {
-                SemanticNode::Element { tag, children, .. } => {
-                    if tag.eq_ignore_ascii_case("style") {
-                        let mut text = String::new();
-                        for child in children {
-                            if let SemanticNode::Text(t) = child {
-                                text.push_str(t);
-                                text.push('\n');
-                            }
+            if let SemanticNode::Element { tag, children, .. } = node {
+                if tag.eq_ignore_ascii_case("style") {
+                    let mut text = String::new();
+                    for child in children {
+                        if let SemanticNode::Text(t) = child {
+                            text.push_str(t);
+                            text.push('\n');
                         }
-                        if !text.trim().is_empty() {
-                            if let Ok(sheet) = StyleSheet::parse_with_context(&text, context) {
-                                if !sheet.rules.is_empty() {
-                                    out.push(sheet);
-                                }
-                            }
-                        }
-                    } else {
-                        Self::collect_stylesheets(children, context, out);
                     }
+                    if !text.trim().is_empty() {
+                        if let Ok(sheet) = StyleSheet::parse_with_context(&text, context) {
+                            if !sheet.rules.is_empty() {
+                                out.push(sheet);
+                            }
+                        }
+                    }
+                } else {
+                    Self::collect_stylesheets(children, context, out);
                 }
-                _ => {}
             }
         }
     }
@@ -444,41 +514,38 @@ impl<'a> WebTranspiler<'a> {
 
     fn collect_resource_urls(nodes: &[SemanticNode], out: &mut Vec<String>) {
         for node in nodes {
-            match node {
-                SemanticNode::Element {
+            if let SemanticNode::Element {
                     tag,
                     attributes,
                     children,
                     ..
-                } => {
-                    let tag_lower = tag.to_ascii_lowercase();
-                    if tag_lower == "link" {
-                        let is_stylesheet = attributes.iter().any(|(k, v)| {
-                            k.eq_ignore_ascii_case("rel") && v.eq_ignore_ascii_case("stylesheet")
-                        });
-                        if is_stylesheet {
-                            if let Some((_, href)) = attributes
-                                .iter()
-                                .find(|(k, _)| k.eq_ignore_ascii_case("href"))
-                            {
-                                if !href.trim().is_empty() {
-                                    out.push(href.trim().to_string());
-                                }
-                            }
-                        }
-                    } else if tag_lower == "img" {
-                        if let Some((_, src)) = attributes
+                } = node {
+                let tag_lower = tag.to_ascii_lowercase();
+                if tag_lower == "link" {
+                    let is_stylesheet = attributes.iter().any(|(k, v)| {
+                        k.eq_ignore_ascii_case("rel") && v.eq_ignore_ascii_case("stylesheet")
+                    });
+                    if is_stylesheet {
+                        if let Some((_, href)) = attributes
                             .iter()
-                            .find(|(k, _)| k.eq_ignore_ascii_case("src"))
+                            .find(|(k, _)| k.eq_ignore_ascii_case("href"))
                         {
-                            if !src.trim().is_empty() {
-                                out.push(src.trim().to_string());
+                            if !href.trim().is_empty() {
+                                out.push(href.trim().to_string());
                             }
                         }
                     }
-                    Self::collect_resource_urls(children, out);
+                } else if tag_lower == "img" {
+                    if let Some((_, src)) = attributes
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("src"))
+                    {
+                        if !src.trim().is_empty() {
+                            out.push(src.trim().to_string());
+                        }
+                    }
                 }
-                _ => {}
+                Self::collect_resource_urls(children, out);
             }
         }
     }
@@ -492,34 +559,31 @@ impl<'a> WebTranspiler<'a> {
 
     fn collect_stylesheet_urls(nodes: &[SemanticNode], out: &mut Vec<String>) {
         for node in nodes {
-            match node {
-                SemanticNode::Element {
+            if let SemanticNode::Element {
                     tag,
                     attributes,
                     children,
                     ..
-                } => {
-                    let tag_lower = tag.to_ascii_lowercase();
-                    if tag_lower == "link" {
-                        let is_stylesheet = attributes.iter().any(|(k, v)| {
-                            k.eq_ignore_ascii_case("rel")
-                                && v.split_whitespace()
-                                    .any(|r| r.eq_ignore_ascii_case("stylesheet"))
-                        });
-                        if is_stylesheet {
-                            if let Some((_, href)) = attributes
-                                .iter()
-                                .find(|(k, _)| k.eq_ignore_ascii_case("href"))
-                            {
-                                if !href.trim().is_empty() {
-                                    out.push(href.trim().to_string());
-                                }
+                } = node {
+                let tag_lower = tag.to_ascii_lowercase();
+                if tag_lower == "link" {
+                    let is_stylesheet = attributes.iter().any(|(k, v)| {
+                        k.eq_ignore_ascii_case("rel")
+                            && v.split_whitespace()
+                                .any(|r| r.eq_ignore_ascii_case("stylesheet"))
+                    });
+                    if is_stylesheet {
+                        if let Some((_, href)) = attributes
+                            .iter()
+                            .find(|(k, _)| k.eq_ignore_ascii_case("href"))
+                        {
+                            if !href.trim().is_empty() {
+                                out.push(href.trim().to_string());
                             }
                         }
                     }
-                    Self::collect_stylesheet_urls(children, out);
                 }
-                _ => {}
+                Self::collect_stylesheet_urls(children, out);
             }
         }
     }
@@ -573,7 +637,7 @@ impl<'a> WebTranspiler<'a> {
                     let is_selected = opt_attrs
                         .iter()
                         .any(|(k, _)| k.eq_ignore_ascii_case("selected"))
-                        || current_val.map_or(false, |cv| {
+                        || current_val.is_some_and(|cv| {
                             opt_attrs.iter().any(|(k, v)| {
                                 k.eq_ignore_ascii_case("value") && v.eq_ignore_ascii_case(cv)
                             })
@@ -698,12 +762,10 @@ impl<'a> WebTranspiler<'a> {
             root_style.background_color = Some(composite_over_white(canvas_bg));
         }
 
-        let mut root_attrs = Vec::new();
-        root_attrs.push(Attribute::property(
-            "class",
-            "strata-html-root w-full min-h-full block",
-        ));
-        root_attrs.push(Attribute::direct_style(root_style));
+        let root_attrs = vec![
+            Attribute::property("class", "strata-html-root w-full min-h-full block"),
+            Attribute::direct_style(root_style),
+        ];
 
         NodeBlueprint::element(
             Tag::Div,
@@ -725,11 +787,11 @@ impl<'a> WebTranspiler<'a> {
         root_nodes_for_styles: &[SemanticNode],
         title: Option<&str>,
     ) -> NodeBlueprint {
-        let media_ctx = MediaContext {
-            viewport_width: self.theme.max_width_px as f32,
-            viewport_height: 800.0,
-            is_dark: self.theme.name != "Sepia",
-        };
+        let media_ctx = MediaContext::new(
+            self.theme.max_width_px as f32,
+            800.0,
+            self.theme.name != "Sepia",
+        );
         let mut stylesheets = Self::extract_stylesheets(root_nodes_for_styles, &media_ctx);
         if root_nodes_for_styles.as_ptr() != nodes.as_ptr() {
             let mut more = Self::extract_stylesheets(nodes, &media_ctx);
@@ -891,7 +953,7 @@ impl<'a> WebTranspiler<'a> {
         for (idx, c) in nodes.iter().enumerate() {
             match c {
                 SemanticNode::Text(t) => {
-                    let is_pre = parent_style.map_or(false, |p| {
+                    let is_pre = parent_style.is_some_and(|p| {
                         matches!(p.white_space, WhiteSpace::Pre | WhiteSpace::PreWrap)
                     });
                     if is_pre {
@@ -905,16 +967,16 @@ impl<'a> WebTranspiler<'a> {
                             });
                         }
                     } else if t.trim_matches(is_html_whitespace).is_empty() {
-                        let is_inline_container = parent_style.map_or(false, |p| {
+                        let is_inline_container = parent_style.is_some_and(|p| {
                             matches!(p.display, Display::Inline | Display::InlineBlock)
                         });
                         let prev_is_inline =
-                            raw_blueprints.last().map_or(false, is_blueprint_inline);
+                            raw_blueprints.last().is_some_and(is_blueprint_inline);
                         let prev_ends_space = raw_blueprints
                             .last()
-                            .map_or(false, blueprint_ends_with_space);
+                            .is_some_and(blueprint_ends_with_space);
                         let next_is_inline =
-                            nodes.get(idx + 1).map_or(false, Self::is_inline_phrasing);
+                            nodes.get(idx + 1).is_some_and(Self::is_inline_phrasing);
 
                         if (is_inline_container && !t.is_empty())
                             || (prev_is_inline && next_is_inline && !prev_ends_space)
@@ -964,7 +1026,7 @@ impl<'a> WebTranspiler<'a> {
                                 .any(|cls| cls == "andlist" || cls == "andlistoxford");
 
                             if (is_cslist || is_sslist || is_andlist)
-                                && c.tag().map_or(false, |t| t.eq_ignore_ascii_case("li"))
+                                && c.tag().is_some_and(|t| t.eq_ignore_ascii_case("li"))
                             {
                                 let li_count_after = nodes[idx + 1..]
                                     .iter()
@@ -983,14 +1045,11 @@ impl<'a> WebTranspiler<'a> {
                                     } else {
                                         ", "
                                     };
-                                    match &mut bp {
-                                        NodeBlueprint::Element {
+                                    if let NodeBlueprint::Element {
                                             children: bp_children,
                                             ..
-                                        } => {
-                                            bp_children.push(NodeBlueprint::text(sep));
-                                        }
-                                        _ => {}
+                                        } = &mut bp {
+                                        bp_children.push(NodeBlueprint::text(sep));
                                     }
                                 }
                             }
@@ -1005,7 +1064,7 @@ impl<'a> WebTranspiler<'a> {
         // Apply W3C Inline Formatting Context (IFC) anonymous block restructuring:
         // When parent is a block-level container, and children are a mix of inlines and blocks,
         // group contiguous runs of inlines into anonymous block containers!
-        let is_block_container = parent_style.map_or(true, |p| {
+        let is_block_container = parent_style.is_none_or(|p| {
             matches!(
                 p.display,
                 Display::Block
@@ -1225,7 +1284,7 @@ impl<'a> WebTranspiler<'a> {
                 let sib_slice = if preceding_siblings.len() > 8 {
                     &preceding_siblings[preceding_siblings.len() - 8..]
                 } else {
-                    &preceding_siblings[..]
+                    preceding_siblings
                 };
                 let sib_refs: Vec<ElementRef> = sib_slice
                     .iter()
@@ -1424,7 +1483,7 @@ impl<'a> WebTranspiler<'a> {
                 let is_float_right = is_infobox
                     || tag_lower == "aside"
                     || (matches!(tag_lower.as_str(), "table" | "img")
-                        && align_attr.map_or(false, |a| a.eq_ignore_ascii_case("right")))
+                        && align_attr.is_some_and(|a| a.eq_ignore_ascii_case("right")))
                     || class_tokens.iter().any(|c| {
                         matches!(
                             c.to_ascii_lowercase().as_str(),
@@ -1440,7 +1499,7 @@ impl<'a> WebTranspiler<'a> {
                         }));
 
                 let is_float_left = (matches!(tag_lower.as_str(), "table" | "img")
-                    && align_attr.map_or(false, |a| a.eq_ignore_ascii_case("left")))
+                    && align_attr.is_some_and(|a| a.eq_ignore_ascii_case("left")))
                     || class_tokens.iter().any(|c| {
                         matches!(
                             c.to_ascii_lowercase().as_str(),

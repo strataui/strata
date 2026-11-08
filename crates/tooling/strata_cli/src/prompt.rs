@@ -227,11 +227,13 @@ impl PromptTheme {
     }
 }
 
+pub type TextValidator = Box<dyn Fn(&str) -> Result<(), String>>;
+
 /// An interactive single-line text input prompt with dynamic collapsing.
 pub struct TextPrompt {
     pub message: String,
     pub default: Option<String>,
-    pub validator: Option<Box<dyn Fn(&str) -> Result<(), String>>>,
+    pub validator: Option<TextValidator>,
 }
 
 impl TextPrompt {
@@ -789,11 +791,7 @@ impl ConfirmPrompt {
 
         let val = if trimmed.is_empty() {
             self.default
-        } else if trimmed.starts_with('n') || trimmed.starts_with('N') {
-            false
-        } else {
-            true
-        };
+        } else { !(trimmed.starts_with('n') || trimmed.starts_with('N')) };
 
         let val_str = if val {
             "\x1b[32mYes\x1b[0m"
@@ -1061,7 +1059,7 @@ impl<T: Clone> MultiSelectPrompt<T> {
                 it.selected = false;
             }
             let mut universal_triggered = false;
-            for part in trimmed.split(|c| c == ',' || c == ' ') {
+            for part in trimmed.split([',', ' ']) {
                 let part = part.trim();
                 if part.is_empty() {
                     continue;

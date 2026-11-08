@@ -3,6 +3,13 @@
 //! Enables native, ultra-lightweight rendering of HTML5 articles and Wikipedia content
 //! without requiring JavaScript execution, Chromium, or web engine overhead.
 
+#![allow(
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::field_reassign_with_default,
+    clippy::collapsible_match
+)]
+
 pub mod ast;
 pub mod tokenizer;
 pub mod parser;

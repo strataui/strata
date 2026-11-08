@@ -1,11 +1,10 @@
 //! Authentic live HTTP/HTTPS network page loader and internal browser schemes.
 //!
-//! Replaces all offline mock web fixtures with live network fetching via `ureq`,
+//! Replaces all offline mock web fixtures with live network fetching via `strata_web_api::fetch()`,
 //! true HTML extraction, and standard Chromium-grade network error pages.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::Duration;
 
 static PAGE_CACHE: Mutex<Option<HashMap<String, PageLoadResult>>> = Mutex::new(None);
 static STYLESHEET_CACHE: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
@@ -71,6 +70,8 @@ pub fn normalize_target(input: &str) -> String {
 
     if trimmed.is_empty() || trimmed == "about:blank" || trimmed == "strata://newtab" {
         "strata://newtab".to_string()
+    } else if trimmed.starts_with("data:") {
+        trimmed.to_string()
     } else if trimmed == "strata://about" || trimmed == "about:strata" {
         "strata://about".to_string()
     } else if trimmed == "strata://version" || trimmed == "about:version" {
@@ -88,6 +89,22 @@ pub fn normalize_target(input: &str) -> String {
 /// Resolves a URL by checking internal browser schemes or executing a live HTTP/HTTPS request.
 pub fn load_page(url: &str) -> PageLoadResult {
     let normalized = normalize_target(url);
+
+    // Data URLs
+    if normalized.starts_with("data:") {
+        let raw_data = if let Some((_, data)) = normalized.split_once(',') {
+            data
+        } else {
+            ""
+        };
+        let decoded = decode_data_url(raw_data);
+        return PageLoadResult {
+            title: "Data Page".to_string(),
+            html: decoded,
+            status: 200,
+            is_error: false,
+        };
+    }
 
     // Internal Native Browser Schemes
     if normalized == "strata://newtab" {
@@ -136,16 +153,25 @@ pub fn load_page(url: &str) -> PageLoadResult {
     res
 }
 
-static SHARED_AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-
-fn get_agent() -> &'static ureq::Agent {
-    SHARED_AGENT.get_or_init(|| {
-        ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(6))
-            .timeout_read(Duration::from_secs(8))
-            .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Strata/0.1.0")
-            .build()
-    })
+fn decode_data_url(data: &str) -> String {
+    let replaced = data.replace('+', " ");
+    let bytes = replaced.as_bytes();
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
+                if let Ok(b) = u8::from_str_radix(hex, 16) {
+                    result.push(b);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        result.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&result).into_owned()
 }
 
 fn resolve_relative_url(base: &str, relative: &str) -> Option<String> {
@@ -162,10 +188,9 @@ fn resolve_relative_url(base: &str, relative: &str) -> Option<String> {
 
     let (scheme, rest) = if let Some(stripped) = base.strip_prefix("https://") {
         ("https://", stripped)
-    } else if let Some(stripped) = base.strip_prefix("http://") {
-        ("http://", stripped)
     } else {
-        return None;
+        let stripped = base.strip_prefix("http://")?;
+        ("http://", stripped)
     };
 
     let (host, path) = match rest.split_once('/') {
@@ -186,8 +211,6 @@ fn resolve_relative_url(base: &str, relative: &str) -> Option<String> {
 
 /// Automatically downloads external linked stylesheets and inlines them into <style> tags within HTML.
 fn inline_linked_stylesheets(base_url: &str, mut html: String) -> String {
-    use std::io::Read;
-    let agent = get_agent();
     let nodes = strata_web_reader::HtmlParser::parse(&html);
     let stylesheet_hrefs = strata_web_reader::WebTranspiler::extract_stylesheet_urls(&nodes);
 
@@ -206,23 +229,37 @@ fn inline_linked_stylesheets(base_url: &str, mut html: String) -> String {
 
             let css_text = if let Some(css) = cached_css {
                 css
-            } else if let Ok(resp) = agent.get(&abs_url).call() {
-                if resp.status() == 200 {
-                    let mut reader = resp.into_reader().take(1024 * 512); // 512KB cap
-                    let mut text = String::new();
-                    if reader.read_to_string(&mut text).is_ok() {
-                        let mut guard = STYLESHEET_CACHE.lock().unwrap();
-                        let cache = guard.get_or_insert_with(HashMap::new);
-                        cache.insert(abs_url, text.clone());
-                        text
+            } else {
+                let mut headers = strata_web_api::Headers::new();
+                headers.set(
+                    "User-Agent",
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Strata/0.1.0",
+                );
+                headers.set("Accept", "text/css,*/*;q=0.1");
+
+                let init = strata_web_api::RequestInit {
+                    method: "GET".to_string(),
+                    headers,
+                    timeout_ms: Some(6000),
+                    ..Default::default()
+                };
+
+                if let Ok(resp) = strata_web_api::fetch(&abs_url, Some(init)) {
+                    if resp.status == 200 {
+                        if let Ok(text) = resp.text() {
+                            let mut guard = STYLESHEET_CACHE.lock().unwrap();
+                            let cache = guard.get_or_insert_with(HashMap::new);
+                            cache.insert(abs_url, text.clone());
+                            text
+                        } else {
+                            String::new()
+                        }
                     } else {
                         String::new()
                     }
                 } else {
                     String::new()
                 }
-            } else {
-                String::new()
             };
 
             if !css_text.trim().is_empty() {
@@ -249,9 +286,6 @@ fn inline_linked_stylesheets(base_url: &str, mut html: String) -> String {
 
 /// Performs a real live HTTP/HTTPS request over the network.
 fn fetch_live_web_page(url: &str) -> PageLoadResult {
-    use std::io::Read;
-    let agent = get_agent();
-
     // For Wikipedia articles, fetch directly via official Wikipedia REST API endpoint for clean, full semantic HTML5
     if url.starts_with("https://en.wikipedia.org/wiki/")
         || url.starts_with("http://en.wikipedia.org/wiki/")
@@ -260,46 +294,79 @@ fn fetch_live_web_page(url: &str) -> PageLoadResult {
             .trim_start_matches("https://en.wikipedia.org/wiki/")
             .trim_start_matches("http://en.wikipedia.org/wiki/");
         let rest_url = format!("https://en.wikipedia.org/api/rest_v1/page/html/{slug}");
-        let rest_req = agent
-            .get(&rest_url)
-            .set("Accept", "text/html; charset=utf-8; profile=\"https://www.mediawiki.org/wiki/Specs/HTML/2.8.0\"")
-            .set("Accept-Language", "en-US,en;q=0.9")
-            .call();
-        if let Ok(resp) = rest_req {
-            if resp.status() == 200 {
-                let mut reader = resp.into_reader().take(1024 * 1024 * 6); // 6MB cap for full articles
-                let mut body = String::new();
-                if reader.read_to_string(&mut body).is_ok() && !body.is_empty() {
-                    let page_title = slug.replace('_', " ");
-                    let title = extract_html_title(&body)
-                        .unwrap_or_else(|| format!("{page_title} - Wikipedia"));
-                    let inlined = inline_linked_stylesheets(url, body);
-                    return PageLoadResult {
-                        title,
-                        html: inlined,
-                        status: 200,
-                        is_error: false,
-                    };
+
+        let mut rest_headers = strata_web_api::Headers::new();
+        rest_headers.set(
+            "Accept",
+            "text/html; charset=utf-8; profile=\"https://www.mediawiki.org/wiki/Specs/HTML/2.8.0\"",
+        );
+        rest_headers.set("Accept-Language", "en-US,en;q=0.9");
+        rest_headers.set(
+            "User-Agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Strata/0.1.0",
+        );
+
+        let rest_init = strata_web_api::RequestInit {
+            method: "GET".to_string(),
+            headers: rest_headers,
+            timeout_ms: Some(8000),
+            ..Default::default()
+        };
+
+        if let Ok(resp) = strata_web_api::fetch(&rest_url, Some(rest_init)) {
+            if resp.status == 200 {
+                if let Ok(body) = resp.text() {
+                    if !body.is_empty() {
+                        let page_title = slug.replace('_', " ");
+                        let title = extract_html_title(&body)
+                            .unwrap_or_else(|| format!("{page_title} - Wikipedia"));
+                        let inlined = inline_linked_stylesheets(url, body);
+                        return PageLoadResult {
+                            title,
+                            html: inlined,
+                            status: 200,
+                            is_error: false,
+                        };
+                    }
                 }
             }
         }
     }
 
-    match agent
-        .get(url)
-        .set(
-            "Accept",
-            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        )
-        .set("Accept-Language", "en-US,en;q=0.9")
-        .call()
-    {
+    let mut headers = strata_web_api::Headers::new();
+    headers.set(
+        "Accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    );
+    headers.set("Accept-Language", "en-US,en;q=0.9");
+    headers.set(
+        "User-Agent",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Strata/0.1.0",
+    );
+
+    let init = strata_web_api::RequestInit {
+        method: "GET".to_string(),
+        headers,
+        timeout_ms: Some(8000),
+        ..Default::default()
+    };
+
+    match strata_web_api::fetch(url, Some(init)) {
         Ok(response) => {
-            let status = response.status();
-            let mut reader = response.into_reader().take(1024 * 1024 * 6); // 6MB cap
-            let mut body = String::new();
-            match reader.read_to_string(&mut body) {
-                Ok(_) => {
+            let status = response.status;
+            if status >= 400 {
+                let error_details = response
+                    .text()
+                    .unwrap_or_else(|_| "Server returned an error without response body.".to_string());
+                return generate_network_error_page(
+                    url,
+                    &format!("HTTP_{status}"),
+                    &format!("HTTP Error {status}: {error_details}"),
+                );
+            }
+
+            match response.text() {
+                Ok(body) => {
                     let title = extract_html_title(&body)
                         .unwrap_or_else(|| url.split('/').nth(2).unwrap_or(url).to_string());
                     let inlined = inline_linked_stylesheets(url, body);
@@ -317,52 +384,48 @@ fn fetch_live_web_page(url: &str) -> PageLoadResult {
                 ),
             }
         }
-        Err(ureq::Error::Status(code, response)) => {
-            let status_text = format!("HTTP Error {code}");
-            let error_details = response
-                .into_string()
-                .unwrap_or_else(|_| "Server returned an error without response body.".to_string());
-            generate_network_error_page(
-                url,
-                &format!("HTTP_{code}"),
-                &format!("{status_text}: {error_details}"),
-            )
-        }
-        Err(ureq::Error::Transport(transport_err)) => {
+        Err(err) => {
             // In hermetic / offline environments without internet, provide fallback for standard test fixtures
-            if matches!(
-                transport_err.kind(),
-                ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed | ureq::ErrorKind::Io
-            ) {
-                if url == "https://en.wikipedia.org/wiki/Rust_(programming_language)" {
-                    return PageLoadResult {
-                        title: "Rust (programming language) - Wikipedia (Offline)".to_string(),
-                        html: default_rust_wikipedia_html(),
-                        status: 200,
-                        is_error: false,
-                    };
-                }
+            if url == "https://en.wikipedia.org/wiki/Rust_(programming_language)" {
+                return PageLoadResult {
+                    title: "Rust (programming language) - Wikipedia (Offline)".to_string(),
+                    html: default_rust_wikipedia_html(),
+                    status: 200,
+                    is_error: false,
+                };
             }
 
-            let (code_str, message) = match transport_err.kind() {
-                ureq::ErrorKind::Dns => (
-                    "ERR_NAME_NOT_RESOLVED",
-                    "The server DNS address could not be resolved. Check internet connectivity and host spelling.",
+            let (code_str, message) = match err {
+                strata_web_api::FetchError::InvalidUrl(msg) => (
+                    "ERR_INVALID_URL",
+                    format!("The specified URL is invalid: {msg}"),
                 ),
-                ureq::ErrorKind::ConnectionFailed => (
+                strata_web_api::FetchError::Timeout(_) => (
+                    "ERR_CONNECTION_TIMED_OUT",
+                    "The connection timed out while establishing the session.".to_string(),
+                ),
+                strata_web_api::FetchError::NetworkError(msg)
+                    if msg.contains("DNS") || msg.contains("No IP") =>
+                {
+                    (
+                        "ERR_NAME_NOT_RESOLVED",
+                        "The server DNS address could not be resolved. Check internet connectivity and host spelling.".to_string(),
+                    )
+                }
+                strata_web_api::FetchError::NetworkError(msg) if msg.contains("refused") => (
                     "ERR_CONNECTION_REFUSED",
-                    "The remote host refused the connection on the requested port.",
+                    "The remote host refused the connection on the requested port.".to_string(),
                 ),
-                ureq::ErrorKind::Io => (
+                strata_web_api::FetchError::IoError(msg) => (
                     "ERR_NETWORK_IO_ERROR",
-                    "An I/O socket error occurred while establishing or maintaining the network connection.",
+                    format!("An I/O socket error occurred: {msg}"),
                 ),
                 _ => (
                     "ERR_CONNECTION_FAILED",
-                    "A transport-level network failure prevented establishing the secure connection.",
+                    "A transport-level network failure prevented establishing the secure connection.".to_string(),
                 ),
             };
-            generate_network_error_page(url, code_str, message)
+            generate_network_error_page(url, code_str, &message)
         }
     }
 }
