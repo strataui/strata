@@ -235,3 +235,68 @@ fn test_wgsl_shader_constants_validity() {
     assert!(WGSL_ANALYTICAL_PATH_RASTER_SHADER.contains("sd_quadratic_bezier"));
 }
 
+#[test]
+fn test_slug_font_shader_and_glyph_buffer() {
+    use strata_gpu_path::{
+        AnalyticGlyph, Point2D, QuadraticBezier, Rect2D, SlugGlyphBuffer, WGSL_SLUG_FONT_SHADER,
+    };
+
+    assert!(WGSL_SLUG_FONT_SHADER.contains("solve_quadratic_roots"));
+    assert!(WGSL_SLUG_FONT_SHADER.contains("GpuGlyphCurve"));
+    assert!(WGSL_SLUG_FONT_SHADER.contains("@vertex"));
+    assert!(WGSL_SLUG_FONT_SHADER.contains("@fragment"));
+
+    let glyph = AnalyticGlyph {
+        char_code: 'A',
+        advance_width: 24.0,
+        bounds: Rect2D::new(0.0, 0.0, 24.0, 32.0),
+        curves: vec![
+            QuadraticBezier::new(Point2D::new(0.0, 0.0), Point2D::new(12.0, 32.0), Point2D::new(24.0, 0.0)),
+            QuadraticBezier::new(Point2D::new(4.0, 10.0), Point2D::new(12.0, 10.0), Point2D::new(20.0, 10.0)),
+        ],
+    };
+
+    let mut buffer = SlugGlyphBuffer::new();
+    buffer.push_glyph(
+        &glyph,
+        Rect2D::new(100.0, 100.0, 124.0, 132.0),
+        [1.0, 1.0, 1.0, 1.0],
+        Rect2D::new(0.0, 0.0, 1920.0, 1080.0),
+    );
+
+    assert_eq!(buffer.instances.len(), 1);
+    assert_eq!(buffer.curves.len(), 2);
+    assert_eq!(buffer.instances[0].curve_range, [0, 2]);
+    assert!(!buffer.instances_as_bytes().is_empty());
+    assert!(!buffer.curves_as_bytes().is_empty());
+}
+
+#[test]
+fn test_geometry_types_bidirectional_conversions() {
+    use strata_gpu_path::{Point2D, Rect2D};
+    use strata_primitives::geom::{Point, Rect};
+
+    let p_prim = Point::new(15.0f32, 25.0f32);
+    let p_gpu: Point2D = p_prim.into();
+    assert_eq!(p_gpu.x, 15.0);
+    assert_eq!(p_gpu.y, 25.0);
+
+    let p_back: Point<f32> = p_gpu.into();
+    assert_eq!(p_back, p_prim);
+
+    let r_prim = Rect::from_xywh(10.0, 20.0, 100.0, 200.0);
+    let r_gpu: Rect2D = r_prim.into();
+    assert_eq!(r_gpu.min_x, 10.0);
+    assert_eq!(r_gpu.min_y, 20.0);
+    assert_eq!(r_gpu.max_x, 110.0);
+    assert_eq!(r_gpu.max_y, 220.0);
+    assert_eq!(r_gpu.width(), 100.0);
+    assert_eq!(r_gpu.height(), 200.0);
+
+    let r_back: Rect<f32> = r_gpu.into();
+    assert_eq!(r_back.x(), 10.0);
+    assert_eq!(r_back.y(), 20.0);
+    assert_eq!(r_back.width(), 100.0);
+    assert_eq!(r_back.height(), 200.0);
+}
+

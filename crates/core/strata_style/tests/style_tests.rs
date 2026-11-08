@@ -254,3 +254,51 @@ fn test_tailwind_grid_system() {
     assert_eq!(style.grid_template_columns[0], GridTrack::Fr(1.0));
     assert_eq!(style.gap, 8.0);
 }
+
+#[test]
+fn test_tailwind_arbitrary_utf8_and_bracket_safety() {
+    // 1. Multibyte UTF-8 within arbitrary values does not panic
+    let utf8_classes = "bg-[#12🦀45] w-[calc(100%-20px)]";
+    let style = TailwindEngine::resolve_classes(utf8_classes);
+    // Invalid hex with emoji gracefully fails to parse without crashing
+    assert_eq!(style.background_color, None);
+    // Calc width is parsed and interned
+    assert!(matches!(style.width, Dimension::Calc(_)));
+
+    // 2. Colons inside brackets do not get confused with modifiers
+    let (mod1, rest1) = strata_style::tailwind::split_modifier("bg-[url(https://example.com/asset.png)]");
+    assert_eq!(mod1, None);
+    assert_eq!(rest1, "bg-[url(https://example.com/asset.png)]");
+
+    // 3. True modifiers with arbitrary values work seamlessly
+    let hover_classes = "hover:bg-[rgb(255,0,0)]";
+    let unhovered = TailwindEngine::resolve_classes_with_state(hover_classes, false, false, false);
+    assert_eq!(unhovered.background_color, None);
+    let hovered = TailwindEngine::resolve_classes_with_state(hover_classes, true, false, false);
+    assert_eq!(hovered.background_color, Some(Color::new(255, 0, 0, 255)));
+
+    // 4. Forward slash inside arbitrary brackets does not get confused with opacity
+    let slash_classes = "w-[calc(100%/2)]";
+    let style_slash = TailwindEngine::resolve_classes(slash_classes);
+    assert!(matches!(style_slash.width, Dimension::Calc(_)));
+
+    // 5. Opacity on arbitrary color
+    let op_classes = "bg-[#00ff00]/50";
+    let style_op = TailwindEngine::resolve_classes(op_classes);
+    assert_eq!(style_op.background_color, Some(Color::new(0, 255, 0, 128)));
+
+    // 6. Arbitrary units: vw, vh, rem, em
+    let units_classes = "w-[50vw] h-[80vh] min-w-[3rem]";
+    let style_units = TailwindEngine::resolve_classes(units_classes);
+    assert_eq!(style_units.width, Dimension::Vw(50.0));
+    assert_eq!(style_units.height, Dimension::Vh(80.0));
+    assert_eq!(style_units.min_width, Dimension::Px(48.0));
+
+    // 7. Bracketed arbitrary values with spaces are tokenized intact
+    let spaced_classes = "flex w-[calc(100% - 32px)] text-sm";
+    let style_spaced = TailwindEngine::resolve_classes(spaced_classes);
+    assert_eq!(style_spaced.display, Display::Flex);
+    assert!(matches!(style_spaced.width, Dimension::Calc(_)));
+    assert_eq!(style_spaced.font_size, 14.0);
+}
+

@@ -192,3 +192,91 @@ impl ClipPath {
         }
     }
 }
+
+/// Continuously interpolates between two `ClipPath` shapes per W3C CSS Masking Module Level 1.
+pub fn interpolate_clip_path(from: &ClipPath, to: &ClipPath, t: f32) -> ClipPath {
+    let t = t.clamp(0.0, 1.0);
+    match (from, to) {
+        (
+            ClipPath::Inset {
+                top: t1,
+                right: r1,
+                bottom: b1,
+                left: l1,
+                border_radius: br1,
+            },
+            ClipPath::Inset {
+                top: t2,
+                right: r2,
+                bottom: b2,
+                left: l2,
+                border_radius: br2,
+            },
+        ) => ClipPath::Inset {
+            top: t1 + (t2 - t1) * t,
+            right: r1 + (r2 - r1) * t,
+            bottom: b1 + (b2 - b1) * t,
+            left: l1 + (l2 - l1) * t,
+            border_radius: br1 + (br2 - br1) * t,
+        },
+        (
+            ClipPath::Circle {
+                radius: r1,
+                center_x: x1,
+                center_y: y1,
+            },
+            ClipPath::Circle {
+                radius: r2,
+                center_x: x2,
+                center_y: y2,
+            },
+        ) => ClipPath::Circle {
+            radius: r1 + (r2 - r1) * t,
+            center_x: x1 + (x2 - x1) * t,
+            center_y: y1 + (y2 - y1) * t,
+        },
+        (
+            ClipPath::Ellipse {
+                radius_x: rx1,
+                radius_y: ry1,
+                center_x: cx1,
+                center_y: cy1,
+            },
+            ClipPath::Ellipse {
+                radius_x: rx2,
+                radius_y: ry2,
+                center_x: cx2,
+                center_y: cy2,
+            },
+        ) => ClipPath::Ellipse {
+            radius_x: rx1 + (rx2 - rx1) * t,
+            radius_y: ry1 + (ry2 - ry1) * t,
+            center_x: cx1 + (cx2 - cx1) * t,
+            center_y: cy1 + (cy2 - cy1) * t,
+        },
+        (ClipPath::Polygon(v1), ClipPath::Polygon(v2)) => {
+            if v1.len() == v2.len() {
+                let mut out = Vec::with_capacity(v1.len());
+                for (p1, p2) in v1.iter().zip(v2.iter()) {
+                    out.push(Point::new(
+                        p1.x + (p2.x - p1.x) * t,
+                        p1.y + (p2.y - p1.y) * t,
+                    ));
+                }
+                ClipPath::Polygon(out)
+            } else if t < 0.5 {
+                from.clone()
+            } else {
+                to.clone()
+            }
+        }
+        _ => {
+            if t < 0.5 {
+                from.clone()
+            } else {
+                to.clone()
+            }
+        }
+    }
+}
+

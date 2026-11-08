@@ -1,5 +1,7 @@
 //! Integration Tests: 2D Stacking Context Compositor, SDF Rasterizer, 3D Linear Algebra, and Viewport Engine.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use strata_layout::{LayoutGeometry, LayoutNode, Rect};
 use strata_primitives::geom::EdgeInsets;
 use strata_render::prelude::*;

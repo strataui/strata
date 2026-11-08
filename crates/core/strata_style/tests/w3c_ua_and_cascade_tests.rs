@@ -1,5 +1,7 @@
 //! Comprehensive Integration Tests for W3C User-Agent Default Stylesheet and Multi-Origin Cascade Engine.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use strata_style::prelude::*;
 
 #[test]

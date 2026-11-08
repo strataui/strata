@@ -206,7 +206,18 @@ pub enum AlignSelf {
     Baseline,
 }
 
-/// CSS Grid track sizing definition.
+/// Individual track sizing breadth used in CSS minmax() functions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GridTrackBreadth {
+    Auto,
+    Px(f32),
+    Percent(f32),
+    Fr(f32),
+    MinContent,
+    MaxContent,
+}
+
+/// CSS Grid track sizing definition (W3C CSS Grid Layout Level 2).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GridTrack {
     Auto,
@@ -215,6 +226,41 @@ pub enum GridTrack {
     Fr(f32),
     MinContent,
     MaxContent,
+    Subgrid,
+    MinMax(GridTrackBreadth, GridTrackBreadth),
+}
+
+/// CSS grid-auto-flow property (W3C CSS Grid Level 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GridAutoFlow {
+    #[default]
+    Row,
+    Column,
+    RowDense,
+    ColumnDense,
+}
+
+impl GridAutoFlow {
+    pub fn is_row(&self) -> bool {
+        matches!(self, Self::Row | Self::RowDense)
+    }
+
+    pub fn is_dense(&self) -> bool {
+        matches!(self, Self::RowDense | Self::ColumnDense)
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim().to_ascii_lowercase();
+        let tokens: Vec<&str> = s.split_whitespace().collect();
+        match tokens.as_slice() {
+            ["row"] => Some(Self::Row),
+            ["column"] => Some(Self::Column),
+            ["dense"] => Some(Self::RowDense),
+            ["row", "dense"] | ["dense", "row"] => Some(Self::RowDense),
+            ["column", "dense"] | ["dense", "column"] => Some(Self::ColumnDense),
+            _ => None,
+        }
+    }
 }
 
 /// 4-corner border radius definition.
@@ -557,6 +603,7 @@ pub enum BorderStyle {
     Dotted,
     Double,
     None,
+    Hidden,
 }
 
 /// Content visibility optimization (W3C CSS Containment Module Level 2).
@@ -567,6 +614,58 @@ pub enum ContentVisibility {
     Auto,
     Hidden,
 }
+
+/// CSS Containment specification (W3C CSS Containment Module Level 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Containment {
+    pub size: bool,
+    pub inline_size: bool,
+    pub layout: bool,
+    pub paint: bool,
+    pub style: bool,
+}
+
+impl Containment {
+    pub const NONE: Self = Self {
+        size: false,
+        inline_size: false,
+        layout: false,
+        paint: false,
+        style: false,
+    };
+
+    pub const STRICT: Self = Self {
+        size: true,
+        inline_size: false,
+        layout: true,
+        paint: true,
+        style: false,
+    };
+
+    pub const CONTENT: Self = Self {
+        size: false,
+        inline_size: false,
+        layout: true,
+        paint: true,
+        style: false,
+    };
+
+    #[inline]
+    pub fn contains_layout(&self) -> bool {
+        self.layout
+    }
+
+    #[inline]
+    pub fn contains_size(&self) -> bool {
+        self.size
+    }
+
+    #[inline]
+    pub fn contains_paint(&self) -> bool {
+        self.paint
+    }
+}
+
 
 /// Stepped timing function transition position (W3C CSS Easing Functions Level 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -582,8 +681,10 @@ pub enum StepPosition {
 
 /// Animation and transition timing function (easing curve).
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub enum TransitionEasing {
     Linear,
+    #[default]
     Ease,
     EaseIn,
     EaseOut,
@@ -594,11 +695,6 @@ pub enum TransitionEasing {
     CubicBezier(f32, f32, f32, f32),
 }
 
-impl Default for TransitionEasing {
-    fn default() -> Self {
-        Self::Ease
-    }
-}
 
 impl TransitionEasing {
     /// Evaluates the easing function at normalized progression `t` in `[0.0, 1.0]`.
@@ -690,37 +786,10 @@ impl TransitionEasing {
     }
 }
 
-/// Solves a cubic Bézier curve for parameter `x` using Newton-Raphson iteration.
+/// Solves a cubic Bézier curve for parameter `x` using De Casteljau's algorithm and root finding.
+#[inline(always)]
 pub fn cubic_bezier_solve(x: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
-    let x = x.clamp(0.0, 1.0);
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-
-    let mut u = x;
-    for _ in 0..8 {
-        let one_minus_u = 1.0 - u;
-        let bx =
-            3.0 * one_minus_u * one_minus_u * u * x1 + 3.0 * one_minus_u * u * u * x2 + u * u * u;
-        let error = bx - x;
-        if error.abs() < 1e-5 {
-            break;
-        }
-        let dbx = 3.0 * one_minus_u * one_minus_u * x1
-            + 6.0 * one_minus_u * u * (x2 - x1)
-            + 3.0 * u * u * (1.0 - x2);
-        if dbx.abs() < 1e-5 {
-            break;
-        }
-        u -= error / dbx;
-        u = u.clamp(0.0, 1.0);
-    }
-
-    let one_minus_u = 1.0 - u;
-    3.0 * one_minus_u * one_minus_u * u * y1 + 3.0 * one_minus_u * u * u * y2 + u * u * u
+    crate::bezier::cubic_bezier_solve(x, x1, y1, x2, y2)
 }
 
 /// Evaluates stepped progress for `steps(n, position)`.
@@ -1031,8 +1100,10 @@ pub enum ScrollTimelineSource {
 
 /// CSS animation timeline descriptor per W3C Scroll-Driven Animations Level 1.
 #[derive(Debug, Clone, PartialEq)]
+#[derive(Default)]
 pub enum AnimationTimeline {
     /// Traditional wall-clock time timeline.
+    #[default]
     Time,
     /// Container scroll-driven timeline with source scroller and axis.
     Scroll(ScrollTimelineSource, ScrollAxis),
@@ -1042,11 +1113,6 @@ pub enum AnimationTimeline {
     Named(String),
 }
 
-impl Default for AnimationTimeline {
-    fn default() -> Self {
-        Self::Time
-    }
-}
 
 /// Named range anchor for scroll-driven animations per W3C specification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1290,6 +1356,7 @@ pub struct ComputedStyle {
     pub clear: Clear,
     pub box_sizing: BoxSizing,
     pub content_visibility: ContentVisibility,
+    pub contain: Containment,
     pub contain_intrinsic_width: Option<Dimension>,
     pub contain_intrinsic_height: Option<Dimension>,
     pub width: Dimension,
@@ -1323,6 +1390,7 @@ pub struct ComputedStyle {
     // CSS Grid
     pub grid_template_columns: Vec<GridTrack>,
     pub grid_template_rows: Vec<GridTrack>,
+    pub grid_auto_flow: GridAutoFlow,
     pub grid_column_start: Option<i32>,
     pub grid_column_span: Option<u32>,
     pub grid_row_start: Option<i32>,
@@ -1420,6 +1488,7 @@ impl Default for ComputedStyle {
             clear: Clear::None,
             box_sizing: BoxSizing::BorderBox,
             content_visibility: ContentVisibility::Visible,
+            contain: Containment::NONE,
             contain_intrinsic_width: None,
             contain_intrinsic_height: None,
             width: Dimension::Auto,
@@ -1456,6 +1525,7 @@ impl Default for ComputedStyle {
 
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
+            grid_auto_flow: GridAutoFlow::Row,
             grid_column_start: None,
             grid_column_span: None,
             grid_row_start: None,
@@ -1485,7 +1555,7 @@ impl Default for ComputedStyle {
             font_weight: FontWeight::Normal,
             font_style: FontStyle::Normal,
             text_align: TextAlign::Left,
-            line_height: 1.5,
+            line_height: 1.2,
             letter_spacing: 0.0,
             text_decoration: TextDecoration::None,
             text_transform: TextTransform::None,
@@ -1550,12 +1620,12 @@ impl ComputedStyle {
     pub fn has_visual_effects(&self) -> bool {
         self.mix_blend_mode != BlendMode::Normal
             || self.isolation == Isolation::Isolate
-            || self.filter.as_ref().map_or(false, |f| !f.is_empty())
+            || self.filter.as_ref().is_some_and(|f| !f.is_empty())
             || self
                 .backdrop_filter
                 .as_ref()
-                .map_or(false, |b| !b.is_empty())
-            || self.clip_path.as_ref().map_or(false, |c| !c.is_none())
+                .is_some_and(|b| !b.is_empty())
+            || self.clip_path.as_ref().is_some_and(|c| !c.is_none())
     }
 
     /// Computes the composite 4x4 matrix for this element's transform given layout width and height.
@@ -1577,30 +1647,31 @@ impl ComputedStyle {
     }
     /// Constructs an unstyled node inheriting inheritable properties from parent with zero heap allocations.
     pub fn inherit_from(parent: &Self) -> Self {
-        let mut child = Self::default();
         // Inheritable properties per W3C CSS Cascading and Inheritance Level 4:
-        child.color = parent.color;
-        child.font_family = parent.font_family;
-        child.font_size = parent.font_size;
-        child.root_font_size = parent.root_font_size;
-        child.font_weight = parent.font_weight;
-        child.font_style = parent.font_style;
-        child.text_align = parent.text_align;
-        child.line_height = parent.line_height;
-        child.letter_spacing = parent.letter_spacing;
-        child.text_decoration = parent.text_decoration;
-        child.text_transform = parent.text_transform;
-        child.text_overflow = parent.text_overflow;
-        child.white_space = parent.white_space;
-        child.cursor = parent.cursor;
-        child.user_select = parent.user_select;
-        child.visibility = parent.visibility;
-        child.caret_color = parent.caret_color;
-        child.border_collapse = parent.border_collapse;
-        child.border_spacing = parent.border_spacing;
-        child.caption_side = parent.caption_side;
-        child.custom_properties = parent.custom_properties.clone();
-        child
+        Self {
+            color: parent.color,
+            font_family: parent.font_family,
+            font_size: parent.font_size,
+            root_font_size: parent.root_font_size,
+            font_weight: parent.font_weight,
+            font_style: parent.font_style,
+            text_align: parent.text_align,
+            line_height: parent.line_height,
+            letter_spacing: parent.letter_spacing,
+            text_decoration: parent.text_decoration,
+            text_transform: parent.text_transform,
+            text_overflow: parent.text_overflow,
+            white_space: parent.white_space,
+            cursor: parent.cursor,
+            user_select: parent.user_select,
+            visibility: parent.visibility,
+            caret_color: parent.caret_color,
+            border_collapse: parent.border_collapse,
+            border_spacing: parent.border_spacing,
+            caption_side: parent.caption_side,
+            custom_properties: parent.custom_properties.clone(),
+            ..Self::default()
+        }
     }
 
     /// Looks up a CSS custom property by AtomId.

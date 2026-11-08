@@ -117,6 +117,7 @@ pub fn cascade_origin_rank(origin: CascadeOrigin, important: bool) -> u8 {
 struct CascadeCandidate<'a> {
     declaration: &'a Declaration,
     rank: u8,
+    layer_priority: u32,
     specificity: Specificity,
     source_order: usize,
 }
@@ -214,9 +215,16 @@ impl CascadeSolver {
                 if let Some(spec) = best_match {
                     for decl in &rule.declarations {
                         let rank = cascade_origin_rank(origin, decl.important);
+                        let layer_priority = match (rule.layer_order, decl.important) {
+                            (None, false) => u32::MAX, // unlayered normal beats all layered normal
+                            (Some(k), false) => k + 1, // later layers beat earlier layers
+                            (None, true) => 0, // unlayered !important is beaten by all layered !important
+                            (Some(k), true) => u32::MAX.saturating_sub(k), // earlier layers beat later layers
+                        };
                         candidates.push(CascadeCandidate {
                             declaration: decl,
                             rank,
+                            layer_priority,
                             specificity: spec,
                             source_order: global_order,
                         });
@@ -230,19 +238,22 @@ impl CascadeSolver {
         let inline_declarations = inline_style.map(parse_declarations).unwrap_or_default();
         for decl in &inline_declarations {
             let rank = cascade_origin_rank(CascadeOrigin::Inline, decl.important);
+            let layer_priority = if decl.important { 0 } else { u32::MAX };
             candidates.push(CascadeCandidate {
                 declaration: decl,
                 rank,
+                layer_priority,
                 specificity: Specificity::INLINE,
                 source_order: global_order,
             });
             global_order += 1;
         }
 
-        // Sort candidates by W3C cascade priority: (rank, specificity, source_order)
+        // Sort candidates by W3C cascade priority: (rank, layer_priority, specificity, source_order)
         candidates.sort_by(|a, b| {
             a.rank
                 .cmp(&b.rank)
+                .then_with(|| a.layer_priority.cmp(&b.layer_priority))
                 .then_with(|| a.specificity.cmp(&b.specificity))
                 .then_with(|| a.source_order.cmp(&b.source_order))
         });
@@ -567,21 +578,58 @@ impl CascadeSolver {
                 }
             }
             "margin" => {
-                if val.trim() == "auto" {
-                    style.margin_auto_top = true;
-                    style.margin_auto_right = true;
-                    style.margin_auto_bottom = true;
-                    style.margin_auto_left = true;
-                } else if let Some(insets) = crate::parser::parse_edge_insets_with_context(
-                    val,
-                    style.font_size,
-                    style.root_font_size,
-                ) {
-                    style.margin = insets;
-                    style.margin_auto_top = false;
-                    style.margin_auto_right = false;
-                    style.margin_auto_bottom = false;
-                    style.margin_auto_left = false;
+                let parts: Vec<&str> = val.split_whitespace().collect();
+                let parse_side = |tok: &str| -> (f32, bool) {
+                    if tok.eq_ignore_ascii_case("auto") {
+                        (0.0, true)
+                    } else if let Some(px) =
+                        resolve_length_px(tok, style.font_size, style.root_font_size)
+                    {
+                        (px, false)
+                    } else {
+                        (0.0, false)
+                    }
+                };
+                match parts.len() {
+                    1 => {
+                        let (v, a) = parse_side(parts[0]);
+                        style.margin = EdgeInsets::all(v);
+                        style.margin_auto_top = a;
+                        style.margin_auto_right = a;
+                        style.margin_auto_bottom = a;
+                        style.margin_auto_left = a;
+                    }
+                    2 => {
+                        let (v_tb, a_tb) = parse_side(parts[0]);
+                        let (v_lr, a_lr) = parse_side(parts[1]);
+                        style.margin = EdgeInsets::symmetric(v_tb, v_lr);
+                        style.margin_auto_top = a_tb;
+                        style.margin_auto_bottom = a_tb;
+                        style.margin_auto_left = a_lr;
+                        style.margin_auto_right = a_lr;
+                    }
+                    3 => {
+                        let (v_t, a_t) = parse_side(parts[0]);
+                        let (v_lr, a_lr) = parse_side(parts[1]);
+                        let (v_b, a_b) = parse_side(parts[2]);
+                        style.margin = EdgeInsets::new(v_t, v_lr, v_b, v_lr);
+                        style.margin_auto_top = a_t;
+                        style.margin_auto_left = a_lr;
+                        style.margin_auto_right = a_lr;
+                        style.margin_auto_bottom = a_b;
+                    }
+                    4 => {
+                        let (v_t, a_t) = parse_side(parts[0]);
+                        let (v_r, a_r) = parse_side(parts[1]);
+                        let (v_b, a_b) = parse_side(parts[2]);
+                        let (v_l, a_l) = parse_side(parts[3]);
+                        style.margin = EdgeInsets::new(v_t, v_r, v_b, v_l);
+                        style.margin_auto_top = a_t;
+                        style.margin_auto_right = a_r;
+                        style.margin_auto_bottom = a_b;
+                        style.margin_auto_left = a_l;
+                    }
+                    _ => {}
                 }
             }
             "margin-top" => {
@@ -980,8 +1028,9 @@ impl CascadeSolver {
                 style.grid_template_rows = crate::parser::parse_grid_tracks(val);
             }
             "grid-auto-flow" => {
-                // Row flow is the supported placement mode. The `dense` keyword
-                // and column flow are accepted but do not alter placement yet.
+                if let Some(flow) = GridAutoFlow::parse(val) {
+                    style.grid_auto_flow = flow;
+                }
             }
             "grid-column" => {
                 apply_grid_placement_shorthand(
@@ -1163,7 +1212,7 @@ impl CascadeSolver {
                 "x-large" => style.font_size = 24.0,
                 "xx-large" => style.font_size = 32.0,
                 "smaller" => style.font_size = (style.font_size * 0.833).max(8.0),
-                "larger" => style.font_size = style.font_size * 1.2,
+                "larger" => style.font_size *= 1.2,
                 _ => {
                     if let Some(dim) = parse_dimension(val) {
                         match dim {
@@ -1372,6 +1421,29 @@ impl CascadeSolver {
             "outline-offset" => {
                 if let Some(Dimension::Px(px)) = parse_dimension(val) {
                     style.outline_offset = px;
+                }
+            }
+            "contain" => {
+                let trimmed = val.trim().to_ascii_lowercase();
+                if trimmed == "none" {
+                    style.contain = Containment::NONE;
+                } else if trimmed == "strict" {
+                    style.contain = Containment::STRICT;
+                } else if trimmed == "content" {
+                    style.contain = Containment::CONTENT;
+                } else {
+                    let mut c = Containment::NONE;
+                    for part in trimmed.split_whitespace() {
+                        match part {
+                            "size" => c.size = true,
+                            "inline-size" => c.inline_size = true,
+                            "layout" => c.layout = true,
+                            "paint" => c.paint = true,
+                            "style" => c.style = true,
+                            _ => {}
+                        }
+                    }
+                    style.contain = c;
                 }
             }
             "content-visibility" => match val.trim().to_ascii_lowercase().as_str() {
@@ -1777,7 +1849,7 @@ fn parse_grid_line(value: &str) -> Option<i32> {
 }
 
 fn parse_grid_span(value: &str) -> Option<u32> {
-    let mut parts = value.trim().split_whitespace();
+    let mut parts = value.split_whitespace();
     let keyword = parts.next()?;
     if !keyword.eq_ignore_ascii_case("span") {
         return None;

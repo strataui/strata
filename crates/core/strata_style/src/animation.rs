@@ -234,6 +234,10 @@ fn declaration_to_animatable(decl: &Declaration) -> Option<(TransitionProperty, 
             let p = parse_edge_insets_px(val_str)?;
             Some((TransitionProperty::Padding, AnimatableValue::EdgeInsets(p)))
         }
+        "clip-path" => {
+            let cp = crate::parser::parse_clip_path(val_str)?;
+            Some((TransitionProperty::ClipPath, AnimatableValue::ClipPath(cp)))
+        }
         _ => None,
     }
 }
@@ -265,6 +269,9 @@ pub fn interpolate_animatable_value(
         }
         (AnimatableValue::Transform(t1), AnimatableValue::Transform(t2)) => {
             AnimatableValue::Transform(interpolate_transform_ops(t1, t2, progress))
+        }
+        (AnimatableValue::ClipPath(c1), AnimatableValue::ClipPath(c2)) => {
+            AnimatableValue::ClipPath(crate::effects::interpolate_clip_path(c1, c2, progress))
         }
         _ => v2.clone(),
     }
@@ -595,14 +602,14 @@ impl ActiveKeyframeAnimation {
                         AnimationDirection::Normal => solved_t,
                         AnimationDirection::Reverse => 1.0 - solved_t,
                         AnimationDirection::Alternate => {
-                            if final_iter_idx % 2 == 0 {
+                            if final_iter_idx.is_multiple_of(2) {
                                 solved_t
                             } else {
                                 1.0 - solved_t
                             }
                         }
                         AnimationDirection::AlternateReverse => {
-                            if final_iter_idx % 2 == 0 {
+                            if final_iter_idx.is_multiple_of(2) {
                                 1.0 - solved_t
                             } else {
                                 solved_t
@@ -636,14 +643,14 @@ impl ActiveKeyframeAnimation {
             AnimationDirection::Normal => solved_t,
             AnimationDirection::Reverse => 1.0 - solved_t,
             AnimationDirection::Alternate => {
-                if iter_idx % 2 == 0 {
+                if iter_idx.is_multiple_of(2) {
                     solved_t
                 } else {
                     1.0 - solved_t
                 }
             }
             AnimationDirection::AlternateReverse => {
-                if iter_idx % 2 == 0 {
+                if iter_idx.is_multiple_of(2) {
                     1.0 - solved_t
                 } else {
                     solved_t

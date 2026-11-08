@@ -10,21 +10,152 @@ use std::sync::{Arc, RwLock};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CalcId(pub u32);
 
-static CALC_INTERNER: std::sync::LazyLock<RwLock<Vec<Arc<CalcExpr>>>> =
-    std::sync::LazyLock::new(|| RwLock::new(Vec::new()));
+const MAX_CALC_ENTRIES: usize = 8192;
+
+struct CalcInternerState {
+    entries: Vec<Arc<CalcExpr>>,
+    index: std::collections::HashMap<u64, Vec<u32>>,
+}
+
+impl CalcInternerState {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            index: std::collections::HashMap::new(),
+        }
+    }
+}
+
+static CALC_INTERNER: std::sync::LazyLock<RwLock<CalcInternerState>> =
+    std::sync::LazyLock::new(|| RwLock::new(CalcInternerState::new()));
+
+#[inline]
+fn feed_hash(h: &mut u64, v: u64) {
+    *h ^= v;
+    *h = h.wrapping_mul(0x100000001b3);
+}
+
+fn hash_dimension_bits(dim: &Dimension, h: &mut u64) {
+    match *dim {
+        Dimension::Auto => feed_hash(h, 0),
+        Dimension::Px(v) => {
+            feed_hash(h, 1);
+            feed_hash(h, v.to_bits() as u64);
+        }
+        Dimension::Percent(v) => {
+            feed_hash(h, 2);
+            feed_hash(h, v.to_bits() as u64);
+        }
+        Dimension::Vw(v) => {
+            feed_hash(h, 3);
+            feed_hash(h, v.to_bits() as u64);
+        }
+        Dimension::Vh(v) => {
+            feed_hash(h, 4);
+            feed_hash(h, v.to_bits() as u64);
+        }
+        Dimension::Rem(v) => {
+            feed_hash(h, 5);
+            feed_hash(h, v.to_bits() as u64);
+        }
+        Dimension::Em(v) => {
+            feed_hash(h, 6);
+            feed_hash(h, v.to_bits() as u64);
+        }
+        Dimension::Calc(id) => {
+            feed_hash(h, 7);
+            feed_hash(h, id.0 as u64);
+        }
+        Dimension::MinContent => feed_hash(h, 8),
+        Dimension::MaxContent => feed_hash(h, 9),
+        Dimension::FitContent(v) => {
+            feed_hash(h, 10);
+            feed_hash(h, v.to_bits() as u64);
+        }
+    }
+}
+
+fn hash_calc_expr_bits(expr: &CalcExpr, h: &mut u64) {
+    match expr {
+        CalcExpr::Value(dim) => {
+            feed_hash(h, 100);
+            hash_dimension_bits(dim, h);
+        }
+        CalcExpr::Add(l, r) => {
+            feed_hash(h, 101);
+            hash_calc_expr_bits(l, h);
+            hash_calc_expr_bits(r, h);
+        }
+        CalcExpr::Sub(l, r) => {
+            feed_hash(h, 102);
+            hash_calc_expr_bits(l, h);
+            hash_calc_expr_bits(r, h);
+        }
+        CalcExpr::Mul(l, s) => {
+            feed_hash(h, 103);
+            hash_calc_expr_bits(l, h);
+            feed_hash(h, s.to_bits() as u64);
+        }
+        CalcExpr::Div(l, s) => {
+            feed_hash(h, 104);
+            hash_calc_expr_bits(l, h);
+            feed_hash(h, s.to_bits() as u64);
+        }
+    }
+}
+
+fn compute_expr_hash(expr: &CalcExpr) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    hash_calc_expr_bits(expr, &mut h);
+    h
+}
 
 /// Interns a calc expression AST into the global cache and returns its lightweight CalcId.
+/// Automatically deduplicates identical expressions and bounds capacity to prevent memory leaks.
 pub fn intern_calc(expr: CalcExpr) -> CalcId {
-    let mut table = CALC_INTERNER.write().unwrap();
-    let id = table.len() as u32;
-    table.push(Arc::new(expr));
+    let hash = compute_expr_hash(&expr);
+
+    // Fast path: check for existing interned expression under read lock
+    {
+        let state = CALC_INTERNER.read().unwrap();
+        if let Some(candidates) = state.index.get(&hash) {
+            for &id in candidates {
+                if let Some(existing) = state.entries.get(id as usize) {
+                    if **existing == expr {
+                        return CalcId(id);
+                    }
+                }
+            }
+        }
+    }
+
+    // Slow path: acquire write lock to insert
+    let mut state = CALC_INTERNER.write().unwrap();
+    if let Some(candidates) = state.index.get(&hash) {
+        for &id in candidates {
+            if let Some(existing) = state.entries.get(id as usize) {
+                if **existing == expr {
+                    return CalcId(id);
+                }
+            }
+        }
+    }
+
+    if state.entries.len() >= MAX_CALC_ENTRIES {
+        // Enforce hard bound to avoid unbounded memory leak under dynamic DoS
+        return CalcId(0);
+    }
+
+    let id = state.entries.len() as u32;
+    state.entries.push(Arc::new(expr));
+    state.index.entry(hash).or_default().push(id);
     CalcId(id)
 }
 
 /// Retrieves an interned calc expression AST by its CalcId.
 pub fn get_calc(id: CalcId) -> Option<Arc<CalcExpr>> {
-    let table = CALC_INTERNER.read().unwrap();
-    table.get(id.0 as usize).cloned()
+    let state = CALC_INTERNER.read().unwrap();
+    state.entries.get(id.0 as usize).cloned()
 }
 
 /// Contextual environment for resolving relative CSS units inside a calc() expression.
@@ -72,7 +203,7 @@ pub enum CalcExpr {
 impl CalcExpr {
     /// Evaluates the expression AST to concrete CSS pixels given a context.
     pub fn eval(&self, ctx: &CalcContext) -> f32 {
-        match self {
+        let raw = match self {
             CalcExpr::Value(dim) => match *dim {
                 Dimension::Auto => 0.0,
                 Dimension::Px(px) => px,
@@ -86,14 +217,26 @@ impl CalcExpr {
             },
             CalcExpr::Add(left, right) => left.eval(ctx) + right.eval(ctx),
             CalcExpr::Sub(left, right) => left.eval(ctx) - right.eval(ctx),
-            CalcExpr::Mul(left, scalar) => left.eval(ctx) * scalar,
+            CalcExpr::Mul(left, scalar) => {
+                if scalar.is_finite() {
+                    left.eval(ctx) * scalar
+                } else {
+                    0.0
+                }
+            }
             CalcExpr::Div(left, scalar) => {
-                if *scalar != 0.0 {
+                if scalar.is_finite() && *scalar != 0.0 {
                     left.eval(ctx) / scalar
                 } else {
                     0.0
                 }
             }
+        };
+
+        if raw.is_finite() {
+            raw
+        } else {
+            0.0
         }
     }
 
@@ -126,6 +269,9 @@ enum Token {
     RParen,
 }
 
+/// Maximum recursion depth allowed during calc() parsing to prevent stack overflow crashes.
+pub const MAX_CALC_DEPTH: usize = 32;
+
 /// Parses a CSS calc(...) expression string into a `CalcExpr` AST.
 pub fn parse_calc(input: &str) -> Result<CalcExpr, String> {
     let clean = input.trim();
@@ -137,7 +283,7 @@ pub fn parse_calc(input: &str) -> Result<CalcExpr, String> {
 
     let tokens = tokenize_calc(inner)?;
     let mut cursor = TokenCursor::new(tokens);
-    let expr = parse_add_sub(&mut cursor)?;
+    let expr = parse_add_sub(&mut cursor, 0)?;
 
     if !cursor.is_eof() {
         return Err(format!(
@@ -245,40 +391,49 @@ fn tokenize_calc(s: &str) -> Result<Vec<Token>, String> {
 }
 
 fn parse_dimension_token(raw: &str) -> Option<Dimension> {
-    if raw.ends_with("px") {
-        raw[..raw.len() - 2].parse::<f32>().ok().map(Dimension::Px)
-    } else if raw.ends_with('%') {
-        raw[..raw.len() - 1]
-            .parse::<f32>()
-            .ok()
-            .map(Dimension::Percent)
-    } else if raw.ends_with("rem") {
-        raw[..raw.len() - 3].parse::<f32>().ok().map(Dimension::Rem)
-    } else if raw.ends_with("em") {
-        raw[..raw.len() - 2].parse::<f32>().ok().map(Dimension::Em)
-    } else if raw.ends_with("vw") {
-        raw[..raw.len() - 2].parse::<f32>().ok().map(Dimension::Vw)
-    } else if raw.ends_with("vh") {
-        raw[..raw.len() - 2].parse::<f32>().ok().map(Dimension::Vh)
+    let parse_num = |s: &str| -> Option<f32> {
+        let n = s.parse::<f32>().ok()?;
+        if n.is_finite() {
+            Some(n)
+        } else {
+            None
+        }
+    };
+
+    if let Some(stripped) = raw.strip_suffix("px") {
+        parse_num(stripped).map(Dimension::Px)
+    } else if let Some(stripped) = raw.strip_suffix('%') {
+        parse_num(stripped).map(Dimension::Percent)
+    } else if let Some(stripped) = raw.strip_suffix("rem") {
+        parse_num(stripped).map(Dimension::Rem)
+    } else if let Some(stripped) = raw.strip_suffix("em") {
+        parse_num(stripped).map(Dimension::Em)
+    } else if let Some(stripped) = raw.strip_suffix("vw") {
+        parse_num(stripped).map(Dimension::Vw)
+    } else if let Some(stripped) = raw.strip_suffix("vh") {
+        parse_num(stripped).map(Dimension::Vh)
     } else {
         None
     }
 }
 
 // Precedence Level 1: Add (+) and Sub (-)
-fn parse_add_sub(cursor: &mut TokenCursor) -> Result<CalcExpr, String> {
-    let mut left = parse_mul_div(cursor)?;
+fn parse_add_sub(cursor: &mut TokenCursor, depth: usize) -> Result<CalcExpr, String> {
+    if depth > MAX_CALC_DEPTH {
+        return Err(format!("Maximum calc() expression nesting depth ({MAX_CALC_DEPTH}) exceeded"));
+    }
+    let mut left = parse_mul_div(cursor, depth)?;
 
     while let Some(tok) = cursor.peek() {
         match tok {
             Token::Plus => {
                 cursor.next();
-                let right = parse_mul_div(cursor)?;
+                let right = parse_mul_div(cursor, depth)?;
                 left = CalcExpr::Add(Box::new(left), Box::new(right));
             }
             Token::Minus => {
                 cursor.next();
-                let right = parse_mul_div(cursor)?;
+                let right = parse_mul_div(cursor, depth)?;
                 left = CalcExpr::Sub(Box::new(left), Box::new(right));
             }
             _ => break,
@@ -289,8 +444,11 @@ fn parse_add_sub(cursor: &mut TokenCursor) -> Result<CalcExpr, String> {
 }
 
 // Precedence Level 2: Mul (*) and Div (/)
-fn parse_mul_div(cursor: &mut TokenCursor) -> Result<CalcExpr, String> {
-    let mut left = parse_factor(cursor)?;
+fn parse_mul_div(cursor: &mut TokenCursor, depth: usize) -> Result<CalcExpr, String> {
+    if depth > MAX_CALC_DEPTH {
+        return Err(format!("Maximum calc() expression nesting depth ({MAX_CALC_DEPTH}) exceeded"));
+    }
+    let mut left = parse_factor(cursor, depth)?;
 
     while let Some(tok) = cursor.peek() {
         match tok {
@@ -298,6 +456,9 @@ fn parse_mul_div(cursor: &mut TokenCursor) -> Result<CalcExpr, String> {
                 cursor.next();
                 match cursor.next() {
                     Some(Token::Number(scalar)) => {
+                        if !scalar.is_finite() {
+                            return Err(format!("Non-finite scalar multiplier in calc(): {scalar}"));
+                        }
                         left = CalcExpr::Mul(Box::new(left), scalar);
                     }
                     other => {
@@ -312,6 +473,9 @@ fn parse_mul_div(cursor: &mut TokenCursor) -> Result<CalcExpr, String> {
                 cursor.next();
                 match cursor.next() {
                     Some(Token::Number(scalar)) => {
+                        if !scalar.is_finite() || scalar == 0.0 {
+                            return Err(format!("Division by zero or non-finite scalar in calc(): {scalar}"));
+                        }
                         left = CalcExpr::Div(Box::new(left), scalar);
                     }
                     other => {
@@ -330,12 +494,20 @@ fn parse_mul_div(cursor: &mut TokenCursor) -> Result<CalcExpr, String> {
 }
 
 // Precedence Level 3: Atoms, Parentheses, Values
-fn parse_factor(cursor: &mut TokenCursor) -> Result<CalcExpr, String> {
+fn parse_factor(cursor: &mut TokenCursor, depth: usize) -> Result<CalcExpr, String> {
+    if depth > MAX_CALC_DEPTH {
+        return Err(format!("Maximum calc() expression nesting depth ({MAX_CALC_DEPTH}) exceeded"));
+    }
     match cursor.next() {
         Some(Token::Dim(dim)) => Ok(CalcExpr::Value(dim)),
-        Some(Token::Number(num)) => Ok(CalcExpr::Value(Dimension::Px(num))),
+        Some(Token::Number(num)) => {
+            if !num.is_finite() {
+                return Err(format!("Non-finite number in calc(): {num}"));
+            }
+            Ok(CalcExpr::Value(Dimension::Px(num)))
+        }
         Some(Token::LParen) => {
-            let inner = parse_add_sub(cursor)?;
+            let inner = parse_add_sub(cursor, depth + 1)?;
             match cursor.next() {
                 Some(Token::RParen) => Ok(inner),
                 other => Err(format!("Expected ')', found {:?}", other)),

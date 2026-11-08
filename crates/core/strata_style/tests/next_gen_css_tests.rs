@@ -134,7 +134,7 @@ fn test_houdini_property_registration_and_continuous_interpolation() {
     let prop = parse_property_rule_body("--brand-accent", body);
     assert_eq!(prop.name, "--brand-accent");
     assert_eq!(prop.syntax, PropertySyntax::Color);
-    assert_eq!(prop.inherits, false);
+    assert!(!prop.inherits);
     assert_eq!(prop.initial_value, Some("#ff0000".to_string()));
 
     let mut registry = PropertyRegistry::new();

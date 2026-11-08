@@ -20,6 +20,7 @@ pub enum AnimatableValue {
     BorderRadius(BorderRadius),
     BoxShadow(Vec<BoxShadow>),
     Transform(Vec<TransformOp>),
+    ClipPath(crate::effects::ClipPath),
     Display(Display),
     Visibility(Visibility),
     Discrete(String),
@@ -47,6 +48,9 @@ impl AnimatableValue {
             }
             (Self::Transform(t1), Self::Transform(t2)) => {
                 Self::Transform(interpolate_transform_ops(t1, t2, t))
+            }
+            (Self::ClipPath(cp1), Self::ClipPath(cp2)) => {
+                Self::ClipPath(crate::effects::interpolate_clip_path(cp1, cp2, t))
             }
             (disc1, disc2) => {
                 if behavior == TransitionBehavior::AllowDiscrete {
@@ -184,8 +188,24 @@ pub fn interpolate_transform_ops(
         }
         return result;
     }
-    // If lengths differ and neither is empty, discrete fallback
-    if t < 0.5 {
+    // If lengths differ, compose each list into a combined matrix and interpolate decomposed parameters
+    let mut mat1 = strata_primitives::geom::Matrix4x4::identity();
+    for op in from {
+        mat1 = mat1.multiply(&op.to_matrix(100.0, 100.0));
+    }
+    let mut mat2 = strata_primitives::geom::Matrix4x4::identity();
+    for op in to {
+        mat2 = mat2.multiply(&op.to_matrix(100.0, 100.0));
+    }
+    let m1_2d = [mat1.m[0], mat1.m[1], mat1.m[4], mat1.m[5], mat1.m[12], mat1.m[13]];
+    let m2_2d = [mat2.m[0], mat2.m[1], mat2.m[4], mat2.m[5], mat2.m[12], mat2.m[13]];
+    if let (Some(d1), Some(d2)) = (
+        crate::matrix_decomp::Decomposed2d::from_matrix(m1_2d),
+        crate::matrix_decomp::Decomposed2d::from_matrix(m2_2d),
+    ) {
+        let interpolated = d1.interpolate(&d2, t);
+        vec![TransformOp::Matrix(interpolated.to_matrix())]
+    } else if t < 0.5 {
         from.to_vec()
     } else {
         to.to_vec()
@@ -249,11 +269,19 @@ pub fn interpolate_single_transform_op(
             TransformOp::Perspective(d1 + (d2 - d1) * t)
         }
         (TransformOp::Matrix(m1), TransformOp::Matrix(m2)) => {
-            let mut out = [0.0f32; 6];
-            for i in 0..6 {
-                out[i] = m1[i] + (m2[i] - m1[i]) * t;
+            if let (Some(d1), Some(d2)) = (
+                crate::matrix_decomp::Decomposed2d::from_matrix(*m1),
+                crate::matrix_decomp::Decomposed2d::from_matrix(*m2),
+            ) {
+                let interpolated = d1.interpolate(&d2, t);
+                TransformOp::Matrix(interpolated.to_matrix())
+            } else {
+                let mut out = [0.0f32; 6];
+                for i in 0..6 {
+                    out[i] = m1[i] + (m2[i] - m1[i]) * t;
+                }
+                TransformOp::Matrix(out)
             }
-            TransformOp::Matrix(out)
         }
         (TransformOp::Matrix3d(m1), TransformOp::Matrix3d(m2)) => {
             let mut out = [0.0f32; 16];
@@ -263,7 +291,17 @@ pub fn interpolate_single_transform_op(
             TransformOp::Matrix3d(out)
         }
         _ => {
-            if t < 0.5 {
+            let mat1 = from.to_matrix(100.0, 100.0);
+            let mat2 = to.to_matrix(100.0, 100.0);
+            let m1_2d = [mat1.m[0], mat1.m[1], mat1.m[4], mat1.m[5], mat1.m[12], mat1.m[13]];
+            let m2_2d = [mat2.m[0], mat2.m[1], mat2.m[4], mat2.m[5], mat2.m[12], mat2.m[13]];
+            if let (Some(d1), Some(d2)) = (
+                crate::matrix_decomp::Decomposed2d::from_matrix(m1_2d),
+                crate::matrix_decomp::Decomposed2d::from_matrix(m2_2d),
+            ) {
+                let interpolated = d1.interpolate(&d2, t);
+                TransformOp::Matrix(interpolated.to_matrix())
+            } else if t < 0.5 {
                 from.clone()
             } else {
                 to.clone()
@@ -429,6 +467,7 @@ pub fn extract_animatable_value(
         }
         TransitionProperty::BoxShadow => Some(AnimatableValue::BoxShadow(style.box_shadow.clone())),
         TransitionProperty::Transform => Some(AnimatableValue::Transform(style.transform.clone())),
+        TransitionProperty::ClipPath => style.clip_path.clone().map(AnimatableValue::ClipPath),
         _ => None,
     }
 }
@@ -463,6 +502,9 @@ pub fn apply_animatable_value(
         }
         (TransitionProperty::Transform, AnimatableValue::Transform(t)) => {
             style.transform = t.clone();
+        }
+        (TransitionProperty::ClipPath, AnimatableValue::ClipPath(cp)) => {
+            style.clip_path = Some(cp.clone());
         }
         _ => {}
     }

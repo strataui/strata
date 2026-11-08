@@ -172,3 +172,40 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(in.color.rgb, in.color.a * alpha);
 }
 "#;
+
+/// Embedded WGSL Shader for hardware-accelerated concentric fillet corner clipping with G^2 curvature continuity.
+pub const WGSL_CONCENTRIC_FILLET_CORNER_SHADER: &str = r#"
+fn sdf_squircle(p: vec2<f32>, half_size: vec2<f32>, radius: f32, n: f32) -> f32 {
+    let straight = max(half_size - vec2<f32>(radius, radius), vec2<f32>(0.0, 0.0));
+    let q = abs(p) - straight;
+    if (q.x <= 0.0 && q.y <= 0.0) {
+        return max(q.x, q.y) - radius;
+    } else if (q.x > 0.0 && q.y > 0.0) {
+        let norm_n = pow(pow(q.x, n) + pow(q.y, n), 1.0 / n);
+        return norm_n - radius;
+    } else {
+        return max(q.x, q.y) - radius;
+    }
+}
+
+fn concentric_fillet_clip(
+    pixel_pos: vec2<f32>,
+    outer_half: vec2<f32>,
+    outer_radius: f32,
+    bezel_thickness: f32,
+    exponent: f32
+) -> vec4<f32> {
+    let inner_half = max(outer_half - vec2<f32>(bezel_thickness, bezel_thickness), vec2<f32>(0.0, 0.0));
+    let inner_radius = max(outer_radius - bezel_thickness, 0.0);
+
+    let d_outer = sdf_squircle(pixel_pos, outer_half, outer_radius, exponent);
+    let d_inner = sdf_squircle(pixel_pos, inner_half, inner_radius, exponent);
+
+    let screen_coverage = clamp(0.5 - d_inner, 0.0, 1.0);
+    let chassis_coverage = clamp(0.5 - d_outer, 0.0, 1.0);
+    let bezel_mask = clamp(0.5 - max(d_outer, -d_inner), 0.0, 1.0);
+
+    return vec4<f32>(screen_coverage, chassis_coverage, bezel_mask, d_inner);
+}
+"#;
+

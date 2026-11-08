@@ -1,5 +1,7 @@
 //! Comprehensive unit tests for W3C CSS Transitions Level 1 and Level 2 Engine.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use strata_primitives::geom::EdgeInsets;
 use strata_style::cascade::CascadeSolver;
 use strata_style::parser::{parse_declarations, parse_single_transition, parse_transitions};

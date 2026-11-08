@@ -1,11 +1,14 @@
 //! Strata Style: CSS spec parser, specificity calculator, cascade solver, and Tailwind JIT compiler.
 
 pub mod animation;
+pub mod bezier;
 pub mod calc;
 pub mod cascade;
 pub mod effects;
 pub mod keyframes;
+pub mod matrix_decomp;
 pub mod media;
+pub mod oklab;
 pub mod palette;
 pub mod parser;
 pub mod properties;
@@ -20,12 +23,16 @@ pub use animation::{
     ActiveKeyframeAnimation, AnimationLifecycleEvent, AnimationManager, CompiledKeyframeStop,
     KeyframeRegistry, KeyframeTrack,
 };
+pub use bezier::cubic_bezier_solve;
 pub use calc::{get_calc, intern_calc, parse_calc, CalcContext, CalcExpr, CalcId};
 pub use cascade::{CascadeOrigin, CascadeSolver, OriginStyleSheet};
-pub use effects::{BackdropFilter, ClipPath, FilterList, FilterOp};
+pub use effects::{interpolate_clip_path, BackdropFilter, ClipPath, FilterList, FilterOp};
+pub use matrix_decomp::{slerp_quaternion, Decomposed2d};
+pub use oklab::{interpolate_color_oklab, oklab_to_rgba, rgba_to_oklab};
 pub use keyframes::{CubicBezier, Keyframe, KeyframeAnimation, KeyframeProperty};
 pub use media::{
-    ColorScheme, MediaContext, MediaFeature, MediaQuery, MediaQueryList, MediaType, Orientation,
+    ColorScheme, DevicePostureQuery, MediaContext, MediaFeature, MediaQuery, MediaQueryList,
+    MediaType, Orientation,
 };
 pub use palette::lookup_tailwind_color;
 pub use parser::{

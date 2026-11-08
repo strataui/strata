@@ -245,6 +245,12 @@ pub struct ZeroCopyCompositor {
     telemetry: CompositorTelemetry,
 }
 
+impl Default for ZeroCopyCompositor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ZeroCopyCompositor {
     /// Creates a new zero-copy compositor.
     pub fn new() -> Self {

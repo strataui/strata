@@ -40,6 +40,44 @@ fn test_calc_expression_ast_and_unit_resolution() {
 }
 
 #[test]
+fn test_calc_recursion_limit_and_division_by_zero_safety() {
+    let ctx = CalcContext::default();
+
+    // 1. Division by non-zero scalar: 100px / 4
+    let div_expr = parse_calc("100px / 4").expect("Valid division should parse");
+    assert_eq!(div_expr.eval(&ctx), 25.0);
+
+    // 2. Division by zero in syntax returns Err
+    let div_zero_err = parse_calc("100px / 0");
+    assert!(div_zero_err.is_err());
+    let err_msg = div_zero_err.unwrap_err();
+    assert!(err_msg.contains("Division by zero"));
+
+    // 3. Direct Div AST node with 0.0 or NaN evaluates safely to 0.0 without panic or NaN
+    let zero_ast = CalcExpr::Div(Box::new(CalcExpr::px(100.0)), 0.0);
+    assert_eq!(zero_ast.eval(&ctx), 0.0);
+
+    let nan_ast = CalcExpr::Div(Box::new(CalcExpr::px(100.0)), f32::NAN);
+    assert_eq!(nan_ast.eval(&ctx), 0.0);
+
+    let inf_ast = CalcExpr::Mul(Box::new(CalcExpr::px(100.0)), f32::INFINITY);
+    assert_eq!(inf_ast.eval(&ctx), 0.0);
+
+    // 4. Nested parentheses within safe depth limit (10 levels)
+    let nested_ok = format!("{}10px{}", "(".repeat(10), ")".repeat(10));
+    let parsed_ok = parse_calc(&nested_ok);
+    assert!(parsed_ok.is_ok());
+    assert_eq!(parsed_ok.unwrap().eval(&ctx), 10.0);
+
+    // 5. Unbounded recursion attack (40 levels > MAX_CALC_DEPTH 32)
+    let nested_attack = format!("{}10px{}", "(".repeat(40), ")".repeat(40));
+    let attack_res = parse_calc(&nested_attack);
+    assert!(attack_res.is_err());
+    assert!(attack_res.unwrap_err().contains("Maximum calc() expression nesting depth"));
+}
+
+
+#[test]
 fn test_cubic_bezier_easing_curves() {
     let linear = CubicBezier::linear();
     assert_eq!(linear.solve(0.0), 0.0);
@@ -153,3 +191,35 @@ fn test_backdrop_filter_and_clip_path_containment() {
     assert!(triangle_clip.contains_point(50.0, 20.0, 100.0, 100.0)); // Inside
     assert!(!triangle_clip.contains_point(10.0, 80.0, 100.0, 100.0)); // Outside bottom left
 }
+
+#[test]
+fn test_calc_interner_deduplication_and_bounded_memory() {
+    let expr1 = parse_calc("100% - 24px").expect("parse calc");
+    let expr2 = parse_calc("100% - 24px").expect("parse calc");
+
+    let id1 = intern_calc(expr1);
+    let id2 = intern_calc(expr2);
+
+    // Expressions must deduplicate to the same ID
+    assert_eq!(id1, id2);
+
+    let retrieved = get_calc(id1).expect("must find interned expression");
+    let ctx = CalcContext {
+        parent_size: 1000.0,
+        ..Default::default()
+    };
+    assert_eq!(retrieved.eval(&ctx), 976.0);
+
+    // Interning multiple distinct expressions up to the boundary
+    let mut last_id = id1;
+    for i in 0..10_000 {
+        let synth = CalcExpr::Add(
+            Box::new(CalcExpr::px(i as f32)),
+            Box::new(CalcExpr::percent(50.0)),
+        );
+        last_id = intern_calc(synth);
+    }
+    // Hard bound MAX_CALC_ENTRIES prevents unbounded heap growth
+    assert!(last_id.0 < 8192);
+}
+

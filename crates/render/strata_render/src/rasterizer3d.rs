@@ -965,7 +965,7 @@ fn rasterize_screen_triangle(
             }
 
             let pixel_index = pixel_row + global_x;
-            if a >= 255 {
+            if a == 255 {
                 if depth[depth_idx] > interp_depth && interp_depth >= 0.0 {
                     depth[depth_idx] = interp_depth;
                     write_opaque_band(pixels, pixel_index, r, g, b);

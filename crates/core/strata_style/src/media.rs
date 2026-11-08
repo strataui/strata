@@ -12,6 +12,13 @@ pub enum ColorScheme {
     Dark,
 }
 
+/// Device posture state for CSS `@media (device-posture: ...)` queries (W3C Device Posture API).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DevicePostureQuery {
+    Continuous,
+    Folded,
+}
+
 /// Device or viewport orientation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
@@ -37,6 +44,13 @@ pub enum MediaFeature {
     MaxHeight(f32),
     PrefersColorScheme(ColorScheme),
     Orientation(Orientation),
+    HorizontalViewportSegments(u32),
+    MinHorizontalViewportSegments(u32),
+    MaxHorizontalViewportSegments(u32),
+    VerticalViewportSegments(u32),
+    MinVerticalViewportSegments(u32),
+    MaxVerticalViewportSegments(u32),
+    DevicePosture(DevicePostureQuery),
 }
 
 impl MediaFeature {
@@ -55,6 +69,13 @@ impl MediaFeature {
                 Orientation::Portrait => ctx.viewport_height >= ctx.viewport_width,
                 Orientation::Landscape => ctx.viewport_width > ctx.viewport_height,
             },
+            MediaFeature::HorizontalViewportSegments(n) => ctx.horizontal_viewport_segments == *n,
+            MediaFeature::MinHorizontalViewportSegments(n) => ctx.horizontal_viewport_segments >= *n,
+            MediaFeature::MaxHorizontalViewportSegments(n) => ctx.horizontal_viewport_segments <= *n,
+            MediaFeature::VerticalViewportSegments(n) => ctx.vertical_viewport_segments == *n,
+            MediaFeature::MinVerticalViewportSegments(n) => ctx.vertical_viewport_segments >= *n,
+            MediaFeature::MaxVerticalViewportSegments(n) => ctx.vertical_viewport_segments <= *n,
+            MediaFeature::DevicePosture(posture) => ctx.device_posture == *posture,
         }
     }
 }
@@ -191,12 +212,17 @@ impl MediaQueryList {
     }
 }
 
-/// Device context used to evaluate media query conditions.
+/// Device context used to evaluate media and container query conditions.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MediaContext {
     pub viewport_width: f32,
     pub viewport_height: f32,
     pub is_dark: bool,
+    pub container_width: Option<f32>,
+    pub container_height: Option<f32>,
+    pub horizontal_viewport_segments: u32,
+    pub vertical_viewport_segments: u32,
+    pub device_posture: DevicePostureQuery,
 }
 
 impl Default for MediaContext {
@@ -205,7 +231,48 @@ impl Default for MediaContext {
             viewport_width: 1280.0,
             viewport_height: 800.0,
             is_dark: true,
+            container_width: None,
+            container_height: None,
+            horizontal_viewport_segments: 1,
+            vertical_viewport_segments: 1,
+            device_posture: DevicePostureQuery::Continuous,
         }
+    }
+}
+
+impl MediaContext {
+    /// Constructs a MediaContext with viewport dimensions and color scheme.
+    pub const fn new(viewport_width: f32, viewport_height: f32, is_dark: bool) -> Self {
+        Self {
+            viewport_width,
+            viewport_height,
+            is_dark,
+            container_width: None,
+            container_height: None,
+            horizontal_viewport_segments: 1,
+            vertical_viewport_segments: 1,
+            device_posture: DevicePostureQuery::Continuous,
+        }
+    }
+
+    /// Sets container size for evaluating @container queries.
+    pub fn with_container_size(mut self, width: f32, height: f32) -> Self {
+        self.container_width = Some(width);
+        self.container_height = Some(height);
+        self
+    }
+
+    /// Sets horizontal and vertical viewport segments (W3C Viewport Segments Level 1).
+    pub fn with_viewport_segments(mut self, horizontal: u32, vertical: u32) -> Self {
+        self.horizontal_viewport_segments = horizontal.max(1);
+        self.vertical_viewport_segments = vertical.max(1);
+        self
+    }
+
+    /// Sets the device posture (W3C Device Posture API).
+    pub fn with_device_posture(mut self, posture: DevicePostureQuery) -> Self {
+        self.device_posture = posture;
+        self
     }
 }
 
@@ -241,6 +308,35 @@ fn parse_feature(input: &str) -> Result<MediaFeature, String> {
             "portrait" => Ok(MediaFeature::Orientation(Orientation::Portrait)),
             "landscape" => Ok(MediaFeature::Orientation(Orientation::Landscape)),
             _ => Err(format!("Unknown orientation value '{}'", val)),
+        },
+        "horizontal-viewport-segments" => {
+            let count = val.trim().parse::<u32>().map_err(|e| e.to_string())?;
+            Ok(MediaFeature::HorizontalViewportSegments(count))
+        }
+        "min-horizontal-viewport-segments" => {
+            let count = val.trim().parse::<u32>().map_err(|e| e.to_string())?;
+            Ok(MediaFeature::MinHorizontalViewportSegments(count))
+        }
+        "max-horizontal-viewport-segments" => {
+            let count = val.trim().parse::<u32>().map_err(|e| e.to_string())?;
+            Ok(MediaFeature::MaxHorizontalViewportSegments(count))
+        }
+        "vertical-viewport-segments" => {
+            let count = val.trim().parse::<u32>().map_err(|e| e.to_string())?;
+            Ok(MediaFeature::VerticalViewportSegments(count))
+        }
+        "min-vertical-viewport-segments" => {
+            let count = val.trim().parse::<u32>().map_err(|e| e.to_string())?;
+            Ok(MediaFeature::MinVerticalViewportSegments(count))
+        }
+        "max-vertical-viewport-segments" => {
+            let count = val.trim().parse::<u32>().map_err(|e| e.to_string())?;
+            Ok(MediaFeature::MaxVerticalViewportSegments(count))
+        }
+        "device-posture" => match val.to_ascii_lowercase().as_str() {
+            "continuous" => Ok(MediaFeature::DevicePosture(DevicePostureQuery::Continuous)),
+            "folded" => Ok(MediaFeature::DevicePosture(DevicePostureQuery::Folded)),
+            _ => Err(format!("Unknown device-posture value '{}'", val)),
         },
         _ => Err(format!("Unsupported media feature property '{}'", prop)),
     }

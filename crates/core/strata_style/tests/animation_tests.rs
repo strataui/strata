@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use strata_style::animation::{AnimationLifecycleEvent, AnimationManager, KeyframeRegistry};
 use strata_style::cascade::CascadeSolver;
 use strata_style::parser::{parse_animations, StyleSheet};

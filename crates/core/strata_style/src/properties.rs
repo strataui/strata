@@ -88,7 +88,7 @@ impl PropertyRegistry {
 
     /// Evaluates if a custom property inherits down the cascade (defaults to true if unregistered).
     pub fn is_inheritable(&self, name: &str) -> bool {
-        self.properties.get(name).map_or(true, |p| p.inherits)
+        self.properties.get(name).is_none_or(|p| p.inherits)
     }
 
     /// Linearly interpolates two custom property string values based on the registered syntax.

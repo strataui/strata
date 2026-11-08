@@ -74,12 +74,12 @@ impl TilingSet {
         let cols = if surface_width == 0 {
             0
         } else {
-            (surface_width + ts - 1) / ts
+            surface_width.div_ceil(ts)
         };
         let rows = if surface_height == 0 {
             0
         } else {
-            (surface_height + ts - 1) / ts
+            surface_height.div_ceil(ts)
         };
 
         let mut tiles = Vec::with_capacity((cols * rows) as usize);

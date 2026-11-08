@@ -1,5 +1,7 @@
 //! Integration Tests: opacity groups, border styles, and outline emission.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use strata_layout::{LayoutNode, Rect};
 use strata_primitives::geom::EdgeInsets;
 use strata_render::compositor::{Compositor, DrawCommand};
