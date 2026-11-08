@@ -20,6 +20,7 @@ strata_vfs = { workspace = true }
 strata_storage = { workspace = true }
 strata_web_api = { workspace = true }
 strata_gpu_path = { workspace = true }
+strata_a11y = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
@@ -33,8 +34,8 @@ strata_codegen_js = { workspace = true, optional = true }
 strata_devtools = { workspace = true, optional = true }
 strata_mobile_test = { workspace = true, optional = true }
 strata_sim = { workspace = true, optional = true }
-strata_a11y = { workspace = true, optional = true }
 strata_audio = { workspace = true, optional = true }
+
 strata_crdt = { workspace = true, optional = true }
 strata_agent_ui = { workspace = true, optional = true }
 strata_i18n = { workspace = true, optional = true }
@@ -74,8 +75,9 @@ codegen-js = ["dep:strata_codegen_js"]
 devtools = ["dep:strata_devtools"]
 mobile-test = ["dep:strata_mobile_test"]
 sim = ["dep:strata_sim"]
-a11y = ["dep:strata_a11y"]
+a11y = []
 audio = ["dep:strata_audio"]
+
 crdt = ["dep:strata_crdt"]
 agent-ui = ["dep:strata_agent_ui"]
 full = [
@@ -111,3 +113,17 @@ strata_ui = { workspace = true }
 strata_icons = { workspace = true }
 strata_device = { workspace = true }
 strata_web_reader = { workspace = true }
+strata_devtools = { workspace = true }
+strata_aria = { workspace = true }
+
+
+
+[[test]]
+name = "cdp_integration_tests"
+required-features = ["devtools"]
+
+[[example]]
+name = "readme_hero"
+path = "../../examples/readme_hero.rs"
+
+
