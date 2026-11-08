@@ -50,7 +50,7 @@ impl OffscreenBuffer {
     }
 
     pub fn clear(&mut self, color: [u8; 4]) {
-        for chunk in self.pixels.chunks_exact_mut(4) {
+        for chunk in self.pixels.as_chunks_mut::<4>().0 {
             chunk.copy_from_slice(&color);
         }
     }

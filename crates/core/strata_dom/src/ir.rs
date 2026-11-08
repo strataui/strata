@@ -19,7 +19,9 @@ impl NodeId {
 /// Abstract component/element tag in the Strata UI IR.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Default)]
 pub enum IrTag {
+    #[default]
     Div = 0,
     Span = 1,
     Text = 2,
@@ -34,11 +36,6 @@ pub enum IrTag {
     ComponentRoot = 11,
 }
 
-impl Default for IrTag {
-    fn default() -> Self {
-        Self::Div
-    }
-}
 
 /// Bit flags representing state, containment, and dirty status.
 pub struct IrNodeFlags;
@@ -164,9 +161,11 @@ impl UiIrGraph {
     /// Allocates a new node in the IR graph, returning its `NodeId`.
     pub fn alloc_node(&mut self, tag: IrTag) -> NodeId {
         let id = NodeId(self.nodes.len() as u32);
-        let mut node = UiIrNode::default();
-        node.id = id;
-        node.tag = tag;
+        let node = UiIrNode {
+            id,
+            tag,
+            ..Default::default()
+        };
         self.nodes.push(node);
         self.last_children.push(NodeId::NULL);
         if self.root_id.is_none() {
@@ -237,6 +236,35 @@ impl UiIrGraph {
 
         self.nodes[node_id.0 as usize].subtree_span = span;
         span
+    }
+
+    /// Iterates through the direct children of a given parent node.
+    pub fn children(&self, parent: NodeId) -> ChildIter<'_> {
+        let first = self.get(parent).map(|n| n.first_child).unwrap_or(NodeId::NULL);
+        ChildIter {
+            graph: self,
+            current: first,
+        }
+    }
+}
+
+/// Iterator over direct children of a `UiIrNode`.
+pub struct ChildIter<'a> {
+    graph: &'a UiIrGraph,
+    current: NodeId,
+}
+
+impl<'a> Iterator for ChildIter<'a> {
+    type Item = &'a UiIrNode;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current.is_null() {
+            None
+        } else {
+            let node = self.graph.get(self.current)?;
+            self.current = node.next_sibling;
+            Some(node)
+        }
     }
 }
 

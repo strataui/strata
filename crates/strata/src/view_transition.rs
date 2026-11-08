@@ -59,7 +59,7 @@ impl ViewTransitionManager {
     /// Advances active view transitions at timestamp `now_ms`. Returns true if any transition remains active.
     pub fn step(&mut self, now_ms: f64) -> bool {
         let mut active = false;
-        for (_, trans) in self.active_transitions.iter_mut() {
+        for trans in self.active_transitions.values_mut() {
             let elapsed = (now_ms - trans.start_time_ms) as f32;
             if elapsed >= trans.duration_ms {
                 trans.is_finished = true;

@@ -160,7 +160,7 @@ fn test_runtime_css_transition_on_state_update() {
     let animated_box = &runtime.layout_root.children[0];
     if let strata_style::types::Dimension::Px(w) = animated_box.style.width {
         assert!(
-            w >= 100.0 && w <= 200.0,
+            (100.0..=200.0).contains(&w),
             "Width should be smoothly interpolated between 100 and 200, got: {}",
             w
         );

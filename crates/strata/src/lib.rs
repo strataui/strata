@@ -1,5 +1,12 @@
 //! Strata: Universal High-Performance Frontend Engine & Framework in Pure Rust.
 
+#![allow(
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::field_reassign_with_default,
+    clippy::collapsible_match
+)]
+
 pub use strata_dom;
 pub use strata_dom as dom;
 pub use strata_js;
@@ -14,6 +21,11 @@ pub use strata_vfs as fs;
 pub use strata_storage as storage;
 pub use strata_web_api as web_api;
 pub use strata_gpu_path as gpu_path;
+pub use strata_platform::WindowConfig;
+pub use strata_platform::dialog;
+pub use strata_platform::vibrancy;
+pub use strata_a11y;
+pub use strata_a11y as a11y;
 
 #[cfg(feature = "icons")]
 pub use strata_icons as icons;
@@ -33,10 +45,9 @@ pub use strata_devtools as devtools;
 pub use strata_mobile_test as mobile_test;
 #[cfg(feature = "sim")]
 pub use strata_sim as sim;
-#[cfg(feature = "a11y")]
-pub use strata_a11y as a11y;
 #[cfg(feature = "audio")]
 pub use strata_audio as audio;
+
 #[cfg(feature = "crdt")]
 pub use strata_crdt as crdt;
 #[cfg(feature = "agent-ui")]
@@ -70,15 +81,35 @@ pub mod runtime;
 pub mod benchmarks;
 pub mod low_level;
 pub mod view_transition;
+#[cfg(unix)]
 pub mod mcp_bridge;
+#[cfg(unix)]
+pub use mcp_bridge::{default_dev_socket_path, start_mcp_dev_listener};
+
+#[cfg(not(unix))]
+pub mod mcp_bridge {
+    use std::path::PathBuf;
+    pub fn default_dev_socket_path() -> PathBuf {
+        PathBuf::from("/tmp/strata-dev.sock")
+    }
+    pub fn start_mcp_dev_listener(_path: Option<PathBuf>) -> Result<(), std::io::Error> {
+        Ok(())
+    }
+}
+#[cfg(not(unix))]
 pub use mcp_bridge::{default_dev_socket_path, start_mcp_dev_listener};
 pub use runtime::{
     app, AppFrameInfo, AppLifecycleHooks, AppRuntime, launch, launch_headless, launch_window,
     StrataApp, StrataAppBuilder, EditCommand, queue_edit_command,
+    PointerDownAction, PointerMoveAction, PointerUpAction, KeyDispatchResult, DynamicTextBinding,
 };
 pub use view_transition::{ViewTransitionManager, ViewTransitionSnapshot};
 #[cfg(target_os = "linux")]
-pub use runtime::{launch_x11, launch_x11_with_events, launch_gtk, launch_gtk_with_events};
+pub use runtime::{launch_x11, launch_x11_with_events, launch_wayland, launch_wayland_with_events, launch_gtk, launch_gtk_with_events};
+#[cfg(windows)]
+pub use runtime::{launch_win32, launch_win32_with_events};
+#[cfg(target_os = "macos")]
+pub use runtime::{launch_macos, launch_macos_with_events};
 #[cfg(target_os = "linux")]
 pub use strata_platform::{gtk_close, gtk_is_closing, gtk_get_clipboard_text, gtk_minimize, gtk_set_clipboard_text, gtk_toggle_maximize, gtk_is_maximized, gtk_begin_window_drag, gtk_current_modifiers};
 pub use benchmarks::{BenchmarkHarness, BenchmarkReport};
@@ -152,6 +183,11 @@ pub mod prelude {
     pub use strata_aria::floating::Placement as AriaPlacement;
     #[cfg(feature = "store")]
     pub use strata_store::prelude::*;
+    #[cfg(feature = "crdt")]
+    pub use strata_crdt::{
+        CrdtCounterStore, CrdtSignalStore, LamportClock, LwwRegister, OrSet, PnCounter,
+        ReplicatedSignal, RgaSequence, SyncMessage, VectorClock,
+    };
     #[cfg(feature = "toast")]
     pub use strata_toast::{
         compute_stack_layout, toast_dismiss, toast_error, toast_info, toast_success, toast_warning,
@@ -189,12 +225,18 @@ pub mod prelude {
         ScreenProfile, ThreeButtonNavBar, VirtualHalBus,
     };
 
+    pub use strata_platform::WindowConfig;
     pub use crate::runtime::{
         app, AppFrameInfo, AppLifecycleHooks, AppRuntime, launch, launch_headless, launch_window,
         StrataApp, StrataAppBuilder, EditCommand, queue_edit_command,
+        PointerDownAction, PointerMoveAction, PointerUpAction, KeyDispatchResult, DynamicTextBinding,
     };
     #[cfg(target_os = "linux")]
-    pub use crate::runtime::{launch_x11, launch_x11_with_events, launch_gtk, launch_gtk_with_events};
+    pub use crate::runtime::{launch_x11, launch_x11_with_events, launch_wayland, launch_wayland_with_events, launch_gtk, launch_gtk_with_events};
+    #[cfg(windows)]
+    pub use crate::runtime::{launch_win32, launch_win32_with_events};
+    #[cfg(target_os = "macos")]
+    pub use crate::runtime::{launch_macos, launch_macos_with_events};
     #[cfg(target_os = "linux")]
     pub use strata_platform::{gtk_close, gtk_get_clipboard_text, gtk_minimize, gtk_set_clipboard_text, gtk_toggle_maximize, gtk_is_maximized, gtk_begin_window_drag};
     pub use crate::benchmarks::{BenchmarkHarness, BenchmarkReport};

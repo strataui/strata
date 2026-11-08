@@ -198,7 +198,7 @@ fn test_component_macro_and_builder_syntax() {
 
 #[test]
 fn test_dynamic_macro() {
-    let elapsed = 3.14159f32;
+    let elapsed = std::f32::consts::PI;
     let val = dynamic!({
         "status": "ready",
         "code": 200,
@@ -217,7 +217,7 @@ fn test_dynamic_macro() {
     assert_eq!(val["status"].as_str(), Some("ready"));
     assert_eq!(val["code"].as_f64(), Some(200.0));
     assert_eq!(val["is_prod"].as_bool(), Some(true));
-    assert!((val["time"].as_f64().unwrap() - 3.14159).abs() < 1e-4);
+    assert!((val["time"].as_f64().unwrap() - std::f64::consts::PI).abs() < 1e-4);
 
     let meta = &val["meta"];
     assert_eq!(meta["author"].as_str(), Some("Strata"));
@@ -334,4 +334,64 @@ fn test_derive_store_macro_atomic_reactivity_and_transactions() {
     store.restore(&snapshot);
     assert_eq!(store.cpu_percent.get(), 78.2);
     assert!(store.is_healthy.get());
+}
+
+#[test]
+fn test_rsx_class_deduplication_and_compile_time_bitmasking() {
+    // 10 standard utility classes
+    let view = rsx! {
+        <div class="p-4 flex bg-neutral-900 text-white rounded-lg shadow-md border border-neutral-800 m-2 cursor-pointer" />
+    };
+
+    match view.root {
+        NodeBlueprint::Element { classes, .. } => {
+            // Verify that it is a Masked variant with 10 classes encoded in the bitmask
+            assert_eq!(classes.len(), 10);
+            assert!(classes.contains("p-4"));
+            assert!(classes.contains("flex"));
+            assert!(classes.contains("bg-neutral-900"));
+            assert!(classes.contains("text-white"));
+            assert!(classes.contains("rounded-lg"));
+            assert!(classes.contains("shadow-md"));
+            assert!(classes.contains("border"));
+            assert!(classes.contains("border-neutral-800"));
+            assert!(classes.contains("m-2"));
+            assert!(classes.contains("cursor-pointer"));
+
+            // Verify variant is zero-allocation Masked with empty tail
+            match classes {
+                strata_dom::ClassList::Masked { mask, tail } => {
+                    assert_eq!(mask.count_ones(), 10, "All 10 classes mapped to bitmask");
+                    assert_eq!(tail.len(), 0, "Zero dynamic/tail classes");
+                }
+                _ => panic!("Expected Masked class list"),
+            }
+        }
+        _ => panic!("Expected Element"),
+    }
+}
+
+#[test]
+fn test_rsx_class_deduplication_removes_redundant_tokens() {
+    // Repeated tokens at compile time are deduplicated into single bits
+    let view = rsx! {
+        <div class="flex p-4 flex p-4 flex text-white text-white" />
+    };
+
+    match view.root {
+        NodeBlueprint::Element { classes, .. } => {
+            assert_eq!(classes.len(), 3);
+            assert!(classes.contains("flex"));
+            assert!(classes.contains("p-4"));
+            assert!(classes.contains("text-white"));
+
+            if let strata_dom::ClassList::Masked { mask, tail } = classes {
+                assert_eq!(mask.count_ones(), 3);
+                assert_eq!(tail.len(), 0);
+            } else {
+                panic!("Expected Masked class list");
+            }
+        }
+        _ => panic!("Expected Element"),
+    }
 }

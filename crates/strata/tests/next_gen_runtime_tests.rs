@@ -5,6 +5,8 @@
 //! - Scroll-driven animations with zero CPU consumption when stationary.
 //! - View Transitions Module Level 1 & 2 element snapshotting and geometry interpolation.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use strata::prelude::*;
 use strata::runtime::AppRuntime;
 use strata::view_transition::ViewTransitionManager;

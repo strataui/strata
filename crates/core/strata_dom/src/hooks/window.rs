@@ -20,11 +20,13 @@ pub enum CursorIcon {
     RowResize,
 }
 
+type ShortcutEntry = (u32, KeyChord, Rc<dyn Fn()>);
+
 thread_local! {
     static MANUAL_CURSOR: RefCell<Signal<Option<CursorIcon>>> = RefCell::new(Signal::new(None));
-    static CURSOR_REQUESTS: RefCell<Vec<(CursorIcon, Signal<bool>)>> = RefCell::new(Vec::new());
-    static REGISTERED_SHORTCUTS: RefCell<Vec<(u32, KeyChord, Rc<dyn Fn()>)>> = RefCell::new(Vec::new());
-    static NEXT_SHORTCUT_ID: RefCell<u32> = RefCell::new(1);
+    static CURSOR_REQUESTS: RefCell<Vec<(CursorIcon, Signal<bool>)>> = const { RefCell::new(Vec::new()) };
+    static REGISTERED_SHORTCUTS: RefCell<Vec<ShortcutEntry>> = RefCell::new(Vec::new());
+    static NEXT_SHORTCUT_ID: RefCell<u32> = const { RefCell::new(1) };
     static CLIPBOARD_CONTENT: RefCell<Signal<String>> = RefCell::new(Signal::new(String::new()));
 }
 

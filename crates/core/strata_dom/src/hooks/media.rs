@@ -8,7 +8,7 @@ thread_local! {
     static COLOR_SCHEME: RefCell<Signal<ColorScheme>> = RefCell::new(Signal::new(ColorScheme::Dark));
     static REDUCED_MOTION: RefCell<Signal<bool>> = RefCell::new(Signal::new(false));
     static CONTRAST_PREFERENCE: RefCell<Signal<ContrastPreference>> = RefCell::new(Signal::new(ContrastPreference::Normal));
-    static ACTIVE_MEDIA_QUERIES: RefCell<Vec<(Vec<MediaCondition>, Signal<bool>)>> = RefCell::new(Vec::new());
+    static ACTIVE_MEDIA_QUERIES: RefCell<Vec<(Vec<MediaCondition>, Signal<bool>)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Preferred system color scheme.

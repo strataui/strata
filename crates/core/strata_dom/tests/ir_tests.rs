@@ -117,3 +117,43 @@ fn test_stack_guard_recursion_protection() {
     assert!(err.is_err());
     assert!(err.unwrap_err().contains("recursion depth exceeded"));
 }
+
+#[test]
+fn test_node_blueprint_compilation_to_ir_graph() {
+    use strata_dom::{Attribute, EventType, NodeBlueprint, Tag};
+
+    let blueprint = NodeBlueprint::element(
+        Tag::Div,
+        vec!["flex".to_string(), "overflow-hidden".to_string()],
+        vec![Attribute::event_listener(EventType::Click, || {})],
+        vec![
+            NodeBlueprint::element_simple(
+                Tag::Button,
+                vec!["btn-primary".to_string()],
+                vec![NodeBlueprint::text("Click Me")],
+            ),
+            NodeBlueprint::element_simple(
+                Tag::Span,
+                vec!["text-sm".to_string()],
+                vec![NodeBlueprint::text("Subtitle")],
+            ),
+        ],
+    );
+
+    let mut graph = UiIrGraph::new();
+    let root_id = blueprint.compile_to_ir(&mut graph);
+    graph.root_id = Some(root_id);
+    graph.recompute_subtree_spans();
+
+    assert_eq!(graph.len(), 5); // root(div), button, text, span, text
+    let root = graph.get(root_id).expect("Root node exists");
+    assert_eq!(root.tag, IrTag::FlexContainer);
+    assert_ne!(root.flags & IrNodeFlags::HAS_EVENT_LISTENERS, 0);
+    assert_ne!(root.flags & IrNodeFlags::IS_CONTAINMENT_BOUNDARY, 0);
+    assert_eq!(root.child_count, 2);
+    assert_eq!(root.subtree_span, 5);
+
+    // Verify children iterator
+    let child_tags: Vec<IrTag> = graph.children(root_id).map(|c| c.tag).collect();
+    assert_eq!(child_tags, vec![IrTag::Button, IrTag::Span]);
+}
