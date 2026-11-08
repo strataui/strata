@@ -123,12 +123,13 @@ impl VirtualHalBus {
         !self.airplane_mode && self.radio_mode != NetworkRadioMode::Offline
     }
 
-    /// Toggles airplane mode, severing cellular and wireless connections.
+    /// Toggles airplane mode, severing cellular and wireless connections and syncing to strata_device.
     pub fn set_airplane_mode(&mut self, enabled: bool) {
         self.airplane_mode = enabled;
+        self.sync_to_device_runtime();
     }
 
-    /// Sets the current battery charge fraction and charging state.
+    /// Sets the current battery charge fraction and charging state, syncing to strata_device.
     pub fn set_battery(&mut self, level: f32, is_charging: bool) {
         self.battery_level = level.clamp(0.0, 1.0);
         self.is_charging = is_charging;
@@ -137,17 +138,32 @@ impl VirtualHalBus {
         } else {
             PowerSource::Battery
         };
+        self.sync_to_device_runtime();
     }
 
-    /// Sets battery saver mode.
+    /// Sets battery saver mode and syncs to strata_device.
     pub fn set_battery_saver(&mut self, enabled: bool) {
         self.battery_saver_mode = enabled;
+        self.sync_to_device_runtime();
+    }
+
+    /// Sets device thermal condition and syncs to strata_device.
+    pub fn set_thermal_state(&mut self, state: ThermalState) {
+        self.thermal_state = state;
+        self.sync_to_device_runtime();
+    }
+
+    /// Sets active network radio mode and syncs to strata_device.
+    pub fn set_radio_mode(&mut self, mode: NetworkRadioMode) {
+        self.radio_mode = mode;
+        self.sync_to_device_runtime();
     }
 
     /// Injects network latency and packet loss into the virtual bus.
     pub fn inject_network_impairment(&mut self, rtt_ms: u32, packet_loss: f32) {
         self.network_latency_ms = rtt_ms;
         self.network_packet_loss = packet_loss.clamp(0.0, 1.0);
+        self.sync_to_device_runtime();
     }
 
     /// Updates the 3D tilt coordinates from user mouse interaction.
@@ -170,5 +186,95 @@ impl VirtualHalBus {
         } else {
             baseline_hz
         }
+    }
+
+    /// Synchronizes Virtual HAL state into the global strata_device reactive runtime.
+    /// This causes applications using `use_battery()`, `use_thermal()`, and `use_network()`
+    /// to immediately update reactively.
+    pub fn sync_to_device_runtime(&self) {
+        let mock = strata_device::DeviceMockController::new();
+
+        // 1. Battery Telemetry
+        let battery_state = if self.is_charging {
+            strata_device::BatteryState::Charging
+        } else if self.power_source == PowerSource::Battery {
+            if self.battery_level >= 0.99 {
+                strata_device::BatteryState::Full
+            } else {
+                strata_device::BatteryState::Discharging
+            }
+        } else {
+            strata_device::BatteryState::NotCharging
+        };
+
+        let time_to_empty = if !self.is_charging && self.battery_level > 0.0 {
+            Some((self.battery_level * 18000.0) as u32)
+        } else {
+            None
+        };
+
+        let time_to_full = if self.is_charging && self.battery_level < 1.0 {
+            Some(((1.0 - self.battery_level) * 5400.0) as u32)
+        } else {
+            None
+        };
+
+        mock.set_battery(strata_device::BatteryInfo {
+            level: self.battery_level,
+            state: battery_state,
+            is_low_power_mode: self.battery_saver_mode,
+            time_to_empty_secs: time_to_empty,
+            time_to_full_secs: time_to_full,
+        });
+
+        // 2. Thermal State
+        let thermal = match self.thermal_state {
+            ThermalState::Nominal => strata_device::ThermalState::Nominal,
+            ThermalState::Fair => strata_device::ThermalState::Fair,
+            ThermalState::Serious => strata_device::ThermalState::Serious,
+            ThermalState::Critical => strata_device::ThermalState::Critical,
+        };
+        mock.set_thermal(thermal);
+
+        // 3. Network Status
+        let (conn_type, cell_gen, metered) = match self.radio_mode {
+            NetworkRadioMode::Wifi6 => (strata_device::ConnectionType::Wifi, None, false),
+            NetworkRadioMode::Cellular5G => (
+                strata_device::ConnectionType::Cellular,
+                Some(strata_device::CellularGen::FiveG),
+                true,
+            ),
+            NetworkRadioMode::Cellular4G => (
+                strata_device::ConnectionType::Cellular,
+                Some(strata_device::CellularGen::FourG),
+                true,
+            ),
+            NetworkRadioMode::Cellular3G => (
+                strata_device::ConnectionType::Cellular,
+                Some(strata_device::CellularGen::ThreeG),
+                true,
+            ),
+            NetworkRadioMode::Offline => (strata_device::ConnectionType::None, None, false),
+        };
+
+        let is_online = !self.airplane_mode && self.radio_mode != NetworkRadioMode::Offline;
+        let downlink_mbps = if is_online {
+            Some(self.bandwidth_kbps as f32 / 1000.0)
+        } else {
+            Some(0.0)
+        };
+
+        mock.set_network(strata_device::NetworkStatus {
+            is_online,
+            connection_type: if self.airplane_mode {
+                strata_device::ConnectionType::None
+            } else {
+                conn_type
+            },
+            cellular_generation: cell_gen,
+            downlink_mbps,
+            rtt_ms: Some(self.network_latency_ms),
+            is_metered: metered,
+        });
     }
 }

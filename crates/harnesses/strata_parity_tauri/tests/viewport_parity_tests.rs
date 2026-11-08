@@ -47,11 +47,7 @@ const TEST_ARTICLE_HTML: &str = r#"<!DOCTYPE html>
 fn test_strata_maximized_viewport_rendering() {
     let nodes = strata_web_reader::HtmlParser::parse(TEST_ARTICLE_HTML);
     let theme = strata_web_reader::ReaderTheme::dark();
-    let media_ctx = strata_style::MediaContext {
-        viewport_width: 1280.0,
-        viewport_height: 720.0,
-        is_dark: true,
-    };
+    let media_ctx = strata_style::MediaContext::new(1280.0, 720.0, true);
     let transpiler = strata_web_reader::WebTranspiler::new(&theme);
     let bp = transpiler.transpile_full_document(&nodes, &media_ctx);
     let mut runtime = strata::AppRuntime::new(strata::prelude::View { root: bp }, 1280.0, 720.0, 1.0);

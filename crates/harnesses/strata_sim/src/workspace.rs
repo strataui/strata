@@ -102,6 +102,25 @@ impl MobileSimulatorWorkspace {
         }
     }
 
+    /// Derives the active W3C CSS MediaContext based on device screen dimensions, orientation, and foldable posture.
+    pub fn to_media_context(&self) -> strata_style::MediaContext {
+        let screen = self.profile.form_factor.active_screen();
+        let (width, height) = match self.orientation {
+            DeviceOrientation::Portrait | DeviceOrientation::PortraitInverted => {
+                (screen.logical_width, screen.logical_height)
+            }
+            DeviceOrientation::LandscapeLeft | DeviceOrientation::LandscapeRight => {
+                (screen.logical_height, screen.logical_width)
+            }
+        };
+
+        let mut ctx = strata_style::MediaContext::new(width, height, true);
+        if let Some(foldable) = &self.foldable {
+            foldable.apply_to_media_context(&mut ctx);
+        }
+        ctx
+    }
+
     /// Triggers an interactive Dynamic Island transient alert.
     pub fn trigger_island_alert(&mut self, alert: DynamicAlertKind) {
         if let Some(island) = &mut self.island {

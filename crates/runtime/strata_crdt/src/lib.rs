@@ -13,5 +13,5 @@ pub use counter::PnCounter;
 pub use lww::LwwRegister;
 pub use sequence::{RgaNode, RgaSequence};
 pub use set::OrSet;
-pub use signal::ReplicatedSignal;
+pub use signal::{CrdtCounterStore, CrdtSignalStore, ReplicatedSignal};
 pub use sync::SyncMessage;

@@ -106,11 +106,7 @@ impl PanicTrap {
         let msg = &entry.message;
 
         if msg.contains("panicked at") || msg.contains("fatal runtime error") {
-            let location = if let Some(idx) = msg.find("at ") {
-                Some(msg[idx + 3..].trim().to_string())
-            } else {
-                None
-            };
+            let location = msg.find("at ").map(|idx| msg[idx + 3..].trim().to_string());
 
             let report = PanicReport {
                 is_panic: true,

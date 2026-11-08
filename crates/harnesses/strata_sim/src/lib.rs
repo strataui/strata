@@ -16,7 +16,10 @@ pub use profile::{
     AspectRatio, ChassisMaterial, ChassisProfile, CutoutAlignment, CutoutProfile, DeviceFormFactor,
     DeviceManufacturer, DeviceProfile, HingeAxis, NavigationType, PhysicalButton, ScreenProfile,
 };
-pub use geometry::{DeviceOrientation, GeometrySolver, SafeAreaInsets};
+pub use geometry::{
+    ConcentricFilletSdf, DeviceOrientation, GeometrySolver, SafeAreaInsets,
+    WGSL_CONCENTRIC_FILLET_SHADER,
+};
 pub use hal::{
     GpsCoordinates, NetworkRadioMode, PowerSource, SensorTelemetry, ThermalState, VirtualHalBus,
 };
@@ -31,7 +34,10 @@ pub use navigation::{
     ButtonLayout, ButtonShape, GestureNavEngine, NavAction, ThreeButtonNavBar,
 };
 pub use launcher::{AppMetadata, HomeScreenState, RecentsCarouselState};
-pub use sandbox::{AppLifecycleState, MultiAppSandbox, SandboxedAppInstance};
+pub use sandbox::{
+    AppLifecycleState, BytecodeSandboxEngine, GuestInstruction, MultiAppSandbox,
+    SandboxExecutionError, SandboxedAppInstance,
+};
 pub use workspace::MobileSimulatorWorkspace;
 
 /// Prelude re-exporting all simulator constructs.

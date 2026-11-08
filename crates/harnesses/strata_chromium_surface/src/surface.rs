@@ -170,4 +170,140 @@ impl ShmSurface {
 
         self.frame_index.fetch_add(1, Ordering::Relaxed);
     }
+
+    /// Returns the currently active damage rects.
+    pub fn damage_rects(&self) -> Vec<Rect> {
+        self.damage_rects.read().unwrap().clone()
+    }
+
+    /// Serializes this surface into a binary shared memory buffer (header + raw pixel payload).
+    pub fn serialize_shm_buffer(&self) -> Vec<u8> {
+        let w = self.width();
+        let h = self.height();
+        let stride = self.stride();
+        let format_id = match self.format {
+            PixelFormat::Bgra8 => 0,
+            PixelFormat::Rgba8 => 1,
+        };
+        let rev = self.frame_index();
+        let damage = self.damage_rects();
+
+        let mut damage_array = [[0.0f32; 4]; 16];
+        let count = damage.len().min(16);
+        for (i, r) in damage.iter().take(count).enumerate() {
+            damage_array[i] = [r.min_x(), r.min_y(), r.width(), r.height()];
+        }
+
+        let header = ShmBufferHeader {
+            magic: SHM_MAGIC,
+            version: 1,
+            width: w,
+            height: h,
+            stride,
+            format: format_id,
+            revision: rev,
+            damage_count: count as u32,
+            damage_rects: damage_array,
+        };
+
+        let px = self.pixels.read().unwrap();
+        let mut buffer = Vec::with_capacity(SHM_HEADER_SIZE + px.len());
+        // Safety: ShmBufferHeader is POD types with #[repr(C)]
+        let header_slice: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                &header as *const ShmBufferHeader as *const u8,
+                SHM_HEADER_SIZE,
+            )
+        };
+        buffer.extend_from_slice(header_slice);
+        buffer.extend_from_slice(&px);
+        buffer
+    }
+
+    /// Deserializes a binary shared memory buffer, updating the surface dimensions and pixels.
+    pub fn deserialize_shm_buffer(&self, buffer: &[u8]) -> Result<(), ShmError> {
+        if buffer.len() < SHM_HEADER_SIZE {
+            return Err(ShmError::BufferTooSmall {
+                required: SHM_HEADER_SIZE,
+                provided: buffer.len(),
+            });
+        }
+
+        let header = unsafe { std::ptr::read_unaligned(buffer.as_ptr() as *const ShmBufferHeader) };
+        if header.magic != SHM_MAGIC {
+            return Err(ShmError::InvalidMagic(header.magic));
+        }
+        if header.version != 1 {
+            return Err(ShmError::UnsupportedVersion(header.version));
+        }
+
+        let expected_bytes = (header.stride * header.height) as usize;
+        let total_required = SHM_HEADER_SIZE + expected_bytes;
+        if buffer.len() < total_required {
+            return Err(ShmError::BufferTooSmall {
+                required: total_required,
+                provided: buffer.len(),
+            });
+        }
+
+        let pixel_slice = &buffer[SHM_HEADER_SIZE..total_required];
+        let mut rects = Vec::with_capacity(header.damage_count as usize);
+        for i in 0..(header.damage_count as usize).min(16) {
+            let [x, y, w, h] = header.damage_rects[i];
+            rects.push(Rect::from_xywh(x, y, w, h));
+        }
+
+        self.resize(header.width, header.height);
+        self.update_pixels(pixel_slice, rects);
+        self.frame_index.store(header.revision, Ordering::Relaxed);
+        Ok(())
+    }
 }
+
+/// Binary protocol header for zero-copy shared memory frame exchange with external CEF/Chromium processes.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShmBufferHeader {
+    /// Magic identifier: 0x53545241 ('STRA')
+    pub magic: u32,
+    /// Protocol version: 1
+    pub version: u32,
+    /// Viewport width in pixels
+    pub width: u32,
+    /// Viewport height in pixels
+    pub height: u32,
+    /// Byte stride per row
+    pub stride: u32,
+    /// Pixel format: 0 for Bgra8, 1 for Rgba8
+    pub format: u32,
+    /// Monotonic frame revision number
+    pub revision: u64,
+    /// Number of dirty damage rectangles (max 16)
+    pub damage_count: u32,
+    /// Damage rectangles: [x, y, w, h] in f32
+    pub damage_rects: [[f32; 4]; 16],
+}
+
+pub const SHM_MAGIC: u32 = 0x53545241; // 'STRA'
+pub const SHM_HEADER_SIZE: usize = std::mem::size_of::<ShmBufferHeader>();
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShmError {
+    BufferTooSmall { required: usize, provided: usize },
+    InvalidMagic(u32),
+    UnsupportedVersion(u32),
+    DimensionMismatch { expected: (u32, u32), received: (u32, u32) },
+}
+
+impl std::fmt::Display for ShmError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BufferTooSmall { required, provided } => write!(f, "SHM buffer too small: required {}, got {}", required, provided),
+            Self::InvalidMagic(m) => write!(f, "Invalid SHM magic: 0x{:08X}", m),
+            Self::UnsupportedVersion(v) => write!(f, "Unsupported SHM protocol version: {}", v),
+            Self::DimensionMismatch { expected, received } => write!(f, "SHM dimension mismatch: expected {:?}, got {:?}", expected, received),
+        }
+    }
+}
+
+impl std::error::Error for ShmError {}

@@ -210,7 +210,7 @@ fn s2_span_text_is_measured_in_flex_rows_and_blocks() {
 
 fn find_parent_of_text<'a>(node: &'a LayoutNode, needle: &str) -> Option<&'a LayoutNode> {
     for child in &node.children {
-        if child.text.as_deref().map_or(false, |t| t.contains(needle)) {
+        if child.text.as_deref().is_some_and(|t| t.contains(needle)) {
             return Some(node);
         }
         if let Some(found) = find_parent_of_text(child, needle) {

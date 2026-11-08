@@ -8,3 +8,4 @@ description = "Local-first conflict-free replicated data types and collaborative
 
 [dependencies]
 strata_primitives = { workspace = true }
+strata_dom = { workspace = true }

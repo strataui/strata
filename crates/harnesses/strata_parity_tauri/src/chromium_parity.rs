@@ -117,11 +117,11 @@ pub fn render_strata_web_viewport(
 
     let theme = ReaderTheme::dark();
     let nodes = strata_web_reader::HtmlParser::parse(html);
-    let media_ctx = strata_style::MediaContext {
-        viewport_width: width as f32,
-        viewport_height: height as f32,
-        is_dark: true,
-    };
+    let media_ctx = strata_style::MediaContext::new(
+        width as f32,
+        height as f32,
+        true,
+    );
     let transpiler = WebTranspiler::new(&theme);
     let content_blueprint = transpiler.transpile_full_document(&nodes, &media_ctx);
 
@@ -392,11 +392,11 @@ pub fn run_synthetic_wheel_scroll_benchmark(
 
     let theme = ReaderTheme::dark();
     let nodes = strata_web_reader::HtmlParser::parse(html);
-    let media_ctx = strata_style::MediaContext {
-        viewport_width: width as f32,
-        viewport_height: height as f32,
-        is_dark: true,
-    };
+    let media_ctx = strata_style::MediaContext::new(
+        width as f32,
+        height as f32,
+        true,
+    );
     let transpiler = WebTranspiler::new(&theme);
     let content_blueprint = transpiler.transpile_full_document(&nodes, &media_ctx);
     let container = NodeBlueprint::element(

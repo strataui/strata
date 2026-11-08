@@ -13,3 +13,5 @@ strata_layout = { workspace = true }
 strata_style = { workspace = true }
 strata_render = { workspace = true }
 strata_web_reader = { workspace = true }
+strata = { workspace = true }
+strata_platform = { workspace = true }
