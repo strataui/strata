@@ -47,9 +47,7 @@ impl TerminalScreen {
         for cell in &mut self.front {
             *cell = CharCell::default();
         }
-        for dirty in &mut self.dirty_lines {
-            *dirty = true;
-        }
+        self.dirty_lines.fill(true);
     }
 
     /// Writes a single character to the front buffer with z-index ordering.
@@ -110,6 +108,11 @@ impl TerminalScreen {
         }
         let idx = (row as usize) * (self.cols as usize) + (col as usize);
         self.front.get(idx)
+    }
+
+    /// Flushes dirty lines, rendering them to an ANSI escape string and syncing back buffers.
+    pub fn flush(&mut self) -> String {
+        self.render_delta_ansi()
     }
 
     /// Renders minimal delta ANSI escape sequences comparing `front` to `back`.
@@ -204,18 +207,14 @@ impl TerminalScreen {
 
     /// Forces a full frame redraw by marking all lines dirty and resetting the back buffer.
     pub fn force_full_redraw(&mut self) {
-        for cell in &mut self.back {
-            *cell = CharCell {
+        self.back.fill(CharCell {
                 ch: '\0',
                 fg: Color24::Default,
                 bg: Color24::Default,
                 style: 255,
                 is_wide_continuation: false,
                 z_index: -1,
-            };
-        }
-        for dirty in &mut self.dirty_lines {
-            *dirty = true;
-        }
+            });
+        self.dirty_lines.fill(true);
     }
 }

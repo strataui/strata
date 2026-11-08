@@ -95,6 +95,42 @@ fn test_terminal_screen_delta_ansi_flushing() {
 }
 
 #[test]
+fn test_single_character_redraw_delta_size() {
+    let mut screen = TerminalScreen::new(80, 24);
+    // Initial draw
+    screen.put_str(
+        0,
+        0,
+        "Initial screen content",
+        Color24::WHITE,
+        Color24::BLACK,
+        AttrBits::NONE,
+        0,
+    );
+    let _ = screen.render_delta_ansi();
+
+    // Now update only 1 single character
+    screen.put_char(
+        10,
+        5,
+        'X',
+        Color24::Default,
+        Color24::Default,
+        AttrBits::NONE,
+        0,
+    );
+    let delta = screen.render_delta_ansi();
+
+    assert!(delta.contains('X'));
+    assert!(
+        delta.len() < 30,
+        "Single character delta must be < 30 bytes, got {} bytes: {:?}",
+        delta.len(),
+        delta
+    );
+}
+
+#[test]
 fn test_half_block_and_braille_graphics_degradation() {
     let mut screen = TerminalScreen::new(10, 5);
 
@@ -116,13 +152,16 @@ fn test_half_block_and_braille_graphics_degradation() {
     assert_eq!(ch, '\u{28FF}');
 }
 
+static TUI_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn test_conditional_tui_components() {
+    let _guard = TUI_MUTEX.lock().unwrap();
     use strata_dom::View;
 
     let gui_view = View::new(NodeBlueprint::Element {
         tag: strata_dom::Tag::Div,
-        classes: vec![],
+        classes: strata_dom::ClassList::Empty,
         attributes: vec![],
         children: vec![],
     });
@@ -161,3 +200,67 @@ fn test_conditional_tui_components() {
     // Reset back
     set_tui_target_active(false);
 }
+
+#[test]
+fn test_grid_and_flexbox_tui_quantization_exact_sums() {
+    let _guard = TUI_MUTEX.lock().unwrap();
+    use strata_layout::LayoutNode;
+    use strata_style::ComputedStyle;
+    use strata_style::types::{Dimension, Display, FlexDirection, GridTrack};
+
+    // 1. Grid layout in TUI mode: 3 tracks of 1fr in an 80-wide container
+    set_tui_target_active(true);
+
+    let mut grid_node = LayoutNode::new(ComputedStyle::default());
+    grid_node.style.display = Display::Grid;
+    grid_node.style.width = Dimension::Px(80.0);
+    grid_node.style.grid_template_columns = vec![
+        GridTrack::Fr(1.0),
+        GridTrack::Fr(1.0),
+        GridTrack::Fr(1.0),
+    ];
+    grid_node.children = vec![
+        LayoutNode::new(ComputedStyle::default()),
+        LayoutNode::new(ComputedStyle::default()),
+        LayoutNode::new(ComputedStyle::default()),
+    ];
+
+    grid_node.compute_layout(80.0, 24.0);
+
+    let w0 = grid_node.children[0].geometry.border_box.width;
+    let w1 = grid_node.children[1].geometry.border_box.width;
+    let w2 = grid_node.children[2].geometry.border_box.width;
+
+    assert_eq!(w0 + w1 + w2, 80.0);
+    assert_eq!(w0, 27.0);
+    assert_eq!(w1, 27.0);
+    assert_eq!(w2, 26.0);
+
+    // 2. Flexbox layout in TUI mode: 3 flex-grow: 1.0 items in an 80-wide container
+    let mut flex_node = LayoutNode::new(ComputedStyle::default());
+    flex_node.style.display = Display::Flex;
+    flex_node.style.flex_direction = FlexDirection::Row;
+    flex_node.style.width = Dimension::Px(80.0);
+
+    let mut c0 = LayoutNode::new(ComputedStyle::default());
+    c0.style.flex_grow = 1.0;
+    let mut c1 = LayoutNode::new(ComputedStyle::default());
+    c1.style.flex_grow = 1.0;
+    let mut c2 = LayoutNode::new(ComputedStyle::default());
+    c2.style.flex_grow = 1.0;
+    flex_node.children = vec![c0, c1, c2];
+
+    flex_node.compute_layout(80.0, 24.0);
+
+    let fw0 = flex_node.children[0].geometry.border_box.width;
+    let fw1 = flex_node.children[1].geometry.border_box.width;
+    let fw2 = flex_node.children[2].geometry.border_box.width;
+
+    assert_eq!(fw0 + fw1 + fw2, 80.0);
+    assert_eq!(fw0, 27.0);
+    assert_eq!(fw1, 27.0);
+    assert_eq!(fw2, 26.0);
+
+    set_tui_target_active(false);
+}
+
