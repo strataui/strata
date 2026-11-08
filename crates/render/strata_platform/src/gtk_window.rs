@@ -39,7 +39,7 @@ fn stroke_uniform_border(
         return;
     }
     match style {
-        BorderStyle::None => {}
+        BorderStyle::None | BorderStyle::Hidden => {}
         BorderStyle::Solid => {
             let half = border_width / 2.0;
             let r = (radius - half).max(0.0);
@@ -1569,8 +1569,8 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
             DrawCommand::PopTransform => {
                 let _ = cr.restore();
             }
-            DrawCommand::DrawImage { bounds, image } => {
-                if bounds.width > 0.0 && bounds.height > 0.0 {
+            DrawCommand::DrawImage { bounds, image }
+                if bounds.width > 0.0 && bounds.height > 0.0 => {
                     let decoded = cairo::ImageSurface::create_from_png(&mut std::io::Cursor::new(
                         &image.data[..],
                     ));
@@ -1598,7 +1598,6 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                         }
                     }
                 }
-            }
             _ => {}
         }
     }
@@ -1607,7 +1606,7 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
     static RENDER_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     if *PERF_ENABLED.get_or_init(|| std::env::var_os("STRATA_PERF_LOG").is_some()) {
         let frame = RENDER_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if frame < 6 || frame % 120 == 0 {
+        if frame < 6 || frame.is_multiple_of(120) {
             let (w, h) = cr
                 .clip_extents()
                 .map(|e| (e.2 - e.0, e.3 - e.1))
@@ -2729,10 +2728,14 @@ pub fn pango_font_metrics(
         font_desc.set_family(&family);
         font_desc.set_absolute_size(font_size as f64 * pango::SCALE as f64);
         let metrics = context.metrics(Some(&font_desc), None);
-        let ascent = metrics.ascent() as f32 / pango::SCALE as f32;
-        let descent = metrics.descent() as f32 / pango::SCALE as f32;
-        let height = metrics.height() as f32 / pango::SCALE as f32;
-        (ascent, descent, (height - ascent - descent).max(0.0))
+        let raw_ascent = metrics.ascent() as f32 / pango::SCALE as f32;
+        let raw_descent = metrics.descent() as f32 / pango::SCALE as f32;
+        let raw_height = metrics.height() as f32 / pango::SCALE as f32;
+        let ascent = (raw_ascent * 64.0).round() / 64.0;
+        let descent = (raw_descent * 64.0).round() / 64.0;
+        let height = (raw_height * 64.0).round() / 64.0;
+        let line_gap = ((height - ascent - descent).max(0.0) * 64.0).round() / 64.0;
+        (ascent, descent, line_gap)
     })
 }
 

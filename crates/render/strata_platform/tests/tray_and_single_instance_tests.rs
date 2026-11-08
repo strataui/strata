@@ -62,6 +62,10 @@ fn unix_single_instance_recovers_stale_socket_and_forwards_arguments() {
     assert_eq!(forwarded, second_args);
     assert_eq!(lock.app_id(), app_id);
 
+    use std::os::unix::fs::PermissionsExt;
+    let meta = std::fs::metadata(&socket_path).expect("socket metadata");
+    assert_eq!(meta.permissions().mode() & 0o777, 0o600, "socket permissions must be 0600");
+
     drop(lock);
     let _ = std::fs::remove_dir_all(&runtime_dir);
 }
@@ -316,7 +320,7 @@ fn linux_ayatana_indicator_registers_status_notifier_item() {
                     name.contains("StatusNotifierItem")
                         && !names_before
                             .as_ref()
-                            .map_or(true, |before| before.contains(name))
+                            .is_none_or(|before| before.contains(name))
                 }) {
                     registered = Some(format!("bus name {}", name));
                     break;

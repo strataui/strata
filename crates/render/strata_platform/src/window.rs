@@ -78,12 +78,19 @@ pub struct WindowConfig {
     pub transparent: bool,
     pub always_on_top: bool,
     pub single_instance_id: Option<String>,
+    pub vibrancy: crate::vibrancy::VibrancyEffect,
 }
 
 impl WindowConfig {
     /// Configures the window to enforce a single-instance mutex and focus existing instance on launch.
     pub fn with_single_instance(mut self, app_id: impl Into<String>) -> Self {
         self.single_instance_id = Some(app_id.into());
+        self
+    }
+
+    /// Configures window backdrop blur and vibrancy (Mica, Acrylic, NSVisualEffectView).
+    pub fn with_vibrancy(mut self, vibrancy: crate::vibrancy::VibrancyEffect) -> Self {
+        self.vibrancy = vibrancy;
         self
     }
 }
@@ -105,6 +112,7 @@ impl Default for WindowConfig {
             transparent: false,
             always_on_top: false,
             single_instance_id: None,
+            vibrancy: crate::vibrancy::VibrancyEffect::None,
         }
     }
 }
@@ -127,6 +135,8 @@ pub trait PlatformWindow {
     fn is_redraw_requested(&self) -> bool;
     fn poll_events(&mut self) -> Vec<PlatformEvent>;
     fn push_event(&mut self, event: PlatformEvent);
+    /// Transmits an incremental AccessKit/OS accessibility tree update to native screen readers.
+    fn on_accessibility_update(&mut self, _json_payload: &str) {}
 }
 
 /// Headless mock platform window for deterministic testing, CI automation, and headless rendering.
@@ -138,6 +148,7 @@ pub struct MockPlatformWindow {
     pub cursor: CursorIcon,
     pub redraw_requested: bool,
     pub event_queue: VecDeque<PlatformEvent>,
+    pub last_accessibility_update: Option<String>,
 }
 
 impl MockPlatformWindow {
@@ -150,8 +161,10 @@ impl MockPlatformWindow {
             cursor: CursorIcon::Default,
             redraw_requested: false,
             event_queue: VecDeque::new(),
+            last_accessibility_update: None,
         }
     }
+
 
     /// Creates a mock window with default configuration.
     pub fn new_mock() -> Self {
@@ -239,7 +252,12 @@ impl PlatformWindow for MockPlatformWindow {
     fn push_event(&mut self, event: PlatformEvent) {
         self.event_queue.push_back(event);
     }
+
+    fn on_accessibility_update(&mut self, json_payload: &str) {
+        self.last_accessibility_update = Some(json_payload.to_string());
+    }
 }
+
 
 /// Live interactive platform window with surface configuration, frame pacing, and event queuing.
 #[derive(Debug, Clone)]

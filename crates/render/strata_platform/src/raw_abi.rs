@@ -74,6 +74,43 @@ pub mod win32 {
         pub bottom: i32,
     }
 
+    impl From<Point> for strata_primitives::geom::Point<f32> {
+        fn from(p: Point) -> Self {
+            strata_primitives::geom::Point::new(p.x as f32, p.y as f32)
+        }
+    }
+
+    impl From<strata_primitives::geom::Point<f32>> for Point {
+        fn from(p: strata_primitives::geom::Point<f32>) -> Self {
+            Point {
+                x: p.x as i32,
+                y: p.y as i32,
+            }
+        }
+    }
+
+    impl From<Rect> for strata_primitives::geom::Rect<f32> {
+        fn from(r: Rect) -> Self {
+            strata_primitives::geom::Rect::from_xywh(
+                r.left as f32,
+                r.top as f32,
+                (r.right - r.left).max(0) as f32,
+                (r.bottom - r.top).max(0) as f32,
+            )
+        }
+    }
+
+    impl From<strata_primitives::geom::Rect<f32>> for Rect {
+        fn from(r: strata_primitives::geom::Rect<f32>) -> Self {
+            Rect {
+                left: r.min_x() as i32,
+                top: r.min_y() as i32,
+                right: r.max_x() as i32,
+                bottom: r.max_y() as i32,
+            }
+        }
+    }
+
     /// Native message structure matching Win32 `MSG`.
     #[repr(C)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

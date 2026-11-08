@@ -169,3 +169,36 @@ fn test_gpu_introspection_mutation() {
     assert_eq!(gpu.device_name, "Apple M3 Max");
     assert_eq!(gpu.vram_total_bytes, 38654705664);
 }
+
+#[test]
+fn test_real_os_hardware_telemetry_probing() {
+    // 1. Probe OS battery
+    if let Some(battery) = strata_device::probe_os_battery() {
+        assert!((0.0..=1.0).contains(&battery.level));
+    }
+
+    // 2. Probe OS thermal
+    if let Some(thermal) = strata_device::probe_os_thermal() {
+        assert!(matches!(
+            thermal,
+            ThermalState::Nominal | ThermalState::Fair | ThermalState::Serious | ThermalState::Critical
+        ));
+    }
+
+    // 3. Probe OS network
+    if let Some(net) = strata_device::probe_os_network() {
+        if net.is_online {
+            assert!(matches!(
+                net.connection_type,
+                ConnectionType::Wifi
+                    | ConnectionType::Ethernet
+                    | ConnectionType::Cellular
+                    | ConnectionType::Unknown
+            ));
+        }
+    }
+
+    // 4. Test live hardware refresh integration
+    let _detected = strata_device::refresh_from_hardware();
+}
+

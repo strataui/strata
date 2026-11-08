@@ -3,8 +3,16 @@
 //! Provides zero-dependency platform windowing abstractions, client-side decorations (CSD),
 //! desktop system tray integrations, and headless mock drivers for deterministic CI testing.
 
+#![allow(
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::field_reassign_with_default,
+    clippy::chunks_exact_to_as_chunks
+)]
+
 pub mod csd;
 pub mod cursor_theme;
+pub mod dialog;
 pub mod events;
 #[cfg(target_os = "linux")]
 pub mod gtk_window;
@@ -15,15 +23,31 @@ pub mod shortcuts;
 pub mod single_instance;
 pub mod surface;
 pub mod tray;
+pub mod vibrancy;
 pub mod window;
 pub mod window_manager;
 #[cfg(target_os = "linux")]
 pub mod x11_window;
+#[cfg(target_os = "linux")]
+pub mod wayland_window;
+#[cfg(windows)]
+pub mod win32_window;
+#[cfg(target_os = "macos")]
+pub mod macos_window;
+#[cfg(target_os = "android")]
+pub mod android_window;
+#[cfg(target_os = "ios")]
+pub mod ios_window;
 
 #[cfg(target_os = "linux")]
 pub use cairo;
 pub use csd::{ControlPlacement, CsdGeometry, CsdHitZone};
 pub use cursor_theme::{CursorBitmap, CursorTheme};
+pub use dialog::{
+    open_file, open_multiple_files, pick_folder, save_file, set_dialog_mock_response,
+    show_message_box, DialogFilter, DialogMockResponse, MessageBoxButtons, MessageBoxResult,
+    MessageBoxType, OpenFileOptions, PickFolderOptions, SaveFileOptions,
+};
 pub use events::{KeyCode, Modifiers, MouseButton, PlatformEvent, TouchPhase};
 pub use mcp_cursor::McpCursorState;
 #[cfg(target_os = "linux")]
@@ -56,6 +80,9 @@ pub use surface::{
     SurfaceHandle, SurfacePresenter, SwapchainCompositor, SwapchainFormat,
 };
 pub use tray::{NativeTrayHandle, TrayEventSink, TrayIcon, TrayMenu, TrayMenuItem};
+pub use vibrancy::{
+    apply_vibrancy, clear_vibrancy, VibrancyConfig, VibrancyEffect, VibrancyError,
+};
 pub use window::{
     CursorIcon, EventLoop, EventLoopControl, LivePlatformWindow, MockEventLoop, MockPlatformWindow,
     PlatformWindow, ThemeMode, WindowConfig, WindowDecoration, WindowMode,
@@ -63,6 +90,16 @@ pub use window::{
 pub use window_manager::{WindowId, WindowManager};
 #[cfg(target_os = "linux")]
 pub use x11_window::{X11EventLoop, X11Window};
+#[cfg(target_os = "linux")]
+pub use wayland_window::{WaylandDecoder, WaylandEncoder, WaylandEventLoop, WaylandWindow};
+#[cfg(windows)]
+pub use win32_window::{Win32EventLoop, Win32Window};
+#[cfg(target_os = "macos")]
+pub use macos_window::{MacOsEventLoop, MacOsWindow};
+#[cfg(target_os = "android")]
+pub use android_window::{AndroidEventLoop, AndroidWindow};
+#[cfg(target_os = "ios")]
+pub use ios_window::{IosEventLoop, IosWindow};
 
 /// Target operating system or runtime platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -134,5 +171,15 @@ pub mod prelude {
     };
     #[cfg(target_os = "linux")]
     pub use super::x11_window::{X11EventLoop, X11Window};
+    #[cfg(target_os = "linux")]
+    pub use super::wayland_window::{WaylandEventLoop, WaylandWindow};
+    #[cfg(windows)]
+    pub use super::win32_window::{Win32EventLoop, Win32Window};
+    #[cfg(target_os = "macos")]
+    pub use super::macos_window::{MacOsEventLoop, MacOsWindow};
+    #[cfg(target_os = "android")]
+    pub use super::android_window::{AndroidEventLoop, AndroidWindow};
+    #[cfg(target_os = "ios")]
+    pub use super::ios_window::{IosEventLoop, IosWindow};
     pub use super::PlatformTarget;
 }

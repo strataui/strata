@@ -29,6 +29,7 @@ pub struct X11Window {
     pub cursor: CursorIcon,
     pub redraw_requested: bool,
     pub event_queue: VecDeque<PlatformEvent>,
+    pub last_click: Option<(std::time::Instant, f32, f32)>,
 }
 
 impl X11Window {
@@ -107,6 +108,7 @@ impl X11Window {
                 cursor: CursorIcon::Default,
                 redraw_requested: true,
                 event_queue: VecDeque::new(),
+                last_click: None,
             })
         }
     }
@@ -202,31 +204,112 @@ impl X11Window {
                     }
                     xlib::ButtonPress => {
                         let bp = xevent.button;
-                        let btn = match bp.button {
-                            1 => MouseButton::Left,
-                            2 => MouseButton::Middle,
-                            3 => MouseButton::Right,
-                            b => MouseButton::Other(b as u16),
-                        };
-                        events.push(PlatformEvent::MouseDown {
-                            button: btn,
-                            x: bp.x as f32,
-                            y: bp.y as f32,
-                        });
+                        let x = bp.x as f32;
+                        let y = bp.y as f32;
+                        match bp.button {
+                            1 => {
+                                let now = std::time::Instant::now();
+                                if let Some((prev_time, px, py)) = self.last_click {
+                                    if now.duration_since(prev_time).as_millis() < 400
+                                        && (px - x).abs() < 6.0
+                                        && (py - y).abs() < 6.0
+                                    {
+                                        events.push(PlatformEvent::DoubleClick {
+                                            button: MouseButton::Left,
+                                            x,
+                                            y,
+                                        });
+                                        self.last_click = None;
+                                    } else {
+                                        self.last_click = Some((now, x, y));
+                                    }
+                                } else {
+                                    self.last_click = Some((now, x, y));
+                                }
+                                events.push(PlatformEvent::MouseDown {
+                                    button: MouseButton::Left,
+                                    x,
+                                    y,
+                                });
+                            }
+                            2 => {
+                                events.push(PlatformEvent::MouseDown {
+                                    button: MouseButton::Middle,
+                                    x,
+                                    y,
+                                });
+                            }
+                            3 => {
+                                events.push(PlatformEvent::MouseDown {
+                                    button: MouseButton::Right,
+                                    x,
+                                    y,
+                                });
+                            }
+                            4 => {
+                                events.push(PlatformEvent::Scroll {
+                                    delta_x: 0.0,
+                                    delta_y: -1.0,
+                                    is_momentum: false,
+                                });
+                            }
+                            5 => {
+                                events.push(PlatformEvent::Scroll {
+                                    delta_x: 0.0,
+                                    delta_y: 1.0,
+                                    is_momentum: false,
+                                });
+                            }
+                            6 => {
+                                events.push(PlatformEvent::Scroll {
+                                    delta_x: -1.0,
+                                    delta_y: 0.0,
+                                    is_momentum: false,
+                                });
+                            }
+                            7 => {
+                                events.push(PlatformEvent::Scroll {
+                                    delta_x: 1.0,
+                                    delta_y: 0.0,
+                                    is_momentum: false,
+                                });
+                            }
+                            b => {
+                                events.push(PlatformEvent::MouseDown {
+                                    button: MouseButton::Other(b as u16),
+                                    x,
+                                    y,
+                                });
+                            }
+                        }
                     }
                     xlib::ButtonRelease => {
                         let bp = xevent.button;
-                        let btn = match bp.button {
-                            1 => MouseButton::Left,
-                            2 => MouseButton::Middle,
-                            3 => MouseButton::Right,
-                            b => MouseButton::Other(b as u16),
-                        };
-                        events.push(PlatformEvent::MouseUp {
-                            button: btn,
-                            x: bp.x as f32,
-                            y: bp.y as f32,
-                        });
+                        let x = bp.x as f32;
+                        let y = bp.y as f32;
+                        match bp.button {
+                            1 => events.push(PlatformEvent::MouseUp {
+                                button: MouseButton::Left,
+                                x,
+                                y,
+                            }),
+                            2 => events.push(PlatformEvent::MouseUp {
+                                button: MouseButton::Middle,
+                                x,
+                                y,
+                            }),
+                            3 => events.push(PlatformEvent::MouseUp {
+                                button: MouseButton::Right,
+                                x,
+                                y,
+                            }),
+                            4..=7 => {}
+                            b => events.push(PlatformEvent::MouseUp {
+                                button: MouseButton::Other(b as u16),
+                                x,
+                                y,
+                            }),
+                        }
                     }
                     xlib::MotionNotify => {
                         let mn = xevent.motion;
@@ -246,66 +329,7 @@ impl X11Window {
                             &mut keysym,
                             std::ptr::null_mut(),
                         );
-
-                        let code = match keysym {
-                            0xFF08 => KeyCode::Backspace,
-                            0xFF09 => KeyCode::Tab,
-                            0xFF0D => KeyCode::Enter,
-                            0xFF1B => KeyCode::Escape,
-                            0xFF51 => KeyCode::ArrowLeft,
-                            0xFF52 => KeyCode::ArrowUp,
-                            0xFF53 => KeyCode::ArrowRight,
-                            0xFF54 => KeyCode::ArrowDown,
-                            0x0020 => KeyCode::Space,
-                            0x0030..=0x0039 => match keysym - 0x0030 {
-                                0 => KeyCode::Digit0,
-                                1 => KeyCode::Digit1,
-                                2 => KeyCode::Digit2,
-                                3 => KeyCode::Digit3,
-                                4 => KeyCode::Digit4,
-                                5 => KeyCode::Digit5,
-                                6 => KeyCode::Digit6,
-                                7 => KeyCode::Digit7,
-                                8 => KeyCode::Digit8,
-                                _ => KeyCode::Digit9,
-                            },
-                            0x0041..=0x005A | 0x0061..=0x007A => {
-                                let c = if keysym >= 0x0061 {
-                                    keysym - 0x0061
-                                } else {
-                                    keysym - 0x0041
-                                };
-                                match c {
-                                    0 => KeyCode::KeyA,
-                                    1 => KeyCode::KeyB,
-                                    2 => KeyCode::KeyC,
-                                    3 => KeyCode::KeyD,
-                                    4 => KeyCode::KeyE,
-                                    5 => KeyCode::KeyF,
-                                    6 => KeyCode::KeyG,
-                                    7 => KeyCode::KeyH,
-                                    8 => KeyCode::KeyI,
-                                    9 => KeyCode::KeyJ,
-                                    10 => KeyCode::KeyK,
-                                    11 => KeyCode::KeyL,
-                                    12 => KeyCode::KeyM,
-                                    13 => KeyCode::KeyN,
-                                    14 => KeyCode::KeyO,
-                                    15 => KeyCode::KeyP,
-                                    16 => KeyCode::KeyQ,
-                                    17 => KeyCode::KeyR,
-                                    18 => KeyCode::KeyS,
-                                    19 => KeyCode::KeyT,
-                                    20 => KeyCode::KeyU,
-                                    21 => KeyCode::KeyV,
-                                    22 => KeyCode::KeyW,
-                                    23 => KeyCode::KeyX,
-                                    24 => KeyCode::KeyY,
-                                    _ => KeyCode::KeyZ,
-                                }
-                            }
-                            _ => KeyCode::Unknown,
-                        };
+                        let code = map_x11_keysym(keysym);
                         events.push(PlatformEvent::KeyDown {
                             key: code,
                             modifiers: Modifiers::default(),
@@ -317,6 +341,23 @@ impl X11Window {
                                 }
                             }
                         }
+                    }
+                    xlib::KeyRelease => {
+                        let mut kp = xevent.key;
+                        let mut buf = [0u8; 32];
+                        let mut keysym: xlib::KeySym = 0;
+                        let _ = xlib::XLookupString(
+                            &mut kp,
+                            buf.as_mut_ptr() as *mut c_char,
+                            buf.len() as c_int,
+                            &mut keysym,
+                            std::ptr::null_mut(),
+                        );
+                        let code = map_x11_keysym(keysym);
+                        events.push(PlatformEvent::KeyUp {
+                            key: code,
+                            modifiers: Modifiers::default(),
+                        });
                     }
                     xlib::FocusIn => {
                         self.is_focused = true;
@@ -344,7 +385,7 @@ impl Drop for X11Window {
     fn drop(&mut self) {
         unsafe {
             if !self.display.is_null() {
-                if self.gc != std::ptr::null_mut() {
+                if !self.gc.is_null() {
                     xlib::XFreeGC(self.display, self.gc);
                 }
                 if self.window != 0 {
@@ -470,8 +511,81 @@ impl EventLoop for X11EventLoop {
                 }
             }
 
-            // Power-friendly sleep when polling
-            std::thread::sleep(Duration::from_millis(16));
+            match control {
+                EventLoopControl::Poll => std::thread::yield_now(),
+                EventLoopControl::Wait => std::thread::sleep(Duration::from_millis(150)),
+                EventLoopControl::WaitUntil(instant) => {
+                    let now = std::time::Instant::now();
+                    if let Some(dur) = instant.checked_duration_since(now) {
+                        std::thread::sleep(dur.min(Duration::from_millis(150)));
+                    }
+                }
+                EventLoopControl::Exit => break,
+            }
         }
     }
 }
+
+fn map_x11_keysym(keysym: xlib::KeySym) -> KeyCode {
+    match keysym {
+        0xFF08 => KeyCode::Backspace,
+        0xFF09 => KeyCode::Tab,
+        0xFF0D => KeyCode::Enter,
+        0xFF1B => KeyCode::Escape,
+        0xFF51 => KeyCode::ArrowLeft,
+        0xFF52 => KeyCode::ArrowUp,
+        0xFF53 => KeyCode::ArrowRight,
+        0xFF54 => KeyCode::ArrowDown,
+        0xFFFF => KeyCode::Delete,
+        0x0020 => KeyCode::Space,
+        0x0030..=0x0039 => match keysym - 0x0030 {
+            0 => KeyCode::Digit0,
+            1 => KeyCode::Digit1,
+            2 => KeyCode::Digit2,
+            3 => KeyCode::Digit3,
+            4 => KeyCode::Digit4,
+            5 => KeyCode::Digit5,
+            6 => KeyCode::Digit6,
+            7 => KeyCode::Digit7,
+            8 => KeyCode::Digit8,
+            _ => KeyCode::Digit9,
+        },
+        0x0041..=0x005A | 0x0061..=0x007A => {
+            let c = if keysym >= 0x0061 {
+                keysym - 0x0061
+            } else {
+                keysym - 0x0041
+            };
+            match c {
+                0 => KeyCode::KeyA,
+                1 => KeyCode::KeyB,
+                2 => KeyCode::KeyC,
+                3 => KeyCode::KeyD,
+                4 => KeyCode::KeyE,
+                5 => KeyCode::KeyF,
+                6 => KeyCode::KeyG,
+                7 => KeyCode::KeyH,
+                8 => KeyCode::KeyI,
+                9 => KeyCode::KeyJ,
+                10 => KeyCode::KeyK,
+                11 => KeyCode::KeyL,
+                12 => KeyCode::KeyM,
+                13 => KeyCode::KeyN,
+                14 => KeyCode::KeyO,
+                15 => KeyCode::KeyP,
+                16 => KeyCode::KeyQ,
+                17 => KeyCode::KeyR,
+                18 => KeyCode::KeyS,
+                19 => KeyCode::KeyT,
+                20 => KeyCode::KeyU,
+                21 => KeyCode::KeyV,
+                22 => KeyCode::KeyW,
+                23 => KeyCode::KeyX,
+                24 => KeyCode::KeyY,
+                _ => KeyCode::KeyZ,
+            }
+        }
+        _ => KeyCode::Unknown,
+    }
+}
+

@@ -57,11 +57,7 @@ impl CursorBitmap {
 
             if ctype == 0xfffd0002 {
                 // Image chunk
-                let diff = if subtype > target_size {
-                    subtype - target_size
-                } else {
-                    target_size - subtype
-                };
+                let diff = subtype.abs_diff(target_size);
                 if diff < best_diff {
                     best_diff = diff;
                     best_pos = Some(pos as usize);

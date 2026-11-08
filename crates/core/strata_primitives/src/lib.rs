@@ -4,17 +4,23 @@ pub mod geom;
 pub mod color;
 pub mod arena;
 pub mod atom;
+pub mod target;
+pub mod quantization;
 
 pub use geom::{Point, Size, Rect, EdgeInsets, Transform2D, LayoutUnit, FixedRect, Matrix4x4};
 pub use color::{Rgba, Hsla, Oklch};
 pub use arena::{BumpArena, FrameArenaManager, ThreadLocalArena, DEFAULT_ARENA_CAPACITY};
 pub use atom::{AtomId, AtomTable, intern, resolve};
+pub use target::{is_tui_target, set_tui_target_active};
+pub use quantization::largest_remainder_quantization;
 
 pub mod prelude {
     pub use crate::geom::{Point, Size, Rect, EdgeInsets, Transform2D, LayoutUnit, FixedRect, Matrix4x4};
     pub use crate::color::{Rgba, Hsla, Oklch};
     pub use crate::arena::{BumpArena, FrameArenaManager, ThreadLocalArena};
     pub use crate::atom::{AtomId, AtomTable, intern, resolve};
+    pub use crate::target::{is_tui_target, set_tui_target_active};
+    pub use crate::quantization::largest_remainder_quantization;
 }
 
 #[cfg(test)]
@@ -132,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_bump_arena_and_frame_manager() {
-        let arena = BumpArena::new(1024 * 64);
+        let mut arena = BumpArena::new(1024 * 64);
         let p1 = arena.alloc(Point::new(10.0f32, 20.0f32));
         assert_eq!(*p1, Point::new(10.0, 20.0));
 
@@ -156,8 +162,40 @@ mod tests {
     }
 
     #[test]
+    fn test_bump_arena_destructor_cleanup() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        struct DropCounter(Arc<AtomicUsize>);
+        impl Drop for DropCounter {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        {
+            let mut arena = BumpArena::new(1024 * 64);
+            for _ in 0..10 {
+                let _ = arena.alloc(DropCounter(Arc::clone(&counter)));
+            }
+            assert_eq!(counter.load(Ordering::SeqCst), 0);
+            arena.reset();
+            // Destructors must have executed upon reset
+            assert_eq!(counter.load(Ordering::SeqCst), 10);
+
+            // Allocate more and drop arena
+            for _ in 0..5 {
+                let _ = arena.alloc(DropCounter(Arc::clone(&counter)));
+            }
+        }
+        // Destructors must have executed upon arena drop
+        assert_eq!(counter.load(Ordering::SeqCst), 15);
+    }
+
+    #[test]
     fn test_10000_rects_allocation_and_reset_speed() {
-        let arena = BumpArena::new(1024 * 1024); // 1MB
+        let mut arena = BumpArena::new(1024 * 1024); // 1MB
         let start = std::time::Instant::now();
         for i in 0..10_000 {
             let _ = arena.alloc(Rect::from_xywh(i as f32, i as f32, 100.0, 50.0));
