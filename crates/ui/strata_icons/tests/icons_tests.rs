@@ -27,7 +27,7 @@ fn test_path_command_and_bounds() {
 #[test]
 fn test_icon_registry_all_icons_valid() {
     let list = all_icons();
-    assert!(list.len() >= 90, "Expected over 90 icons, found {}", list.len());
+    assert!(list.len() >= 1000, "Expected at least 1,000 icons, found {}", list.len());
 
     for name in list {
         let data = lookup_icon(*name);
@@ -35,6 +35,26 @@ fn test_icon_registry_all_icons_valid() {
         assert!(!data.svg_path.is_empty(), "Icon {:?} has empty SVG path", name);
         assert_eq!(data.view_box, (0.0, 0.0, 24.0, 24.0));
     }
+}
+
+#[test]
+fn test_vector_path_binary_serialization_roundtrip() {
+    let mut path = VectorPath::new();
+    path.move_to(2.0, 4.0)
+        .line_to(10.0, 12.0)
+        .quad_to(14.0, 16.0, 18.0, 20.0)
+        .cubic_to(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+        .arc_to(8.0, 8.0, 0.0, false, true, 22.0, 22.0)
+        .close();
+
+    let binary = path.to_binary();
+    assert!(!binary.is_empty());
+    // Verify compressed size is compact
+    assert!(binary.len() < 120);
+
+    let decoded = VectorPath::from_binary(&binary).expect("Failed to decode binary path");
+    assert_eq!(decoded.commands.len(), path.commands.len());
+    assert_eq!(decoded.commands, path.commands);
 }
 
 #[test]

@@ -8,3 +8,5 @@ description = "Pure-Rust Bitcask WAL engine, synchronous in-memory storage, and 
 
 [dependencies]
 strata_vfs = { workspace = true }
+ring = "0.17"
+

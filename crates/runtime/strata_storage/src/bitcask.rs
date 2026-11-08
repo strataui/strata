@@ -36,6 +36,7 @@ impl StrataKV {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&path)?;
 
         let mut key_dir = HashMap::new();

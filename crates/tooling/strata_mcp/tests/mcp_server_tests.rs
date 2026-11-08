@@ -20,7 +20,7 @@ fn test_mcp_server_initialize_and_tools_list() {
         Some(json!({
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": { "name": "AntigravityTest", "version": "1.0.0" }
+            "clientInfo": { "name": "StrataTestClient", "version": "1.0.0" }
         })),
     );
     let init_resp = server.handle_request(&init_req).expect("Response expected");
@@ -215,25 +215,21 @@ fn test_app_runtime_mcp_bridge_commands_and_cursor_emulation() {
 }
 
 #[test]
-fn test_debug_build_disallow_policy() {
+fn test_debug_build_policy() {
     use strata_cli::prelude::*;
 
     let temp_dir = std::env::temp_dir().join("strata_build_policy_test");
     let _ = std::fs::create_dir_all(&temp_dir);
 
-    // 1. Debug build without force: MUST FAIL
-    let err_result = BuildRunner::build_with_options(
+    // 1. Debug build without force: SUCCEEDS per GOAL-32
+    let debug_result = BuildRunner::build_with_options(
         BuildTarget::Desktop,
         false, // release: false (debug mode)
         false, // force: false
         &temp_dir,
         None,
     );
-    assert!(err_result.is_err());
-    let err_msg = err_result.err().unwrap();
-    assert!(err_msg.contains("Debug builds cannot be built directly"));
-    assert!(err_msg.contains("run-only"));
-    assert!(err_msg.contains("--force"));
+    assert!(debug_result.is_ok());
 
     // 2. Debug build WITH force: MUST SUCCEED
     let force_result = BuildRunner::build_with_options(
@@ -257,3 +253,43 @@ fn test_debug_build_disallow_policy() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_strata_run_app_security_and_rce_mitigation() {
+    let server = McpServer::default();
+
+    // 1. Invalid execution mode rejected
+    let invalid_mode_res = server.call_tool("strata_run_app", json!({ "mode": "malicious_mode" }));
+    assert_eq!(invalid_mode_res.is_error, Some(true));
+    if let McpContent::Text { text } = &invalid_mode_res.content[0] {
+        assert!(text.contains("Invalid execution mode"));
+    } else {
+        panic!("Expected text response");
+    }
+
+    // 2. Path outside authorized workspace root rejected
+    let outside_path = if cfg!(windows) { "C:\\Windows\\System32" } else { "/tmp" };
+    let outside_res = server.call_tool(
+        "strata_run_app",
+        json!({ "mode": "debug", "project_dir": outside_path }),
+    );
+    assert_eq!(outside_res.is_error, Some(true));
+    if let McpContent::Text { text } = &outside_res.content[0] {
+        assert!(text.contains("outside the authorized workspace roots") || text.contains("does not contain a Cargo.toml"));
+    } else {
+        panic!("Expected text response");
+    }
+
+    // 3. Non-existent directory rejected
+    let nonexistent_res = server.call_tool(
+        "strata_run_app",
+        json!({ "mode": "debug", "project_dir": "/path/to/nonexistent/strata/dir/12345" }),
+    );
+    assert_eq!(nonexistent_res.is_error, Some(true));
+    if let McpContent::Text { text } = &nonexistent_res.content[0] {
+        assert!(text.contains("does not exist") || text.contains("cannot be resolved"));
+    } else {
+        panic!("Expected text response");
+    }
+}
+

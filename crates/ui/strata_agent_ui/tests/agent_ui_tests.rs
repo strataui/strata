@@ -18,6 +18,36 @@ fn test_schema_tag_and_attribute_security() {
     assert!(is_attribute_safe("action", "fetch_metrics"));
     assert!(!is_attribute_safe("href", "javascript:alert(1)"));
     assert!(!is_attribute_safe("src", "data:text/html;base64,PHNjcmlwdD4="));
+    // Evasion vectors that must be rejected
+    assert!(!is_attribute_safe("href", " javascript:alert(1)"));
+    assert!(!is_attribute_safe("href", "\tjavascript:alert(1)"));
+    assert!(!is_attribute_safe("href", "\njavascript:evil()"));
+    assert!(!is_attribute_safe("href", "vbscript:msgbox(1)"));
+    assert!(!is_attribute_safe("src", "data:image/svg+xml,<svg onload=alert(1)>"));
+    assert!(!is_attribute_safe("onclick", "alert(1)"));
+    assert!(!is_attribute_safe("oninput", "eval(1)"));
+    assert!(!is_attribute_safe("onchange", "evil()"));
+    assert!(!is_attribute_safe("onload", "evil()"));
+
+    // HTML entity evasion vectors
+    assert!(!is_attribute_safe("href", "java&#x09;script:alert(1)"));
+    assert!(!is_attribute_safe("href", "java&#9;script:alert(1)"));
+    assert!(!is_attribute_safe("href", "&#106;avascript:alert(1)"));
+    assert!(!is_attribute_safe("href", "&#x6a;avascript:alert(1)"));
+    assert!(!is_attribute_safe("href", "&Tab;javascript:alert(1)"));
+
+    // Arbitrary data: URIs must be blocked except safe images
+    assert!(!is_attribute_safe("src", "data:text/javascript,alert(1)"));
+    assert!(!is_attribute_safe("src", "data:application/xhtml+xml,<script>alert(1)</script>"));
+    assert!(!is_attribute_safe("src", "data:;base64,alert(1)"));
+    assert!(!is_attribute_safe("src", "data:image/png;base64,<script>alert(1)</script>"));
+    assert!(is_attribute_safe("src", "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="));
+    assert!(is_attribute_safe("src", "data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA="));
+
+    // Style attribute script injection
+    assert!(!is_attribute_safe("style", "width: expression(alert(1))"));
+    assert!(!is_attribute_safe("style", "background: url('javascript:alert(1)')"));
+    assert!(is_attribute_safe("style", "color: #ffffff; padding: 12px; margin-top: 4px;"));
 
     let validator = AgentSchemaValidator::new();
     assert!(validator.validate_tag("button").is_ok());

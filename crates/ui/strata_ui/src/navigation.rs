@@ -86,10 +86,10 @@ pub fn Sidebar(
                                 } else {
                                     rsx! { <></> }
                                 }}
-                                {if !is_coll && item.badge.is_some() {
+                                {if let (false, Some(badge_text)) = (is_coll, item.badge) {
                                     rsx! {
                                         <span class="px-1.5 py-0.5 rounded-full text-[10px] font-mono bg-neutral-800 text-neutral-300">
-                                            {item.badge.unwrap()}
+                                            {badge_text}
                                         </span>
                                     }
                                 } else {

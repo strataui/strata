@@ -56,7 +56,7 @@ pub fn format_number(val: f64, locale: &LocaleId, options: &NumberFormatOptions)
         let chars: Vec<char> = int_str.chars().collect();
         let len = chars.len();
         for (i, &c) in chars.iter().enumerate() {
-            if i > 0 && (len - i) % 3 == 0 {
+            if i > 0 && (len - i).is_multiple_of(3) {
                 res.push(group_sep);
             }
             res.push(c);

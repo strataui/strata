@@ -8,3 +8,4 @@ description = "Pure-Rust spatial 3D audio synthesizer and DSP engine for Project
 
 [dependencies]
 strata_primitives = { workspace = true }
+cpal = "0.15"

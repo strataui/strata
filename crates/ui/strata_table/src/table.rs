@@ -104,7 +104,7 @@ impl<T: Clone + 'static> Table<T> {
     pub fn total_pages(&self) -> usize {
         let count = self.filtered_rows().len();
         let size = self.page_size.get().max(1);
-        (count + size - 1) / size
+        count.div_ceil(size)
     }
 
     /// Computes filtered rows without pagination.

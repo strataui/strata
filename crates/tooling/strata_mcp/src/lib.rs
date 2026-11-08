@@ -1,7 +1,7 @@
 //! Professional Model Context Protocol (MCP) Server for Strata Development Sessions.
 //!
-//! Provides a bidirectional JSON-RPC 2.0 interface enabling AI assistants (such as Antigravity,
-//! Claude, and Cursor) to connect to a live running Strata application, inspect session telemetry,
+//! Provides a bidirectional JSON-RPC 2.0 interface enabling external developer tools and language models
+//! to connect to a live running Strata application, inspect session telemetry,
 //! take pixel-perfect screenshots with authentic Yaru cursor overlays, perform keyboard and mouse
 //! interactions, and safely batch sequential UI action pipelines.
 

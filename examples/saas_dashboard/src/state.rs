@@ -74,7 +74,7 @@ impl DashboardState {
             gpu_utilization: use_signal(91.4),
             requests_per_sec: use_signal(148200),
             p99_latency: use_signal(16.8),
-            monthly_burn: use_signal(24980.50),
+            monthly_burn: use_signal(24_980.5),
         }
     }
 }

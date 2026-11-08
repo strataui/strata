@@ -1,11 +1,18 @@
-//! Hardware Secure Keystore Abstraction Layer (Zero Dependencies).
+//! Cryptographically Secure Keystore using RFC 8439 ChaCha20-Poly1305 AEAD.
+//!
+//! Replaces vulnerable XOR keystreams and world-readable seeds with authenticated encryption
+//! with associated data (AEAD) using 256-bit CSPRNG keys and 96-bit per-write nonces.
 
 use std::collections::HashMap;
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::RwLock;
-use crate::crc32::crc32;
+
+use ring::aead::{
+    Aad, BoundKey, Nonce, NonceSequence, OpeningKey, SealingKey, UnboundKey, CHACHA20_POLY1305,
+    NONCE_LEN,
+};
+use ring::rand::{SecureRandom, SystemRandom};
 
 /// Keystore error variants.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +35,14 @@ impl std::fmt::Display for KeystoreError {
 }
 
 impl std::error::Error for KeystoreError {}
+
+struct SingleNonceSequence(Option<Nonce>);
+
+impl NonceSequence for SingleNonceSequence {
+    fn advance(&mut self) -> Result<Nonce, ring::error::Unspecified> {
+        self.0.take().ok_or(ring::error::Unspecified)
+    }
+}
 
 /// Secure hardware enclave abstraction storing encrypted credentials.
 pub struct SecureKeystore;
@@ -56,28 +71,53 @@ impl SecureKeystore {
             }
         }
         strata_vfs::driver::to_physical_path(&strata_vfs::app_data().join("keystore.enc"))
+            .unwrap_or_else(|_| {
+                let base = strata_vfs::resolver::resolve_root_dir(strata_vfs::VfsRoot::AppData);
+                base.join("keystore.enc")
+            })
     }
 
-    /// Derives a 32-byte machine-bound master key using machine identity and user salt.
-    fn derive_master_key() -> [u8; 32] {
-        let machine_id = env::var("MACHINE_ID")
-            .or_else(|_| env::var("HOSTNAME"))
-            .or_else(|_| env::var("USER"))
-            .unwrap_or_else(|_| String::from("strata_secure_machine_seed"));
+    fn key_file_path() -> PathBuf {
+        let store_path = Self::keystore_path();
+        store_path.with_extension("key")
+    }
 
+    /// Retrieves or generates a 256-bit cryptographically secure random master key.
+    fn get_or_create_master_key() -> Result<[u8; 32], KeystoreError> {
+        let key_path = Self::key_file_path();
+        if key_path.exists() {
+            if let Ok(bytes) = fs::read(&key_path) {
+                if bytes.len() == 32 {
+                    let mut key = [0u8; 32];
+                    key.copy_from_slice(&bytes);
+                    return Ok(key);
+                }
+            }
+        }
+
+        // Generate 32 bytes of cryptographically secure randomness from system CSPRNG
+        let rng = SystemRandom::new();
         let mut key = [0u8; 32];
-        for (i, b) in machine_id.bytes().enumerate() {
-            key[i % 32] ^= b;
+        rng.fill(&mut key)
+            .map_err(|_| KeystoreError::EncryptionError("Failed to generate secure random key".into()))?;
+
+        if let Some(parent) = key_path.parent() {
+            let _ = fs::create_dir_all(parent);
         }
-        // Apply rounds of bit mixing
-        for i in 0..32 {
-            let mixed = crc32(&key);
-            key[i] ^= (mixed >> (i % 24)) as u8;
+
+        fs::write(&key_path, key).map_err(|e| KeystoreError::IoError(e.to_string()))?;
+
+        // Restrict key file to user read/write only (0600)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600));
         }
-        key
+
+        Ok(key)
     }
 
-    /// Loads the encrypted secret dictionary from disk.
+    /// Loads the encrypted secret dictionary from disk using ChaCha20-Poly1305 AEAD.
     fn load_store() -> Result<HashMap<String, Vec<u8>>, KeystoreError> {
         let path = Self::keystore_path();
         if !path.exists() {
@@ -85,25 +125,39 @@ impl SecureKeystore {
         }
 
         let raw = fs::read(&path).map_err(|e| KeystoreError::IoError(e.to_string()))?;
-        if raw.len() < 4 {
+        if raw.len() < 16 + NONCE_LEN + 16 {
             return Ok(HashMap::new());
         }
 
-        let expected_crc = u32::from_le_bytes(raw[0..4].try_into().unwrap());
-        let encrypted_payload = &raw[4..];
-        let actual_crc = crc32(encrypted_payload);
-
-        if expected_crc != actual_crc {
-            return Err(KeystoreError::DecryptionError("CRC mismatch: keystore corrupted".into()));
+        if &raw[..16] != b"STRATA_KEYSTORE_" {
+            return Err(KeystoreError::DecryptionError(
+                "Invalid keystore file format magic".into(),
+            ));
         }
 
-        let master_key = Self::derive_master_key();
-        let decrypted = Self::mask_bytes(encrypted_payload, &master_key);
+        let nonce_bytes = &raw[16..16 + NONCE_LEN];
+        let mut in_out = raw[16 + NONCE_LEN..].to_vec();
 
-        Self::deserialize_store(&decrypted)
+        let master_key = Self::get_or_create_master_key()?;
+        let unbound_key = UnboundKey::new(&CHACHA20_POLY1305, &master_key)
+            .map_err(|_| KeystoreError::DecryptionError("Invalid master key".into()))?;
+
+        let nonce = Nonce::try_assume_unique_for_key(nonce_bytes)
+            .map_err(|_| KeystoreError::DecryptionError("Corrupted nonce".into()))?;
+
+        let mut opening_key = OpeningKey::new(unbound_key, SingleNonceSequence(Some(nonce)));
+        let plaintext = opening_key
+            .open_in_place(Aad::empty(), &mut in_out)
+            .map_err(|_| {
+                KeystoreError::DecryptionError(
+                    "Cryptographic authentication failed: ciphertext tampered or invalid key".into(),
+                )
+            })?;
+
+        Self::deserialize_store(plaintext)
     }
 
-    /// Saves the encrypted secret dictionary to disk.
+    /// Saves the secret dictionary to disk encrypted with ChaCha20-Poly1305 AEAD.
     fn save_store(map: &HashMap<String, Vec<u8>>) -> Result<(), KeystoreError> {
         let path = Self::keystore_path();
         if let Some(parent) = path.parent() {
@@ -111,34 +165,48 @@ impl SecureKeystore {
         }
 
         let serialized = Self::serialize_store(map);
-        let master_key = Self::derive_master_key();
-        let encrypted = Self::mask_bytes(&serialized, &master_key);
-        let crc = crc32(&encrypted);
+        let master_key = Self::get_or_create_master_key()?;
 
-        let mut out = Vec::with_capacity(4 + encrypted.len());
-        out.extend_from_slice(&crc.to_le_bytes());
-        out.extend_from_slice(&encrypted);
+        // Generate 12-byte CSPRNG nonce
+        let rng = SystemRandom::new();
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        rng.fill(&mut nonce_bytes)
+            .map_err(|_| KeystoreError::EncryptionError("Failed to generate secure nonce".into()))?;
 
-        fs::write(&path, &out).map_err(|e| KeystoreError::IoError(e.to_string()))?;
-        Ok(())
-    }
+        let unbound_key = UnboundKey::new(&CHACHA20_POLY1305, &master_key)
+            .map_err(|_| KeystoreError::EncryptionError("Invalid master key length".into()))?;
 
-    /// Encrypts/decrypts bytes with master key using rolling XOR keystream.
-    fn mask_bytes(data: &[u8], key: &[u8; 32]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(data.len());
-        for (idx, &byte) in data.iter().enumerate() {
-            let k = key[idx % 32];
-            let roll = ((idx * 37 + 13) % 256) as u8;
-            out.push(byte ^ k ^ roll);
+        let nonce = Nonce::try_assume_unique_for_key(&nonce_bytes)
+            .map_err(|_| KeystoreError::EncryptionError("Failed to initialize nonce".into()))?;
+
+        let mut sealing_key = SealingKey::new(unbound_key, SingleNonceSequence(Some(nonce)));
+        let mut ciphertext = serialized;
+        sealing_key
+            .seal_in_place_append_tag(Aad::empty(), &mut ciphertext)
+            .map_err(|_| KeystoreError::EncryptionError("AEAD encryption sealing failed".into()))?;
+
+        let mut output = Vec::with_capacity(16 + NONCE_LEN + ciphertext.len());
+        output.extend_from_slice(b"STRATA_KEYSTORE_");
+        output.extend_from_slice(&nonce_bytes);
+        output.extend_from_slice(&ciphertext);
+
+        fs::write(&path, output).map_err(|e| KeystoreError::IoError(e.to_string()))?;
+
+        // Restrict keystore file to owner read/write only (0600)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
         }
-        out
+
+        Ok(())
     }
 
     fn serialize_store(map: &HashMap<String, Vec<u8>>) -> Vec<u8> {
         let mut out = Vec::new();
         for (k, v) in map {
             let k_bytes = k.as_bytes();
-            out.extend_from_slice(&(k_bytes.len() as u16).to_le_bytes());
+            out.extend_from_slice(&(k_bytes.len() as u32).to_le_bytes());
             out.extend_from_slice(k_bytes);
             out.extend_from_slice(&(v.len() as u32).to_le_bytes());
             out.extend_from_slice(v);
@@ -150,9 +218,9 @@ impl SecureKeystore {
         let mut map = HashMap::new();
         let mut cursor = 0;
 
-        while cursor + 6 <= data.len() {
-            let k_len = u16::from_le_bytes(data[cursor..cursor + 2].try_into().unwrap()) as usize;
-            cursor += 2;
+        while cursor + 8 <= data.len() {
+            let k_len = u32::from_le_bytes(data[cursor..cursor + 4].try_into().unwrap()) as usize;
+            cursor += 4;
             if cursor + k_len > data.len() {
                 break;
             }
@@ -177,31 +245,31 @@ impl SecureKeystore {
         Ok(map)
     }
 
-    /// Stores a secret securely in the keystore.
-    pub fn set_secret(key: &str, secret: &[u8]) -> Result<(), KeystoreError> {
+    /// Stores a secret key/value pair securely into the enclave.
+    pub fn set_secret(key: &str, value: &[u8]) -> Result<(), KeystoreError> {
         let mut store = Self::load_store()?;
-        store.insert(key.to_string(), secret.to_vec());
+        store.insert(key.to_string(), value.to_vec());
         Self::save_store(&store)
     }
 
-    /// Retrieves a secret from the keystore.
+    /// Retrieves an existing secret from the enclave.
     pub fn get_secret(key: &str) -> Result<Option<Vec<u8>>, KeystoreError> {
         let store = Self::load_store()?;
         Ok(store.get(key).cloned())
     }
 
-    /// Deletes a secret from the keystore.
+    /// Deletes a secret key/value pair from the enclave.
     pub fn delete_secret(key: &str) -> Result<bool, KeystoreError> {
         let mut store = Self::load_store()?;
-        let removed = store.remove(key).is_some();
-        if removed {
+        let existed = store.remove(key).is_some();
+        if existed {
             Self::save_store(&store)?;
         }
-        Ok(removed)
+        Ok(existed)
     }
 
-    /// Checks whether a secret exists.
+    /// Checks if a secret identifier exists in the enclave.
     pub fn has_secret(key: &str) -> bool {
-        Self::get_secret(key).ok().flatten().is_some()
+        Self::load_store().map(|m| m.contains_key(key)).unwrap_or(false)
     }
 }

@@ -1,7 +1,7 @@
 //! Application Binary Interface (ABI) definitions for dynamic plugins.
 
 pub const STRATA_PLUGIN_ABI_VERSION: u32 = 1;
-pub const STRATA_PLUGIN_MAGIC: [u8; 4] = [b'S', b'T', b'P', b'L'];
+pub const STRATA_PLUGIN_MAGIC: [u8; 4] = *b"STPL";
 
 /// Binary header prepended to compiled Strata dynamic plugin bundles.
 #[repr(C)]

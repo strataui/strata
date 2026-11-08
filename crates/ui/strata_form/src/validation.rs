@@ -2,6 +2,9 @@
 
 use std::rc::Rc;
 
+/// Type alias for custom field validator callbacks.
+pub type ValidatorFn<T> = Rc<dyn Fn(&T) -> Result<(), String>>;
+
 /// Predefined validation rules for form fields.
 #[derive(Clone)]
 pub enum ValidationRule<T> {
@@ -12,7 +15,7 @@ pub enum ValidationRule<T> {
     Max { max: f64, message: String },
     Email { message: String },
     Custom {
-        validator: Rc<dyn Fn(&T) -> Result<(), String>>,
+        validator: ValidatorFn<T>,
     },
 }
 

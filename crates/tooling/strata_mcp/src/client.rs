@@ -249,6 +249,17 @@ pub fn default_socket_path() -> PathBuf {
     } else if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         PathBuf::from(runtime_dir).join("strata-dev.sock")
     } else {
-        PathBuf::from("/tmp/strata-dev.sock")
+        #[cfg(unix)]
+        {
+            extern "C" {
+                fn getuid() -> u32;
+            }
+            let uid = unsafe { getuid() };
+            PathBuf::from(format!("/tmp/strata-runtime-{}", uid)).join("strata-dev.sock")
+        }
+        #[cfg(not(unix))]
+        {
+            PathBuf::from("/tmp/strata-dev.sock")
+        }
     }
 }

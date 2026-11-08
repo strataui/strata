@@ -35,7 +35,14 @@ impl Vec3 {
     }
 
     pub fn sub(&self, other: Vec3) -> Vec3 {
-        Vec3::new(self.x - other.x, self.y - other.y, self.z - other.z)
+        *self - other
+    }
+}
+
+impl std::ops::Sub for Vec3 {
+    type Output = Self;
+    fn sub(self, other: Self) -> Self {
+        Self::new(self.x - other.x, self.y - other.y, self.z - other.z)
     }
 }
 
@@ -123,7 +130,7 @@ impl Panner3D {
         let delta = self.position.sub(listener.position);
         let dist = delta.length();
         if dist < 1e-6 {
-            return (0.7071, 0.7071);
+            return (std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2);
         }
 
         let dir = delta.normalize();

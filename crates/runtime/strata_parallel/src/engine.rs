@@ -31,6 +31,87 @@ pub struct LayoutPartition {
     pub constraints: LayoutConstraints,
     pub z_index: i32,
     pub node_id: NodeId,
+    pub computational_weight: usize,
+}
+
+impl Default for LayoutPartition {
+    fn default() -> Self {
+        Self {
+            partition_id: PartitionId(0),
+            origin: (0.0, 0.0),
+            constraints: LayoutConstraints::default(),
+            z_index: 0,
+            node_id: NodeId(0),
+            computational_weight: 1,
+        }
+    }
+}
+
+impl LayoutPartition {
+    pub fn new(partition_id: PartitionId, node_id: NodeId) -> Self {
+        Self {
+            partition_id,
+            origin: (0.0, 0.0),
+            constraints: LayoutConstraints::default(),
+            z_index: 0,
+            node_id,
+            computational_weight: 1,
+        }
+    }
+
+    pub fn with_weight(mut self, weight: usize) -> Self {
+        self.computational_weight = weight.max(1);
+        self
+    }
+
+    pub fn with_origin(mut self, x: f32, y: f32) -> Self {
+        self.origin = (x, y);
+        self
+    }
+
+    pub fn with_z_index(mut self, z_index: i32) -> Self {
+        self.z_index = z_index;
+        self
+    }
+}
+
+/// Adaptive partitioner that decomposes heavy layout subtrees into independent partitions
+/// to prevent worker thread starvation.
+#[derive(Debug, Clone, Copy)]
+pub struct AdaptivePartitioner {
+    pub max_partition_weight: usize,
+}
+
+impl AdaptivePartitioner {
+    pub fn new(max_partition_weight: usize) -> Self {
+        Self {
+            max_partition_weight: max_partition_weight.max(1),
+        }
+    }
+
+    /// Splits oversized partitions into balanced sub-tasks when weight exceeds max_partition_weight.
+    pub fn balance_partitions(&self, partitions: Vec<LayoutPartition>) -> Vec<LayoutPartition> {
+        let mut balanced = Vec::with_capacity(partitions.len());
+        for p in partitions {
+            if p.computational_weight > self.max_partition_weight {
+                let sub_count = p.computational_weight.div_ceil(self.max_partition_weight);
+                let sub_weight = (p.computational_weight / sub_count).max(1);
+                for i in 0..sub_count {
+                    balanced.push(LayoutPartition {
+                        partition_id: PartitionId(p.partition_id.0 * 1000 + i as u32),
+                        origin: p.origin,
+                        constraints: p.constraints,
+                        z_index: p.z_index,
+                        node_id: p.node_id,
+                        computational_weight: sub_weight,
+                    });
+                }
+            } else {
+                balanced.push(p);
+            }
+        }
+        balanced
+    }
 }
 
 /// An independent display list chunk emitted by a worker thread.
@@ -233,9 +314,14 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
     }
 }
 
+use std::sync::Arc;
+
 /// The multi-threaded parallel execution and display list assembly engine.
+/// Powered by an authentic Rayon work-stealing threadpool with zero central mutex lock contention.
+#[derive(Clone)]
 pub struct ParallelEngine {
     num_threads: usize,
+    pool: Arc<rayon::ThreadPool>,
 }
 
 impl Default for ParallelEngine {
@@ -250,14 +336,20 @@ impl ParallelEngine {
         let threads = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        Self {
-            num_threads: threads,
-        }
+        Self::with_threads(threads)
     }
 
+    /// Creates a new parallel engine with a specified persistent Rayon work-stealing thread count.
     pub fn with_threads(num_threads: usize) -> Self {
+        let count = num_threads.max(1);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(count)
+            .thread_name(|i| format!("strata-parallel-{i}"))
+            .build()
+            .expect("Failed to initialize Rayon work-stealing threadpool");
         Self {
-            num_threads: num_threads.max(1),
+            num_threads: count,
+            pool: Arc::new(pool),
         }
     }
 
@@ -265,8 +357,13 @@ impl ParallelEngine {
         self.num_threads
     }
 
+    /// Returns a reference to the underlying Rayon work-stealing threadpool.
+    pub fn rayon_pool(&self) -> &rayon::ThreadPool {
+        &self.pool
+    }
+
     /// Executes layout reconciliation across independent partitions concurrently
-    /// using standard library scoped threads, collecting chunks into pre-allocated slots.
+    /// using persistent Rayon work-stealing threads, collecting chunks into pre-allocated slots.
     pub fn execute_parallel<F>(
         &self,
         partitions: &[LayoutPartition],
@@ -280,74 +377,151 @@ impl ParallelEngine {
             return Vec::new();
         }
 
-        // Pre-allocated slot array 0..K-1
-        let mut slots: Vec<Option<DisplayListChunk>> = (0..k).map(|_| None).collect();
-
-        // If single partition or single thread configured, execute serially
-        if self.num_threads <= 1 || k == 1 {
-            for (idx, partition) in partitions.iter().enumerate() {
-                let cmds = worker_fn(partition);
-                slots[idx] = Some(DisplayListChunk {
-                    partition_id: partition.partition_id,
-                    z_index: partition.z_index,
-                    origin: partition.origin,
-                    commands: cmds,
-                });
-            }
-            return slots;
+        if k == 1 || self.num_threads == 1 {
+            return partitions
+                .iter()
+                .map(|partition| {
+                    crate::arena::reset_thread_local_arena();
+                    let cmds = worker_fn(partition);
+                    Some(DisplayListChunk {
+                        partition_id: partition.partition_id,
+                        z_index: partition.z_index,
+                        origin: partition.origin,
+                        commands: cmds,
+                    })
+                })
+                .collect();
         }
 
-        // Concurrent execution using std::thread::scope
-        let chunk_size = (k + self.num_threads - 1) / self.num_threads;
-        let worker_ref = &worker_fn;
+        // Compute LPT (Longest Processing Time first) priority order:
+        // Heaviest partitions are scheduled first, maximizing work-stealing opportunities for remaining cores.
+        let mut order: Vec<usize> = (0..k).collect();
+        order.sort_by_key(|&idx| std::cmp::Reverse(partitions[idx].computational_weight));
 
-        std::thread::scope(|scope| {
-            let mut handles = Vec::new();
-
-            for chunk_slice in partitions.chunks(chunk_size) {
-                let handle = scope.spawn(move || {
-                    let mut local_results = Vec::with_capacity(chunk_slice.len());
-                    for partition in chunk_slice {
-                        let cmds = worker_ref(partition);
-                        local_results.push((
-                            partition.partition_id.0 as usize,
-                            DisplayListChunk {
-                                partition_id: partition.partition_id,
-                                z_index: partition.z_index,
-                                origin: partition.origin,
-                                commands: cmds,
-                            },
-                        ));
-                    }
-                    local_results
-                });
-                handles.push(handle);
-            }
-
-            for handle in handles {
-                if let Ok(results) = handle.join() {
-                    for (slot_idx, chunk) in results {
-                        if slot_idx < slots.len() {
-                            slots[slot_idx] = Some(chunk);
-                        }
-                    }
-                }
-            }
+        let results: Vec<(usize, DisplayListChunk)> = self.pool.install(|| {
+            use rayon::prelude::*;
+            order
+                .into_par_iter()
+                .map(|idx| {
+                    let partition = &partitions[idx];
+                    crate::arena::reset_thread_local_arena();
+                    let cmds = worker_fn(partition);
+                    (
+                        idx,
+                        DisplayListChunk {
+                            partition_id: partition.partition_id,
+                            z_index: partition.z_index,
+                            origin: partition.origin,
+                            commands: cmds,
+                        },
+                    )
+                })
+                .collect()
         });
+
+        let mut slots: Vec<Option<DisplayListChunk>> = (0..k).map(|_| None).collect();
+        for (idx, chunk) in results {
+            slots[idx] = Some(chunk);
+        }
+
+        debug_assert!(
+            slots.iter().all(|s| s.is_some()),
+            "Every scheduled partition must produce a corresponding display list chunk"
+        );
 
         slots
     }
 
-    /// Assembles completed partition chunks into the final Master Display List in deterministic O(K) time
-    /// without sorting, applying spatial origin offsets directly.
+    /// Computes layout for a slice of independent layout subtrees in parallel
+    /// across Rayon work-stealing threads with zero mutex contention.
+    pub fn compute_subtrees_parallel(
+        &self,
+        subtrees: &mut [strata_layout::LayoutNode],
+        available_width: f32,
+        available_height: f32,
+    ) {
+        use rayon::prelude::*;
+        if subtrees.is_empty() {
+            return;
+        }
+        if subtrees.len() == 1 || self.num_threads == 1 {
+            for tree in subtrees {
+                tree.compute_layout(available_width, available_height);
+            }
+            return;
+        }
+
+        self.pool.install(|| {
+            subtrees.par_iter_mut().for_each(|node| {
+                crate::arena::reset_thread_local_arena();
+                node.compute_layout(available_width, available_height);
+            });
+        });
+    }
+
+    /// Recursively divides and computes independent layout subtrees in parallel
+    /// using `rayon::join()` for binary divide-and-conquer work-stealing.
+    pub fn compute_subtrees_recursive_join(
+        &self,
+        subtrees: &mut [strata_layout::LayoutNode],
+        available_width: f32,
+        available_height: f32,
+    ) {
+        if subtrees.is_empty() {
+            return;
+        }
+        if subtrees.len() == 1 || self.num_threads == 1 {
+            for tree in subtrees {
+                tree.compute_layout(available_width, available_height);
+            }
+            return;
+        }
+
+        self.pool.install(|| {
+            fn split_and_compute(slice: &mut [strata_layout::LayoutNode], w: f32, h: f32) {
+                match slice.len() {
+                    0 => {}
+                    1 => {
+                        crate::arena::reset_thread_local_arena();
+                        slice[0].compute_layout(w, h);
+                    }
+                    _ => {
+                        let mid = slice.len() / 2;
+                        let (left, right) = slice.split_at_mut(mid);
+                        rayon::join(
+                            || split_and_compute(left, w, h),
+                            || split_and_compute(right, w, h),
+                        );
+                    }
+                }
+            }
+            split_and_compute(subtrees, available_width, available_height);
+        });
+    }
+
+    /// Assembles completed partition chunks into the final Master Display List,
+    /// sorting chunks by resolved CSS stacking context order (z_index, DOM tree order)
+    /// and applying spatial origin offsets directly.
     pub fn assemble_master_display_list(&self, slots: &[Option<DisplayListChunk>]) -> DisplayList {
         let mut master = DisplayList::new();
 
-        for slot in slots {
-            if let Some(chunk) = slot {
-                for cmd in &chunk.commands {
-                    master.push(translate_draw_command(cmd, chunk.origin));
-                }
+        let mut present_chunks: Vec<(usize, &DisplayListChunk)> = slots
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, s)| s.as_ref().map(|c| (idx, c)))
+            .collect();
+
+        // Stable sort by z_index ascending, preserving DOM tree order for identical z_index
+        present_chunks.sort_by(|(idx_a, chunk_a), (idx_b, chunk_b)| {
+            chunk_a
+                .z_index
+                .cmp(&chunk_b.z_index)
+                .then_with(|| idx_a.cmp(idx_b))
+        });
+
+        for (_idx, chunk) in present_chunks {
+            for cmd in &chunk.commands {
+                master.push(translate_draw_command(cmd, chunk.origin));
             }
         }
 

@@ -12,3 +12,4 @@ strata_layout = { workspace = true }
 strata_style = { workspace = true }
 strata_render = { workspace = true }
 strata_primitives = { workspace = true }
+rayon = "1.10"

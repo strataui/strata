@@ -25,13 +25,21 @@ impl VfsRoot {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
+impl std::str::FromStr for VfsRoot {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "app_data" | "appdata" => Some(Self::AppData),
-            "cache" => Some(Self::Cache),
-            "documents" | "docs" => Some(Self::Documents),
-            "temp" | "tmp" => Some(Self::Temp),
-            _ => None,
+            "app_data" | "appdata" => Ok(Self::AppData),
+            "cache" => Ok(Self::Cache),
+            "documents" | "docs" => Ok(Self::Documents),
+            "temp" | "tmp" => Ok(Self::Temp),
+            _ => Err(()),
         }
     }
 }
@@ -91,7 +99,7 @@ impl VfsPath {
         let root_str = parts.next().unwrap_or("");
         let sub_str = parts.next().unwrap_or("");
 
-        let root = VfsRoot::from_str(root_str).ok_or_else(|| {
+        let root = VfsRoot::parse(root_str).ok_or_else(|| {
             FsError::InvalidPath(format!("Unknown VfsRoot in URI: {root_str}"))
         })?;
 
@@ -103,7 +111,14 @@ impl VfsPath {
         let mut clean = PathBuf::new();
         for comp in path.components() {
             match comp {
-                Component::Normal(c) => clean.push(c),
+                Component::Normal(c) => {
+                    let s = c.to_string_lossy();
+                    // Strip Windows drive letters (e.g., "C:", "D:")
+                    if s.len() == 2 && s.ends_with(':') && s.chars().next().map(|ch| ch.is_ascii_alphabetic()).unwrap_or(false) {
+                        continue;
+                    }
+                    clean.push(c);
+                }
                 Component::CurDir => {}
                 Component::ParentDir => {
                     // Pop only if not at root, never traversing above
