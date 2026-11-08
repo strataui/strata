@@ -3,6 +3,8 @@
 //! Validates Chromium/Blink specification parity across Box Model, Flexbox L1, Grid L2,
 //! Positioning, Box-Sizing, Margin Collapsing, and 1/64th Subpixel Snapping.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use crate::box_model::collapse_margins;
 use crate::prelude::*;
 use strata_primitives::geom::EdgeInsets;
@@ -27,22 +29,20 @@ pub struct WptSuite;
 impl WptSuite {
     /// Executes all formal WPT layout vectors and returns the test results.
     pub fn run_all() -> Vec<WptTestVector> {
-        let mut vectors = Vec::new();
-
-        vectors.push(Self::test_margin_collapsing_siblings());
-        vectors.push(Self::test_margin_collapsing_negative());
-        vectors.push(Self::test_flexbox_grow());
-        vectors.push(Self::test_flexbox_shrink());
-        vectors.push(Self::test_flexbox_wrap());
-        vectors.push(Self::test_flexbox_align_stretch());
-        vectors.push(Self::test_grid_fractional_tracks());
-        vectors.push(Self::test_grid_auto_placement());
-        vectors.push(Self::test_box_sizing_border_box());
-        vectors.push(Self::test_subpixel_snapping());
-        vectors.push(Self::test_absolute_positioning());
-        vectors.push(Self::test_display_none_exclusion());
-
-        vectors
+        vec![
+            Self::test_margin_collapsing_siblings(),
+            Self::test_margin_collapsing_negative(),
+            Self::test_flexbox_grow(),
+            Self::test_flexbox_shrink(),
+            Self::test_flexbox_wrap(),
+            Self::test_flexbox_align_stretch(),
+            Self::test_grid_fractional_tracks(),
+            Self::test_grid_auto_placement(),
+            Self::test_box_sizing_border_box(),
+            Self::test_subpixel_snapping(),
+            Self::test_absolute_positioning(),
+            Self::test_display_none_exclusion(),
+        ]
     }
 
     /// Computes overall compliance percentage (0.0 to 100.0).

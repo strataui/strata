@@ -1,5 +1,7 @@
 //! Integration tests for explicit CSS Grid tracks, gaps, explicit placement, and spans.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use strata_layout::prelude::*;
 use strata_style::types::{ComputedStyle, Dimension, Display, GridTrack};
 

@@ -5,7 +5,7 @@
 
 use crate::box_model::resolve_dimension;
 use crate::tree::LayoutNode;
-use strata_style::types::{Display, FlexDirection, Position};
+use strata_style::types::{Display, FlexDirection, GridTrack, GridTrackBreadth, Position};
 
 /// Intrinsic dimension bounds (min-content and max-content inline sizes).
 /// Mirrors Chromium's `MinMaxSizes` in `third_party/blink/renderer/core/layout/min_max_sizes.h`.
@@ -286,6 +286,11 @@ fn compute_min_max_sizes_uncached(node: &LayoutNode, parent_size: Option<f32>) -
                     }
                 }
             }
+            Display::Grid | Display::InlineGrid => {
+                let grid_sizes = compute_grid_min_max_sizes(node, parent_size);
+                result.min_content = result.min_content.max(grid_sizes.min_content);
+                result.max_content = result.max_content.max(grid_sizes.max_content);
+            }
             _ => {
                 // Standard Block & Inline Formatting Context Layout:
                 // Contiguous inline phrasing children accumulate horizontally along the same line,
@@ -323,9 +328,137 @@ fn compute_min_max_sizes_uncached(node: &LayoutNode, parent_size: Option<f32>) -
     result.add_insets(inline_insets);
 
     // 5. Clamp against min-width and max-width
-    let min_w = resolve_dimension(node.style.min_width.clone(), avail);
-    let max_w = resolve_dimension(node.style.max_width.clone(), avail);
+    let min_w = resolve_dimension(node.style.min_width, avail);
+    let max_w = resolve_dimension(node.style.max_width, avail);
     result.clamp(min_w, max_w)
+}
+
+/// Recursively computes intrinsic min-content and max-content sizes for a grid container
+/// according to W3C CSS Grid Layout Level 2 §12.1.
+fn compute_grid_min_max_sizes(node: &LayoutNode, parent_size: Option<f32>) -> MinMaxSizes {
+    let in_flow_children: Vec<_> = node
+        .children
+        .iter()
+        .filter(|c| {
+            c.style.display != Display::None
+                && c.style.position != Position::Absolute
+                && c.style.position != Position::Fixed
+        })
+        .collect();
+
+    if in_flow_children.is_empty() {
+        return MinMaxSizes::zero();
+    }
+
+    let gap_col = node.style.gap_col.max(node.style.gap);
+
+    if !node.style.grid_template_columns.is_empty() {
+        let num_tracks = node.style.grid_template_columns.len();
+        let mut track_items: Vec<Vec<&LayoutNode>> = vec![Vec::new(); num_tracks];
+
+        for (idx, child) in in_flow_children.iter().enumerate() {
+            let col = if let Some(line) = child.style.grid_column_start {
+                if line >= 1 {
+                    ((line - 1) as usize) % num_tracks
+                } else {
+                    idx % num_tracks
+                }
+            } else {
+                idx % num_tracks
+            };
+            track_items[col].push(child);
+        }
+
+        let mut sum_min = 0.0f32;
+        let mut sum_max = 0.0f32;
+
+        for (col_idx, track) in node.style.grid_template_columns.iter().enumerate() {
+            let items = &track_items[col_idx];
+            let mut items_min = 0.0f32;
+            let mut items_max = 0.0f32;
+
+            for item in items {
+                let s = compute_min_max_sizes(item, parent_size);
+                let m = item.style.margin.left + item.style.margin.right;
+                items_min = items_min.max(s.min_content + m);
+                items_max = items_max.max(s.max_content + m);
+            }
+
+            match track {
+                GridTrack::Px(px) => {
+                    let w = px.max(0.0);
+                    sum_min += w;
+                    sum_max += w;
+                }
+                GridTrack::Percent(pct) => {
+                    if let Some(avail) = parent_size {
+                        let w = ((pct / 100.0) * avail).max(0.0);
+                        sum_min += w;
+                        sum_max += w;
+                    } else {
+                        sum_min += items_min;
+                        sum_max += items_max;
+                    }
+                }
+                GridTrack::Fr(fr) => {
+                    sum_min += items_min;
+                    sum_max += items_max.max(items_min * fr);
+                }
+                GridTrack::Auto => {
+                    sum_min += items_min;
+                    sum_max += items_max;
+                }
+                GridTrack::MinContent => {
+                    sum_min += items_min;
+                    sum_max += items_min;
+                }
+                GridTrack::MaxContent => {
+                    sum_min += items_min;
+                    sum_max += items_max;
+                }
+                GridTrack::MinMax(min_b, max_b) => {
+                    let t_min = match min_b {
+                        GridTrackBreadth::Px(px) => *px,
+                        GridTrackBreadth::MinContent => items_min,
+                        GridTrackBreadth::MaxContent => items_max,
+                        _ => items_min,
+                    };
+                    let t_max = match max_b {
+                        GridTrackBreadth::Px(px) => *px,
+                        GridTrackBreadth::MaxContent => items_max,
+                        GridTrackBreadth::MinContent => items_min,
+                        GridTrackBreadth::Fr(f) => items_max.max(items_min * f),
+                        _ => items_max,
+                    };
+                    sum_min += t_min;
+                    sum_max += t_max.max(t_min);
+                }
+                GridTrack::Subgrid => {
+                    sum_min += items_min;
+                    sum_max += items_max;
+                }
+            }
+        }
+
+        let gaps = if num_tracks > 1 {
+            (num_tracks - 1) as f32 * gap_col
+        } else {
+            0.0
+        };
+
+        MinMaxSizes::new(sum_min + gaps, sum_max + gaps)
+    } else {
+        // Auto / single-column fallback
+        let mut max_min = 0.0f32;
+        let mut max_max = 0.0f32;
+        for child in in_flow_children {
+            let s = compute_min_max_sizes(child, parent_size);
+            let m = child.style.margin.left + child.style.margin.right;
+            max_min = max_min.max(s.min_content + m);
+            max_max = max_max.max(s.max_content + m);
+        }
+        MinMaxSizes::new(max_min, max_max)
+    }
 }
 
 /// Resolves the line-height multiplier for an inline text style.

@@ -1,5 +1,7 @@
 //! Verification Suite for CSS Positioning, Containing Blocks, and Stacking Schemes.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use strata_layout::{ContainingBlock, LayoutNode, Rect};
 use strata_primitives::geom::EdgeInsets;
 use strata_style::types::{ComputedStyle, Dimension, Display, Position};
@@ -203,3 +205,55 @@ fn test_percentage_insets_resolution() {
     assert_eq!(child_geom.width, 500.0);
     assert_eq!(child_geom.height, 320.0);
 }
+
+#[test]
+fn test_sticky_element_clamped_to_static_parent_container() {
+    // Grandparent: Relative with height 3000px
+    let mut grandparent = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        position: Position::Relative,
+        width: Dimension::Px(600.0),
+        height: Dimension::Px(3000.0),
+        ..Default::default()
+    });
+
+    // Parent: Static block container with height 400px
+    let mut parent = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        position: Position::Static,
+        width: Dimension::Px(600.0),
+        height: Dimension::Px(400.0),
+        ..Default::default()
+    });
+
+    // Sticky child with height 50px, top 0px
+    let mut sticky_child = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        position: Position::Sticky,
+        width: Dimension::Px(600.0),
+        height: Dimension::Px(50.0),
+        ..Default::default()
+    });
+    sticky_child.style.insets.top = Dimension::Px(0.0);
+
+    parent.add_child(sticky_child);
+    grandparent.add_child(parent);
+
+    // Initial layout
+    grandparent.compute_layout(600.0, 3000.0);
+
+    // Scroll by 600px
+    let cb_scrolled = ContainingBlock::with_scroll(
+        grandparent.geometry.padding_box,
+        Rect::new(0.0, 0.0, 600.0, 800.0),
+        0.0,
+        600.0,
+    );
+    strata_layout::solve_positioning_children(&mut grandparent, cb_scrolled);
+
+    // Child must be clamped to parent bottom (400) - child height (50) = 350.0,
+    // NOT allowed to escape parent into the 3000px grandparent!
+    let sticky_geom = &grandparent.children[0].children[0].geometry.border_box;
+    assert_eq!(sticky_geom.y, 350.0, "Sticky child must be clamped to static parent container bottom");
+}
+

@@ -187,7 +187,7 @@ fn report() {
     if total < 500 {
         return;
     }
-    entries.sort_by(|a, b| b.1.nanos.cmp(&a.1.nanos));
+    entries.sort_by_key(|a| std::cmp::Reverse(a.1.nanos));
     let mut lines = String::new();
     for (index, (slot, sample)) in entries.iter().enumerate().take(5) {
         lines.push_str(&format!(

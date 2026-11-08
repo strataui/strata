@@ -163,11 +163,12 @@ pub fn refresh_inline_fragment_styles(node: &mut LayoutNode) {
 
 /// Recursively clears line boxes from inline phrasing descendants whose text is absorbed by parent IFC.
 pub fn clear_inline_descendant_line_boxes(node: &mut LayoutNode) {
-    if node.style.display == strata_style::types::Display::Inline {
-        node.line_boxes.clear();
-        for child in &mut node.children {
-            clear_inline_descendant_line_boxes(child);
-        }
+    if node.style.display != strata_style::types::Display::Inline {
+        return;
+    }
+    node.line_boxes.clear();
+    for child in &mut node.children {
+        clear_inline_descendant_line_boxes(child);
     }
 }
 
@@ -275,16 +276,19 @@ fn collect_inline_items_from_children(
 
 /// Recursively propagates atomic inline fragment bounds down through nested `Display::Inline` containers.
 fn propagate_atomic_bounds_to_inline_descendants(node: &mut LayoutNode, bounds: Rect) {
-    if node.style.display == strata_style::types::Display::Inline {
-        for child in &mut node.children {
-            child.geometry.border_box.x = bounds.x;
-            child.geometry.border_box.y = bounds.y;
-            if child.geometry.border_box.width == 0.0 {
-                child.geometry.border_box.width = bounds.width;
-            }
-            if child.geometry.border_box.height == 0.0 {
-                child.geometry.border_box.height = bounds.height;
-            }
+    if node.style.display != strata_style::types::Display::Inline {
+        return;
+    }
+    for child in &mut node.children {
+        child.geometry.border_box.x = bounds.x;
+        child.geometry.border_box.y = bounds.y;
+        if child.geometry.border_box.width == 0.0 {
+            child.geometry.border_box.width = bounds.width;
+        }
+        if child.geometry.border_box.height == 0.0 {
+            child.geometry.border_box.height = bounds.height;
+        }
+        if child.style.display == strata_style::types::Display::Inline {
             propagate_atomic_bounds_to_inline_descendants(child, bounds);
         }
     }
@@ -401,8 +405,7 @@ fn truncate_inline_overflow(
             cut = true;
         }
 
-        if !new_fragments.is_empty() {
-            let last = new_fragments.last().unwrap();
+        if let Some(last) = new_fragments.last() {
             line.bounds.width = last.bounds.x + last.bounds.width;
         } else {
             line.bounds.width = 0.0;
@@ -431,12 +434,35 @@ pub fn solve_block_children_with_exclusions(
     node: &mut LayoutNode,
     content_width: f32,
     available_height: f32,
-    mut parent_exclusions: Option<&mut crate::exclusions::ExclusionSpace>,
+    parent_exclusions: Option<&mut crate::exclusions::ExclusionSpace>,
     bfc_offset_y: f32,
+) -> f32 {
+    solve_block_children_with_exclusions_guarded(
+        node,
+        content_width,
+        available_height,
+        parent_exclusions,
+        bfc_offset_y,
+        crate::tree::LayoutDepthGuard::root(),
+    )
+}
+
+/// Positions in-flow block children with active exclusion space tracking and depth guard.
+pub fn solve_block_children_with_exclusions_guarded(
+    node: &mut LayoutNode,
+    content_width: f32,
+    available_height: f32,
+    parent_exclusions: Option<&mut crate::exclusions::ExclusionSpace>,
+    bfc_offset_y: f32,
+    guard: crate::tree::LayoutDepthGuard,
 ) -> f32 {
     let _prof = crate::prof::Scope::new(crate::prof::Slot::Block);
     let padding = node.style.padding;
     let border = node.style.border_width;
+
+    if guard.is_exhausted() {
+        return padding.top + border.top + padding.bottom + border.bottom;
+    }
 
     // A text leaf that clips with `text-overflow: ellipsis` owns its own inline
     // formatting context. Text leaves normally inherit line boxes from an
@@ -507,12 +533,17 @@ pub fn solve_block_children_with_exclusions(
 
     if has_explicit_inlines || has_implicit_inlines {
         if has_implicit_inlines {
+            let child_guard = guard.enter();
             for child in &mut node.children {
                 // Measure every phrasing child, including text leaves. Text
                 // leaves used to be skipped here because their glyph runs are
                 // absorbed into the parent inline formatting context, which
                 // left their physical `border_box` at 0x0.
-                child.compute_layout(content_width, available_height);
+                if let Some(cg) = child_guard {
+                    child.compute_layout_guarded(content_width, available_height, None, 0.0, cg);
+                } else {
+                    child.compute_layout_guarded(content_width, available_height, None, 0.0, guard);
+                }
                 clear_inline_descendant_line_boxes(child);
             }
             let mut items = Vec::new();
@@ -643,10 +674,12 @@ pub fn solve_block_children_with_exclusions(
 
     let mut local_exclusions = crate::exclusions::ExclusionSpace::new();
     let (exclusion_space, base_bfc_y): (&mut crate::exclusions::ExclusionSpace, f32) =
-        if establishes_bfc {
+        if establishes_bfc || parent_exclusions.is_none() {
             (&mut local_exclusions, 0.0)
+        } else if let Some(pe) = parent_exclusions {
+            (pe, bfc_offset_y)
         } else {
-            (parent_exclusions.take().unwrap(), bfc_offset_y)
+            (&mut local_exclusions, 0.0)
         };
     let initial_exclusions_count = exclusion_space.exclusions().len();
     let mut current_y = border.top + padding.top;
@@ -672,7 +705,12 @@ pub fn solve_block_children_with_exclusions(
         // Handle CSS float
         if child.style.float != strata_style::types::Float::None {
             // Layout float child as an independent BFC to compute its dimensions
-            child.compute_layout(content_width, available_height);
+            let child_guard = guard.enter();
+            if let Some(cg) = child_guard {
+                child.compute_layout_guarded(content_width, available_height, None, 0.0, cg);
+            } else {
+                child.compute_layout_guarded(content_width, available_height, None, 0.0, guard);
+            }
             let float_margin = child.style.margin;
             let float_w = child.geometry.border_box.width + float_margin.left + float_margin.right;
             let float_h = child.geometry.border_box.height + float_margin.top + float_margin.bottom;
@@ -757,31 +795,91 @@ pub fn solve_block_children_with_exclusions(
 
         current_y += collapsed_v_margin;
 
-        let child_x = border.left + padding.left + child_margin.left;
+        let child_establishes_bfc = child.style.float != strata_style::types::Float::None
+            || matches!(child.style.position, Position::Absolute | Position::Fixed)
+            || matches!(
+                child.style.display,
+                strata_style::types::Display::InlineBlock
+                    | strata_style::types::Display::TableCell
+                    | strata_style::types::Display::TableCaption
+            )
+            || child.style.overflow_x != strata_style::types::Overflow::Visible
+            || child.style.overflow_y != strata_style::types::Overflow::Visible
+            || child.style.contain.layout
+            || child.is_layout_boundary();
+
+        let mut child_available_width = content_width;
+        let mut child_x = border.left + padding.left + child_margin.left;
+
+        // CSS 2.1 §9.5: An in-flow element that establishes a new BFC must not overlap the margin box of any floats in the same BFC
+        if child_establishes_bfc && !exclusion_space.exclusions().is_empty() {
+            let mut child_bfc_y = base_bfc_y + current_y;
+            let mut opp = exclusion_space.line_opportunity(child_bfc_y, 0.0, content_width);
+
+            if opp.available_width < content_width || opp.left_float_edge > 0.0 {
+                let child_desired_w = resolve_dimension(child.style.width, content_width);
+                if let Some(w) = child_desired_w {
+                    if w + child_margin.left + child_margin.right > opp.available_width {
+                        // Element does not fit beside the float; clear by placing it below preceding floats
+                        while let Some(next_y) = exclusion_space.next_float_bottom_after(child_bfc_y) {
+                            child_bfc_y = next_y;
+                            opp = exclusion_space.line_opportunity(child_bfc_y, 0.0, content_width);
+                            if opp.available_width >= w + child_margin.left + child_margin.right {
+                                break;
+                            }
+                        }
+                        current_y = child_bfc_y - base_bfc_y;
+                    }
+                }
+
+                child_available_width = (opp.available_width - child_margin.left - child_margin.right).max(0.0);
+                child_x = border.left + padding.left + opp.left_float_edge + child_margin.left;
+            }
+        }
+
         child.geometry.border_box.x = node.geometry.border_box.x + child_x;
         child.geometry.border_box.y = node.geometry.border_box.y + current_y;
 
-        // Pass the active BFC exclusion space down to in-flow block children so floats can overhang across sections
-        child.compute_layout_with_exclusions(
-            content_width,
-            available_height,
-            Some(exclusion_space),
-            base_bfc_y + current_y,
-        );
+        // Pass the active BFC exclusion space down to in-flow block children so floats can overhang across sections,
+        // EXCEPT when child establishes its own BFC or exclusion space is currently empty.
+        let passed_exclusions = if child_establishes_bfc || exclusion_space.exclusions().is_empty() {
+            None
+        } else {
+            Some(&mut *exclusion_space)
+        };
+
+        let child_guard = guard.enter();
+        if let Some(cg) = child_guard {
+            child.compute_layout_guarded(
+                child_available_width,
+                available_height,
+                passed_exclusions,
+                base_bfc_y + current_y,
+                cg,
+            );
+        } else {
+            child.compute_layout_guarded(
+                child_available_width,
+                available_height,
+                passed_exclusions,
+                base_bfc_y + current_y,
+                guard,
+            );
+        }
 
         // Auto margin horizontal centering (mx-auto / ml-auto / mr-auto)
         if child.style.margin_auto_left && child.style.margin_auto_right {
-            let free_space = content_width - child.geometry.border_box.width;
+            let free_space = child_available_width - child.geometry.border_box.width;
             let auto_m = (free_space / 2.0).max(0.0);
-            let target_x = node.geometry.border_box.x + border.left + padding.left + auto_m;
+            let target_x = node.geometry.border_box.x + child_x - child_margin.left + auto_m;
             let dx = target_x - child.geometry.border_box.x;
             if dx != 0.0 {
                 translate_node_and_descendants(child, dx, 0.0);
             }
         } else if child.style.margin_auto_left {
-            let free_space = content_width - child.geometry.border_box.width - child_margin.right;
+            let free_space = child_available_width - child.geometry.border_box.width - child_margin.right;
             let target_x =
-                node.geometry.border_box.x + border.left + padding.left + free_space.max(0.0);
+                node.geometry.border_box.x + child_x - child_margin.left + free_space.max(0.0);
             let dx = target_x - child.geometry.border_box.x;
             if dx != 0.0 {
                 translate_node_and_descendants(child, dx, 0.0);
@@ -830,7 +928,14 @@ pub fn solve_block_children_with_exclusions(
 
 /// Executes normal-flow block layout with vertical margin collapsing.
 pub fn solve_block(node: &mut LayoutNode, available_width: f32, available_height: f32) {
-    solve_block_with_exclusions(node, available_width, available_height, None, 0.0);
+    solve_block_with_exclusions_guarded(
+        node,
+        available_width,
+        available_height,
+        None,
+        0.0,
+        crate::tree::LayoutDepthGuard::root(),
+    );
 }
 
 /// Executes normal-flow block layout passing parent exclusion space for float obstructions.
@@ -841,9 +946,58 @@ pub fn solve_block_with_exclusions(
     parent_exclusions: Option<&mut crate::exclusions::ExclusionSpace>,
     bfc_offset_y: f32,
 ) {
+    solve_block_with_exclusions_guarded(
+        node,
+        available_width,
+        available_height,
+        parent_exclusions,
+        bfc_offset_y,
+        crate::tree::LayoutDepthGuard::root(),
+    );
+}
+
+/// Executes normal-flow block layout with an active depth guard to prevent stack overflow.
+pub fn solve_block_with_exclusions_guarded(
+    node: &mut LayoutNode,
+    available_width: f32,
+    available_height: f32,
+    parent_exclusions: Option<&mut crate::exclusions::ExclusionSpace>,
+    bfc_offset_y: f32,
+    guard: crate::tree::LayoutDepthGuard,
+) {
     let padding = node.style.padding;
     let border = node.style.border_width;
     let margin = node.style.margin;
+
+    if guard.is_exhausted() {
+        let border_box_width = match resolve_dimension(node.style.width, available_width) {
+            Some(w) => clamp_dimension(
+                w,
+                node.style.min_width,
+                node.style.max_width,
+                available_width,
+            ),
+            None => (available_width - margin.left - margin.right).max(0.0),
+        };
+        let border_box_height = match resolve_dimension(node.style.height, available_height) {
+            Some(h) => clamp_dimension(
+                h,
+                node.style.min_height,
+                node.style.max_height,
+                available_height,
+            ),
+            None => 0.0,
+        };
+        let border_box = Rect::new(
+            node.geometry.border_box.x,
+            node.geometry.border_box.y,
+            border_box_width,
+            border_box_height,
+        );
+        node.geometry = LayoutGeometry::from_border_box(border_box, padding, border, margin);
+        node.geometry.snap_to_pixel();
+        return;
+    }
 
     // Content-Visibility: Hidden virtualization (W3C CSS Containment Level 2)
     if node.style.content_visibility == strata_style::types::ContentVisibility::Hidden {
@@ -1004,12 +1158,13 @@ pub fn solve_block_with_exclusions(
     let children_height = if node.children.is_empty() && node.text.is_some() {
         text_h + padding.top + padding.bottom + border.top + border.bottom
     } else {
-        solve_block_children_with_exclusions(
+        solve_block_children_with_exclusions_guarded(
             node,
             content_width,
             available_height,
             parent_exclusions,
             bfc_offset_y,
+            guard,
         )
     };
 
@@ -1056,13 +1211,13 @@ pub fn solve_block_with_exclusions(
     // A text leaf that truncates must publish positioned line boxes so paint
     // renders the clipped ellipsis fragment instead of the full string.
     if node.children.is_empty()
-        && node.text.is_some()
         && node.style.text_overflow == strata_style::types::TextOverflow::Ellipsis
         && node.style.overflow_x != strata_style::types::Overflow::Visible
         && content_width > 0.0
     {
-        let inline_style = inline_style_from_computed_style(&node.style);
-        let item = crate::typography::InlineItem::text(node.text.clone().unwrap(), inline_style);
+        if let Some(ref text) = node.text {
+            let inline_style = inline_style_from_computed_style(&node.style);
+            let item = crate::typography::InlineItem::text(text.clone(), inline_style);
         let ifc = crate::typography::InlineFormattingContext::new();
         let opt = crate::typography::InlineLayoutOptions {
             font_size: node.style.font_size,
@@ -1110,6 +1265,7 @@ pub fn solve_block_with_exclusions(
                 frag.baseline_y += origin_y;
             }
         }
-        node.line_boxes = res.lines;
+            node.line_boxes = res.lines;
+        }
     }
 }

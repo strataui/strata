@@ -107,3 +107,50 @@ fn test_compute_min_max_sizes_ignores_out_of_flow_absolute_children() {
     assert_eq!(sizes.min_content, 60.0);
     assert_eq!(sizes.max_content, 60.0);
 }
+
+#[test]
+fn test_compute_min_max_sizes_grid_container() {
+    // 1. Grid with fixed px columns and gap: 200px + 300px + 20px gap = 520px
+    let mut grid_parent = LayoutNode::new(ComputedStyle::default());
+    grid_parent.style.display = Display::Grid;
+    grid_parent.style.grid_template_columns = vec![GridTrack::Px(200.0), GridTrack::Px(300.0)];
+    grid_parent.style.gap = 20.0;
+
+    let mut item1 = LayoutNode::new(ComputedStyle::default());
+    item1.style.width = Dimension::Px(100.0);
+
+    let mut item2 = LayoutNode::new(ComputedStyle::default());
+    item2.style.width = Dimension::Px(150.0);
+
+    grid_parent.add_child(item1);
+    grid_parent.add_child(item2);
+
+    let sizes = compute_min_max_sizes(&grid_parent, None);
+    assert_eq!(sizes.min_content, 520.0);
+    assert_eq!(sizes.max_content, 520.0);
+
+    // 2. Grid with auto and min-content tracks sizing to children
+    let mut auto_grid = LayoutNode::new(ComputedStyle::default());
+    auto_grid.style.display = Display::Grid;
+    auto_grid.style.grid_template_columns = vec![GridTrack::MinContent, GridTrack::MaxContent];
+    auto_grid.style.gap = 10.0;
+
+    let mut text_item1 = LayoutNode::new(ComputedStyle::default());
+    text_item1.text = Some("Distributed Systems".to_string());
+    text_item1.style.font_size = 16.0;
+
+    let mut text_item2 = LayoutNode::new(ComputedStyle::default());
+    text_item2.text = Some("Cloud Computing Engine".to_string());
+    text_item2.style.font_size = 16.0;
+
+    auto_grid.add_child(text_item1);
+    auto_grid.add_child(text_item2);
+
+    let auto_sizes = compute_min_max_sizes(&auto_grid, None);
+    // Track 0 (MinContent) takes child 0's min_content
+    // Track 1 (MaxContent) takes child 1's max_content
+    // Gap = 10.0
+    assert!(auto_sizes.min_content > 50.0);
+    assert!(auto_sizes.max_content > auto_sizes.min_content);
+}
+

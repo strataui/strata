@@ -1,5 +1,6 @@
 //! Collapsed-border table row rhythm parity checks.
 //!
+#![allow(clippy::field_reassign_with_default)]
 //! A collapsed-border table shares each internal horizontal border between the
 //! bottom edge of one row and the top edge of the next. Counting both borders
 //! makes every internal boundary drift one pixel per row. These tests pin the

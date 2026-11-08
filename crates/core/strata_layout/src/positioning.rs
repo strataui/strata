@@ -60,6 +60,21 @@ impl ContainingBlock {
 /// Resolves out-of-flow and relative positioning offsets for a container's children
 /// and recursively propagates containing blocks down through all descendants.
 pub fn solve_positioning(container: &mut LayoutNode, viewport_width: f32, viewport_height: f32) {
+    solve_positioning_guarded(
+        container,
+        viewport_width,
+        viewport_height,
+        crate::tree::LayoutDepthGuard::root(),
+    );
+}
+
+/// Resolves positioning with an active depth guard to prevent call-stack exhaustion.
+pub fn solve_positioning_guarded(
+    container: &mut LayoutNode,
+    viewport_width: f32,
+    viewport_height: f32,
+    guard: crate::tree::LayoutDepthGuard,
+) {
     let padding_box = if container.geometry.padding_box.width > 0.0
         || container.geometry.padding_box.height > 0.0
     {
@@ -73,7 +88,7 @@ pub fn solve_positioning(container: &mut LayoutNode, viewport_width: f32, viewpo
         Rect::new(0.0, 0.0, viewport_width, viewport_height),
     );
 
-    solve_positioning_children(container, initial_cb);
+    solve_positioning_children_guarded(container, initial_cb, guard);
 
     // W3C CSS Flexbox Level 1 §4.1: the static position of an absolutely
     // positioned child of a flex container is resolved as if the child were
@@ -187,13 +202,29 @@ fn align_offset(align: AlignItems, available: f32, item: f32) -> f32 {
 
 /// Recursively traverses child nodes, resolving positioning and propagating the containing block.
 pub fn solve_positioning_children(container: &mut LayoutNode, cb: ContainingBlock) {
+    solve_positioning_children_guarded(container, cb, crate::tree::LayoutDepthGuard::root());
+}
+
+/// Recursively traverses child nodes with an active depth guard to prevent stack overflow.
+pub fn solve_positioning_children_guarded(
+    container: &mut LayoutNode,
+    cb: ContainingBlock,
+    guard: crate::tree::LayoutDepthGuard,
+) {
+    if guard.is_exhausted() {
+        return;
+    }
+    let child_guard = match guard.enter() {
+        Some(g) => g,
+        None => return,
+    };
     for child in &mut container.children {
         match child.style.position {
             Position::Static => {
                 // Static elements do not establish a containing block for absolute descendants.
                 // Descendants continue using the ancestor containing block `cb`.
                 if !child.children.is_empty() {
-                    solve_positioning_children(child, cb);
+                    solve_positioning_children_guarded(child, cb, child_guard);
                 }
             }
             Position::Relative => {
@@ -233,12 +264,12 @@ pub fn solve_positioning_children(container: &mut LayoutNode, cb: ContainingBloc
                 };
 
                 if !child.children.is_empty() {
-                    solve_positioning_children(child, child_cb);
+                    solve_positioning_children_guarded(child, child_cb, child_guard);
                 }
             }
             Position::Absolute => {
                 // Out-of-flow positioning relative to nearest non-static ancestor (cb.padding_box)
-                solve_out_of_flow_box(child, cb.padding_box, cb.viewport, false);
+                solve_out_of_flow_box_guarded(child, cb.padding_box, cb.viewport, false, child_guard);
 
                 // Absolute elements establish a containing block for descendants
                 let child_cb = ContainingBlock {
@@ -248,12 +279,12 @@ pub fn solve_positioning_children(container: &mut LayoutNode, cb: ContainingBloc
                 };
 
                 if !child.children.is_empty() {
-                    solve_positioning_children(child, child_cb);
+                    solve_positioning_children_guarded(child, child_cb, child_guard);
                 }
             }
             Position::Fixed => {
                 // Out-of-flow positioning relative to the viewport
-                solve_out_of_flow_box(child, cb.viewport, cb.viewport, true);
+                solve_out_of_flow_box_guarded(child, cb.viewport, cb.viewport, true, child_guard);
 
                 // Fixed elements establish a containing block for descendants
                 let child_cb = ContainingBlock {
@@ -263,12 +294,26 @@ pub fn solve_positioning_children(container: &mut LayoutNode, cb: ContainingBloc
                 };
 
                 if !child.children.is_empty() {
-                    solve_positioning_children(child, child_cb);
+                    solve_positioning_children_guarded(child, child_cb, child_guard);
                 }
             }
             Position::Sticky => {
-                // Normal flow placement with dynamic scroll clamping against parent bounds
-                solve_sticky_box(child, cb);
+                // In CSS Positioned Layout Level 3 §6, the containing block for a sticky element
+                // is established by its nearest block container ancestor (`container`), not the
+                // nearest positioned ancestor.
+                let parent_box = if container.geometry.padding_box.width > 0.0
+                    || container.geometry.padding_box.height > 0.0
+                {
+                    container.geometry.padding_box
+                } else {
+                    cb.padding_box
+                };
+                let sticky_cb = ContainingBlock {
+                    padding_box: parent_box,
+                    viewport: cb.viewport,
+                    scroll_offset: cb.scroll_offset,
+                };
+                solve_sticky_box(child, sticky_cb);
 
                 let child_cb = ContainingBlock {
                     padding_box: child.geometry.padding_box,
@@ -277,7 +322,7 @@ pub fn solve_positioning_children(container: &mut LayoutNode, cb: ContainingBloc
                 };
 
                 if !child.children.is_empty() {
-                    solve_positioning_children(child, child_cb);
+                    solve_positioning_children_guarded(child, child_cb, child_guard);
                 }
             }
         }
@@ -288,8 +333,25 @@ pub fn solve_positioning_children(container: &mut LayoutNode, cb: ContainingBloc
 pub fn solve_out_of_flow_box(
     child: &mut LayoutNode,
     cb_rect: Rect,
+    viewport: Rect,
+    is_fixed: bool,
+) {
+    solve_out_of_flow_box_guarded(
+        child,
+        cb_rect,
+        viewport,
+        is_fixed,
+        crate::tree::LayoutDepthGuard::root(),
+    );
+}
+
+/// Solves out-of-flow geometry with an active depth guard.
+pub fn solve_out_of_flow_box_guarded(
+    child: &mut LayoutNode,
+    cb_rect: Rect,
     _viewport: Rect,
     _is_fixed: bool,
+    guard: crate::tree::LayoutDepthGuard,
 ) {
     let left = resolve_dimension(child.style.insets.left, cb_rect.width);
     let right = resolve_dimension(child.style.insets.right, cb_rect.width);
@@ -347,49 +409,35 @@ pub fn solve_out_of_flow_box(
     };
 
     // 3. Horizontal Position & Auto-Margin Centering (mx-auto / m-auto)
-    let item_x = if left.is_some()
-        && right.is_some()
-        && child.style.margin_auto_left
-        && child.style.margin_auto_right
-    {
-        let l = left.unwrap();
-        let r = right.unwrap();
-        let free_space = (cb_rect.width - l - r) - item_w;
-        let auto_m = (free_space / 2.0).max(0.0);
-        cb_rect.x + l + auto_m
-    } else if left.is_some() && child.style.margin_auto_left {
-        let l = left.unwrap();
-        let free_space = (cb_rect.width - l) - item_w;
-        cb_rect.x + l + free_space.max(0.0)
-    } else {
-        match (left, right) {
-            (Some(l), _) => cb_rect.x + l + child.style.margin.left,
-            (None, Some(r)) => cb_rect.x + cb_rect.width - r - child.style.margin.right - item_w,
-            (None, None) => cb_rect.x + child.style.margin.left,
+    let item_x = match (left, right) {
+        (Some(l), Some(r)) if child.style.margin_auto_left && child.style.margin_auto_right => {
+            let free_space = (cb_rect.width - l - r) - item_w;
+            let auto_m = (free_space / 2.0).max(0.0);
+            cb_rect.x + l + auto_m
         }
+        (Some(l), _) if child.style.margin_auto_left => {
+            let free_space = (cb_rect.width - l) - item_w;
+            cb_rect.x + l + free_space.max(0.0)
+        }
+        (Some(l), _) => cb_rect.x + l + child.style.margin.left,
+        (None, Some(r)) => cb_rect.x + cb_rect.width - r - child.style.margin.right - item_w,
+        (None, None) => cb_rect.x + child.style.margin.left,
     };
 
     // 4. Vertical Position & Auto-Margin Centering (my-auto / m-auto)
-    let item_y = if top.is_some()
-        && bottom.is_some()
-        && child.style.margin_auto_top
-        && child.style.margin_auto_bottom
-    {
-        let t = top.unwrap();
-        let b = bottom.unwrap();
-        let free_space = (cb_rect.height - t - b) - item_h;
-        let auto_m = (free_space / 2.0).max(0.0);
-        cb_rect.y + t + auto_m
-    } else if top.is_some() && child.style.margin_auto_top {
-        let t = top.unwrap();
-        let free_space = (cb_rect.height - t) - item_h;
-        cb_rect.y + t + free_space.max(0.0)
-    } else {
-        match (top, bottom) {
-            (Some(t), _) => cb_rect.y + t + child.style.margin.top,
-            (None, Some(b)) => cb_rect.y + cb_rect.height - b - child.style.margin.bottom - item_h,
-            (None, None) => cb_rect.y + child.style.margin.top,
+    let item_y = match (top, bottom) {
+        (Some(t), Some(b)) if child.style.margin_auto_top && child.style.margin_auto_bottom => {
+            let free_space = (cb_rect.height - t - b) - item_h;
+            let auto_m = (free_space / 2.0).max(0.0);
+            cb_rect.y + t + auto_m
         }
+        (Some(t), _) if child.style.margin_auto_top => {
+            let free_space = (cb_rect.height - t) - item_h;
+            cb_rect.y + t + free_space.max(0.0)
+        }
+        (Some(t), _) => cb_rect.y + t + child.style.margin.top,
+        (None, Some(b)) => cb_rect.y + cb_rect.height - b - child.style.margin.bottom - item_h,
+        (None, None) => cb_rect.y + child.style.margin.top,
     };
 
     child.geometry = LayoutGeometry::from_border_box(
@@ -400,7 +448,7 @@ pub fn solve_out_of_flow_box(
     );
 
     if !child.children.is_empty() {
-        child.layout_children();
+        child.layout_children_guarded(guard);
     }
 }
 
