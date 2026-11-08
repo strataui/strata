@@ -852,26 +852,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "eda_studio"
-version = "0.1.0"
-dependencies = [
- "strata",
- "strata_audio",
- "strata_dom",
- "strata_gpu_path",
- "strata_icons",
- "strata_layout",
- "strata_macro",
- "strata_platform",
- "strata_primitives",
- "strata_render",
- "strata_storage",
- "strata_style",
- "strata_tui",
- "strata_ui",
-]
-
-[[package]]
 name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3398,24 +3378,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "strata_browser"
-version = "0.1.0"
-dependencies = [
- "strata",
- "strata_devtools",
- "strata_dom",
- "strata_icons",
- "strata_layout",
- "strata_macro",
- "strata_platform",
- "strata_render",
- "strata_style",
- "strata_ui",
- "strata_web_api",
- "strata_web_reader",
-]
-
-[[package]]
 name = "strata_build"
 version = "0.1.0"
 
@@ -3435,21 +3397,6 @@ dependencies = [
  "strata_platform",
  "strata_primitives",
  "strata_render",
-]
-
-[[package]]
-name = "strata_cli"
-version = "0.1.0"
-dependencies = [
- "flate2",
- "serde",
- "serde_json",
- "strata",
- "strata_codegen_js",
- "strata_dom",
- "strata_mcp",
- "strata_mobile_test",
- "strata_sim",
 ]
 
 [[package]]
@@ -3492,26 +3439,6 @@ dependencies = [
 [[package]]
 name = "strata_dom"
 version = "0.1.0"
-
-[[package]]
-name = "strata_earth"
-version = "0.1.0"
-dependencies = [
- "strata_layout",
- "strata_primitives",
- "strata_render",
- "strata_style",
-]
-
-[[package]]
-name = "strata_earth_golden"
-version = "0.1.0"
-dependencies = [
- "strata_earth",
- "strata_layout",
- "strata_render",
- "strata_style",
-]
 
 [[package]]
 name = "strata_editor"
@@ -3592,20 +3519,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "strata_lsp"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "strata_js",
- "strata_primitives",
- "strata_style",
- "strata_ui",
- "tree-sitter",
- "tree-sitter-rust",
-]
-
-[[package]]
 name = "strata_macro"
 version = "0.1.0"
 dependencies = [
@@ -3620,19 +3533,9 @@ dependencies = [
  "serde",
  "serde_json",
  "strata",
- "strata_cli",
  "strata_dom",
  "strata_platform",
  "strata_primitives",
-]
-
-[[package]]
-name = "strata_mdbook"
-version = "0.1.0"
-dependencies = [
- "strata_codegen_js",
- "strata_js",
- "strata_style",
 ]
 
 [[package]]

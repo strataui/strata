@@ -19,5 +19,4 @@ path = "src/main.rs"
 [dev-dependencies]
 strata = { workspace = true }
 strata_dom = { workspace = true }
-strata_cli = { workspace = true }
 

@@ -214,45 +214,6 @@ fn test_app_runtime_mcp_bridge_commands_and_cursor_emulation() {
     let _ = raw;
 }
 
-#[test]
-fn test_debug_build_policy() {
-    use strata_cli::prelude::*;
-
-    let temp_dir = std::env::temp_dir().join("strata_build_policy_test");
-    let _ = std::fs::create_dir_all(&temp_dir);
-
-    // 1. Debug build without force: SUCCEEDS per GOAL-32
-    let debug_result = BuildRunner::build_with_options(
-        BuildTarget::Desktop,
-        false, // release: false (debug mode)
-        false, // force: false
-        &temp_dir,
-        None,
-    );
-    assert!(debug_result.is_ok());
-
-    // 2. Debug build WITH force: MUST SUCCEED
-    let force_result = BuildRunner::build_with_options(
-        BuildTarget::Desktop,
-        false, // release: false
-        true,  // force: true
-        &temp_dir,
-        None,
-    );
-    assert!(force_result.is_ok());
-
-    // 3. Release build: MUST SUCCEED
-    let release_result = BuildRunner::build_with_options(
-        BuildTarget::Desktop,
-        true,  // release: true
-        false, // force: false
-        &temp_dir,
-        None,
-    );
-    assert!(release_result.is_ok());
-
-    let _ = std::fs::remove_dir_all(&temp_dir);
-}
 
 #[test]
 fn test_strata_run_app_security_and_rce_mitigation() {
