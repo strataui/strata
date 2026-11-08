@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use strata::prelude::*;
 use strata_dom::View;
 use strata_platform::{MockEventLoop, MockPlatformWindow, PlatformEvent, SoftwareSurfacePresenter, SwapchainCompositor, SwapchainFormat, WindowConfig};
@@ -37,7 +39,7 @@ fn test_strata_launch_window_initialization_and_first_frame() {
     // Verify initial layout & display list
     assert_eq!(runtime.viewport_width, 1280.0);
     assert_eq!(runtime.viewport_height, 720.0);
-    assert!(runtime.display_list.commands.len() > 0);
+    assert!(!runtime.display_list.commands.is_empty());
 }
 
 #[test]
@@ -145,7 +147,7 @@ fn test_strata_low_level_app_builder_and_lifecycle_hooks() {
     // 1. Test step_frame and on_draw hook
     let dl = app.step_frame();
     assert!(draw_injected.load(Ordering::SeqCst));
-    assert!(dl.commands.len() > 0);
+    assert!(!dl.commands.is_empty());
 
     // 2. Test event dispatching and on_event hook
     let resized = PlatformEvent::WindowResized { width: 1600, height: 1000 };

@@ -22,6 +22,103 @@ fn get_pending_queue() -> &'static Mutex<Vec<PendingItem>> {
     QUEUE.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+#[cfg(unix)]
+fn get_current_uid() -> u32 {
+    extern "C" {
+        fn getuid() -> u32;
+    }
+    unsafe { getuid() }
+}
+
+#[cfg(target_os = "linux")]
+fn verify_peer_credentials(stream: &UnixStream) -> Result<(), std::io::Error> {
+    use std::os::unix::io::AsRawFd;
+
+    #[repr(C)]
+    struct UCred {
+        pid: i32,
+        uid: u32,
+        gid: u32,
+    }
+
+    extern "C" {
+        fn getsockopt(
+            sockfd: std::os::raw::c_int,
+            level: std::os::raw::c_int,
+            optname: std::os::raw::c_int,
+            optval: *mut std::os::raw::c_void,
+            optlen: *mut u32,
+        ) -> std::os::raw::c_int;
+    }
+
+    let fd = stream.as_raw_fd();
+    let mut ucred = UCred {
+        pid: 0,
+        uid: u32::MAX,
+        gid: u32::MAX,
+    };
+    let mut len = std::mem::size_of::<UCred>() as u32;
+
+    const SOL_SOCKET: std::os::raw::c_int = 1;
+    const SO_PEERCRED: std::os::raw::c_int = 17;
+
+    let res = unsafe {
+        getsockopt(
+            fd,
+            SOL_SOCKET,
+            SO_PEERCRED,
+            &mut ucred as *mut _ as *mut std::os::raw::c_void,
+            &mut len as *mut u32,
+        )
+    };
+
+    if res != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let my_uid = get_current_uid();
+    if ucred.uid != my_uid {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("Peer UID {} does not match process UID {}", ucred.uid, my_uid),
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn verify_peer_credentials(stream: &UnixStream) -> Result<(), std::io::Error> {
+    use std::os::unix::io::AsRawFd;
+
+    extern "C" {
+        fn getpeereid(s: std::os::raw::c_int, euid: *mut u32, egid: *mut u32) -> std::os::raw::c_int;
+    }
+
+    let fd = stream.as_raw_fd();
+    let mut euid = u32::MAX;
+    let mut egid = u32::MAX;
+    let res = unsafe { getpeereid(fd, &mut euid, &mut egid) };
+    if res != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let my_uid = get_current_uid();
+    if euid != my_uid {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("Peer UID {} does not match process UID {}", euid, my_uid),
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
+fn verify_peer_credentials(_stream: &UnixStream) -> Result<(), std::io::Error> {
+    Ok(())
+}
+
 /// Spawns a background thread listening for MCP connections on a Unix domain socket.
 pub fn start_mcp_dev_listener(socket_path: Option<PathBuf>) -> Result<(), std::io::Error> {
     let path = socket_path.unwrap_or_else(default_dev_socket_path);
@@ -32,16 +129,35 @@ pub fn start_mcp_dev_listener(socket_path: Option<PathBuf>) -> Result<(), std::i
     }
 
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut builder = std::fs::DirBuilder::new();
+            builder.recursive(true);
+            builder.mode(0o700);
+            let _ = builder.create(parent);
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = std::fs::create_dir_all(parent);
+        }
     }
 
     let listener = UnixListener::bind(&path)?;
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+
     std::thread::Builder::new()
         .name("strata-mcp-ipc-listener".to_string())
         .spawn(move || {
-            for stream_res in listener.incoming() {
-                if let Ok(stream) = stream_res {
+            for stream in listener.incoming().flatten() {
+                if verify_peer_credentials(&stream).is_ok() {
                     handle_client_connection(stream);
                 }
             }
@@ -71,7 +187,9 @@ fn handle_client_connection(mut stream: UnixStream) {
         }
 
         let (tx, rx) = channel();
-        get_pending_queue().lock().unwrap().push((trimmed.to_string(), tx));
+        if let Ok(mut q) = get_pending_queue().lock() {
+            q.push((trimmed.to_string(), tx));
+        }
 
         // Signal GTK main event loop to wake up and process the queue
         #[cfg(target_os = "linux")]
@@ -427,13 +545,22 @@ pub fn default_dev_socket_path() -> PathBuf {
     } else if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         PathBuf::from(runtime_dir).join("strata-dev.sock")
     } else {
-        PathBuf::from("/tmp/strata-dev.sock")
+        #[cfg(unix)]
+        {
+            let uid = get_current_uid();
+            let runtime_dir = PathBuf::from(format!("/tmp/strata-runtime-{}", uid));
+            runtime_dir.join("strata-dev.sock")
+        }
+        #[cfg(not(unix))]
+        {
+            PathBuf::from("/tmp/strata-dev.sock")
+        }
     }
 }
 
 fn base64_encode(data: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0];
         let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };

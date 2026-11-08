@@ -177,9 +177,11 @@ pub fn use_press() -> (Signal<bool>, PressHandlers) {
     use_active()
 }
 
+type OutsideListener = (u32, Signal<bool>, Rc<dyn Fn()>);
+
 thread_local! {
-    static OUTSIDE_LISTENERS: RefCell<Vec<(u32, Signal<bool>, Rc<dyn Fn()>)>> = RefCell::new(Vec::new());
-    static NEXT_LISTENER_ID: RefCell<u32> = RefCell::new(1);
+    static OUTSIDE_LISTENERS: RefCell<Vec<OutsideListener>> = RefCell::new(Vec::new());
+    static NEXT_LISTENER_ID: RefCell<u32> = const { RefCell::new(1) };
 }
 
 /// Handle returned by `use_click_outside` that automatically deregisters on drop.

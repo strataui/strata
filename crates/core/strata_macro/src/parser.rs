@@ -205,17 +205,10 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor) -> Result<RsxNode, String> {
 fn push_child_node(children: &mut Vec<RsxNode>, next_node: RsxNode) {
     if let RsxNode::Text(next_text) = next_node {
         if let Some(RsxNode::Text(prev_text)) = children.last_mut() {
-            if next_text == "."
-                || next_text == ","
-                || next_text == ":"
-                || next_text == ";"
-                || next_text == "!"
-                || next_text == "?"
-                || next_text == ")"
-                || next_text == "]"
+            if matches!(next_text.as_str(), "." | "," | ":" | ";" | "!" | "?" | ")" | "]")
+                || prev_text.ends_with('(')
+                || prev_text.ends_with('[')
             {
-                prev_text.push_str(&next_text);
-            } else if prev_text.ends_with('(') || prev_text.ends_with('[') {
                 prev_text.push_str(&next_text);
             } else {
                 prev_text.push(' ');

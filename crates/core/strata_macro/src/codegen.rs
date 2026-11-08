@@ -109,23 +109,19 @@ fn lower_element(el: &RsxElement, errors: &mut Vec<String>) -> String {
         _ => format!("strata_dom::Tag::Custom({:?})", el.tag),
     };
 
-    // Extract classes
-    let mut classes_code = "Vec::new()".to_string();
+    // Extract classes with compile-time deduplication and 256-bit SIMD bitmask resolution
+    let mut classes_code = "strata_dom::ClassList::Empty".to_string();
     let mut other_attrs = Vec::new();
 
     for attr in &el.attributes {
         if attr.name == "class" || attr.name == "className" {
             match &attr.value {
                 RsxAttrValue::Literal(s) => {
-                    let parts: Vec<String> = s
-                        .split_whitespace()
-                        .map(|c| format!("{:?}.to_string()", c))
-                        .collect();
-                    classes_code = format!("vec![{}]", parts.join(", "));
+                    classes_code = crate::classes::emit_static_class_list(s);
                 }
                 RsxAttrValue::Expression(stream) => {
                     classes_code = format!(
-                        "({{ let _s = ({}).to_string(); _s.split_whitespace().map(|c| c.to_string()).collect::<Vec<String>>() }})",
+                        "strata_dom::ClassList::Dynamic({{ let _s = ({}).to_string(); _s.split_whitespace().map(|c| c.to_string()).collect::<Vec<String>>() }})",
                         stream
                     );
                 }
