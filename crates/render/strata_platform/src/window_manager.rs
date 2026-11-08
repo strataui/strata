@@ -190,7 +190,7 @@ impl WindowManager {
             entry.children.iter().any(|&child_id| {
                 self.windows
                     .get(&child_id.0)
-                    .map_or(false, |child| child.is_modal)
+                    .is_some_and(|child| child.is_modal)
             })
         } else {
             false

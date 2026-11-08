@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use std::time::{Duration, Instant};
 use strata_platform::raw_abi::wayland::WaylandHeader;
 use strata_platform::raw_abi::win32::*;
@@ -55,6 +57,16 @@ fn test_frame_pacer_refresh_intervals_and_ewma() {
     let duration = pacer.end_frame(start);
     assert_eq!(pacer.frame_count, 1);
     assert!(duration < Duration::from_millis(100));
+}
+
+#[test]
+fn test_frame_pacer_wait_vsync() {
+    let mut pacer = FramePacer::new(RefreshRate::Hz120);
+    let start = Instant::now();
+    pacer.wait_vsync();
+    let elapsed = start.elapsed();
+    assert!(pacer.last_frame_instant.is_some());
+    assert!(elapsed < Duration::from_millis(50));
 }
 
 #[test]
@@ -132,4 +144,31 @@ fn test_raw_abi_win32_and_cocoa_structures() {
     assert_eq!(ns_rect.width, 800.0);
     assert_eq!(ns_rect.height, 600.0);
     assert_eq!(NS_WINDOW_STYLE_TITLED | NS_WINDOW_STYLE_CLOSABLE, 3);
+
+    // Bidirectional conversion tests between Win32 ABI and strata_primitives
+    let prim_pt: strata_primitives::geom::Point<f32> = pt.into();
+    assert_eq!(prim_pt.x, 100.0);
+    assert_eq!(prim_pt.y, 200.0);
+
+    let win_pt: Point = prim_pt.into();
+    assert_eq!(win_pt.x, 100);
+    assert_eq!(win_pt.y, 200);
+
+    let win_rect = strata_platform::raw_abi::win32::Rect {
+        left: 50,
+        top: 100,
+        right: 450,
+        bottom: 400,
+    };
+    let prim_rect: strata_primitives::geom::Rect<f32> = win_rect.into();
+    assert_eq!(prim_rect.x(), 50.0);
+    assert_eq!(prim_rect.y(), 100.0);
+    assert_eq!(prim_rect.width(), 400.0);
+    assert_eq!(prim_rect.height(), 300.0);
+
+    let win_rect_back: strata_platform::raw_abi::win32::Rect = prim_rect.into();
+    assert_eq!(win_rect_back.left, 50);
+    assert_eq!(win_rect_back.top, 100);
+    assert_eq!(win_rect_back.right, 450);
+    assert_eq!(win_rect_back.bottom, 400);
 }

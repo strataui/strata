@@ -112,7 +112,7 @@ impl TrayMenu {
         Self::find_in_slice_mut(&mut self.items, id)
     }
 
-    fn find_in_slice<'a>(items: &'a [TrayMenuItem], id: u64) -> Option<&'a TrayMenuItem> {
+    fn find_in_slice(items: &[TrayMenuItem], id: u64) -> Option<&TrayMenuItem> {
         for item in items {
             if !item.is_separator && item.id == id {
                 return Some(item);
@@ -124,10 +124,10 @@ impl TrayMenu {
         None
     }
 
-    fn find_in_slice_mut<'a>(
-        items: &'a mut [TrayMenuItem],
+    fn find_in_slice_mut(
+        items: &mut [TrayMenuItem],
         id: u64,
-    ) -> Option<&'a mut TrayMenuItem> {
+    ) -> Option<&mut TrayMenuItem> {
         for item in items {
             if !item.is_separator && item.id == id {
                 return Some(item);
@@ -293,6 +293,10 @@ pub struct NativeTrayHandle {
     shared: std::sync::Arc<SharedTrayState>,
     #[cfg(target_os = "linux")]
     live: Option<linux_backend::LiveIndicator>,
+    #[cfg(windows)]
+    live: Option<windows_backend::LiveTrayIcon>,
+    #[cfg(target_os = "macos")]
+    live: Option<macos_backend::LiveStatusItem>,
 }
 
 impl NativeTrayHandle {
@@ -303,20 +307,28 @@ impl NativeTrayHandle {
         let shared = std::sync::Arc::new(SharedTrayState::new(event_sink, icon.menu.clone()));
         #[cfg(target_os = "linux")]
         let live = linux_backend::LiveIndicator::new(&icon, shared.clone());
+        #[cfg(windows)]
+        let live = windows_backend::LiveTrayIcon::new(&icon, shared.clone());
+        #[cfg(target_os = "macos")]
+        let live = macos_backend::LiveStatusItem::new(&icon, shared.clone());
         Self {
             icon,
             shared,
             #[cfg(target_os = "linux")]
+            live,
+            #[cfg(windows)]
+            live,
+            #[cfg(target_os = "macos")]
             live,
         }
     }
 
     /// Returns the active native backend identifier.
     ///
-    /// `"ayatana-appindicator"` means a live StatusNotifierItem indicator is
-    /// registered through the dynamically loaded Ayatana library.
-    /// `"handle-only"` means no live platform indicator exists; events still
-    /// flow through the in-process controller.
+    /// - `"ayatana-appindicator"`: Registered via Linux Ayatana AppIndicator
+    /// - `"win32-tray"`: Registered via Windows Shell_NotifyIconW
+    /// - `"cocoa-nsstatusbar"`: Registered via macOS NSStatusBar
+    /// - `"handle-only"`: Fallback in-process controller
     pub fn backend_name(&self) -> &'static str {
         #[cfg(target_os = "linux")]
         {
@@ -326,7 +338,23 @@ impl NativeTrayHandle {
                 "handle-only"
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            if self.live.is_some() {
+                "win32-tray"
+            } else {
+                "handle-only"
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if self.live.is_some() {
+                "cocoa-nsstatusbar"
+            } else {
+                "handle-only"
+            }
+        }
+        #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
         {
             "handle-only"
         }
@@ -336,6 +364,20 @@ impl NativeTrayHandle {
     pub fn set_tooltip(&mut self, tooltip: impl Into<String>) {
         self.icon.set_tooltip(tooltip);
         #[cfg(target_os = "linux")]
+        {
+            let tooltip = self.icon.tooltip.clone();
+            if let Some(live) = &mut self.live {
+                live.set_tooltip(tooltip);
+            }
+        }
+        #[cfg(windows)]
+        {
+            let tooltip = self.icon.tooltip.clone();
+            if let Some(live) = &mut self.live {
+                live.set_tooltip(tooltip);
+            }
+        }
+        #[cfg(target_os = "macos")]
         {
             let tooltip = self.icon.tooltip.clone();
             if let Some(live) = &mut self.live {
@@ -352,6 +394,14 @@ impl NativeTrayHandle {
         if let Some(live) = &mut self.live {
             live.set_menu(menu.as_ref());
         }
+        #[cfg(windows)]
+        if let Some(live) = &mut self.live {
+            live.set_menu(menu.as_ref());
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(live) = &mut self.live {
+            live.set_menu(menu.as_ref());
+        }
     }
 
     /// Sets visibility of the system tray icon.
@@ -361,12 +411,28 @@ impl NativeTrayHandle {
         if let Some(live) = &mut self.live {
             live.set_visible(visible);
         }
+        #[cfg(windows)]
+        if let Some(live) = &mut self.live {
+            live.set_visible(visible);
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(live) = &mut self.live {
+            live.set_visible(visible);
+        }
     }
 
     /// Sets or clears the notification badge on the tray icon.
     pub fn set_badge(&mut self, badge: Option<String>) {
         self.icon.set_badge(badge.clone());
         #[cfg(target_os = "linux")]
+        if let Some(live) = &mut self.live {
+            live.set_badge(badge);
+        }
+        #[cfg(windows)]
+        if let Some(live) = &mut self.live {
+            live.set_badge(badge);
+        }
+        #[cfg(target_os = "macos")]
         if let Some(live) = &mut self.live {
             live.set_badge(badge);
         }
@@ -751,7 +817,7 @@ mod linux_backend {
 
         // Cairo ARGB32 stores premultiplied BGRA on little-endian hosts.
         let mut bgra = Vec::with_capacity(pixel_count * 4);
-        for pixel in icon.icon_rgba.chunks_exact(4).take(pixel_count) {
+        for pixel in icon.icon_rgba.as_chunks::<4>().0.iter().take(pixel_count) {
             bgra.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
         }
 
@@ -785,3 +851,564 @@ mod linux_backend {
         }
     }
 }
+
+#[cfg(windows)]
+mod windows_backend {
+    //! Win32 System Tray implementation backed by `Shell_NotifyIconW`.
+    use super::{SharedTrayState, TrayIcon, TrayMenu, TrayMenuItem};
+    use std::sync::mpsc::{channel, Sender};
+    use std::sync::Arc;
+    use std::thread::JoinHandle;
+    use windows_sys::Win32::Foundation::{HWND, POINT};
+    use windows_sys::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::Shell::{
+        Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
+        NIM_MODIFY, NOTIFYICONDATAW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
+        DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, HICON, HMENU,
+        ICONINFO, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
+        PeekMessageW, PM_REMOVE, PostMessageW, RegisterClassExW, SetForegroundWindow,
+        TrackPopupMenuEx, TPM_BOTTOMALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP,
+        WM_CONTEXTMENU, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSEXW,
+    };
+
+    enum TrayCommand {
+        SetTooltip(String),
+        SetMenu(Option<TrayMenu>),
+        SetVisible(bool),
+        SetBadge(Option<String>),
+        Destroy,
+    }
+
+    pub struct LiveTrayIcon {
+        command_tx: Sender<TrayCommand>,
+        hwnd: HWND,
+        thread_handle: Option<JoinHandle<()>>,
+    }
+
+    impl LiveTrayIcon {
+        pub fn new(icon: &TrayIcon, shared: Arc<SharedTrayState>) -> Option<Self> {
+            let (tx, rx) = channel();
+            let (init_tx, init_rx) = channel();
+            let initial_tooltip = icon.tooltip.clone();
+            let initial_visible = icon.visible;
+            let icon_rgba = icon.icon_rgba.clone();
+            let icon_width = icon.icon_width;
+            let icon_height = icon.icon_height;
+
+            let thread_handle = std::thread::spawn(move || {
+                unsafe {
+                    let instance = GetModuleHandleW(std::ptr::null());
+                    let class_name: Vec<u16> = "StrataTrayWindowClass\0".encode_utf16().collect();
+                    let wnd_class = WNDCLASSEXW {
+                        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                        style: 0,
+                        lpfnWndProc: Some(DefWindowProcW),
+                        cbClsExtra: 0,
+                        cbWndExtra: 0,
+                        hInstance: instance,
+                        hIcon: 0,
+                        hCursor: 0,
+                        hbrBackground: 0,
+                        lpszMenuName: std::ptr::null(),
+                        lpszClassName: class_name.as_ptr(),
+                        hIconSm: 0,
+                    };
+                    RegisterClassExW(&wnd_class);
+
+                    let window_title: Vec<u16> = "StrataTray\0".encode_utf16().collect();
+                    // -3 is HWND_MESSAGE in Win32
+                    let hwnd = CreateWindowExW(
+                        0,
+                        class_name.as_ptr(),
+                        window_title.as_ptr(),
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        -3,
+                        0,
+                        instance,
+                        std::ptr::null(),
+                    );
+
+                    if hwnd == 0 {
+                        let _ = init_tx.send(Err(()));
+                        return;
+                    }
+
+                    let hicon = create_native_hicon(&icon_rgba, icon_width, icon_height);
+
+                    let mut nid = std::mem::zeroed::<NOTIFYICONDATAW>();
+                    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+                    nid.hWnd = hwnd;
+                    nid.uID = 1;
+                    nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+                    nid.uCallbackMessage = WM_APP + 1;
+                    nid.hIcon = hicon;
+                    copy_to_wide_buf(&initial_tooltip, &mut nid.szTip);
+
+                    if initial_visible {
+                        Shell_NotifyIconW(NIM_ADD, &nid);
+                    }
+
+                    let _ = init_tx.send(Ok(hwnd));
+
+                    let mut msg: MSG = std::mem::zeroed();
+                    'tray_loop: loop {
+                        while let Ok(cmd) = rx.try_recv() {
+                            match cmd {
+                                TrayCommand::SetTooltip(tip) => {
+                                    copy_to_wide_buf(&tip, &mut nid.szTip);
+                                    nid.uFlags = NIF_TIP;
+                                    Shell_NotifyIconW(NIM_MODIFY, &nid);
+                                }
+                                TrayCommand::SetMenu(menu) => {
+                                    shared.set_menu(menu);
+                                }
+                                TrayCommand::SetVisible(visible) => {
+                                    if visible {
+                                        nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+                                        Shell_NotifyIconW(NIM_ADD, &nid);
+                                    } else {
+                                        Shell_NotifyIconW(NIM_DELETE, &nid);
+                                    }
+                                }
+                                TrayCommand::SetBadge(badge) => {
+                                    if let Some(b) = badge {
+                                        nid.uFlags = NIF_INFO;
+                                        copy_to_wide_buf(&b, &mut nid.szInfo);
+                                        copy_to_wide_buf(&initial_tooltip, &mut nid.szInfoTitle);
+                                        Shell_NotifyIconW(NIM_MODIFY, &nid);
+                                    }
+                                }
+                                TrayCommand::Destroy => {
+                                    break 'tray_loop;
+                                }
+                            }
+                        }
+
+                        while PeekMessageW(&mut msg, hwnd, 0, 0, PM_REMOVE) != 0 {
+                            if msg.message == WM_APP + 1 {
+                                let event = (msg.lParam as u32) & 0xFFFF;
+                                match event {
+                                    WM_LBUTTONUP => {
+                                        shared.dispatch_click();
+                                    }
+                                    WM_RBUTTONUP | WM_CONTEXTMENU => {
+                                        SetForegroundWindow(hwnd);
+                                        let hmenu = CreatePopupMenu();
+                                        if hmenu != 0 {
+                                            if let Ok(guard) = shared.menu.lock() {
+                                                if let Some(menu) = guard.as_ref() {
+                                                    populate_win32_menu(hmenu, &menu.items);
+                                                }
+                                            }
+                                            let mut pt = POINT { x: 0, y: 0 };
+                                            GetCursorPos(&mut pt);
+                                            let cmd = TrackPopupMenuEx(
+                                                hmenu,
+                                                TPM_RIGHTBUTTON
+                                                    | TPM_BOTTOMALIGN
+                                                    | TPM_NONOTIFY
+                                                    | TPM_RETURNCMD,
+                                                pt.x,
+                                                pt.y,
+                                                hwnd,
+                                                std::ptr::null(),
+                                            );
+                                            if cmd > 0 {
+                                                shared.dispatch_menu_action(cmd as u64);
+                                            }
+                                            DestroyMenu(hmenu);
+                                            PostMessageW(hwnd, WM_NULL, 0, 0);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            DispatchMessageW(&msg);
+                        }
+
+                        std::thread::sleep(std::time::Duration::from_millis(16));
+                    }
+
+                    Shell_NotifyIconW(NIM_DELETE, &nid);
+                    if hicon != 0 {
+                        DestroyIcon(hicon);
+                    }
+                    DestroyWindow(hwnd);
+                }
+            });
+
+            match init_rx.recv().ok()? {
+                Ok(hwnd) => Some(Self {
+                    command_tx: tx,
+                    hwnd,
+                    thread_handle: Some(thread_handle),
+                }),
+                Err(_) => None,
+            }
+        }
+
+        pub fn set_tooltip(&mut self, tooltip: String) {
+            let _ = self.command_tx.send(TrayCommand::SetTooltip(tooltip));
+            unsafe {
+                PostMessageW(self.hwnd, WM_NULL, 0, 0);
+            }
+        }
+
+        pub fn set_menu(&mut self, menu: Option<&TrayMenu>) {
+            let _ = self.command_tx.send(TrayCommand::SetMenu(menu.cloned()));
+            unsafe {
+                PostMessageW(self.hwnd, WM_NULL, 0, 0);
+            }
+        }
+
+        pub fn set_visible(&mut self, visible: bool) {
+            let _ = self.command_tx.send(TrayCommand::SetVisible(visible));
+            unsafe {
+                PostMessageW(self.hwnd, WM_NULL, 0, 0);
+            }
+        }
+
+        pub fn set_badge(&mut self, badge: Option<String>) {
+            let _ = self.command_tx.send(TrayCommand::SetBadge(badge));
+            unsafe {
+                PostMessageW(self.hwnd, WM_NULL, 0, 0);
+            }
+        }
+    }
+
+    impl Drop for LiveTrayIcon {
+        fn drop(&mut self) {
+            let _ = self.command_tx.send(TrayCommand::Destroy);
+            unsafe {
+                PostMessageW(self.hwnd, WM_NULL, 0, 0);
+            }
+            if let Some(handle) = self.thread_handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    unsafe fn populate_win32_menu(parent: HMENU, items: &[TrayMenuItem]) {
+        for item in items {
+            if item.is_separator {
+                AppendMenuW(parent, MF_SEPARATOR, 0, std::ptr::null());
+            } else if !item.children.is_empty() {
+                let sub = CreatePopupMenu();
+                populate_win32_menu(sub, &item.children);
+                let wide: Vec<u16> = item
+                    .label
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                AppendMenuW(parent, MF_POPUP, sub as usize, wide.as_ptr());
+            } else {
+                let mut flags = MF_STRING;
+                if !item.enabled {
+                    flags |= MF_GRAYED;
+                }
+                if item.checked {
+                    flags |= MF_CHECKED;
+                } else {
+                    flags |= MF_UNCHECKED;
+                }
+                let wide: Vec<u16> = item
+                    .label
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                AppendMenuW(parent, flags, item.id as usize, wide.as_ptr());
+            }
+        }
+    }
+
+    fn copy_to_wide_buf(src: &str, dest: &mut [u16]) {
+        let wide: Vec<u16> = src.encode_utf16().collect();
+        let len = wide.len().min(dest.len().saturating_sub(1));
+        dest[..len].copy_from_slice(&wide[..len]);
+        dest[len] = 0;
+    }
+
+    unsafe fn create_native_hicon(rgba: &[u8], width: u32, height: u32) -> HICON {
+        if width == 0 || height == 0 || rgba.len() < (width * height * 4) as usize {
+            return windows_sys::Win32::UI::WindowsAndMessaging::LoadIconW(
+                0,
+                windows_sys::Win32::UI::WindowsAndMessaging::IDI_APPLICATION,
+            );
+        }
+        let mask = CreateBitmap(width as i32, height as i32, 1, 1, std::ptr::null());
+        let color = CreateBitmap(
+            width as i32,
+            height as i32,
+            1,
+            32,
+            rgba.as_ptr() as *const _,
+        );
+        let icon_info = ICONINFO {
+            fIcon: 1,
+            xHotspot: 0,
+            yHotspot: 0,
+            hbmMask: mask,
+            hbmColor: color,
+        };
+        let hicon = CreateIconIndirect(&icon_info);
+        DeleteObject(mask);
+        DeleteObject(color);
+        if hicon != 0 {
+            hicon
+        } else {
+            windows_sys::Win32::UI::WindowsAndMessaging::LoadIconW(
+                0,
+                windows_sys::Win32::UI::WindowsAndMessaging::IDI_APPLICATION,
+            )
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos_backend {
+    //! macOS Cocoa System Tray implementation backed by `NSStatusBar` & `NSMenu`.
+    use super::{SharedTrayState, TrayIcon, TrayMenu, TrayMenuItem};
+    use std::ffi::{c_char, c_void, CString};
+    use std::sync::Arc;
+
+    extern "C" {
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend(receiver: *mut c_void, op: *mut c_void, ...) -> *mut c_void;
+    }
+
+    pub struct LiveStatusItem {
+        status_item: *mut c_void,
+        shared: Arc<SharedTrayState>,
+    }
+
+    impl LiveStatusItem {
+        pub fn new(icon: &TrayIcon, shared: Arc<SharedTrayState>) -> Option<Self> {
+            unsafe {
+                let status_bar_cls = objc_getClass(b"NSStatusBar\0".as_ptr() as *const c_char);
+                if status_bar_cls.is_null() {
+                    return None;
+                }
+                let system_sb_sel =
+                    sel_registerName(b"systemStatusBar\0".as_ptr() as *const c_char);
+                let msg_sb: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+                    std::mem::transmute(objc_msgSend as *const ());
+                let status_bar = msg_sb(status_bar_cls, system_sb_sel);
+                if status_bar.is_null() {
+                    return None;
+                }
+
+                // -1.0 represents NSVariableStatusItemLength in AppKit
+                let item_sel =
+                    sel_registerName(b"statusItemWithLength:\0".as_ptr() as *const c_char);
+                let msg_item: unsafe extern "C" fn(*mut c_void, *mut c_void, f64) -> *mut c_void =
+                    std::mem::transmute(objc_msgSend as *const ());
+                let status_item = msg_item(status_bar, item_sel, -1.0);
+                if status_item.is_null() {
+                    return None;
+                }
+
+                let retain_sel = sel_registerName(b"retain\0".as_ptr() as *const c_char);
+                let msg_retain: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+                    std::mem::transmute(objc_msgSend as *const ());
+                msg_retain(status_item, retain_sel);
+
+                let mut this = Self {
+                    status_item,
+                    shared,
+                };
+                this.set_tooltip(icon.tooltip.clone());
+                this.set_menu(icon.menu.as_ref());
+                this.set_badge(icon.badge.clone());
+                this.set_visible(icon.visible);
+                Some(this)
+            }
+        }
+
+        pub fn set_tooltip(&mut self, tooltip: String) {
+            unsafe {
+                let btn_sel = sel_registerName(b"button\0".as_ptr() as *const c_char);
+                let msg_btn: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+                    std::mem::transmute(objc_msgSend as *const ());
+                let button = msg_btn(self.status_item, btn_sel);
+                if !button.is_null() {
+                    let tip_sel = sel_registerName(b"setToolTip:\0".as_ptr() as *const c_char);
+                    let ns_str = create_ns_string(&tooltip);
+                    let msg_tip: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
+                        std::mem::transmute(objc_msgSend as *const ());
+                    msg_tip(button, tip_sel, ns_str);
+                }
+            }
+        }
+
+        pub fn set_menu(&mut self, menu: Option<&TrayMenu>) {
+            self.shared.set_menu(menu.cloned());
+            unsafe {
+                if let Some(menu) = menu {
+                    let ns_menu = build_ns_menu(&menu.items, self.shared.clone());
+                    let set_menu_sel =
+                        sel_registerName(b"setMenu:\0".as_ptr() as *const c_char);
+                    let msg_set_menu: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
+                        std::mem::transmute(objc_msgSend as *const ());
+                    msg_set_menu(self.status_item, set_menu_sel, ns_menu);
+                } else {
+                    let set_menu_sel =
+                        sel_registerName(b"setMenu:\0".as_ptr() as *const c_char);
+                    let msg_set_menu: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
+                        std::mem::transmute(objc_msgSend as *const ());
+                    msg_set_menu(self.status_item, set_menu_sel, std::ptr::null_mut());
+                }
+            }
+        }
+
+        pub fn set_visible(&mut self, visible: bool) {
+            unsafe {
+                let vis_sel = sel_registerName(b"setVisible:\0".as_ptr() as *const c_char);
+                let msg_vis: unsafe extern "C" fn(*mut c_void, *mut c_void, bool) =
+                    std::mem::transmute(objc_msgSend as *const ());
+                msg_vis(self.status_item, vis_sel, visible);
+            }
+        }
+
+        pub fn set_badge(&mut self, badge: Option<String>) {
+            unsafe {
+                let btn_sel = sel_registerName(b"button\0".as_ptr() as *const c_char);
+                let msg_btn: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+                    std::mem::transmute(objc_msgSend as *const ());
+                let button = msg_btn(self.status_item, btn_sel);
+                if !button.is_null() {
+                    let title_sel = sel_registerName(b"setTitle:\0".as_ptr() as *const c_char);
+                    let ns_str = create_ns_string(badge.as_deref().unwrap_or(""));
+                    let msg_title: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
+                        std::mem::transmute(objc_msgSend as *const ());
+                    msg_title(button, title_sel, ns_str);
+                }
+            }
+        }
+    }
+
+    impl Drop for LiveStatusItem {
+        fn drop(&mut self) {
+            unsafe {
+                let status_bar_cls =
+                    objc_getClass(b"NSStatusBar\0".as_ptr() as *const c_char);
+                if !status_bar_cls.is_null() {
+                    let system_sb_sel =
+                        sel_registerName(b"systemStatusBar\0".as_ptr() as *const c_char);
+                    let msg_sb: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+                        std::mem::transmute(objc_msgSend as *const ());
+                    let status_bar = msg_sb(status_bar_cls, system_sb_sel);
+                    if !status_bar.is_null() {
+                        let rm_sel =
+                            sel_registerName(b"removeStatusItem:\0".as_ptr() as *const c_char);
+                        let msg_rm: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
+                            std::mem::transmute(objc_msgSend as *const ());
+                        msg_rm(status_bar, rm_sel, self.status_item);
+                    }
+                }
+                let release_sel = sel_registerName(b"release\0".as_ptr() as *const c_char);
+                let msg_rel: unsafe extern "C" fn(*mut c_void, *mut c_void) =
+                    std::mem::transmute(objc_msgSend as *const ());
+                msg_rel(self.status_item, release_sel);
+            }
+        }
+    }
+
+    unsafe fn create_ns_string(s: &str) -> *mut c_void {
+        let cls = objc_getClass(b"NSString\0".as_ptr() as *const c_char);
+        let sel = sel_registerName(b"stringWithUTF8String:\0".as_ptr() as *const c_char);
+        let cstr = CString::new(s).unwrap_or_default();
+        let msg: unsafe extern "C" fn(*mut c_void, *mut c_void, *const c_char) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        msg(cls, sel, cstr.as_ptr())
+    }
+
+    unsafe fn build_ns_menu(
+        items: &[TrayMenuItem],
+        shared: Arc<SharedTrayState>,
+    ) -> *mut c_void {
+        let menu_cls = objc_getClass(b"NSMenu\0".as_ptr() as *const c_char);
+        let alloc_sel = sel_registerName(b"alloc\0".as_ptr() as *const c_char);
+        let init_sel = sel_registerName(b"initWithTitle:\0".as_ptr() as *const c_char);
+        let msg_alloc: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        let msg_init: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        let menu_inst = msg_alloc(menu_cls, alloc_sel);
+        let title_str = create_ns_string("StrataTrayMenu");
+        let ns_menu = msg_init(menu_inst, init_sel, title_str);
+
+        let add_item_sel = sel_registerName(b"addItem:\0".as_ptr() as *const c_char);
+        let msg_add_item: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
+            std::mem::transmute(objc_msgSend as *const ());
+
+        for item in items {
+            if item.is_separator {
+                let item_cls = objc_getClass(b"NSMenuItem\0".as_ptr() as *const c_char);
+                let sep_sel = sel_registerName(b"separatorItem\0".as_ptr() as *const c_char);
+                let msg_sep: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+                    std::mem::transmute(objc_msgSend as *const ());
+                let sep = msg_sep(item_cls, sep_sel);
+                msg_add_item(ns_menu, add_item_sel, sep);
+                continue;
+            }
+
+            let item_cls = objc_getClass(b"NSMenuItem\0".as_ptr() as *const c_char);
+            let item_alloc = msg_alloc(item_cls, alloc_sel);
+            let item_init_sel =
+                sel_registerName(b"initWithTitle:action:keyEquivalent:\0".as_ptr() as *const c_char);
+            let msg_item_init: unsafe extern "C" fn(
+                *mut c_void,
+                *mut c_void,
+                *mut c_void,
+                *mut c_void,
+                *mut c_void,
+            ) -> *mut c_void = std::mem::transmute(objc_msgSend as *const ());
+            let label_str = create_ns_string(&item.label);
+            let empty_str = create_ns_string("");
+            let ns_item = msg_item_init(
+                item_alloc,
+                item_init_sel,
+                label_str,
+                std::ptr::null_mut(),
+                empty_str,
+            );
+
+            let set_tag_sel = sel_registerName(b"setTag:\0".as_ptr() as *const c_char);
+            let msg_tag: unsafe extern "C" fn(*mut c_void, *mut c_void, isize) =
+                std::mem::transmute(objc_msgSend as *const ());
+            msg_tag(ns_item, set_tag_sel, item.id as isize);
+
+            let set_enabled_sel = sel_registerName(b"setEnabled:\0".as_ptr() as *const c_char);
+            let msg_enabled: unsafe extern "C" fn(*mut c_void, *mut c_void, bool) =
+                std::mem::transmute(objc_msgSend as *const ());
+            msg_enabled(ns_item, set_enabled_sel, item.enabled);
+
+            let set_state_sel = sel_registerName(b"setState:\0".as_ptr() as *const c_char);
+            let msg_state: unsafe extern "C" fn(*mut c_void, *mut c_void, isize) =
+                std::mem::transmute(objc_msgSend as *const ());
+            msg_state(ns_item, set_state_sel, if item.checked { 1 } else { 0 });
+
+            if !item.children.is_empty() {
+                let sub_menu = build_ns_menu(&item.children, shared.clone());
+                let set_sub_sel = sel_registerName(b"setSubmenu:\0".as_ptr() as *const c_char);
+                let msg_sub: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
+                    std::mem::transmute(objc_msgSend as *const ());
+                msg_sub(ns_item, set_sub_sel, sub_menu);
+            }
+
+            msg_add_item(ns_menu, add_item_sel, ns_item);
+        }
+
+        ns_menu
+    }
+}
+

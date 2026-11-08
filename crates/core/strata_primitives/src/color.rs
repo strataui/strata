@@ -24,6 +24,7 @@ impl Rgba {
     }
 
     #[inline(always)]
+    #[allow(clippy::self_named_constructors)]
     pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }
     }
@@ -275,6 +276,7 @@ impl Oklch {
     }
 
     /// Converts Oklch to standard sRGB Rgba.
+    #[allow(clippy::excessive_precision)]
     pub fn to_rgba(self) -> Rgba {
         let h_rad = self.h.to_radians();
         let a_star = self.c * h_rad.cos();

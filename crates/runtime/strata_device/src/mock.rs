@@ -6,6 +6,7 @@ use crate::types::*;
 
 /// Snapshot of simulated hardware telemetry.
 #[derive(Debug, Clone, PartialEq)]
+#[derive(Default)]
 pub struct DeviceTelemetrySnapshot {
     pub battery: BatteryInfo,
     pub thermal: ThermalState,
@@ -15,18 +16,6 @@ pub struct DeviceTelemetrySnapshot {
     pub gpu: GpuInfo,
 }
 
-impl Default for DeviceTelemetrySnapshot {
-    fn default() -> Self {
-        Self {
-            battery: BatteryInfo::default(),
-            thermal: ThermalState::default(),
-            network: NetworkStatus::default(),
-            screen: ScreenGeometry::default(),
-            display_refresh: DisplayRefreshInfo::default(),
-            gpu: GpuInfo::default(),
-        }
-    }
-}
 
 static GLOBAL_MOCK: OnceLock<Arc<Mutex<DeviceTelemetrySnapshot>>> = OnceLock::new();
 

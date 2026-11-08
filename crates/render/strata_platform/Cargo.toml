@@ -18,3 +18,17 @@ gtk = "0.18.2"
 cairo-rs = { version = "0.18.5", features = ["png"] }
 pangocairo = "0.18.0"
 pango = { version = "0.18.0", features = ["v1_44"] }
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_Controls_Dialogs",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_System_LibraryLoader",
+] }
+

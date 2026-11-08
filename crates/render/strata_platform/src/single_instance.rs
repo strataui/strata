@@ -54,7 +54,17 @@ impl SingleInstanceLock {
         {
             let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("/tmp"));
+                .unwrap_or_else(|| {
+                    extern "C" {
+                        fn getuid() -> u32;
+                    }
+                    let uid = unsafe { getuid() };
+                    let dir = PathBuf::from(format!("/tmp/strata-runtime-{}", uid));
+                    let _ = std::fs::create_dir_all(&dir);
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+                    dir
+                });
             Self::acquire_in_dir(app_id, args, &runtime_dir, on_secondary_args)
         }
         #[cfg(windows)]
@@ -125,12 +135,16 @@ impl SingleInstanceLock {
 
         // Try binding the socket as the primary instance.
         match UnixListener::bind(&socket_path) {
-            Ok(listener) => Ok(SingleInstanceStatus::Primary(Self::establish_unix(
-                app_id,
-                listener,
-                socket_path,
-                on_secondary_args,
-            )?)),
+            Ok(listener) => {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600));
+                Ok(SingleInstanceStatus::Primary(Self::establish_unix(
+                    app_id,
+                    listener,
+                    socket_path,
+                    on_secondary_args,
+                )?))
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                 // The path exists. Connect to determine whether the owner is live.
                 match UnixStream::connect(&socket_path) {
@@ -146,6 +160,8 @@ impl SingleInstanceLock {
                         // Stale socket left by a crashed primary. Remove and rebind.
                         let _ = std::fs::remove_file(&socket_path);
                         let listener = UnixListener::bind(&socket_path)?;
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600));
                         Ok(SingleInstanceStatus::Primary(Self::establish_unix(
                             app_id,
                             listener,

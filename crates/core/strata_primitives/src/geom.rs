@@ -145,6 +145,15 @@ impl Rect<f32> {
     }
 
     #[inline(always)]
+    pub fn x(self) -> f32 { self.origin.x }
+    #[inline(always)]
+    pub fn y(self) -> f32 { self.origin.y }
+    #[inline(always)]
+    pub fn width(self) -> f32 { self.size.width }
+    #[inline(always)]
+    pub fn height(self) -> f32 { self.size.height }
+
+    #[inline(always)]
     pub fn min_x(self) -> f32 { self.origin.x }
     #[inline(always)]
     pub fn max_x(self) -> f32 { self.origin.x + self.size.width }
@@ -814,8 +823,8 @@ impl Matrix4x4 {
     /// Returns true if this matrix is approximately the identity matrix.
     pub fn is_identity(&self) -> bool {
         let id = Self::IDENTITY.m;
-        for i in 0..16 {
-            if (self.m[i] - id[i]).abs() > 1e-5 {
+        for (i, &expected) in id.iter().enumerate() {
+            if (self.m[i] - expected).abs() > 1e-5 {
                 return false;
             }
         }

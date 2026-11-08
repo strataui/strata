@@ -42,12 +42,14 @@ fn with_or_init_signals<R>(f: impl FnOnce(&ThreadLocalSignals) -> R) -> R {
 /// Synchronizes current thread's reactive signals with the mock controller state.
 pub(crate) fn sync_signals_from_mock(mock: &DeviceMockController) {
     SIGNALS.with(|cell| {
-        if let Some(signals) = cell.borrow().as_ref() {
-            signals.battery.set(mock.battery());
-            signals.thermal.set(mock.thermal());
-            signals.network.set(mock.network());
-            signals.screen.set(mock.screen());
-            signals.display_refresh.set(mock.display_refresh());
+        if let Ok(borrow) = cell.try_borrow() {
+            if let Some(signals) = borrow.as_ref() {
+                signals.battery.set(mock.battery());
+                signals.thermal.set(mock.thermal());
+                signals.network.set(mock.network());
+                signals.screen.set(mock.screen());
+                signals.display_refresh.set(mock.display_refresh());
+            }
         }
     });
 }

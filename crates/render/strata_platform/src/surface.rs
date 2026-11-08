@@ -22,7 +22,9 @@ pub enum PresentMode {
 
 /// Target display refresh rate for frame pacing and VSync synchronization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Default)]
 pub enum RefreshRate {
+    #[default]
     Hz60,
     Hz90,
     Hz120,
@@ -30,11 +32,6 @@ pub enum RefreshRate {
     Custom(u32),
 }
 
-impl Default for RefreshRate {
-    fn default() -> Self {
-        Self::Hz60
-    }
-}
 
 impl RefreshRate {
     /// Returns integer frequency in Hertz.
@@ -158,6 +155,44 @@ impl FramePacer {
         } else {
             Duration::ZERO
         }
+    }
+
+    /// Synchronizes execution with the hardware VSync signal or refresh rate deadline.
+    pub fn wait_vsync(&mut self) {
+        #[cfg(windows)]
+        {
+            unsafe {
+                extern "system" {
+                    fn LoadLibraryA(lpLibFileName: *const u8) -> *mut std::ffi::c_void;
+                    fn GetProcAddress(
+                        hModule: *mut std::ffi::c_void,
+                        lpProcName: *const u8,
+                    ) -> *mut std::ffi::c_void;
+                    fn FreeLibrary(hLibModule: *mut std::ffi::c_void) -> i32;
+                }
+                let dwmapi = LoadLibraryA(b"dwmapi.dll\0".as_ptr());
+                if !dwmapi.is_null() {
+                    let proc = GetProcAddress(dwmapi, b"DwmFlush\0".as_ptr());
+                    if !proc.is_null() {
+                        let dwm_flush: unsafe extern "system" fn() -> i32 =
+                            std::mem::transmute(proc);
+                        let _ = dwm_flush();
+                    }
+                    FreeLibrary(dwmapi);
+                }
+            }
+        }
+
+        // High-precision deadline sleep for remaining duration until next frame
+        let remaining = self.duration_until_next_deadline();
+        if remaining > Duration::from_micros(500) {
+            std::thread::sleep(remaining - Duration::from_micros(250));
+        }
+        // Sub-millisecond spin loop to nail the deadline
+        while self.duration_until_next_deadline() > Duration::ZERO {
+            std::hint::spin_loop();
+        }
+        self.last_frame_instant = Some(Instant::now());
     }
 }
 

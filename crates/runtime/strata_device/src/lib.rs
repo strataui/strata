@@ -4,10 +4,15 @@
 //! and system-wide memory pressure eviction callbacks.
 
 pub mod mock;
+pub mod os_telemetry;
 pub mod signals;
 pub mod types;
 
 pub use mock::{DeviceMockController, DeviceTelemetrySnapshot};
+pub use os_telemetry::{
+    probe_hardware_telemetry, probe_os_battery, probe_os_network, probe_os_thermal,
+    refresh_from_hardware,
+};
 pub use signals::{
     clear_memory_pressure_listeners, notify_memory_pressure, on_memory_pressure,
     unregister_memory_pressure, use_battery, use_display_refresh, use_network, use_screen,
