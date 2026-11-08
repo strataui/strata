@@ -4,7 +4,6 @@ members = [
     "crates/strata",
     "crates/core/*",
     "crates/render/*",
-    "crates/geo/*",
     "crates/runtime/*",
     "crates/ui/*",
     "crates/tooling/*",
@@ -14,7 +13,7 @@ members = [
 
 [workspace.package]
 version = "0.1.0"
-authors = ["larvance <64753457+larvance@users.noreply.github.com>"]
+authors = ["Strata Contributors"]
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/strataui/strata"
@@ -57,9 +56,6 @@ strata_device = { path = "crates/runtime/strata_device" }
 strata_parallel = { path = "crates/runtime/strata_parallel" }
 strata_web_reader = { path = "crates/runtime/strata_web_reader" }
 
-# Geo
-strata_earth = { path = "crates/geo/strata_earth" }
-
 # UI
 strata_ui = { path = "crates/ui/strata_ui" }
 strata_icons = { path = "crates/ui/strata_icons" }
@@ -76,12 +72,9 @@ strata_i18n = { path = "crates/ui/strata_i18n" }
 strata_query = { path = "crates/ui/strata_query" }
 
 # Tooling
-strata_cli = { path = "crates/tooling/strata_cli" }
-strata_lsp = { path = "crates/tooling/strata_lsp" }
 strata_devtools = { path = "crates/tooling/strata_devtools" }
 strata_build = { path = "crates/tooling/strata_build" }
 strata_hot_reload = { path = "crates/tooling/strata_hot_reload" }
-strata_mdbook = { path = "crates/tooling/strata_mdbook" }
 strata_mcp = { path = "crates/tooling/strata_mcp" }
 
 # Harnesses
