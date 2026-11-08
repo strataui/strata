@@ -134,7 +134,7 @@ impl CacheStorage {
     /// Opens or retrieves an existing named Cache.
     pub fn open(&self, name: &str) -> Cache {
         let mut lock = self.caches.write().expect("CacheStorage write lock");
-        lock.entry(name.to_string()).or_insert_with(Cache::new).clone()
+        lock.entry(name.to_string()).or_default().clone()
     }
 
     /// Returns whether a cache with the given name exists.

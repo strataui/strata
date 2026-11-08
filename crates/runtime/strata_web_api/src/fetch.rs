@@ -2,11 +2,13 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::io::{Cursor, Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+use crate::tls::HttpTransportStream;
 
 /// Errors occurring during HTTP fetch requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -291,10 +293,65 @@ impl ParsedUrl {
     }
 }
 
-/// Executes an HTTP fetch request.
+/// Resolves a redirect location header against the base URL.
+pub fn resolve_redirect_url(base: &str, location: &str) -> Result<String, FetchError> {
+    let loc_trimmed = location.trim();
+    if loc_trimmed.starts_with("http://") || loc_trimmed.starts_with("https://") {
+        return Ok(loc_trimmed.to_string());
+    }
+
+    let parsed_base = ParsedUrl::parse(base)?;
+    let host_part = if (parsed_base.scheme == "http" && parsed_base.port == 80)
+        || (parsed_base.scheme == "https" && parsed_base.port == 443)
+    {
+        parsed_base.host
+    } else {
+        format!("{}:{}", parsed_base.host, parsed_base.port)
+    };
+
+    if let Some(stripped) = loc_trimmed.strip_prefix("//") {
+        return Ok(format!("{}://{stripped}", parsed_base.scheme));
+    }
+
+    if loc_trimmed.starts_with('/') {
+        return Ok(format!("{}://{}{}", parsed_base.scheme, host_part, loc_trimmed));
+    }
+
+    let base_dir = match parsed_base.path_and_query.rfind('/') {
+        Some(idx) => &parsed_base.path_and_query[..=idx],
+        None => "/",
+    };
+    Ok(format!("{}://{}{}{}", parsed_base.scheme, host_part, base_dir, loc_trimmed))
+}
+
+/// Executes an HTTP or HTTPS fetch request, following standard HTTP redirects.
 pub fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, FetchError> {
     let req = init.unwrap_or_default();
+    let max_redirects = 5;
+    let mut current_url = url.to_string();
+    let mut current_req = req;
 
+    for _ in 0..max_redirects {
+        let resp = fetch_single(&current_url, &current_req)?;
+        if (301..=303).contains(&resp.status) || resp.status == 307 || resp.status == 308 {
+            if let Some(loc) = resp.headers.get("location") {
+                let next_url = resolve_redirect_url(&current_url, loc)?;
+                current_url = next_url;
+                if resp.status == 303 || resp.status == 301 || resp.status == 302 {
+                    current_req.method = "GET".to_string();
+                    current_req.body = None;
+                }
+                continue;
+            }
+        }
+        return Ok(resp);
+    }
+
+    Err(FetchError::NetworkError("Too many redirects (exceeded 5 hops)".into()))
+}
+
+/// Executes a single HTTP or HTTPS fetch request without following redirects.
+pub fn fetch_single(url: &str, req: &RequestInit) -> Result<Response, FetchError> {
     // Check cancellation
     if let Some(ref sig) = req.signal {
         if sig.is_aborted() {
@@ -303,23 +360,78 @@ pub fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, FetchErro
     }
 
     let parsed = ParsedUrl::parse(url)?;
-
-    // Handle mock test addresses or direct loopback
-    let addr = format!("{}:{}", parsed.host, parsed.port);
     let timeout = Duration::from_millis(req.timeout_ms.unwrap_or(15000));
 
-    let mut stream = TcpStream::connect_timeout(
-        &addr.parse().map_err(|e| FetchError::InvalidUrl(format!("{e}")))?,
-        timeout,
-    ).map_err(|e| FetchError::NetworkError(e.to_string()))?;
+    // Resolve DNS host and establish TCP connection
+    let addrs: Vec<std::net::SocketAddr> = match (parsed.host.as_str(), parsed.port).to_socket_addrs() {
+        Ok(iter) => iter.collect(),
+        Err(e) => {
+            return Err(FetchError::NetworkError(format!(
+                "DNS resolution failed for {}: {e}",
+                parsed.host
+            )));
+        }
+    };
 
-    stream.set_read_timeout(Some(timeout)).map_err(|e| FetchError::IoError(e.to_string()))?;
-    stream.set_write_timeout(Some(timeout)).map_err(|e| FetchError::IoError(e.to_string()))?;
+    if addrs.is_empty() {
+        return Err(FetchError::NetworkError(format!(
+            "No IP addresses resolved for host {}",
+            parsed.host
+        )));
+    }
+
+    let mut tcp_stream_opt = None;
+    let mut last_err = None;
+
+    for addr in &addrs {
+        match TcpStream::connect_timeout(addr, timeout) {
+            Ok(s) => {
+                tcp_stream_opt = Some(s);
+                break;
+            }
+            Err(e) => {
+                last_err = Some(e);
+            }
+        }
+    }
+
+    let tcp_stream = tcp_stream_opt.ok_or_else(|| {
+        FetchError::NetworkError(format!(
+            "Connection to {}:{} failed: {}",
+            parsed.host,
+            parsed.port,
+            last_err
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "Network unreachable".into())
+        ))
+    })?;
+
+    tcp_stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|e| FetchError::IoError(e.to_string()))?;
+    tcp_stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|e| FetchError::IoError(e.to_string()))?;
+
+    // Transparently multiplex between Plain TCP and TLS 1.2/1.3
+    let mut transport: HttpTransportStream = if parsed.scheme == "https" {
+        crate::tls::create_tls_stream(tcp_stream, &parsed.host)
+            .map_err(FetchError::NetworkError)?
+    } else {
+        HttpTransportStream::Plain(tcp_stream)
+    };
+
+    // If ALPN negotiated HTTP/2 ("h2"), dispatch to pure-Rust HTTP/2 client engine
+    if transport.alpn_protocol() == Some(b"h2") {
+        return crate::http2::execute_http2_request(&mut transport, req, &parsed);
+    }
 
     // Build HTTP/1.1 request
     let mut request_bytes = Vec::new();
     let method = req.method.to_uppercase();
-    request_bytes.extend_from_slice(format!("{method} {} HTTP/1.1\r\n", parsed.path_and_query).as_bytes());
+    request_bytes.extend_from_slice(
+        format!("{method} {} HTTP/1.1\r\n", parsed.path_and_query).as_bytes(),
+    );
     request_bytes.extend_from_slice(format!("Host: {}\r\n", parsed.host).as_bytes());
     request_bytes.extend_from_slice(b"Connection: close\r\n");
 
@@ -341,14 +453,15 @@ pub fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, FetchErro
         request_bytes.extend_from_slice(body);
     }
 
-    stream.write_all(&request_bytes).map_err(|e| FetchError::NetworkError(e.to_string()))?;
-    stream.flush().map_err(|e| FetchError::NetworkError(e.to_string()))?;
+    transport
+        .write_all(&request_bytes)
+        .map_err(|e| FetchError::NetworkError(e.to_string()))?;
+    transport
+        .flush()
+        .map_err(|e| FetchError::NetworkError(e.to_string()))?;
 
-    // Read response
-    let mut raw_response = Vec::new();
-    stream.read_to_end(&mut raw_response).map_err(|e| FetchError::NetworkError(e.to_string()))?;
-
-    parse_http_response(&raw_response)
+    // Read response with RFC 7230 framing (terminates on Content-Length or chunked without waiting for EOF)
+    read_http_response(&mut transport)
 }
 
 /// Decodes HTTP/1.1 chunked transfer encoded payloads.
@@ -428,17 +541,33 @@ pub fn decompress_body(raw_body: &[u8], encoding: &str) -> Result<Vec<u8>, Fetch
     }
 }
 
-/// Parses raw HTTP/1.1 response bytes into a structured `Response`.
-pub fn parse_http_response(raw: &[u8]) -> Result<Response, FetchError> {
-    let header_end = raw
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .ok_or_else(|| FetchError::NetworkError("Malformed HTTP response: no header delimiter".into()))?;
+/// Reads an HTTP/1.1 response from a synchronous byte stream, enforcing RFC 7230 framing.
+/// Terminates immediately upon reading `Content-Length` bytes or the terminal chunk `0\r\n\r\n`,
+/// preventing hangs on persistent keep-alive connections.
+pub fn read_http_response<R: Read>(reader: &mut R) -> Result<Response, FetchError> {
+    let mut buffer = Vec::with_capacity(4096);
+    let mut header_end = None;
 
-    let header_str = String::from_utf8_lossy(&raw[..header_end]);
+    // 1. Read headers incrementally until \r\n\r\n
+    let mut temp = [0u8; 1024];
+    while header_end.is_none() {
+        let n = reader
+            .read(&mut temp)
+            .map_err(|e| FetchError::NetworkError(e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&temp[..n]);
+        header_end = buffer.windows(4).position(|w| w == b"\r\n\r\n");
+    }
+
+    let Some(header_end_pos) = header_end else {
+        return Err(FetchError::NetworkError("Malformed HTTP response: no header delimiter".into()));
+    };
+
+    let header_str = String::from_utf8_lossy(&buffer[..header_end_pos]);
     let mut lines = header_str.split("\r\n");
 
-    // Status Line: HTTP/1.1 200 OK
     let status_line = lines.next().ok_or_else(|| {
         FetchError::NetworkError("Missing HTTP status line".into())
     })?;
@@ -447,7 +576,6 @@ pub fn parse_http_response(raw: &[u8]) -> Result<Response, FetchError> {
     let _version = status_parts.next();
     let status_code_str = status_parts.next().unwrap_or("0");
     let status_text = status_parts.next().unwrap_or("");
-
     let status_code = status_code_str.parse::<u16>().unwrap_or(0);
 
     let mut headers = Headers::new();
@@ -457,25 +585,151 @@ pub fn parse_http_response(raw: &[u8]) -> Result<Response, FetchError> {
         }
     }
 
-    let raw_body = &raw[header_end + 4..];
+    // Residual bytes already read into buffer after the \r\n\r\n delimiter
+    let initial_body = buffer[header_end_pos + 4..].to_vec();
 
-    // Decode chunked transfer encoding if specified
-    let unchunked_body = if headers
+    // Responses to 1xx, 204 No Content, 304 Not Modified have no body per RFC 7230 §3.3.3
+    if (100..200).contains(&status_code) || status_code == 204 || status_code == 304 {
+        return Ok(Response::new(status_code, status_text, headers, Vec::new()));
+    }
+
+    let is_chunked = headers
         .get("transfer-encoding")
         .map(|v| v.eq_ignore_ascii_case("chunked"))
-        .unwrap_or(false)
-    {
-        decode_chunked_body(raw_body)?
+        .unwrap_or(false);
+
+    let raw_body = if is_chunked {
+        read_chunked_stream(reader, initial_body)?
+    } else if let Some(cl_str) = headers.get("content-length") {
+        let content_length = cl_str.trim().parse::<usize>().map_err(|e| {
+            FetchError::NetworkError(format!("Invalid Content-Length '{cl_str}': {e}"))
+        })?;
+        read_fixed_length_body(reader, initial_body, content_length)?
     } else {
-        raw_body.to_vec()
+        // Delimited by connection closure (RFC 7230 Section 3.3.3 #7)
+        let mut full_body = initial_body;
+        let mut eof_buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut eof_buf) {
+                Ok(0) => break,
+                Ok(n) => full_body.extend_from_slice(&eof_buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(FetchError::NetworkError(e.to_string())),
+            }
+        }
+        full_body
     };
 
-    // Decompress payload if Content-Encoding is set
     let body = if let Some(encoding) = headers.get("content-encoding") {
-        decompress_body(&unchunked_body, encoding)?
+        decompress_body(&raw_body, encoding)?
     } else {
-        unchunked_body
+        raw_body
     };
 
     Ok(Response::new(status_code, status_text, headers, body))
+}
+
+fn read_fixed_length_body<R: Read>(
+    reader: &mut R,
+    mut initial: Vec<u8>,
+    content_length: usize,
+) -> Result<Vec<u8>, FetchError> {
+    if initial.len() >= content_length {
+        initial.truncate(content_length);
+        return Ok(initial);
+    }
+
+    let remaining = content_length - initial.len();
+    let mut remaining_buf = vec![0u8; remaining];
+    reader.read_exact(&mut remaining_buf).map_err(|e| {
+        FetchError::NetworkError(format!(
+            "Truncated HTTP body (expected {content_length} bytes): {e}"
+        ))
+    })?;
+    initial.extend_from_slice(&remaining_buf);
+    Ok(initial)
+}
+
+fn read_chunked_stream<R: Read>(
+    reader: &mut R,
+    initial: Vec<u8>,
+) -> Result<Vec<u8>, FetchError> {
+    let mut decoded = Vec::new();
+    let mut stream_buf = initial;
+    let mut temp = [0u8; 4096];
+
+    loop {
+        let newline_pos = loop {
+            if let Some(pos) = stream_buf.windows(2).position(|w| w == b"\r\n") {
+                break pos;
+            }
+            let n = reader
+                .read(&mut temp)
+                .map_err(|e| FetchError::NetworkError(e.to_string()))?;
+            if n == 0 {
+                return Err(FetchError::NetworkError(
+                    "Unexpected EOF while reading chunk size".into(),
+                ));
+            }
+            stream_buf.extend_from_slice(&temp[..n]);
+        };
+
+        let size_str = std::str::from_utf8(&stream_buf[..newline_pos])
+            .map_err(|e| FetchError::NetworkError(format!("Invalid chunk size UTF-8: {e}")))?
+            .trim();
+        let size_hex = size_str.split(';').next().unwrap_or(size_str).trim();
+        let chunk_size = usize::from_str_radix(size_hex, 16).map_err(|e| {
+            FetchError::NetworkError(format!("Invalid hex chunk size '{size_hex}': {e}"))
+        })?;
+
+        stream_buf.drain(..newline_pos + 2);
+
+        if chunk_size == 0 {
+            // Drain trailing CRLF / trailers
+            while !stream_buf.starts_with(b"\r\n") {
+                if stream_buf.is_empty() {
+                    let n = reader
+                        .read(&mut temp)
+                        .map_err(|e| FetchError::NetworkError(e.to_string()))?;
+                    if n == 0 {
+                        break;
+                    }
+                    stream_buf.extend_from_slice(&temp[..n]);
+                } else if let Some(end) = stream_buf.windows(2).position(|w| w == b"\r\n") {
+                    stream_buf.drain(..end + 2);
+                    break;
+                } else {
+                    break;
+                }
+            }
+            if stream_buf.starts_with(b"\r\n") {
+                stream_buf.drain(..2);
+            }
+            break;
+        }
+
+        let total_needed = chunk_size + 2;
+        while stream_buf.len() < total_needed {
+            let n = reader
+                .read(&mut temp)
+                .map_err(|e| FetchError::NetworkError(e.to_string()))?;
+            if n == 0 {
+                return Err(FetchError::NetworkError(
+                    "Unexpected EOF while reading chunk payload".into(),
+                ));
+            }
+            stream_buf.extend_from_slice(&temp[..n]);
+        }
+
+        decoded.extend_from_slice(&stream_buf[..chunk_size]);
+        stream_buf.drain(..total_needed);
+    }
+
+    Ok(decoded)
+}
+
+/// Parses raw HTTP/1.1 response bytes into a structured `Response`.
+pub fn parse_http_response(raw: &[u8]) -> Result<Response, FetchError> {
+    let mut cursor = Cursor::new(raw);
+    read_http_response(&mut cursor)
 }
