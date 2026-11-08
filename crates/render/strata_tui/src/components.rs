@@ -1,19 +1,9 @@
 //! Conditional TUI RSX Components (<TuiFallback>, <NoTui>, <TuiOnly>).
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use strata_dom::{NodeBlueprint, View};
 
-static TUI_TARGET_ACTIVE: AtomicBool = AtomicBool::new(false);
+pub use strata_primitives::target::{is_tui_target, set_tui_target_active};
 
-/// Checks if the current runtime target is TUI.
-pub fn is_tui_target() -> bool {
-    TUI_TARGET_ACTIVE.load(Ordering::SeqCst)
-}
-
-/// Sets whether the TUI target is active (useful for testing and dual-mode execution).
-pub fn set_tui_target_active(active: bool) {
-    TUI_TARGET_ACTIVE.store(active, Ordering::SeqCst);
-}
 
 /// A component providing declarative fallback between rich GUI surfaces and terminal representations.
 pub fn tui_fallback(gui: View, tui: View) -> View {

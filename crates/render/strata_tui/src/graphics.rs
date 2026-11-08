@@ -19,7 +19,7 @@ pub fn render_half_block(
         return;
     }
 
-    let cell_rows = (img_height + 1) / 2;
+    let cell_rows = img_height.div_ceil(2);
 
     for r in 0..cell_rows {
         let dest_row = start_row + (r as u16);
@@ -94,8 +94,8 @@ pub fn render_braille(
     bg: Color24,
     z_index: i16,
 ) {
-    let char_cols = (img_width + 1) / 2;
-    let char_rows = (img_height + 3) / 4;
+    let char_cols = img_width.div_ceil(2);
+    let char_rows = img_height.div_ceil(4);
 
     for r in 0..char_rows {
         let dest_row = start_row + (r as u16);
