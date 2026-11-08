@@ -48,13 +48,25 @@ fn test_parse_repeat_multiple_tracks() {
 #[test]
 fn test_parse_minmax_zero_to_fr() {
     let tracks = parse_grid_tracks("minmax(0, 1fr)");
-    assert_eq!(tracks, vec![GridTrack::Fr(1.0)]);
+    assert_eq!(
+        tracks,
+        vec![GridTrack::MinMax(
+            GridTrackBreadth::Px(0.0),
+            GridTrackBreadth::Fr(1.0)
+        )]
+    );
 }
 
 #[test]
 fn test_parse_minmax_fixed_min_auto_max() {
     let tracks = parse_grid_tracks("minmax(120px, auto)");
-    assert_eq!(tracks, vec![GridTrack::Px(120.0)]);
+    assert_eq!(
+        tracks,
+        vec![GridTrack::MinMax(
+            GridTrackBreadth::Px(120.0),
+            GridTrackBreadth::Auto
+        )]
+    );
 }
 
 #[test]

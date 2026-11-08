@@ -5,9 +5,10 @@ use crate::types::{
     AnimationDirection, AnimationFillMode, AnimationIterationCount, AnimationPlayState,
     AnimationRange, AnimationRangeName, AnimationSpec, AnimationTimeline, BackfaceVisibility,
     BorderStyle, BoxShadow, Color, ColorStop, Cursor, Dimension, EdgeInsets, Gradient, GridTrack,
-    PointerEvents, ScrollAxis, ScrollTimelineSource, TextDecoration, TextTransform, TransformOp,
-    TransformOrigin, TransformStyle, TransitionBehavior, TransitionEasing, TransitionProperty,
-    TransitionSpec, UserSelect, VerticalAlign, Visibility, WhiteSpace,
+    GridTrackBreadth, PointerEvents, ScrollAxis, ScrollTimelineSource, TextDecoration,
+    TextTransform, TransformOp, TransformOrigin, TransformStyle, TransitionBehavior,
+    TransitionEasing, TransitionProperty, TransitionSpec, UserSelect, VerticalAlign, Visibility,
+    WhiteSpace,
 };
 
 /// Single CSS property declaration (e.g. `background-color: #000 !important;`).
@@ -18,11 +19,12 @@ pub struct Declaration {
     pub important: bool,
 }
 
-/// CSS style rule associating a list of selectors with a declaration block.
+/// CSS style rule associating a list of selectors with a declaration block and optional layer order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StyleRule {
     pub selectors: Vec<Selector>,
     pub declarations: Vec<Declaration>,
+    pub layer_order: Option<u32>,
 }
 
 /// A single parsed stop inside a CSS `@keyframes` block.
@@ -75,6 +77,7 @@ impl StyleSheet {
         let mut keyframes = Vec::new();
         let mut starting_styles = Vec::new();
         let mut registered_properties = Vec::new();
+        let mut layer_names: Vec<String> = Vec::new();
         let mut chars = stripped.chars().peekable();
 
         loop {
@@ -88,7 +91,7 @@ impl StyleSheet {
             let mut found_brace = false;
             let mut in_quotes: Option<char> = None;
 
-            while let Some(c) = chars.next() {
+            for c in chars.by_ref() {
                 if let Some(q) = in_quotes {
                     if c == q {
                         in_quotes = None;
@@ -109,7 +112,16 @@ impl StyleSheet {
             }
 
             if !found_brace {
-                // Semicolon-terminated at-rule (like @charset "UTF-8";) or stray semicolon consumed
+                // Semicolon-terminated at-rule (like @layer base, components; or @charset "UTF-8";)
+                let trimmed_stmt = selector_buf.trim();
+                if let Some(layer_names_str) = trimmed_stmt.strip_prefix("@layer") {
+                    for name in layer_names_str.split(',') {
+                        let name = name.trim();
+                        if !name.is_empty() && !layer_names.contains(&name.to_string()) {
+                            layer_names.push(name.to_string());
+                        }
+                    }
+                }
                 continue;
             }
 
@@ -118,7 +130,7 @@ impl StyleSheet {
             let mut depth = 1;
             let mut in_decl_quotes: Option<char> = None;
 
-            while let Some(c) = chars.next() {
+            for c in chars.by_ref() {
                 if let Some(q) = in_decl_quotes {
                     if c == q {
                         in_decl_quotes = None;
@@ -161,11 +173,43 @@ impl StyleSheet {
 
             // Evaluate @layer
             if trimmed_sel.starts_with("@layer") {
+                let layer_name = trimmed_sel.trim_start_matches("@layer").trim();
+                let layer_id = if layer_name.is_empty() {
+                    let id = layer_names.len() as u32;
+                    layer_names.push(format!("__anon_{}", id));
+                    id
+                } else if let Some(idx) = layer_names.iter().position(|n| n == layer_name) {
+                    idx as u32
+                } else {
+                    let id = layer_names.len() as u32;
+                    layer_names.push(layer_name.to_string());
+                    id
+                };
+
                 if let Ok(inner_sheet) = Self::parse_with_context(&decl_buf, context) {
-                    rules.extend(inner_sheet.rules);
+                    for mut r in inner_sheet.rules {
+                        if r.layer_order.is_none() {
+                            r.layer_order = Some(layer_id);
+                        }
+                        rules.push(r);
+                    }
                     keyframes.extend(inner_sheet.keyframes);
                     starting_styles.extend(inner_sheet.starting_styles);
                     registered_properties.extend(inner_sheet.registered_properties);
+                }
+                continue;
+            }
+
+            // Evaluate @container
+            if trimmed_sel.starts_with("@container") {
+                let query_str = trimmed_sel.trim_start_matches("@container").trim();
+                if evaluate_container_query(query_str, context) {
+                    if let Ok(inner_sheet) = Self::parse_with_context(&decl_buf, context) {
+                        rules.extend(inner_sheet.rules);
+                        keyframes.extend(inner_sheet.keyframes);
+                        starting_styles.extend(inner_sheet.starting_styles);
+                        registered_properties.extend(inner_sheet.registered_properties);
+                    }
                 }
                 continue;
             }
@@ -281,6 +325,7 @@ impl StyleSheet {
             rules.push(StyleRule {
                 selectors,
                 declarations,
+                layer_order: None,
             });
         }
 
@@ -361,7 +406,7 @@ pub fn parse_keyframe_rule_body(name: &str, body: &str) -> KeyframeRule {
         // Read stop offsets header (e.g. "0%, 100%" or "from") up to '{'
         let mut offset_buf = String::new();
         let mut found_brace = false;
-        while let Some(c) = chars.next() {
+        for c in chars.by_ref() {
             if c == '{' {
                 found_brace = true;
                 break;
@@ -375,7 +420,7 @@ pub fn parse_keyframe_rule_body(name: &str, body: &str) -> KeyframeRule {
         // Read stop body up to matching '}'
         let mut stop_body = String::new();
         let mut depth = 1;
-        while let Some(c) = chars.next() {
+        for c in chars.by_ref() {
             if c == '{' {
                 depth += 1;
                 stop_body.push(c);
@@ -652,6 +697,7 @@ fn parse_single_grid_track(token: &str) -> Option<GridTrack> {
         "auto" => return Some(GridTrack::Auto),
         "min-content" => return Some(GridTrack::MinContent),
         "max-content" => return Some(GridTrack::MaxContent),
+        "subgrid" => return Some(GridTrack::Subgrid),
         _ => {}
     }
 
@@ -676,21 +722,37 @@ fn parse_single_grid_track(token: &str) -> Option<GridTrack> {
     None
 }
 
+fn parse_grid_breadth(token: &str) -> Option<GridTrackBreadth> {
+    let lower = token.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return None;
+    }
+
+    match lower.as_str() {
+        "auto" => return Some(GridTrackBreadth::Auto),
+        "min-content" => return Some(GridTrackBreadth::MinContent),
+        "max-content" => return Some(GridTrackBreadth::MaxContent),
+        "0" | "0.0" => return Some(GridTrackBreadth::Px(0.0)),
+        _ => {}
+    }
+
+    if let Some(px) = lower.strip_suffix("px") {
+        return px.trim().parse::<f32>().ok().map(GridTrackBreadth::Px);
+    }
+    if let Some(pct) = lower.strip_suffix('%') {
+        return pct.trim().parse::<f32>().ok().map(GridTrackBreadth::Percent);
+    }
+    if let Some(fr) = lower.strip_suffix("fr") {
+        return fr.trim().parse::<f32>().ok().map(GridTrackBreadth::Fr);
+    }
+
+    None
+}
+
 fn resolve_minmax_track(min: &str, max: &str) -> GridTrack {
-    let min_lower = min.trim().to_ascii_lowercase();
-    let max_lower = max.trim().to_ascii_lowercase();
-
-    if max_lower == "1fr" || min_lower == "0" || min_lower == "auto" {
-        return GridTrack::Fr(1.0);
-    }
-
-    if max_lower == "auto" {
-        if let Some(GridTrack::Px(px)) = parse_single_grid_track(&min_lower) {
-            return GridTrack::Px(px);
-        }
-    }
-
-    parse_single_grid_track(&max_lower).unwrap_or(GridTrack::Auto)
+    let min_b = parse_grid_breadth(min).unwrap_or(GridTrackBreadth::Auto);
+    let max_b = parse_grid_breadth(max).unwrap_or(GridTrackBreadth::Auto);
+    GridTrack::MinMax(min_b, max_b)
 }
 
 /// Decodes CSS colors: `#hex`, `rgb(...)`, `rgba(...)`, `hsl(...)`, `hsla(...)`, or named colors.
@@ -879,7 +941,8 @@ pub fn parse_border_style(val: &str) -> Option<BorderStyle> {
         "dashed" => Some(BorderStyle::Dashed),
         "dotted" => Some(BorderStyle::Dotted),
         "double" => Some(BorderStyle::Double),
-        "none" | "hidden" => Some(BorderStyle::None),
+        "none" => Some(BorderStyle::None),
+        "hidden" => Some(BorderStyle::Hidden),
         _ => None,
     }
 }
@@ -1237,10 +1300,8 @@ fn parse_color_stop(part: &str) -> Option<ColorStop> {
             color = Some(c);
         } else if let Some(pct) = tok.strip_suffix('%').and_then(|t| t.parse::<f32>().ok()) {
             position = Some((pct / 100.0).clamp(0.0, 1.0));
-        } else if let Some(dim) = parse_dimension(tok) {
-            if let Dimension::Percent(p) = dim {
-                position = Some((p / 100.0).clamp(0.0, 1.0));
-            }
+        } else if let Some(Dimension::Percent(p)) = parse_dimension(tok) {
+            position = Some((p / 100.0).clamp(0.0, 1.0));
         }
     }
 
@@ -1879,12 +1940,11 @@ pub fn parse_single_animation(item: &str) -> Option<AnimationSpec> {
         }
 
         // 3. Fill mode: forwards | backwards | both
-        if lower == "forwards" || lower == "backwards" || lower == "both" {
-            if fill_mode.is_none() {
+        if (lower == "forwards" || lower == "backwards" || lower == "both")
+            && fill_mode.is_none() {
                 fill_mode = Some(AnimationFillMode::parse(&tok).unwrap());
                 continue;
             }
-        }
 
         // 4. Timing function
         if let Some(easing) = TransitionEasing::parse(&tok) {
@@ -2243,7 +2303,7 @@ pub fn parse_transform_list(val: &str) -> Vec<TransformOp> {
         // Read arguments up to ')'
         let mut args = String::new();
         let mut depth = 1;
-        while let Some(c) = chars.next() {
+        for c in chars.by_ref() {
             if c == '(' {
                 depth += 1;
                 args.push(c);
@@ -2552,4 +2612,45 @@ pub fn split_selector_list(input: &str) -> Vec<&str> {
         result.push(&input[prev_idx..]);
     }
     result
+}
+
+/// Evaluates a `@container` query condition against the active media and container context.
+fn evaluate_container_query(query_str: &str, context: &crate::media::MediaContext) -> bool {
+    let container_w = context.container_width.unwrap_or(context.viewport_width);
+    let container_h = context.container_height.unwrap_or(context.viewport_height);
+
+    let parts: Vec<&str> = query_str
+        .split(" and ")
+        .flat_map(|p| p.split(" AND "))
+        .map(|s| s.trim())
+        .collect();
+
+    for part in parts {
+        let trimmed = part.trim();
+        if trimmed.starts_with('(') && trimmed.ends_with(')') {
+            let inner = trimmed[1..trimmed.len() - 1].trim();
+            if let Some((feat, val)) = inner.split_once(':') {
+                let feat = feat.trim().to_ascii_lowercase();
+                let val_str = val.trim();
+                let px = if let Some(px_str) = val_str.strip_suffix("px") {
+                    px_str.trim().parse::<f32>().unwrap_or(0.0)
+                } else if let Some(rem_str) = val_str.strip_suffix("rem") {
+                    rem_str.trim().parse::<f32>().unwrap_or(0.0) * 16.0
+                } else {
+                    val_str.parse::<f32>().unwrap_or(0.0)
+                };
+
+                match feat.as_str() {
+                    "min-width" if container_w < px => return false,
+                    "max-width" if container_w > px => return false,
+                    "min-height" if container_h < px => return false,
+                    "max-height" if container_h > px => return false,
+                    "width" if (container_w - px).abs() > 0.5 => return false,
+                    "height" if (container_h - px).abs() > 0.5 => return false,
+                    _ => {}
+                }
+            }
+        }
+    }
+    true
 }

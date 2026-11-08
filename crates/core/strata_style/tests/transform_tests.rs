@@ -1,5 +1,7 @@
 //! W3C CSS 2D and 3D Transforms Level 1 & 2 comprehensive verification test suite.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use strata_style::cascade::CascadeSolver;
 use strata_style::parser::{parse_declarations, parse_transform_list, parse_transform_origin};
 use strata_style::tailwind::TailwindEngine;

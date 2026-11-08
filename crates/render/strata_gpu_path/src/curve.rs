@@ -47,6 +47,38 @@ impl Rect2D {
     pub fn contains(&self, p: Point2D) -> bool {
         p.x >= self.min_x && p.x <= self.max_x && p.y >= self.min_y && p.y <= self.max_y
     }
+
+    pub fn width(&self) -> f32 {
+        self.max_x - self.min_x
+    }
+
+    pub fn height(&self) -> f32 {
+        self.max_y - self.min_y
+    }
+}
+
+impl From<strata_primitives::geom::Point<f32>> for Point2D {
+    fn from(p: strata_primitives::geom::Point<f32>) -> Self {
+        Self::new(p.x, p.y)
+    }
+}
+
+impl From<Point2D> for strata_primitives::geom::Point<f32> {
+    fn from(p: Point2D) -> Self {
+        strata_primitives::geom::Point::new(p.x, p.y)
+    }
+}
+
+impl From<strata_primitives::geom::Rect<f32>> for Rect2D {
+    fn from(r: strata_primitives::geom::Rect<f32>) -> Self {
+        Self::new(r.min_x(), r.min_y(), r.max_x(), r.max_y())
+    }
+}
+
+impl From<Rect2D> for strata_primitives::geom::Rect<f32> {
+    fn from(r: Rect2D) -> Self {
+        strata_primitives::geom::Rect::from_xywh(r.min_x, r.min_y, r.width(), r.height())
+    }
 }
 
 /// Quadratic Bézier curve defined by three control points: P0 (start), P1 (control), P2 (end).

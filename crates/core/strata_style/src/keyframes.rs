@@ -34,71 +34,10 @@ impl CubicBezier {
         Self::new(0.42, 0.0, 0.58, 1.0)
     }
 
-    /// Evaluates Bézier X coordinate at parameter t.
+    /// Solves for y given x in [0.0, 1.0] using De Casteljau's algorithm and root finding.
     #[inline(always)]
-    fn sample_x(&self, t: f32) -> f32 {
-        let inv_t = 1.0 - t;
-        3.0 * inv_t * inv_t * t * self.x1 + 3.0 * inv_t * t * t * self.x2 + t * t * t
-    }
-
-    /// Evaluates Bézier derivative dX/dt at parameter t.
-    #[inline(always)]
-    fn sample_x_derivative(&self, t: f32) -> f32 {
-        let inv_t = 1.0 - t;
-        3.0 * inv_t * inv_t * self.x1
-            + 6.0 * inv_t * t * (self.x2 - self.x1)
-            + 3.0 * t * t * (1.0 - self.x2)
-    }
-
-    /// Evaluates Bézier Y coordinate at parameter t.
-    #[inline(always)]
-    fn sample_y(&self, t: f32) -> f32 {
-        let inv_t = 1.0 - t;
-        3.0 * inv_t * inv_t * t * self.y1 + 3.0 * inv_t * t * t * self.y2 + t * t * t
-    }
-
-    /// Solves for y given x in [0.0, 1.0] using Newton-Raphson iteration with bisection fallback.
     pub fn solve(&self, x: f32) -> f32 {
-        if x <= 0.0 {
-            return 0.0;
-        }
-        if x >= 1.0 {
-            return 1.0;
-        }
-
-        // 1. Try Newton-Raphson iteration
-        let mut t = x;
-        for _ in 0..8 {
-            let current_x = self.sample_x(t) - x;
-            if current_x.abs() < 1e-5 {
-                return self.sample_y(t);
-            }
-            let d_x = self.sample_x_derivative(t);
-            if d_x.abs() < 1e-6 {
-                break;
-            }
-            t -= current_x / d_x;
-        }
-
-        // 2. Fallback to binary search bisection
-        let mut lower = 0.0f32;
-        let mut upper = 1.0f32;
-        t = x;
-
-        while lower < upper {
-            let current_x = self.sample_x(t);
-            if (current_x - x).abs() < 1e-5 {
-                return self.sample_y(t);
-            }
-            if x > current_x {
-                lower = t;
-            } else {
-                upper = t;
-            }
-            t = (upper + lower) * 0.5;
-        }
-
-        self.sample_y(t)
+        crate::bezier::cubic_bezier_solve(x, self.x1, self.y1, self.x2, self.y2)
     }
 }
 

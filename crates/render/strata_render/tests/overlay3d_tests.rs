@@ -338,7 +338,7 @@ fn every_marker_kind_paints() {
     for command in &commands {
         let mut fb = FrameBuffer::new(200, 200);
         rasterize_overlay(&mut fb, viewport, None, std::slice::from_ref(command));
-        let painted = fb.pixels.chunks_exact(4).filter(|p| p[3] > 0).count();
+        let painted = fb.pixels.as_chunks::<4>().0.iter().filter(|p| p[3] > 0).count();
         assert!(
             painted > 0,
             "marker {command:?} must paint at least one pixel"
@@ -350,7 +350,7 @@ fn every_marker_kind_paints() {
     rasterize_overlay(&mut square, viewport, None, &commands[0..1]);
     let mut ring = FrameBuffer::new(200, 200);
     rasterize_overlay(&mut ring, viewport, None, &commands[3..4]);
-    let count = |fb: &FrameBuffer| fb.pixels.chunks_exact(4).filter(|p| p[3] > 0).count();
+    let count = |fb: &FrameBuffer| fb.pixels.as_chunks::<4>().0.iter().filter(|p| p[3] > 0).count();
     assert!(count(&ring) < count(&square), "the ring must be hollow");
 }
 

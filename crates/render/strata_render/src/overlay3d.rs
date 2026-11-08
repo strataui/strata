@@ -13,7 +13,7 @@
 //! 2. Rasterization: the commands are drawn into a [`FrameBuffer`].
 
 use crate::camera64::{DVec3, RenderFrame64};
-use crate::font::get_glyph;
+use crate::font::get_glyph_or_fallback;
 use crate::rasterizer::FrameBuffer;
 use strata_layout::Rect;
 use strata_style::types::Color;
@@ -567,22 +567,21 @@ pub fn draw_text(
     let mut cursor_x = origin[0].round() as i32;
     let cursor_y = origin[1].round() as i32;
     for ch in text.chars() {
-        if let Some(glyph) = get_glyph(ch) {
-            for (row, bits) in glyph.iter().enumerate() {
-                for col in 0..8 {
-                    if bits & (0x80 >> col) == 0 {
-                        continue;
-                    }
-                    for sy in 0..scale {
-                        for sx in 0..scale {
-                            plot(
-                                frame_buffer,
-                                region,
-                                cursor_x + col * scale + sx,
-                                cursor_y + row as i32 * scale + sy,
-                                style.color,
-                            );
-                        }
+        let glyph = get_glyph_or_fallback(ch);
+        for (row, bits) in glyph.iter().enumerate() {
+            for col in 0..8 {
+                if bits & (0x80 >> col) == 0 {
+                    continue;
+                }
+                for sy in 0..scale {
+                    for sx in 0..scale {
+                        plot(
+                            frame_buffer,
+                            region,
+                            cursor_x + col * scale + sx,
+                            cursor_y + row as i32 * scale + sy,
+                            style.color,
+                        );
                     }
                 }
             }

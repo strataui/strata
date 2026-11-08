@@ -1,5 +1,7 @@
 //! Integration Tests: CSS Visual Effects, GPU Compositing Commands, Blend Modes, and Filter Pipelines.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use strata_layout::{LayoutNode, Rect};
 use strata_render::compositor::{Compositor, DrawCommand};
 use strata_render::rasterizer::FrameBuffer;

@@ -37,13 +37,32 @@ impl DVec3 {
 
     #[inline(always)]
     pub fn sub(self, other: Self) -> Self {
-        Self::new(self.x - other.x, self.y - other.y, self.z - other.z)
+        self - other
     }
 
     #[inline(always)]
     pub fn add(self, other: Self) -> Self {
+        self + other
+    }
+}
+
+impl std::ops::Sub for DVec3 {
+    type Output = Self;
+    #[inline(always)]
+    fn sub(self, other: Self) -> Self {
+        Self::new(self.x - other.x, self.y - other.y, self.z - other.z)
+    }
+}
+
+impl std::ops::Add for DVec3 {
+    type Output = Self;
+    #[inline(always)]
+    fn add(self, other: Self) -> Self {
         Self::new(self.x + other.x, self.y + other.y, self.z + other.z)
     }
+}
+
+impl DVec3 {
 
     #[inline(always)]
     pub fn scale(self, k: f64) -> Self {

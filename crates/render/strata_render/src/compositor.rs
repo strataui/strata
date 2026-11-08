@@ -403,6 +403,57 @@ impl Compositor {
             return;
         }
 
+        if let Some(ref grid) = node.table_grid {
+            // CSS 2.1 §17.6.2: Draw collapsed horizontal border segments centered on grid lines
+            for r in 0..=grid.num_rows {
+                let y = grid.row_positions[r];
+                for c in 0..grid.num_cols {
+                    let edge = &grid.horizontal_edges[r][c];
+                    if edge.style == BorderStyle::Hidden
+                        || edge.style == BorderStyle::None
+                        || edge.width <= 0.0
+                    {
+                        continue;
+                    }
+                    let x0 = grid.col_positions[c];
+                    let x1 = grid.col_positions[c + 1];
+                    let w = (x1 - x0).max(1.0);
+                    let color = edge.color.unwrap_or(node.style.color);
+                    let thickness = edge.width.round().max(1.0);
+                    let draw_y = (y - 0.5 * thickness).round();
+                    list.push(DrawCommand::DrawRect {
+                        bounds: Rect::new(x0.round(), draw_y, w.round(), thickness),
+                        color,
+                    });
+                }
+            }
+
+            // CSS 2.1 §17.6.2: Draw collapsed vertical border segments centered on grid lines
+            for r in 0..grid.num_rows {
+                let y0 = grid.row_positions[r];
+                let y1 = grid.row_positions[r + 1];
+                let h = (y1 - y0).max(1.0);
+                for c in 0..=grid.num_cols {
+                    let edge = &grid.vertical_edges[r][c];
+                    if edge.style == BorderStyle::Hidden
+                        || edge.style == BorderStyle::None
+                        || edge.width <= 0.0
+                    {
+                        continue;
+                    }
+                    let x = grid.col_positions[c];
+                    let color = edge.color.unwrap_or(node.style.color);
+                    let thickness = edge.width.round().max(1.0);
+                    let draw_x = (x - 0.5 * thickness).round();
+                    list.push(DrawCommand::DrawRect {
+                        bounds: Rect::new(draw_x, y0.round(), thickness, h.round()),
+                        color,
+                    });
+                }
+            }
+            return;
+        }
+
         let mut cells: Vec<&LayoutNode> = Vec::new();
         Self::collect_table_cells(node, &mut cells);
         cells.retain(|cell| {
@@ -635,12 +686,16 @@ impl Compositor {
                 || node.style.border_width.bottom > 0.0
                 || node.style.border_width.left > 0.0;
             let draw_border_separately = node.style.border_style != BorderStyle::None
+                && node.style.border_style != BorderStyle::Hidden
                 && has_any_border_width
                 && node.style.border_color.is_some()
                 && !(node.style.display == Display::TableCell
                     && node.style.border_collapse == BorderCollapse::Collapse);
             let rounded_border_color =
-                if draw_border_separately || node.style.border_style == BorderStyle::None {
+                if draw_border_separately
+                    || node.style.border_style == BorderStyle::None
+                    || node.style.border_style == BorderStyle::Hidden
+                {
                     None
                 } else {
                     node.style.border_color
@@ -1069,12 +1124,16 @@ impl Compositor {
                 || node.style.border_width.bottom > 0.0
                 || node.style.border_width.left > 0.0;
             let draw_border_separately = node.style.border_style != BorderStyle::None
+                && node.style.border_style != BorderStyle::Hidden
                 && has_any_border_width
                 && node.style.border_color.is_some()
                 && !(node.style.display == Display::TableCell
                     && node.style.border_collapse == BorderCollapse::Collapse);
             let rounded_border_color =
-                if draw_border_separately || node.style.border_style == BorderStyle::None {
+                if draw_border_separately
+                    || node.style.border_style == BorderStyle::None
+                    || node.style.border_style == BorderStyle::Hidden
+                {
                     None
                 } else {
                     node.style.border_color

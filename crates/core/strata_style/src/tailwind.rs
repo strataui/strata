@@ -22,7 +22,7 @@ impl TailwindEngine {
     ) -> ComputedStyle {
         let mut style = ComputedStyle::default();
 
-        for raw_token in classes.split_whitespace() {
+        for raw_token in tokenize_classes(classes) {
             let (modifier, class) = split_modifier(raw_token);
 
             let should_apply = match modifier {
@@ -174,6 +174,38 @@ impl TailwindEngine {
             }
             "content-hidden" => {
                 style.content_visibility = ContentVisibility::Hidden;
+                return;
+            }
+            "contain-none" => {
+                style.contain = Containment::NONE;
+                return;
+            }
+            "contain-strict" => {
+                style.contain = Containment::STRICT;
+                return;
+            }
+            "contain-content" => {
+                style.contain = Containment::CONTENT;
+                return;
+            }
+            "contain-size" => {
+                style.contain.size = true;
+                return;
+            }
+            "contain-inline-size" => {
+                style.contain.inline_size = true;
+                return;
+            }
+            "contain-layout" => {
+                style.contain.layout = true;
+                return;
+            }
+            "contain-paint" => {
+                style.contain.paint = true;
+                return;
+            }
+            "contain-style" => {
+                style.contain.style = true;
                 return;
             }
             _ => {}
@@ -684,7 +716,7 @@ impl TailwindEngine {
             }
             "text-5xl" => {
                 style.font_size = 48.0;
-                style.line_height = 48.0 / 48.0;
+                style.line_height = 1.0;
                 return;
             }
             "text-6xl" => {
@@ -1245,22 +1277,14 @@ impl TailwindEngine {
                 style.z_index = None;
                 return;
             }
-            let num_str = if rest.starts_with('[') && rest.ends_with(']') {
-                &rest[1..rest.len() - 1]
-            } else {
-                rest
-            };
+            let num_str = extract_bracket_content(rest).unwrap_or(rest);
             if let Ok(z) = num_str.parse::<i32>() {
                 style.z_index = Some(z);
                 return;
             }
         }
         if let Some(rest) = class.strip_prefix("-z-") {
-            let num_str = if rest.starts_with('[') && rest.ends_with(']') {
-                &rest[1..rest.len() - 1]
-            } else {
-                rest
-            };
+            let num_str = extract_bracket_content(rest).unwrap_or(rest);
             if let Ok(z) = num_str.parse::<i32>() {
                 style.z_index = Some(-z);
                 return;
@@ -1541,7 +1565,7 @@ impl TailwindEngine {
                 "700" => Some(700.0),
                 "1000" => Some(1000.0),
                 custom => {
-                    let inner = custom.trim_start_matches('[').trim_end_matches(']');
+                    let inner = extract_bracket_content(custom).unwrap_or(custom);
                     crate::parser::parse_time_ms(inner)
                 }
             };
@@ -1568,7 +1592,7 @@ impl TailwindEngine {
                 "in-out" => Some(TransitionEasing::CubicBezier(0.4, 0.0, 0.2, 1.0)),
                 "initial" => Some(TransitionEasing::Ease),
                 custom => {
-                    let inner = custom.trim_start_matches('[').trim_end_matches(']');
+                    let inner = extract_bracket_content(custom).unwrap_or(custom);
                     TransitionEasing::parse(inner)
                 }
             };
@@ -1598,7 +1622,7 @@ impl TailwindEngine {
                 "700" => Some(700.0),
                 "1000" => Some(1000.0),
                 custom => {
-                    let inner = custom.trim_start_matches('[').trim_end_matches(']');
+                    let inner = extract_bracket_content(custom).unwrap_or(custom);
                     crate::parser::parse_time_ms(inner)
                 }
             };
@@ -1679,8 +1703,7 @@ impl TailwindEngine {
             return;
         }
         if let Some(rest) = class.strip_prefix("animate-") {
-            if rest.starts_with('[') && rest.ends_with(']') {
-                let inner = &rest[1..rest.len() - 1];
+            if let Some(inner) = extract_bracket_content(rest) {
                 let normalized = inner.replace('_', " ");
                 let parsed = crate::parser::parse_animations(&normalized);
                 if !parsed.is_empty() {
@@ -1710,11 +1733,7 @@ impl TailwindEngine {
             return;
         }
         if let Some(rest) = class.strip_prefix("view-transition-") {
-            let name = if rest.starts_with('[') && rest.ends_with(']') {
-                &rest[1..rest.len() - 1]
-            } else {
-                rest
-            };
+            let name = extract_bracket_content(rest).unwrap_or(rest);
             style.view_transition_name = Some(name.to_string());
             return;
         }
@@ -1744,11 +1763,7 @@ impl TailwindEngine {
             return;
         }
         if let Some(rest) = class.strip_prefix("timeline-") {
-            let name = if rest.starts_with('[') && rest.ends_with(']') {
-                &rest[1..rest.len() - 1]
-            } else {
-                rest
-            };
+            let name = extract_bracket_content(rest).unwrap_or(rest);
             style.animation_timeline = crate::parser::parse_animation_timeline(name);
             return;
         }
@@ -1792,8 +1807,7 @@ impl TailwindEngine {
         }
 
         // 2D & 3D Transforms (Tailwind v3/v4)
-        if class.starts_with("scale-") {
-            let rest = &class[6..];
+        if let Some(rest) = class.strip_prefix("scale-") {
             let factor = match rest {
                 "0" => Some(0.0),
                 "50" => Some(0.5),
@@ -1806,11 +1820,11 @@ impl TailwindEngine {
                 "125" => Some(1.25),
                 "150" => Some(1.5),
                 custom => {
-                    let inner = custom.trim_start_matches('[').trim_end_matches(']');
+                    let inner = extract_bracket_content(custom).unwrap_or(custom);
                     if let Some(pct) = inner.strip_suffix('%') {
-                        pct.parse::<f32>().map(|p| p / 100.0).ok()
+                        pct.parse::<f32>().map(|p| p / 100.0).ok().filter(|f| f.is_finite())
                     } else {
-                        inner.parse::<f32>().ok()
+                        inner.parse::<f32>().ok().filter(|f| f.is_finite())
                     }
                 }
             };
@@ -1835,8 +1849,8 @@ impl TailwindEngine {
                 "90" => Some(90.0f32.to_radians()),
                 "180" => Some(180.0f32.to_radians()),
                 custom => {
-                    let inner = custom.trim_start_matches('[').trim_end_matches(']');
-                    crate::parser::parse_angle_rad(inner)
+                    let inner = extract_bracket_content(custom).unwrap_or(custom);
+                    crate::parser::parse_angle_rad(inner).filter(|f| f.is_finite())
                 }
             };
             if let Some(rad) = angle_rad {
@@ -1858,8 +1872,8 @@ impl TailwindEngine {
                 "90" => Some(-90.0f32.to_radians()),
                 "180" => Some(-180.0f32.to_radians()),
                 custom => {
-                    let inner = custom.trim_start_matches('[').trim_end_matches(']');
-                    crate::parser::parse_angle_rad(inner).map(|r| -r)
+                    let inner = extract_bracket_content(custom).unwrap_or(custom);
+                    crate::parser::parse_angle_rad(inner).filter(|f| f.is_finite()).map(|r| -r)
                 }
             };
             if let Some(rad) = angle_rad {
@@ -1997,7 +2011,6 @@ impl TailwindEngine {
 
         // 7. Visual Effects: Blend modes, Isolation, Filters, and Backdrop Filters
         if resolve_visual_effects(class, style) {
-            return;
         }
     }
 }
@@ -2093,8 +2106,8 @@ fn resolve_visual_effects(class: &str, style: &mut ComputedStyle) -> bool {
             "150" => Some(1.5),
             "200" => Some(2.0),
             other => {
-                if other.starts_with('[') && other.ends_with(']') {
-                    other[1..other.len() - 1].parse::<f32>().ok()
+                if let Some(inner) = extract_bracket_content(other) {
+                    inner.parse::<f32>().ok().filter(|f| f.is_finite())
                 } else {
                     None
                 }
@@ -2117,8 +2130,8 @@ fn resolve_visual_effects(class: &str, style: &mut ComputedStyle) -> bool {
             "150" => Some(1.5),
             "200" => Some(2.0),
             other => {
-                if other.starts_with('[') && other.ends_with(']') {
-                    other[1..other.len() - 1].parse::<f32>().ok()
+                if let Some(inner) = extract_bracket_content(other) {
+                    inner.parse::<f32>().ok().filter(|f| f.is_finite())
                 } else {
                     None
                 }
@@ -2264,33 +2277,111 @@ fn add_filter_op(
 
 fn resolve_pixel_length(val: &str) -> Option<f32> {
     if let Some(px) = val.strip_suffix("px") {
-        px.trim().parse::<f32>().ok()
+        px.trim().parse::<f32>().ok().filter(|f| f.is_finite())
     } else if let Some(rem) = val.strip_suffix("rem") {
-        rem.trim().parse::<f32>().map(|r| r * 16.0).ok()
+        rem.trim().parse::<f32>().ok().filter(|f| f.is_finite()).map(|r| r * 16.0)
     } else {
-        val.trim().parse::<f32>().ok()
+        val.trim().parse::<f32>().ok().filter(|f| f.is_finite())
     }
 }
 
+/// Safely extracts the inner content of a bracketed arbitrary value `[...]`.
+/// Returns `None` if the token does not start with `[` or end with `]`.
+#[inline]
+pub fn extract_bracket_content(token: &str) -> Option<&str> {
+    token.strip_prefix('[')?.strip_suffix(']')
+}
+
+/// Tokenizes a Tailwind classes string by whitespace, preserving bracketed expressions `[...]`.
+pub fn tokenize_classes(classes: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut bracket_depth = 0;
+    let mut start = None;
+
+    for (idx, ch) in classes.char_indices() {
+        if ch == '[' {
+            bracket_depth += 1;
+        } else if ch == ']' && bracket_depth > 0 {
+            bracket_depth -= 1;
+        }
+
+        if ch.is_whitespace() && bracket_depth == 0 {
+            if let Some(s) = start {
+                tokens.push(&classes[s..idx]);
+                start = None;
+            }
+        } else if start.is_none() {
+            start = Some(idx);
+        }
+    }
+
+    if let Some(s) = start {
+        tokens.push(&classes[s..]);
+    }
+
+    tokens
+}
+
+/// Splits a modifier prefix (`hover:`, `dark:`, `sm:`) from a class token,
+/// ignoring colons located within arbitrary value brackets `[...]`.
 pub fn split_modifier(token: &str) -> (Option<&str>, &str) {
-    if let Some((modifier, rest)) = token.split_once(':') {
-        (Some(modifier), rest)
-    } else {
-        (None, token)
+    let mut bracket_depth = 0;
+    for (idx, ch) in token.char_indices() {
+        match ch {
+            '[' => bracket_depth += 1,
+            ']' => {
+                if bracket_depth > 0 {
+                    bracket_depth -= 1;
+                }
+            }
+            ':' if bracket_depth == 0 => {
+                let modifier = &token[..idx];
+                let rest = &token[idx + 1..];
+                return (Some(modifier), rest);
+            }
+            _ => {}
+        }
     }
+    (None, token)
 }
 
+/// Splits an opacity suffix (`/50`, `/[0.75]`) from a class token,
+/// ignoring forward slashes located within arbitrary value brackets `[...]`.
 fn split_opacity(token: &str) -> (&str, Option<f32>) {
-    if let Some((color, op_str)) = token.split_once('/') {
-        let op_trimmed = op_str.trim_start_matches('[').trim_end_matches(']');
+    let mut bracket_depth = 0;
+    let mut split_idx = None;
+    for (idx, ch) in token.char_indices() {
+        match ch {
+            '[' => bracket_depth += 1,
+            ']' => {
+                if bracket_depth > 0 {
+                    bracket_depth -= 1;
+                }
+            }
+            '/' if bracket_depth == 0 => {
+                split_idx = Some(idx);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(idx) = split_idx {
+        let color = &token[..idx];
+        let op_str = &token[idx + 1..];
+        let op_trimmed = extract_bracket_content(op_str).unwrap_or(op_str);
         if let Some(pct) = op_trimmed.strip_suffix('%') {
             if let Ok(p) = pct.parse::<f32>() {
-                return (color, Some((p / 100.0).clamp(0.0, 1.0)));
+                if p.is_finite() {
+                    return (color, Some((p / 100.0).clamp(0.0, 1.0)));
+                }
             }
         }
         if let Ok(val) = op_trimmed.parse::<f32>() {
-            let alpha = if val <= 1.0 { val } else { val / 100.0 };
-            return (color, Some(alpha.clamp(0.0, 1.0)));
+            if val.is_finite() {
+                let alpha = if val <= 1.0 { val } else { val / 100.0 };
+                return (color, Some(alpha.clamp(0.0, 1.0)));
+            }
         }
         (color, None)
     } else {
@@ -2299,10 +2390,10 @@ fn split_opacity(token: &str) -> (&str, Option<f32>) {
 }
 
 fn lookup_color_or_arbitrary(token: &str, opacity: Option<f32>) -> Option<Color> {
-    if token.starts_with('[') && token.ends_with(']') {
-        let inner = &token[1..token.len() - 1];
-        if inner.starts_with('#') {
-            let mut c = Color::parse_hex(inner)?;
+    if let Some(inner) = extract_bracket_content(token) {
+        let clean = inner.trim();
+        let normalized = clean.replace('_', " ");
+        if let Some(mut c) = crate::parser::parse_color(&normalized) {
             if let Some(op) = opacity {
                 c.a = (c.a as f32 * op.clamp(0.0, 1.0)).round() as u8;
             }
@@ -2313,8 +2404,7 @@ fn lookup_color_or_arbitrary(token: &str, opacity: Option<f32>) -> Option<Color>
 }
 
 fn resolve_spacing(token: &str) -> Option<f32> {
-    if token.starts_with('[') && token.ends_with(']') {
-        let inner = &token[1..token.len() - 1];
+    if let Some(inner) = extract_bracket_content(token) {
         return resolve_arbitrary_px(inner);
     }
 
@@ -2381,22 +2471,65 @@ fn resolve_sizing_dimension(token: &str) -> Option<Dimension> {
         _ => {}
     }
 
-    if token.starts_with('[') && token.ends_with(']') {
-        let inner = &token[1..token.len() - 1];
-        if let Some(px) = resolve_arbitrary_px(inner) {
-            return Some(Dimension::Px(px));
+    if let Some(inner) = extract_bracket_content(token) {
+        if let Some(px_str) = inner.strip_suffix("px") {
+            if let Ok(n) = px_str.trim().parse::<f32>() {
+                if n.is_finite() {
+                    return Some(Dimension::Px(n));
+                }
+            }
         }
         if let Some(pct) = inner.strip_suffix('%') {
-            if let Ok(n) = pct.parse::<f32>() {
-                return Some(Dimension::Percent(n));
+            if let Ok(n) = pct.trim().parse::<f32>() {
+                if n.is_finite() {
+                    return Some(Dimension::Percent(n));
+                }
             }
+        }
+        if let Some(rem) = inner.strip_suffix("rem") {
+            if let Ok(n) = rem.trim().parse::<f32>() {
+                if n.is_finite() {
+                    return Some(Dimension::Px(n * 16.0));
+                }
+            }
+        }
+        if let Some(em) = inner.strip_suffix("em") {
+            if let Ok(n) = em.trim().parse::<f32>() {
+                if n.is_finite() {
+                    return Some(Dimension::Px(n * 16.0));
+                }
+            }
+        }
+        if let Some(vw) = inner.strip_suffix("vw") {
+            if let Ok(n) = vw.trim().parse::<f32>() {
+                if n.is_finite() {
+                    return Some(Dimension::Vw(n));
+                }
+            }
+        }
+        if let Some(vh) = inner.strip_suffix("vh") {
+            if let Ok(n) = vh.trim().parse::<f32>() {
+                if n.is_finite() {
+                    return Some(Dimension::Vh(n));
+                }
+            }
+        }
+        let calc_str = inner.replace('_', " ");
+        if calc_str.starts_with("calc(") || calc_str.contains('+') || calc_str.contains('-') || calc_str.contains('*') || calc_str.contains('/') {
+            if let Ok(expr) = crate::calc::parse_calc(&calc_str) {
+                let id = crate::calc::intern_calc(expr);
+                return Some(Dimension::Calc(id));
+            }
+        }
+        if let Some(px) = resolve_arbitrary_px(inner) {
+            return Some(Dimension::Px(px));
         }
         return None;
     }
 
     if let Some((num, den)) = token.split_once('/') {
         if let (Ok(n), Ok(d)) = (num.parse::<f32>(), den.parse::<f32>()) {
-            if d > 0.0 {
+            if d > 0.0 && n.is_finite() && d.is_finite() {
                 return Some(Dimension::Percent((n / d) * 100.0));
             }
         }
@@ -2406,14 +2539,20 @@ fn resolve_sizing_dimension(token: &str) -> Option<Dimension> {
 }
 
 fn resolve_arbitrary_px(val: &str) -> Option<f32> {
-    if let Some(px_str) = val.strip_suffix("px") {
-        return px_str.trim().parse::<f32>().ok();
+    let clean = val.trim();
+    if let Some(px_str) = clean.strip_suffix("px") {
+        return px_str.trim().parse::<f32>().ok().filter(|f| f.is_finite());
     }
-    if let Some(rem_str) = val.strip_suffix("rem") {
-        return rem_str.trim().parse::<f32>().map(|r| r * 16.0).ok();
+    if let Some(rem_str) = clean.strip_suffix("rem") {
+        return rem_str.trim().parse::<f32>().ok().filter(|f| f.is_finite()).map(|r| r * 16.0);
     }
-    if let Ok(n) = val.parse::<f32>() {
-        return Some(n);
+    if let Some(em_str) = clean.strip_suffix("em") {
+        return em_str.trim().parse::<f32>().ok().filter(|f| f.is_finite()).map(|e| e * 16.0);
+    }
+    if let Ok(n) = clean.parse::<f32>() {
+        if n.is_finite() {
+            return Some(n);
+        }
     }
     None
 }

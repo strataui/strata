@@ -208,3 +208,254 @@ pub fn get_glyph(c: char) -> Option<&'static [u8; 16]> {
         None
     }
 }
+
+/// Fallback replacement glyph (hollow box / tofu) for unresolved Unicode characters.
+pub const TOFU_GLYPH: [u8; 16] = [
+    0x00, 0x00, 0x7e, 0x42, 0x42, 0x5a, 0x5a, 0x42, 0x5a, 0x5a, 0x42, 0x42, 0x7e, 0x00, 0x00, 0x00,
+];
+
+/// Maps common typographical Unicode characters to their visual ASCII approximations.
+pub fn map_common_unicode(c: char) -> Option<&'static [u8; 16]> {
+    match c {
+        '\u{00A0}' => get_glyph(' '),                     // Non-breaking space
+        '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => get_glyph('\''), // Single curly quotes
+        '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => get_glyph('"'),  // Double curly quotes
+        '\u{2013}' | '\u{2014}' | '\u{2212}' => get_glyph('-'),             // En-dash, Em-dash, Minus sign
+        '\u{2026}' => get_glyph('.'),                     // Horizontal ellipsis
+        '\u{2022}' => get_glyph('*'),                     // Bullet
+        '\u{00B7}' => get_glyph('.'),                     // Middle dot
+        '\u{00AB}' => get_glyph('<'),                     // Left-pointing double angle quotation mark
+        '\u{00BB}' => get_glyph('>'),                     // Right-pointing double angle quotation mark
+        '\u{00D7}' => get_glyph('x'),                     // Multiplication sign
+        '\u{00F7}' => get_glyph('/'),                     // Division sign
+        '\u{00B1}' => get_glyph('+'),                     // Plus-minus sign
+        '\u{00B0}' => get_glyph('o'),                     // Degree sign
+        _ => None,
+    }
+}
+
+/// Retrieves a glyph bitmask, resolving common Unicode symbols or falling back to the standard tofu box.
+#[inline]
+pub fn get_glyph_or_fallback(c: char) -> &'static [u8; 16] {
+    if let Some(glyph) = get_glyph(c) {
+        glyph
+    } else if let Some(mapped) = map_common_unicode(c) {
+        mapped
+    } else {
+        &TOFU_GLYPH
+    }
+}
+
+/// Operating system platform indicator for font resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsPlatform {
+    Linux,
+    MacOS,
+    Windows,
+    Other,
+}
+
+impl OsPlatform {
+    pub const fn current() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::MacOS
+        } else if cfg!(target_os = "windows") {
+            Self::Windows
+        } else if cfg!(target_os = "linux") {
+            Self::Linux
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// Generic CSS font family keyword.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenericFontFamily {
+    SansSerif,
+    Serif,
+    Monospace,
+    Cursive,
+    Fantasy,
+    SystemUi,
+}
+
+/// System font fallback cascade resolver across Linux, macOS, and Windows.
+#[derive(Debug, Clone)]
+pub struct SystemFontResolver;
+
+impl SystemFontResolver {
+    /// Resolves default system font chain for generic families on the current OS.
+    pub fn default_chain_for_generic(family: GenericFontFamily) -> Vec<String> {
+        Self::chain_for_platform(family, OsPlatform::current())
+    }
+
+    /// Resolves system font chain for a specific OS platform.
+    pub fn chain_for_platform(family: GenericFontFamily, platform: OsPlatform) -> Vec<String> {
+        match platform {
+            OsPlatform::MacOS => match family {
+                GenericFontFamily::SansSerif | GenericFontFamily::SystemUi => vec![
+                    "-apple-system".into(),
+                    "BlinkMacSystemFont".into(),
+                    "SF Pro Text".into(),
+                    "Helvetica Neue".into(),
+                    "Helvetica".into(),
+                    "Arial".into(),
+                    "PingFang SC".into(),
+                    "Hiragino Sans".into(),
+                    "Apple Color Emoji".into(),
+                    "sans-serif".into(),
+                ],
+                GenericFontFamily::Serif => vec![
+                    "New York".into(),
+                    "Times New Roman".into(),
+                    "Times".into(),
+                    "Songti SC".into(),
+                    "serif".into(),
+                ],
+                GenericFontFamily::Monospace => vec![
+                    "SF Mono".into(),
+                    "Menlo".into(),
+                    "Monaco".into(),
+                    "Courier New".into(),
+                    "monospace".into(),
+                ],
+                _ => vec!["-apple-system".into(), "sans-serif".into()],
+            },
+            OsPlatform::Windows => match family {
+                GenericFontFamily::SansSerif | GenericFontFamily::SystemUi => vec![
+                    "Segoe UI".into(),
+                    "Calibri".into(),
+                    "Arial".into(),
+                    "Microsoft YaHei".into(),
+                    "Meiryo".into(),
+                    "Segoe UI Emoji".into(),
+                    "Segoe UI Symbol".into(),
+                    "sans-serif".into(),
+                ],
+                GenericFontFamily::Serif => vec![
+                    "Georgia".into(),
+                    "Times New Roman".into(),
+                    "Cambria".into(),
+                    "SimSun".into(),
+                    "serif".into(),
+                ],
+                GenericFontFamily::Monospace => vec![
+                    "Consolas".into(),
+                    "Cascadia Code".into(),
+                    "Courier New".into(),
+                    "monospace".into(),
+                ],
+                _ => vec!["Segoe UI".into(), "sans-serif".into()],
+            },
+            OsPlatform::Linux | OsPlatform::Other => match family {
+                GenericFontFamily::SansSerif | GenericFontFamily::SystemUi => vec![
+                    "Ubuntu".into(),
+                    "DejaVu Sans".into(),
+                    "Liberation Sans".into(),
+                    "Noto Sans".into(),
+                    "Noto Sans CJK SC".into(),
+                    "Noto Color Emoji".into(),
+                    "sans-serif".into(),
+                ],
+                GenericFontFamily::Serif => vec![
+                    "DejaVu Serif".into(),
+                    "Liberation Serif".into(),
+                    "Noto Serif".into(),
+                    "serif".into(),
+                ],
+                GenericFontFamily::Monospace => vec![
+                    "Ubuntu Mono".into(),
+                    "DejaVu Sans Mono".into(),
+                    "Liberation Mono".into(),
+                    "Noto Sans Mono".into(),
+                    "monospace".into(),
+                ],
+                _ => vec!["Ubuntu".into(), "sans-serif".into()],
+            },
+        }
+    }
+
+    /// Parses a CSS `font-family` property value and returns an ordered cascade of resolved font names.
+    pub fn parse_font_family_cascade(css_value: &str) -> Vec<String> {
+        let mut results = Vec::new();
+        for item in css_value.split(',') {
+            let trimmed = item.trim().trim_matches(|c| c == '\'' || c == '"');
+            if trimmed.is_empty() {
+                continue;
+            }
+            match trimmed.to_ascii_lowercase().as_str() {
+                "sans-serif" => {
+                    for f in Self::default_chain_for_generic(GenericFontFamily::SansSerif) {
+                        if !results.contains(&f) {
+                            results.push(f);
+                        }
+                    }
+                }
+                "serif" => {
+                    for f in Self::default_chain_for_generic(GenericFontFamily::Serif) {
+                        if !results.contains(&f) {
+                            results.push(f);
+                        }
+                    }
+                }
+                "monospace" => {
+                    for f in Self::default_chain_for_generic(GenericFontFamily::Monospace) {
+                        if !results.contains(&f) {
+                            results.push(f);
+                        }
+                    }
+                }
+                "system-ui" | "-apple-system" | "blinkmacsystemfont" => {
+                    let token = trimmed.to_string();
+                    if !results.contains(&token) {
+                        results.push(token);
+                    }
+                    for f in Self::default_chain_for_generic(GenericFontFamily::SystemUi) {
+                        if !results.contains(&f) {
+                            results.push(f);
+                        }
+                    }
+                }
+                _ => {
+                    let owned = trimmed.to_string();
+                    if !results.contains(&owned) {
+                        results.push(owned);
+                    }
+                }
+            }
+        }
+
+        if results.is_empty() {
+            results = Self::default_chain_for_generic(GenericFontFamily::SansSerif);
+        }
+        results
+    }
+}
+
+/// Fallback font resolution chain with per-glyph coverage checking.
+#[derive(Debug, Clone)]
+pub struct FontFallbackChain {
+    pub families: Vec<String>,
+}
+
+impl FontFallbackChain {
+    pub fn new(families: Vec<String>) -> Self {
+        Self { families }
+    }
+
+    pub fn from_css(css_value: &str) -> Self {
+        Self {
+            families: SystemFontResolver::parse_font_family_cascade(css_value),
+        }
+    }
+
+    pub fn primary_font(&self) -> Option<&str> {
+        self.families.first().map(|s| s.as_str())
+    }
+
+    /// Resolves whether a character is natively printable or mapped by the fallback table.
+    pub fn can_render(&self, c: char) -> bool {
+        get_glyph(c).is_some() || map_common_unicode(c).is_some()
+    }
+}

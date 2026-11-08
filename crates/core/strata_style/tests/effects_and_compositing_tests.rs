@@ -1,5 +1,7 @@
 //! Comprehensive Test Suite: W3C CSS Visual Effects, Blend Modes, Isolation, Filters, and Vector Clip Paths.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use strata_primitives::geom::Point;
 use strata_style::cascade::CascadeSolver;
 use strata_style::effects::{ClipPath, FilterOp};

@@ -10,6 +10,7 @@
 use strata_style::media::{MediaContext, MediaQuery, MediaQueryList};
 use strata_style::selector::{ElementRef, PseudoState, Selector};
 use strata_style::specificity::Specificity;
+use strata_style::types::{Color, Dimension};
 use strata_style::{CascadeSolver, StyleSheet};
 
 #[test]
@@ -172,12 +173,14 @@ fn test_media_query_viewport_and_theme_evaluation() {
         viewport_width: 1280.0,
         viewport_height: 800.0,
         is_dark: true,
+        ..Default::default()
     };
 
     let ctx_mobile_light = MediaContext {
         viewport_width: 480.0,
         viewport_height: 800.0,
         is_dark: false,
+        ..Default::default()
     };
 
     // 1. Min/Max Width
@@ -206,6 +209,7 @@ fn test_media_query_viewport_and_theme_evaluation() {
         viewport_width: 800.0,
         viewport_height: 600.0,
         is_dark: true,
+        ..Default::default()
     };
     assert!(!mql_responsive.matches(&ctx_tablet));
 
@@ -292,6 +296,7 @@ fn test_at_rules_charset_and_tachyons_parsing() {
         viewport_width: 1280.0,
         viewport_height: 800.0,
         is_dark: true,
+        ..Default::default()
     };
     let sheet = StyleSheet::parse_with_context(css, &ctx).expect("Failed to parse stylesheet");
     println!("Parsed rules count: {}", sheet.rules.len());
@@ -313,5 +318,157 @@ fn test_at_rules_charset_and_tachyons_parsing() {
         sheet.rules.iter().any(|r| r.selectors.iter().any(|s| format!("{:?}", s).contains("w-auto-l"))),
         "Must parse .w-auto-l from inside @media after @charset"
     );
+}
+
+#[test]
+fn test_w3c_cascade_layers_priority() {
+    let css = r#"
+        @layer base, framework, overrides;
+
+        @layer base {
+            #btn { color: red; }
+            .important-btn { color: green !important; }
+        }
+
+        @layer framework {
+            .btn { color: yellow; }
+            .important-btn { color: yellow !important; }
+        }
+
+        /* Unlayered rule: should beat layered normal rules regardless of specificity */
+        .btn { color: blue; }
+
+        /* Unlayered important rule: should be beaten by layered important rules */
+        #btn.important-btn { color: red !important; }
+    "#;
+
+    let ctx = MediaContext::default();
+    let sheet = StyleSheet::parse_with_context(css, &ctx).expect("Failed to parse stylesheet");
+
+    let computed = CascadeSolver::resolve(
+        "button",
+        &["btn", "important-btn"],
+        Some("btn"),
+        None,
+        &[&sheet],
+        None,
+        &PseudoState::default(),
+    );
+
+    // 1. Normal declaration: Unlayered `.btn { color: blue }` beats `@layer base { #btn { color: red } }`
+    // despite #btn having higher specificity!
+    // 2. Important declaration: `@layer base { color: green !important }` beats later `@layer framework`
+    // and beats unlayered `#btn.important-btn { color: red !important }`!
+    assert_eq!(computed.color, Color::GREEN);
+}
+
+#[test]
+fn test_container_queries_evaluation() {
+    let css = r#"
+        .box { width: 100px; }
+        @container (min-width: 500px) {
+            .box { width: 450px; }
+        }
+        @container (max-width: 300px) {
+            .box { width: 250px; }
+        }
+    "#;
+
+    // Evaluate with container width 600px -> matches min-width: 500px
+    let ctx_wide = MediaContext::default().with_container_size(600.0, 400.0);
+    let sheet_wide = StyleSheet::parse_with_context(css, &ctx_wide).expect("Parse wide container");
+    let computed_wide = CascadeSolver::resolve(
+        "div",
+        &["box"],
+        None,
+        None,
+        &[&sheet_wide],
+        None,
+        &PseudoState::default(),
+    );
+    assert_eq!(computed_wide.width, Dimension::Px(450.0));
+
+    // Evaluate with container width 250px -> matches max-width: 300px
+    let ctx_narrow = MediaContext::default().with_container_size(250.0, 400.0);
+    let sheet_narrow = StyleSheet::parse_with_context(css, &ctx_narrow).expect("Parse narrow container");
+    let computed_narrow = CascadeSolver::resolve(
+        "div",
+        &["box"],
+        None,
+        None,
+        &[&sheet_narrow],
+        None,
+        &PseudoState::default(),
+    );
+    assert_eq!(computed_narrow.width, Dimension::Px(250.0));
+}
+
+#[test]
+fn test_w3c_viewport_segments_and_device_posture_media_queries() {
+    use strata_style::media::DevicePostureQuery;
+
+    let css = r#"
+        .pane { width: 100px; }
+
+        @media (device-posture: continuous) {
+            .pane { width: 300px; }
+        }
+
+        @media (device-posture: folded) and (horizontal-viewport-segments: 2) {
+            .pane { width: 500px; }
+        }
+
+        @media (device-posture: folded) and (vertical-viewport-segments: 2) {
+            .pane { width: 700px; }
+        }
+    "#;
+
+    // 1. Continuous single screen context (standard flat device)
+    let ctx_flat = MediaContext::default()
+        .with_device_posture(DevicePostureQuery::Continuous)
+        .with_viewport_segments(1, 1);
+    let sheet_flat = StyleSheet::parse_with_context(css, &ctx_flat).expect("Parse flat");
+    let comp_flat = CascadeSolver::resolve(
+        "div",
+        &["pane"],
+        None,
+        None,
+        &[&sheet_flat],
+        None,
+        &PseudoState::default(),
+    );
+    assert_eq!(comp_flat.width, Dimension::Px(300.0));
+
+    // 2. Folded horizontal split (BookMode: 2 horizontal segments, 1 vertical)
+    let ctx_book = MediaContext::default()
+        .with_device_posture(DevicePostureQuery::Folded)
+        .with_viewport_segments(2, 1);
+    let sheet_book = StyleSheet::parse_with_context(css, &ctx_book).expect("Parse book");
+    let comp_book = CascadeSolver::resolve(
+        "div",
+        &["pane"],
+        None,
+        None,
+        &[&sheet_book],
+        None,
+        &PseudoState::default(),
+    );
+    assert_eq!(comp_book.width, Dimension::Px(500.0));
+
+    // 3. Folded vertical split (TabletopFlex: 1 horizontal segment, 2 vertical)
+    let ctx_tabletop = MediaContext::default()
+        .with_device_posture(DevicePostureQuery::Folded)
+        .with_viewport_segments(1, 2);
+    let sheet_tabletop = StyleSheet::parse_with_context(css, &ctx_tabletop).expect("Parse tabletop");
+    let comp_tabletop = CascadeSolver::resolve(
+        "div",
+        &["pane"],
+        None,
+        None,
+        &[&sheet_tabletop],
+        None,
+        &PseudoState::default(),
+    );
+    assert_eq!(comp_tabletop.width, Dimension::Px(700.0));
 }
 

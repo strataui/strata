@@ -147,7 +147,7 @@ impl CompoundSelector {
                         chars.next();
                         let mut depth = 1;
                         ident.push('(');
-                        while let Some(ch) = chars.next() {
+                        for ch in chars.by_ref() {
                             ident.push(ch);
                             if ch == '(' {
                                 depth += 1;
@@ -573,7 +573,7 @@ fn parse_attribute_selector<I: Iterator<Item = char>>(
     }
 
     // Advance past closing ']'
-    while let Some(c) = chars.next() {
+    for c in chars.by_ref() {
         if c == ']' {
             break;
         }

@@ -159,10 +159,9 @@ impl FrameBuffer {
                 let alpha = sdf_coverage(d);
 
                 if alpha > 0.0 {
-                    if border_width > 0.0 && border_color.is_some() {
+                    if let Some(b_color) = border_color.filter(|_| border_width > 0.0) {
                         let inner_d = d + border_width;
                         let inner_alpha = sdf_coverage(inner_d);
-                        let b_color = border_color.unwrap();
 
                         // Blend border with inner fill
                         let effective_color = Color::rgba(
@@ -222,7 +221,7 @@ impl FrameBuffer {
 
                 let d = sd_rounded_rect(px, py, half_w, half_h, 0.0);
                 // Gaussian blur roll-off approximation:
-                let alpha = (-d / blur).exp().min(1.0).max(0.0) * shadow.color.a();
+                let alpha = (-d / blur).exp().clamp(0.0, 1.0) * shadow.color.a();
 
                 if alpha > 0.005 {
                     let c = Color::rgba(
@@ -264,8 +263,8 @@ impl FrameBuffer {
                 continue;
             }
 
-            if let Some(glyph) = crate::font::get_glyph(ch) {
-                for (row_idx, &row) in glyph.iter().enumerate() {
+            let glyph = crate::font::get_glyph_or_fallback(ch);
+            for (row_idx, &row) in glyph.iter().enumerate() {
                     if row == 0 {
                         continue;
                     }
@@ -303,7 +302,6 @@ impl FrameBuffer {
                         }
                     }
                 }
-            }
             cursor_x += char_w;
         }
     }
@@ -336,10 +334,10 @@ impl FrameBuffer {
                         let row_start = (y * self.width + min_x) * 4;
                         let row_end = (y * self.width + max_x) * 4;
                         for chunk in self.pixels[row_start..row_end].chunks_exact_mut(4) {
-                            for c in 0..3 {
-                                let norm = chunk[c] as f32 / 255.0;
+                            for ch in &mut chunk[..3] {
+                                let norm = *ch as f32 / 255.0;
                                 let adjusted = ((norm - 0.5) * factor + 0.5).clamp(0.0, 1.0);
-                                chunk[c] = (adjusted * 255.0).round() as u8;
+                                *ch = (adjusted * 255.0).round() as u8;
                             }
                         }
                     }
@@ -576,7 +574,7 @@ impl FrameBuffer {
                 DrawCommand::PushClip { bounds, .. } => {
                     let combined = match current_clip {
                         Some(prev) => prev
-                            .intersect(bounds.clone())
+                            .intersect(*bounds)
                             .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
                         None => *bounds,
                     };
