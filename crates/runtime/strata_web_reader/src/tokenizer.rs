@@ -44,7 +44,9 @@ pub fn decode_html_entities(input: &str) -> String {
                     found_semicolon = true;
                     break;
                 } else if next_ch.is_alphanumeric() || next_ch == '#' {
-                    entity.push(chars.next().unwrap());
+                    if let Some(ch) = chars.next() {
+                        entity.push(ch);
+                    }
                     if entity.len() > 10 {
                         break;
                     }
@@ -313,7 +315,9 @@ impl<'a> HtmlTokenizer<'a> {
                     }
                 }
             }
-            content.push(self.chars.next().unwrap());
+            if let Some(ch) = self.chars.next() {
+                content.push(ch);
+            }
         }
 
         self.raw_text_tag = None;
@@ -331,7 +335,9 @@ impl<'a> HtmlTokenizer<'a> {
             if ch == '<' {
                 break;
             }
-            raw_text.push(self.chars.next().unwrap());
+            if let Some(ch) = self.chars.next() {
+                raw_text.push(ch);
+            }
         }
 
         if raw_text.is_empty() {
@@ -358,7 +364,7 @@ impl<'a> HtmlTokenizer<'a> {
 
             // Otherwise DOCTYPE or directive
             let mut doctype = String::new();
-            while let Some(ch) = self.chars.next() {
+            for ch in self.chars.by_ref() {
                 if ch == '>' {
                     break;
                 }
@@ -377,8 +383,8 @@ impl<'a> HtmlTokenizer<'a> {
                     break;
                 } else if ch.is_whitespace() {
                     self.chars.next();
-                } else {
-                    tag_name.push(self.chars.next().unwrap());
+                } else if let Some(ch) = self.chars.next() {
+                    tag_name.push(ch);
                 }
             }
             return Some(HtmlToken::EndTag {
@@ -392,7 +398,9 @@ impl<'a> HtmlTokenizer<'a> {
             if ch == '>' || ch == '/' || ch.is_whitespace() {
                 break;
             }
-            tag_name.push(self.chars.next().unwrap());
+            if let Some(ch) = self.chars.next() {
+                tag_name.push(ch);
+            }
         }
 
         let mut attributes = Vec::new();
@@ -442,7 +450,7 @@ impl<'a> HtmlTokenizer<'a> {
         let mut content = String::new();
         let mut dash_count = 0;
 
-        while let Some(ch) = self.chars.next() {
+        for ch in self.chars.by_ref() {
             if ch == '-' {
                 dash_count += 1;
             } else if ch == '>' && dash_count >= 2 {
@@ -467,7 +475,9 @@ impl<'a> HtmlTokenizer<'a> {
             if ch == '=' || ch == '>' || ch == '/' || ch.is_whitespace() {
                 break;
             }
-            name.push(self.chars.next().unwrap());
+            if let Some(ch) = self.chars.next() {
+                name.push(ch);
+            }
         }
 
         if name.is_empty() {
@@ -485,7 +495,7 @@ impl<'a> HtmlTokenizer<'a> {
                 Some(&'"') => {
                     self.chars.next();
                     let mut s = String::new();
-                    while let Some(ch) = self.chars.next() {
+                    for ch in self.chars.by_ref() {
                         if ch == '"' {
                             break;
                         }
@@ -496,7 +506,7 @@ impl<'a> HtmlTokenizer<'a> {
                 Some(&'\'') => {
                     self.chars.next();
                     let mut s = String::new();
-                    while let Some(ch) = self.chars.next() {
+                    for ch in self.chars.by_ref() {
                         if ch == '\'' {
                             break;
                         }
@@ -510,7 +520,9 @@ impl<'a> HtmlTokenizer<'a> {
                         if ch.is_whitespace() || ch == '>' || ch == '/' {
                             break;
                         }
-                        s.push(self.chars.next().unwrap());
+                        if let Some(ch) = self.chars.next() {
+                            s.push(ch);
+                        }
                     }
                     decode_html_entities(&s)
                 }

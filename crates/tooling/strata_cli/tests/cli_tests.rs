@@ -4,7 +4,7 @@ use strata_cli::prelude::*;
 #[test]
 fn test_cli_args_parsing_commands() {
     // 1. New command
-    let cmd = CliArgs::parse_from(&["strata", "new", "my-app", "--template", "saas"]).unwrap();
+    let cmd = CliArgs::parse_from(["strata", "new", "my-app", "--template", "saas"]).unwrap();
     assert_eq!(
         cmd,
         CliCommand::New {
@@ -16,7 +16,7 @@ fn test_cli_args_parsing_commands() {
     );
 
     // 2. Dev command
-    let cmd = CliArgs::parse_from(&["strata", "dev", "--target", "web-wasm", "--port", "8080"]).unwrap();
+    let cmd = CliArgs::parse_from(["strata", "dev", "--target", "web-wasm", "--port", "8080"]).unwrap();
     assert_eq!(
         cmd,
         CliCommand::Dev {
@@ -27,7 +27,7 @@ fn test_cli_args_parsing_commands() {
     );
 
     // 3. Build command
-    let cmd = CliArgs::parse_from(&["strata", "build", "--target", "web-js", "--release"]).unwrap();
+    let cmd = CliArgs::parse_from(["strata", "build", "--target", "web-js", "--release"]).unwrap();
     assert_eq!(
         cmd,
         CliCommand::Build {
@@ -39,7 +39,7 @@ fn test_cli_args_parsing_commands() {
         }
     );
 
-    let cmd = CliArgs::parse_from(&["strata", "build", "--target", "desktop", "-e", "staging"]).unwrap();
+    let cmd = CliArgs::parse_from(["strata", "build", "--target", "desktop", "-e", "staging"]).unwrap();
     assert_eq!(
         cmd,
         CliCommand::Build {
@@ -51,7 +51,7 @@ fn test_cli_args_parsing_commands() {
         }
     );
 
-    let cmd = CliArgs::parse_from(&["strata", "build", "--target", "desktop", "--force"]).unwrap();
+    let cmd = CliArgs::parse_from(["strata", "build", "--target", "desktop", "--force"]).unwrap();
     assert_eq!(
         cmd,
         CliCommand::Build {
@@ -64,20 +64,20 @@ fn test_cli_args_parsing_commands() {
     );
 
     // 4. Run command
-    let cmd = CliArgs::parse_from(&["strata", "run", "--release", "--example", "eda_studio"]).unwrap();
+    let cmd = CliArgs::parse_from(["strata", "run", "--release", "--example", "saas_dashboard"]).unwrap();
     assert_eq!(
         cmd,
         CliCommand::Run {
             target: BuildTarget::Desktop,
             release: true,
             mcp: true,
-            example: Some("eda_studio".to_string()),
+            example: Some("saas_dashboard".to_string()),
             bin: None,
         }
     );
 
     // 5. MCP command
-    let cmd = CliArgs::parse_from(&["strata", "mcp", "--socket", "/tmp/test.sock", "info"]).unwrap();
+    let cmd = CliArgs::parse_from(["strata", "mcp", "--socket", "/tmp/test.sock", "info"]).unwrap();
     assert_eq!(
         cmd,
         CliCommand::Mcp {
@@ -87,7 +87,7 @@ fn test_cli_args_parsing_commands() {
     );
 
     // 4. Package command
-    let cmd = CliArgs::parse_from(&["strata", "package", "--target", "android", "--format", "apk"]).unwrap();
+    let cmd = CliArgs::parse_from(["strata", "package", "--target", "android", "--format", "apk"]).unwrap();
     assert_eq!(
         cmd,
         CliCommand::Package {
@@ -99,7 +99,7 @@ fn test_cli_args_parsing_commands() {
     );
 
     // 5. Test command
-    let cmd = CliArgs::parse_from(&["strata", "test", "--parity"]).unwrap();
+    let cmd = CliArgs::parse_from(["strata", "test", "--parity"]).unwrap();
     assert_eq!(
         cmd,
         CliCommand::Test {
@@ -111,7 +111,7 @@ fn test_cli_args_parsing_commands() {
         }
     );
 
-    let cmd_android = CliArgs::parse_from(&["strata", "test", "--android"]).unwrap();
+    let cmd_android = CliArgs::parse_from(["strata", "test", "--android"]).unwrap();
     assert_eq!(
         cmd_android,
         CliCommand::Test {
@@ -124,7 +124,7 @@ fn test_cli_args_parsing_commands() {
     );
 
     // 6. Sim command
-    let cmd_sim = CliArgs::parse_from(&["strata", "sim", "--device", "z-fold-6"]).unwrap();
+    let cmd_sim = CliArgs::parse_from(["strata", "sim", "--device", "z-fold-6"]).unwrap();
     assert_eq!(
         cmd_sim,
         CliCommand::Sim {
@@ -133,8 +133,8 @@ fn test_cli_args_parsing_commands() {
     );
 
     // 7. Help & Version
-    assert_eq!(CliArgs::parse_from(&["strata", "help"]).unwrap(), CliCommand::Help(None));
-    assert_eq!(CliArgs::parse_from(&["strata", "--version"]).unwrap(), CliCommand::Version);
+    assert_eq!(CliArgs::parse_from(["strata", "help"]).unwrap(), CliCommand::Help(None));
+    assert_eq!(CliArgs::parse_from(["strata", "--version"]).unwrap(), CliCommand::Version);
 }
 
 #[test]
@@ -205,10 +205,21 @@ fn test_builder_web_js_and_web_wasm_emission() {
     assert!(temp_dir.join("dist/web-wasm/index.html").exists());
     assert!(temp_dir.join("dist/web-wasm/loader.js").exists());
 
-    // 3. Desktop Native build
+    // 3. Desktop Native build (Release)
     let desktop_report = BuildRunner::build(BuildTarget::Desktop, true, &temp_dir).unwrap();
     assert_eq!(desktop_report.target, BuildTarget::Desktop);
+    assert!(desktop_report.release);
     assert!(temp_dir.join("dist/desktop/strata_build.json").exists());
+    let release_manifest = fs::read_to_string(temp_dir.join("dist/desktop/strata_build.json")).unwrap();
+    assert!(release_manifest.contains(r#""release": true"#));
+
+    // 4. Desktop Native build (Debug without --force)
+    let debug_report = BuildRunner::build(BuildTarget::Desktop, false, &temp_dir).unwrap();
+    assert_eq!(debug_report.target, BuildTarget::Desktop);
+    assert!(!debug_report.release);
+    assert!(temp_dir.join("dist/desktop/strata_build.json").exists());
+    let debug_manifest = fs::read_to_string(temp_dir.join("dist/desktop/strata_build.json")).unwrap();
+    assert!(debug_manifest.contains(r#""release": false"#));
 
     let _ = fs::remove_dir_all(&temp_dir);
 }

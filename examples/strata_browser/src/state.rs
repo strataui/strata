@@ -166,7 +166,13 @@ fn is_test_execution() -> bool {
         || std::env::var("CARGO_TARGET_TMPDIR").is_ok()
         || std::thread::current()
             .name()
-            .map_or(false, |n| n.starts_with("test_"))
+            .is_some_and(|n| n.starts_with("test_"))
+}
+
+impl Default for BrowserState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BrowserState {
@@ -1125,13 +1131,13 @@ impl BrowserState {
 
     /// Checks if the active tab can navigate back.
     pub fn can_go_back(&self) -> bool {
-        self.active_tab().map_or(false, |t| t.history_index > 0)
+        self.active_tab().is_some_and(|t| t.history_index > 0)
     }
 
     /// Checks if the active tab can navigate forward.
     pub fn can_go_forward(&self) -> bool {
         self.active_tab()
-            .map_or(false, |t| t.history_index + 1 < t.history.len())
+            .is_some_and(|t| t.history_index + 1 < t.history.len())
     }
 
     /// Sets the active reader appearance theme.
@@ -1142,7 +1148,7 @@ impl BrowserState {
     /// Handles a middle-click anywhere on the tab strip to close the clicked tab.
     pub fn handle_middle_click(&self, x: f32, y: f32) -> bool {
         // Tab bar is in the top header area: y between 0.0 and 42.0
-        if y >= 0.0 && y <= 42.0 && x >= 12.0 {
+        if (0.0..=42.0).contains(&y) && x >= 12.0 {
             let tabs = self.tabs.get();
             let tab_width = 176.0 + 4.0; // w-44 (176px) + gap-1 (4px)
             let tab_offset_x = x - 12.0;

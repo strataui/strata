@@ -61,6 +61,10 @@ fn validate_node(node: &RsxNode, doc: &RsxDocument, diagnostics: &mut Vec<Diagno
         for child in children {
             validate_node(child, doc, diagnostics);
         }
+    } else if let RsxNode::Block { children, .. } = node {
+        for child in children {
+            validate_node(child, doc, diagnostics);
+        }
     }
 }
 

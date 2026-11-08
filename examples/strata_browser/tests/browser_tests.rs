@@ -618,7 +618,7 @@ fn test_bookmarks_bar_visibility_on_new_tab_only() {
     let tb_newtab = strata_browser::components::Toolbar(state.clone());
     let is_hidden_on_newtab = match &tb_newtab.root {
         strata_dom::NodeBlueprint::Element { children, .. } => {
-            children.get(1).map_or(true, |c| match c {
+            children.get(1).is_none_or(|c| match c {
                 strata_dom::NodeBlueprint::Element { classes, .. } => {
                     classes.iter().any(|cls| cls == "hidden")
                 }
@@ -641,7 +641,7 @@ fn test_bookmarks_bar_visibility_on_new_tab_only() {
     let tb_external = strata_browser::components::Toolbar(state.clone());
     let is_hidden_on_external = match &tb_external.root {
         strata_dom::NodeBlueprint::Element { children, .. } => {
-            children.get(1).map_or(false, |c| match c {
+            children.get(1).is_some_and(|c| match c {
                 strata_dom::NodeBlueprint::Element { classes, .. } => {
                     classes.iter().any(|cls| cls == "hidden")
                 }
@@ -1488,11 +1488,7 @@ fn test_rust_lang_org_reproduction() {
 
     let nodes = HtmlParser::parse(html);
     let theme = ReaderTheme::dark();
-    let media_ctx = strata_style::MediaContext {
-        viewport_width: 1280.0,
-        viewport_height: 800.0,
-        is_dark: true,
-    };
+    let media_ctx = strata_style::MediaContext::new(1280.0, 800.0, true);
     let transpiler = WebTranspiler::new(&theme);
     let extracted_sheets = WebTranspiler::extract_stylesheets(&nodes, &media_ctx);
     println!("Extracted sheets count: {}", extracted_sheets.len());
@@ -1581,11 +1577,7 @@ fn test_inline_whitespace_and_link_spacing_layout() {
     let theme = strata_web_reader::ReaderTheme::dark();
     let transpiler = strata_web_reader::WebTranspiler::new(&theme);
     let nodes = strata_web_reader::HtmlParser::parse(html);
-    let media_ctx = strata_style::MediaContext {
-        viewport_width: 1280.0,
-        viewport_height: 800.0,
-        is_dark: true,
-    };
+    let media_ctx = strata_style::MediaContext::new(1280.0, 800.0, true);
     let bp = transpiler.transpile_full_document(&nodes, &media_ctx);
     let mut layout_node = strata::AppRuntime::build_layout_tree(&bp);
     layout_node.compute_layout(1280.0, 800.0);
@@ -1680,11 +1672,7 @@ fn test_light_page_without_background_gets_ua_white_canvas() {
     // the W3C UA canvas: white background and black text.
     let theme = ReaderTheme::dark();
     let transpiler = WebTranspiler::new(&theme);
-    let media_ctx = strata_style::MediaContext {
-        viewport_width: 1280.0,
-        viewport_height: 800.0,
-        is_dark: false,
-    };
+    let media_ctx = strata_style::MediaContext::new(1280.0, 800.0, false);
 
     let doc = transpiler.transpile_full_document(&nodes, &media_ctx);
 

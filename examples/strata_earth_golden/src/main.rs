@@ -13,6 +13,8 @@
 //!
 //! With no argument the goldens are written to `target/earth-goldens`.
 
+#![allow(clippy::chunks_exact_to_as_chunks)]
+
 use std::path::PathBuf;
 
 use strata_earth::{
@@ -208,7 +210,7 @@ fn capture(
     );
     let cover = fb
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .zip(bare.pixels.chunks_exact(4))
         .filter(|(a, b)| a != b)
         .count();

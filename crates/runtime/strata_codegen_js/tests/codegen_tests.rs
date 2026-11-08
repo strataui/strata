@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use strata_codegen_js::prelude::*;
 use strata_dom::{Attribute, EventType, NodeBlueprint, Tag};
 
@@ -21,7 +23,7 @@ fn test_reactive_runtime_emission() {
 fn test_transpiler_nested_blueprints() {
     let blueprint = NodeBlueprint::Element {
         tag: Tag::Div,
-        classes: vec!["flex".to_string(), "items-center".to_string()],
+        classes: vec!["flex".to_string(), "items-center".to_string()].into(),
         attributes: vec![
             Attribute::property("id", "container"),
             Attribute::event_listener(EventType::Click, || {}),
@@ -29,7 +31,7 @@ fn test_transpiler_nested_blueprints() {
         children: vec![
             NodeBlueprint::Element {
                 tag: Tag::H1,
-                classes: vec!["font-bold".to_string()],
+                classes: vec!["font-bold".to_string()].into(),
                 attributes: vec![],
                 children: vec![NodeBlueprint::text("Welcome to Strata")],
             },
@@ -50,11 +52,11 @@ fn test_transpiler_nested_blueprints() {
 fn test_css_extractor_classes_and_rules() {
     let blueprint = NodeBlueprint::Element {
         tag: Tag::Section,
-        classes: vec!["flex flex-col p-4 w-[400px]".to_string()],
+        classes: vec!["flex flex-col p-4 w-[400px]".to_string()].into(),
         attributes: vec![],
         children: vec![NodeBlueprint::Element {
             tag: Tag::Button,
-            classes: vec!["hover:font-bold rounded-md".to_string()],
+            classes: vec!["hover:font-bold rounded-md".to_string()].into(),
             attributes: vec![],
             children: vec![],
         }],
@@ -99,7 +101,7 @@ fn test_unified_web_target_builder_pure_js_mode() {
 
     let blueprint = NodeBlueprint::Element {
         tag: Tag::Main,
-        classes: vec!["w-full h-full flex items-center justify-center".to_string()],
+        classes: vec!["w-full h-full flex items-center justify-center".to_string()].into(),
         attributes: vec![],
         children: vec![NodeBlueprint::text("Apex Athletics Storefront")],
     };

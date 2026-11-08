@@ -98,11 +98,22 @@ impl Json {
     }
 
     /// Serializes to compact JSON.
-    pub fn to_string(&self) -> String {
+    pub fn to_json_string(&self) -> String {
         let mut out = String::new();
         self.write(&mut out);
         out
     }
+}
+
+impl std::fmt::Display for Json {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut out = String::new();
+        self.write(&mut out);
+        write!(f, "{out}")
+    }
+}
+
+impl Json {
 
     fn write(&self, out: &mut String) {
         match self {

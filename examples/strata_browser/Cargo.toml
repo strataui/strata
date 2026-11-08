@@ -18,4 +18,5 @@ strata_web_reader = { workspace = true }
 strata_style = { workspace = true }
 strata_render = { workspace = true }
 strata_layout = { workspace = true }
-ureq = "2.10"
+strata_web_api = { workspace = true }
+

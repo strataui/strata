@@ -280,21 +280,19 @@ impl CliArgs {
             }
             Some("build") => {
                 "Usage: strata build [OPTIONS]\n\n\
-                 Compiles the application for production or distribution.\n\n\
-                 Note: Debug builds are run-only ('strata run'). To build release artifacts, pass '--release'.\n\
-                       To force building a debug binary, pass '--force'.\n\n\
+                 Compiles the application for development, testing, or distribution.\n\n\
                  Options:\n\
                    -t, --target <TARGET>           Target platform: desktop, android, ios, macos, windows, linux, web-wasm, web-js (default: desktop)\n\
-                   -r, --release                   Compile with release optimizations (required for production)\n\
-                       --debug                     Target debug profile (must be combined with --force)\n\
-                   -f, --force, --force-build      Force build even for debug profile\n\
+                   -r, --release                   Compile with release optimizations (default: debug profile)\n\
+                       --debug                     Target debug profile\n\
+                   -f, --force, --force-build      Force rebuild of all artifacts\n\
                    -e, --env <ENV>                 Environment profile (development, production, staging, custom)\n\
                    -o, --out-dir <DIR>             Output directory for artifacts\n\
                    -h, --help                      Print this help message\n".to_string()
             }
             Some("mcp") => {
                 "Usage: strata mcp [OPTIONS] [COMMAND]\n\n\
-                 Launches or interacts with the Model Context Protocol (MCP) server for AI assistants (Antigravity, Claude, Cursor).\n\n\
+                 Launches or interacts with the Model Context Protocol (MCP) server for external developer tools and language models.\n\n\
                  Commands:\n\
                    stdio                           Run JSON-RPC 2.0 MCP server over stdio (default)\n\
                    info                            Query active Strata development session info\n\

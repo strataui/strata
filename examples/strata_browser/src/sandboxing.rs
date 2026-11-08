@@ -270,7 +270,7 @@ impl SandboxedTabPool {
                         let execution_result = catch_unwind(AssertUnwindSafe(|| {
                             let t_start = Instant::now();
                             let result: PageLoadResult = load_page(&job_clone.url);
-                            let dom_nodes = HtmlParser::parse(&result.html);
+                            let dom_nodes = HtmlParser::parse_with_scripts(&result.html);
                             let elapsed_ms = t_start.elapsed().as_secs_f32() * 1000.0;
 
                             // Assemble DisplayList and commit to zero-copy ShmRingBuffer
@@ -280,12 +280,23 @@ impl SandboxedTabPool {
                                 bounds: Rect::new(0.0, 0.0, 1920.0, 1080.0),
                                 color: Color::rgb(255, 255, 255),
                             });
+
+                            let display_title = if !dom_nodes.is_empty() {
+                                let first_text = dom_nodes
+                                    .iter()
+                                    .map(|n| n.text_content())
+                                    .find(|s| !s.trim().is_empty());
+                                first_text.unwrap_or_else(|| result.title.clone())
+                            } else {
+                                result.title.clone()
+                            };
+
                             dl.push(DrawCommand::DrawText {
                                 origin: (24.0, 32.0),
                                 bounds_width: Some(800.0),
                                 bounds_height: Some(40.0),
                                 text_align: strata_style::TextAlign::Left,
-                                text: result.title.clone(),
+                                text: display_title,
                                 font_size: 24.0,
                                 line_height: 32.0,
                                 font_weight: strata_style::FontWeight::Bold,

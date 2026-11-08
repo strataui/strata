@@ -46,9 +46,9 @@ fn is_inside_class_attribute(source: &str, offset: usize) -> bool {
     let prefix_slice = &source[0..offset.min(source.len())];
     if let Some(last_class) = prefix_slice.rfind("class=") {
         let after_class = &prefix_slice[last_class + 6..];
-        if after_class.starts_with('"') {
+        if let Some(stripped) = after_class.strip_prefix('"') {
             // Count unescaped quotes after the opening quote
-            let quote_count = after_class[1..].chars().filter(|&c| c == '"').count();
+            let quote_count = stripped.chars().filter(|&c| c == '"').count();
             return quote_count == 0;
         }
     }

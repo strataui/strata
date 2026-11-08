@@ -23,6 +23,7 @@ impl Span {
 /// Source coordinate map indexing newline offsets for O(log N) coordinate lookups.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceMap {
+    source: String,
     line_starts: Vec<usize>,
     total_len: usize,
 }
@@ -36,12 +37,14 @@ impl SourceMap {
             }
         }
         Self {
+            source: source.to_string(),
             line_starts,
             total_len: source.len(),
         }
     }
 
-    /// Converts a 0-indexed byte offset into an LSP (line, character) position.
+    /// Converts a 0-indexed byte offset into an LSP (line, character) position,
+    /// where character column is in UTF-16 code units per the LSP specification.
     pub fn offset_to_position(&self, offset: usize) -> Position {
         let clamped = offset.min(self.total_len);
         let line_idx = match self.line_starts.binary_search(&clamped) {
@@ -50,16 +53,50 @@ impl SourceMap {
         };
 
         let start_of_line = self.line_starts[line_idx];
-        let char_offset = clamped.saturating_sub(start_of_line);
+        let end_of_line = self
+            .line_starts
+            .get(line_idx + 1)
+            .copied()
+            .unwrap_or(self.total_len);
+        let actual_end = clamped.min(end_of_line);
 
-        Position::new(line_idx as u32, char_offset as u32)
+        // Clamp to character boundaries to prevent indexing panic
+        let mut valid_end = actual_end;
+        while valid_end > start_of_line && !self.source.is_char_boundary(valid_end) {
+            valid_end -= 1;
+        }
+
+        let slice = &self.source[start_of_line..valid_end];
+        let utf16_col: usize = slice.chars().map(|c| c.len_utf16()).sum();
+
+        Position::new(line_idx as u32, utf16_col as u32)
     }
 
-    /// Converts an LSP (line, character) position into a 0-indexed byte offset.
+    /// Converts an LSP (line, character) position into a 0-indexed byte offset,
+    /// properly translating UTF-16 code units to UTF-8 character boundaries.
     pub fn position_to_offset(&self, pos: Position) -> usize {
         let line_idx = (pos.line as usize).min(self.line_starts.len().saturating_sub(1));
         let line_start = self.line_starts[line_idx];
-        (line_start + pos.character as usize).min(self.total_len)
+        let next_line_start = self
+            .line_starts
+            .get(line_idx + 1)
+            .copied()
+            .unwrap_or(self.total_len);
+
+        let line_str = &self.source[line_start..next_line_start];
+        let target_utf16 = pos.character as usize;
+        let mut current_utf16 = 0;
+        let mut byte_offset = line_start;
+
+        for ch in line_str.chars() {
+            if current_utf16 >= target_utf16 {
+                break;
+            }
+            current_utf16 += ch.len_utf16();
+            byte_offset += ch.len_utf8();
+        }
+
+        byte_offset.min(self.total_len)
     }
 }
 
@@ -92,6 +129,7 @@ pub enum RsxNode {
     Block {
         expression: String,
         span: Span,
+        children: Vec<RsxNode>,
     },
 }
 
@@ -116,26 +154,210 @@ impl ParseError {
 }
 
 /// High-level parsed RSX document.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RsxDocument {
     pub source: String,
     pub source_map: SourceMap,
     pub nodes: Vec<RsxNode>,
     pub errors: Vec<ParseError>,
+    pub tree: Option<tree_sitter::Tree>,
 }
+
+impl PartialEq for RsxDocument {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source && self.nodes == other.nodes && self.errors == other.errors
+    }
+}
+
+impl Eq for RsxDocument {}
 
 impl RsxDocument {
     /// Parses an RSX text string into a document representation.
     pub fn parse(source: &str) -> Self {
+        Self::parse_with_old_tree(source, None)
+    }
+
+    /// Parses an RSX text string with optional previous Tree-Sitter tree for incremental parsing.
+    pub fn parse_with_old_tree(source: &str, old_tree: Option<&tree_sitter::Tree>) -> Self {
         let source_map = SourceMap::new(source);
         let mut parser = ParserState::new(source);
         let nodes = parser.parse_nodes();
+        let mut errors = parser.errors;
+
+        let mut ts_parser = tree_sitter::Parser::new();
+        let tree = if ts_parser.set_language(&tree_sitter_rust::LANGUAGE.into()).is_ok() {
+            ts_parser.parse(source, old_tree)
+        } else {
+            None
+        };
+
+        validate_rsx_blocks(&nodes, &mut errors);
 
         Self {
             source: source.to_string(),
             source_map,
             nodes,
-            errors: parser.errors,
+            errors,
+            tree,
+        }
+    }
+
+    /// Incrementally updates the document with differential text edits.
+    pub fn apply_incremental_edits(
+        &mut self,
+        changes: &[crate::types::TextDocumentContentChangeEvent],
+    ) {
+        let mut ts_parser = tree_sitter::Parser::new();
+        let has_ts = ts_parser.set_language(&tree_sitter_rust::LANGUAGE.into()).is_ok();
+
+        for change in changes {
+            if let Some(range) = change.range {
+                let start_byte = self.source_map.position_to_offset(range.start);
+                let old_end_byte = self.source_map.position_to_offset(range.end);
+                let new_end_byte = start_byte + change.text.len();
+
+                let start_position = tree_sitter::Point {
+                    row: range.start.line as usize,
+                    column: range.start.character as usize,
+                };
+                let old_end_position = tree_sitter::Point {
+                    row: range.end.line as usize,
+                    column: range.end.character as usize,
+                };
+
+                let mut new_row = start_position.row;
+                let mut new_col = start_position.column;
+                for b in change.text.bytes() {
+                    if b == b'\n' {
+                        new_row += 1;
+                        new_col = 0;
+                    } else {
+                        new_col += 1;
+                    }
+                }
+                let new_end_position = tree_sitter::Point {
+                    row: new_row,
+                    column: new_col,
+                };
+
+                if let Some(tree) = &mut self.tree {
+                    let input_edit = tree_sitter::InputEdit {
+                        start_byte,
+                        old_end_byte,
+                        new_end_byte,
+                        start_position,
+                        old_end_position,
+                        new_end_position,
+                    };
+                    tree.edit(&input_edit);
+                }
+
+                let clamped_start = start_byte.min(self.source.len());
+                let clamped_end = old_end_byte.min(self.source.len()).max(clamped_start);
+                self.source.replace_range(clamped_start..clamped_end, &change.text);
+            } else {
+                self.source = change.text.clone();
+                self.tree = None;
+            }
+        }
+
+        self.source_map = SourceMap::new(&self.source);
+        let mut parser_state = ParserState::new(&self.source);
+        self.nodes = parser_state.parse_nodes();
+        self.errors = parser_state.errors;
+
+        if has_ts {
+            self.tree = ts_parser.parse(&self.source, self.tree.as_ref());
+        }
+
+        validate_rsx_blocks(&self.nodes, &mut self.errors);
+    }
+}
+
+/// Validates Rust expressions inside RSX blocks and attribute bindings.
+fn validate_rsx_blocks(nodes: &[RsxNode], errors: &mut Vec<ParseError>) {
+    for node in nodes {
+        match node {
+            RsxNode::Block { expression, span, children } => {
+                if children.is_empty() && !expression.trim().is_empty() {
+                    let expr_start = span.start + 1; // skip leading '{'
+                    let mut expr_errors = validate_rust_expression(expression, expr_start);
+                    errors.append(&mut expr_errors);
+                }
+                validate_rsx_blocks(children, errors);
+            }
+            RsxNode::Element { children, attributes, .. } => {
+                for attr in attributes {
+                    if attr.is_expression {
+                        if let Some(val) = &attr.value {
+                            if let Some(val_span) = attr.value_span {
+                                let mut expr_errors = validate_rust_expression(val, val_span.start);
+                                errors.append(&mut expr_errors);
+                            }
+                        }
+                    }
+                }
+                validate_rsx_blocks(children, errors);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Validates a Rust expression using Tree-Sitter, emitting ParseError for syntax errors.
+pub fn validate_rust_expression(expr: &str, expr_start: usize) -> Vec<ParseError> {
+    let mut errors = Vec::new();
+    let trimmed = expr.trim();
+    if trimmed.is_empty() {
+        return errors;
+    }
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&tree_sitter_rust::LANGUAGE.into()).is_err() {
+        return errors;
+    }
+
+    let prefix = "let _ = { ";
+    let suffix = " };";
+    let wrapped = format!("{}{}{}", prefix, expr, suffix);
+    let prefix_len = prefix.len();
+
+    if let Some(tree) = parser.parse(&wrapped, None) {
+        if tree.root_node().has_error() {
+            collect_syntax_errors(&tree.root_node(), expr, expr_start, prefix_len, &mut errors);
+        }
+    }
+
+    errors
+}
+
+fn collect_syntax_errors(
+    node: &tree_sitter::Node,
+    expr: &str,
+    expr_start: usize,
+    prefix_len: usize,
+    out: &mut Vec<ParseError>,
+) {
+    if node.is_error() || node.is_missing() {
+        let sb = node.start_byte();
+        let eb = node.end_byte();
+        if sb >= prefix_len && sb < prefix_len + expr.len() {
+            let rel_start = sb - prefix_len;
+            let rel_end = (eb.saturating_sub(prefix_len)).min(expr.len()).max(rel_start + 1);
+            let bad_snippet = expr.get(rel_start..rel_end).unwrap_or("syntax error");
+            out.push(ParseError {
+                message: format!("Syntax error in RSX expression: unexpected '{}'", bad_snippet),
+                span: Span::new(expr_start + rel_start, expr_start + rel_end),
+                severity: DiagnosticSeverity::Error,
+            });
+            return;
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.has_error() {
+            collect_syntax_errors(&child, expr, expr_start, prefix_len, out);
         }
     }
 }
@@ -459,9 +681,39 @@ impl<'a> ParserState<'a> {
         let end = self.cursor;
 
         let expression = self.source[expr_start..expr_end].to_string();
+
+        let mut children = Vec::new();
+        let mut inner = ParserState::new(self.source);
+        inner.cursor = expr_start;
+        while inner.cursor < expr_end {
+            inner.skip_whitespace();
+            if inner.cursor >= expr_end {
+                break;
+            }
+            if inner.bytes[inner.cursor] == b'<' {
+                if inner.cursor + 1 < expr_end && inner.bytes[inner.cursor + 1] == b'/' {
+                    break;
+                }
+                if let Some(elem) = inner.parse_element() {
+                    children.push(elem);
+                } else {
+                    inner.cursor += 1;
+                }
+            } else if inner.bytes[inner.cursor] == b'{' {
+                if let Some(blk) = inner.parse_block() {
+                    children.push(blk);
+                } else {
+                    inner.cursor += 1;
+                }
+            } else {
+                inner.cursor += 1;
+            }
+        }
+
         Some(RsxNode::Block {
             expression,
             span: Span::new(start, end),
+            children,
         })
     }
 

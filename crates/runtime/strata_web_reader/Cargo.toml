@@ -12,5 +12,6 @@ strata_dom = { workspace = true }
 strata_style = { workspace = true }
 strata_layout = { workspace = true }
 strata_storage = { workspace = true }
+strata_js = { workspace = true }
 
 [dev-dependencies]

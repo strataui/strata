@@ -120,11 +120,7 @@ pub fn Viewport(state: BrowserState) -> View {
         // Normal page rendering follows the browser's light color-scheme preference
         // so W3C UA defaults and `prefers-color-scheme: light` author rules apply.
         // The chrome and any future reader mode remain themed independently.
-        let media_ctx = strata_style::MediaContext {
-            viewport_width: 1280.0,
-            viewport_height: 800.0,
-            is_dark: false,
-        };
+        let media_ctx = strata_style::MediaContext::new(1280.0, 800.0, false);
         let transpile_start = std::time::Instant::now();
         let transpiler = WebTranspiler::new(&theme);
         let document_blueprint = transpiler.transpile_full_document(&nodes, &media_ctx);

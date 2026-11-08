@@ -19,3 +19,7 @@ strata_style = { workspace = true }
 strata_ui = { workspace = true }
 strata_primitives = { workspace = true }
 strata_js = { workspace = true }
+tree-sitter = "0.27.2"
+tree-sitter-rust = "0.24.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

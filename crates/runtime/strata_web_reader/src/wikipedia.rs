@@ -185,7 +185,7 @@ impl WikipediaEngine {
             if current.len() == 1 {
                 let tag = current[0].tag().unwrap_or("");
                 if tag == "html" || tag == "body" || tag == "article" || tag == "main" {
-                    if let SemanticNode::Element { children, .. } = current.pop().unwrap() {
+                    if let Some(SemanticNode::Element { children, .. }) = current.pop() {
                         current = children;
                         continue;
                     }
@@ -281,7 +281,7 @@ impl WikipediaEngine {
             let first = parts.next().unwrap_or("");
             let rest = parts.next().unwrap_or(first);
 
-            let (number, item_title) = if first.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+            let (number, item_title) = if first.chars().next().is_some_and(|c| c.is_ascii_digit()) {
                 (first.to_string(), rest.to_string())
             } else {
                 (String::new(), text)

@@ -6,13 +6,21 @@ use crate::types::{ColorInformation, ColorPresentation, ColorRgba, Range, TextEd
 /// Discovers all color definitions (Hex, RGBA, Tailwind classes) within the document.
 pub fn find_document_colors(doc: &RsxDocument) -> Vec<ColorInformation> {
     let mut colors = Vec::new();
-    let bytes = doc.source.as_bytes();
+    let src = &doc.source;
     let mut i = 0;
 
-    while i < bytes.len() {
+    while i < src.len() {
+        if !src.is_char_boundary(i) {
+            i += 1;
+            while i < src.len() && !src.is_char_boundary(i) {
+                i += 1;
+            }
+            continue;
+        }
+
         // 1. Hex Color Match: #[0-9a-fA-F]{6}
-        if bytes[i] == b'#' && i + 7 <= bytes.len() {
-            let candidate = &doc.source[i..i + 7];
+        if src.as_bytes()[i] == b'#' && i + 7 <= src.len() && src.is_char_boundary(i + 7) {
+            let candidate = &src[i..i + 7];
             if let Some(rgba) = parse_hex_color(candidate) {
                 let range = Range::new(
                     doc.source_map.offset_to_position(i),
@@ -25,17 +33,21 @@ pub fn find_document_colors(doc: &RsxDocument) -> Vec<ColorInformation> {
         }
 
         // 2. Tailwind Named Color Classes in attributes
-        if let Some((len, rgba)) = match_tailwind_color_class(&doc.source[i..]) {
-            let range = Range::new(
-                doc.source_map.offset_to_position(i),
-                doc.source_map.offset_to_position(i + len),
-            );
-            colors.push(ColorInformation { range, color: rgba });
-            i += len;
-            continue;
+        if let Some((len, rgba)) = match_tailwind_color_class(&src[i..]) {
+            let end = i + len;
+            if src.is_char_boundary(end) {
+                let range = Range::new(
+                    doc.source_map.offset_to_position(i),
+                    doc.source_map.offset_to_position(end),
+                );
+                colors.push(ColorInformation { range, color: rgba });
+                i += len;
+                continue;
+            }
         }
 
-        i += 1;
+        let ch = src[i..].chars().next().unwrap();
+        i += ch.len_utf8();
     }
 
     colors
@@ -116,7 +128,10 @@ fn match_tailwind_color_class(s: &str) -> Option<(usize, ColorRgba)> {
         if s.starts_with(name) {
             // Ensure next char is whitespace, quote, or end of string
             let len = name.len();
-            if len == s.len() || s.as_bytes()[len].is_ascii_whitespace() || s.as_bytes()[len] == b'"' || s.as_bytes()[len] == b'\'' {
+            if len == s.len()
+                || s.as_bytes()[len].is_ascii_whitespace()
+                || matches!(s.as_bytes()[len], b'"' | b'\'' | b'<' | b'>' | b'}' | b'/')
+            {
                 return Some((
                     len,
                     ColorRgba {

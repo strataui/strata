@@ -37,9 +37,11 @@ fn main() {
                     }
                 }
             } else {
+                let p_name = name.unwrap_or_default();
+                let p_template = template.unwrap_or_default();
                 CliArgs::print_banner();
-                println!("  \x1b[36m›\x1b[0m Scaffolding project \x1b[1m{}\x1b[0m with template \x1b[37m{}\x1b[0m...", name.as_ref().unwrap(), template.unwrap_or_default().as_str());
-                (name.unwrap(), template.unwrap_or_default())
+                println!("  \x1b[36m›\x1b[0m Scaffolding project \x1b[1m{}\x1b[0m with template \x1b[37m{}\x1b[0m...", p_name, p_template.as_str());
+                (p_name, p_template)
             };
 
             match ProjectScaffolder::scaffold(&project_name, project_template, &base_dir) {
@@ -130,17 +132,11 @@ fn main() {
             env,
         } => {
             CliArgs::print_banner();
-            if !release && !force {
-                eprintln!("\x1b[1;31merror:\x1b[0m Debug builds cannot be built directly — debug mode is run-only in Strata.");
-                eprintln!("  Use '\x1b[36mstrata run\x1b[0m' or '\x1b[36mstrata dev\x1b[0m' to run in debug mode, or pass '\x1b[36m--release\x1b[0m' to build production artifacts.");
-                eprintln!("  To force building a debug binary anyway, pass '\x1b[36m--force\x1b[0m' or '\x1b[36m--force-build\x1b[0m'.\n");
-                process::exit(1);
-            }
 
             let base_dir = out_dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
             println!(
                 "  \x1b[36m›\x1b[0m Compiling \x1b[1m{}\x1b[0m bundle for target: \x1b[1m{}\x1b[0m (env: \x1b[37m{}\x1b[0m)...",
-                if release { "release" } else { "debug (forced)" },
+                if release { "release" } else { "debug" },
                 target.as_str(),
                 env.as_deref().unwrap_or(if release { "production" } else { "development" })
             );

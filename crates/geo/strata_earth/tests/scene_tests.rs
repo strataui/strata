@@ -480,7 +480,7 @@ fn relief_sampling_raises_the_terrain_surface() {
         panic!("terrain must be custom textured geometry");
     };
     let radii: Vec<f64> = vertices
-        .chunks_exact(8)
+        .as_chunks::<8>().0.iter()
         .map(|v| {
             let absolute = origin.add(strata_render::camera64::DVec3::new(
                 v[0] as f64,
@@ -499,7 +499,7 @@ fn relief_sampling_raises_the_terrain_surface() {
     );
 
     // At least one normal must be tilted away from the radial direction.
-    let tilted = vertices.chunks_exact(8).any(|v| {
+    let tilted = vertices.as_chunks::<8>().0.iter().any(|v| {
         let normal = strata_render::camera64::DVec3::new(v[3] as f64, v[4] as f64, v[5] as f64);
         let absolute = origin.add(strata_render::camera64::DVec3::new(
             v[0] as f64,
@@ -609,7 +609,7 @@ fn local_depth_policy_lets_a_twenty_kilometre_quad_paint() {
 
     let mut store = TextureStore::new();
     let texture = store
-        .insert_rgba8(2, 2, vec![180u8, 200, 120, 255].repeat(4))
+        .insert_rgba8(2, 2, [180u8, 200, 120, 255].repeat(4))
         .expect("texture");
     let mut scene = Scene3D::new();
     scene.camera = Camera3D::Perspective {
@@ -637,7 +637,7 @@ fn local_depth_policy_lets_a_twenty_kilometre_quad_paint() {
     );
     let painted = fb
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .filter(|p| p[3] > 0 && p[0] > 100 && p[1] > 150 && p[2] < 200)
         .count();
     assert!(
