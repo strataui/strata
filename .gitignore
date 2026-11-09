@@ -31,3 +31,8 @@ Thumbs.db
 node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# Parity test and browser capture artifacts
+**/target/browser-artifacts/
+**/target/parity_viewport/
+
