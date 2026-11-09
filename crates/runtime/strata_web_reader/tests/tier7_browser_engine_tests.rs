@@ -350,3 +350,43 @@ fn test_goal59_readability_heuristic_extracts_article_from_complex_site() {
     assert!(full_repr.contains("Sovereign Web Engine Architecture"));
     assert!(full_repr.contains("Ad banner promotion"), "FullDom mode must retain all elements");
 }
+
+#[test]
+fn test_goal23_csp_directive_fallback_and_strict_dynamic() {
+    // 1. Directive inheritance cascade: ScriptSrcElem -> ScriptSrc -> DefaultSrc
+    let p1 = ContentSecurityPolicy::parse("default-src 'self'");
+    let s1 = p1.effective_sources(DirectiveKind::ScriptSrcElem).expect("Must inherit default-src");
+    assert_eq!(s1.len(), 1);
+    assert_eq!(s1[0], SourceExpr::SelfSource);
+
+    let p2 = ContentSecurityPolicy::parse("default-src 'self'; script-src https://scripts.strataui.org");
+    let s2 = p2.effective_sources(DirectiveKind::ScriptSrcElem).expect("Must inherit script-src");
+    assert_eq!(s2.len(), 1);
+    match &s2[0] {
+        SourceExpr::Host { host, .. } => assert_eq!(host, "scripts.strataui.org"),
+        _ => panic!("Expected host from script-src fallback"),
+    }
+
+    let p3 = ContentSecurityPolicy::parse("default-src 'self'; script-src https://scripts.strataui.org; script-src-elem https://elem.strataui.org");
+    let s3 = p3.effective_sources(DirectiveKind::ScriptSrcElem).expect("Must have explicit script-src-elem");
+    assert_eq!(s3.len(), 1);
+    match &s3[0] {
+        SourceExpr::Host { host, .. } => assert_eq!(host, "elem.strataui.org"),
+        _ => panic!("Expected host from direct script-src-elem"),
+    }
+
+    // 2. strict-dynamic ignores host whitelists when nonce is absent, permits valid nonce
+    let p_strict = ContentSecurityPolicy::parse("script-src 'strict-dynamic' 'nonce-token99' https://trusted.org");
+    let origin = "https://app.strataui.org";
+
+    // Matching nonce is permitted anywhere under strict-dynamic
+    assert!(p_strict.allows_script_url(origin, "https://dynamic.cdn.com/bundle.js", Some("token99")));
+    // Host whitelist alone without valid nonce is blocked under strict-dynamic
+    assert!(!p_strict.allows_script_url(origin, "https://trusted.org/bundle.js", None));
+    assert!(!p_strict.allows_script_url(origin, "https://trusted.org/bundle.js", Some("invalidNonce")));
+
+    // 3. enforce API
+    assert!(p_strict.enforce(DirectiveKind::ScriptSrc, origin, "https://dynamic.cdn.com/bundle.js", Some("token99")).is_ok());
+    assert!(p_strict.enforce(DirectiveKind::ScriptSrc, origin, "https://trusted.org/bundle.js", None).is_err());
+}
+

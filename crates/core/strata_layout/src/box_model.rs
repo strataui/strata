@@ -643,6 +643,35 @@ pub fn is_empty_collapsible_block(node: &LayoutNode) -> bool {
         && node.style.overflow_y == strata_style::types::Overflow::Visible
 }
 
+/// Returns true if an element establishes an independent formatting context (BFC, FFC, GFC),
+/// preventing margin collapsing across its boundaries under W3C CSS 2.1 §8.3.1 and CSS Display Level 3.
+#[inline]
+pub fn node_establishes_bfc(node: &LayoutNode) -> bool {
+    node.style.float != strata_style::types::Float::None
+        || matches!(node.style.position, Position::Absolute | Position::Fixed)
+        || matches!(
+            node.style.display,
+            strata_style::types::Display::InlineBlock
+                | strata_style::types::Display::TableCell
+                | strata_style::types::Display::TableCaption
+                | strata_style::types::Display::Flex
+                | strata_style::types::Display::Grid
+                | strata_style::types::Display::InlineFlex
+                | strata_style::types::Display::InlineGrid
+                | strata_style::types::Display::Table
+                | strata_style::types::Display::InlineTable
+        )
+        || node.style.overflow_x != strata_style::types::Overflow::Visible
+        || node.style.overflow_y != strata_style::types::Overflow::Visible
+        || node.style.contain.layout
+        || child_is_layout_boundary(node)
+}
+
+#[inline]
+fn child_is_layout_boundary(node: &LayoutNode) -> bool {
+    node.is_layout_boundary()
+}
+
 /// Positions in-flow block children with active exclusion space tracking and depth guard.
 pub fn solve_block_children_with_exclusions_guarded(
     node: &mut LayoutNode,
@@ -877,16 +906,7 @@ pub fn solve_block_children_with_exclusions_guarded(
     // W3C CSS 2.1 §9.4.1 Block Formatting Context (BFC) root determination:
     // Normal in-flow block boxes with overflow: visible share their parent BFC's ExclusionSpace
     // so floats inside a <section> or <div> overhang into subsequent sibling sections.
-    let establishes_bfc = node.style.float != strata_style::types::Float::None
-        || matches!(node.style.position, Position::Absolute | Position::Fixed)
-        || matches!(
-            node.style.display,
-            strata_style::types::Display::InlineBlock
-                | strata_style::types::Display::TableCell
-                | strata_style::types::Display::TableCaption
-        )
-        || node.style.overflow_x != strata_style::types::Overflow::Visible
-        || node.style.overflow_y != strata_style::types::Overflow::Visible;
+    let establishes_bfc = node_establishes_bfc(node);
 
     let is_root_exclusion_context = parent_exclusions.is_none();
     let mut local_exclusions = crate::exclusions::ExclusionSpace::new();
@@ -908,6 +928,7 @@ pub fn solve_block_children_with_exclusions_guarded(
     let mut current_y = border.top + padding.top;
     let mut pending_margin: Option<f32> = None;
     let mut is_first_in_flow = true;
+    let mut last_child_establishes_bfc = false;
 
     for child in &mut node.children {
         if child.style.position == Position::Absolute || child.style.position == Position::Fixed {
@@ -1034,6 +1055,8 @@ pub fn solve_block_children_with_exclusions_guarded(
             continue;
         }
 
+        let child_establishes_bfc = node_establishes_bfc(child);
+
         let mut collapsed_v_margin = match pending_margin.take() {
             Some(prev_m) => collapse_margins(prev_m, child_margin.top),
             None => child_margin.top,
@@ -1041,26 +1064,13 @@ pub fn solve_block_children_with_exclusions_guarded(
 
         if is_first_in_flow {
             is_first_in_flow = false;
-            if parent_top_adjoining {
+            if parent_top_adjoining && !child_establishes_bfc {
                 node.style.margin.top = collapse_margins(node.style.margin.top, collapsed_v_margin);
                 collapsed_v_margin = 0.0;
             }
         }
 
         current_y += collapsed_v_margin;
-
-        let child_establishes_bfc = child.style.float != strata_style::types::Float::None
-            || matches!(child.style.position, Position::Absolute | Position::Fixed)
-            || matches!(
-                child.style.display,
-                strata_style::types::Display::InlineBlock
-                    | strata_style::types::Display::TableCell
-                    | strata_style::types::Display::TableCaption
-            )
-            || child.style.overflow_x != strata_style::types::Overflow::Visible
-            || child.style.overflow_y != strata_style::types::Overflow::Visible
-            || child.style.contain.layout
-            || child.is_layout_boundary();
 
         let mut child_available_width = content_width;
         let mut child_x = border.left + padding.left + child_margin.left;
@@ -1161,10 +1171,11 @@ pub fn solve_block_children_with_exclusions_guarded(
 
         current_y += child.geometry.border_box.height;
         pending_margin = Some(child_margin.bottom);
+        last_child_establishes_bfc = child_establishes_bfc;
     }
 
     if let Some(trailing_margin) = pending_margin {
-        if parent_bottom_adjoining {
+        if parent_bottom_adjoining && !last_child_establishes_bfc {
             node.style.margin.bottom = collapse_margins(node.style.margin.bottom, trailing_margin);
         } else {
             current_y += trailing_margin;

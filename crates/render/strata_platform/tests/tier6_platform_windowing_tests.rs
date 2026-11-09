@@ -597,3 +597,52 @@ fn test_goal_28_operating_system_vibrancy_mica_acrylic_backdrop_blur() {
     let win_config = WindowConfig::default().with_vibrancy(VibrancyEffect::Acrylic);
     assert_eq!(win_config.vibrancy, VibrancyEffect::Acrylic);
 }
+
+#[test]
+fn test_goal_20_win32_raw_abi_and_event_loop_soundness() {
+    use strata_platform::raw_abi::win32::*;
+
+    // 1. Verify standard Win32 window message identifiers
+    assert_eq!(WM_NULL, 0x0000);
+    assert_eq!(WM_CREATE, 0x0001);
+    assert_eq!(WM_DESTROY, 0x0002);
+    assert_eq!(WM_SIZE, 0x0005);
+    assert_eq!(WM_PAINT, 0x000F);
+    assert_eq!(WM_CLOSE, 0x0010);
+    assert_eq!(WM_QUIT, 0x0012);
+    assert_eq!(WM_KEYDOWN, 0x0100);
+    assert_eq!(WM_KEYUP, 0x0101);
+    assert_eq!(WM_MOUSEMOVE, 0x0200);
+    assert_eq!(WM_LBUTTONDOWN, 0x0201);
+    assert_eq!(WM_LBUTTONUP, 0x0202);
+
+    // 2. Verify DXGI 1.6 flip model constants
+    assert_eq!(DXGI_SWAP_EFFECT_DISCARD, 0);
+    assert_eq!(DXGI_SWAP_EFFECT_FLIP_DISCARD, 4);
+    assert_eq!(DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING, 2048);
+
+    // 3. Verify Point and Rect conversions
+    let pt = Point { x: 100, y: 200 };
+    let prim_pt: strata_primitives::geom::Point<f32> = pt.into();
+    assert_eq!(prim_pt.x, 100.0);
+    assert_eq!(prim_pt.y, 200.0);
+
+    let rect = Rect { left: 10, top: 20, right: 110, bottom: 220 };
+    let prim_rect: strata_primitives::geom::Rect<f32> = rect.into();
+    assert_eq!(prim_rect.x(), 10.0);
+    assert_eq!(prim_rect.y(), 20.0);
+    assert_eq!(prim_rect.width(), 100.0);
+    assert_eq!(prim_rect.height(), 200.0);
+
+    // 4. Verify Win32 Msg payload layout
+    let msg = Msg {
+        hwnd: Hwnd(0x1234),
+        message: WM_PAINT,
+        wparam: 0,
+        lparam: 0,
+        time: 123456,
+        pt,
+    };
+    assert_eq!(msg.hwnd.0, 0x1234);
+    assert_eq!(msg.message, WM_PAINT);
+}

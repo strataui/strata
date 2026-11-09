@@ -32,7 +32,7 @@ pub use wikipedia::{
     WikipediaTocItem,
 };
 pub use cache::ArticleCache;
-pub use csp::{extract_meta_csp, ContentSecurityPolicy, DirectiveKind, SourceExpr};
+pub use csp::{extract_meta_csp, ContentSecurityPolicy, CspPolicy, DirectiveKind, SourceExpr};
 pub use strata_dom::NodeBlueprint;
 pub use strata_style::MediaContext;
 
@@ -47,7 +47,7 @@ pub mod prelude {
         WikipediaTocItem,
     };
     pub use crate::cache::ArticleCache;
-    pub use crate::csp::{extract_meta_csp, ContentSecurityPolicy, DirectiveKind, SourceExpr};
+    pub use crate::csp::{extract_meta_csp, ContentSecurityPolicy, CspPolicy, DirectiveKind, SourceExpr};
     pub use strata_dom::NodeBlueprint;
     pub use strata_style::MediaContext;
 }

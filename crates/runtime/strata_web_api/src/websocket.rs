@@ -217,32 +217,45 @@ pub fn compute_sec_websocket_accept(key: &str) -> String {
     base64_encode(&digest)
 }
 
+/// Fills a buffer with cryptographically secure pseudo-random bytes.
+///
+/// Uses `ring::rand::SystemRandom` backed by the OS CSPRNG, with fallbacks to `getrandom`
+/// and `/dev/urandom` on Unix. Panics on total entropy failure rather than falling back to
+/// predictable timestamps (preventing RFC 6455 §5.3 cache poisoning attacks).
+fn fill_secure_random(buf: &mut [u8]) {
+    use ring::rand::SecureRandom;
+    let rng = ring::rand::SystemRandom::new();
+    if rng.fill(buf).is_ok() {
+        return;
+    }
+
+    if getrandom::getrandom(buf).is_ok() {
+        return;
+    }
+
+    #[cfg(unix)]
+    {
+        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+            if f.read_exact(buf).is_ok() {
+                return;
+            }
+        }
+    }
+
+    panic!("RFC 6455 CSPRNG failure: unable to obtain secure cryptographic entropy for WebSocket operations");
+}
+
 /// Generates a cryptographically random 16-byte base64 nonce for `Sec-WebSocket-Key` (RFC 6455 §4.1).
 pub fn generate_sec_websocket_key() -> String {
     let mut nonce = [0u8; 16];
-    if getrandom::getrandom(&mut nonce).is_err() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let bytes = now.to_be_bytes();
-        for i in 0..16 {
-            nonce[i] = bytes[i].wrapping_add(i as u8).rotate_left((i % 7) as u32);
-        }
-    }
+    fill_secure_random(&mut nonce);
     base64_encode(&nonce)
 }
 
 /// Generates an unpredictable 32-bit masking key for client frames (RFC 6455 §5.3).
 pub fn generate_mask_key() -> [u8; 4] {
     let mut key = [0u8; 4];
-    if getrandom::getrandom(&mut key).is_err() {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos();
-        key = nanos.to_be_bytes();
-    }
+    fill_secure_random(&mut key);
     key
 }
 
