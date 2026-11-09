@@ -243,3 +243,18 @@ fn test_http11_keep_alive_without_connection_close_does_not_hang() {
     server_handle.join().expect("Server thread finished");
 }
 
+#[test]
+fn test_goal27_cleartext_http_on_port_443_rejected() {
+    // Attempting cleartext transmission on HTTPS port 443 must be rejected (CWE-319 / Goal 27)
+    let res = ParsedUrl::parse("http://example.com:443/insecure");
+    assert!(res.is_err());
+    match res.unwrap_err() {
+        FetchError::InvalidUrl(msg) => {
+            assert!(msg.contains("443"), "Error must mention port 443: {msg}");
+            assert!(msg.contains("CWE-319"), "Error must cite CWE-319: {msg}");
+        }
+        other => panic!("Expected FetchError::InvalidUrl, got: {other:?}"),
+    }
+}
+
+
