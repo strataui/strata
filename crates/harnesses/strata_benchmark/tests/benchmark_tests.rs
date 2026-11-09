@@ -25,7 +25,7 @@ fn test_benchmark_metrics_calculation() {
 #[test]
 fn test_cold_start_and_layout_benchmarks() {
     let cold_start = bench_cold_start(3);
-    assert_eq!(cold_start.name, "Cold Start to First Frame Presentation");
+    assert_eq!(cold_start.name, "In-Memory Headless Framebuffer Render Pass");
     assert!(cold_start.mean_us < 120_000.0, "Cold start should be < 120ms in debug builds under test load, got {} us", cold_start.mean_us);
 
     let flex_layout = bench_flexbox_layout_10k(2);

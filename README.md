@@ -13,7 +13,7 @@
 
 Strata is a ground-up universal presentation engine and reactive user interface framework engineered entirely in **pure Rust**. It pairs the developer ergonomics of modern declarative UI paradigms (RSX, reactive signals, Tailwind utility classes) with the deterministic memory consumption, zero-cost abstractions, and computational speed of native Rust.
 
-Unlike Electron, Tauri, or React Native, **Strata never spawns an embedded browser engine, WebView, CEF instance, or V8 JavaScript runtime**. Instead, Strata implements a complete, spec-compliant layout engine, cascading style system, and presentation pipeline directly in safe Rust.
+Unlike Electron, Tauri, or React Native, **Strata's core presentation engine never spawns an embedded browser engine, WebView, CEF instance, or V8 JavaScript runtime** for native UI rendering. Instead, Strata implements a complete, spec-compliant layout engine, cascading style system, and presentation pipeline directly in safe Rust. (Optional companion harnesses such as `strata_chromium_surface` exist strictly for legacy web embedding and automated cross-engine visual parity verification).
 
 ```
                       ┌────────────────────────────────────────┐
@@ -162,7 +162,7 @@ All figures below are empirically measured via high-resolution hardware timers (
 
 | Benchmark Task | Workload Scale | Measured Time | Throughput | Peak Memory (RSS) |
 |---|---|---|---|---|
-| **Cold Start to First Frame Presentation** | 1280x720 window, tree mount, cascade, layout, native presentation | **50.1 ms** | 20 ops/s | **32.4 MB** |
+| **In-Memory Headless Framebuffer Render Pass** | 1280x720 tree mount, cascade, layout, headless framebuffer render | **50.1 ms** | 20 ops/s | **32.4 MB** |
 | **W3C Flexbox Layout** | 1,000 styled flex items | **668 µs** (0.67 ms) | 1,497 ops/s | Negligible |
 | **W3C Flexbox Layout (Heavy)** | 10,000 styled flex items | **14.17 ms** | 71 ops/s | 4.8 MB |
 | **W3C CSS Grid Layout** | 1,000 styled grid cells with auto-placement | **692 µs** (0.69 ms) | 1,446 ops/s | Negligible |
@@ -178,7 +178,7 @@ All figures below are empirically measured via high-resolution hardware timers (
 | Metric | Strata Measured Characteristic | Verification Method |
 |---|---|---|
 | **Engine Core** | Safe, 100% pure Rust (Zero Chromium, zero WebViews, zero V8) | Source audit and workspace crate boundaries |
-| **Cold Start to First Frame** | **~50 ms** (clean boot to presentation) | Measured via `strata_benchmark::bench_cold_start` |
+| **Cold Start / First Frame Pass** | **~50 ms** (clean boot to in-memory headless render pass) | Measured via `strata_benchmark::bench_cold_start` |
 | **Baseline Idle Memory (RSS)** | **~32.4 MB** (Linux native surface) | Measured via `get_process_memory_rss_mb` |
 | **Layout Compute (1k Flex Items)** | **0.67 ms** (W3C Flexbox Level 1) | Measured via `strata_benchmark::bench_flexbox_layout` |
 | **Layout Compute (1k Grid Cells)** | **0.69 ms** (W3C CSS Grid Level 2) | Measured via `strata_benchmark::bench_w3c_grid_layout_1k` |

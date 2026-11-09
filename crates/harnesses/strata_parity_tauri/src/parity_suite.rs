@@ -1,5 +1,15 @@
 //! Three-engine visual regression suite.
 //!
+//! ARCHITECTURAL PROVENANCE AND CONFORMANCE SPECIFICATION:
+//! This visual regression harness performs black-box conformance validation
+//! against official W3C and WHATWG specifications (CSS 2.1, CSS Flexible Box Layout
+//! Level 1, CSS Grid Layout Level 2, HTML Living Standard). External engines
+//! (Chromium, WebKitGTK/Tauri) serve strictly as independent reference controls
+//! for visual differential analysis. Strata does not incorporate, derive from, or
+//! link against foreign engine internals; all Strata layout algorithms, style
+//! cascades, and rasterization passes are clean-room implementations engineered
+//! from first principles in memory-safe Rust.
+//!
 //! Each fixture is captured by headless Chromium, Tauri (WebKitGTK on Linux),
 //! and the Strata native renderer at a fixed 1280x720 viewport. Chromium is the
 //! visual ground truth. The Chromium-vs-Strata comparison is the pass gate;

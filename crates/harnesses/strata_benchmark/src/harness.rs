@@ -31,11 +31,11 @@ pub fn benchmark_task<F: FnMut()>(name: impl Into<String>, iterations: usize, mu
     BenchmarkResult::from_samples(name, &samples, rss_mb)
 }
 
-/// Measures honest engine cold start latency from clean boot to first frame presentation.
+/// Measures honest engine cold start latency from clean boot to first frame in-memory headless presentation.
 /// Initializes WindowConfig, creates the root App component, compiles the DOM/IR graph,
-/// executes initial cascading style resolution and layout, and rasterizes/presents the first frame.
+/// executes initial cascading style resolution and layout, and rasterizes/presents the first frame to an in-memory framebuffer.
 pub fn bench_cold_start(iterations: usize) -> BenchmarkResult {
-    benchmark_task("Cold Start to First Frame Presentation", iterations, || {
+    benchmark_task("In-Memory Headless Framebuffer Render Pass", iterations, || {
         let mut config = strata_platform::WindowConfig::default();
         config.title = "Strata Benchmark Live Surface".to_string();
         config.width = 1280;
