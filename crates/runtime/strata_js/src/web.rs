@@ -511,6 +511,30 @@ impl TimerScheduler {
         self.simulated_offset += delta;
         self.tick()
     }
+
+    fn time_until_next(&self) -> Option<Duration> {
+        let now = self.current_time();
+        self.entries
+            .iter()
+            .filter_map(|e| match e {
+                TimerEntry::Timeout { trigger_at, cancelled, .. } if !*cancelled => {
+                    if *trigger_at > now {
+                        Some(*trigger_at - now)
+                    } else {
+                        Some(Duration::ZERO)
+                    }
+                }
+                TimerEntry::Interval { next_trigger, cancelled, .. } if !*cancelled => {
+                    if *next_trigger > now {
+                        Some(*next_trigger - now)
+                    } else {
+                        Some(Duration::ZERO)
+                    }
+                }
+                _ => None,
+            })
+            .min()
+    }
 }
 
 thread_local! {
@@ -540,6 +564,18 @@ pub fn clear_interval(id: TimerId) {
 /// Ticks active timers and executes any due callbacks.
 pub fn tick_timers() -> usize {
     TIMER_SCHEDULER.with(|s| s.borrow_mut().tick())
+}
+
+/// Returns the duration until the next timer is scheduled to fire, or None if no timers are active.
+pub fn time_until_next_timer() -> Option<Duration> {
+    TIMER_SCHEDULER.with(|s| s.borrow().time_until_next())
+}
+
+/// Returns true if there are any active, uncancelled timeouts or intervals.
+pub fn has_pending_timers() -> bool {
+    TIMER_SCHEDULER.with(|s| s.borrow().entries.iter().any(|e| match e {
+        TimerEntry::Timeout { cancelled, .. } | TimerEntry::Interval { cancelled, .. } => !*cancelled,
+    }))
 }
 
 /// Advances the simulated timer clock by a given duration and executes due timers.
