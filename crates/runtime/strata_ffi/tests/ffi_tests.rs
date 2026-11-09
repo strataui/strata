@@ -27,6 +27,12 @@ fn test_app_lifecycle_and_window_creation() {
         let new_title = CString::new("Updated Title").unwrap();
         assert_eq!(strata_window_set_title(win, new_title.as_ptr()), 0);
 
+        let mut frame_buf = vec![0u8; 1024 * 768 * 4];
+        let bytes_rendered = strata_window_render_frame(win, frame_buf.as_mut_ptr());
+        assert_eq!(bytes_rendered, 1024 * 768 * 4);
+        assert_eq!(frame_buf[0], 255);
+        assert_eq!(frame_buf[3], 255);
+
         strata_app_destroy(app);
     }
 }

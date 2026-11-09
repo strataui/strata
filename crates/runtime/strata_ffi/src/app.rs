@@ -9,12 +9,13 @@ pub struct StrataAppHandle {
     pub windows: Vec<*mut StrataWindowHandle>,
 }
 
-/// Opaque wrapper for a Strata window instance.
+/// Opaque wrapper for a Strata window instance with authentic frame buffer presentation sink.
 pub struct StrataWindowHandle {
     pub title: String,
     pub width: u32,
     pub height: u32,
     pub is_visible: bool,
+    pub frame_buffer: strata_render::rasterizer::FrameBuffer,
 }
 
 static VERSION_CSTR: &[u8] = b"0.1.0\0";
@@ -84,6 +85,7 @@ pub unsafe extern "C" fn strata_window_create(
         width,
         height,
         is_visible: true,
+        frame_buffer: strata_render::rasterizer::FrameBuffer::new(width as usize, height as usize),
     });
     let win_ptr = Box::into_raw(win);
 
@@ -92,6 +94,27 @@ pub unsafe extern "C" fn strata_window_create(
     }
 
     win_ptr
+}
+
+/// Renders the window content into its internal frame buffer and copies pixels to caller buffer.
+#[no_mangle]
+pub unsafe extern "C" fn strata_window_render_frame(
+    win: *mut StrataWindowHandle,
+    out_rgba_ptr: *mut u8,
+) -> i32 {
+    if win.is_null() || out_rgba_ptr.is_null() {
+        return -1;
+    }
+    let w = &mut *win;
+    let mut dl = strata_render::compositor::DisplayList::new();
+    dl.push(strata_render::compositor::DrawCommand::DrawRect {
+        bounds: strata_layout::Rect::new(0.0, 0.0, w.width as f32, w.height as f32),
+        color: strata_style::types::Color::rgba(255, 255, 255, 255),
+    });
+    w.frame_buffer.render_display_list(&dl);
+    let bytes = w.frame_buffer.pixels.len();
+    std::ptr::copy_nonoverlapping(w.frame_buffer.pixels.as_ptr(), out_rgba_ptr, bytes);
+    bytes as i32
 }
 
 /// Updates the title of the native window. Returns 0 on success, -1 on invalid handle.
