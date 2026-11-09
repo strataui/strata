@@ -90,11 +90,23 @@ impl MinMaxSizes {
 /// is running, so a `(node, available parent size)` pair is a stable key and the
 /// cache is cleared when the outermost layout call finishes.
 pub fn compute_min_max_sizes(node: &LayoutNode, parent_size: Option<f32>) -> MinMaxSizes {
+    compute_min_max_sizes_guarded(node, parent_size, 0)
+}
+
+/// Computes intrinsic min/max sizes with an active depth counter to prevent stack exhaustion on deep DOM trees.
+pub fn compute_min_max_sizes_guarded(
+    node: &LayoutNode,
+    parent_size: Option<f32>,
+    depth: usize,
+) -> MinMaxSizes {
+    if depth > crate::tree::MAX_LAYOUT_DEPTH {
+        return MinMaxSizes::zero();
+    }
     let _prof = crate::prof::Scope::new(crate::prof::Slot::Intrinsic);
     if let Some(hit) = memo_lookup(node, parent_size) {
         return hit;
     }
-    let result = compute_min_max_sizes_uncached(node, parent_size);
+    let result = compute_min_max_sizes_uncached(node, parent_size, depth);
     memo_store(node, parent_size, result);
     result
 }
@@ -172,7 +184,11 @@ pub fn end_layout_session(is_root: bool) {
     SESSION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
 }
 
-fn compute_min_max_sizes_uncached(node: &LayoutNode, parent_size: Option<f32>) -> MinMaxSizes {
+fn compute_min_max_sizes_uncached(
+    node: &LayoutNode,
+    parent_size: Option<f32>,
+    depth: usize,
+) -> MinMaxSizes {
     let avail = parent_size.unwrap_or(0.0);
 
     // 1. Definite non-percentage width on element containers:
@@ -258,7 +274,7 @@ fn compute_min_max_sizes_uncached(node: &LayoutNode, parent_size: Option<f32>) -
                     };
 
                     for child in in_flow_children {
-                        let child_sizes = compute_min_max_sizes(child, parent_size);
+                        let child_sizes = compute_min_max_sizes_guarded(child, parent_size, depth + 1);
                         let child_margin = child.style.margin.left + child.style.margin.right;
                         sum_min += child_sizes.min_content + child_margin;
                         sum_max += child_sizes.max_content + child_margin;
@@ -275,7 +291,7 @@ fn compute_min_max_sizes_uncached(node: &LayoutNode, parent_size: Option<f32>) -
                         {
                             continue;
                         }
-                        let child_sizes = compute_min_max_sizes(child, parent_size);
+                        let child_sizes = compute_min_max_sizes_guarded(child, parent_size, depth + 1);
                         let child_margin = child.style.margin.left + child.style.margin.right;
                         result.min_content = result
                             .min_content
@@ -287,7 +303,7 @@ fn compute_min_max_sizes_uncached(node: &LayoutNode, parent_size: Option<f32>) -
                 }
             }
             Display::Grid | Display::InlineGrid => {
-                let grid_sizes = compute_grid_min_max_sizes(node, parent_size);
+                let grid_sizes = compute_grid_min_max_sizes(node, parent_size, depth + 1);
                 result.min_content = result.min_content.max(grid_sizes.min_content);
                 result.max_content = result.max_content.max(grid_sizes.max_content);
             }
@@ -303,7 +319,7 @@ fn compute_min_max_sizes_uncached(node: &LayoutNode, parent_size: Option<f32>) -
                     {
                         continue;
                     }
-                    let child_sizes = compute_min_max_sizes(child, parent_size);
+                    let child_sizes = compute_min_max_sizes_guarded(child, parent_size, depth + 1);
                     let child_margin = child.style.margin.left + child.style.margin.right;
                     result.min_content = result
                         .min_content
@@ -335,7 +351,14 @@ fn compute_min_max_sizes_uncached(node: &LayoutNode, parent_size: Option<f32>) -
 
 /// Recursively computes intrinsic min-content and max-content sizes for a grid container
 /// according to W3C CSS Grid Layout Level 2 §12.1.
-fn compute_grid_min_max_sizes(node: &LayoutNode, parent_size: Option<f32>) -> MinMaxSizes {
+fn compute_grid_min_max_sizes(
+    node: &LayoutNode,
+    parent_size: Option<f32>,
+    depth: usize,
+) -> MinMaxSizes {
+    if depth > crate::tree::MAX_LAYOUT_DEPTH {
+        return MinMaxSizes::zero();
+    }
     let in_flow_children: Vec<_> = node
         .children
         .iter()
@@ -378,7 +401,7 @@ fn compute_grid_min_max_sizes(node: &LayoutNode, parent_size: Option<f32>) -> Mi
             let mut items_max = 0.0f32;
 
             for item in items {
-                let s = compute_min_max_sizes(item, parent_size);
+                let s = compute_min_max_sizes_guarded(item, parent_size, depth + 1);
                 let m = item.style.margin.left + item.style.margin.right;
                 items_min = items_min.max(s.min_content + m);
                 items_max = items_max.max(s.max_content + m);
@@ -452,7 +475,7 @@ fn compute_grid_min_max_sizes(node: &LayoutNode, parent_size: Option<f32>) -> Mi
         let mut max_min = 0.0f32;
         let mut max_max = 0.0f32;
         for child in in_flow_children {
-            let s = compute_min_max_sizes(child, parent_size);
+            let s = compute_min_max_sizes_guarded(child, parent_size, depth + 1);
             let m = child.style.margin.left + child.style.margin.right;
             max_min = max_min.max(s.min_content + m);
             max_max = max_max.max(s.max_content + m);

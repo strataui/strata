@@ -1390,10 +1390,14 @@ pub struct ComputedStyle {
     // CSS Grid
     pub grid_template_columns: Vec<GridTrack>,
     pub grid_template_rows: Vec<GridTrack>,
+    pub grid_template_areas: Vec<Vec<String>>,
     pub grid_auto_flow: GridAutoFlow,
+    pub grid_area: Option<String>,
     pub grid_column_start: Option<i32>,
+    pub grid_column_end: Option<i32>,
     pub grid_column_span: Option<u32>,
     pub grid_row_start: Option<i32>,
+    pub grid_row_end: Option<i32>,
     pub grid_row_span: Option<u32>,
 
     // CSS Table
@@ -1525,10 +1529,14 @@ impl Default for ComputedStyle {
 
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
+            grid_template_areas: Vec::new(),
             grid_auto_flow: GridAutoFlow::Row,
+            grid_area: None,
             grid_column_start: None,
+            grid_column_end: None,
             grid_column_span: None,
             grid_row_start: None,
+            grid_row_end: None,
             grid_row_span: None,
 
             table_layout: TableLayout::Auto,

@@ -142,6 +142,7 @@ impl CascadeSolver {
             classes: &owned_classes,
             id,
             attributes: &[],
+            children: &[],
         };
         Self::resolve_with_hierarchy(
             &target,
@@ -163,6 +164,30 @@ impl CascadeSolver {
         stylesheets: &[&StyleSheet],
         state: &PseudoState,
     ) -> Vec<Declaration> {
+        Self::collect_declarations_with_hierarchy_full(
+            target,
+            ancestors,
+            preceding_siblings,
+            None,
+            None,
+            inline_style,
+            stylesheets,
+            state,
+        )
+    }
+
+    /// Collects and resolves all matching CSS declarations considering hierarchy, siblings, and position context.
+    #[allow(clippy::too_many_arguments)]
+    pub fn collect_declarations_with_hierarchy_full(
+        target: &crate::selector::ElementRef,
+        ancestors: &[crate::selector::ElementRef],
+        preceding_siblings: &[crate::selector::ElementRef],
+        is_last_child: Option<bool>,
+        is_last_of_type: Option<bool>,
+        inline_style: Option<&str>,
+        stylesheets: &[&StyleSheet],
+        state: &PseudoState,
+    ) -> Vec<Declaration> {
         let ua = crate::ua_stylesheet::get_ua_stylesheet();
         let mut origin_sheets = Vec::with_capacity(1 + stylesheets.len());
         origin_sheets.push(OriginStyleSheet::user_agent(ua));
@@ -170,10 +195,12 @@ impl CascadeSolver {
             origin_sheets.push(OriginStyleSheet::author(s));
         }
 
-        Self::collect_declarations_with_origins(
+        Self::collect_declarations_with_origins_full(
             target,
             ancestors,
             preceding_siblings,
+            is_last_child,
+            is_last_of_type,
             inline_style,
             &origin_sheets,
             state,
@@ -189,6 +216,30 @@ impl CascadeSolver {
         stylesheets: &[OriginStyleSheet],
         state: &PseudoState,
     ) -> Vec<Declaration> {
+        Self::collect_declarations_with_origins_full(
+            target,
+            ancestors,
+            preceding_siblings,
+            None,
+            None,
+            inline_style,
+            stylesheets,
+            state,
+        )
+    }
+
+    /// Collects and resolves all matching CSS declarations from multi-origin stylesheets with full position context.
+    #[allow(clippy::too_many_arguments)]
+    pub fn collect_declarations_with_origins_full(
+        target: &crate::selector::ElementRef,
+        ancestors: &[crate::selector::ElementRef],
+        preceding_siblings: &[crate::selector::ElementRef],
+        is_last_child: Option<bool>,
+        is_last_of_type: Option<bool>,
+        inline_style: Option<&str>,
+        stylesheets: &[OriginStyleSheet],
+        state: &PseudoState,
+    ) -> Vec<Declaration> {
         let mut candidates = Vec::new();
         let mut global_order = 0;
 
@@ -200,7 +251,14 @@ impl CascadeSolver {
                 // Find highest specificity among matching selectors for this rule
                 let mut best_match: Option<Specificity> = None;
                 for selector in &rule.selectors {
-                    if selector.matches_hierarchy(target, ancestors, preceding_siblings, state) {
+                    if selector.matches_hierarchy_full(
+                        target,
+                        ancestors,
+                        preceding_siblings,
+                        is_last_child,
+                        is_last_of_type,
+                        state,
+                    ) {
                         match best_match {
                             Some(current) => {
                                 if selector.specificity > current {
@@ -274,6 +332,32 @@ impl CascadeSolver {
         parent_style: Option<&ComputedStyle>,
         state: &PseudoState,
     ) -> ComputedStyle {
+        Self::resolve_with_hierarchy_full(
+            target,
+            ancestors,
+            preceding_siblings,
+            None,
+            None,
+            inline_style,
+            stylesheets,
+            parent_style,
+            state,
+        )
+    }
+
+    /// Resolves all matching CSS rules considering hierarchical ancestor, sibling, and position relationships.
+    #[allow(clippy::too_many_arguments)]
+    pub fn resolve_with_hierarchy_full(
+        target: &crate::selector::ElementRef,
+        ancestors: &[crate::selector::ElementRef],
+        preceding_siblings: &[crate::selector::ElementRef],
+        is_last_child: Option<bool>,
+        is_last_of_type: Option<bool>,
+        inline_style: Option<&str>,
+        stylesheets: &[&StyleSheet],
+        parent_style: Option<&ComputedStyle>,
+        state: &PseudoState,
+    ) -> ComputedStyle {
         // Step 1: Base style from inheritance or initial default
         let mut computed = match parent_style {
             Some(parent) => ComputedStyle::inherit_from(parent),
@@ -281,10 +365,12 @@ impl CascadeSolver {
         };
 
         // Step 2: Collect and apply declarations in sorted priority order
-        let declarations = Self::collect_declarations_with_hierarchy(
+        let declarations = Self::collect_declarations_with_hierarchy_full(
             target,
             ancestors,
             preceding_siblings,
+            is_last_child,
+            is_last_of_type,
             inline_style,
             stylesheets,
             state,
@@ -302,11 +388,16 @@ impl CascadeSolver {
         let mut starting_decls = Vec::new();
         for sheet in stylesheets {
             for s_rule in &sheet.starting_styles {
-                if s_rule
-                    .selectors
-                    .iter()
-                    .any(|sel| sel.matches_hierarchy(target, ancestors, preceding_siblings, state))
-                {
+                if s_rule.selectors.iter().any(|sel| {
+                    sel.matches_hierarchy_full(
+                        target,
+                        ancestors,
+                        preceding_siblings,
+                        is_last_child,
+                        is_last_of_type,
+                        state,
+                    )
+                }) {
                     starting_decls.extend(s_rule.declarations.clone());
                 }
             }
@@ -1032,10 +1123,17 @@ impl CascadeSolver {
                     style.grid_auto_flow = flow;
                 }
             }
+            "grid-template-areas" => {
+                style.grid_template_areas = crate::parser::parse_grid_template_areas(val);
+            }
+            "grid-area" => {
+                apply_grid_area_shorthand(val, style);
+            }
             "grid-column" => {
                 apply_grid_placement_shorthand(
                     val,
                     &mut style.grid_column_start,
+                    &mut style.grid_column_end,
                     &mut style.grid_column_span,
                 );
             }
@@ -1047,12 +1145,13 @@ impl CascadeSolver {
                 );
             }
             "grid-column-end" => {
-                apply_grid_placement_end(val, style.grid_column_start, &mut style.grid_column_span);
+                apply_grid_placement_end(val, &mut style.grid_column_end, &mut style.grid_column_span);
             }
             "grid-row" => {
                 apply_grid_placement_shorthand(
                     val,
                     &mut style.grid_row_start,
+                    &mut style.grid_row_end,
                     &mut style.grid_row_span,
                 );
             }
@@ -1060,7 +1159,7 @@ impl CascadeSolver {
                 apply_grid_placement_line(val, &mut style.grid_row_start, &mut style.grid_row_span);
             }
             "grid-row-end" => {
-                apply_grid_placement_end(val, style.grid_row_start, &mut style.grid_row_span);
+                apply_grid_placement_end(val, &mut style.grid_row_end, &mut style.grid_row_span);
             }
             "background-color" => {
                 if let Some(c) = parse_color(val) {
@@ -1867,19 +1966,22 @@ fn apply_grid_placement_line(value: &str, start: &mut Option<i32>, span: &mut Op
     }
 }
 
-fn apply_grid_placement_end(value: &str, start: Option<i32>, span: &mut Option<u32>) {
+fn apply_grid_placement_end(value: &str, end: &mut Option<i32>, span: &mut Option<u32>) {
     if let Some(count) = parse_grid_span(value) {
         *span = Some(count);
-    } else if let Some(end) = parse_grid_line(value) {
-        if let Some(begin) = start {
-            if end > begin {
-                *span = Some((end - begin) as u32);
-            }
-        }
+    } else if value.trim().eq_ignore_ascii_case("auto") {
+        *end = None;
+    } else if let Some(line) = parse_grid_line(value) {
+        *end = Some(line);
     }
 }
 
-fn apply_grid_placement_shorthand(value: &str, start: &mut Option<i32>, span: &mut Option<u32>) {
+fn apply_grid_placement_shorthand(
+    value: &str,
+    start: &mut Option<i32>,
+    end: &mut Option<i32>,
+    span: &mut Option<u32>,
+) {
     let parts: Vec<&str> = value
         .split('/')
         .map(str::trim)
@@ -1891,8 +1993,8 @@ fn apply_grid_placement_shorthand(value: &str, start: &mut Option<i32>, span: &m
         [first, second] => {
             if let Some(count) = parse_grid_span(first) {
                 *span = Some(count);
-                if let Some(end) = parse_grid_line(second) {
-                    *start = Some(end - count as i32);
+                if let Some(line) = parse_grid_line(second) {
+                    *end = Some(line);
                 }
                 return;
             }
@@ -1901,14 +2003,52 @@ fn apply_grid_placement_shorthand(value: &str, start: &mut Option<i32>, span: &m
 
             if let Some(count) = parse_grid_span(second) {
                 *span = Some(count);
-            } else if let Some(end) = parse_grid_line(second) {
-                if let Some(begin) = *start {
-                    if end > begin {
-                        *span = Some((end - begin) as u32);
+            } else if let Some(line) = parse_grid_line(second) {
+                *end = Some(line);
+                if let Some(s) = *start {
+                    if line > s {
+                        *span = Some((line - s) as u32);
                     }
                 }
             }
         }
         _ => {}
+    }
+}
+
+fn apply_grid_area_shorthand(value: &str, style: &mut ComputedStyle) {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    if !trimmed.contains('/') {
+        if let Some(line) = parse_grid_line(trimmed) {
+            style.grid_row_start = Some(line);
+        } else if let Some(span) = parse_grid_span(trimmed) {
+            style.grid_row_span = Some(span);
+        } else {
+            style.grid_area = Some(trimmed.to_string());
+        }
+        return;
+    }
+
+    let parts: Vec<&str> = trimmed
+        .split('/')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+
+    if let Some(&row_start) = parts.first() {
+        apply_grid_placement_line(row_start, &mut style.grid_row_start, &mut style.grid_row_span);
+    }
+    if let Some(&col_start) = parts.get(1) {
+        apply_grid_placement_line(col_start, &mut style.grid_column_start, &mut style.grid_column_span);
+    }
+    if let Some(&row_end) = parts.get(2) {
+        apply_grid_placement_end(row_end, &mut style.grid_row_end, &mut style.grid_row_span);
+    }
+    if let Some(&col_end) = parts.get(3) {
+        apply_grid_placement_end(col_end, &mut style.grid_column_end, &mut style.grid_column_span);
     }
 }

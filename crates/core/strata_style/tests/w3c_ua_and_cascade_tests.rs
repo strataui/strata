@@ -83,6 +83,7 @@ fn test_w3c_ua_stylesheet_defaults() {
         classes: &[],
         id: None,
         attributes: &[("hidden".to_string(), "".to_string())],
+        children: &[],
     };
     let hidden_style = CascadeSolver::resolve_with_hierarchy(&hidden_target, &[], &[], None, &[], None, &state);
     assert_eq!(hidden_style.display, Display::None);
@@ -147,6 +148,7 @@ fn test_multi_origin_cascade_order() {
         classes: &[],
         id: None,
         attributes: &[("hidden".to_string(), "".to_string())],
+        children: &[],
     };
     let style5 = CascadeSolver::resolve_with_hierarchy(
         &hidden_target,

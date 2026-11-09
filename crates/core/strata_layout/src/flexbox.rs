@@ -1,6 +1,8 @@
 //! W3C Flexible Box Layout Level 1 Multi-Pass Solver.
 
-use crate::box_model::{clamp_dimension, resolve_dimension};
+use crate::box_model::{
+    clamp_dimension, clamp_dimension_with_node, resolve_dimension, resolve_dimension_with_node,
+};
 use crate::geometry::{LayoutGeometry, Rect};
 use crate::tree::LayoutNode;
 use strata_style::types::{
@@ -185,12 +187,13 @@ pub fn solve_flexbox_with_definite_cross_guarded(
     );
 
     // 1. Resolve container dimensions
-    let resolved_width = match resolve_dimension(container.style.width, available_width) {
-        Some(w) => clamp_dimension(
+    let resolved_width = match resolve_dimension_with_node(container.style.width, available_width, container) {
+        Some(w) => clamp_dimension_with_node(
             w,
             container.style.min_width,
             container.style.max_width,
             available_width,
+            container,
         ),
         None => {
             // Only inline-level flex containers shrink-to-fit. A block-level
@@ -209,7 +212,7 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                     {
                         continue;
                     }
-                    let cw = resolve_dimension(child.style.width, available_width).unwrap_or_else(
+                    let cw = resolve_dimension_with_node(child.style.width, available_width, child).unwrap_or_else(
                         || {
                             if child.geometry.border_box.width > 0.0 {
                                 child.geometry.border_box.width
@@ -335,9 +338,9 @@ pub fn solve_flexbox_with_definite_cross_guarded(
             child.style.display = strata_style::types::Display::InlineFlex;
         }
 
-        let item_w_opt = resolve_dimension(child.style.width, inner_width).or_else(|| {
+        let item_w_opt = resolve_dimension_with_node(child.style.width, inner_width, child).or_else(|| {
             if child.style.flex_basis != Dimension::Auto {
-                let basis = resolve_dimension(child.style.flex_basis, inner_width)?;
+                let basis = resolve_dimension_with_node(child.style.flex_basis, inner_width, child)?;
                 if basis > 0.0 {
                     Some(basis)
                 } else {
@@ -435,7 +438,7 @@ pub fn solve_flexbox_with_definite_cross_guarded(
         let mut has_explicit_basis = false;
         if child.style.flex_basis != Dimension::Auto
             && (is_row || resolved_height.is_some()) {
-                if let Some(basis_px) = resolve_dimension(child.style.flex_basis, container_main) {
+                if let Some(basis_px) = resolve_dimension_with_node(child.style.flex_basis, container_main, child) {
                     main_size = basis_px;
                     has_explicit_basis = true;
                 }
@@ -641,9 +644,9 @@ pub fn solve_flexbox_with_definite_cross_guarded(
             .sum();
 
         let min_container_main = if is_row {
-            resolve_dimension(container.style.min_width, available_width)
+            resolve_dimension_with_node(container.style.min_width, available_width, container)
         } else {
-            resolve_dimension(container.style.min_height, available_height)
+            resolve_dimension_with_node(container.style.min_height, available_height, container)
         };
 
         if is_main_definite {
@@ -754,15 +757,16 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                                     };
                                     let mut auto_min = content_size.min(specified_size);
                                     if let Some(max_w) =
-                                        resolve_dimension(ch.style.max_width, inner_width)
+                                        resolve_dimension_with_node(ch.style.max_width, inner_width, ch)
                                     {
                                         auto_min = auto_min.min(max_w);
                                     }
                                     auto_min
                                 } else {
-                                    resolve_dimension(
+                                    resolve_dimension_with_node(
                                         container.children[it.index].style.min_width,
                                         inner_width,
+                                        &container.children[it.index],
                                     )
                                     .unwrap_or(0.0)
                                 }
@@ -1196,6 +1200,7 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                     child.style.border_width,
                     child_margin,
                 );
+                child.geometry.snap_to_pixel();
                 child.last_child_layout_content = Some((desired_content_w, desired_content_h));
             } else {
                 child.geometry = LayoutGeometry::from_border_box(
@@ -1204,6 +1209,7 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                     child.style.border_width,
                     child_margin,
                 );
+                child.geometry.snap_to_pixel();
                 if !child.children.is_empty() {
                     if let Some(cg) = guard.enter() {
                         child.layout_children_guarded(cg);

@@ -4,7 +4,9 @@
 //! (Absolute Positioning Equations, Double-Anchored Inset Stretching, Auto-Margin Centering),
 //! and CSS Positioned Layout Level 3 Section 6 (Sticky Constraints).
 
-use crate::box_model::{clamp_dimension, resolve_dimension};
+use crate::box_model::{
+    clamp_dimension, clamp_dimension_with_node, resolve_dimension, resolve_dimension_with_node,
+};
 use crate::geometry::{LayoutGeometry, Rect};
 use crate::tree::LayoutNode;
 use strata_style::types::{
@@ -372,13 +374,14 @@ pub fn solve_out_of_flow_box_guarded(
             )
         }
         _ => {
-            let w = resolve_dimension(child.style.width, cb_rect.width)
+            let w = resolve_dimension_with_node(child.style.width, cb_rect.width, child)
                 .unwrap_or(child.geometry.border_box.width);
-            clamp_dimension(
+            clamp_dimension_with_node(
                 w,
                 child.style.min_width,
                 child.style.max_width,
                 cb_rect.width,
+                child,
             )
         }
     };

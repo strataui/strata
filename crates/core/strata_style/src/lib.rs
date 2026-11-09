@@ -1,4 +1,15 @@
 //! Strata Style: CSS spec parser, specificity calculator, cascade solver, and Tailwind JIT compiler.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use strata_style::types::{ComputedStyle, Display, Dimension};
+//!
+//! let mut style = ComputedStyle::default();
+//! style.display = Display::Flex;
+//! style.width = Dimension::Px(500.0);
+//! assert_eq!(style.display, Display::Flex);
+//! ```
 
 pub mod animation;
 pub mod bezier;

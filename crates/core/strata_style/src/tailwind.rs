@@ -20,22 +20,25 @@ impl TailwindEngine {
         is_focused: bool,
         is_dark_mode: bool,
     ) -> ComputedStyle {
+        let state = crate::selector::PseudoState {
+            is_hovered,
+            is_focused,
+            is_active: false,
+            is_disabled: false,
+            is_dark: is_dark_mode,
+        };
+        Self::resolve_classes_with_pseudo_state(classes, &state)
+    }
+
+    /// Resolves Tailwind classes evaluating a full `PseudoState` (`hover:`, `focus:`, `active:`, `disabled:`, `dark:`).
+    pub fn resolve_classes_with_pseudo_state(
+        classes: &str,
+        state: &crate::selector::PseudoState,
+    ) -> ComputedStyle {
         let mut style = ComputedStyle::default();
 
         for raw_token in tokenize_classes(classes) {
-            let (modifier, class) = split_modifier(raw_token);
-
-            let should_apply = match modifier {
-                None => true,
-                Some("hover") => is_hovered,
-                Some("focus") => is_focused,
-                Some("dark") => is_dark_mode,
-                Some(_) => false, // sm:, md:, lg: can be activated with media contexts
-            };
-
-            if should_apply {
-                Self::apply_class(&mut style, class);
-            }
+            Self::apply_class_with_pseudo_state(&mut style, raw_token, state);
         }
 
         style
@@ -49,12 +52,30 @@ impl TailwindEngine {
         is_focused: bool,
         is_dark_mode: bool,
     ) {
+        let state = crate::selector::PseudoState {
+            is_hovered,
+            is_focused,
+            is_active: false,
+            is_disabled: false,
+            is_dark: is_dark_mode,
+        };
+        Self::apply_class_with_pseudo_state(style, token, &state);
+    }
+
+    /// Applies a single Tailwind class token evaluating a full `PseudoState`.
+    pub fn apply_class_with_pseudo_state(
+        style: &mut ComputedStyle,
+        token: &str,
+        state: &crate::selector::PseudoState,
+    ) {
         let (modifier, class) = split_modifier(token);
         let should_apply = match modifier {
             None => true,
-            Some("hover") => is_hovered,
-            Some("focus") => is_focused,
-            Some("dark") => is_dark_mode,
+            Some("hover") => state.is_hovered,
+            Some("focus") => state.is_focused,
+            Some("active") => state.is_active,
+            Some("disabled") => state.is_disabled,
+            Some("dark") => state.is_dark,
             Some(_) => false,
         };
         if should_apply {

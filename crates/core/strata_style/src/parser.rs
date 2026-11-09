@@ -503,6 +503,27 @@ pub fn parse_dimension(val: &str) -> Option<Dimension> {
     if s == "auto" {
         return Some(Dimension::Auto);
     }
+    if s == "min-content" {
+        return Some(Dimension::MinContent);
+    }
+    if s == "max-content" {
+        return Some(Dimension::MaxContent);
+    }
+    if s == "fit-content" {
+        return Some(Dimension::FitContent(0.0));
+    }
+    if let Some(arg) = s.strip_prefix("fit-content(").and_then(|r| r.strip_suffix(')')) {
+        let arg_trimmed = arg.trim();
+        if let Some(arg_dim) = parse_dimension(arg_trimmed) {
+            match arg_dim {
+                Dimension::Px(px) => return Some(Dimension::FitContent(px)),
+                Dimension::Rem(rem) => return Some(Dimension::FitContent(rem * 16.0)),
+                Dimension::Em(em) => return Some(Dimension::FitContent(em * 16.0)),
+                _ => return Some(Dimension::FitContent(0.0)),
+            }
+        }
+        return Some(Dimension::FitContent(0.0));
+    }
     if let Some(px) = s.strip_suffix("px") {
         if let Ok(n) = px.trim().parse::<f32>() {
             return Some(Dimension::Px(n));
@@ -753,6 +774,55 @@ fn resolve_minmax_track(min: &str, max: &str) -> GridTrack {
     let min_b = parse_grid_breadth(min).unwrap_or(GridTrackBreadth::Auto);
     let max_b = parse_grid_breadth(max).unwrap_or(GridTrackBreadth::Auto);
     GridTrack::MinMax(min_b, max_b)
+}
+
+/// Parses `grid-template-areas` value into a 2D matrix of area name tokens per W3C CSS Grid Level 2 §7.3.
+/// Quotes delineate rows; whitespace separates columns within rows.
+/// Unnamed empty cell tokens (`.`) are preserved as `"."`.
+pub fn parse_grid_template_areas(input: &str) -> Vec<Vec<String>> {
+    let trimmed = input.trim();
+    if trimmed.eq_ignore_ascii_case("none") || trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let mut rows = Vec::new();
+    if trimmed.contains('"') || trimmed.contains('\'') {
+        let mut in_quote = false;
+        let mut quote_char = '"';
+        let mut current_row = String::new();
+
+        for ch in trimmed.chars() {
+            if !in_quote && (ch == '"' || ch == '\'') {
+                in_quote = true;
+                quote_char = ch;
+                current_row.clear();
+            } else if in_quote && ch == quote_char {
+                in_quote = false;
+                let cells: Vec<String> = current_row
+                    .split_whitespace()
+                    .map(|s| s.to_string())
+                    .collect();
+                if !cells.is_empty() {
+                    rows.push(cells);
+                }
+                current_row.clear();
+            } else if in_quote {
+                current_row.push(ch);
+            }
+        }
+    } else {
+        for line in trimmed.lines() {
+            let cells: Vec<String> = line
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect();
+            if !cells.is_empty() {
+                rows.push(cells);
+            }
+        }
+    }
+
+    rows
 }
 
 /// Decodes CSS colors: `#hex`, `rgb(...)`, `rgba(...)`, `hsl(...)`, `hsla(...)`, or named colors.

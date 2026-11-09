@@ -401,20 +401,20 @@ fn test_subpixel_layout_snapping() {
 }
 
 #[test]
-fn test_wpt_suite_execution_and_compliance() {
-    let results = WptSuite::run_all();
-    assert_eq!(results.len(), 12);
+fn test_internal_layout_regression_suite_execution_and_compliance() {
+    let results = InternalLayoutRegressionSuite::run_all();
+    assert_eq!(results.len(), 14);
 
     for vector in &results {
         assert!(
             vector.passed,
-            "WPT Test vector '{}' ({}) failed with deviation: {:.4}px",
+            "Specification conformance vector '{}' ({}) failed with deviation: {:.4}px",
             vector.id, vector.title, vector.deviation_px
         );
         assert!(vector.deviation_px <= 0.016);
     }
 
-    let compliance = WptSuite::compliance_percentage();
+    let compliance = InternalLayoutRegressionSuite::compliance_percentage();
     assert_eq!(compliance, 100.0);
 }
 

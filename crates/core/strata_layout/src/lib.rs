@@ -1,4 +1,15 @@
 //! Strata Layout: W3C Spec-compliant, Chromium-grade Box Model, Flexbox, and Grid solvers.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use strata_layout::tree::LayoutNode;
+//! use strata_style::types::ComputedStyle;
+//!
+//! let mut root = LayoutNode::new(ComputedStyle::default());
+//! root.compute_layout(1024.0, 768.0);
+//! assert_eq!(root.geometry.border_box.width, 1024.0);
+//! ```
 
 #![forbid(unsafe_code)]
 
@@ -16,9 +27,12 @@ pub mod tree;
 pub mod typography;
 pub mod wpt;
 
-pub use box_model::{clamp_dimension, collapse_margins, resolve_dimension};
+pub use box_model::{
+    clamp_dimension, clamp_dimension_with_node, collapse_margins, resolve_dimension,
+    resolve_dimension_with_node,
+};
 pub use exclusions::{ExclusionKind, ExclusionRect, ExclusionSpace, LineOpportunity};
-pub use geometry::{LayoutGeometry, Rect};
+pub use geometry::{LayoutGeometry, Point, Rect, Size};
 pub use intrinsic::{compute_min_max_sizes, MinMaxSizes};
 pub use positioning::{
     solve_out_of_flow_box, solve_positioning, solve_positioning_children, ContainingBlock,
@@ -44,11 +58,13 @@ pub use typography::{
     OpenTypeFont, OpenTypeParseError, ShapedGlyph, TextFragment, TextLine, TextShaper,
     VerticalAlignment, WhiteSpaceMode, apply_small_caps,
 };
-pub use wpt::{WptSuite, WptTestVector};
+pub use wpt::{
+    InternalLayoutRegressionSuite, SpecificationConformanceVector, WptSuite, WptTestVector,
+};
 
 pub mod prelude {
     pub use crate::box_model::collapse_margins;
-    pub use crate::geometry::{LayoutGeometry, Rect};
+    pub use crate::geometry::{LayoutGeometry, Point, Rect, Size};
     pub use crate::intrinsic::{compute_min_max_sizes, MinMaxSizes};
     pub use crate::text::{
         is_monospace_family, layout_inline_text, measure_text_bounds, measure_text_bounds_ext,
@@ -56,5 +72,7 @@ pub mod prelude {
     };
     pub use crate::tree::LayoutNode;
     pub use crate::typography::*;
-    pub use crate::wpt::{WptSuite, WptTestVector};
+    pub use crate::wpt::{
+        InternalLayoutRegressionSuite, SpecificationConformanceVector, WptSuite, WptTestVector,
+    };
 }

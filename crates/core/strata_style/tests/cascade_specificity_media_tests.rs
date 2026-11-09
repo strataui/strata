@@ -24,6 +24,7 @@ fn test_combinator_descendant_and_child_matching() {
         classes: &[],
         id: None,
         attributes: &[],
+        children: &[],
     };
 
     let span_anc = ElementRef {
@@ -31,6 +32,7 @@ fn test_combinator_descendant_and_child_matching() {
         classes: &[],
         id: None,
         attributes: &[],
+        children: &[],
     };
 
     let p_target = ElementRef {
@@ -38,6 +40,7 @@ fn test_combinator_descendant_and_child_matching() {
         classes: &[],
         id: None,
         attributes: &[],
+        children: &[],
     };
 
     // Immediate parent is div -> Child matches
@@ -65,6 +68,7 @@ fn test_combinator_sibling_matching() {
         classes: &[],
         id: None,
         attributes: &[],
+        children: &[],
     };
 
     let p1_sib = ElementRef {
@@ -72,6 +76,7 @@ fn test_combinator_sibling_matching() {
         classes: &[],
         id: None,
         attributes: &[],
+        children: &[],
     };
 
     let p2_target = ElementRef {
@@ -79,6 +84,7 @@ fn test_combinator_sibling_matching() {
         classes: &[],
         id: None,
         attributes: &[],
+        children: &[],
     };
 
     // p immediately preceded by h2 -> Adjacent matches
@@ -103,6 +109,7 @@ fn test_attribute_selector_matching_operators() {
         classes: &[],
         id: None,
         attributes: &attrs_active,
+        children: &[],
     };
     assert!(sel_exists.matches_hierarchy(&el_active, &[], &[], &PseudoState::default()));
 
@@ -114,6 +121,7 @@ fn test_attribute_selector_matching_operators() {
         classes: &[],
         id: None,
         attributes: &attrs_submit,
+        children: &[],
     };
     assert!(sel_exact.matches_hierarchy(&el_submit, &[], &[], &PseudoState::default()));
 
@@ -126,12 +134,14 @@ fn test_attribute_selector_matching_operators() {
         classes: &[],
         id: None,
         attributes: &attrs_https,
+        children: &[],
     };
     let el_http = ElementRef {
         tag: "a",
         classes: &[],
         id: None,
         attributes: &attrs_http,
+        children: &[],
     };
     assert!(sel_prefix.matches_hierarchy(&el_https, &[], &[], &PseudoState::default()));
     assert!(!sel_prefix.matches_hierarchy(&el_http, &[], &[], &PseudoState::default()));
@@ -145,12 +155,14 @@ fn test_attribute_selector_matching_operators() {
         classes: &[],
         id: None,
         attributes: &attrs_png,
+        children: &[],
     };
     let el_jpg = ElementRef {
         tag: "img",
         classes: &[],
         id: None,
         attributes: &attrs_jpg,
+        children: &[],
     };
     assert!(sel_suffix.matches_hierarchy(&el_png, &[], &[], &PseudoState::default()));
     assert!(!sel_suffix.matches_hierarchy(&el_jpg, &[], &[], &PseudoState::default()));
@@ -163,6 +175,7 @@ fn test_attribute_selector_matching_operators() {
         classes: &[],
         id: None,
         attributes: &attrs_badge,
+        children: &[],
     };
     assert!(sel_sub.matches_hierarchy(&el_badge, &[], &[], &PseudoState::default()));
 }
@@ -251,6 +264,7 @@ fn test_cascade_specificity_tie_breaking_and_important() {
         classes: &classes,
         id: Some("hero-text"),
         attributes: &[],
+        children: &[],
     };
 
     // p.special has !important -> it must beat #hero-text (#333333) and produce #444444!
@@ -470,5 +484,294 @@ fn test_w3c_viewport_segments_and_device_posture_media_queries() {
         &PseudoState::default(),
     );
     assert_eq!(comp_tabletop.width, Dimension::Px(700.0));
+}
+
+#[test]
+fn test_complex_selector_nth_child_and_not_matching() {
+    let css = r#"
+        .container > div:nth-child(2) {
+            color: #ff0000;
+        }
+        .container > div:first-child {
+            color: #00ff00;
+        }
+        .container > div:not(.skip) {
+            background-color: #0000ff;
+        }
+    "#;
+
+    let sheet = StyleSheet::parse(css).expect("Parse stylesheet");
+    let container_classes = vec!["container".to_string()];
+    let container_anc = ElementRef {
+        tag: "div",
+        classes: &container_classes,
+        id: None,
+        attributes: &[],
+        children: &[],
+    };
+
+    let empty_classes = Vec::new();
+    let child1 = ElementRef {
+        tag: "div",
+        classes: &empty_classes,
+        id: None,
+        attributes: &[],
+        children: &[],
+    };
+    let child2 = ElementRef {
+        tag: "div",
+        classes: &empty_classes,
+        id: None,
+        attributes: &[],
+        children: &[],
+    };
+    let skip_classes = vec!["skip".to_string()];
+    let child2_skip = ElementRef {
+        tag: "div",
+        classes: &skip_classes,
+        id: None,
+        attributes: &[],
+        children: &[],
+    };
+
+    // Child 1 has no preceding siblings -> matches :first-child
+    let style1 = CascadeSolver::resolve_with_hierarchy(
+        &child1,
+        &[container_anc],
+        &[],
+        None,
+        &[&sheet],
+        None,
+        &PseudoState::default(),
+    );
+    assert_eq!(style1.color, Color::rgb(0, 255, 0)); // #00ff00
+    assert_eq!(style1.background_color, Some(Color::rgb(0, 0, 255))); // matches :not(.skip)
+
+    // Child 2 has 1 preceding sibling -> matches .container > div:nth-child(2)
+    let style2 = CascadeSolver::resolve_with_hierarchy(
+        &child2,
+        &[container_anc],
+        &[child1],
+        None,
+        &[&sheet],
+        None,
+        &PseudoState::default(),
+    );
+    assert_eq!(style2.color, Color::rgb(255, 0, 0)); // #ff0000
+    assert_eq!(style2.background_color, Some(Color::rgb(0, 0, 255)));
+
+    // Child with .skip class -> should NOT match :not(.skip)
+    let style_skip = CascadeSolver::resolve_with_hierarchy(
+        &child2_skip,
+        &[container_anc],
+        &[child1],
+        None,
+        &[&sheet],
+        None,
+        &PseudoState::default(),
+    );
+    assert_eq!(style_skip.color, Color::rgb(255, 0, 0)); // still matches :nth-child(2)
+    assert_eq!(style_skip.background_color, None); // does not match :not(.skip)
+}
+
+#[test]
+fn test_w3c_selectors_level_4_is_where_not_specificity() {
+    // 1. :where() always has specificity (0, 0, 0, 0)
+    let sel_where = Selector::parse("button:where(#hero, .primary)").unwrap();
+    // button (0,0,0,1) + :where(...) (0,0,0,0) = (0, 0, 0, 1)
+    assert_eq!(sel_where.specificity, Specificity::new(0, 0, 0, 1));
+
+    // 2. :is() takes the max specificity of its arguments
+    let sel_is = Selector::parse("button:is(.btn, #submit)").unwrap();
+    // button (0,0,0,1) + #submit (0,1,0,0) = (0, 1, 0, 1)
+    assert_eq!(sel_is.specificity, Specificity::new(0, 1, 0, 1));
+
+    // 3. :not() with multiple selectors takes the max specificity
+    let sel_not = Selector::parse("p:not(span, #special)").unwrap();
+    // p (0,0,0,1) + #special (0,1,0,0) = (0, 1, 0, 1)
+    assert_eq!(sel_not.specificity, Specificity::new(0, 1, 0, 1));
+
+    // Cascade resolution test:
+    // .btn:where(#hero) has specificity (0, 0, 1, 0).
+    // .btn.themed has specificity (0, 0, 2, 0).
+    // Therefore .btn.themed must beat .btn:where(#hero)!
+    let css = r#"
+        .btn:where(#hero) { color: #ff0000; }
+        .btn.themed { color: #00ff00; }
+    "#;
+    let sheet = StyleSheet::parse(css).expect("parse sheet");
+    let classes = vec!["btn".to_string(), "themed".to_string()];
+    let el = ElementRef {
+        tag: "button",
+        classes: &classes,
+        id: Some("hero"),
+        attributes: &[],
+        children: &[],
+    };
+    let computed = CascadeSolver::resolve_with_hierarchy(
+        &el,
+        &[],
+        &[],
+        None,
+        &[&sheet],
+        None,
+        &PseudoState::default(),
+    );
+    assert_eq!(computed.color, Color::rgb(0, 255, 0)); // Green wins because :where() contributed 0!
+
+    // Cascade resolution test for :is():
+    // button:is(#btn-submit, .btn) has specificity (0, 1, 0, 1).
+    // button.large.btn has specificity (0, 0, 2, 1).
+    // button:is(#btn-submit, .btn) must win because of #btn-submit!
+    let css2 = r#"
+        button:is(#btn-submit, .btn) { color: #123456; }
+        button.large.btn { color: #654321; }
+    "#;
+    let sheet2 = StyleSheet::parse(css2).expect("parse sheet2");
+    let classes2 = vec!["large".to_string(), "btn".to_string()];
+    let el2 = ElementRef {
+        tag: "button",
+        classes: &classes2,
+        id: Some("btn-submit"),
+        attributes: &[],
+        children: &[],
+    };
+    let computed2 = CascadeSolver::resolve_with_hierarchy(
+        &el2,
+        &[],
+        &[],
+        None,
+        &[&sheet2],
+        None,
+        &PseudoState::default(),
+    );
+    assert_eq!(computed2.color, Color::new(0x12, 0x34, 0x56, 0xFF));
+}
+
+#[test]
+fn test_w3c_selectors_level_4_has_child_and_descendant() {
+    let sel_has_child = Selector::parse("div:has(> p)").unwrap();
+    let sel_has_desc = Selector::parse("article:has(span.badge)").unwrap();
+
+    let p_child = ElementRef {
+        tag: "p",
+        classes: &[],
+        id: None,
+        attributes: &[],
+        children: &[],
+    };
+    let span_badge = ElementRef {
+        tag: "span",
+        classes: &["badge".to_string()],
+        id: None,
+        attributes: &[],
+        children: &[],
+    };
+    let section_middle = ElementRef {
+        tag: "section",
+        classes: &[],
+        id: None,
+        attributes: &[],
+        children: &[span_badge],
+    };
+
+    // Div with p child matches div:has(> p)
+    let div_with_p = ElementRef {
+        tag: "div",
+        classes: &[],
+        id: None,
+        attributes: &[],
+        children: &[p_child],
+    };
+    assert!(sel_has_child.matches_hierarchy(&div_with_p, &[], &[], &PseudoState::default()));
+
+    // Div with no p child does not match div:has(> p)
+    let div_empty = ElementRef {
+        tag: "div",
+        classes: &[],
+        id: None,
+        attributes: &[],
+        children: &[],
+    };
+    assert!(!sel_has_child.matches_hierarchy(&div_empty, &[], &[], &PseudoState::default()));
+
+    // Article with deep descendant span.badge matches article:has(span.badge)
+    let article_deep = ElementRef {
+        tag: "article",
+        classes: &[],
+        id: None,
+        attributes: &[],
+        children: &[section_middle],
+    };
+    assert!(sel_has_desc.matches_hierarchy(&article_deep, &[], &[], &PseudoState::default()));
+
+    // Article with no badge does not match
+    let article_empty = ElementRef {
+        tag: "article",
+        classes: &[],
+        id: None,
+        attributes: &[],
+        children: &[p_child],
+    };
+    assert!(!sel_has_desc.matches_hierarchy(&article_empty, &[], &[], &PseudoState::default()));
+}
+
+#[test]
+fn test_w3c_media_queries_level_4_range_syntax() {
+    let ctx_mobile = MediaContext::new(480.0, 800.0, true);
+    let ctx_tablet = MediaContext::new(800.0, 1024.0, true);
+    let ctx_desktop = MediaContext::new(1440.0, 900.0, true);
+
+    // 1. Single inequality range: width >= 768px
+    let mq_min = MediaQuery::parse("screen and (width >= 768px)").expect("parse width >= 768px");
+    assert!(!mq_min.matches(&ctx_mobile));
+    assert!(mq_min.matches(&ctx_tablet));
+    assert!(mq_min.matches(&ctx_desktop));
+
+    // 2. Single inequality range: width < 768px
+    let mq_max = MediaQuery::parse("screen and (width < 768px)").expect("parse width < 768px");
+    assert!(mq_max.matches(&ctx_mobile));
+    assert!(!mq_max.matches(&ctx_tablet));
+    assert!(!mq_max.matches(&ctx_desktop));
+
+    // 3. Interval range: 768px <= width <= 1200px
+    let mq_interval = MediaQuery::parse("screen and (768px <= width <= 1200px)").expect("parse interval");
+    assert!(!mq_interval.matches(&ctx_mobile));
+    assert!(mq_interval.matches(&ctx_tablet));
+    assert!(!mq_interval.matches(&ctx_desktop));
+
+    // 4. Stylesheet evaluation with range media query
+    let css = r#"
+        .layout { width: 100%; }
+        @media (768px <= width <= 1200px) {
+            .layout { width: 720px; }
+        }
+        @media (width > 1200px) {
+            .layout { width: 1200px; }
+        }
+    "#;
+    let sheet_tablet = StyleSheet::parse_with_context(css, &ctx_tablet).unwrap();
+    let comp_tablet = CascadeSolver::resolve(
+        "div",
+        &["layout"],
+        None,
+        None,
+        &[&sheet_tablet],
+        None,
+        &PseudoState::default(),
+    );
+    assert_eq!(comp_tablet.width, Dimension::Px(720.0));
+
+    let sheet_desktop = StyleSheet::parse_with_context(css, &ctx_desktop).unwrap();
+    let comp_desktop = CascadeSolver::resolve(
+        "div",
+        &["layout"],
+        None,
+        None,
+        &[&sheet_desktop],
+        None,
+        &PseudoState::default(),
+    );
+    assert_eq!(comp_desktop.width, Dimension::Px(1200.0));
 }
 
