@@ -55,7 +55,15 @@ pub struct VfsPath {
 
 impl VfsPath {
     pub fn new(root: VfsRoot, subpath: impl AsRef<Path>) -> Self {
-        let clean = Self::sanitize_subpath(subpath.as_ref());
+        let sub_ref = subpath.as_ref();
+        let raw_str = sub_ref.to_string_lossy();
+        if crate::driver::is_windows_unc_device_namespace(&raw_str) {
+            return Self {
+                root,
+                subpath: sub_ref.to_path_buf(),
+            };
+        }
+        let clean = Self::sanitize_subpath(sub_ref);
         Self {
             root,
             subpath: clean,
@@ -74,6 +82,14 @@ impl VfsPath {
 
     /// Appends subpath components while neutralizing directory traversal attacks.
     pub fn join(&self, path: impl AsRef<Path>) -> Self {
+        let path_ref = path.as_ref();
+        let raw_str = path_ref.to_string_lossy();
+        if crate::driver::is_windows_unc_device_namespace(&raw_str) {
+            return Self {
+                root: self.root,
+                subpath: self.subpath.join(path_ref),
+            };
+        }
         let joined = self.subpath.join(path);
         let clean = Self::sanitize_subpath(&joined);
         Self {
@@ -81,6 +97,7 @@ impl VfsPath {
             subpath: clean,
         }
     }
+
 
     /// Serializes path into a universal VFS URI string (e.g. `vfs://app_data/settings.json`).
     pub fn to_uri(&self) -> String {

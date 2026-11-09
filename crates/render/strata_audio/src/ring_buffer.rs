@@ -5,12 +5,31 @@ use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+#[repr(align(64))]
+struct CachePaddedAtomicUsize(AtomicUsize);
+
+impl CachePaddedAtomicUsize {
+    #[inline]
+    const fn new(val: usize) -> Self {
+        Self(AtomicUsize::new(val))
+    }
+}
+
+impl std::ops::Deref for CachePaddedAtomicUsize {
+    type Target = AtomicUsize;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// A wait-free SPSC ring buffer for real-time audio thread communication without locks.
 pub struct SpscRingBuffer<T> {
     buffer: Box<[UnsafeCell<MaybeUninit<T>>]>,
     capacity: usize,
-    head: AtomicUsize, // Written by Producer, read by Consumer
-    tail: AtomicUsize, // Written by Consumer, read by Producer
+    head: CachePaddedAtomicUsize, // Written by Producer, read by Consumer
+    tail: CachePaddedAtomicUsize, // Written by Consumer, read by Producer
 }
 
 unsafe impl<T: Send> Sync for SpscRingBuffer<T> {}
@@ -29,10 +48,11 @@ impl<T> SpscRingBuffer<T> {
         Self {
             buffer: buffer.into_boxed_slice(),
             capacity: total_slots,
-            head: AtomicUsize::new(0),
-            tail: AtomicUsize::new(0),
+            head: CachePaddedAtomicUsize::new(0),
+            tail: CachePaddedAtomicUsize::new(0),
         }
     }
+
 
     /// Splits the ring buffer into independent Producer and Consumer handles.
     pub fn split(self) -> (Producer<T>, Consumer<T>) {
@@ -207,4 +227,18 @@ mod tests {
         assert_eq!(rx.pop(), Some(50));
         assert_eq!(rx.pop(), None);
     }
+
+    #[test]
+    fn test_cache_line_padding_prevents_false_sharing() {
+        let rb = SpscRingBuffer::<f32>::new(16);
+        let head_ptr = &rb.head as *const _ as usize;
+        let tail_ptr = &rb.tail as *const _ as usize;
+        let diff = head_ptr.abs_diff(tail_ptr);
+        assert!(
+
+            diff >= 64,
+            "head and tail must be separated by at least 64 bytes to prevent false sharing: diff={diff}"
+        );
+    }
 }
+
