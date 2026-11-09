@@ -22,7 +22,10 @@ pub use font_shader::{
     SlugGlyphBuffer, WGSL_SLUG_FONT_SHADER,
 };
 pub use path::{FillRule, Path, PathBuilder, PathVerb, StrokeStyle};
-pub use sdf::{distance_to_quadratic, is_point_inside_closed_path, solve_cubic_roots};
+pub use sdf::{
+    distance_to_quadratic, is_point_inside_closed_path, is_point_inside_closed_path_rule,
+    solve_cubic_roots,
+};
 pub use shaders::{
     WGSL_ANALYTICAL_PATH_RASTER_SHADER, WGSL_CONCENTRIC_FILLET_CORNER_SHADER,
     WGSL_PATH_COMPUTE_FLATTEN_SHADER,

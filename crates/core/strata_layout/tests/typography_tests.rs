@@ -410,3 +410,16 @@ fn test_complex_script_shaping_arabic_indic_thai() {
     // Reph mark attaches above 'म'
     assert!(dharma_glyphs.iter().any(|g| g.glyph_id == 0x094D && g.is_mark), "Reph mark must attach above base consonant");
 }
+
+#[test]
+fn test_shape_with_font_arabic_complex_joining() {
+    let font_db = font_database();
+    let style = strata_style::types::FontStyle::Normal;
+    let weight = strata_style::types::FontWeight::Normal;
+    if let Some(font) = font_db.query_font("Inter", weight, style) {
+        let shaper = TextShaper::new();
+        let kataba = "كتب";
+        let glyphs = shaper.shape_with_font(kataba, &font, 16.0);
+        assert_eq!(glyphs.len(), 3);
+    }
+}
