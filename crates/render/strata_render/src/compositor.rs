@@ -323,6 +323,43 @@ impl DamageTracker {
         Some(Rect::new(min_x, min_y, max_x - min_x, max_y - min_y))
     }
 
+    /// Hierarchically clusters dirty rects into isolated non-overlapping bounding regions.
+    ///
+    /// Prevents disjoint localized damage (e.g., caret blink at top-left, button ripple at bottom-right)
+    /// from inflating into a catastrophic full-canvas bounding box.
+    pub fn cluster_damage_rects(&self) -> Vec<Rect> {
+        if self.dirty_rects.is_empty() {
+            return Vec::new();
+        }
+
+        let mut clusters: Vec<Rect> = Vec::new();
+        for &r in &self.dirty_rects {
+            let mut merged = false;
+            for cluster in &mut clusters {
+                // If rects intersect or are within a close margin (16px), merge them
+                let expanded = Rect::new(
+                    cluster.x - 16.0,
+                    cluster.y - 16.0,
+                    cluster.width + 32.0,
+                    cluster.height + 32.0,
+                );
+                if expanded.intersect(r).is_some() {
+                    let min_x = cluster.x.min(r.x);
+                    let min_y = cluster.y.min(r.y);
+                    let max_x = cluster.max_x().max(r.max_x());
+                    let max_y = cluster.max_y().max(r.max_y());
+                    *cluster = Rect::new(min_x, min_y, max_x - min_x, max_y - min_y);
+                    merged = true;
+                    break;
+                }
+            }
+            if !merged {
+                clusters.push(r);
+            }
+        }
+        clusters
+    }
+
     pub fn reset(&mut self) {
         self.dirty_rects.clear();
     }

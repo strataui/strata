@@ -1,6 +1,7 @@
 //! Analytical signed distance fields (SDF) and winding numbers for quadratic Béziers.
 
 use crate::curve::{Point2D, QuadraticBezier};
+use crate::path::FillRule;
 
 /// Computes the exact minimum Euclidean distance from query point `p` to quadratic Bézier `curve`.
 pub fn distance_to_quadratic(p: Point2D, curve: &QuadraticBezier) -> f32 {
@@ -102,9 +103,11 @@ pub fn solve_cubic_roots(a: f32, b: f32, c: f32, d: f32) -> Vec<f32> {
     roots
 }
 
-/// Evaluates whether point `p` is inside a closed path composed of quadratic Béziers using winding number.
-pub fn is_point_inside_closed_path(p: Point2D, curves: &[QuadraticBezier]) -> bool {
+/// Evaluates whether point `p` is inside a closed path composed of quadratic Béziers
+/// according to the specified fill rule (NonZero or EvenOdd).
+pub fn is_point_inside_closed_path_rule(p: Point2D, curves: &[QuadraticBezier], rule: FillRule) -> bool {
     let mut winding = 0;
+    let mut ray_crossings = 0;
 
     for curve in curves {
         // Count crossings of a horizontal ray from p towards +X
@@ -137,6 +140,7 @@ pub fn is_point_inside_closed_path(p: Point2D, curves: &[QuadraticBezier]) -> bo
                 if (0.0..=1.0).contains(&t) {
                     let x_intersect = curve.evaluate(t).x;
                     if x_intersect >= p.x {
+                        ray_crossings += 1;
                         if p2.y > p0.y {
                             winding += 1;
                         } else {
@@ -148,5 +152,14 @@ pub fn is_point_inside_closed_path(p: Point2D, curves: &[QuadraticBezier]) -> bo
         }
     }
 
-    winding != 0
+    match rule {
+        FillRule::NonZero => winding != 0,
+        FillRule::EvenOdd => ray_crossings % 2 != 0,
+    }
+}
+
+/// Evaluates whether point `p` is inside a closed path composed of quadratic Béziers using standard NonZero winding number.
+#[inline]
+pub fn is_point_inside_closed_path(p: Point2D, curves: &[QuadraticBezier]) -> bool {
+    is_point_inside_closed_path_rule(p, curves, FillRule::NonZero)
 }

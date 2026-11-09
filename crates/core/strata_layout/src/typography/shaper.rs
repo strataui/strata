@@ -499,6 +499,47 @@ impl TextShaper {
             return Vec::new();
         }
 
+        let metrics = font.font_metrics(font_size);
+
+        // Complex script pass: Contextual Arabic cursive joining & multi-glyph ligatures
+        if text
+            .chars()
+            .any(|c| ('\u{0600}'..='\u{06FF}').contains(&c) || ('\u{0750}'..='\u{077F}').contains(&c))
+        {
+            let mut arabic_glyphs = self.shape_arabic_run(text, &metrics);
+            for g in &mut arabic_glyphs {
+                if let Some(ch) = char::from_u32(g.glyph_id) {
+                    let gid = font.glyph_id(ch);
+                    if gid > 0 {
+                        g.glyph_id = gid as u32;
+                        let adv = font.glyph_advance(gid, font_size);
+                        if adv > 0.0 && !g.is_mark {
+                            g.x_advance = LayoutUnit::from_f32(adv);
+                        }
+                    }
+                }
+            }
+            return arabic_glyphs;
+        }
+
+        // Complex script pass: Indic Universal Shaping Engine (USE) conjuncts & pre-base vowel reordering
+        if text.chars().any(is_indic_char) {
+            let mut indic_glyphs = self.shape_indic_run(text, &metrics);
+            for g in &mut indic_glyphs {
+                if let Some(ch) = char::from_u32(g.glyph_id) {
+                    let gid = font.glyph_id(ch);
+                    if gid > 0 {
+                        g.glyph_id = gid as u32;
+                        let adv = font.glyph_advance(gid, font_size);
+                        if adv > 0.0 && !g.is_mark {
+                            g.x_advance = LayoutUnit::from_f32(adv);
+                        }
+                    }
+                }
+            }
+            return indic_glyphs;
+        }
+
         let transformed_text: std::borrow::Cow<'_, str> = if features.small_caps {
             std::borrow::Cow::Owned(apply_small_caps(text))
         } else {

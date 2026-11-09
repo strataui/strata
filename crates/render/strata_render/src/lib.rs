@@ -78,7 +78,7 @@ pub use kinetic_scroll::{
 };
 pub use math3d::{Mat4, Ray3D, Vec3, Vec4};
 pub use orbit_controls::{OrbitControls, OrbitInteractionMode};
-pub use rasterizer::{sd_rounded_rect, sdf_coverage, FrameBuffer};
+pub use rasterizer::{sd_rounded_rect, sdf_coverage, FrameBuffer, Rasterizer};
 pub use scene3d::{Camera3D, Geometry3D, Light3D, Material3D, Mesh3D, Scene3D, Transform3D};
 pub use shared_target::{render_hybrid_frame, SharedRenderTarget};
 pub use swapchain::{
@@ -106,7 +106,7 @@ pub mod prelude {
     pub use crate::kinetic_scroll::KineticScrollController;
     pub use crate::math3d::{Mat4, Ray3D, Vec3, Vec4};
     pub use crate::orbit_controls::OrbitControls;
-    pub use crate::rasterizer::FrameBuffer;
+    pub use crate::rasterizer::{FrameBuffer, Rasterizer};
     pub use crate::scene3d::*;
     pub use crate::shared_target::SharedRenderTarget;
     pub use crate::shm_compositor::{CompositorTelemetry, ShmFrameSlot, ShmRingBuffer, ZeroCopyCompositor};

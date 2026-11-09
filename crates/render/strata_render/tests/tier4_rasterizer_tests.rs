@@ -328,3 +328,110 @@ fn test_pure_rust_headless_png_export_decoupling() {
     assert_eq!(w, 100);
     assert_eq!(h, 100);
 }
+
+#[test]
+fn test_svg_vector_path_even_odd_vs_nonzero_winding_rule() {
+    let path_data = "M 10 10 L 50 10 L 50 50 L 10 50 Z M 20 20 L 40 20 L 40 40 L 20 40 Z".to_string();
+
+    // 1. NonZero: Interior hole (30, 30) has winding = 2 != 0, so it is filled
+    let mut fb_nonzero = FrameBuffer::new(60, 60);
+    let mut dl_nonzero = DisplayList::new();
+    dl_nonzero.push(DrawCommand::DrawSvgPath {
+        bounds: Rect::new(0.0, 0.0, 60.0, 60.0),
+        path_data: path_data.clone(),
+        stroke_color: None,
+        fill_color: Some(Color::from_f32(0.0, 1.0, 0.0, 1.0)),
+        stroke_width: 0.0,
+        stroke_linecap: StrokeLineCap::Butt,
+        stroke_linejoin: StrokeLineJoin::Miter,
+        stroke_dasharray: Vec::new(),
+        fill_rule: FillRule::NonZero,
+        view_box: (60.0, 60.0),
+    });
+    fb_nonzero.execute_display_list(&dl_nonzero);
+
+    let px_nonzero_hole = fb_nonzero.get_pixel(30, 30);
+    assert!(px_nonzero_hole.g > 200, "NonZero winding rule must fill interior hole with winding=2");
+
+    // 2. EvenOdd: Interior hole (30, 30) has crossings = 2 % 2 == 0, so it is empty (transparent)
+    let mut fb_evenodd = FrameBuffer::new(60, 60);
+    let mut dl_evenodd = DisplayList::new();
+    dl_evenodd.push(DrawCommand::DrawSvgPath {
+        bounds: Rect::new(0.0, 0.0, 60.0, 60.0),
+        path_data,
+        stroke_color: None,
+        fill_color: Some(Color::from_f32(0.0, 1.0, 0.0, 1.0)),
+        stroke_width: 0.0,
+        stroke_linecap: StrokeLineCap::Butt,
+        stroke_linejoin: StrokeLineJoin::Miter,
+        stroke_dasharray: Vec::new(),
+        fill_rule: FillRule::EvenOdd,
+        view_box: (60.0, 60.0),
+    });
+    fb_evenodd.execute_display_list(&dl_evenodd);
+
+    let px_evenodd_ring = fb_evenodd.get_pixel(15, 15);
+    assert!(px_evenodd_ring.g > 200, "Outer ring pixel (15, 15) must be filled under EvenOdd");
+
+    let px_evenodd_hole = fb_evenodd.get_pixel(30, 30);
+    assert_eq!(px_evenodd_hole.a, 0, "Interior hole (30, 30) must remain transparent under EvenOdd fill rule");
+}
+
+#[test]
+fn test_srgb_gamma_compensation_subpixel_alpha() {
+    use strata_render::rasterizer::{srgb_to_linear, linear_to_srgb};
+
+    // Gamma transfer round-trip
+    for v in [0u8, 64, 128, 192, 255] {
+        let lin = srgb_to_linear(v);
+        let srgb = linear_to_srgb(lin);
+        assert_eq!(v, srgb, "Gamma round-trip fidelity failed for byte {}", v);
+    }
+
+    let mut fb = FrameBuffer::new(20, 20);
+    fb.clear(Color::BLACK);
+
+    // Blend white text glyph with 0.5 coverage onto black background
+    fb.blend_glyph_coverage(10, 10, Color::WHITE, 0.5);
+
+    let px = fb.get_pixel(10, 10);
+    // Linear 0.5 converted to sRGB gamma 2.2 is ~186, preventing optical thinning
+    assert!(px.r >= 180 && px.r <= 190, "sRGB gamma compensated red channel expected ~186, got {}", px.r);
+    assert_eq!(px.r, px.g);
+    assert_eq!(px.g, px.b);
+    assert_eq!(px.a, 255);
+}
+
+#[test]
+fn test_dirty_rect_damage_scissoring() {
+    use strata_render::compositor::DamageTracker;
+
+    let mut damage = DamageTracker::new();
+    damage.add_damage(Rect::new(5.0, 5.0, 10.0, 10.0));
+    damage.add_damage(Rect::new(80.0, 80.0, 10.0, 10.0));
+
+    let clusters = damage.cluster_damage_rects();
+    assert_eq!(clusters.len(), 2, "Disjoint dirty regions must not prematurely collapse to full-window bounds");
+
+    let mut fb = FrameBuffer::new(100, 100);
+    fb.clear(Color::BLACK);
+
+    let mut dl = DisplayList::new();
+    dl.push(DrawCommand::DrawRect {
+        bounds: Rect::new(0.0, 0.0, 100.0, 100.0),
+        color: Color::WHITE,
+    });
+
+    fb.rasterize_damaged(&dl, &damage);
+
+    // Damage regions must be white
+    let px_d1 = fb.get_pixel(10, 10);
+    assert_eq!(px_d1, Color::WHITE);
+
+    let px_d2 = fb.get_pixel(85, 85);
+    assert_eq!(px_d2, Color::WHITE);
+
+    // Undamaged center region must remain black
+    let px_center = fb.get_pixel(50, 50);
+    assert_eq!(px_center, Color::BLACK);
+}

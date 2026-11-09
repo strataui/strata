@@ -31,6 +31,27 @@ pub fn sdf_coverage(distance: f32) -> f32 {
     (0.5 - distance).clamp(0.0, 1.0)
 }
 
+/// Standard sRGB gamma exponent for perceptual linearity compensation.
+pub const SRGB_GAMMA: f32 = 2.2;
+
+/// Converts an 8-bit sRGB value [0..255] to linear luminance [0.0..1.0].
+#[inline]
+pub fn srgb_to_linear(v: u8) -> f32 {
+    let s = v as f32 / 255.0;
+    s.powf(SRGB_GAMMA)
+}
+
+/// Converts linear luminance [0.0..1.0] to an 8-bit sRGB value [0..255].
+#[inline]
+pub fn linear_to_srgb(l: f32) -> u8 {
+    let l_clamped = l.clamp(0.0, 1.0);
+    let s = l_clamped.powf(1.0 / SRGB_GAMMA);
+    (s * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
+/// Authentic analytical software rasterizer alias matching FrameBuffer.
+pub type Rasterizer = FrameBuffer;
+
 /// Headless in-memory RGBA pixel canvas for software rasterization and automated testing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrameBuffer {
@@ -136,6 +157,61 @@ impl FrameBuffer {
             self.pixels[idx + 1] = (out_g * 255.0).round() as u8;
             self.pixels[idx + 2] = (out_b * 255.0).round() as u8;
             self.pixels[idx + 3] = (out_a * 255.0).round() as u8;
+        }
+    }
+
+    /// Blends glyph coverage into the framebuffer at (x, y) with non-linear sRGB gamma compensation (gamma = 2.2).
+    ///
+    /// Prevents optical thinning and dark halos when rendering light text on dark backgrounds
+    /// by performing alpha compositing in physically linear luminance space.
+    pub fn blend_glyph_coverage(&mut self, x: usize, y: usize, color: Color, mut coverage: f32) {
+        if x >= self.width || y >= self.height || coverage <= 0.001 {
+            return;
+        }
+
+        if let Some(mask) = self.clip_mask_stack.last() {
+            let mask_val = mask[y * self.width + x];
+            if mask_val == 0 {
+                return;
+            }
+            if mask_val < 255 {
+                coverage *= mask_val as f32 / 255.0;
+            }
+        }
+
+        let src_a = (color.a() * coverage).clamp(0.0, 1.0);
+        if src_a <= 0.001 {
+            return;
+        }
+
+        let idx = (y * self.width + x) * 4;
+        let dst_r_byte = self.pixels[idx];
+        let dst_g_byte = self.pixels[idx + 1];
+        let dst_b_byte = self.pixels[idx + 2];
+        let dst_a = self.pixels[idx + 3] as f32 / 255.0;
+
+        // Convert destination sRGB values to linear luminance
+        let dst_r_lin = srgb_to_linear(dst_r_byte);
+        let dst_g_lin = srgb_to_linear(dst_g_byte);
+        let dst_b_lin = srgb_to_linear(dst_b_byte);
+
+        // Convert source sRGB values to linear luminance
+        let (sr, sg, sb, _) = color.to_rgba8();
+        let src_r_lin = srgb_to_linear(sr);
+        let src_g_lin = srgb_to_linear(sg);
+        let src_b_lin = srgb_to_linear(sb);
+
+        // Porter-Duff Over in linear space
+        let out_a = src_a + dst_a * (1.0 - src_a);
+        if out_a > 1e-5 {
+            let out_r_lin = (src_r_lin * src_a + dst_r_lin * dst_a * (1.0 - src_a)) / out_a;
+            let out_g_lin = (src_g_lin * src_a + dst_g_lin * dst_a * (1.0 - src_a)) / out_a;
+            let out_b_lin = (src_b_lin * src_a + dst_b_lin * dst_a * (1.0 - src_a)) / out_a;
+
+            self.pixels[idx] = linear_to_srgb(out_r_lin);
+            self.pixels[idx + 1] = linear_to_srgb(out_g_lin);
+            self.pixels[idx + 2] = linear_to_srgb(out_b_lin);
+            self.pixels[idx + 3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
         }
     }
 
@@ -302,7 +378,7 @@ impl FrameBuffer {
                                     continue;
                                 }
                             }
-                            self.set_pixel(x, y, color);
+                            self.blend_glyph_coverage(x, y, color, 1.0);
                         }
                     }
                 }
@@ -350,10 +426,7 @@ impl FrameBuffer {
                         let cov = top * (1.0 - fr) + bot * fr;
 
                         if cov > 0.01 {
-                            let mut blended = color;
-                            let out_a = blended.a() * cov;
-                            blended = Color::from_f32(blended.r(), blended.g(), blended.b(), out_a);
-                            self.set_pixel(x, y, blended);
+                            self.blend_glyph_coverage(x, y, color, cov);
                         }
                     }
                 }
@@ -671,7 +744,7 @@ impl FrameBuffer {
         stroke_linecap: strata_layout::StrokeLineCap,
         stroke_linejoin: strata_layout::StrokeLineJoin,
         _stroke_dasharray: &[f32],
-        _fill_rule: strata_layout::FillRule,
+        fill_rule: strata_layout::FillRule,
         view_box: (f32, f32),
         clip: Option<Rect>,
     ) {
@@ -692,9 +765,14 @@ impl FrameBuffer {
             )
         }).collect();
 
+        let gpu_fill_rule = match fill_rule {
+            strata_layout::FillRule::NonZero => strata_gpu_path::FillRule::NonZero,
+            strata_layout::FillRule::EvenOdd => strata_gpu_path::FillRule::EvenOdd,
+        };
+
         if let Some(fc) = fill_color {
             if fc.a() > 0.001 {
-                self.rasterize_curves_fill(&transformed_quads, bounds, fc, clip);
+                self.rasterize_curves_fill(&transformed_quads, bounds, fc, gpu_fill_rule, clip);
             }
         }
 
@@ -723,7 +801,7 @@ impl FrameBuffer {
                     bounds.width + stroke_width * 2.0,
                     bounds.height + stroke_width * 2.0,
                 );
-                self.rasterize_curves_fill(&stroked_quads, inflated, sc, clip);
+                self.rasterize_curves_fill(&stroked_quads, inflated, sc, strata_gpu_path::FillRule::NonZero, clip);
             }
         }
     }
@@ -766,9 +844,10 @@ impl FrameBuffer {
             strata_gpu_path::QuadraticBezier::new(p0, p1, p2)
         }).collect();
 
+        let path_fill_rule = path.fill_rule.unwrap_or(strata_gpu_path::FillRule::NonZero);
         if let Some(fc) = fill_color {
             if fc.a() > 0.001 {
-                self.rasterize_curves_fill(&transformed_quads, bounds, fc, clip);
+                self.rasterize_curves_fill(&transformed_quads, bounds, fc, path_fill_rule, clip);
             }
         }
 
@@ -782,7 +861,7 @@ impl FrameBuffer {
                     bounds.width + opts.width * 2.0,
                     bounds.height + opts.width * 2.0,
                 );
-                self.rasterize_curves_fill(&stroked_quads, inflated, sc, clip);
+                self.rasterize_curves_fill(&stroked_quads, inflated, sc, strata_gpu_path::FillRule::NonZero, clip);
             }
         }
     }
@@ -792,6 +871,7 @@ impl FrameBuffer {
         curves: &[strata_gpu_path::QuadraticBezier],
         bounds: Rect,
         color: Color,
+        fill_rule: strata_gpu_path::FillRule,
         clip: Option<Rect>,
     ) {
         if curves.is_empty() || color.a() <= 0.001 {
@@ -827,7 +907,7 @@ impl FrameBuffer {
                 ];
                 for (ox, oy) in sub_offsets {
                     let pt = strata_gpu_path::Point2D::new(px + ox, py + oy);
-                    if strata_gpu_path::is_point_inside_closed_path(pt, curves) {
+                    if strata_gpu_path::is_point_inside_closed_path_rule(pt, curves, fill_rule) {
                         hits += 1;
                     }
                 }
@@ -969,6 +1049,18 @@ impl FrameBuffer {
     pub fn execute_display_list(&mut self, list: &DisplayList) {
         let full_bounds = Rect::new(0.0, 0.0, self.width as f32, self.height as f32);
         self.execute_display_list_damaged(list, full_bounds);
+    }
+
+    /// Executes a display list scissored strictly to the clustered damage regions tracked by the DamageTracker.
+    pub fn rasterize_damaged(&mut self, list: &DisplayList, damage: &crate::compositor::DamageTracker) {
+        let clusters = damage.cluster_damage_rects();
+        if clusters.is_empty() {
+            return;
+        }
+
+        for damage_rect in clusters {
+            self.execute_display_list_damaged(list, damage_rect);
+        }
     }
 
     /// Executes drawing commands strictly scissored to the specified damage rectangle.
