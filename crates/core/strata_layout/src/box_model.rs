@@ -686,6 +686,7 @@ pub fn solve_block_children_with_exclusions_guarded(
     let border = node.style.border_width;
 
     if guard.is_exhausted() {
+        crate::tree::record_layout_overflow(guard.current_depth(), guard.max_depth());
         return padding.top + border.top + padding.bottom + border.bottom;
     }
 
@@ -1239,6 +1240,7 @@ pub fn solve_block_with_exclusions_guarded(
     let margin = node.style.margin;
 
     if guard.is_exhausted() {
+        crate::tree::record_layout_overflow(guard.current_depth(), guard.max_depth());
         let border_box_width = match resolve_dimension_with_node(node.style.width, available_width, node) {
             Some(w) => clamp_dimension_with_node(
                 w,

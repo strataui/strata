@@ -423,3 +423,42 @@ fn test_shape_with_font_arabic_complex_joining() {
         assert_eq!(glyphs.len(), 3);
     }
 }
+
+#[test]
+fn test_parallel_multi_paragraph_text_shaping() {
+    use strata_layout::typography::{InlineFormattingContext, InlineLayoutOptions};
+
+    let paragraph_template = "The quick brown fox jumps over the lazy dog. Continuous typesetting of technical text requires precise OpenType font tables, subpixel metric snapping, and high-performance multi-threaded paragraph splitting. ";
+    // Repeat to build a paragraph of ~1500 bytes
+    let single_para = paragraph_template.repeat(8);
+    // Create 8 paragraphs separated by double newline (> 12,000 bytes)
+    let full_document = [single_para.as_str(); 8].join("\n\n");
+    assert!(full_document.len() > 8192);
+
+
+    let ifc = InlineFormattingContext::new();
+    let options = InlineLayoutOptions {
+        font_size: 16.0,
+        line_height: Some(24.0),
+        max_width: Some(500.0),
+        ..Default::default()
+    };
+
+    let result = ifc.layout_text(&full_document, &options);
+
+    assert!(result.line_count > 50, "Expected > 50 lines, got {}", result.line_count);
+    assert!(result.total_width <= 510.0, "Total width must roughly match max_width constraint");
+    assert!(result.total_height > 1000.0, "Total height must encompass all paragraph lines");
+
+
+
+    // Verify monotonic Y progression across line boxes
+    let mut prev_y = -1.0f32;
+    for line in &result.lines {
+        assert!(line.bounds.y >= prev_y, "Line boxes must have monotonic Y coordinates");
+        assert!(line.bounds.width >= 0.0);
+        assert_eq!(line.bounds.height, 24.0);
+        prev_y = line.bounds.y;
+    }
+}
+

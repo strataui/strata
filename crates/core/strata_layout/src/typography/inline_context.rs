@@ -143,12 +143,35 @@ fn metrics_for_style(
         }
     }
 
+
+    let weight = strata_style::types::FontWeight::Normal;
+    let style = strata_style::types::FontStyle::Normal;
+    let effective_family = if is_monospace && font_family == strata_primitives::AtomId::NULL {
+        strata_primitives::AtomId::FONT_MONO
+    } else {
+        font_family
+    };
+
+    if let Some(font) = crate::typography::opentype::lookup_font_for_style(effective_family, weight, style) {
+        let metrics = font.font_metrics(font_size);
+        FONT_METRICS_CACHE.with(|cache| {
+            let mut map = cache.borrow_mut();
+            if map.len() >= 4096 {
+                map.clear();
+            }
+            map.insert(cache_key, metrics);
+        });
+        return metrics;
+    }
+
     if is_monospace {
         FontMetrics::default_mono(font_size)
     } else {
         FontMetrics::default_sans(font_size)
     }
+
 }
+
 
 /// CSS vertical-align property values for inline formatting context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1111,6 +1134,12 @@ impl InlineFormattingContext {
 
     /// Formats input text into positioned line boxes, honoring metrics, BiDi, and line breaks.
     pub fn layout_text(&self, text: &str, options: &InlineLayoutOptions) -> InlineLayoutResult {
+        if options.exclusion_space.is_none() && text.len() >= 8192 && text.contains("\n\n") {
+            let paragraphs: Vec<&str> = text.split("\n\n").collect();
+            if paragraphs.len() >= 2 {
+                return self.layout_text_parallel(&paragraphs, options);
+            }
+        }
         let style = InlineTextStyle {
             font_size: options.font_size,
             vertical_align: options.vertical_align,
@@ -1124,4 +1153,84 @@ impl InlineFormattingContext {
         };
         self.layout_inline_stream(&[item], options)
     }
+
+    fn layout_text_parallel(
+        &self,
+        paragraphs: &[&str],
+        options: &InlineLayoutOptions,
+    ) -> InlineLayoutResult {
+        let strut_family = strata_primitives::AtomId::FONT_SANS;
+        let strut_metrics =
+            metrics_for_style(strut_family, options.font_size, options.is_monospace);
+        let strut = CssStrut::new(&strut_metrics, options.line_height);
+        let empty_line_h = strut.line_height.to_f32();
+
+        // Process paragraphs in parallel using std::thread::scope
+        let results: Vec<InlineLayoutResult> = std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(paragraphs.len());
+            for &para in paragraphs {
+                let opts = *options;
+                let h = s.spawn(move || {
+                    let ifc = InlineFormattingContext::new();
+                    let style = InlineTextStyle {
+                        font_size: opts.font_size,
+                        vertical_align: opts.vertical_align,
+                        line_height: opts.line_height,
+                        is_monospace: opts.is_monospace,
+                        ..Default::default()
+                    };
+                    let item = InlineItem::Text {
+                        text: para.to_string(),
+                        style,
+                    };
+                    ifc.layout_inline_stream(&[item], &opts)
+                });
+                handles.push(h);
+            }
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        // Merge results sequentially preserving correct Y coordinates and line boxes
+        let mut merged_lines = Vec::new();
+        let mut current_y = 0.0f32;
+        let mut max_width = 0.0f32;
+
+        for (i, mut res) in results.into_iter().enumerate() {
+            max_width = max_width.max(res.total_width);
+            for line in &mut res.lines {
+                line.bounds.y += current_y;
+                for frag in &mut line.text_fragments {
+                    frag.bounds.y += current_y;
+                    frag.baseline_y += current_y;
+                }
+                for frag in &mut line.atomic_fragments {
+                    frag.bounds.y += current_y;
+                }
+            }
+            merged_lines.extend(res.lines);
+            current_y += res.total_height;
+
+            if i + 1 < paragraphs.len() {
+                merged_lines.push(LineBox {
+                    bounds: Rect::from_xywh(0.0, current_y, 0.0, empty_line_h),
+                    baseline: strut_metrics.ascent.to_f32(),
+                    metrics: FontHeight::new(strut_metrics.ascent, strut_metrics.descent),
+                    glyphs: Vec::new(),
+                    text_fragments: Vec::new(),
+                    atomic_fragments: Vec::new(),
+                    is_hard_break: true,
+                });
+                current_y += empty_line_h;
+            }
+        }
+
+        let total_lines = merged_lines.len();
+        InlineLayoutResult {
+            lines: merged_lines,
+            total_width: max_width,
+            total_height: current_y,
+            line_count: total_lines,
+        }
+    }
 }
+

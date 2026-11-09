@@ -171,3 +171,43 @@ fn test_custom_depth_guard_exhaustion() {
 
     assert!(g3.enter().is_none(), "Depth 3 must exhaust guard with max_depth 3");
 }
+
+#[test]
+fn test_layout_overflow_callback_and_diagnostic_reporting() {
+    use strata_layout::tree::{
+        clear_layout_overflow, last_layout_overflow, set_on_layout_overflow, LayoutDepthGuard,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    clear_layout_overflow();
+    assert_eq!(last_layout_overflow(), None);
+
+    let callback_fired = Arc::new(AtomicUsize::new(0));
+    let cb_clone = callback_fired.clone();
+    set_on_layout_overflow(Some(move |_depth, _max_depth| {
+        cb_clone.fetch_add(1, Ordering::SeqCst);
+    }));
+
+    let guard = LayoutDepthGuard::with_max_depth(3);
+    // Force a guard exhaustion
+    let mut g = guard;
+    for _ in 0..3 {
+        g = g.enter().unwrap();
+    }
+    assert!(g.is_exhausted());
+
+    let mut leaf = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        ..ComputedStyle::default()
+    });
+    leaf.compute_layout_guarded(100.0, 100.0, None, 0.0, g);
+
+    assert_eq!(last_layout_overflow(), Some((3, 3)));
+    assert_eq!(callback_fired.load(Ordering::SeqCst), 1);
+
+    clear_layout_overflow();
+    assert_eq!(last_layout_overflow(), None);
+    set_on_layout_overflow::<fn(usize, usize)>(None);
+}
+

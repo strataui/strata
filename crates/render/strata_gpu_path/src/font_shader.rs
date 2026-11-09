@@ -127,9 +127,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let start = in.curve_range.x;
     let count = in.curve_range.y;
+    let total_curves = arrayLength(&glyph_curves);
 
     for (var i = 0u; i < count; i = i + 1u) {
-        let curve = glyph_curves[start + i];
+        let curve_idx = start + i;
+        if (curve_idx >= total_curves) {
+            break;
+        }
+        let curve = glyph_curves[curve_idx];
+
         let p0 = curve.p0;
         let p1 = curve.p1;
         let p2 = curve.p2;
@@ -230,11 +236,29 @@ impl GpuGlyphCurve {
     }
 }
 
+/// Maximum number of quadratic Bézier curve segments permissible in a single GPU draw batch.
+pub const MAX_GLYPH_CURVES: usize = 1_048_576;
+/// Maximum number of glyph instances permissible in a single GPU draw batch.
+pub const MAX_GLYPH_INSTANCES: usize = 65_536;
+
 /// VRAM-ready batch buffer packing analytical glyph instances and curves.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct SlugGlyphBuffer {
     pub instances: Vec<GpuGlyphInstance>,
     pub curves: Vec<GpuGlyphCurve>,
+    current_fence: std::sync::atomic::AtomicU64,
+}
+
+impl Clone for SlugGlyphBuffer {
+    fn clone(&self) -> Self {
+        Self {
+            instances: self.instances.clone(),
+            curves: self.curves.clone(),
+            current_fence: std::sync::atomic::AtomicU64::new(
+                self.current_fence.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+        }
+    }
 }
 
 impl SlugGlyphBuffer {
@@ -249,14 +273,30 @@ impl SlugGlyphBuffer {
         self.curves.clear();
     }
 
-    /// Appends an analytical glyph to the draw batch.
+    /// Advances and returns the hardware synchronization fence.
+    pub fn sync_barrier(&self) -> u64 {
+        self.current_fence.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+    }
+
+    /// Verifies whether the hardware fence has been signaled.
+    pub fn is_fence_synchronized(&self, fence: u64) -> bool {
+        self.current_fence.load(std::sync::atomic::Ordering::SeqCst) >= fence
+    }
+
+    /// Appends an analytical glyph to the draw batch with buffer bounds validation.
     pub fn push_glyph(
         &mut self,
         glyph: &AnalyticGlyph,
         screen_bounds: Rect2D,
         color: [f32; 4],
         clip_rect: Rect2D,
-    ) {
+    ) -> bool {
+        if self.instances.len() >= MAX_GLYPH_INSTANCES
+            || self.curves.len() + glyph.curves.len() > MAX_GLYPH_CURVES
+        {
+            return false;
+        }
+
         let start_index = self.curves.len() as u32;
         let count = glyph.curves.len() as u32;
 
@@ -288,7 +328,9 @@ impl SlugGlyphBuffer {
         };
 
         self.instances.push(instance);
+        true
     }
+
 
     /// Returns byte slice of instance buffer for direct GPU upload.
     pub fn instances_as_bytes(&self) -> &[u8] {
