@@ -97,9 +97,10 @@ impl LayoutCacheEntry {
 }
 
 /// Maximum allowable call-stack recursion depth for layout tree formatting.
-/// Bounded to 1024 frames to guarantee that total call-stack consumption stays
-/// safely bounded while supporting deep enterprise DOM trees up to 1,000 levels.
-pub const MAX_LAYOUT_DEPTH: usize = 1024;
+/// Bounded to 512 frames to guarantee that total call-stack consumption stays
+/// safely bounded within default OS and test-runner stack budgets (2 MB) across all
+/// platforms and unoptimized debug builds while supporting deep enterprise DOM trees.
+pub const MAX_LAYOUT_DEPTH: usize = 512;
 
 /// Lightweight Copy-context passed through layout formatting contexts to track recursion budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +175,8 @@ pub struct LayoutNode {
     pub last_child_layout_content: Option<(f32, f32)>,
     /// Table border grid matrix for collapsed border rendering (CSS 2.1 §17.6.2).
     pub table_grid: Option<crate::table::TableBorderGrid>,
+    /// Unique 64-bit entity identifier associating this layout node with its blueprint element.
+    pub entity_id: strata_primitives::EntityId,
 }
 
 impl LayoutNode {
@@ -192,6 +195,7 @@ impl LayoutNode {
             layout_cache: LayoutCacheEntry::invalid(),
             last_child_layout_content: None,
             table_grid: None,
+            entity_id: strata_primitives::EntityId::NONE,
         }
     }
 
@@ -210,6 +214,7 @@ impl LayoutNode {
             layout_cache: LayoutCacheEntry::invalid(),
             last_child_layout_content: None,
             table_grid: None,
+            entity_id: strata_primitives::EntityId::NONE,
         }
     }
 
@@ -228,6 +233,7 @@ impl LayoutNode {
             layout_cache: LayoutCacheEntry::invalid(),
             last_child_layout_content: None,
             table_grid: None,
+            entity_id: strata_primitives::EntityId::NONE,
         }
     }
 
@@ -246,6 +252,7 @@ impl LayoutNode {
             layout_cache: LayoutCacheEntry::invalid(),
             last_child_layout_content: None,
             table_grid: None,
+            entity_id: strata_primitives::EntityId::NONE,
         }
     }
 
@@ -274,6 +281,7 @@ impl LayoutNode {
             layout_cache: LayoutCacheEntry::invalid(),
             last_child_layout_content: None,
             table_grid: None,
+            entity_id: strata_primitives::EntityId::NONE,
         }
     }
 
@@ -293,6 +301,7 @@ impl LayoutNode {
             layout_cache: LayoutCacheEntry::invalid(),
             last_child_layout_content: None,
             table_grid: None,
+            entity_id: strata_primitives::EntityId::NONE,
         }
     }
 
@@ -311,7 +320,54 @@ impl LayoutNode {
             layout_cache: LayoutCacheEntry::invalid(),
             last_child_layout_content: None,
             table_grid: None,
+            entity_id: strata_primitives::EntityId::NONE,
         }
+    }
+
+    /// Sets the EntityId on this layout node.
+    pub fn with_entity_id(mut self, entity_id: strata_primitives::EntityId) -> Self {
+        self.entity_id = entity_id;
+        self
+    }
+
+    /// Mutably assigns the EntityId on this layout node.
+    pub fn set_entity_id(&mut self, entity_id: strata_primitives::EntityId) {
+        self.entity_id = entity_id;
+    }
+
+    /// Recursively locates a layout node by its EntityId.
+    pub fn find_by_entity_id(&self, target_id: strata_primitives::EntityId) -> Option<&LayoutNode> {
+        if !target_id.is_valid() {
+            return None;
+        }
+        if self.entity_id == target_id {
+            return Some(self);
+        }
+        for child in &self.children {
+            if let Some(found) = child.find_by_entity_id(target_id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Recursively locates a mutable layout node by its EntityId.
+    pub fn find_by_entity_id_mut(
+        &mut self,
+        target_id: strata_primitives::EntityId,
+    ) -> Option<&mut LayoutNode> {
+        if !target_id.is_valid() {
+            return None;
+        }
+        if self.entity_id == target_id {
+            return Some(self);
+        }
+        for child in &mut self.children {
+            if let Some(found) = child.find_by_entity_id_mut(target_id) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     /// Appends a child layout node.
@@ -325,27 +381,30 @@ impl LayoutNode {
             return;
         }
 
-        self.geometry.translate(dx, dy);
-        self.layout_cache.origin_x += dx;
-        self.layout_cache.origin_y += dy;
-        for line in &mut self.line_boxes {
-            line.bounds.x += dx;
-            line.bounds.y += dy;
-            for frag in &mut line.text_fragments {
-                frag.bounds.x += dx;
-                frag.bounds.y += dy;
-                frag.baseline_y += dy;
+        let mut stack: Vec<&mut LayoutNode> = vec![self];
+        while let Some(node) = stack.pop() {
+            node.geometry.translate(dx, dy);
+            node.layout_cache.origin_x += dx;
+            node.layout_cache.origin_y += dy;
+            for line in &mut node.line_boxes {
+                line.bounds.x += dx;
+                line.bounds.y += dy;
+                for frag in &mut line.text_fragments {
+                    frag.bounds.x += dx;
+                    frag.bounds.y += dy;
+                    frag.baseline_y += dy;
+                }
+                for atomic in &mut line.atomic_fragments {
+                    atomic.bounds.x += dx;
+                    atomic.bounds.y += dy;
+                }
             }
-            for atomic in &mut line.atomic_fragments {
-                atomic.bounds.x += dx;
-                atomic.bounds.y += dy;
+            if let Some(ref mut grid) = node.table_grid {
+                grid.translate(dx, dy);
             }
-        }
-        if let Some(ref mut grid) = self.table_grid {
-            grid.translate(dx, dy);
-        }
-        for child in &mut self.children {
-            child.translate(dx, dy);
+            for child in &mut node.children {
+                stack.push(child);
+            }
         }
     }
 
@@ -501,6 +560,18 @@ impl LayoutNode {
     ) {
         let _guard = crate::prof::LayoutGuard::new();
         crate::prof::observe_width(self.children.len());
+
+        let available_width = if available_width.is_finite() && available_width >= 0.0 {
+            available_width.min(1e7)
+        } else {
+            0.0
+        };
+        let available_height = if available_height.is_finite() && available_height >= 0.0 {
+            available_height.min(1e7)
+        } else {
+            0.0
+        };
+
         if self.style.display == Display::None {
             self.geometry = LayoutGeometry::default();
             self.layout_cache.is_valid = false;
@@ -512,7 +583,7 @@ impl LayoutNode {
             let border = self.style.border_width;
             let margin = self.style.margin;
 
-            let w = crate::box_model::resolve_dimension(self.style.width, available_width)
+            let w = crate::box_model::resolve_dimension_with_node(self.style.width, available_width, self)
                 .unwrap_or(available_width)
                 .max(0.0);
             let h = crate::box_model::resolve_dimension(self.style.height, available_height)
@@ -626,8 +697,12 @@ impl LayoutNode {
         // Resolve relative and out-of-flow absolute/fixed positioned children
         crate::positioning::solve_positioning_guarded(self, available_width, available_height, guard);
 
-        // Subpixel snapping
+        // Subpixel snapping and geometry sanitization
         self.geometry.snap_to_pixel();
+        self.geometry.sanitize();
+
+        // Update scrollable overflow metrics
+        self.update_scroll_metrics();
 
         if !self.children.is_empty() || !self.inline_items.is_empty() || self.text.is_some() {
             self.last_child_layout_content = Some((
@@ -650,11 +725,14 @@ impl LayoutNode {
         }
     }
 
-    /// Invalidates layout cache on this node and all descendants.
+    /// Invalidates layout cache on this node and all descendants using an iterative heap stack.
     pub fn invalidate_cache(&mut self) {
-        self.layout_cache.is_valid = false;
-        for child in &mut self.children {
-            child.invalidate_cache();
+        let mut stack: Vec<&mut LayoutNode> = vec![self];
+        while let Some(node) = stack.pop() {
+            node.layout_cache.is_valid = false;
+            for child in &mut node.children {
+                stack.push(child);
+            }
         }
     }
 
@@ -787,5 +865,113 @@ impl LayoutNode {
 
         curr.invalidate_cache();
         true
+    }
+
+    /// Recursively calculates the index path to the layout node with matching EntityId.
+    pub fn find_path_by_entity_id(&self, target_id: strata_primitives::EntityId) -> Option<Vec<usize>> {
+        if !target_id.is_valid() {
+            return None;
+        }
+        let mut path = Vec::new();
+        if self.find_path_by_entity_id_internal(target_id, &mut path) {
+            Some(path)
+        } else {
+            None
+        }
+    }
+
+    fn find_path_by_entity_id_internal(
+        &self,
+        target_id: strata_primitives::EntityId,
+        path: &mut Vec<usize>,
+    ) -> bool {
+        if self.entity_id == target_id {
+            return true;
+        }
+        for (i, child) in self.children.iter().enumerate() {
+            path.push(i);
+            if child.find_path_by_entity_id_internal(target_id, path) {
+                return true;
+            }
+            path.pop();
+        }
+        false
+    }
+
+    /// Invalidates layout cache on self and all ancestors leading down to `path`.
+    pub fn invalidate_ancestors(&mut self, path: &[usize]) {
+        self.layout_cache.is_valid = false;
+        let mut curr = self;
+        for &idx in path {
+            if idx >= curr.children.len() {
+                break;
+            }
+            curr = &mut curr.children[idx];
+            curr.layout_cache.is_valid = false;
+        }
+    }
+
+    /// Evaluates child geometry to compute `scroll_bounds` and `has_scroll` for this container.
+    pub fn update_scroll_metrics(&mut self) {
+        let origin_x = self.geometry.padding_box.x;
+        let origin_y = self.geometry.padding_box.y;
+        let mut max_extent_x = self.geometry.content_box.width;
+        let mut max_extent_y = self.geometry.content_box.height;
+
+        for child in &self.children {
+            if child.style.display == strata_style::types::Display::None
+                || child.style.position == strata_style::types::Position::Fixed
+            {
+                continue;
+            }
+            let child_end_x = child.geometry.border_box.max_x() - origin_x;
+            let child_end_y = child.geometry.border_box.max_y() - origin_y;
+            if child_end_x.is_finite() && child_end_x > max_extent_x {
+                max_extent_x = child_end_x;
+            }
+            if child_end_y.is_finite() && child_end_y > max_extent_y {
+                max_extent_y = child_end_y;
+            }
+        }
+
+        for line in &self.line_boxes {
+            let line_end_x = line.bounds.max_x() - origin_x;
+            let line_end_y = line.bounds.max_y() - origin_y;
+            if line_end_x.is_finite() && line_end_x > max_extent_x {
+                max_extent_x = line_end_x;
+            }
+            if line_end_y.is_finite() && line_end_y > max_extent_y {
+                max_extent_y = line_end_y;
+            }
+        }
+
+        self.geometry.scroll_bounds = crate::geometry::Size::new(max_extent_x, max_extent_y);
+
+        let has_scroll_x = match self.style.overflow_x {
+            strata_style::types::Overflow::Scroll => true,
+            strata_style::types::Overflow::Auto => max_extent_x > self.geometry.padding_box.width,
+            _ => false,
+        };
+        let has_scroll_y = match self.style.overflow_y {
+            strata_style::types::Overflow::Scroll => true,
+            strata_style::types::Overflow::Auto => max_extent_y > self.geometry.padding_box.height,
+            _ => false,
+        };
+        self.geometry.has_scroll = (has_scroll_x, has_scroll_y);
+        self.geometry.scroll_offset = self.geometry.clamp_scroll_offset(self.geometry.scroll_offset);
+    }
+}
+
+impl Drop for LayoutNode {
+    fn drop(&mut self) {
+        // Drain descendants iteratively onto a heap stack to prevent recursion stack overflow
+        // during deallocation of deeply nested trees (e.g. 10,000+ levels).
+        let mut stack = std::mem::take(&mut self.children);
+        while let Some(mut node) = stack.pop() {
+            if !node.children.is_empty() {
+                let grandchildren = std::mem::take(&mut node.children);
+                stack.extend(grandchildren);
+            }
+        }
     }
 }

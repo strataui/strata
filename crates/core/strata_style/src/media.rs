@@ -42,6 +42,18 @@ pub enum MediaFeature {
     MaxWidth(f32),
     MinHeight(f32),
     MaxHeight(f32),
+    WidthRange {
+        min: Option<f32>,
+        min_inclusive: bool,
+        max: Option<f32>,
+        max_inclusive: bool,
+    },
+    HeightRange {
+        min: Option<f32>,
+        min_inclusive: bool,
+        max: Option<f32>,
+        max_inclusive: bool,
+    },
     PrefersColorScheme(ColorScheme),
     Orientation(Orientation),
     HorizontalViewportSegments(u32),
@@ -61,6 +73,44 @@ impl MediaFeature {
             MediaFeature::MaxWidth(max_w) => ctx.viewport_width <= *max_w,
             MediaFeature::MinHeight(min_h) => ctx.viewport_height >= *min_h,
             MediaFeature::MaxHeight(max_h) => ctx.viewport_height <= *max_h,
+            MediaFeature::WidthRange {
+                min,
+                min_inclusive,
+                max,
+                max_inclusive,
+            } => {
+                let w = ctx.viewport_width;
+                let min_ok = match min {
+                    Some(m) if *min_inclusive => w >= *m,
+                    Some(m) => w > *m,
+                    None => true,
+                };
+                let max_ok = match max {
+                    Some(m) if *max_inclusive => w <= *m,
+                    Some(m) => w < *m,
+                    None => true,
+                };
+                min_ok && max_ok
+            }
+            MediaFeature::HeightRange {
+                min,
+                min_inclusive,
+                max,
+                max_inclusive,
+            } => {
+                let h = ctx.viewport_height;
+                let min_ok = match min {
+                    Some(m) if *min_inclusive => h >= *m,
+                    Some(m) => h > *m,
+                    None => true,
+                };
+                let max_ok = match max {
+                    Some(m) if *max_inclusive => h <= *m,
+                    Some(m) => h < *m,
+                    None => true,
+                };
+                min_ok && max_ok
+            }
             MediaFeature::PrefersColorScheme(scheme) => match scheme {
                 ColorScheme::Dark => ctx.is_dark,
                 ColorScheme::Light => !ctx.is_dark,
@@ -276,7 +326,142 @@ impl MediaContext {
     }
 }
 
+fn parse_range_feature(input: &str) -> Result<MediaFeature, String> {
+    let lower = input.to_ascii_lowercase();
+    let is_width = lower.contains("width");
+    let is_height = lower.contains("height");
+    if !is_width && !is_height {
+        return Err(format!("Range query only supported for width and height: '{}'", input));
+    }
+
+    // Tokenize into operands and operators
+    let mut tokens: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c.is_whitespace() {
+            if !cur.is_empty() {
+                tokens.push(cur.clone());
+                cur.clear();
+            }
+            i += 1;
+            continue;
+        }
+        if c == '<' || c == '>' || c == '=' {
+            if !cur.is_empty() {
+                tokens.push(cur.clone());
+                cur.clear();
+            }
+            let mut op = String::new();
+            op.push(c);
+            if i + 1 < chars.len() && chars[i + 1] == '=' {
+                op.push('=');
+                i += 1;
+            }
+            tokens.push(op);
+            i += 1;
+            continue;
+        }
+        cur.push(c);
+        i += 1;
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+
+    // Expected patterns:
+    // 1. [val, op1, prop, op2, val2] (e.g. 768px <= width <= 1200px)
+    // 2. [prop, op, val] (e.g. width >= 768px)
+    // 3. [val, op, prop] (e.g. 768px <= width)
+    if tokens.len() == 5 {
+        let val1 = parse_px_dimension(&tokens[0])?;
+        let op1 = &tokens[1];
+        let prop = tokens[2].to_ascii_lowercase();
+        let op2 = &tokens[3];
+        let val2 = parse_px_dimension(&tokens[4])?;
+
+        if prop != "width" && prop != "height" {
+            return Err(format!("Expected width or height in range query, got '{}'", prop));
+        }
+
+        let (min, min_inclusive) = match op1.as_str() {
+            "<=" => (Some(val1), true),
+            "<" => (Some(val1), false),
+            ">=" => (Some(val2), true),
+            ">" => (Some(val2), false),
+            _ => return Err(format!("Unsupported operator '{}' in range query", op1)),
+        };
+
+        let (max, max_inclusive) = match op2.as_str() {
+            "<=" => (Some(val2), true),
+            "<" => (Some(val2), false),
+            ">=" => (Some(val1), true),
+            ">" => (Some(val1), false),
+            _ => return Err(format!("Unsupported operator '{}' in range query", op2)),
+        };
+
+        if prop == "width" {
+            Ok(MediaFeature::WidthRange { min, min_inclusive, max, max_inclusive })
+        } else {
+            Ok(MediaFeature::HeightRange { min, min_inclusive, max, max_inclusive })
+        }
+    } else if tokens.len() == 3 {
+        let t0_lower = tokens[0].to_ascii_lowercase();
+        let t2_lower = tokens[2].to_ascii_lowercase();
+
+        if t0_lower == "width" || t0_lower == "height" {
+            let prop = t0_lower;
+            let op = &tokens[1];
+            let val = parse_px_dimension(&tokens[2])?;
+
+            let (min, min_inclusive, max, max_inclusive) = match op.as_str() {
+                ">=" => (Some(val), true, None, false),
+                ">" => (Some(val), false, None, false),
+                "<=" => (None, false, Some(val), true),
+                "<" => (None, false, Some(val), false),
+                "=" => (Some(val), true, Some(val), true),
+                _ => return Err(format!("Unsupported operator '{}' in range query", op)),
+            };
+
+            if prop == "width" {
+                Ok(MediaFeature::WidthRange { min, min_inclusive, max, max_inclusive })
+            } else {
+                Ok(MediaFeature::HeightRange { min, min_inclusive, max, max_inclusive })
+            }
+        } else if t2_lower == "width" || t2_lower == "height" {
+            let val = parse_px_dimension(&tokens[0])?;
+            let op = &tokens[1];
+            let prop = t2_lower;
+
+            let (min, min_inclusive, max, max_inclusive) = match op.as_str() {
+                "<=" => (Some(val), true, None, false),
+                "<" => (Some(val), false, None, false),
+                ">=" => (None, false, Some(val), true),
+                ">" => (None, false, Some(val), false),
+                "=" => (Some(val), true, Some(val), true),
+                _ => return Err(format!("Unsupported operator '{}' in range query", op)),
+            };
+
+            if prop == "width" {
+                Ok(MediaFeature::WidthRange { min, min_inclusive, max, max_inclusive })
+            } else {
+                Ok(MediaFeature::HeightRange { min, min_inclusive, max, max_inclusive })
+            }
+        } else {
+            Err(format!("Neither side of comparison is width/height in '{}'", input))
+        }
+    } else {
+        Err(format!("Invalid range media query syntax: '{}'", input))
+    }
+}
+
 fn parse_feature(input: &str) -> Result<MediaFeature, String> {
+    if input.contains('<') || input.contains('>') {
+        return parse_range_feature(input);
+    }
+
     let (prop, val) = match input.split_once(':') {
         Some((p, v)) => (p.trim().to_ascii_lowercase(), v.trim()),
         None => return Err(format!("Invalid media feature without colon: '{}'", input)),

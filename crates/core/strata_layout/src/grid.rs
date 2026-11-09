@@ -1,9 +1,15 @@
 //! W3C CSS Grid Layout Level 2 Solver.
 
-use crate::box_model::{clamp_dimension, resolve_dimension};
+use crate::box_model::{
+    clamp_dimension, clamp_dimension_with_node, resolve_dimension, resolve_dimension_with_node,
+};
 use crate::geometry::{LayoutGeometry, Rect};
 use crate::tree::LayoutNode;
 use strata_style::types::{Display, GridTrack, GridTrackBreadth, Position};
+
+/// Maximum allowable tracks in either dimension per CSS Grid Level 1 specifications
+/// (prevents unbounded memory allocation DoS on pathological or adversarial CSS).
+pub const MAX_GRID_TRACKS: usize = 1000;
 
 /// Solves W3C CSS Grid Layout Level 2 for a container and its items.
 pub fn solve_grid(container: &mut LayoutNode, available_width: f32, available_height: f32) {
@@ -47,20 +53,22 @@ pub fn solve_grid_with_subgrid_guarded(
     let margin = container.style.margin;
 
     // 1. Resolve container dimensions
-    let resolved_width = match resolve_dimension(container.style.width, available_width) {
-        Some(w) => clamp_dimension(
+    let resolved_width = match resolve_dimension_with_node(container.style.width, available_width, container) {
+        Some(w) => clamp_dimension_with_node(
             w,
             container.style.min_width,
             container.style.max_width,
             available_width,
+            container,
         ),
         None => {
             let auto_w = (available_width - margin.left - margin.right).max(0.0);
-            clamp_dimension(
+            clamp_dimension_with_node(
                 auto_w,
                 container.style.min_width,
                 container.style.max_width,
                 available_width,
+                container,
             )
         }
     };
@@ -81,13 +89,47 @@ pub fn solve_grid_with_subgrid_guarded(
     let gap_col = container.style.gap_col.max(container.style.gap);
     let gap_row = container.style.gap_row.max(container.style.gap);
 
-    // 2. Pre-calculate Column Bounds and Grid Dimensions (supporting implicit tracks)
+    // 2. Pre-calculate Column Bounds and Grid Dimensions (supporting named areas and implicit tracks)
+    let area_rows = container.style.grid_template_areas.len();
+    let area_cols = container.style.grid_template_areas.iter().map(|r| r.len()).max().unwrap_or(0);
+
+    // Synthesize named grid areas into row/column lines (W3C CSS Grid Level 2 §7.3)
+    if !container.style.grid_template_areas.is_empty() {
+        for child in &mut container.children {
+            if let Some(ref area_name) = child.style.grid_area {
+                if child.style.grid_column_start.is_none() && child.style.grid_row_start.is_none() {
+                    let mut min_r = None;
+                    let mut max_r = None;
+                    let mut min_c = None;
+                    let mut max_c = None;
+                    for (r_idx, row) in container.style.grid_template_areas.iter().enumerate() {
+                        for (c_idx, cell) in row.iter().enumerate() {
+                            if cell == area_name {
+                                min_r = Some(min_r.map_or(r_idx, |m: usize| m.min(r_idx)));
+                                max_r = Some(max_r.map_or(r_idx, |m: usize| m.max(r_idx)));
+                                min_c = Some(min_c.map_or(c_idx, |m: usize| m.min(c_idx)));
+                                max_c = Some(max_c.map_or(c_idx, |m: usize| m.max(c_idx)));
+                            }
+                        }
+                    }
+                    if let (Some(r_min), Some(r_max), Some(c_min), Some(c_max)) = (min_r, max_r, min_c, max_c) {
+                        child.style.grid_row_start = Some((r_min + 1) as i32);
+                        child.style.grid_row_span = Some((r_max - r_min + 1) as u32);
+                        child.style.grid_column_start = Some((c_min + 1) as i32);
+                        child.style.grid_column_span = Some((c_max - c_min + 1) as u32);
+                    }
+                }
+            }
+        }
+    }
+
     let is_subgrid_cols = container.style.grid_template_columns.first() == Some(&GridTrack::Subgrid);
     let explicit_cols = if is_subgrid_cols {
         inherited_cols.map_or(1, |c| c.len().max(1))
     } else {
-        container.style.grid_template_columns.len().max(1)
+        container.style.grid_template_columns.len().max(area_cols).max(1)
     };
+    let explicit_rows = container.style.grid_template_rows.len().max(area_rows).max(1);
     let mut num_cols = explicit_cols;
 
     for child in &container.children {
@@ -97,14 +139,17 @@ pub fn solve_grid_with_subgrid_guarded(
         {
             continue;
         }
-        let span = child.style.grid_column_span.unwrap_or(1).max(1) as usize;
-        if let Some(line) = child.style.grid_column_start {
-            if line >= 1 {
-                let start = (line - 1) as usize;
-                num_cols = num_cols.max(start + span);
-            }
+        let (c_start, c_span) = resolve_axis_placement(
+            child.style.grid_column_start,
+            child.style.grid_column_end,
+            child.style.grid_column_span,
+            explicit_cols,
+        );
+        if let Some(start) = c_start {
+            num_cols = num_cols.max(start + c_span).min(MAX_GRID_TRACKS);
+        } else {
+            num_cols = num_cols.max(c_span).min(MAX_GRID_TRACKS);
         }
-        num_cols = num_cols.max(span);
     }
 
     // 3. Grid Item Multi-Pass Placement (W3C CSS Grid Layout Level 2 §8.5)
@@ -131,12 +176,19 @@ pub fn solve_grid_with_subgrid_guarded(
         {
             continue;
         }
-        if let (Some(r_line), Some(c_line)) = (child.style.grid_row_start, child.style.grid_column_start) {
-            let r = (r_line.max(1) - 1) as usize;
-            let c = (c_line.max(1) - 1) as usize;
-            let col_span = child.style.grid_column_span.unwrap_or(1).max(1) as usize;
-            let row_span = child.style.grid_row_span.unwrap_or(1) as usize;
-
+        let (c_opt, col_span) = resolve_axis_placement(
+            child.style.grid_column_start,
+            child.style.grid_column_end,
+            child.style.grid_column_span,
+            explicit_cols,
+        );
+        let (r_opt, row_span) = resolve_axis_placement(
+            child.style.grid_row_start,
+            child.style.grid_row_end,
+            child.style.grid_row_span,
+            explicit_rows,
+        );
+        if let (Some(c), Some(r)) = (c_opt, r_opt) {
             mark_cell_range_occupied(&mut grid_occupancy, r, c, row_span, col_span);
             placed[child_idx] = Some(PlacedItem {
                 child_index: child_idx,
@@ -145,7 +197,7 @@ pub fn solve_grid_with_subgrid_guarded(
                 row_start: r,
                 row_span,
             });
-            num_cols = num_cols.max(c + col_span);
+            num_cols = num_cols.max(c + col_span).min(MAX_GRID_TRACKS);
         }
     }
 
@@ -157,13 +209,34 @@ pub fn solve_grid_with_subgrid_guarded(
         {
             continue;
         }
-        if let (Some(r_line), None) = (child.style.grid_row_start, child.style.grid_column_start) {
-            let r = (r_line.max(1) - 1) as usize;
-            let col_span = child.style.grid_column_span.unwrap_or(1).max(1) as usize;
-            let row_span = child.style.grid_row_span.unwrap_or(1) as usize;
-
+        let (c_opt, col_span) = resolve_axis_placement(
+            child.style.grid_column_start,
+            child.style.grid_column_end,
+            child.style.grid_column_span,
+            explicit_cols,
+        );
+        let (r_opt, row_span) = resolve_axis_placement(
+            child.style.grid_row_start,
+            child.style.grid_row_end,
+            child.style.grid_row_span,
+            explicit_rows,
+        );
+        if let (None, Some(r)) = (c_opt, r_opt) {
             let mut c = 0;
             loop {
+                if c + col_span > MAX_GRID_TRACKS {
+                    c = MAX_GRID_TRACKS.saturating_sub(col_span);
+                    mark_cell_range_occupied(&mut grid_occupancy, r, c, row_span, col_span);
+                    placed[child_idx] = Some(PlacedItem {
+                        child_index: child_idx,
+                        col_start: c,
+                        col_span,
+                        row_start: r,
+                        row_span,
+                    });
+                    num_cols = num_cols.max(c + col_span).min(MAX_GRID_TRACKS);
+                    break;
+                }
                 ensure_grid_dimensions(&mut grid_occupancy, r + row_span, c + col_span);
                 if is_cell_range_free(&grid_occupancy, r, c, row_span, col_span) {
                     mark_cell_range_occupied(&mut grid_occupancy, r, c, row_span, col_span);
@@ -174,7 +247,7 @@ pub fn solve_grid_with_subgrid_guarded(
                         row_start: r,
                         row_span,
                     });
-                    num_cols = num_cols.max(c + col_span);
+                    num_cols = num_cols.max(c + col_span).min(MAX_GRID_TRACKS);
                     break;
                 }
                 c += 1;
@@ -190,13 +263,34 @@ pub fn solve_grid_with_subgrid_guarded(
         {
             continue;
         }
-        if let (None, Some(c_line)) = (child.style.grid_row_start, child.style.grid_column_start) {
-            let c = (c_line.max(1) - 1) as usize;
-            let col_span = child.style.grid_column_span.unwrap_or(1).max(1) as usize;
-            let row_span = child.style.grid_row_span.unwrap_or(1) as usize;
-
+        let (c_opt, col_span) = resolve_axis_placement(
+            child.style.grid_column_start,
+            child.style.grid_column_end,
+            child.style.grid_column_span,
+            explicit_cols,
+        );
+        let (r_opt, row_span) = resolve_axis_placement(
+            child.style.grid_row_start,
+            child.style.grid_row_end,
+            child.style.grid_row_span,
+            explicit_rows,
+        );
+        if let (Some(c), None) = (c_opt, r_opt) {
             let mut r = 0;
             loop {
+                if r + row_span > MAX_GRID_TRACKS {
+                    r = MAX_GRID_TRACKS.saturating_sub(row_span);
+                    mark_cell_range_occupied(&mut grid_occupancy, r, c, row_span, col_span);
+                    placed[child_idx] = Some(PlacedItem {
+                        child_index: child_idx,
+                        col_start: c,
+                        col_span,
+                        row_start: r,
+                        row_span,
+                    });
+                    num_cols = num_cols.max(c + col_span).min(MAX_GRID_TRACKS);
+                    break;
+                }
                 ensure_grid_dimensions(&mut grid_occupancy, r + row_span, c + col_span);
                 if is_cell_range_free(&grid_occupancy, r, c, row_span, col_span) {
                     mark_cell_range_occupied(&mut grid_occupancy, r, c, row_span, col_span);
@@ -207,7 +301,7 @@ pub fn solve_grid_with_subgrid_guarded(
                         row_start: r,
                         row_span,
                     });
-                    num_cols = num_cols.max(c + col_span);
+                    num_cols = num_cols.max(c + col_span).min(MAX_GRID_TRACKS);
                     break;
                 }
                 r += 1;
@@ -246,8 +340,18 @@ pub fn solve_grid_with_subgrid_guarded(
             continue;
         }
 
-        let col_span = child.style.grid_column_span.unwrap_or(1).max(1) as usize;
-        let row_span = child.style.grid_row_span.unwrap_or(1) as usize;
+        let (_, col_span) = resolve_axis_placement(
+            child.style.grid_column_start,
+            child.style.grid_column_end,
+            child.style.grid_column_span,
+            explicit_cols,
+        );
+        let (_, row_span) = resolve_axis_placement(
+            child.style.grid_row_start,
+            child.style.grid_row_end,
+            child.style.grid_row_span,
+            explicit_rows,
+        );
 
         if !is_col_flow {
             // Row-major auto placement
@@ -255,6 +359,9 @@ pub fn solve_grid_with_subgrid_guarded(
             let mut c = if is_dense { 0 } else { cursor_col };
 
             loop {
+                if r + row_span > MAX_GRID_TRACKS {
+                    break;
+                }
                 ensure_grid_dimensions(&mut grid_occupancy, r + row_span, num_cols);
 
                 if c + col_span > num_cols {
@@ -294,6 +401,9 @@ pub fn solve_grid_with_subgrid_guarded(
             let mut r = if is_dense { 0 } else { cursor_row };
 
             loop {
+                if c + col_span > MAX_GRID_TRACKS {
+                    break;
+                }
                 ensure_grid_dimensions(&mut grid_occupancy, max_rows.max(r + row_span), c + col_span);
 
                 if r + row_span > max_rows && max_rows > 0 {
@@ -315,7 +425,7 @@ pub fn solve_grid_with_subgrid_guarded(
                         cursor_col = c;
                         cursor_row = r + row_span;
                     }
-                    num_cols = num_cols.max(c + col_span);
+                    num_cols = num_cols.max(c + col_span).min(MAX_GRID_TRACKS);
                     break;
                 }
 
@@ -326,8 +436,8 @@ pub fn solve_grid_with_subgrid_guarded(
 
     let placed_items: Vec<PlacedItem> = placed.into_iter().flatten().collect();
 
-    let total_cols = num_cols.max(grid_occupancy.first().map_or(1, |row| row.len())).max(1);
-    let total_rows = grid_occupancy.len().max(1);
+    let total_cols = num_cols.max(grid_occupancy.first().map_or(1, |row| row.len())).clamp(1, MAX_GRID_TRACKS);
+    let total_rows = grid_occupancy.len().clamp(1, MAX_GRID_TRACKS);
 
     // 4. Resolve Column Tracks (with Subgrid and implicit track expansion)
     let col_sizes = if let (true, Some(cols)) = (is_subgrid_cols, inherited_cols) {
@@ -431,6 +541,7 @@ pub fn solve_grid_with_subgrid_guarded(
             child.style.border_width,
             child.style.margin,
         );
+        child.geometry.snap_to_pixel();
 
         // Subgrid handling: if child is display: grid with subgrid columns or rows, inherit tracks
         if child.style.display == strata_style::types::Display::Grid {
@@ -642,9 +753,11 @@ fn calculate_span_size(sizes: &[f32], start: usize, span: usize, gap: f32) -> f3
 }
 
 fn ensure_grid_dimensions(grid: &mut Vec<Vec<bool>>, rows: usize, cols: usize) {
-    let current_cols = grid.first().map_or(cols, |r| r.len()).max(cols);
-    if grid.len() < rows {
-        grid.resize_with(rows, || vec![false; current_cols]);
+    let bounded_rows = rows.min(MAX_GRID_TRACKS);
+    let bounded_cols = cols.min(MAX_GRID_TRACKS);
+    let current_cols = grid.first().map_or(bounded_cols, |r| r.len()).max(bounded_cols).min(MAX_GRID_TRACKS);
+    if grid.len() < bounded_rows {
+        grid.resize_with(bounded_rows, || vec![false; current_cols]);
     }
     for row in grid.iter_mut() {
         if row.len() < current_cols {
@@ -660,12 +773,12 @@ fn is_cell_range_free(
     r_span: usize,
     c_span: usize,
 ) -> bool {
-    for r in r_start..(r_start + r_span) {
+    for r in r_start..(r_start + r_span).min(MAX_GRID_TRACKS) {
         if r >= grid.len() {
             continue;
         }
         let row = &grid[r];
-        for c in c_start..(c_start + c_span) {
+        for c in c_start..(c_start + c_span).min(MAX_GRID_TRACKS) {
             if c < row.len() && row[c] {
                 return false;
             }
@@ -681,10 +794,64 @@ fn mark_cell_range_occupied(
     r_span: usize,
     c_span: usize,
 ) {
-    ensure_grid_dimensions(grid, r_start + r_span, c_start + c_span);
-    for row in grid.iter_mut().skip(r_start).take(r_span) {
-        for cell in row.iter_mut().skip(c_start).take(c_span) {
+    let r_end = (r_start + r_span).min(MAX_GRID_TRACKS);
+    let c_end = (c_start + c_span).min(MAX_GRID_TRACKS);
+    ensure_grid_dimensions(grid, r_end, c_end);
+    for row in grid.iter_mut().skip(r_start).take(r_end.saturating_sub(r_start)) {
+        for cell in row.iter_mut().skip(c_start).take(c_end.saturating_sub(c_start)) {
             *cell = true;
+        }
+    }
+}
+
+/// Resolves a 1-based CSS grid line (positive or negative) against explicit track count.
+/// Negative line numbers count backwards from the end of the explicit grid (W3C CSS Grid Level 1 §8.3).
+fn resolve_grid_line(line: i32, explicit_tracks: usize) -> usize {
+    if line < 0 {
+        // In W3C Grid Level 1 §8.3, -1 represents line (explicit_tracks + 1),
+        // -2 represents line explicit_tracks, etc.
+        let resolved = explicit_tracks as i32 + 2 + line;
+        (resolved.clamp(1, MAX_GRID_TRACKS as i32) - 1) as usize
+    } else {
+        (line.clamp(1, MAX_GRID_TRACKS as i32) - 1) as usize
+    }
+}
+
+/// Resolves start track index (0-based) and span for a grid item axis.
+fn resolve_axis_placement(
+    start: Option<i32>,
+    end: Option<i32>,
+    span: Option<u32>,
+    explicit_tracks: usize,
+) -> (Option<usize>, usize) {
+    match (start, end) {
+        (Some(s), Some(e)) => {
+            let s_track = resolve_grid_line(s, explicit_tracks);
+            let e_track = resolve_grid_line(e, explicit_tracks);
+            if e_track > s_track {
+                let track_span = (e_track - s_track).clamp(1, MAX_GRID_TRACKS.saturating_sub(s_track).max(1));
+                (Some(s_track), track_span)
+            } else if s_track > e_track {
+                let track_span = (s_track - e_track).clamp(1, MAX_GRID_TRACKS.saturating_sub(e_track).max(1));
+                (Some(e_track), track_span)
+            } else {
+                (Some(s_track), 1)
+            }
+        }
+        (Some(s), None) => {
+            let s_track = resolve_grid_line(s, explicit_tracks);
+            let s_span = (span.unwrap_or(1).max(1) as usize).min(MAX_GRID_TRACKS.saturating_sub(s_track).max(1));
+            (Some(s_track), s_span)
+        }
+        (None, Some(e)) => {
+            let e_track = resolve_grid_line(e, explicit_tracks);
+            let s_span = (span.unwrap_or(1).max(1) as usize).min(MAX_GRID_TRACKS);
+            let s_track = e_track.saturating_sub(s_span);
+            (Some(s_track), s_span.max(1))
+        }
+        (None, None) => {
+            let s_span = (span.unwrap_or(1).max(1) as usize).min(MAX_GRID_TRACKS);
+            (None, s_span)
         }
     }
 }

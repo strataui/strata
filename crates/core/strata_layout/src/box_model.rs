@@ -12,6 +12,8 @@ use strata_style::types::{BoxSizing, Dimension, Position};
 /// - If one is positive and one is negative, add the most negative to the most positive:
 ///   $\max(m_1, m_2, 0) + \min(m_1, m_2, 0)$.
 pub fn collapse_margins(m1: f32, m2: f32) -> f32 {
+    let m1 = if m1.is_finite() { m1.clamp(-1e7, 1e7) } else { 0.0 };
+    let m2 = if m2.is_finite() { m2.clamp(-1e7, 1e7) } else { 0.0 };
     if m1 >= 0.0 && m2 >= 0.0 {
         m1.max(m2)
     } else if m1 < 0.0 && m2 < 0.0 {
@@ -25,23 +27,87 @@ pub fn collapse_margins(m1: f32, m2: f32) -> f32 {
 
 /// Resolves a CSS `Dimension` into concrete pixels relative to an available length.
 pub fn resolve_dimension(dim: Dimension, available: f32) -> Option<f32> {
+    const MAX_DIMENSION: f32 = 1e7;
+
+    let avail = if available.is_finite() {
+        available.clamp(-MAX_DIMENSION, MAX_DIMENSION)
+    } else {
+        0.0
+    };
+
     match dim {
         Dimension::Auto => None,
-        Dimension::Px(px) => Some(px),
-        Dimension::Percent(pct) => Some(available * (pct / 100.0)),
-        Dimension::Vw(vw) => Some(available * (vw / 100.0)),
-        Dimension::Vh(vh) => Some(available * (vh / 100.0)),
-        Dimension::Rem(rem) => Some(rem * 16.0),
-        Dimension::Em(em) => Some(em * 16.0),
-        Dimension::Calc(id) => strata_style::calc::get_calc(id).map(|expr| {
+        Dimension::Px(px) => {
+            if px.is_finite() {
+                Some(px.clamp(-MAX_DIMENSION, MAX_DIMENSION))
+            } else {
+                None
+            }
+        }
+        Dimension::Percent(pct) => {
+            if pct.is_finite() {
+                let px = avail * (pct / 100.0);
+                if px.is_finite() {
+                    Some(px.clamp(-MAX_DIMENSION, MAX_DIMENSION))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        Dimension::Vw(vw) => {
+            if vw.is_finite() {
+                let px = avail * (vw / 100.0);
+                if px.is_finite() {
+                    Some(px.clamp(-MAX_DIMENSION, MAX_DIMENSION))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        Dimension::Vh(vh) => {
+            if vh.is_finite() {
+                let px = avail * (vh / 100.0);
+                if px.is_finite() {
+                    Some(px.clamp(-MAX_DIMENSION, MAX_DIMENSION))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        Dimension::Rem(rem) => {
+            if rem.is_finite() {
+                Some((rem * 16.0).clamp(-MAX_DIMENSION, MAX_DIMENSION))
+            } else {
+                None
+            }
+        }
+        Dimension::Em(em) => {
+            if em.is_finite() {
+                Some((em * 16.0).clamp(-MAX_DIMENSION, MAX_DIMENSION))
+            } else {
+                None
+            }
+        }
+        Dimension::Calc(id) => strata_style::calc::get_calc(id).and_then(|expr| {
             let ctx = strata_style::calc::CalcContext {
-                parent_size: available,
+                parent_size: avail,
                 root_font_size: 16.0,
                 current_font_size: 16.0,
                 viewport_width: 1920.0,
                 viewport_height: 1080.0,
             };
-            expr.eval(&ctx)
+            let val = expr.eval(&ctx);
+            if val.is_finite() {
+                Some(val.clamp(-MAX_DIMENSION, MAX_DIMENSION))
+            } else {
+                None
+            }
         }),
         Dimension::MinContent | Dimension::MaxContent | Dimension::FitContent(_) => None,
     }
@@ -49,14 +115,90 @@ pub fn resolve_dimension(dim: Dimension, available: f32) -> Option<f32> {
 
 /// Clamps a computed size against `min` and `max` constraints.
 pub fn clamp_dimension(size: f32, min: Dimension, max: Dimension, available: f32) -> f32 {
-    let mut clamped = size;
+    let mut clamped = if size.is_finite() {
+        size.clamp(0.0, 1e7)
+    } else {
+        0.0
+    };
     if let Some(min_px) = resolve_dimension(min, available) {
-        clamped = clamped.max(min_px);
+        clamped = clamped.max(min_px.max(0.0));
     }
     if let Some(max_px) = resolve_dimension(max, available) {
-        clamped = clamped.min(max_px);
+        clamped = clamped.min(max_px.max(0.0));
     }
-    clamped.max(0.0)
+    clamped.clamp(0.0, 1e7)
+}
+
+/// Resolves a CSS `Dimension` into concrete pixels relative to an available length and node context,
+/// evaluating intrinsic keywords (`min-content`, `max-content`, `fit-content`) via `compute_min_max_sizes`.
+pub fn resolve_dimension_with_node(
+    dim: Dimension,
+    available: f32,
+    node: &LayoutNode,
+) -> Option<f32> {
+    match dim {
+        Dimension::MinContent => {
+            let sizes = crate::intrinsic::compute_min_max_sizes(node, Some(available));
+            let inline_insets = node.style.padding.left
+                + node.style.padding.right
+                + node.style.border_width.left
+                + node.style.border_width.right;
+            let val = match node.style.box_sizing {
+                BoxSizing::BorderBox => sizes.min_content,
+                BoxSizing::ContentBox => (sizes.min_content - inline_insets).max(0.0),
+            };
+            Some(val)
+        }
+        Dimension::MaxContent => {
+            let sizes = crate::intrinsic::compute_min_max_sizes(node, Some(available));
+            let inline_insets = node.style.padding.left
+                + node.style.padding.right
+                + node.style.border_width.left
+                + node.style.border_width.right;
+            let val = match node.style.box_sizing {
+                BoxSizing::BorderBox => sizes.max_content,
+                BoxSizing::ContentBox => (sizes.max_content - inline_insets).max(0.0),
+            };
+            Some(val)
+        }
+        Dimension::FitContent(arg) => {
+            let sizes = crate::intrinsic::compute_min_max_sizes(node, Some(available));
+            let inline_insets = node.style.padding.left
+                + node.style.padding.right
+                + node.style.border_width.left
+                + node.style.border_width.right;
+            let limit = if arg > 0.0 { arg } else { available };
+            let fitted = sizes.shrink_to_fit(limit);
+            let val = match node.style.box_sizing {
+                BoxSizing::BorderBox => fitted,
+                BoxSizing::ContentBox => (fitted - inline_insets).max(0.0),
+            };
+            Some(val)
+        }
+        other => resolve_dimension(other, available),
+    }
+}
+
+/// Clamps a computed size against `min` and `max` constraints with node context.
+pub fn clamp_dimension_with_node(
+    size: f32,
+    min: Dimension,
+    max: Dimension,
+    available: f32,
+    node: &LayoutNode,
+) -> f32 {
+    let mut clamped = if size.is_finite() {
+        size.clamp(0.0, 1e7)
+    } else {
+        0.0
+    };
+    if let Some(min_px) = resolve_dimension_with_node(min, available, node) {
+        clamped = clamped.max(min_px.max(0.0));
+    }
+    if let Some(max_px) = resolve_dimension_with_node(max, available, node) {
+        clamped = clamped.min(max_px.max(0.0));
+    }
+    clamped.clamp(0.0, 1e7)
 }
 
 /// Converts a ComputedStyle into an InlineTextStyle for inline text shaping and typography.
@@ -122,57 +264,65 @@ pub fn is_inline_phrasing_node(child: &LayoutNode) -> bool {
 /// inline item stream from the freshly styled children and patches each line
 /// fragment's paint-only style fields by item index.
 pub fn refresh_inline_fragment_styles(node: &mut LayoutNode) {
-    if !node.line_boxes.is_empty() {
-        if !node.children.is_empty() {
-            let mut items = Vec::new();
-            collect_inline_items_from_children(
-                &node.children,
-                None,
-                None,
-                &mut items,
-                node.geometry.content_box.width,
-                node.geometry.content_box.height,
-            );
-            node.inline_items = items;
-        }
-        for line in &mut node.line_boxes {
-            for frag in &mut line.text_fragments {
-                if let Some(crate::typography::InlineItem::Text { style, .. }) =
-                    node.inline_items.get(frag.item_index)
-                {
-                    frag.style.color = style.color;
-                    frag.style.background_color = style.background_color;
-                    frag.style.text_decoration = style.text_decoration;
-                    frag.style.font_family = style.font_family;
-                    frag.font_family = style.font_family;
-                } else if node.inline_items.is_empty() && node.text.is_some() {
-                    let style = inline_style_from_computed_style(&node.style);
-                    frag.style.color = style.color;
-                    frag.style.background_color = style.background_color;
-                    frag.style.text_decoration = style.text_decoration;
-                    frag.style.font_family = style.font_family;
-                    frag.font_family = style.font_family;
+    let mut stack = vec![node];
+    while let Some(curr) = stack.pop() {
+        if !curr.line_boxes.is_empty() {
+            if !curr.children.is_empty() {
+                let mut items = Vec::new();
+                collect_inline_items_from_children(
+                    &curr.children,
+                    None,
+                    None,
+                    &mut items,
+                    curr.geometry.content_box.width,
+                    curr.geometry.content_box.height,
+                );
+                curr.inline_items = items;
+            }
+            for line in &mut curr.line_boxes {
+                for frag in &mut line.text_fragments {
+                    if let Some(crate::typography::InlineItem::Text { style, .. }) =
+                        curr.inline_items.get(frag.item_index)
+                    {
+                        frag.style.color = style.color;
+                        frag.style.background_color = style.background_color;
+                        frag.style.text_decoration = style.text_decoration;
+                        frag.style.font_family = style.font_family;
+                        frag.font_family = style.font_family;
+                    } else if curr.inline_items.is_empty() && curr.text.is_some() {
+                        let style = inline_style_from_computed_style(&curr.style);
+                        frag.style.color = style.color;
+                        frag.style.background_color = style.background_color;
+                        frag.style.text_decoration = style.text_decoration;
+                        frag.style.font_family = style.font_family;
+                        frag.font_family = style.font_family;
+                    }
                 }
             }
         }
-    }
-    for child in &mut node.children {
-        refresh_inline_fragment_styles(child);
+        for child in &mut curr.children {
+            stack.push(child);
+        }
     }
 }
 
-/// Recursively clears line boxes from inline phrasing descendants whose text is absorbed by parent IFC.
+/// Recursively clears line boxes from inline phrasing descendants whose text is absorbed by parent IFC using an iterative heap stack.
 pub fn clear_inline_descendant_line_boxes(node: &mut LayoutNode) {
     if node.style.display != strata_style::types::Display::Inline {
         return;
     }
-    node.line_boxes.clear();
-    for child in &mut node.children {
-        clear_inline_descendant_line_boxes(child);
+    let mut stack = vec![node];
+    while let Some(curr) = stack.pop() {
+        if curr.style.display == strata_style::types::Display::Inline {
+            curr.line_boxes.clear();
+            for child in &mut curr.children {
+                stack.push(child);
+            }
+        }
     }
 }
 
-/// Recursively flattens inline phrasing children into an InlineItem stream.
+/// Recursively flattens inline phrasing children into an InlineItem stream bounded by MAX_LAYOUT_DEPTH.
 fn collect_inline_items_from_children(
     children: &[LayoutNode],
     parent_style: Option<&strata_style::types::ComputedStyle>,
@@ -181,6 +331,29 @@ fn collect_inline_items_from_children(
     content_width: f32,
     available_height: f32,
 ) {
+    collect_inline_items_from_children_guarded(
+        children,
+        parent_style,
+        top_level_idx,
+        items,
+        content_width,
+        available_height,
+        0,
+    );
+}
+
+fn collect_inline_items_from_children_guarded(
+    children: &[LayoutNode],
+    parent_style: Option<&strata_style::types::ComputedStyle>,
+    top_level_idx: Option<usize>,
+    items: &mut Vec<crate::typography::InlineItem>,
+    content_width: f32,
+    available_height: f32,
+    depth: usize,
+) {
+    if depth > crate::tree::MAX_LAYOUT_DEPTH {
+        return;
+    }
     let _prof = crate::prof::Scope::new(crate::prof::Slot::StyleClone);
     for (idx, child) in children.iter().enumerate() {
         if child.style.display == strata_style::types::Display::None {
@@ -241,16 +414,17 @@ fn collect_inline_items_from_children(
                     }
                 }
             }
-            collect_inline_items_from_children(
+            collect_inline_items_from_children_guarded(
                 &child.children,
                 Some(&merged_style),
                 Some(effective_top_idx),
                 items,
                 content_width,
                 available_height,
+                depth + 1,
             );
         } else {
-            let mut w = resolve_dimension(child.style.width, content_width).unwrap_or(0.0);
+            let mut w = resolve_dimension_with_node(child.style.width, content_width, child).unwrap_or(0.0);
             let mut h = resolve_dimension(child.style.height, available_height).unwrap_or(0.0);
             if w == 0.0 && child.geometry.border_box.width > 0.0 {
                 w = child.geometry.border_box.width;
@@ -274,22 +448,25 @@ fn collect_inline_items_from_children(
     }
 }
 
-/// Recursively propagates atomic inline fragment bounds down through nested `Display::Inline` containers.
+/// Recursively propagates atomic inline fragment bounds down through nested `Display::Inline` containers using an iterative heap stack.
 fn propagate_atomic_bounds_to_inline_descendants(node: &mut LayoutNode, bounds: Rect) {
     if node.style.display != strata_style::types::Display::Inline {
         return;
     }
-    for child in &mut node.children {
-        child.geometry.border_box.x = bounds.x;
-        child.geometry.border_box.y = bounds.y;
-        if child.geometry.border_box.width == 0.0 {
-            child.geometry.border_box.width = bounds.width;
-        }
-        if child.geometry.border_box.height == 0.0 {
-            child.geometry.border_box.height = bounds.height;
-        }
-        if child.style.display == strata_style::types::Display::Inline {
-            propagate_atomic_bounds_to_inline_descendants(child, bounds);
+    let mut stack = vec![node];
+    while let Some(curr) = stack.pop() {
+        for child in &mut curr.children {
+            child.geometry.border_box.x = bounds.x;
+            child.geometry.border_box.y = bounds.y;
+            if child.geometry.border_box.width == 0.0 {
+                child.geometry.border_box.width = bounds.width;
+            }
+            if child.geometry.border_box.height == 0.0 {
+                child.geometry.border_box.height = bounds.height;
+            }
+            if child.style.display == strata_style::types::Display::Inline {
+                stack.push(child);
+            }
         }
     }
 }
@@ -445,6 +622,25 @@ pub fn solve_block_children_with_exclusions(
         bfc_offset_y,
         crate::tree::LayoutDepthGuard::root(),
     )
+}
+
+/// Returns true if an in-flow block element has zero computed height, no padding or border,
+/// and no in-flow content, allowing its top and bottom margins to collapse through under CSS 2.1 §8.3.1.
+#[inline]
+pub fn is_empty_collapsible_block(node: &LayoutNode) -> bool {
+    node.children.is_empty()
+        && node.text.is_none()
+        && node.inline_items.is_empty()
+        && node.style.border_width.top == 0.0
+        && node.style.border_width.bottom == 0.0
+        && node.style.padding.top == 0.0
+        && node.style.padding.bottom == 0.0
+        && matches!(node.style.height, Dimension::Auto | Dimension::Px(0.0))
+        && matches!(node.style.min_height, Dimension::Auto | Dimension::Px(0.0))
+        && node.style.clear == strata_style::types::Clear::None
+        && node.style.float == strata_style::types::Float::None
+        && node.style.overflow_x == strata_style::types::Overflow::Visible
+        && node.style.overflow_y == strata_style::types::Overflow::Visible
 }
 
 /// Positions in-flow block children with active exclusion space tracking and depth guard.
@@ -653,6 +849,27 @@ pub fn solve_block_children_with_exclusions_guarded(
         }
 
         let total_h = res.total_height;
+        for child in &mut node.children {
+            if let Some(ref text) = child.text {
+                let mut found = false;
+                for line in &positioned_lines {
+                    for frag in &line.text_fragments {
+                        if frag.text.contains(text.as_str()) || text.contains(frag.text.as_str()) {
+                            child.geometry.border_box = frag.bounds;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if found {
+                        break;
+                    }
+                }
+                if !found {
+                    child.geometry.border_box.x = content_origin_x;
+                    child.geometry.border_box.y = content_origin_y;
+                }
+            }
+        }
         node.line_boxes = positioned_lines;
         return total_h + padding.top + padding.bottom + border.top + border.bottom;
     }
@@ -660,8 +877,7 @@ pub fn solve_block_children_with_exclusions_guarded(
     // W3C CSS 2.1 §9.4.1 Block Formatting Context (BFC) root determination:
     // Normal in-flow block boxes with overflow: visible share their parent BFC's ExclusionSpace
     // so floats inside a <section> or <div> overhang into subsequent sibling sections.
-    let establishes_bfc = parent_exclusions.is_none()
-        || node.style.float != strata_style::types::Float::None
+    let establishes_bfc = node.style.float != strata_style::types::Float::None
         || matches!(node.style.position, Position::Absolute | Position::Fixed)
         || matches!(
             node.style.display,
@@ -672,9 +888,10 @@ pub fn solve_block_children_with_exclusions_guarded(
         || node.style.overflow_x != strata_style::types::Overflow::Visible
         || node.style.overflow_y != strata_style::types::Overflow::Visible;
 
+    let is_root_exclusion_context = parent_exclusions.is_none();
     let mut local_exclusions = crate::exclusions::ExclusionSpace::new();
     let (exclusion_space, base_bfc_y): (&mut crate::exclusions::ExclusionSpace, f32) =
-        if establishes_bfc || parent_exclusions.is_none() {
+        if establishes_bfc || is_root_exclusion_context {
             (&mut local_exclusions, 0.0)
         } else if let Some(pe) = parent_exclusions {
             (pe, bfc_offset_y)
@@ -682,8 +899,15 @@ pub fn solve_block_children_with_exclusions_guarded(
             (&mut local_exclusions, 0.0)
         };
     let initial_exclusions_count = exclusion_space.exclusions().len();
+    let parent_top_adjoining = !establishes_bfc && border.top == 0.0 && padding.top == 0.0;
+    let parent_bottom_adjoining = !establishes_bfc
+        && border.bottom == 0.0
+        && padding.bottom == 0.0
+        && node.style.height == Dimension::Auto;
+
     let mut current_y = border.top + padding.top;
-    let mut prev_bottom_margin: Option<f32> = None;
+    let mut pending_margin: Option<f32> = None;
+    let mut is_first_in_flow = true;
 
     for child in &mut node.children {
         if child.style.position == Position::Absolute || child.style.position == Position::Fixed {
@@ -698,7 +922,7 @@ pub fn solve_block_children_with_exclusions_guarded(
                 exclusion_space.clearance_offset(child.style.clear, base_bfc_y + current_y);
             if cleared_bfc_y > base_bfc_y + current_y {
                 current_y = cleared_bfc_y - base_bfc_y;
-                prev_bottom_margin = None;
+                pending_margin = None;
             }
         }
 
@@ -788,10 +1012,40 @@ pub fn solve_block_children_with_exclusions_guarded(
 
         let child_margin = child.style.margin;
 
-        let collapsed_v_margin = match prev_bottom_margin {
+        // CSS 2.1 §8.3.1: An empty block's top and bottom margins collapse through
+        if is_empty_collapsible_block(child) {
+            let through_margin = collapse_margins(child_margin.top, child_margin.bottom);
+            let combined = match pending_margin {
+                Some(pm) => collapse_margins(pm, through_margin),
+                None => through_margin,
+            };
+
+            if is_first_in_flow && parent_top_adjoining {
+                node.style.margin.top = collapse_margins(node.style.margin.top, combined);
+                pending_margin = None;
+            } else {
+                pending_margin = Some(combined);
+            }
+
+            child.geometry.border_box.x = node.geometry.border_box.x + border.left + padding.left + child_margin.left;
+            child.geometry.border_box.y = node.geometry.border_box.y + current_y + pending_margin.unwrap_or(0.0);
+            child.geometry.border_box.width = content_width;
+            child.geometry.border_box.height = 0.0;
+            continue;
+        }
+
+        let mut collapsed_v_margin = match pending_margin.take() {
             Some(prev_m) => collapse_margins(prev_m, child_margin.top),
             None => child_margin.top,
         };
+
+        if is_first_in_flow {
+            is_first_in_flow = false;
+            if parent_top_adjoining {
+                node.style.margin.top = collapse_margins(node.style.margin.top, collapsed_v_margin);
+                collapsed_v_margin = 0.0;
+            }
+        }
 
         current_y += collapsed_v_margin;
 
@@ -817,7 +1071,7 @@ pub fn solve_block_children_with_exclusions_guarded(
             let mut opp = exclusion_space.line_opportunity(child_bfc_y, 0.0, content_width);
 
             if opp.available_width < content_width || opp.left_float_edge > 0.0 {
-                let child_desired_w = resolve_dimension(child.style.width, content_width);
+                let child_desired_w = resolve_dimension_with_node(child.style.width, content_width, child);
                 if let Some(w) = child_desired_w {
                     if w + child_margin.left + child_margin.right > opp.available_width {
                         // Element does not fit beside the float; clear by placing it below preceding floats
@@ -906,15 +1160,19 @@ pub fn solve_block_children_with_exclusions_guarded(
         }
 
         current_y += child.geometry.border_box.height;
-        prev_bottom_margin = Some(child_margin.bottom);
+        pending_margin = Some(child_margin.bottom);
     }
 
-    if let Some(last_margin) = prev_bottom_margin {
-        current_y += last_margin;
+    if let Some(trailing_margin) = pending_margin {
+        if parent_bottom_adjoining {
+            node.style.margin.bottom = collapse_margins(node.style.margin.bottom, trailing_margin);
+        } else {
+            current_y += trailing_margin;
+        }
     }
 
-    // CSS 2.1 §10.6.7 BFC float containment: ONLY BFC roots expand their auto height to enclose floats
-    if establishes_bfc && exclusion_space.exclusions().len() > initial_exclusions_count {
+    // CSS 2.1 §10.6.7 BFC float containment: BFC roots or layout tree root expand auto height to enclose floats
+    if (establishes_bfc || is_root_exclusion_context) && exclusion_space.exclusions().len() > initial_exclusions_count {
         let max_float_bottom = exclusion_space.max_float_bottom();
         if max_float_bottom > current_y {
             current_y = max_float_bottom;
@@ -970,12 +1228,13 @@ pub fn solve_block_with_exclusions_guarded(
     let margin = node.style.margin;
 
     if guard.is_exhausted() {
-        let border_box_width = match resolve_dimension(node.style.width, available_width) {
-            Some(w) => clamp_dimension(
+        let border_box_width = match resolve_dimension_with_node(node.style.width, available_width, node) {
+            Some(w) => clamp_dimension_with_node(
                 w,
                 node.style.min_width,
                 node.style.max_width,
                 available_width,
+                node,
             ),
             None => (available_width - margin.left - margin.right).max(0.0),
         };
@@ -1004,19 +1263,20 @@ pub fn solve_block_with_exclusions_guarded(
         let intrinsic_w = node
             .style
             .contain_intrinsic_width
-            .and_then(|dim| resolve_dimension(dim, available_width));
+            .and_then(|dim| resolve_dimension_with_node(dim, available_width, node));
         let intrinsic_h = node
             .style
             .contain_intrinsic_height
             .and_then(|dim| resolve_dimension(dim, available_height))
             .unwrap_or(0.0);
         let border_box_width =
-            match resolve_dimension(node.style.width, available_width).or(intrinsic_w) {
-                Some(w) => clamp_dimension(
+            match resolve_dimension_with_node(node.style.width, available_width, node).or(intrinsic_w) {
+                Some(w) => clamp_dimension_with_node(
                     w,
                     node.style.min_width,
                     node.style.max_width,
                     available_width,
+                    node,
                 ),
                 None => (available_width - margin.left - margin.right).max(0.0),
             };
@@ -1088,12 +1348,13 @@ pub fn solve_block_with_exclusions_guarded(
     };
 
     // 1. Resolve element width
-    let resolved_width = match resolve_dimension(node.style.width, available_width) {
-        Some(w) => clamp_dimension(
+    let resolved_width = match resolve_dimension_with_node(node.style.width, available_width, node) {
+        Some(w) => clamp_dimension_with_node(
             w,
             node.style.min_width,
             node.style.max_width,
             available_width,
+            node,
         ),
         None => {
             if node.text.is_some()
@@ -1125,20 +1386,22 @@ pub fn solve_block_with_exclusions_guarded(
                     text_w
                 };
                 let fit_w = base_w + padding.left + padding.right + border.left + border.right;
-                clamp_dimension(
+                clamp_dimension_with_node(
                     fit_w,
                     node.style.min_width,
                     node.style.max_width,
                     available_width,
+                    node,
                 )
             } else {
                 // In CSS block layout, auto width fills available width minus margins
                 let auto_w = (available_width - margin.left - margin.right).max(0.0);
-                clamp_dimension(
+                clamp_dimension_with_node(
                     auto_w,
                     node.style.min_width,
                     node.style.max_width,
                     available_width,
+                    node,
                 )
             }
         }
@@ -1205,7 +1468,7 @@ pub fn solve_block_with_exclusions_guarded(
         border_box_height,
     );
 
-    node.geometry = LayoutGeometry::from_border_box(border_box, padding, border, margin);
+    node.geometry = LayoutGeometry::from_border_box(border_box, padding, border, node.style.margin);
     node.geometry.snap_to_pixel();
 
     // A text leaf that truncates must publish positioned line boxes so paint
