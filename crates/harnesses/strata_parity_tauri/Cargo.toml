@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 description = "Parity Verification Harness between Strata Pure Rust Engine and Tauri WebKitGTK"
 
+[features]
+default = []
+tauri-backend = ["dep:tauri", "dep:tauri-build"]
+
 [dependencies]
 strata = { workspace = true, features = ["mobile-test"] }
 strata_dom = { workspace = true }
@@ -15,10 +19,10 @@ strata_render = { workspace = true }
 strata_platform = { workspace = true }
 strata_mobile_test = { workspace = true }
 strata_web_reader = { workspace = true }
-tauri = { version = "2.1.1" }
+tauri = { version = "2.1.1", optional = true }
 gtk = "0.18.2"
 cairo-rs = "0.18.5"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [build-dependencies]
-tauri-build = { version = "2.1.1" }
+tauri-build = { version = "2.1.1", optional = true }

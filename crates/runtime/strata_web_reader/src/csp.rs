@@ -41,6 +41,7 @@ pub enum DirectiveKind {
 }
 
 impl DirectiveKind {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "default-src" => Some(Self::DefaultSrc),
@@ -110,7 +111,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     let bit_len = (data.len() as u64).wrapping_mul(8);
     let mut padded = data.to_vec();
     padded.push(0x80);
-    while (padded.len() + 8) % 64 != 0 {
+    while !(padded.len() + 8).is_multiple_of(64) {
         padded.push(0x00);
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
@@ -600,11 +601,8 @@ impl ContentSecurityPolicy {
     }
 
     fn parse_origin_parts(url: &str) -> Option<(String, String, Option<u16>)> {
-        let (scheme, rest) = if let Some(idx) = url.find("://") {
-            (url[..idx].to_ascii_lowercase(), &url[idx + 3..])
-        } else {
-            return None;
-        };
+        let idx = url.find("://")?;
+        let (scheme, rest) = (url[..idx].to_ascii_lowercase(), &url[idx + 3..]);
 
         let authority = if let Some(slash_idx) = rest.find('/') {
             &rest[..slash_idx]
