@@ -91,6 +91,7 @@ pub enum SourceExpr {
 }
 
 /// Pure-Rust SHA-256 implementation (FIPS 180-4) for CSP inline script/style hash verification.
+#[allow(clippy::chunks_exact_to_as_chunks)]
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     let mut h: [u32; 8] = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,

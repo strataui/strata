@@ -1213,7 +1213,7 @@ impl JsEngine {
                                         }
                                         let all_p = JsPromise::all(promise_list);
                                         drain_microtasks();
-                                        let mapped_p = all_p.then(|items| JsValue::new_array(items));
+                                        let mapped_p = all_p.then(JsValue::new_array);
                                         drain_microtasks();
                                         return Ok(self.create_promise_value(mapped_p));
                                     }
@@ -1298,7 +1298,7 @@ impl JsEngine {
                                         for item in items.borrow().iter() {
                                             if let JsValue::Array(pair) = item {
                                                 let p = pair.borrow();
-                                                if let (Some(k), Some(v)) = (p.get(0), p.get(1)) {
+                                                if let (Some(k), Some(v)) = (p.first(), p.get(1)) {
                                                     map.insert(k.to_string(), v.clone());
                                                 }
                                             }
@@ -3468,7 +3468,7 @@ impl JsEngine {
         }
 
         if name == "Object" {
-            let first = args.first().cloned().unwrap_or_else(|| JsValue::empty_object());
+            let first = args.first().cloned().unwrap_or_else(JsValue::empty_object);
             return match first {
                 JsValue::Undefined | JsValue::Null => Ok(JsValue::empty_object()),
                 other => Ok(other),
