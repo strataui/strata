@@ -178,4 +178,54 @@ fn test_multithreaded_signal_subscriptions() {
     }
 }
 
+#[test]
+fn test_window_renders_complex_ui_pixels() {
+    use strata_dom::{NodeBlueprint, Tag, View};
+
+    unsafe {
+        let app = strata_app_create();
+        assert!(!app.is_null());
+
+        let title = CString::new("Complex UI Window").unwrap();
+        let width = 100u32;
+        let height = 100u32;
+        let win = strata_window_create(app, title.as_ptr(), width, height);
+        assert!(!win.is_null());
+
+        // Create a multi-element layout:
+        // Outer div with bg-red (239, 68, 68), inner child with bg-blue (59, 130, 246)
+        let child = NodeBlueprint::Element {
+            tag: Tag::Div,
+            classes: vec!["w-[50px]".to_string(), "h-[50px]".to_string(), "bg-blue-500".to_string()].into(),
+            attributes: Vec::new(),
+            children: Vec::new(),
+        };
+        let root = NodeBlueprint::Element {
+            tag: Tag::Div,
+            classes: vec!["w-[100px]".to_string(), "h-[100px]".to_string(), "bg-red-500".to_string()].into(),
+            attributes: Vec::new(),
+            children: vec![child],
+        };
+        let mut view = View::new(root);
+        let runtime = strata_runtime_create(&mut view as *mut _, width as f32, height as f32, 1.0);
+        assert!(!runtime.is_null());
+
+        assert_eq!(strata_window_set_runtime(win, runtime), 0);
+
+        let mut buffer = vec![0u8; (width * height * 4) as usize];
+        let bytes_rendered = strata_window_render_frame(win, buffer.as_mut_ptr());
+        assert_eq!(bytes_rendered, (width * height * 4) as i32);
+
+        // Verify pixel rendering is authentic and non-uniform:
+        // Frame must contain distinct red and blue pixels from the multi-element fixture
+        let has_red = buffer.chunks(4).any(|p| p[0] > 180 && p[2] < 120);
+        let has_blue = buffer.chunks(4).any(|p| p[2] > 180 && p[0] < 120);
+        assert!(has_red, "Rendered frame must contain red background pixels");
+        assert!(has_blue, "Rendered frame must contain blue child pixels");
+
+        strata_runtime_destroy(runtime);
+        strata_app_destroy(app);
+    }
+}
+
 

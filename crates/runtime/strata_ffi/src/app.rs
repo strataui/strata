@@ -17,6 +17,7 @@ pub struct StrataWindowHandle {
     pub height: u32,
     pub is_visible: bool,
     pub frame_buffer: strata_render::rasterizer::FrameBuffer,
+    pub runtime: *mut strata::runtime::AppRuntime,
 }
 
 static VERSION_CSTR: &[u8] = b"0.1.0\0";
@@ -89,6 +90,7 @@ pub unsafe extern "C" fn strata_window_create(
         height,
         is_visible: true,
         frame_buffer: strata_render::rasterizer::FrameBuffer::new(width as usize, height as usize),
+        runtime: std::ptr::null_mut(),
     });
     let win_ptr = Box::into_raw(win);
 
@@ -97,6 +99,43 @@ pub unsafe extern "C" fn strata_window_create(
     }
 
     win_ptr
+}
+
+/// Associates an active AppRuntime with the window handle for authentic layout and rendering.
+#[no_mangle]
+pub unsafe extern "C" fn strata_window_set_runtime(
+    win: *mut StrataWindowHandle,
+    runtime: *mut strata::runtime::AppRuntime,
+) -> i32 {
+    if win.is_null() {
+        return -1;
+    }
+    (*win).runtime = runtime;
+    0
+}
+
+/// Creates an AppRuntime instance from a View pointer.
+#[no_mangle]
+pub unsafe extern "C" fn strata_runtime_create(
+    view: *mut strata_dom::View,
+    width: f32,
+    height: f32,
+    dpr: f32,
+) -> *mut strata::runtime::AppRuntime {
+    if view.is_null() {
+        return std::ptr::null_mut();
+    }
+    let view_clone = (*view).clone();
+    let runtime = Box::new(strata::runtime::AppRuntime::new(view_clone, width, height, dpr));
+    Box::into_raw(runtime)
+}
+
+/// Destroys an AppRuntime instance.
+#[no_mangle]
+pub unsafe extern "C" fn strata_runtime_destroy(runtime: *mut strata::runtime::AppRuntime) {
+    if !runtime.is_null() {
+        let _ = Box::from_raw(runtime);
+    }
 }
 
 /// Renders the window content into its internal frame buffer and copies pixels to caller buffer.
@@ -109,15 +148,24 @@ pub unsafe extern "C" fn strata_window_render_frame(
         return -1;
     }
     let w = &mut *win;
-    let mut dl = strata_render::compositor::DisplayList::new();
-    dl.push(strata_render::compositor::DrawCommand::DrawRect {
-        bounds: strata_layout::Rect::new(0.0, 0.0, w.width as f32, w.height as f32),
-        color: strata_style::types::Color::rgba(255, 255, 255, 255),
-    });
-    w.frame_buffer.render_display_list(&dl);
-    let bytes = w.frame_buffer.pixels.len();
-    std::ptr::copy_nonoverlapping(w.frame_buffer.pixels.as_ptr(), out_rgba_ptr, bytes);
-    bytes as i32
+    if !w.runtime.is_null() {
+        let runtime = &mut *w.runtime;
+        let fb = runtime.render_to_framebuffer();
+        let bytes = fb.pixels.len();
+        std::ptr::copy_nonoverlapping(fb.pixels.as_ptr(), out_rgba_ptr, bytes);
+        w.frame_buffer = fb;
+        bytes as i32
+    } else {
+        let mut dl = strata_render::compositor::DisplayList::new();
+        dl.push(strata_render::compositor::DrawCommand::DrawRect {
+            bounds: strata_layout::Rect::new(0.0, 0.0, w.width as f32, w.height as f32),
+            color: strata_style::types::Color::rgba(255, 255, 255, 255),
+        });
+        w.frame_buffer.render_display_list(&dl);
+        let bytes = w.frame_buffer.pixels.len();
+        std::ptr::copy_nonoverlapping(w.frame_buffer.pixels.as_ptr(), out_rgba_ptr, bytes);
+        bytes as i32
+    }
 }
 
 /// Updates the title of the native window. Returns 0 on success, -1 on invalid handle.

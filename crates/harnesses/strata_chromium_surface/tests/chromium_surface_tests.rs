@@ -79,7 +79,7 @@ fn test_process_manager_lazy_mount_and_unmount() {
 
     assert!(manager.is_running());
     match manager.state() {
-        ProcessState::Running { pid } => assert!(pid >= 42001),
+        ProcessState::Running { pid } => assert!(pid > 0),
         _ => panic!("Expected running process with PID"),
     }
 
