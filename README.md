@@ -144,7 +144,7 @@ Every capability listed below is backed by reproducible automated tests in the r
 The following systems are architecturally scaffolded in the repository and actively being expanded toward full production tier:
 
 * **Hardware GPU Pipelines (`strata_render`):**
-  * Direct Vulkan, Apple Metal, and Direct3D 12 render pipelines are scaffolded in `crates/render/strata_render/src/gpu_pipeline.rs` and `strata_gl`.
+  * Direct Vulkan, Apple Metal, and Direct3D 12 render pipelines are scaffolded in `crates/render/strata_render/src/gpu_pipeline.rs`.
   * Currently, the primary native display target on Linux is the Cairo/GTK3 accelerated window surface, alongside the software framebuffer for headless automation.
 * **macOS & Windows Native Windowing:**
   * Linux GTK3/Wayland/X11 windowing is fully operational (`strata::launch_window`).
@@ -162,15 +162,15 @@ All figures below are empirically measured via high-resolution hardware timers (
 
 | Benchmark Task | Workload Scale | Measured Time | Throughput | Peak Memory (RSS) |
 |---|---|---|---|---|
-| **Cold Start to First Frame Presentation** | 1280x720 window, tree mount, cascade, layout, Cairo presentation | **42.4 ms** | 24 ops/s | **32.2 MB** |
-| **W3C Flexbox Layout** | 1,000 styled flex items | **408 µs** (0.41 ms) | 2,446 ops/s | Negligible |
-| **W3C Flexbox Layout (Heavy)** | 10,000 styled flex items | **8.62 ms** | 116 ops/s | 4.8 MB |
-| **W3C CSS Grid Layout** | 1,000 styled grid cells with auto-placement | **317 µs** (0.32 ms) | 3,150 ops/s | Negligible |
-| **DisplayList Compilation** | 1,000 styled elements to draw commands | **11.5 µs** (0.01 ms) | 86,781 ops/s | Negligible |
-| **Reactive Signal DAG** | 100,000 reactive signal propagations | **325 µs** (0.33 ms) | 3,078 ops/s | 1.2 MB |
-| **UI IR Graph Construction** | 100,000 64-byte `UiIrNode` allocations | **1.77 ms** | 565 ops/s | 6.4 MB |
-| **HTML Semantic Parsing** | Full Wikipedia article document | **27.2 µs** (0.03 ms) | 36,736 ops/s | Negligible |
-| **WebTranspiler Blueprint Generation** | Full Wikipedia article to RSX blueprint | **95.5 µs** (0.10 ms) | 10,467 ops/s | Negligible |
+| **Cold Start to First Frame Presentation** | 1280x720 window, tree mount, cascade, layout, native presentation | **36.0 ms** | 28 ops/s | **32.4 MB** |
+| **W3C Flexbox Layout** | 1,000 styled flex items | **489 µs** (0.49 ms) | 2,044 ops/s | Negligible |
+| **W3C Flexbox Layout (Heavy)** | 10,000 styled flex items | **7.18 ms** | 139 ops/s | 4.8 MB |
+| **W3C CSS Grid Layout** | 1,000 styled grid cells with auto-placement | **566 µs** (0.57 ms) | 1,768 ops/s | Negligible |
+| **DisplayList Compilation** | 1,000 styled elements to draw commands | **3.8 µs** (0.004 ms) | 264,340 ops/s | Negligible |
+| **Reactive Signal Diamond DAG** | 10,000 diamond DAG cascades (40,000 node propagations) | **9.15 ms** (0.91 µs/cascade) | 109 ops/s | 1.2 MB |
+| **UI IR Graph Construction** | 100,000 64-byte `UiIrNode` allocations | **767 µs** (0.77 ms) | 1,303 ops/s | 6.4 MB |
+| **HTML Semantic Parsing** | Full Wikipedia article document | **307 µs** (0.31 ms) | 3,258 ops/s | Negligible |
+| **WebTranspiler Blueprint Generation** | Full Wikipedia article to RSX blueprint | **568 µs** (0.57 ms) | 1,760 ops/s | Negligible |
 | **Code Editor 100k-Line Rope Access** | Random line lookup in 100,000-line rope | **6.3 µs** | 158,000 ops/s | 14.1 MB |
 
 ### Standalone Runtime Profile
@@ -178,11 +178,11 @@ All figures below are empirically measured via high-resolution hardware timers (
 | Metric | Strata Measured Characteristic | Verification Method |
 |---|---|---|
 | **Engine Core** | Safe, 100% pure Rust (Zero Chromium, zero WebViews, zero V8) | Source audit and workspace crate boundaries |
-| **Cold Start to First Frame** | **~42 ms** (clean boot to presentation) | Measured via `strata_benchmark::bench_cold_start` |
-| **Baseline Idle Memory (RSS)** | **~32 MB** (Linux GTK3/Cairo native surface) | Measured via `get_process_memory_rss_mb` |
-| **Layout Compute (1k Flex Items)** | **0.41 ms** (W3C Flexbox Level 1) | Measured via `strata_benchmark::bench_flexbox_layout` |
-| **Layout Compute (1k Grid Cells)** | **0.32 ms** (W3C CSS Grid Level 2) | Measured via `strata_benchmark::bench_w3c_grid_layout_1k` |
-| **Reactive Update Propagation** | **0.33 ms** (10,000 diamond DAG cascades) | Measured via `strata_benchmark::bench_signal_propagation_100k` |
+| **Cold Start to First Frame** | **~36 ms** (clean boot to presentation) | Measured via `strata_benchmark::bench_cold_start` |
+| **Baseline Idle Memory (RSS)** | **~32.4 MB** (Linux native surface) | Measured via `get_process_memory_rss_mb` |
+| **Layout Compute (1k Flex Items)** | **0.49 ms** (W3C Flexbox Level 1) | Measured via `strata_benchmark::bench_flexbox_layout` |
+| **Layout Compute (1k Grid Cells)** | **0.57 ms** (W3C CSS Grid Level 2) | Measured via `strata_benchmark::bench_w3c_grid_layout_1k` |
+| **Reactive Update Propagation** | **9.15 ms** (10,000 diamond DAG cascades, 0.91 µs/update) | Measured via `strata_benchmark::bench_signal_propagation_100k` |
 | **External Dependencies** | **Zero C / Node.js dependencies** | Cargo.lock workspace dependency graph |
 
 ### Reproducing the Benchmarks
@@ -292,7 +292,10 @@ Strata is organized into five cohesive architecture tiers plus the top-level fac
 3. **Run the Zero-Chromium Web Browser Example:**
    ```bash
    cargo run -p strata_browser
+   # Or run in headless verification mode:
+   cargo run -p strata_browser -- --headless
    ```
+   *For the sovereign multi-process web browser with developer tools and network sandboxing, see companion [`onyx`](https://github.com/strataui/onyx).*
 
 ---
 

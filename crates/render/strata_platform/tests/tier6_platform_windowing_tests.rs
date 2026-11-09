@@ -199,11 +199,13 @@ fn test_goal_22_win32_window_wndproc_message_dispatch_and_high_dpi() {
     assert_eq!(roundtrip_pt, win_pt);
 
     // 2. Verify Win32 message dispatch simulation via mock platform window
-    let mut config = WindowConfig::default();
-    config.title = "Win32 Test Application".to_string();
-    config.width = 1024;
-    config.height = 768;
-    config.decoration = WindowDecoration::ClientSideDecorations;
+    let config = WindowConfig {
+        title: "Win32 Test Application".to_string(),
+        width: 1024,
+        height: 768,
+        decoration: WindowDecoration::ClientSideDecorations,
+        ..Default::default()
+    };
 
     let mut window = MockPlatformWindow::new(config);
     assert_eq!(window.title(), "Win32 Test Application");
@@ -302,9 +304,11 @@ fn test_goal_23_macos_cocoa_nswindow_cvdisplaylink_pacing() {
 
 #[test]
 fn test_goal_25_dynamic_multi_monitor_high_dpi_scaling_and_hotplug() {
-    let mut config = WindowConfig::default();
-    config.width = 1280;
-    config.height = 720;
+    let config = WindowConfig {
+        width: 1280,
+        height: 720,
+        ..Default::default()
+    };
     let mut window = MockPlatformWindow::new(config);
 
     // Check default monitor configuration
@@ -333,9 +337,7 @@ fn test_goal_25_dynamic_multi_monitor_high_dpi_scaling_and_hotplug() {
 
     // Verify ScaleFactorChanged event emission
     let events = window.poll_events();
-    assert!(events
-        .iter()
-        .any(|ev| *ev == PlatformEvent::ScaleFactorChanged { scale_factor: 2.0 }));
+    assert!(events.contains(&PlatformEvent::ScaleFactorChanged { scale_factor: 2.0 }));
 
     // Test LivePlatformWindow multi-monitor queries
     let live_window = LivePlatformWindow::new(WindowConfig::default());

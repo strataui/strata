@@ -1,13 +1,18 @@
 //! Tauri 2 WebKitGTK Window Runner and Snapshot Orchestrator.
 
-use crate::fixture::{get_fixture_html, ParityLevel};
-use std::fs;
-use std::path::Path;
-use std::thread;
-use std::time::Duration;
-use tauri::{WebviewUrl, WebviewWindowBuilder};
+use crate::fixture::ParityLevel;
 
-/// Runs the Tauri 2 WebKitGTK window on DISPLAY=:1 maximized, takes a screenshot, and exits.
+#[cfg(feature = "tauri-backend")]
+use {
+    crate::fixture::get_fixture_html,
+    std::fs,
+    std::path::Path,
+    std::thread,
+    std::time::Duration,
+    tauri::{WebviewUrl, WebviewWindowBuilder},
+};
+
+#[cfg(feature = "tauri-backend")]
 pub fn run_tauri_window(level: ParityLevel, html_fixture_path: &str, screenshot_path: &str) {
     fs::write(html_fixture_path, get_fixture_html(level))
         .expect("Failed to write HTML fixture for Tauri");
@@ -45,11 +50,12 @@ pub fn run_tauri_window(level: ParityLevel, html_fixture_path: &str, screenshot_
     app.run(|_, _| {});
 }
 
-/// Loads a prepared HTML file in a fixed-size Tauri window, captures it, and exits.
-///
-/// The window is undecorated, non-resizable, and explicitly not maximized. The
-/// capture is scoped to the window ID, so a window manager offset does not
-/// affect the pixels. A fixed 1500 ms settle period is used as the load signal.
+#[cfg(not(feature = "tauri-backend"))]
+pub fn run_tauri_window(_level: ParityLevel, _html_fixture_path: &str, _screenshot_path: &str) {
+    eprintln!("[Tauri] Tauri runner disabled. Compile with `--features tauri-backend` to enable WebKitGTK execution.");
+}
+
+#[cfg(feature = "tauri-backend")]
 pub fn run_tauri_capture(
     html_fixture_path: &str,
     screenshot_path: &str,
@@ -111,4 +117,16 @@ pub fn run_tauri_capture(
 
     app.run(|_, _| {});
     Path::new(screenshot_path).exists()
+}
+
+#[cfg(not(feature = "tauri-backend"))]
+pub fn run_tauri_capture(
+    _html_fixture_path: &str,
+    _screenshot_path: &str,
+    _width: u32,
+    _height: u32,
+    _title: &str,
+) -> bool {
+    eprintln!("[Tauri] Tauri runner disabled. Compile with `--features tauri-backend` to enable WebKitGTK execution.");
+    false
 }
