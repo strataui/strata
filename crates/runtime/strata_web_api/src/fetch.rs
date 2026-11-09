@@ -478,10 +478,9 @@ pub fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, FetchErro
         .clone()
         .or_else(|| current_req.headers.get("origin").map(|s| s.to_string()));
 
-    let client_origin_norm = match &client_origin {
-        Some(raw) => Some(compute_origin(raw).unwrap_or_else(|_| raw.trim().to_string())),
-        None => None,
-    };
+    let client_origin_norm = client_origin
+        .as_ref()
+        .map(|raw| compute_origin(raw).unwrap_or_else(|_| raw.trim().to_string()));
 
     for _ in 0..max_redirects {
         let target_origin = compute_origin(&current_url)?;
@@ -595,7 +594,7 @@ pub fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, FetchErro
                         .get("access-control-allow-headers")
                         .unwrap_or("");
                     let headers_list: Vec<&str> = allow_headers.split(',').map(|s| s.trim()).collect();
-                    let wildcard = headers_list.iter().any(|&h| h == "*");
+                    let wildcard = headers_list.contains(&"*");
                     if !wildcard {
                         for header in &custom_headers {
                             if !headers_list.iter().any(|&h| h.eq_ignore_ascii_case(header)) {

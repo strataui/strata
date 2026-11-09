@@ -1716,8 +1716,8 @@ fn normalize_color_stops(stops: &[ColorStop]) -> Vec<(f32, Color)> {
             let end_pos = if end_idx < result.len() { result[end_idx].0 } else { 1.0 };
             let count = (end_idx - start_idx) as f32;
             let step = (end_pos - start_pos) / count;
-            for j in (start_idx + 1)..end_idx {
-                result[j].0 = start_pos + step * (j - start_idx) as f32;
+            for (k, entry) in result[(start_idx + 1)..end_idx].iter_mut().enumerate() {
+                entry.0 = start_pos + step * (k + 1) as f32;
             }
             i = end_idx;
         } else {

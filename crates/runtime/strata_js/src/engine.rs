@@ -17,6 +17,8 @@ use std::rc::Rc;
 use crate::promise::{JsPromise, PromiseState, RejectFn, ResolveFn};
 use crate::{ClosureHandle, JsValue, SymbolId};
 
+pub type WeakObjectMap = HashMap<u64, std::rc::Weak<RefCell<BTreeMap<String, JsValue>>>>;
+
 pub struct JsEngine {
     pub globals: BTreeMap<String, JsValue>,
     pub root_scope: Rc<RefCell<Scope>>,
@@ -48,7 +50,7 @@ pub struct JsEngine {
     pub weak_maps: RefCell<HashMap<u64, HashMap<usize, JsValue>>>,
     pub next_weak_id: u64,
     pub weak_sets: RefCell<HashMap<u64, HashSet<usize>>>,
-    pub weak_refs: RefCell<HashMap<u64, std::rc::Weak<RefCell<BTreeMap<String, JsValue>>>>>,
+    pub weak_refs: RefCell<WeakObjectMap>,
     pub generators: RefCell<HashMap<u64, GeneratorInstance>>,
     pub next_generator_id: u64,
     pub pending_yield: Option<JsValue>,

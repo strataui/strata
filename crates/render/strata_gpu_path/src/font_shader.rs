@@ -356,17 +356,15 @@ pub fn evaluate_slug_analytical_coverage(glyph: &AnalyticGlyph, p: [f32; 2], pix
 
         let (r1, r2) = solve_quadratic_roots_f32(a, b, c);
 
-        for t_opt in [r1, r2] {
-            if let Some(t) = t_opt {
-                let u = 1.0 - t;
-                let x = u * u * p0[0] + 2.0 * u * t * p1[0] + t * t * p2[0];
-                if x > p[0] {
-                    let dy = 2.0 * a * t + b;
-                    if dy > 0.0 {
-                        winding += 1;
-                    } else if dy < 0.0 {
-                        winding -= 1;
-                    }
+        for t in [r1, r2].into_iter().flatten() {
+            let u = 1.0 - t;
+            let x = u * u * p0[0] + 2.0 * u * t * p1[0] + t * t * p2[0];
+            if x > p[0] {
+                let dy = 2.0 * a * t + b;
+                if dy > 0.0 {
+                    winding += 1;
+                } else if dy < 0.0 {
+                    winding -= 1;
                 }
             }
         }
