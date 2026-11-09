@@ -99,6 +99,7 @@ pub enum JsValue {
     Object(Rc<RefCell<BTreeMap<String, JsValue>>>),
     Function(ClosureHandle),
     Symbol(SymbolId),
+    Promise(crate::promise::JsPromise<JsValue>),
 }
 
 impl PartialEq for JsValue {
@@ -118,6 +119,7 @@ impl PartialEq for JsValue {
             (Self::BigInt(a), Self::BigInt(b)) => a == b,
             (Self::Function(a), Self::Function(b)) => a.id == b.id,
             (Self::Symbol(a), Self::Symbol(b)) => a.id == b.id,
+            (Self::Promise(a), Self::Promise(b)) => a == b,
             (Self::Array(a), Self::Array(b)) => {
                 if Rc::ptr_eq(a, b) {
                     true
@@ -160,6 +162,7 @@ impl JsValue {
             Self::Array(_) => "object",
             Self::Function(_) => "function",
             Self::Symbol(_) => "symbol",
+            Self::Promise(_) => "object",
             Self::Object(cell) => {
                 let map = cell.borrow();
                 if map.contains_key("__fn__") || map.contains_key("__is_class__") {
@@ -188,6 +191,7 @@ impl JsValue {
             (Self::BigInt(a), Self::BigInt(b)) => a == b,
             (Self::Function(a), Self::Function(b)) => a.id == b.id,
             (Self::Symbol(a), Self::Symbol(b)) => a.id == b.id,
+            (Self::Promise(a), Self::Promise(b)) => a == b,
             (Self::Array(a), Self::Array(b)) => Rc::ptr_eq(a, b),
             (Self::Object(a), Self::Object(b)) => Rc::ptr_eq(a, b),
             _ => false,
@@ -207,7 +211,8 @@ impl JsValue {
             | (Self::Array(_), Self::Array(_))
             | (Self::Object(_), Self::Object(_))
             | (Self::Function(_), Self::Function(_))
-            | (Self::Symbol(_), Self::Symbol(_)) => self.strict_eq(other),
+            | (Self::Symbol(_), Self::Symbol(_))
+            | (Self::Promise(_), Self::Promise(_)) => self.strict_eq(other),
 
             // null == undefined -> true
             (Self::Null, Self::Undefined) | (Self::Undefined, Self::Null) => true,
@@ -301,7 +306,7 @@ impl JsValue {
             Self::Number(n) => *n != 0.0 && !n.is_nan(),
             Self::String(s) => !s.is_empty(),
             Self::BigInt(bi) => !bi.is_zero(),
-            Self::Array(_) | Self::Object(_) | Self::Function(_) | Self::Symbol(_) => true,
+            Self::Array(_) | Self::Object(_) | Self::Function(_) | Self::Symbol(_) | Self::Promise(_) => true,
         }
     }
 
@@ -311,6 +316,21 @@ impl JsValue {
 
     pub fn is_symbol(&self) -> bool {
         matches!(self, Self::Symbol(_))
+    }
+
+    pub fn is_promise(&self) -> bool {
+        matches!(self, Self::Promise(_))
+    }
+
+    pub fn as_promise(&self) -> Option<&crate::promise::JsPromise<JsValue>> {
+        match self {
+            Self::Promise(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn new_promise(p: crate::promise::JsPromise<JsValue>) -> Self {
+        Self::Promise(p)
     }
 
     pub fn new_object(map: BTreeMap<String, JsValue>) -> Self {
@@ -893,7 +913,14 @@ impl std::fmt::Display for JsValue {
                     write!(f, "Symbol()")
                 }
             }
+            Self::Promise(_) => write!(f, "[object Promise]"),
         }
+    }
+}
+
+impl From<crate::promise::JsPromise<JsValue>> for JsValue {
+    fn from(p: crate::promise::JsPromise<JsValue>) -> Self {
+        Self::Promise(p)
     }
 }
 

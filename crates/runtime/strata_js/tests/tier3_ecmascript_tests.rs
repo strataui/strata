@@ -368,3 +368,48 @@ fn test_bitwise_and_exponentiation_operators() {
     assert_eq!(engine.globals.get("exp1"), Some(&JsValue::Number(256.0)));
     assert_eq!(engine.globals.get("exp2"), Some(&JsValue::Number(27.0)));
 }
+
+#[test]
+fn test_promise_first_class_reference_semantics() {
+    let mut engine = JsEngine::new();
+    let script = r#"
+        var p1 = new Promise(function(resolve, reject) {
+            resolve(100);
+        });
+        var typeOfP1 = typeof p1;
+        var p1IsSelfIdentical = (p1 === p1);
+        var p2 = Promise.resolve(200);
+        var p2NotP1 = (p1 !== p2);
+    "#;
+    engine.eval(script).expect("eval promise reference semantics");
+
+    let p1 = engine.globals.get("p1").expect("p1 promise");
+    assert!(p1.is_promise(), "p1 must be a first-class JsValue::Promise");
+    assert_eq!(engine.globals.get("typeOfP1"), Some(&JsValue::String("object".to_string())));
+    assert_eq!(engine.globals.get("p1IsSelfIdentical"), Some(&JsValue::Bool(true)));
+    assert_eq!(engine.globals.get("p2NotP1"), Some(&JsValue::Bool(true)));
+    assert!(p1.is_truthy());
+    assert_eq!(p1.to_json_string(), "{}");
+}
+
+#[test]
+fn test_async_await_cooperative_settlement() {
+    let mut engine = JsEngine::new();
+    let script = r#"
+        async function runCompute() {
+            var a = await Promise.resolve(21);
+            var b = await Promise.resolve(a * 2);
+            return b;
+        }
+
+        var result = null;
+        async function main() {
+            result = await runCompute();
+        }
+        main();
+    "#;
+    engine.eval(script).expect("eval async await cooperative settlement");
+    strata_js::promise::drain_microtasks();
+
+    assert_eq!(engine.globals.get("result"), Some(&JsValue::Number(42.0)));
+}

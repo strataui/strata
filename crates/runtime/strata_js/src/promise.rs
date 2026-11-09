@@ -72,6 +72,22 @@ impl<T> Clone for JsPromise<T> {
     }
 }
 
+impl<T> PartialEq for JsPromise<T> {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl<T: Clone + std::fmt::Debug> std::fmt::Debug for JsPromise<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Ok(inner) = self.inner.try_borrow() {
+            write!(f, "Promise {{ state: {:?} }}", inner.state)
+        } else {
+            write!(f, "Promise {{ state: <borrowed> }}")
+        }
+    }
+}
+
 impl<T: Clone + 'static> JsPromise<T> {
     /// Creates a new pending promise along with resolve and reject controller callbacks.
     pub fn new_pending() -> (Self, ResolveFn<T>, RejectFn) {
