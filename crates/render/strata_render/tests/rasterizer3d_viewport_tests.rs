@@ -108,3 +108,48 @@ fn serial_and_banded_paths_agree() {
         }
     }
 }
+
+#[test]
+fn test_evaluate_gpu_rte_vertex_accuracy() {
+    use strata_render::camera64::{DVec3, EARTH_RADIUS_M};
+    use strata_render::math3d::Mat4;
+    use strata_render::rasterizer3d::evaluate_gpu_rte_vertex;
+
+    let eye = DVec3::new(EARTH_RADIUS_M + 5000.0, 0.0, 0.0);
+    let (eye_h, eye_l) = eye.split_high_low();
+
+    let pos = DVec3::new(EARTH_RADIUS_M + 5000.25, 0.0, 0.0);
+    let (pos_h, pos_l) = pos.split_high_low();
+
+    let view_proj_rel = Mat4::IDENTITY;
+    let clip = evaluate_gpu_rte_vertex(pos_h, pos_l, eye_h, eye_l, &view_proj_rel);
+
+    assert!((clip.x - 0.25).abs() < 1e-6, "clip.x error: got {}", clip.x);
+    assert!(clip.y.abs() < 1e-6, "clip.y should be 0");
+    assert!(clip.z.abs() < 1e-6, "clip.z should be 0");
+    assert!((clip.w - 1.0).abs() < 1e-6, "clip.w should be 1.0");
+}
+
+#[test]
+fn test_rte_mesh_builder_interleaved_layout() {
+    use strata_render::camera64::{DVec3, EARTH_RADIUS_M};
+    use strata_render::terrain3d::RteMeshBuilder;
+
+    let mut builder = RteMeshBuilder::with_capacity(4, 2);
+    let p0 = DVec3::new(EARTH_RADIUS_M, 0.0, 0.0);
+    let p1 = DVec3::new(EARTH_RADIUS_M + 10.0, 0.0, 0.0);
+    let p2 = DVec3::new(EARTH_RADIUS_M + 10.0, 10.0, 0.0);
+    let p3 = DVec3::new(EARTH_RADIUS_M, 10.0, 0.0);
+
+    let v0 = builder.push_vertex(p0, [0.0, 0.0, 1.0], (0.0, 0.0));
+    let v1 = builder.push_vertex(p1, [0.0, 0.0, 1.0], (1.0, 0.0));
+    let v2 = builder.push_vertex(p2, [0.0, 0.0, 1.0], (1.0, 1.0));
+    let v3 = builder.push_vertex(p3, [0.0, 0.0, 1.0], (0.0, 1.0));
+
+    builder.push_quad(v0, v1, v2, v3);
+
+    assert_eq!(builder.vertex_count(), 4);
+    assert_eq!(builder.triangle_count(), 2);
+    assert_eq!(builder.vertices().len(), 4 * RteMeshBuilder::STRIDE);
+    assert_eq!(builder.indices().len(), 6);
+}

@@ -183,6 +183,7 @@ impl AppRuntime {
             self.active_focus = Some(ActiveInput {
                 input_index: target.input_index,
                 input_id: target.input_id,
+                entity_id: target.entity_id,
                 state,
                 on_input: target.on_input,
                 on_change: target.on_change,
@@ -265,13 +266,22 @@ impl AppRuntime {
                 let target_idx = active.input_index;
                 let target_id = active.input_id.as_deref();
 
-                if let Some(layout) = Self::find_input_layout(
-                    &self.root_blueprint,
-                    &self.layout_root,
-                    target_idx,
-                    target_id,
-                    &mut current_idx,
-                ) {
+                let layout_by_entity = if let Some(eid) = active.entity_id {
+                    self.layout_root.find_by_entity_id(eid)
+                } else {
+                    None
+                };
+                let layout_opt = layout_by_entity.or_else(|| {
+                    Self::find_input_layout(
+                        &self.root_blueprint,
+                        &self.layout_root,
+                        target_idx,
+                        target_id,
+                        &mut current_idx,
+                    )
+                });
+
+                if let Some(layout) = layout_opt {
                     let rel_x = (px - layout.geometry.content_box.x).max(0.0);
                     let is_mono = strata_layout::is_monospace_family(layout.style.font_family);
                     let char_idx = Self::calculate_exact_char_index_at_offset(
@@ -442,6 +452,27 @@ impl AppRuntime {
         }
 
         match event {
+            PlatformEvent::ImeCommit(text) => {
+                if !text.is_empty() {
+                    self.reset_caret_blink();
+                    let active = self.active_focus.as_mut().unwrap();
+                    active.state.insert_text(text);
+                    let val = active.state.text.get();
+                    if let Some(ref on_input) = active.on_input {
+                        on_input(strata_dom::Event::with_value(
+                            strata_dom::EventType::Input,
+                            val,
+                        ));
+                    }
+                    self.sync_active_input_layout();
+                    KeyDispatchResult::NeedsRebuild
+                } else {
+                    KeyDispatchResult::Ignored
+                }
+            }
+            PlatformEvent::ImePreedit { .. } => {
+                KeyDispatchResult::RedrawOnly
+            }
             PlatformEvent::ReceivedCharacter(ch) => {
                 if !ch.is_control() {
                     self.reset_caret_blink();
@@ -752,7 +783,11 @@ impl AppRuntime {
             py,
             "data-app-region",
         );
-        if region.as_deref() != Some("drag") {
+        let is_drag = region.as_deref() == Some("drag")
+            || self.csd_controller.hit_test(self.viewport_width, self.viewport_height, px, py)
+                == strata_platform::CsdHitZone::Titlebar;
+
+        if !is_drag {
             self.pending_window_drag = None;
             return false;
         }
@@ -785,6 +820,10 @@ impl AppRuntime {
                     strata_platform::gtk_begin_window_drag(sx / self.viewport_width.max(1.0), sy);
                     let now_max = strata_platform::gtk_is_maximized();
                     return was_max != now_max;
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    return true;
                 }
             }
         }

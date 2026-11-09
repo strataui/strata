@@ -7,3 +7,4 @@ license.workspace = true
 description = "Core DOM, reactive signals, and synthetic event routing for Strata"
 
 [dependencies]
+strata_primitives = { workspace = true }

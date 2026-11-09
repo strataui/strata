@@ -29,6 +29,7 @@ pub type SubscriberCallback = Rc<RefCell<dyn FnMut()>>;
 /// Central thread-local reactive graph coordinator.
 pub struct ReactiveRuntime {
     current_subscriber: Cell<Option<SubscriberId>>,
+    evaluating_subscribers: RefCell<Vec<SubscriberId>>,
     signal_subscribers: RefCell<BTreeMap<SignalId, BTreeSet<SubscriberId>>>,
     subscriber_signals: RefCell<BTreeMap<SubscriberId, BTreeSet<SignalId>>>,
     signal_producer: RefCell<BTreeMap<SignalId, SubscriberId>>,
@@ -47,6 +48,7 @@ impl ReactiveRuntime {
     fn new() -> Self {
         Self {
             current_subscriber: Cell::new(None),
+            evaluating_subscribers: RefCell::new(Vec::new()),
             signal_subscribers: RefCell::new(BTreeMap::new()),
             subscriber_signals: RefCell::new(BTreeMap::new()),
             signal_producer: RefCell::new(BTreeMap::new()),
@@ -134,6 +136,41 @@ impl ReactiveRuntime {
 
     pub fn mark_dirty() {
         let _ = RUNTIME.try_with(|rt| rt.dirty_signals.set(true));
+    }
+
+    pub fn push_evaluating(sub_id: SubscriberId) -> bool {
+        RUNTIME.with(|rt| {
+            if let Ok(mut stack) = rt.evaluating_subscribers.try_borrow_mut() {
+                if stack.contains(&sub_id) {
+                    false
+                } else {
+                    stack.push(sub_id);
+                    true
+                }
+            } else {
+                false
+            }
+        })
+    }
+
+    pub fn pop_evaluating(sub_id: SubscriberId) {
+        let _ = RUNTIME.try_with(|rt| {
+            if let Ok(mut stack) = rt.evaluating_subscribers.try_borrow_mut() {
+                if let Some(pos) = stack.iter().rposition(|&id| id == sub_id) {
+                    stack.remove(pos);
+                }
+            }
+        });
+    }
+
+    pub fn is_evaluating(sub_id: SubscriberId) -> bool {
+        RUNTIME.try_with(|rt| {
+            rt.evaluating_subscribers
+                .try_borrow()
+                .map(|stack| stack.contains(&sub_id))
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
     }
 
     pub fn register_signal_producer(signal_id: SignalId, sub_id: SubscriberId) {
@@ -265,6 +302,9 @@ impl ReactiveRuntime {
             if let Ok(mut free) = rt.free_subscriber_indices.try_borrow_mut() {
                 free.push(sub_id.index);
             }
+            if let Ok(mut evaluating) = rt.evaluating_subscribers.try_borrow_mut() {
+                evaluating.retain(|&id| id != sub_id);
+            }
             if let Ok(mut subs) = rt.subscribers.try_borrow_mut() {
                 subs.remove(&sub_id)
             } else {
@@ -277,12 +317,16 @@ impl ReactiveRuntime {
     pub fn notify(signal_id: SignalId) {
         let _ = RUNTIME.try_with(|rt| {
             rt.dirty_signals.set(true);
-            let (subs, stale_subs) = {
-                if let Ok(sig_subs) = rt.signal_subscribers.try_borrow() {
-                    if let Some(subs_set) = sig_subs.get(&signal_id) {
-                        let gens = rt.subscriber_generations.try_borrow().ok();
-                        let mut valid = Vec::new();
-                        let mut stale = Vec::new();
+            let mut stale_subs: Option<Vec<SubscriberId>> = None;
+
+            if let Ok(sig_subs) = rt.signal_subscribers.try_borrow() {
+                if let Some(subs_set) = sig_subs.get(&signal_id) {
+                    if subs_set.is_empty() {
+                        return;
+                    }
+                    let gens = rt.subscriber_generations.try_borrow().ok();
+                    let ranks = rt.subscriber_ranks.try_borrow().ok();
+                    if let Ok(mut pending) = rt.pending_subscribers.try_borrow_mut() {
                         for &sub in subs_set {
                             let is_alive = if let Some(ref g) = gens {
                                 g.get(sub.index as usize).copied() == Some(sub.generation)
@@ -290,43 +334,30 @@ impl ReactiveRuntime {
                                 true
                             };
                             if is_alive {
-                                valid.push(sub);
+                                let rank = ranks.as_ref().and_then(|r| r.get(&sub).copied()).unwrap_or(0);
+                                pending.insert((rank, sub));
                             } else {
-                                stale.push(sub);
+                                stale_subs.get_or_insert_with(Vec::new).push(sub);
                             }
                         }
-                        (valid, stale)
-                    } else {
-                        return;
                     }
                 } else {
                     return;
                 }
-            };
+            } else {
+                return;
+            }
 
-            // Evict stale subscriptions automatically
-            if !stale_subs.is_empty() {
+            // Evict stale subscriptions automatically only when stale subscribers are encountered
+            if let Some(stale_list) = stale_subs {
                 if let Ok(mut sig_subs) = rt.signal_subscribers.try_borrow_mut() {
                     if let Some(subs_set) = sig_subs.get_mut(&signal_id) {
-                        for stale in stale_subs {
+                        for stale in stale_list {
                             subs_set.remove(&stale);
                         }
                         if subs_set.is_empty() {
                             sig_subs.remove(&signal_id);
                         }
-                    }
-                }
-            }
-
-            if subs.is_empty() {
-                return;
-            }
-
-            if let Ok(ranks) = rt.subscriber_ranks.try_borrow() {
-                if let Ok(mut pending) = rt.pending_subscribers.try_borrow_mut() {
-                    for sub_id in subs {
-                        let rank = ranks.get(&sub_id).copied().unwrap_or(0);
-                        pending.insert((rank, sub_id));
                     }
                 }
             }
@@ -354,7 +385,8 @@ impl ReactiveRuntime {
 
     pub fn flush() {
         RUNTIME.with(|rt| {
-            let mut run_counts: std::collections::HashMap<SubscriberId, usize> = std::collections::HashMap::new();
+            let mut loop_count: usize = 0;
+            let mut run_counts: Option<std::collections::HashMap<SubscriberId, usize>> = None;
             const MAX_RUNS_PER_SUBSCRIBER: usize = 50;
 
             loop {
@@ -381,11 +413,18 @@ impl ReactiveRuntime {
                     continue;
                 }
 
-                let count = run_counts.entry(sub_id).or_insert(0);
-                *count += 1;
-                if *count > MAX_RUNS_PER_SUBSCRIBER {
-                    eprintln!("Strata Reactive Guard: Subscriber {} exceeded maximum recursive executions (possible circular dependency).", sub_id);
-                    continue;
+                loop_count += 1;
+                if loop_count > 64 {
+                    let map = run_counts.get_or_insert_with(std::collections::HashMap::new);
+                    let count = map.entry(sub_id).or_insert(0);
+                    *count += 1;
+                    if *count > MAX_RUNS_PER_SUBSCRIBER {
+                        eprintln!(
+                            "Strata Reactive Guard: Subscriber {} exceeded maximum recursive executions (possible circular dependency).",
+                            sub_id
+                        );
+                        continue;
+                    }
                 }
 
                 let runner = {
@@ -555,6 +594,25 @@ pub fn create_signal<T: Clone + 'static>(initial: T) -> (ReadSignal<T>, WriteSig
     sig.split()
 }
 
+/// RAII guard tracking an actively evaluating subscriber on the thread-local call stack.
+pub struct EvaluatingGuard(SubscriberId);
+
+impl EvaluatingGuard {
+    pub fn new(sub_id: SubscriberId) -> Option<Self> {
+        if ReactiveRuntime::push_evaluating(sub_id) {
+            Some(Self(sub_id))
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for EvaluatingGuard {
+    fn drop(&mut self) {
+        ReactiveRuntime::pop_evaluating(self.0);
+    }
+}
+
 struct MemoInner {
     subscriber_id: SubscriberId,
 }
@@ -596,28 +654,55 @@ impl<T: Clone + PartialEq + 'static> Memo<T> {
         let eq_clone = eq_cell.clone();
 
         let runner = Rc::new(RefCell::new(move || {
-            ReactiveRuntime::clear_subscriber_dependencies(subscriber_id);
-            let prev = RUNTIME.with(|rt| rt.current_subscriber.replace(Some(subscriber_id)));
-            let new_val = (compute_clone.borrow_mut())();
-            RUNTIME.with(|rt| rt.current_subscriber.set(prev));
-
-            let changed = match &*value_clone.borrow() {
-                Some(old_val) => !eq_clone(old_val, &new_val),
-                None => true,
+            let _guard = match EvaluatingGuard::new(subscriber_id) {
+                Some(guard) => guard,
+                None => {
+                    eprintln!(
+                        "Strata Reactive Guard: Circular memo dependency detected for subscriber {}. Returning cached value.",
+                        subscriber_id
+                    );
+                    return;
+                }
             };
 
-            *value_clone.borrow_mut() = Some(new_val);
+            ReactiveRuntime::clear_subscriber_dependencies(subscriber_id);
+            let prev = RUNTIME.with(|rt| rt.current_subscriber.replace(Some(subscriber_id)));
+            let maybe_new_val = match compute_clone.try_borrow_mut() {
+                Ok(mut compute) => Some(compute()),
+                Err(_) => {
+                    eprintln!(
+                        "Strata Reactive Guard: Memo compute closure already borrowed for subscriber {}. Returning cached value.",
+                        subscriber_id
+                    );
+                    None
+                }
+            };
+            RUNTIME.with(|rt| rt.current_subscriber.set(prev));
 
-            // Halt downstream propagation if output has not changed (O(1) memoization)
-            if changed {
-                ReactiveRuntime::notify(signal_id);
+            if let Some(new_val) = maybe_new_val {
+                let changed = match value_clone.try_borrow().as_deref() {
+                    Ok(Some(old_val)) => !eq_clone(old_val, &new_val),
+                    Ok(None) => true,
+                    Err(_) => true,
+                };
+
+                if let Ok(mut val) = value_clone.try_borrow_mut() {
+                    *val = Some(new_val);
+                }
+
+                // Halt downstream propagation if output has not changed (O(1) memoization)
+                if changed {
+                    ReactiveRuntime::notify(signal_id);
+                }
             }
         }));
 
         ReactiveRuntime::register_subscriber(subscriber_id, runner.clone());
 
         // Initial evaluation
-        (runner.borrow_mut())();
+        if let Ok(r) = runner.try_borrow_mut() {
+            (*r)();
+        }
 
         Self {
             id: signal_id,
@@ -632,7 +717,36 @@ impl<T: Clone + PartialEq + 'static> Memo<T> {
 
     pub fn get(&self) -> T {
         ReactiveRuntime::track(self.id);
-        self.value.borrow().as_ref().unwrap().clone()
+        match self.value.borrow().as_ref() {
+            Some(v) => v.clone(),
+            None => panic!(
+                "Strata Reactive Guard: Memo read before initial value could be computed (unresolvable circular dependency during initialization)."
+            ),
+        }
+    }
+
+    pub fn try_get(&self) -> Option<T> {
+        ReactiveRuntime::track(self.id);
+        self.value.borrow().as_ref().cloned()
+    }
+
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        ReactiveRuntime::track(self.id);
+        match self.value.borrow().as_ref() {
+            Some(v) => f(v),
+            None => panic!(
+                "Strata Reactive Guard: Memo read before initial value could be computed (unresolvable circular dependency during initialization)."
+            ),
+        }
+    }
+
+    pub fn untracked_get(&self) -> T {
+        match self.value.borrow().as_ref() {
+            Some(v) => v.clone(),
+            None => panic!(
+                "Strata Reactive Guard: Memo read before initial value could be computed."
+            ),
+        }
     }
 }
 
@@ -663,14 +777,29 @@ impl Effect {
                 return;
             }
 
+            let _guard = match EvaluatingGuard::new(subscriber_id) {
+                Some(guard) => guard,
+                None => {
+                    eprintln!(
+                        "Strata Reactive Guard: Circular effect dependency detected for subscriber {}.",
+                        subscriber_id
+                    );
+                    return;
+                }
+            };
+
             // Run previous cleanup closure if any
-            if let Some(prev_clean) = cleanup_runner.borrow_mut().take() {
-                prev_clean();
+            if let Ok(mut cleanup) = cleanup_runner.try_borrow_mut() {
+                if let Some(prev_clean) = cleanup.take() {
+                    prev_clean();
+                }
             }
 
             // Run effect
             let next_clean = effect_fn();
-            *cleanup_runner.borrow_mut() = next_clean;
+            if let Ok(mut cleanup) = cleanup_runner.try_borrow_mut() {
+                *cleanup = next_clean;
+            }
         }));
 
         ReactiveRuntime::register_subscriber(subscriber_id, runner.clone());
@@ -678,7 +807,9 @@ impl Effect {
         // Initial run
         {
             let prev = RUNTIME.with(|rt| rt.current_subscriber.replace(Some(subscriber_id)));
-            (runner.borrow_mut())();
+            if let Ok(mut r) = runner.try_borrow_mut() {
+                (*r)();
+            }
             RUNTIME.with(|rt| rt.current_subscriber.set(prev));
         }
 
@@ -692,8 +823,10 @@ impl Effect {
     pub fn dispose(&self) {
         if !self.disposed.replace(true) {
             ReactiveRuntime::unregister_subscriber(self.subscriber_id);
-            if let Some(clean) = self.cleanup.borrow_mut().take() {
-                clean();
+            if let Ok(mut cleanup) = self.cleanup.try_borrow_mut() {
+                if let Some(clean) = cleanup.take() {
+                    clean();
+                }
             }
         }
     }

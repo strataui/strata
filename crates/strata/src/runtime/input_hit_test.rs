@@ -98,6 +98,7 @@ impl AppRuntime {
                         InputHitTarget {
                             input_index: this_idx,
                             input_id,
+                            entity_id: if layout.entity_id.is_valid() { Some(layout.entity_id) } else { None },
                             current_value,
                             font_size: layout.style.font_size,
                             line_height: layout.style.line_height,

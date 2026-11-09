@@ -18,7 +18,8 @@ pub use compute::{
 pub use curve::{CubicBezier, Point2D, QuadraticBezier, Rect2D};
 pub use font_cache::{AnalyticGlyph, AnalyticGlyphCache};
 pub use font_shader::{
-    GpuGlyphCurve, GpuGlyphInstance, SlugGlyphBuffer, WGSL_SLUG_FONT_SHADER,
+    evaluate_slug_analytical_coverage, solve_quadratic_roots_f32, GpuGlyphCurve, GpuGlyphInstance,
+    SlugGlyphBuffer, WGSL_SLUG_FONT_SHADER,
 };
 pub use path::{FillRule, Path, PathBuilder, PathVerb, StrokeStyle};
 pub use sdf::{distance_to_quadratic, is_point_inside_closed_path, solve_cubic_roots};

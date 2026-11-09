@@ -103,7 +103,7 @@ impl StrataApp {
             "[+] Launching Strata Native App: \"{}\"...",
             self.window_config.title
         );
-        let window = LivePlatformWindow::new(self.window_config.clone());
+        let mut window = LivePlatformWindow::new(self.window_config.clone());
 
         if let Some(ref mut on_start) = self.hooks.on_start {
             on_start(&mut self.runtime);
@@ -149,6 +149,7 @@ impl StrataApp {
                     on_draw(&mut runtime.display_list);
                 }
                 let _ = runtime.render_frame(compositor, presenter, false);
+                let _ = window.present_surface(&presenter.backing_buffer, presenter.width, presenter.height);
                 if let Some(ref mut on_frame) = hooks.on_frame {
                     let info = AppFrameInfo {
                         frame_index: runtime.frame_count,
@@ -169,22 +170,50 @@ impl StrataApp {
         }
     }
 
-    /// Runs the application using the native platform event loop (Wayland/X11 on Linux,
-    /// Win32 on Windows, Cocoa on macOS), or MockEventLoop on headless/mock targets.
-    pub fn run(self) {
+    /// Runs the application using the native platform window (Wayland/X11 on Linux,
+    /// Win32 on Windows, Cocoa on macOS), or headless fallback when running headless.
+    pub fn run(mut self) {
+        if std::env::var("STRATA_HEADLESS").is_ok() {
+            let window = strata_platform::MockPlatformWindow::new(self.window_config.clone());
+            let _ = crate::runtime::platforms::run_native_surface_window_loop(
+                window,
+                None::<fn() -> View>,
+                self.runtime,
+                self.compositor,
+                self.presenter,
+                |_, _| false,
+                Some(&mut self.hooks),
+            );
+            return;
+        }
+
         #[cfg(target_os = "linux")]
         {
             if std::env::var("WAYLAND_DISPLAY").is_ok() {
                 if let Ok(window) = strata_platform::WaylandWindow::new(self.window_config.clone()) {
-                    let mut event_loop = strata_platform::WaylandEventLoop::new(window);
-                    self.run_with_event_loop(&mut event_loop);
+                    let _ = crate::runtime::platforms::run_native_surface_window_loop(
+                        window,
+                        None::<fn() -> View>,
+                        self.runtime,
+                        self.compositor,
+                        self.presenter,
+                        |_, _| false,
+                        Some(&mut self.hooks),
+                    );
                     return;
                 }
             }
             if std::env::var("DISPLAY").is_ok() {
                 if let Ok(window) = strata_platform::X11Window::new(self.window_config.clone()) {
-                    let mut event_loop = strata_platform::X11EventLoop::new(window);
-                    self.run_with_event_loop(&mut event_loop);
+                    let _ = crate::runtime::platforms::run_native_surface_window_loop(
+                        window,
+                        None::<fn() -> View>,
+                        self.runtime,
+                        self.compositor,
+                        self.presenter,
+                        |_, _| false,
+                        Some(&mut self.hooks),
+                    );
                     return;
                 }
             }
@@ -192,21 +221,43 @@ impl StrataApp {
         #[cfg(windows)]
         {
             if let Ok(window) = strata_platform::Win32Window::new(self.window_config.clone()) {
-                let mut event_loop = strata_platform::Win32EventLoop::new(window);
-                self.run_with_event_loop(&mut event_loop);
+                let _ = crate::runtime::platforms::run_native_surface_window_loop(
+                    window,
+                    None::<fn() -> View>,
+                    self.runtime,
+                    self.compositor,
+                    self.presenter,
+                    |_, _| false,
+                    Some(&mut self.hooks),
+                );
                 return;
             }
         }
         #[cfg(target_os = "macos")]
         {
             if let Ok(window) = strata_platform::MacOsWindow::new(self.window_config.clone()) {
-                let mut event_loop = strata_platform::MacOsEventLoop::new(window);
-                self.run_with_event_loop(&mut event_loop);
+                let _ = crate::runtime::platforms::run_native_surface_window_loop(
+                    window,
+                    None::<fn() -> View>,
+                    self.runtime,
+                    self.compositor,
+                    self.presenter,
+                    |_, _| false,
+                    Some(&mut self.hooks),
+                );
                 return;
             }
         }
-        let mut event_loop = strata_platform::MockEventLoop::new();
-        self.run_with_event_loop(&mut event_loop);
+        let window = strata_platform::LivePlatformWindow::new(self.window_config.clone());
+        let _ = crate::runtime::platforms::run_native_surface_window_loop(
+            window,
+            None::<fn() -> View>,
+            self.runtime,
+            self.compositor,
+            self.presenter,
+            |_, _| false,
+            Some(&mut self.hooks),
+        );
     }
 }
 

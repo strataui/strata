@@ -236,6 +236,7 @@ fn test_compute_idle_sleep_pacing_states() {
     runtime.active_focus = Some(strata::runtime::ActiveInput {
         input_index: 0,
         input_id: None,
+        entity_id: None,
         state: input_state,
         on_input: None,
         on_change: None,

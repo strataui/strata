@@ -83,7 +83,7 @@ impl JsTranspiler {
                             out.push_str(&format!("'on{}': (e) => {{ /* event handler */ }}", evt_name));
                             first_attr = false;
                         }
-                        Attribute::DirectStyle(_) => {}
+                        Attribute::DirectStyle(_) | Attribute::Entity(_) => {}
                     }
                 }
 

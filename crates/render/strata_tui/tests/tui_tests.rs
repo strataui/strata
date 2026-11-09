@@ -264,3 +264,108 @@ fn test_grid_and_flexbox_tui_quantization_exact_sums() {
     set_tui_target_active(false);
 }
 
+#[test]
+fn test_tui_compositor_layout_node_rendering() {
+    use strata_layout::tree::LayoutNode;
+    use strata_style::types::{BorderRadius, Dimension, EdgeInsets, FontWeight};
+    use strata_style::ComputedStyle;
+
+    let mut node = LayoutNode::new(ComputedStyle::default());
+    node.style.width = Dimension::Px(20.0);
+    node.style.height = Dimension::Px(6.0);
+    node.style.border_width = EdgeInsets::all(1.0);
+    node.style.border_radius = BorderRadius::all(1.0); // Rounded corners
+    node.style.color = Rgba::rgb(0, 255, 0); // Green text
+    node.style.font_weight = FontWeight::Bold;
+    node.text = Some("Terminal RSX".to_string());
+
+    let compositor = TuiCompositor::new(20, 6);
+    let screen = compositor.render_to_screen(&mut node);
+
+    // Verify border corners
+    assert_eq!(screen.cell(0, 0).unwrap().ch, '╭');
+    assert_eq!(screen.cell(19, 0).unwrap().ch, '╮');
+    assert_eq!(screen.cell(0, 5).unwrap().ch, '╰');
+    assert_eq!(screen.cell(19, 5).unwrap().ch, '╯');
+
+    // Verify text content
+    let mut text_found = String::new();
+    for col in 1..=12 {
+        if let Some(cell) = screen.cell(col, 1) {
+            text_found.push(cell.ch);
+            assert_eq!(cell.fg, Color24::Rgb(0, 255, 0));
+            assert_ne!(cell.style & AttrBits::BOLD, 0);
+        }
+    }
+    assert_eq!(text_found, "Terminal RSX");
+}
+
+#[test]
+fn test_tui_compositor_quantization_exact_sums() {
+    use strata_layout::tree::LayoutNode;
+    use strata_style::types::{Dimension, Display, FlexDirection};
+    use strata_style::ComputedStyle;
+
+    let mut parent = LayoutNode::new(ComputedStyle::default());
+    parent.style.display = Display::Flex;
+    parent.style.flex_direction = FlexDirection::Row;
+    parent.style.width = Dimension::Px(80.0);
+    parent.style.height = Dimension::Px(5.0);
+
+    let mut c1 = LayoutNode::new(ComputedStyle::default());
+    c1.text = Some("Col1".into());
+    c1.geometry.border_box.width = 1.0;
+    c1.geometry.border_box.height = 5.0;
+
+    let mut c2 = LayoutNode::new(ComputedStyle::default());
+    c2.text = Some("Col2".into());
+    c2.geometry.border_box.width = 1.0;
+    c2.geometry.border_box.height = 5.0;
+
+    let mut c3 = LayoutNode::new(ComputedStyle::default());
+    c3.text = Some("Col3".into());
+    c3.geometry.border_box.width = 1.0;
+    c3.geometry.border_box.height = 5.0;
+
+    parent.children = vec![c1, c2, c3];
+
+    let compositor = TuiCompositor::new(80, 5);
+    let mut screen = TerminalScreen::new(80, 5);
+    compositor.render(&parent, &mut screen);
+
+    // Verify all 3 columns rendered text at their quantized positions (27, 27, 26)
+    assert_eq!(screen.cell(0, 0).unwrap().ch, 'C');
+    assert_eq!(screen.cell(27, 0).unwrap().ch, 'C');
+    assert_eq!(screen.cell(54, 0).unwrap().ch, 'C');
+}
+
+#[test]
+fn test_tui_compositor_render_rsx_view() {
+    use strata_dom::{ClassList, NodeBlueprint, Tag, View};
+
+    let view = View::new(NodeBlueprint::element(
+        Tag::Div,
+        ClassList::Empty,
+        vec![],
+        vec![
+            NodeBlueprint::text("Title"),
+            NodeBlueprint::element(
+                Tag::P,
+                ClassList::Empty,
+                vec![],
+                vec![NodeBlueprint::text("Paragraph")],
+            ),
+        ],
+    ));
+
+    let compositor = TuiCompositor::new(40, 10);
+    let screen = compositor.render_view_to_screen(&view);
+    assert_eq!(screen.cols(), 40);
+    assert_eq!(screen.rows(), 10);
+
+    let ansi = compositor.render_view_to_ansi(&view);
+    assert!(ansi.contains("Title"));
+    assert!(ansi.contains("Paragraph"));
+}
+
+

@@ -4,6 +4,7 @@
 //! uniform buffers for model-view-projection matrices, multi-light Blinn-Phong shading,
 //! and compositing the rendered 3D viewport into the 2D display list.
 
+use crate::camera64::DVec3;
 use crate::gpu_context::{GpuBufferHandle, GpuBufferUsage, GpuDevice, GpuRenderPassDescriptor};
 use crate::math3d::{Mat4, Vec3};
 use crate::scene3d::{Camera3D, Light3D, Material3D, Scene3D};
@@ -61,6 +62,87 @@ fn vs_main(model: VertexInput) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let N = normalize(in.world_normal);
     let V = normalize(uniforms.camera_pos - in.world_pos);
+    let L = normalize(-uniforms.dir_light_dir);
+    let H = normalize(L + V);
+
+    // Ambient
+    let ambient = uniforms.ambient_color * uniforms.material_color.rgb;
+
+    // Diffuse
+    let diff = max(dot(N, L), 0.0);
+    let diffuse = diff * uniforms.dir_light_color * uniforms.material_color.rgb;
+
+    // Specular (Blinn-Phong)
+    let spec = pow(max(dot(N, H), 0.0), max((1.0 - uniforms.roughness) * 64.0, 1.0));
+    let specular = spec * uniforms.dir_light_color * mix(vec3<f32>(0.04), uniforms.material_color.rgb, uniforms.metalness);
+
+    let final_color = ambient + diffuse + specular;
+    return vec4<f32>(final_color, uniforms.material_color.a);
+}
+"#;
+
+/// Standard WGSL shader for Relative-To-Eye (RTE) double-single 3D meshes on GPU.
+///
+/// Prevents 32-bit vertex jitter and shaking at planetary coordinates (~6.378e6 m)
+/// by evaluating relative subtraction `(pos_high - eye_high) + (pos_low - eye_low)`
+/// directly inside the GPU vertex shader.
+pub const WGSL_3D_RTE_SHADER: &str = r#"
+struct RteVertexInput {
+    @location(0) position_high: vec3<f32>,
+    @location(1) position_low: vec3<f32>,
+    @location(2) normal: vec3<f32>,
+    @location(3) uv: vec2<f32>,
+};
+
+struct RteVertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) view_relative_pos: vec3<f32>,
+    @location(1) world_normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+};
+
+struct RteUniforms {
+    view_proj_relative: mat4x4<f32>,
+    normal_matrix: mat4x4<f32>,
+    eye_high: vec3<f32>,
+    _pad0: f32,
+    eye_low: vec3<f32>,
+    _pad1: f32,
+    ambient_color: vec3<f32>,
+    _pad2: f32,
+    dir_light_dir: vec3<f32>,
+    _pad3: f32,
+    dir_light_color: vec3<f32>,
+    _pad4: f32,
+    material_color: vec4<f32>,
+    roughness: f32,
+    metalness: f32,
+    _pad5: vec2<f32>,
+};
+
+@group(0) @binding(0) var<uniform> uniforms: RteUniforms;
+
+@vertex
+fn vs_rte_main(input: RteVertexInput) -> RteVertexOutput {
+    var out: RteVertexOutput;
+
+    // Double-single Relative-To-Eye (RTE) subtraction on GPU
+    let rel_high = input.position_high - uniforms.eye_high;
+    let rel_low = input.position_low - uniforms.eye_low;
+    let rel_pos = rel_high + rel_low;
+
+    out.view_relative_pos = rel_pos;
+    out.clip_position = uniforms.view_proj_relative * vec4<f32>(rel_pos, 1.0);
+    out.world_normal = normalize((uniforms.normal_matrix * vec4<f32>(input.normal, 0.0)).xyz);
+    out.uv = input.uv;
+
+    return out;
+}
+
+@fragment
+fn fs_rte_main(in: RteVertexOutput) -> @location(0) vec4<f32> {
+    let N = normalize(in.world_normal);
+    let V = normalize(-in.view_relative_pos);
     let L = normalize(-uniforms.dir_light_dir);
     let H = normalize(L + V);
 
@@ -155,13 +237,101 @@ impl Default for Gpu3DUniforms {
     }
 }
 
+/// 3D vertex layout for GPU Relative-To-Eye (RTE) double-single vertex buffer upload.
+///
+/// Stores position split into high and low 32-bit floats (`vec3<f32> high`, `vec3<f32> low`),
+/// eliminating 32-bit floating point precision loss at planetary scales.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct GpuRteVertex {
+    pub position_high: [f32; 3],
+    pub position_low: [f32; 3],
+    pub normal: [f32; 3],
+    pub uv: [f32; 2],
+}
+
+impl GpuRteVertex {
+    pub const STRIDE_FLOATS: usize = 11; // 11 floats = 44 bytes
+
+    pub fn new(position: DVec3, normal: [f32; 3], uv: [f32; 2]) -> Self {
+        let (high, low) = position.split_high_low();
+        Self {
+            position_high: high,
+            position_low: low,
+            normal,
+            uv,
+        }
+    }
+}
+
+/// Packed uniform buffer data for Relative-To-Eye (RTE) 3D shaders.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GpuRteUniforms {
+    pub view_proj_relative: [[f32; 4]; 4],
+    pub normal_matrix: [[f32; 4]; 4],
+    pub eye_high: [f32; 3],
+    pub _pad0: f32,
+    pub eye_low: [f32; 3],
+    pub _pad1: f32,
+    pub ambient_color: [f32; 3],
+    pub _pad2: f32,
+    pub dir_light_dir: [f32; 3],
+    pub _pad3: f32,
+    pub dir_light_color: [f32; 3],
+    pub _pad4: f32,
+    pub material_color: [f32; 4],
+    pub roughness: f32,
+    pub metalness: f32,
+    pub _pad5: [f32; 2],
+}
+
+impl GpuRteUniforms {
+    /// Safe byte view for uploading to GPU uniform buffer.
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self as *const Self as *const u8,
+                std::mem::size_of::<Self>(),
+            )
+        }
+    }
+}
+
+impl Default for GpuRteUniforms {
+    fn default() -> Self {
+        let id = mat4_to_cols_2d(&Mat4::IDENTITY);
+        Self {
+            view_proj_relative: id,
+            normal_matrix: id,
+            eye_high: [0.0, 0.0, 0.0],
+            _pad0: 0.0,
+            eye_low: [0.0, 0.0, 0.0],
+            _pad1: 0.0,
+            ambient_color: [0.2, 0.2, 0.25],
+            _pad2: 0.0,
+            dir_light_dir: [-0.5, -1.0, -0.5],
+            _pad3: 0.0,
+            dir_light_color: [0.9, 0.9, 0.85],
+            _pad4: 0.0,
+            material_color: [0.8, 0.8, 0.8, 1.0],
+            roughness: 0.4,
+            metalness: 0.1,
+            _pad5: [0.0, 0.0],
+        }
+    }
+}
+
 /// Hardware GPU 3D rendering pipeline managing vertex/index buffers and draw passes.
 pub struct Gpu3DPipeline {
     pub vertex_buffer: GpuBufferHandle,
     pub index_buffer: GpuBufferHandle,
     pub uniform_buffer: GpuBufferHandle,
+    pub depth_stencil: crate::gpu_pipeline::GpuDepthStencilState,
     pub viewport_width: u32,
     pub viewport_height: u32,
+    pub early_z_culled_fragments: usize,
+    pub total_tested_fragments: usize,
 }
 
 impl Gpu3DPipeline {
@@ -175,8 +345,22 @@ impl Gpu3DPipeline {
             vertex_buffer: vb,
             index_buffer: ib,
             uniform_buffer: ub,
+            depth_stencil: crate::gpu_pipeline::GpuDepthStencilState::default(),
             viewport_width: width,
             viewport_height: height,
+            early_z_culled_fragments: 0,
+            total_tested_fragments: 0,
+        }
+    }
+
+    /// Evaluates hardware early-Z fragment occlusion test, updating occlusion stats.
+    pub fn test_early_z(&mut self, current_depth: f32, new_depth: f32) -> bool {
+        self.total_tested_fragments += 1;
+        if self.depth_stencil.passes_test(current_depth, new_depth) {
+            true
+        } else {
+            self.early_z_culled_fragments += 1;
+            false
         }
     }
 
@@ -309,6 +493,59 @@ impl Gpu3DPipeline {
             self.uniform_buffer.write_bytes(0, uniforms.as_bytes());
 
             // Record draw call for the mesh geometry
+            encoder.draw_indexed(36, 1);
+        }
+
+        encoder.end_render_pass();
+        device.submit(encoder);
+    }
+
+    /// Renders a Relative-To-Eye (RTE) double-single mesh using GPU vertex shaders.
+    pub fn render_rte_mesh(
+        &mut self,
+        device: &mut GpuDevice,
+        uniforms: &GpuRteUniforms,
+        vertices: &[GpuRteVertex],
+        indices: &[u32],
+        viewport: Rect,
+        clip: Option<Rect>,
+    ) {
+        let mut encoder = device.create_command_encoder();
+
+        let pass_desc = GpuRenderPassDescriptor {
+            color_texture_id: device.swapchain_texture.id,
+            depth_texture_id: Some(device.depth_texture.id),
+            clear_color: None,
+            clear_depth: None,
+            scissor_rect: clip.or(Some(viewport)),
+        };
+
+        encoder.begin_render_pass(pass_desc);
+
+        // Upload RTE uniforms
+        self.uniform_buffer.write_bytes(0, uniforms.as_bytes());
+
+        // Upload vertex & index buffers if data provided
+        if !vertices.is_empty() {
+            let v_bytes = unsafe {
+                std::slice::from_raw_parts(
+                    vertices.as_ptr() as *const u8,
+                    std::mem::size_of_val(vertices),
+                )
+            };
+            self.vertex_buffer.write_bytes(0, v_bytes);
+        }
+
+        if !indices.is_empty() {
+            let i_bytes = unsafe {
+                std::slice::from_raw_parts(
+                    indices.as_ptr() as *const u8,
+                    std::mem::size_of_val(indices),
+                )
+            };
+            self.index_buffer.write_bytes(0, i_bytes);
+            encoder.draw_indexed(indices.len(), 1);
+        } else {
             encoder.draw_indexed(36, 1);
         }
 

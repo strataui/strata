@@ -1,4 +1,13 @@
 //! Strata Render: Display List, Stacking Context Compositor, Analytical SDF GPU Rasterizer, and Unified 3D Engine.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use strata_render::compositor::DisplayList;
+//!
+//! let dl = DisplayList::new();
+//! assert_eq!(dl.len(), 0);
+//! ```
 
 #![allow(
     clippy::too_many_arguments,
@@ -56,8 +65,11 @@ pub use geometry3d::{
     generate_box, generate_cylinder, generate_plane, generate_sphere, generate_custom, MeshBuffers, Vertex3D,
 };
 pub use gpu_pipeline::{
-    GpuBatch, GpuPathBatch, GpuPathPipeline, GpuPresentationPipeline, GpuQuadInstance, GpuUniforms,
-    GpuVertex, QUAD_VERTICES, WGSL_ANALYTICAL_QUAD_SHADER,
+    GpuBatch, GpuBatchCollector, GpuBatchSummary, GpuCompareFunction, GpuDepthStencilState,
+    GpuPathBatch, GpuPathPipeline, GpuPresentationPipeline, GpuPrimitiveTopology, GpuQuadInstance,
+    GpuRenderPipeline, GpuShaderCompiler, GpuShaderModule, GpuSlugTextPipeline, GpuUniforms,
+    GpuVertex, GpuVertexAttribute, GpuVertexBufferLayout, GpuVertexFormat, GpuVertexStepMode,
+    QUAD_VERTICES, WGSL_ANALYTICAL_QUAD_SHADER,
 };
 pub use strata_gpu_path as gpu_path;
 pub use kinetic_scroll::{
@@ -74,8 +86,10 @@ pub use swapchain::{
 };
 pub use tiling::{DEFAULT_TILE_SIZE, OcclusionTracker, Tile, TileCoord, TilingSet};
 pub use gpu_context::{
-    GpuBackend, GpuBufferHandle, GpuBufferUsage, GpuCommandEncoder, GpuDevice,
-    GpuRenderPassDescriptor, GpuTextureHandle,
+    GpuAdapter, GpuBackend, GpuBufferHandle, GpuBufferUsage, GpuCommandEncoder, GpuContext,
+    GpuDevice, GpuDeviceType, GpuFeatures, GpuLimits, GpuMemoryLocation, GpuOffscreenSurface,
+    GpuPresentMode, GpuQueue, GpuRenderPassDescriptor, GpuSurfacePresenter, GpuSwapchain,
+    GpuTextureHandle,
 };
 pub use gpu3d::{Gpu3DPipeline, Gpu3DUniforms, Gpu3DVertex, WGSL_3D_STANDARD_SHADER};
 pub use texture_atlas::{AtlasRegion, GpuTextureAtlas};
@@ -99,7 +113,11 @@ pub mod prelude {
     pub use crate::swapchain::{
         PresentError, SoftwareSurfacePresenter, SurfacePresenter, SwapchainCompositor, SwapchainFormat,
     };
-    pub use crate::gpu_context::{GpuBackend, GpuDevice};
+    pub use crate::gpu_context::{
+        GpuAdapter, GpuBackend, GpuDevice, GpuDeviceType, GpuPresentMode, GpuSurfacePresenter,
+        GpuSwapchain,
+    };
+    pub use crate::gpu_pipeline::GpuSlugTextPipeline;
     pub use crate::gpu3d::{Gpu3DPipeline, WGSL_3D_STANDARD_SHADER};
     pub use crate::texture_atlas::GpuTextureAtlas;
     pub use crate::blur::BackdropFilterPipeline;

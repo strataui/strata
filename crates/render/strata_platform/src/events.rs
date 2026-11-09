@@ -173,6 +173,17 @@ pub enum PlatformEvent {
     },
     ReceivedCharacter(char),
 
+    // Input Method Editor (IME) for internationalized / CJK text composition
+    ImePreedit {
+        text: String,
+        cursor: Option<(usize, usize)>,
+    },
+    ImeCommit(String),
+    ImeDeleteSurrounding {
+        offset: i32,
+        n_chars: u32,
+    },
+
     // Multi-touch
     Touch {
         touch_id: u64,

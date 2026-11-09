@@ -1,4 +1,13 @@
 //! Strata UI: High-Level Accessible Component Library and Design System.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use strata_ui::buttons::ButtonVariant;
+//!
+//! let variant = ButtonVariant::default();
+//! assert_eq!(variant, ButtonVariant::Primary);
+//! ```
 
 #![allow(
     non_snake_case,

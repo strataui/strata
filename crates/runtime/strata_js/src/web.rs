@@ -137,14 +137,40 @@ impl Response {
     }
 }
 
-/// Asynchronous fetch stub connecting to physical networking.
-pub async fn fetch(_url: &str, init: Option<RequestInit>) -> Result<Response, String> {
-    let _init = init.unwrap_or_default();
-    let body_bytes = b"{\"status\":\"ok\"}".to_vec();
-    let mut headers = Headers::new();
-    headers.set("content-type", "application/json");
+/// Asynchronous fetch connecting to physical networking via `strata_web_api`.
+pub async fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, String> {
+    let init = init.unwrap_or_default();
 
-    Ok(Response::new(body_bytes, 200, headers))
+    // Check for explicit synthetic test mock scheme for offline hermetic tests
+    if url.starts_with("mock://") {
+        let body_bytes = b"{\"status\":\"ok\"}".to_vec();
+        let mut headers = Headers::new();
+        headers.set("content-type", "application/json");
+        return Ok(Response::new(body_bytes, 200, headers));
+    }
+
+    let mut web_req = strata_web_api::fetch::RequestInit {
+        method: init.method,
+        ..Default::default()
+    };
+    for (k, v) in init.headers.entries() {
+        web_req.headers.set(&k, &v);
+    }
+    if let Some(body_str) = init.body {
+        web_req = web_req.body(body_str.into_bytes());
+    }
+
+    let resp = strata_web_api::fetch::fetch(url, Some(web_req))
+        .map_err(|e| format!("TypeError: Failed to fetch {}: {}", url, e))?;
+
+    let mut headers = Headers::new();
+    for (k, v) in resp.headers.all_entries() {
+        headers.append(k, v);
+    }
+
+    let mut result_resp = Response::new(resp.bytes().to_vec(), resp.status, headers);
+    result_resp.status_text = resp.status_text;
+    Ok(result_resp)
 }
 
 /// URLSearchParams: Parsing, manipulating, and serializing URL query parameters.

@@ -1,4 +1,14 @@
 //! Strata: Universal High-Performance Frontend Engine & Framework in Pure Rust.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use strata::prelude::*;
+//!
+//! let counter = Signal::new(10);
+//! counter.set(25);
+//! assert_eq!(counter.get(), 25);
+//! ```
 
 #![allow(
     clippy::too_many_arguments,
@@ -100,6 +110,7 @@ pub mod mcp_bridge {
 pub use mcp_bridge::{default_dev_socket_path, start_mcp_dev_listener};
 pub use runtime::{
     app, AppFrameInfo, AppLifecycleHooks, AppRuntime, launch, launch_headless, launch_window,
+    launch_with_config, launch_with_events, launch_auto, launch_headless_pump,
     StrataApp, StrataAppBuilder, EditCommand, queue_edit_command,
     PointerDownAction, PointerMoveAction, PointerUpAction, KeyDispatchResult, DynamicTextBinding,
 };
@@ -228,6 +239,7 @@ pub mod prelude {
     pub use strata_platform::WindowConfig;
     pub use crate::runtime::{
         app, AppFrameInfo, AppLifecycleHooks, AppRuntime, launch, launch_headless, launch_window,
+        launch_with_config, launch_with_events, launch_auto, launch_headless_pump,
         StrataApp, StrataAppBuilder, EditCommand, queue_edit_command,
         PointerDownAction, PointerMoveAction, PointerUpAction, KeyDispatchResult, DynamicTextBinding,
     };

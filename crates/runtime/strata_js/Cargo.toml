@@ -7,3 +7,5 @@ license.workspace = true
 description = "JavaScript runtime and dynamic type emulation in pure Rust for Strata"
 
 [dependencies]
+regex = "1.10"
+strata_web_api = { workspace = true }

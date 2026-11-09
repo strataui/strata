@@ -1,7 +1,6 @@
 //! Comprehensive Integration Tests for `strata_js` Runtime, dynamic values, promises, and Web APIs.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use std::time::Duration;
@@ -63,8 +62,8 @@ fn test_js_typeof_and_truthiness() {
     assert_eq!(JsValue::Bool(true).js_typeof(), "boolean");
     assert_eq!(JsValue::Number(42.0).js_typeof(), "number");
     assert_eq!(JsValue::String("str".into()).js_typeof(), "string");
-    assert_eq!(JsValue::Array(vec![]).js_typeof(), "object");
-    assert_eq!(JsValue::Object(BTreeMap::new()).js_typeof(), "object");
+    assert_eq!(JsValue::empty_array().js_typeof(), "object");
+    assert_eq!(JsValue::empty_object().js_typeof(), "object");
 
     // Truthiness
     assert!(!JsValue::Undefined.is_truthy());
@@ -76,8 +75,8 @@ fn test_js_typeof_and_truthiness() {
     assert!(JsValue::Number(1.0).is_truthy());
     assert!(!JsValue::String("".into()).is_truthy());
     assert!(JsValue::String("not empty".into()).is_truthy());
-    assert!(JsValue::Array(vec![]).is_truthy());
-    assert!(JsValue::Object(BTreeMap::new()).is_truthy());
+    assert!(JsValue::empty_array().is_truthy());
+    assert!(JsValue::empty_object().is_truthy());
 }
 
 #[test]
@@ -100,13 +99,13 @@ fn test_strict_and_loose_equality() {
     assert!(JsValue::Bool(false).loose_eq(&JsValue::String("0".into()))); // false == "0"
 
     // Array to string coercion in loose eq
-    let arr = JsValue::Array(vec![JsValue::Number(1.0), JsValue::Number(2.0)]);
+    let arr = JsValue::new_array(vec![JsValue::Number(1.0), JsValue::Number(2.0)]);
     assert!(arr.loose_eq(&JsValue::String("1,2".into())));
 }
 
 #[test]
 fn test_array_prototype_methods() {
-    let arr = JsValue::Array(vec![
+    let arr = JsValue::new_array(vec![
         JsValue::Number(1.0),
         JsValue::Number(2.0),
         JsValue::Number(3.0),
@@ -133,7 +132,7 @@ fn test_array_prototype_methods() {
     assert_eq!(sum.as_f64(), Some(15.0));
 
     // find & find_index
-    assert_eq!(arr.find(|x| x.as_f64() == Some(3.0)), Some(&JsValue::Number(3.0)));
+    assert_eq!(arr.find(|x| x.as_f64() == Some(3.0)), Some(JsValue::Number(3.0)));
     assert_eq!(arr.find_index(|x| x.as_f64() == Some(4.0)), Some(3));
 
     // some & every
@@ -174,9 +173,9 @@ fn test_array_prototype_methods() {
     assert_eq!(mut_arr[0], JsValue::Number(1.0));
 
     // flat
-    let nested = JsValue::Array(vec![
+    let nested = JsValue::new_array(vec![
         JsValue::Number(1.0),
-        JsValue::Array(vec![JsValue::Number(2.0), JsValue::Array(vec![JsValue::Number(3.0)])]),
+        JsValue::new_array(vec![JsValue::Number(2.0), JsValue::new_array(vec![JsValue::Number(3.0)])]),
     ]);
     let flat_1 = nested.flat(1);
     assert_eq!(flat_1.len(), 3);
@@ -191,7 +190,7 @@ fn test_array_prototype_methods() {
 
 #[test]
 fn test_js_object_utilities() {
-    let mut obj = JsValue::Object(BTreeMap::new());
+    let obj = JsValue::empty_object();
     obj.set_property("a", 10.0);
     obj.set_property("b", "str");
 
@@ -205,7 +204,7 @@ fn test_js_object_utilities() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].0, "a");
 
-    let mut target = JsValue::Object(BTreeMap::new());
+    let mut target = JsValue::empty_object();
     target.set_property("c", 30.0);
     JsObject::assign(&mut target, &obj);
     assert_eq!(target["a"], JsValue::Number(10.0));

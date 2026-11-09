@@ -92,6 +92,120 @@ fn unix_single_instance_second_acquire_is_secondary() {
     let _ = std::fs::remove_dir_all(&runtime_dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn unix_single_instance_drop_cleans_up_socket_and_terminates_thread() {
+    let runtime_dir = temp_runtime_dir("drop_cleanup");
+    std::fs::create_dir_all(&runtime_dir).expect("create private runtime dir");
+
+    let app_id = "com.strata.test.drop_cleanup";
+    let socket_path = runtime_dir.join(format!("{}.sock", app_id));
+
+    let first = SingleInstanceLock::acquire_in_dir(app_id, &[], &runtime_dir, |_| {})
+        .expect("primary acquire");
+    let lock = match first {
+        SingleInstanceStatus::Primary(lock) => lock,
+        SingleInstanceStatus::SecondaryExited => panic!("first instance must be primary"),
+    };
+
+    assert!(socket_path.exists(), "socket file must exist while lock is held");
+
+    let start = std::time::Instant::now();
+    drop(lock);
+    let elapsed = start.elapsed();
+
+    assert!(!socket_path.exists(), "socket must be cleaned up on drop");
+    assert!(
+        elapsed < std::time::Duration::from_millis(250),
+        "drop must join listener thread without blocking indefinitely, took {:?}",
+        elapsed
+    );
+
+    let _ = std::fs::remove_dir_all(&runtime_dir);
+}
+
+#[test]
+fn test_binary_serialization_embedded_newlines_and_empty_args() {
+    use strata_platform::{decode_args, encode_args};
+
+    // 1. Arguments with embedded newlines and empty strings
+    let original = vec![
+        "--query=SELECT * FROM users\nWHERE active = 1;".to_string(),
+        "".to_string(),
+        "line1\r\nline2\nline3".to_string(),
+        "--name".to_string(),
+        "".to_string(),
+        "normal_arg".to_string(),
+    ];
+
+    let encoded = encode_args(&original);
+    let decoded = decode_args(&encoded);
+
+    assert_eq!(decoded, original, "Binary serialization must preserve arguments exactly");
+    assert_eq!(decoded.len(), 6);
+    assert_eq!(decoded[0], "--query=SELECT * FROM users\nWHERE active = 1;");
+    assert_eq!(decoded[1], "");
+    assert_eq!(decoded[2], "line1\r\nline2\nline3");
+
+    // 2. Empty list
+    let empty: Vec<String> = Vec::new();
+    let enc_empty = encode_args(&empty);
+    let dec_empty = decode_args(&enc_empty);
+    assert_eq!(dec_empty, empty);
+
+    // 3. Fallback compatibility with newline-delimited raw payload
+    let legacy_payload = b"arg1\narg2\narg3";
+    let dec_legacy = decode_args(legacy_payload);
+    assert_eq!(dec_legacy, vec!["arg1", "arg2", "arg3"]);
+
+    // 4. Fallback compatibility with null-delimited payload
+    let null_payload = b"arg1\0arg2\0arg3";
+    let dec_null = decode_args(null_payload);
+    assert_eq!(dec_null, vec!["arg1", "arg2", "arg3"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_single_instance_forwards_embedded_newlines_and_empty_strings() {
+    let runtime_dir = temp_runtime_dir("newlines_ipc");
+    std::fs::create_dir_all(&runtime_dir).expect("create private runtime dir");
+
+    let app_id = "com.strata.test.newlines_ipc";
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let first = SingleInstanceLock::acquire_in_dir(app_id, &[], &runtime_dir, move |args| {
+        let _ = sender.send(args);
+    })
+    .expect("primary acquire");
+
+    let lock = match first {
+        SingleInstanceStatus::Primary(lock) => lock,
+        SingleInstanceStatus::SecondaryExited => panic!("first instance must be primary"),
+    };
+
+    let second_args = vec![
+        "--script".to_string(),
+        "function main() {\n  return 42;\n}".to_string(),
+        "".to_string(),
+        "--flag".to_string(),
+    ];
+
+    let second = SingleInstanceLock::acquire_in_dir(app_id, &second_args, &runtime_dir, |_| {})
+        .expect("secondary acquire");
+    assert!(matches!(second, SingleInstanceStatus::SecondaryExited));
+
+    let forwarded = receiver
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("primary should receive forwarded arguments");
+
+    assert_eq!(
+        forwarded, second_args,
+        "Forwarded arguments must preserve embedded newlines and empty strings exactly"
+    );
+
+    drop(lock);
+    let _ = std::fs::remove_dir_all(&runtime_dir);
+}
+
 #[test]
 fn tray_handle_only_dispatches_click_and_menu_events() {
     let events = Arc::new(Mutex::new(Vec::new()));

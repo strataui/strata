@@ -542,6 +542,9 @@ impl Compositor {
         false
     }
 
+    /// Maximum allowable recursion depth for stacking context and layout node display list composition.
+    pub const MAX_COMPOSITOR_DEPTH: usize = 1024;
+
     /// Paints a stacking context according to the 7-layer CSS 2.1 Appendix E algorithm.
     pub fn paint_stacking_context(node: &LayoutNode, list: &mut DisplayList) {
         Self::paint_stacking_context_culled(node, list, None);
@@ -553,6 +556,19 @@ impl Compositor {
         list: &mut DisplayList,
         cull: Option<Rect>,
     ) {
+        Self::paint_stacking_context_guarded(node, list, cull, 0);
+    }
+
+    /// Paints a stacking context with optional spatial viewport culling and active recursion depth guard.
+    pub fn paint_stacking_context_guarded(
+        node: &LayoutNode,
+        list: &mut DisplayList,
+        cull: Option<Rect>,
+        depth: usize,
+    ) {
+        if depth >= Self::MAX_COMPOSITOR_DEPTH {
+            return;
+        }
         if node.style.display == Display::None {
             return;
         }
@@ -815,8 +831,16 @@ impl Compositor {
 
             // Apply clip for content and children if border radius or overflow clipping is active
             if should_clip {
+                let clip_bounds = if clips_overflow
+                    && node.geometry.padding_box.width > 0.0
+                    && node.geometry.padding_box.height > 0.0
+                {
+                    node.geometry.padding_box
+                } else {
+                    bounds
+                };
                 list.push(DrawCommand::PushClip {
-                    bounds,
+                    bounds: clip_bounds,
                     radius: border_radius,
                 });
             }
@@ -997,38 +1021,52 @@ impl Compositor {
         // Sort positive z-index ascending (e.g. 1, then 10)
         positive_z.sort_by_key(|n| n.style.z_index.unwrap_or(0));
 
+        let has_scroll_offset = node.geometry.scroll_offset.x != 0.0 || node.geometry.scroll_offset.y != 0.0;
+        if has_scroll_offset {
+            let mat = strata_primitives::geom::Matrix4x4::translation(
+                -node.geometry.scroll_offset.x,
+                -node.geometry.scroll_offset.y,
+                0.0,
+            );
+            list.push(DrawCommand::PushTransform { matrix: mat });
+        }
+
         // Layer 2: Child stacking contexts with negative z-index
         for child in negative_z {
-            Self::paint_stacking_context_culled(child, list, child_cull);
+            Self::paint_stacking_context_guarded(child, list, child_cull, depth + 1);
         }
 
         // Layer 3: In-flow, non-inline, non-positioned block descendants
         for child in in_flow_blocks {
-            Self::paint_node_content_culled(child, list, child_cull);
+            Self::paint_node_content_guarded(child, list, child_cull, depth + 1);
         }
 
         // Layer 4: Non-positioned floating descendants
         for child in floats {
-            Self::paint_node_content_culled(child, list, child_cull);
+            Self::paint_node_content_guarded(child, list, child_cull, depth + 1);
         }
 
         // Layer 5: In-flow inline-level descendants
         for child in in_flow_inlines {
-            Self::paint_node_content_culled(child, list, child_cull);
+            Self::paint_node_content_guarded(child, list, child_cull, depth + 1);
         }
 
         // Layer 6: Positioned descendants with z-index: auto or 0
         for child in auto_or_zero_z {
-            Self::paint_stacking_context_culled(child, list, child_cull);
+            Self::paint_stacking_context_guarded(child, list, child_cull, depth + 1);
         }
 
         // Layer 7: Child stacking contexts with positive z-index
         for child in positive_z {
-            Self::paint_stacking_context_culled(child, list, child_cull);
+            Self::paint_stacking_context_guarded(child, list, child_cull, depth + 1);
         }
 
         // Collapsed table boundaries paint once above cell content.
         Self::paint_collapsed_table_grid(node, list);
+
+        if has_scroll_offset {
+            list.push(DrawCommand::PopTransform);
+        }
 
         if should_clip && is_visible {
             list.push(DrawCommand::PopClip);
@@ -1074,6 +1112,20 @@ impl Compositor {
         list: &mut DisplayList,
         cull: Option<Rect>,
     ) {
+        Self::paint_node_content_guarded(node, list, cull, 0);
+    }
+
+    /// Paints an in-flow non-stacking-context node with optional spatial viewport culling and active recursion depth guard.
+    pub fn paint_node_content_guarded(
+        node: &LayoutNode,
+        list: &mut DisplayList,
+        cull: Option<Rect>,
+        depth: usize,
+    ) {
+        if depth >= Self::MAX_COMPOSITOR_DEPTH {
+            return;
+        }
+
         if node.style.display == Display::None {
             return;
         }
@@ -1251,8 +1303,16 @@ impl Compositor {
             }
 
             if should_clip {
+                let clip_bounds = if clips_overflow
+                    && node.geometry.padding_box.width > 0.0
+                    && node.geometry.padding_box.height > 0.0
+                {
+                    node.geometry.padding_box
+                } else {
+                    bounds
+                };
                 list.push(DrawCommand::PushClip {
-                    bounds,
+                    bounds: clip_bounds,
                     radius: border_radius,
                 });
             }
@@ -1361,6 +1421,16 @@ impl Compositor {
         }
 
         // Children
+        let has_scroll_offset = node.geometry.scroll_offset.x != 0.0 || node.geometry.scroll_offset.y != 0.0;
+        if has_scroll_offset {
+            let mat = strata_primitives::geom::Matrix4x4::translation(
+                -node.geometry.scroll_offset.x,
+                -node.geometry.scroll_offset.y,
+                0.0,
+            );
+            list.push(DrawCommand::PushTransform { matrix: mat });
+        }
+
         let has_line_boxes = !node.line_boxes.is_empty();
         for child in &node.children {
             if child.style.display == Display::None {
@@ -1389,14 +1459,18 @@ impl Compositor {
             }
 
             if Self::establishes_stacking_context(child, false) {
-                Self::paint_stacking_context_culled(child, list, child_cull);
+                Self::paint_stacking_context_guarded(child, list, child_cull, depth + 1);
             } else {
-                Self::paint_node_content_culled(child, list, child_cull);
+                Self::paint_node_content_guarded(child, list, child_cull, depth + 1);
             }
         }
 
         // Collapsed table boundaries paint once above cell content.
         Self::paint_collapsed_table_grid(node, list);
+
+        if has_scroll_offset {
+            list.push(DrawCommand::PopTransform);
+        }
 
         if should_clip && is_visible {
             list.push(DrawCommand::PopClip);

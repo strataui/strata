@@ -218,3 +218,55 @@ fn quad_and_triangle_reject_degenerate_indices() {
     builder.push_quad(0, 1, 2, 3);
     assert_eq!(builder.triangle_count(), 3);
 }
+
+#[test]
+fn push_skirt_generates_quad_strip_with_outward_normals() {
+    let mut builder = MeshBuilder::new();
+    let top = vec![
+        DVec3::new(0.0, 0.0, 10.0),
+        DVec3::new(10.0, 0.0, 10.0),
+        DVec3::new(20.0, 0.0, 10.0),
+    ];
+    let bottom = vec![
+        DVec3::new(0.0, 0.0, 0.0),
+        DVec3::new(10.0, 0.0, 0.0),
+        DVec3::new(20.0, 0.0, 0.0),
+    ];
+    let uvs = vec![(0.0, 0.0), (0.5, 0.0), (1.0, 0.0)];
+
+    builder.push_skirt(&top, &bottom, &uvs);
+    assert_eq!(builder.triangle_count(), 4, "2 segments * 2 triangles");
+    assert_eq!(builder.vertex_count(), 8, "2 quads * 4 vertices");
+
+    let geometry = builder.finish().expect("geometry");
+    let Geometry3D::CustomTextured { vertices, .. } = geometry else {
+        panic!("expected textured geometry");
+    };
+
+    // First vertex normal (indices 3, 4, 5 in stride 8) must point South (-Y):
+    let nx = vertices[3];
+    let ny = vertices[4];
+    let nz = vertices[5];
+    assert!(nx.abs() < 1e-4, "nx should be ~0, got {nx}");
+    assert!(ny < -0.99, "ny should point South (-1.0), got {ny}");
+    assert!(nz.abs() < 1e-4, "nz should be ~0, got {nz}");
+}
+
+#[test]
+fn push_grid_perimeter_skirts_generates_four_boundary_skirts() {
+    let mut builder = MeshBuilder::new();
+    let cols = 4;
+    let rows = 4;
+    let positions = grid_positions(cols, rows, 10.0);
+    // Push terrain grid
+    builder.push_grid(&positions, cols, rows, (0.0, 0.0, 1.0, 1.0));
+    let grid_triangles = builder.triangle_count();
+    assert_eq!(grid_triangles, (cols - 1) * (rows - 1) * 2); // 3 * 3 * 2 = 18
+
+    // Push 4 perimeter boundary skirts
+    builder.push_grid_perimeter_skirts(&positions, cols, rows, 5.0, (0.0, 0.0, 1.0, 1.0));
+    let skirt_triangles = builder.triangle_count() - grid_triangles;
+    // 4 edges * (4 - 1) segments * 2 triangles per quad = 24 triangles
+    assert_eq!(skirt_triangles, 4 * (cols - 1) * 2);
+    assert_eq!(builder.triangle_count(), 18 + 24);
+}

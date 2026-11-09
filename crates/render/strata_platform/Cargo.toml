@@ -12,12 +12,21 @@ strata_style = { workspace = true }
 strata_primitives = { workspace = true }
 strata_layout = { workspace = true }
 
+[features]
+default = ["gtk-compat", "xlib"]
+gtk-compat = ["dep:gtk", "dep:cairo-rs", "dep:pangocairo", "dep:pango"]
+xlib = ["dep:x11"]
+test-internals = []
+
+[dev-dependencies]
+strata_platform = { path = ".", features = ["test-internals"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
-x11 = { version = "2.21", features = ["xlib"] }
-gtk = "0.18.2"
-cairo-rs = { version = "0.18.5", features = ["png"] }
-pangocairo = "0.18.0"
-pango = { version = "0.18.0", features = ["v1_44"] }
+x11 = { version = "2.21", features = ["xlib"], optional = true }
+gtk = { version = "0.18.2", optional = true }
+cairo-rs = { version = "0.18.5", features = ["png"], optional = true }
+pangocairo = { version = "0.18.0", optional = true }
+pango = { version = "0.18.0", features = ["v1_44"], optional = true }
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]

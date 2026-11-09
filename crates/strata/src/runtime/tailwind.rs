@@ -11,14 +11,28 @@ impl AppRuntime {
         is_focused: bool,
         is_dark: bool,
     ) {
+        let state = strata_style::selector::PseudoState {
+            is_hovered,
+            is_focused,
+            is_active: false,
+            is_disabled: false,
+            is_dark,
+        };
+        Self::apply_tailwind_classes_with_pseudo_state(style, classes, &state);
+    }
+
+    /// Full Tailwind CSS class parser supporting hover, focus, active, disabled, and dark mode variants.
+    pub fn apply_tailwind_classes_with_pseudo_state(
+        style: &mut ComputedStyle,
+        classes: &strata_dom::ClassList,
+        state: &strata_style::selector::PseudoState,
+    ) {
         for cls in classes.iter() {
             for single_class in cls.split_whitespace() {
-                strata_style::tailwind::TailwindEngine::apply_class_with_state(
+                strata_style::tailwind::TailwindEngine::apply_class_with_pseudo_state(
                     style,
                     single_class,
-                    is_hovered,
-                    is_focused,
-                    is_dark,
+                    state,
                 );
             }
         }

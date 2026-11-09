@@ -59,7 +59,24 @@ impl AppRuntime {
                 let has_fragments = children
                     .iter()
                     .any(|c| matches!(c, NodeBlueprint::Fragment(_)));
-                if !has_fragments {
+                let has_entity_ids = layout.children.iter().any(|c| c.entity_id.is_valid());
+                if has_entity_ids {
+                    for child_layout in layout.children.iter().rev() {
+                        if child_layout.entity_id.is_valid() {
+                            if let Some(child_bp) = blueprint.find_by_entity_id(child_layout.entity_id) {
+                                if let Some(res) = Self::hit_test_event_with_box(
+                                    child_bp,
+                                    child_layout,
+                                    px,
+                                    py,
+                                    event_type,
+                                ) {
+                                    return Some(res);
+                                }
+                            }
+                        }
+                    }
+                } else if !has_fragments {
                     for (child_bp, child_layout) in
                         children.iter().zip(layout.children.iter()).rev()
                     {

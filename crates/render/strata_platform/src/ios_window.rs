@@ -308,6 +308,18 @@ impl PlatformWindow for IosWindow {
     }
 }
 
+impl crate::window::NativeSurfaceWindow for IosWindow {
+    fn present_surface(
+        &mut self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<(), crate::surface::PresentError> {
+        self.present_bgra(pixels, width, height)
+            .map_err(crate::surface::PresentError::Custom)
+    }
+}
+
 /// Native iOS UIKit event loop driving frame presentation and event dispatching.
 pub struct IosEventLoop {
     pub window: IosWindow,
