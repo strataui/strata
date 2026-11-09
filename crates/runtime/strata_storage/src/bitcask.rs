@@ -156,10 +156,14 @@ impl StrataKV {
         try_lock_exclusive(&file)?;
 
         let mut key_dir = HashMap::new();
-        Self::replay_wal(&mut file, &mut key_dir)?;
+        let valid_offset = Self::replay_wal(&mut file, &mut key_dir)?;
+        let file_len = file.metadata()?.len();
+        if valid_offset < file_len {
+            file.set_len(valid_offset)?;
+        }
 
         // Ensure file cursor is at the very end for subsequent appends
-        file.seek(SeekFrom::End(0))?;
+        file.seek(SeekFrom::Start(valid_offset))?;
 
         Ok(Self {
             wal_path: path,
@@ -169,10 +173,12 @@ impl StrataKV {
     }
 
     /// Replays the WAL from start to end, verifying CRC32 checksums and indexing active keys.
-    fn replay_wal(file: &mut File, key_dir: &mut HashMap<String, KeyDirEntry>) -> io::Result<()> {
+    /// Returns the last confirmed valid byte offset, allowing recovery and truncation of torn writes.
+    fn replay_wal(file: &mut File, key_dir: &mut HashMap<String, KeyDirEntry>) -> io::Result<u64> {
         let file_len = file.metadata()?.len();
         file.seek(SeekFrom::Start(0))?;
         let mut header_buf = [0u8; 18]; // 4 (crc) + 8 (ts) + 2 (klen) + 4 (vlen)
+        let mut last_valid_offset = 0u64;
 
         loop {
             let offset = file.stream_position()?;
@@ -233,9 +239,11 @@ impl StrataKV {
                     },
                 );
             }
+
+            last_valid_offset = file.stream_position()?;
         }
 
-        Ok(())
+        Ok(last_valid_offset)
     }
 
     /// Retrieves a value by key.

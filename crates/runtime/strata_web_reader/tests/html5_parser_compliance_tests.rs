@@ -201,3 +201,31 @@ fn test_select_option_auto_closing() {
     assert_eq!(options[1].text_content().trim(), "Two");
     assert_eq!(options[2].text_content().trim(), "Three");
 }
+
+#[test]
+fn test_deeply_nested_html_tree_depth_bound() {
+    let mut html = String::new();
+    for _ in 0..1000 {
+        html.push_str("<div>");
+    }
+    html.push_str("Deep Payload");
+
+    // Must safely parse without thread stack exhaustion or uncontrolled heap tree growth
+    let nodes = HtmlParser::parse(&html);
+    assert!(!nodes.is_empty(), "Parser must complete and produce nodes");
+
+    fn compute_depth(node: &SemanticNode) -> usize {
+        match node {
+            SemanticNode::Element { children, .. } => {
+                1 + children.iter().map(compute_depth).max().unwrap_or(0)
+            }
+            _ => 1,
+        }
+    }
+    let max_depth = nodes.iter().map(compute_depth).max().unwrap_or(0);
+    assert!(
+        max_depth <= MAX_TREE_DEPTH + 2,
+        "Tree depth must be bounded by MAX_TREE_DEPTH ({MAX_TREE_DEPTH}), got {max_depth}"
+    );
+}
+

@@ -3,7 +3,7 @@
 use super::ast::*;
 use super::dom::*;
 use super::scope::*;
-use super::JsEngine;
+use super::{JsEngine, MAX_EVAL_DEPTH};
 use crate::json::{parse_json, stringify_json};
 use crate::promise::{drain_microtasks, JsPromise, PromiseState};
 use crate::{ClosureHandle, JsValue, SymbolId};
@@ -409,6 +409,9 @@ impl JsEngine {
                             if self.freeze_prototypes {
                                 return Err(format!("TypeError: Cannot modify frozen prototype {ctor_id}.prototype"));
                             }
+                            if ctor_id == "Object" && !self.allow_prototype_mutation {
+                                return Err("TypeError: Cannot modify sealed prototype Object.prototype".to_string());
+                            }
                             match ctor_id.as_str() {
                                 "Array" => {
                                     self.array_prototype.insert(key.clone(), val.clone());
@@ -504,8 +507,8 @@ impl JsEngine {
                     }
                 }
 
-                if key == "__proto__" && self.freeze_prototypes {
-                    return Err("TypeError: Cannot modify prototype in frozen mode".to_string());
+                if key == "__proto__" && (self.freeze_prototypes || !self.allow_prototype_mutation) {
+                    return Err("TypeError: Cannot modify prototype in sealed mode".to_string());
                 }
 
                 // Check Proxy set trap
@@ -673,6 +676,16 @@ impl JsEngine {
     }
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<JsValue, String> {
+        if self.eval_depth >= MAX_EVAL_DEPTH {
+            return Err("RangeError: Maximum call stack size exceeded (eval recursion limit)".to_string());
+        }
+        self.eval_depth += 1;
+        let res = self.eval_expr_inner(expr);
+        self.eval_depth -= 1;
+        res
+    }
+
+    fn eval_expr_inner(&mut self, expr: &Expr) -> Result<JsValue, String> {
         match expr {
             Expr::Literal(val) => Ok(val.clone()),
             Expr::Assign { target, value } => {
@@ -1242,6 +1255,9 @@ impl JsEngine {
                                     return Ok(JsValue::Null);
                                 }
                                 "setPrototypeOf" => {
+                                    if self.freeze_prototypes || !self.allow_prototype_mutation {
+                                        return Err("TypeError: Cannot modify prototype in sealed mode".to_string());
+                                    }
                                     let proto = evaluated_args.get(1).cloned().unwrap_or(JsValue::Null);
                                     if let Some(JsValue::Object(m)) = evaluated_args.first() {
                                         m.borrow_mut().insert("__proto__".to_string(), proto);
@@ -1284,6 +1300,9 @@ impl JsEngine {
                                         for src in evaluated_args.iter().skip(1) {
                                             if let JsValue::Object(s_map) = src {
                                                 for (k, v) in s_map.borrow().iter() {
+                                                    if (k == "__proto__" || k == "constructor" || k == "prototype") && !self.allow_prototype_mutation {
+                                                        continue;
+                                                    }
                                                     target.borrow_mut().insert(k.clone(), v.clone());
                                                 }
                                             }
