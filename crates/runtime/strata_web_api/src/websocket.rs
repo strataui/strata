@@ -18,6 +18,9 @@ use crate::tls::{create_tls_stream, HttpTransportStream};
 
 const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
+/// Maximum default frame payload size before automatically fragmenting (64 KB).
+pub const DEFAULT_MAX_FRAME_SIZE: usize = 65536;
+
 /// RFC 6455 WebSocket Opcode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WsOpcode {
@@ -40,6 +43,10 @@ impl WsOpcode {
             0xA => Some(Self::Pong),
             _ => None,
         }
+    }
+
+    pub fn is_control(&self) -> bool {
+        matches!(self, Self::Close | Self::Ping | Self::Pong)
     }
 }
 
@@ -86,6 +93,7 @@ pub struct WsFrame {
     pub fin: bool,
     pub opcode: WsOpcode,
     pub payload: Vec<u8>,
+    pub masked: bool,
 }
 
 /// High-level WebSocket message.
@@ -209,18 +217,33 @@ pub fn compute_sec_websocket_accept(key: &str) -> String {
     base64_encode(&digest)
 }
 
-/// Generates a randomized 16-byte base64 nonce for `Sec-WebSocket-Key`.
+/// Generates a cryptographically random 16-byte base64 nonce for `Sec-WebSocket-Key` (RFC 6455 §4.1).
 pub fn generate_sec_websocket_key() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
     let mut nonce = [0u8; 16];
-    let bytes = now.to_be_bytes();
-    for i in 0..16 {
-        nonce[i] = bytes[i].wrapping_add(i as u8).rotate_left((i % 7) as u32);
+    if getrandom::getrandom(&mut nonce).is_err() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let bytes = now.to_be_bytes();
+        for i in 0..16 {
+            nonce[i] = bytes[i].wrapping_add(i as u8).rotate_left((i % 7) as u32);
+        }
     }
     base64_encode(&nonce)
+}
+
+/// Generates an unpredictable 32-bit masking key for client frames (RFC 6455 §5.3).
+pub fn generate_mask_key() -> [u8; 4] {
+    let mut key = [0u8; 4];
+    if getrandom::getrandom(&mut key).is_err() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos();
+        key = nanos.to_be_bytes();
+    }
+    key
 }
 
 /// Encodes an RFC 6455 frame into bytes.
@@ -250,7 +273,7 @@ pub fn encode_frame(
     }
 
     if masked {
-        let key = mask_key.unwrap_or([0x37, 0x91, 0xAF, 0x5C]);
+        let key = mask_key.unwrap_or_else(generate_mask_key);
         frame.extend_from_slice(&key);
         for (i, &b) in payload.iter().enumerate() {
             frame.push(b ^ key[i % 4]);
@@ -283,6 +306,11 @@ pub fn decode_frame(buf: &[u8]) -> Result<Option<(WsFrame, usize)>, WsError> {
     let payload_len: usize = if payload_indicator < 126 {
         payload_indicator as usize
     } else if payload_indicator == 126 {
+        if opcode.is_control() {
+            return Err(WsError::ProtocolError(
+                "Control frames must not have payload length > 125 bytes (RFC 6455 §5.5)".into(),
+            ));
+        }
         if buf.len() < cursor + 2 {
             return Ok(None);
         }
@@ -290,6 +318,11 @@ pub fn decode_frame(buf: &[u8]) -> Result<Option<(WsFrame, usize)>, WsError> {
         cursor += 2;
         u16::from_be_bytes(len_bytes) as usize
     } else {
+        if opcode.is_control() {
+            return Err(WsError::ProtocolError(
+                "Control frames must not have payload length > 125 bytes (RFC 6455 §5.5)".into(),
+            ));
+        }
         if buf.len() < cursor + 8 {
             return Ok(None);
         }
@@ -298,6 +331,12 @@ pub fn decode_frame(buf: &[u8]) -> Result<Option<(WsFrame, usize)>, WsError> {
         cursor += 8;
         u64::from_be_bytes(len_bytes) as usize
     };
+
+    if opcode.is_control() && !fin {
+        return Err(WsError::ProtocolError(
+            "Control frames must not be fragmented (FIN must be true, RFC 6455 §5.5)".into(),
+        ));
+    }
 
     let mask_key = if masked {
         if buf.len() < cursor + 4 {
@@ -328,6 +367,7 @@ pub fn decode_frame(buf: &[u8]) -> Result<Option<(WsFrame, usize)>, WsError> {
             fin,
             opcode,
             payload,
+            masked,
         },
         cursor,
     )))
@@ -395,6 +435,7 @@ pub struct WebSocket {
     received_messages: Arc<Mutex<VecDeque<WsMessage>>>,
     closed_flag: Arc<AtomicBool>,
     fragment_state: Arc<Mutex<Option<WsFragment>>>,
+    worker_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
 impl WebSocket {
@@ -407,6 +448,7 @@ impl WebSocket {
             received_messages: Arc::new(Mutex::new(VecDeque::new())),
             closed_flag: Arc::new(AtomicBool::new(false)),
             fragment_state: Arc::new(Mutex::new(None)),
+            worker_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -466,7 +508,7 @@ impl WebSocket {
         let mut temp_buf = [0u8; 1024];
         let mut accept_validated = false;
 
-        loop {
+        let initial_data = loop {
             let n = transport
                 .read(&mut temp_buf)
                 .map_err(|e| WsError::NetworkError(format!("Error reading handshake response: {e}")))?;
@@ -498,9 +540,10 @@ impl WebSocket {
                         }
                     }
                 }
-                break;
+                let initial_data = response_buf[pos + 4..].to_vec();
+                break initial_data;
             }
-        }
+        };
 
         if !accept_validated {
             return Err(WsError::ProtocolError("Missing Sec-WebSocket-Accept header in response".into()));
@@ -513,7 +556,13 @@ impl WebSocket {
             received_messages: Arc::new(Mutex::new(VecDeque::new())),
             closed_flag: Arc::new(AtomicBool::new(false)),
             fragment_state: Arc::new(Mutex::new(None)),
+            worker_handle: Arc::new(Mutex::new(None)),
         };
+
+        // Configure socket options for low latency and non-blocking worker polling
+        let _ = transport.set_nodelay(true);
+        let _ = transport.set_read_timeout(Some(Duration::from_millis(15)));
+        let _ = transport.set_write_timeout(Some(Duration::from_secs(10)));
 
         // Spawn background worker thread managing stream I/O
         let worker_state = ws.state.clone();
@@ -522,26 +571,16 @@ impl WebSocket {
         let worker_closed = ws.closed_flag.clone();
         let worker_fragment = ws.fragment_state.clone();
 
-        std::thread::Builder::new()
+        let handle = std::thread::Builder::new()
             .name("strata-ws-worker".into())
             .spawn(move || {
-                let mut read_buf = Vec::new();
+                let mut read_buf = initial_data;
                 let mut temp = [0u8; 4096];
                 let mut last_ping = std::time::Instant::now();
                 let ping_interval = Duration::from_secs(30);
 
                 while !worker_closed.load(Ordering::Relaxed) {
-                    // 1. Send periodic RFC 6455 Ping heartbeat
-                    if last_ping.elapsed() >= ping_interval {
-                        let ping = encode_frame(true, WsOpcode::Ping, b"strata-heartbeat", true, None);
-                        if transport.write_all(&ping).is_err() || transport.flush().is_err() {
-                            worker_closed.store(true, Ordering::Relaxed);
-                            break;
-                        }
-                        last_ping = std::time::Instant::now();
-                    }
-
-                    // 2. Drain and send outgoing frames
+                    // 1. Drain and send outgoing frames
                     let outgoing = worker_outgoing
                         .lock()
                         .map(|mut q| std::mem::take(&mut *q))
@@ -554,7 +593,21 @@ impl WebSocket {
                         }
                     }
 
-                    // 3. Read incoming frames
+                    if worker_closed.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    // 2. Send periodic RFC 6455 Ping heartbeat
+                    if last_ping.elapsed() >= ping_interval {
+                        let ping = encode_frame(true, WsOpcode::Ping, b"strata-heartbeat", true, None);
+                        if transport.write_all(&ping).is_err() || transport.flush().is_err() {
+                            worker_closed.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                        last_ping = std::time::Instant::now();
+                    }
+
+                    // 3. Read incoming frames with non-blocking 15ms window
                     match transport.read(&mut temp) {
                         Ok(0) => {
                             worker_closed.store(true, Ordering::Relaxed);
@@ -562,91 +615,141 @@ impl WebSocket {
                         }
                         Ok(n) => {
                             read_buf.extend_from_slice(&temp[..n]);
-                            while let Ok(Some((frame, consumed))) = decode_frame(&read_buf) {
-                                read_buf.drain(..consumed);
-
-                                match frame.opcode {
-                                    WsOpcode::Text => {
-                                        if frame.fin {
-                                            if let Ok(s) = String::from_utf8(frame.payload) {
-                                                if let Ok(mut msgs) = worker_received.lock() {
-                                                    msgs.push_back(WsMessage::Text(s));
-                                                }
-                                            }
-                                        } else if let Ok(mut frag) = worker_fragment.lock() {
-                                            *frag = Some(WsFragment {
-                                                opcode: WsOpcode::Text,
-                                                buffer: frame.payload,
-                                            });
-                                        }
-                                    }
-                                    WsOpcode::Binary => {
-                                        if frame.fin {
-                                            if let Ok(mut msgs) = worker_received.lock() {
-                                                msgs.push_back(WsMessage::Binary(frame.payload));
-                                            }
-                                        } else if let Ok(mut frag) = worker_fragment.lock() {
-                                            *frag = Some(WsFragment {
-                                                opcode: WsOpcode::Binary,
-                                                buffer: frame.payload,
-                                            });
-                                        }
-                                    }
-                                    WsOpcode::Continuation => {
-                                        let mut completed_msg = None;
-                                        if let Ok(mut frag_guard) = worker_fragment.lock() {
-                                            if let Some(ref mut fragment) = *frag_guard {
-                                                fragment.buffer.extend_from_slice(&frame.payload);
-                                                if frame.fin {
-                                                    let fragment_val = frag_guard.take().unwrap();
-                                                    match fragment_val.opcode {
-                                                        WsOpcode::Text => {
-                                                            if let Ok(s) = String::from_utf8(fragment_val.buffer) {
-                                                                completed_msg = Some(WsMessage::Text(s));
-                                                            }
-                                                        }
-                                                        WsOpcode::Binary => {
-                                                            completed_msg = Some(WsMessage::Binary(fragment_val.buffer));
-                                                        }
-                                                        _ => {}
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        if let Some(msg) = completed_msg {
-                                            if let Ok(mut msgs) = worker_received.lock() {
-                                                msgs.push_back(msg);
-                                            }
-                                        }
-                                    }
-                                    WsOpcode::Ping => {
-                                        // Auto-reply with Pong per RFC 6455 §5.5.3
-                                        let pong = encode_frame(true, WsOpcode::Pong, &frame.payload, true, None);
-                                        let _ = transport.write_all(&pong);
-                                        let _ = transport.flush();
-                                    }
-                                    WsOpcode::Pong => {
-                                        if let Ok(mut msgs) = worker_received.lock() {
-                                            msgs.push_back(WsMessage::Pong(frame.payload));
-                                        }
-                                    }
-                                    WsOpcode::Close => {
-                                        let _ = transport.write_all(&encode_frame(true, WsOpcode::Close, &[], true, None));
-                                        let _ = transport.flush();
-                                        worker_closed.store(true, Ordering::Relaxed);
-                                        break;
-                                    }
-                                }
-                            }
                         }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            std::thread::sleep(Duration::from_millis(10));
+                        Err(ref e)
+                            if e.kind() == std::io::ErrorKind::WouldBlock
+                                || e.kind() == std::io::ErrorKind::TimedOut =>
+                        {
+                            // Non-fatal read timeout: continue to process read_buf and service outgoing queue
                         }
                         Err(_) => {
                             worker_closed.store(true, Ordering::Relaxed);
                             break;
                         }
                     }
+
+                    // 4. Drain and process all complete frames present in read_buf
+                    let mut proto_violation = false;
+                    while let Ok(Some((frame, consumed))) = decode_frame(&read_buf) {
+                        read_buf.drain(..consumed);
+
+                        if frame.masked {
+                            // RFC 6455 §5.1: server frames must not be masked
+                            proto_violation = true;
+                            break;
+                        }
+
+                        match frame.opcode {
+                            WsOpcode::Text | WsOpcode::Binary => {
+                                if let Ok(mut frag) = worker_fragment.lock() {
+                                    if frag.is_some() {
+                                        proto_violation = true;
+                                        break;
+                                    }
+                                    if frame.fin {
+                                        if frame.opcode == WsOpcode::Text {
+                                            if let Ok(s) = String::from_utf8(frame.payload) {
+                                                if let Ok(mut msgs) = worker_received.lock() {
+                                                    msgs.push_back(WsMessage::Text(s));
+                                                }
+                                            }
+                                        } else if let Ok(mut msgs) = worker_received.lock() {
+                                            msgs.push_back(WsMessage::Binary(frame.payload));
+                                        }
+                                    } else {
+                                        *frag = Some(WsFragment {
+                                            opcode: frame.opcode,
+                                            buffer: frame.payload,
+                                        });
+                                    }
+                                }
+                            }
+                            WsOpcode::Continuation => {
+                                let mut completed_msg = None;
+                                if let Ok(mut frag_guard) = worker_fragment.lock() {
+                                    if let Some(ref mut fragment) = *frag_guard {
+                                        fragment.buffer.extend_from_slice(&frame.payload);
+                                        if frame.fin {
+                                            let fragment_val = frag_guard.take().unwrap();
+                                            match fragment_val.opcode {
+                                                WsOpcode::Text => {
+                                                    if let Ok(s) = String::from_utf8(fragment_val.buffer) {
+                                                        completed_msg = Some(WsMessage::Text(s));
+                                                    }
+                                                }
+                                                WsOpcode::Binary => {
+                                                    completed_msg = Some(WsMessage::Binary(fragment_val.buffer));
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    } else {
+                                        proto_violation = true;
+                                        break;
+                                    }
+                                }
+                                if let Some(msg) = completed_msg {
+                                    if let Ok(mut msgs) = worker_received.lock() {
+                                        msgs.push_back(msg);
+                                    }
+                                }
+                            }
+                            WsOpcode::Ping => {
+                                // Auto-reply with Pong per RFC 6455 §5.5.3
+                                let pong = encode_frame(true, WsOpcode::Pong, &frame.payload, true, None);
+                                let _ = transport.write_all(&pong);
+                                let _ = transport.flush();
+                            }
+                            WsOpcode::Pong => {
+                                if let Ok(mut msgs) = worker_received.lock() {
+                                    msgs.push_back(WsMessage::Pong(frame.payload));
+                                }
+                            }
+                            WsOpcode::Close => {
+                                // Echo close frame per RFC 6455 §5.5.1
+                                let echo = encode_frame(true, WsOpcode::Close, &frame.payload, true, None);
+                                let _ = transport.write_all(&echo);
+                                let _ = transport.flush();
+
+                                let (code, reason) = if frame.payload.len() >= 2 {
+                                    let code = u16::from_be_bytes([frame.payload[0], frame.payload[1]]);
+                                    let r = String::from_utf8_lossy(&frame.payload[2..]).to_string();
+                                    (Some(code), r)
+                                } else {
+                                    (None, String::new())
+                                };
+                                if let Ok(mut msgs) = worker_received.lock() {
+                                    msgs.push_back(WsMessage::Close(code, reason));
+                                }
+                                worker_closed.store(true, Ordering::Relaxed);
+                                if let Ok(mut s) = worker_state.lock() {
+                                    *s = WsState::Closed;
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    if proto_violation {
+                        let close_frame = encode_frame(true, WsOpcode::Close, &1002u16.to_be_bytes(), true, None);
+                        let _ = transport.write_all(&close_frame);
+                        let _ = transport.flush();
+                        worker_closed.store(true, Ordering::Relaxed);
+                        if let Ok(mut s) = worker_state.lock() {
+                            *s = WsState::Closed;
+                        }
+                        break;
+                    }
+                }
+
+                // Final drain of any queued frames (e.g. Close frame queued by close())
+                let final_outgoing = worker_outgoing
+                    .lock()
+                    .map(|mut q| std::mem::take(&mut *q))
+                    .unwrap_or_default();
+                for frame in final_outgoing {
+                    let _ = transport.write_all(&frame);
+                    let _ = transport.flush();
                 }
 
                 if let Ok(mut s) = worker_state.lock() {
@@ -654,6 +757,10 @@ impl WebSocket {
                 }
             })
             .map_err(|e| WsError::NetworkError(format!("Failed to spawn WebSocket thread: {e}")))?;
+
+        if let Ok(mut handle_guard) = ws.worker_handle.lock() {
+            *handle_guard = Some(handle);
+        }
 
         Ok(ws)
     }
@@ -675,30 +782,77 @@ impl WebSocket {
         self.ready_state() == WsState::Open
     }
 
-    /// Sends a text message over the WebSocket.
+    /// Sends a text message over the WebSocket. If length exceeds `DEFAULT_MAX_FRAME_SIZE`, it is fragmented.
     pub fn send_text(&self, text: &str) -> Result<(), WsError> {
-        let state = self.ready_state();
-        if state != WsState::Open {
-            return Err(WsError::InvalidState(format!("Cannot send in state {state:?}")));
-        }
+        if text.len() > DEFAULT_MAX_FRAME_SIZE {
+            self.send_text_fragmented(text, DEFAULT_MAX_FRAME_SIZE)
+        } else {
+            let state = self.ready_state();
+            if state != WsState::Open {
+                return Err(WsError::InvalidState(format!("Cannot send in state {state:?}")));
+            }
 
-        let frame = encode_frame(true, WsOpcode::Text, text.as_bytes(), true, None);
-        if let Ok(mut q) = self.outgoing_queue.lock() {
-            q.push(frame);
+            let frame = encode_frame(true, WsOpcode::Text, text.as_bytes(), true, None);
+            if let Ok(mut q) = self.outgoing_queue.lock() {
+                q.push(frame);
+            }
+            Ok(())
         }
-        Ok(())
     }
 
-    /// Sends binary data over the WebSocket.
+    /// Sends binary data over the WebSocket. If length exceeds `DEFAULT_MAX_FRAME_SIZE`, it is fragmented.
     pub fn send_binary(&self, data: &[u8]) -> Result<(), WsError> {
+        if data.len() > DEFAULT_MAX_FRAME_SIZE {
+            self.send_binary_fragmented(data, DEFAULT_MAX_FRAME_SIZE)
+        } else {
+            let state = self.ready_state();
+            if state != WsState::Open {
+                return Err(WsError::InvalidState(format!("Cannot send in state {state:?}")));
+            }
+
+            let frame = encode_frame(true, WsOpcode::Binary, data, true, None);
+            if let Ok(mut q) = self.outgoing_queue.lock() {
+                q.push(frame);
+            }
+            Ok(())
+        }
+    }
+
+    /// Sends a text message split into multiple frames with given chunk size.
+    pub fn send_text_fragmented(&self, text: &str, chunk_size: usize) -> Result<(), WsError> {
+        self.send_payload_fragmented(WsOpcode::Text, text.as_bytes(), chunk_size)
+    }
+
+    /// Sends binary data split into multiple frames with given chunk size.
+    pub fn send_binary_fragmented(&self, data: &[u8], chunk_size: usize) -> Result<(), WsError> {
+        self.send_payload_fragmented(WsOpcode::Binary, data, chunk_size)
+    }
+
+    /// Helper to send payload in fragmented RFC 6455 frames.
+    pub fn send_payload_fragmented(&self, opcode: WsOpcode, payload: &[u8], chunk_size: usize) -> Result<(), WsError> {
         let state = self.ready_state();
         if state != WsState::Open {
             return Err(WsError::InvalidState(format!("Cannot send in state {state:?}")));
         }
 
-        let frame = encode_frame(true, WsOpcode::Binary, data, true, None);
-        if let Ok(mut q) = self.outgoing_queue.lock() {
-            q.push(frame);
+        let chunk_size = chunk_size.max(1);
+        let chunks: Vec<&[u8]> = payload.chunks(chunk_size).collect();
+        if chunks.is_empty() {
+            let frame = encode_frame(true, opcode, &[], true, None);
+            if let Ok(mut q) = self.outgoing_queue.lock() {
+                q.push(frame);
+            }
+            return Ok(());
+        }
+
+        let num_chunks = chunks.len();
+        for (i, chunk) in chunks.iter().enumerate() {
+            let fin = i == num_chunks - 1;
+            let op = if i == 0 { opcode } else { WsOpcode::Continuation };
+            let frame = encode_frame(fin, op, chunk, true, None);
+            if let Ok(mut q) = self.outgoing_queue.lock() {
+                q.push(frame);
+            }
         }
         Ok(())
     }
@@ -743,32 +897,52 @@ impl WebSocket {
             buf = &buf[consumed..];
             total_consumed += consumed;
 
+            if frame.masked {
+                return Err(WsError::ProtocolError(
+                    "Frames received from server must not be masked (RFC 6455 §5.1)".into(),
+                ));
+            }
+
             match frame.opcode {
                 WsOpcode::Text => {
-                    if frame.fin {
-                        let s = String::from_utf8(frame.payload).map_err(|e| {
-                            WsError::ProtocolError(format!("Invalid UTF-8 in text frame: {e}"))
-                        })?;
-                        if let Ok(mut msgs) = self.received_messages.lock() {
-                            msgs.push_back(WsMessage::Text(s));
+                    if let Ok(mut frag) = self.fragment_state.lock() {
+                        if frag.is_some() {
+                            return Err(WsError::ProtocolError(
+                                "Cannot start new data frame while fragmented frame is in progress (RFC 6455 §5.4)".into(),
+                            ));
                         }
-                    } else if let Ok(mut frag) = self.fragment_state.lock() {
-                        *frag = Some(WsFragment {
-                            opcode: WsOpcode::Text,
-                            buffer: frame.payload,
-                        });
+                        if frame.fin {
+                            let s = String::from_utf8(frame.payload).map_err(|e| {
+                                WsError::ProtocolError(format!("Invalid UTF-8 in text frame: {e}"))
+                            })?;
+                            if let Ok(mut msgs) = self.received_messages.lock() {
+                                msgs.push_back(WsMessage::Text(s));
+                            }
+                        } else {
+                            *frag = Some(WsFragment {
+                                opcode: WsOpcode::Text,
+                                buffer: frame.payload,
+                            });
+                        }
                     }
                 }
                 WsOpcode::Binary => {
-                    if frame.fin {
-                        if let Ok(mut msgs) = self.received_messages.lock() {
-                            msgs.push_back(WsMessage::Binary(frame.payload));
+                    if let Ok(mut frag) = self.fragment_state.lock() {
+                        if frag.is_some() {
+                            return Err(WsError::ProtocolError(
+                                "Cannot start new data frame while fragmented frame is in progress (RFC 6455 §5.4)".into(),
+                            ));
                         }
-                    } else if let Ok(mut frag) = self.fragment_state.lock() {
-                        *frag = Some(WsFragment {
-                            opcode: WsOpcode::Binary,
-                            buffer: frame.payload,
-                        });
+                        if frame.fin {
+                            if let Ok(mut msgs) = self.received_messages.lock() {
+                                msgs.push_back(WsMessage::Binary(frame.payload));
+                            }
+                        } else {
+                            *frag = Some(WsFragment {
+                                opcode: WsOpcode::Binary,
+                                buffer: frame.payload,
+                            });
+                        }
                     }
                 }
                 WsOpcode::Continuation => {
@@ -851,5 +1025,19 @@ impl WebSocket {
             .lock()
             .map(|mut q| std::mem::take(&mut *q))
             .unwrap_or_default()
+    }
+}
+
+impl Drop for WebSocket {
+    fn drop(&mut self) {
+        // Only perform teardown when the last cloned handle drops
+        if Arc::strong_count(&self.closed_flag) == 1 {
+            self.closed_flag.store(true, Ordering::Relaxed);
+            if let Ok(mut handle_guard) = self.worker_handle.lock() {
+                if let Some(handle) = handle_guard.take() {
+                    let _ = handle.join();
+                }
+            }
+        }
     }
 }

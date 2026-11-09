@@ -153,7 +153,7 @@ const STATIC_ATOMS: &[(AtomId, &str)] = &[
     (AtomId::HREF, "href"),
 ];
 
-/// Thread-safe string interning table with pre-baked static atoms.
+/// Thread-safe, high-concurrency RwLock-synchronized string interning table with pre-baked static atoms.
 pub struct AtomTable {
     string_to_id: RwLock<HashMap<String, AtomId>>,
     id_to_string: RwLock<Vec<String>>,

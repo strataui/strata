@@ -194,6 +194,8 @@ impl FrameArenaManager {
     }
 }
 
+type DropEntry = (*mut u8, unsafe fn(*mut u8));
+
 /// Cache-line aligned (64-byte) linear arena for worker threads in parallel layout passes.
 #[repr(align(64))]
 pub struct ThreadLocalArena {
@@ -201,6 +203,7 @@ pub struct ThreadLocalArena {
     ptr: *mut u8,
     end: *mut u8,
     capacity: usize,
+    drop_chain: Vec<DropEntry>,
 }
 
 impl ThreadLocalArena {
@@ -214,11 +217,39 @@ impl ThreadLocalArena {
             ptr: start,
             end: unsafe { start.add(capacity) },
             capacity,
+            drop_chain: Vec::new(),
         }
     }
 
+    /// Allocates space for a value of type `T` and tracks its destructor if needed.
     #[inline(always)]
     pub fn alloc<T>(&mut self, value: T) -> &mut T {
+        let layout = Layout::new::<T>();
+        let current = self.ptr as usize;
+        let aligned = (current + layout.align() - 1) & !(layout.align() - 1);
+        let next = aligned + layout.size();
+
+        assert!(next <= self.end as usize, "ThreadLocalArena overflow!");
+
+        self.ptr = next as *mut u8;
+        unsafe {
+            let target = aligned as *mut T;
+            target.write(value);
+
+            if std::mem::needs_drop::<T>() {
+                unsafe fn drop_glue<T>(ptr: *mut u8) {
+                    std::ptr::drop_in_place(ptr as *mut T);
+                }
+                self.drop_chain.push((target as *mut u8, drop_glue::<T>));
+            }
+
+            &mut *target
+        }
+    }
+
+    /// Fast path allocation for `Copy` types without drop tracking overhead.
+    #[inline(always)]
+    pub fn alloc_copy<T: Copy>(&mut self, value: T) -> &mut T {
         let layout = Layout::new::<T>();
         let current = self.ptr as usize;
         let aligned = (current + layout.align() - 1) & !(layout.align() - 1);
@@ -257,6 +288,11 @@ impl ThreadLocalArena {
 
     #[inline(always)]
     pub fn reset(&mut self) {
+        for (ptr, drop_fn) in self.drop_chain.drain(..).rev() {
+            unsafe {
+                drop_fn(ptr);
+            }
+        }
         self.ptr = self.start;
     }
 
@@ -273,9 +309,15 @@ impl ThreadLocalArena {
 
 impl Drop for ThreadLocalArena {
     fn drop(&mut self) {
+        for (ptr, drop_fn) in self.drop_chain.drain(..).rev() {
+            unsafe {
+                drop_fn(ptr);
+            }
+        }
         let layout = Layout::from_size_align(self.capacity, 64).unwrap();
         unsafe {
             dealloc(self.start, layout);
         }
     }
 }
+

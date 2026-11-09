@@ -168,3 +168,68 @@ fn test_secure_keystore() {
     let _ = std::fs::remove_file(&test_key);
     SecureKeystore::clear_keystore_path();
 }
+
+#[test]
+fn test_bitcask_cross_process_file_locking() {
+    let test_wal = std::env::temp_dir().join(format!("strata_test_lock_{}.wal", std::process::id()));
+    let _ = std::fs::remove_file(&test_wal);
+
+    let first = StrataKV::open(&test_wal).expect("first open must succeed");
+
+    // Second open on the same WAL file must fail with WouldBlock
+    let second_res = StrataKV::open(&test_wal);
+    assert!(second_res.is_err(), "Second concurrent open on WAL must fail");
+    let err = second_res.err().unwrap();
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::WouldBlock,
+        "Concurrent lock failure must be ErrorKind::WouldBlock"
+    );
+
+    // Dropping first releases the lock
+    drop(first);
+
+    // Third open must succeed cleanly
+    let third = StrataKV::open(&test_wal).expect("open after drop must succeed");
+    drop(third);
+
+    let _ = std::fs::remove_file(&test_wal);
+}
+
+#[test]
+fn test_bitcask_corrupt_val_len_pre_allocation_oom_guard() {
+    let test_dir = std::env::temp_dir().join(format!("strata_oom_guard_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&test_dir);
+    let wal_path = test_dir.join("corrupted.wal");
+
+    // Write a valid record first
+    {
+        let mut kv = StrataKV::open(&wal_path).expect("open should succeed");
+        kv.put("valid_key", b"valid_data").expect("put should succeed");
+    }
+
+    // Artificially append a corrupted record header with a 4GB val_len
+    {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        let mut file = OpenOptions::new().append(true).open(&wal_path).expect("open for append");
+        let fake_crc: u32 = 0xDEADBEEF;
+        let fake_ts: u64 = 1700000000;
+        let fake_klen: u16 = 4;
+        let fake_vlen: u32 = 0xFFFF_FFFE; // 4GB - 2 bytes OOM bomb
+        file.write_all(&fake_crc.to_le_bytes()).unwrap();
+        file.write_all(&fake_ts.to_le_bytes()).unwrap();
+        file.write_all(&fake_klen.to_le_bytes()).unwrap();
+        file.write_all(&fake_vlen.to_le_bytes()).unwrap();
+        file.write_all(b"test").unwrap();
+        file.flush().unwrap();
+    }
+
+    // Replay WAL on open: must NOT OOM panic, and must successfully recover the valid_key!
+    let mut kv = StrataKV::open(&wal_path).expect("open with corrupted tail must succeed");
+    let recovered = kv.get("valid_key").expect("get must succeed");
+    assert_eq!(recovered, Some(b"valid_data".to_vec()));
+
+    let _ = std::fs::remove_file(&wal_path);
+    let _ = std::fs::remove_dir_all(&test_dir);
+}

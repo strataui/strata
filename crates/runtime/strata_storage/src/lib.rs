@@ -1,4 +1,14 @@
 //! Strata Storage: Pure-Rust Bitcask WAL Engine, In-Memory Storage, and Hardware Keystore.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use strata_storage::SessionStorage;
+//!
+//! let storage = SessionStorage::new();
+//! storage.set("user", "alice");
+//! assert_eq!(storage.get("user"), Some("alice".to_string()));
+//! ```
 
 pub mod crc32;
 pub mod bitcask;

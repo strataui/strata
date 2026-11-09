@@ -89,7 +89,39 @@ impl VfsPath {
         format!("vfs://{}/{}", self.root.as_str(), sub_clean)
     }
 
-    /// Parses a universal VFS URI string.
+    /// Checks whether a given path string attempts to traverse outside of the virtual root.
+    pub fn has_traversal_escape(subpath: &str) -> bool {
+        let normalized = subpath.replace('\\', "/");
+        let mut depth: isize = 0;
+        for part in normalized.split('/') {
+            if part.is_empty() || part == "." {
+                continue;
+            } else if part == ".." {
+                depth -= 1;
+                if depth < 0 {
+                    return true;
+                }
+            } else {
+                depth += 1;
+            }
+        }
+        false
+    }
+
+    /// Attempts to construct a `VfsPath`, returning `Err(FsError::SecurityViolation)` if traversal escapes the root.
+    pub fn try_new(root: VfsRoot, subpath: impl AsRef<Path>) -> Result<Self, FsError> {
+        let subpath_ref = subpath.as_ref();
+        let subpath_str = subpath_ref.to_string_lossy();
+        if Self::has_traversal_escape(&subpath_str) {
+            return Err(FsError::SecurityViolation(format!(
+                "Directory traversal escape detected in subpath: {}",
+                subpath_str
+            )));
+        }
+        Ok(Self::new(root, subpath_ref))
+    }
+
+    /// Parses a universal VFS URI string, strictly rejecting directory traversal attempts.
     pub fn from_uri(uri: &str) -> Result<Self, FsError> {
         let stripped = uri.strip_prefix("vfs://").ok_or_else(|| {
             FsError::InvalidPath(format!("URI does not start with 'vfs://': {uri}"))
@@ -102,6 +134,12 @@ impl VfsPath {
         let root = VfsRoot::parse(root_str).ok_or_else(|| {
             FsError::InvalidPath(format!("Unknown VfsRoot in URI: {root_str}"))
         })?;
+
+        if Self::has_traversal_escape(sub_str) {
+            return Err(FsError::SecurityViolation(format!(
+                "Directory traversal escape detected in URI: {uri}"
+            )));
+        }
 
         Ok(Self::new(root, PathBuf::from(sub_str)))
     }
