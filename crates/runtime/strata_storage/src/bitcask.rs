@@ -160,6 +160,7 @@ impl StrataKV {
         let file_len = file.metadata()?.len();
         if valid_offset < file_len {
             file.set_len(valid_offset)?;
+            file.sync_all()?;
         }
 
         // Ensure file cursor is at the very end for subsequent appends
@@ -466,6 +467,22 @@ impl StrataKV {
 
         self.key_dir = new_key_dir;
         Ok(())
+    }
+
+    /// Flushes and syncs WAL file data to underlying physical storage for durability guarantees.
+    pub fn sync(&mut self) -> io::Result<()> {
+        self.wal_file.flush()?;
+        self.wal_file.sync_data()?;
+        Ok(())
+    }
+
+    /// Verifies the integrity of the WAL file, checking CRC checksums for each frame.
+    /// Returns the number of valid records and the valid byte offset, allowing detection and recovery of torn writes.
+    pub fn verify_wal_integrity(wal_path: impl AsRef<Path>) -> io::Result<(usize, u64)> {
+        let mut file = OpenOptions::new().read(true).open(wal_path)?;
+        let mut key_dir = HashMap::new();
+        let valid_offset = Self::replay_wal(&mut file, &mut key_dir)?;
+        Ok((key_dir.len(), valid_offset))
     }
 }
 

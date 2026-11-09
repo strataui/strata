@@ -103,6 +103,10 @@ impl ThreadLocalArena {
 
     /// Allocates a contiguous slice of cloned elements.
     pub fn alloc_slice<T: Clone>(&mut self, slice: &[T]) -> &mut [T] {
+        if slice.is_empty() {
+            return &mut [];
+        }
+
         let align = std::mem::align_of::<T>();
         let size = std::mem::size_of_val(slice);
 
@@ -115,14 +119,49 @@ impl ThreadLocalArena {
             "ThreadLocalArena capacity overflow for slice"
         );
 
+        // RAII rollback and partial drop guard for exception safety (CWE-401 / Goal 04)
+        struct SliceGuard<T> {
+            ptr: *mut T,
+            len: usize,
+            old_bump: *mut u8,
+            arena_ptr: *mut *mut u8,
+        }
+
+        impl<T> Drop for SliceGuard<T> {
+            fn drop(&mut self) {
+                for i in 0..self.len {
+                    unsafe {
+                        std::ptr::drop_in_place(self.ptr.add(i));
+                    }
+                }
+                unsafe {
+                    *self.arena_ptr = self.old_bump;
+                }
+            }
+        }
+
+        let old_bump = self.ptr;
         self.ptr = next as *mut u8;
+        let target = aligned as *mut T;
+
+        let mut guard = SliceGuard {
+            ptr: target,
+            len: 0,
+            old_bump,
+            arena_ptr: &mut self.ptr,
+        };
+
+        for item in slice.iter() {
+            unsafe {
+                std::ptr::write(target.add(guard.len), item.clone());
+            }
+            guard.len += 1;
+        }
+
+        // Successfully cloned all items: disarm guard
+        std::mem::forget(guard);
 
         unsafe {
-            let target = aligned as *mut T;
-            for (i, item) in slice.iter().enumerate() {
-                std::ptr::write(target.add(i), item.clone());
-            }
-
             if std::mem::needs_drop::<T>() {
                 unsafe fn drop_glue<T>(ptr: *mut u8) {
                     std::ptr::drop_in_place(ptr as *mut T);
@@ -190,4 +229,64 @@ pub fn reset_thread_local_arena() {
         a.borrow_mut().reset();
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_alloc_slice_panic_safety() {
+        struct PanicOnClone {
+            id: usize,
+            panic_id: usize,
+            drops: Arc<AtomicUsize>,
+        }
+
+        impl Clone for PanicOnClone {
+            fn clone(&self) -> Self {
+                if self.id == self.panic_id {
+                    panic!("Simulated clone panic at index {}", self.id);
+                }
+                Self {
+                    id: self.id,
+                    panic_id: self.panic_id,
+                    drops: Arc::clone(&self.drops),
+                }
+            }
+        }
+
+        impl Drop for PanicOnClone {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let mut arena = ThreadLocalArena::new(1024 * 64);
+        let initial_bump = arena.ptr;
+        let panic_drops = Arc::new(AtomicUsize::new(0));
+
+        let slice = vec![
+            PanicOnClone { id: 0, panic_id: 2, drops: Arc::clone(&panic_drops) },
+            PanicOnClone { id: 1, panic_id: 2, drops: Arc::clone(&panic_drops) },
+            PanicOnClone { id: 2, panic_id: 2, drops: Arc::clone(&panic_drops) },
+            PanicOnClone { id: 3, panic_id: 2, drops: Arc::clone(&panic_drops) },
+        ];
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            arena.alloc_slice(&slice);
+        }));
+
+        assert!(result.is_err(), "Must panic when cloning element 2");
+
+        // Elements 0 and 1 were successfully cloned into arena before panic.
+        // RAII guard must have dropped those 2 elements during stack unwind!
+        assert_eq!(panic_drops.load(Ordering::SeqCst), 2, "Initialized elements must be cleaned up on panic");
+
+        // The arena bump pointer must be rolled back to its pre-allocation state
+        assert_eq!(arena.ptr, initial_bump, "Bump pointer must roll back on panic");
+    }
+}
+
 

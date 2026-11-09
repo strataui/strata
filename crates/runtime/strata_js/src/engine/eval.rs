@@ -409,8 +409,8 @@ impl JsEngine {
                             if self.freeze_prototypes {
                                 return Err(format!("TypeError: Cannot modify frozen prototype {ctor_id}.prototype"));
                             }
-                            if ctor_id == "Object" && !self.allow_prototype_mutation {
-                                return Err("TypeError: Cannot modify sealed prototype Object.prototype".to_string());
+                            if !self.allow_prototype_mutation && matches!(ctor_id.as_str(), "Object" | "Array" | "Function" | "String" | "Error") {
+                                return Err(format!("TypeError: Cannot modify sealed prototype {ctor_id}.prototype"));
                             }
                             match ctor_id.as_str() {
                                 "Array" => {
@@ -831,7 +831,7 @@ impl JsEngine {
                                 JsValue::Bool(b) => out.push_str(&format!("{b}")),
                                 JsValue::Null => out.push_str("null"),
                                 JsValue::Undefined => out.push_str("undefined"),
-                                other => out.push_str(&stringify_json(&other)),
+                                other => out.push_str(&stringify_json(&other).unwrap_or_else(|_| "[object Object]".to_string())),
                             }
                         }
                     }
@@ -1150,7 +1150,7 @@ impl JsEngine {
                                     JsValue::Bool(b) => b.to_string(),
                                     JsValue::Null => "null".to_string(),
                                     JsValue::Undefined => "undefined".to_string(),
-                                    other => stringify_json(other),
+                                    other => stringify_json(other).unwrap_or_else(|_| "[object Object]".to_string()),
                                 })
                                 .collect::<Vec<_>>()
                                 .join(" ");
@@ -1159,7 +1159,7 @@ impl JsEngine {
                         } else if id == "JSON" {
                             if property == "stringify" {
                                 if let Some(first) = evaluated_args.first() {
-                                    return Ok(JsValue::String(stringify_json(first)));
+                                    return stringify_json(first).map(JsValue::String);
                                 }
                             } else if property == "parse" {
                                 if let Some(first) = evaluated_args.first().and_then(|v| v.as_str()) {
@@ -3802,7 +3802,7 @@ impl JsEngine {
                 let flg = b.get("flags").and_then(|v| v.as_str()).unwrap_or("");
                 format!("/{src}/{flg}")
             }
-            other => stringify_json(other),
+            other => stringify_json(other).unwrap_or_else(|_| "[object Object]".to_string()),
         }
     }
 }

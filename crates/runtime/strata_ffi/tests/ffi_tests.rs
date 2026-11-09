@@ -117,3 +117,65 @@ fn test_render_to_buffer_rgba() {
         assert_eq!(buffer[63], 255);
     }
 }
+
+#[test]
+fn test_window_destruction_before_app_destroy_safety() {
+    unsafe {
+        let app = strata_app_create();
+        assert!(!app.is_null());
+        let title = CString::new("Safety Test Window").unwrap();
+        let win = strata_window_create(app, title.as_ptr(), 640, 480);
+        assert!(!win.is_null());
+
+        // Explicitly destroy the window handle first.
+        strata_window_destroy(win);
+
+        // Subsequent destruction of the app must not double-free the window handle.
+        strata_app_destroy(app);
+    }
+}
+
+extern "C" fn mt_callback(_new_val: i64, user_data: *mut c_void) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let counter = unsafe { &*(user_data as *const AtomicUsize) };
+    counter.fetch_add(1, Ordering::SeqCst);
+}
+
+#[test]
+fn test_multithreaded_signal_subscriptions() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+
+    unsafe {
+        let sig = strata_signal_create_int(0);
+        let counter = Arc::new(AtomicUsize::new(0));
+        let user_data = Arc::as_ptr(&counter) as *mut c_void;
+
+        let sub_id = strata_signal_subscribe_int(sig, Some(mt_callback), user_data);
+        assert!(sub_id > 0);
+
+        let sig_addr = sig as usize;
+        let mut handles = Vec::new();
+
+        // Spawn 4 writer threads mutating signal concurrently
+        for t in 0..4 {
+            handles.push(thread::spawn(move || {
+                let sig_ptr = sig_addr as *mut StrataSignalHandle;
+                for i in 0..100 {
+                    strata_signal_set_int(sig_ptr, (t * 1000 + i) as i64);
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert!(counter.load(Ordering::SeqCst) > 0);
+        assert_eq!(strata_signal_unsubscribe_int(sig, sub_id), 0);
+        strata_signal_destroy(sig);
+    }
+}
+
+

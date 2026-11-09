@@ -1,7 +1,6 @@
 //! Fast contiguous bump memory arenas with bulk O(1) resets and SIMD sentry padding.
 
 use std::alloc::{alloc, dealloc, Layout};
-use std::cell::UnsafeCell;
 use std::ptr::NonNull;
 
 pub const DEFAULT_ARENA_CAPACITY: usize = 1024 * 1024; // 1 MB contiguous memory block
@@ -14,14 +13,11 @@ type DropFn = unsafe fn(*mut u8);
 pub struct BumpArena {
     memory: NonNull<u8>,
     capacity: usize,
-    offset: UnsafeCell<usize>,
-    drop_chain: UnsafeCell<Vec<(*mut u8, DropFn)>>,
+    offset: usize,
+    drop_chain: Vec<(*mut u8, DropFn)>,
 }
 
 unsafe impl Send for BumpArena {}
-// NOTE: BumpArena is intentionally !Sync because allocation mutates internal offset
-// without atomic synchronization. For multi-threaded sharing, each worker thread must
-// own its dedicated arena.
 
 impl BumpArena {
     pub fn new(capacity: usize) -> Self {
@@ -39,19 +35,18 @@ impl BumpArena {
         Self {
             memory: NonNull::new(ptr).unwrap(),
             capacity,
-            offset: UnsafeCell::new(0),
-            drop_chain: UnsafeCell::new(Vec::new()),
+            offset: 0,
+            drop_chain: Vec::new(),
         }
     }
 
     /// Allocates an instance of `T` sequentially in linear memory.
-    /// The returned reference's lifetime is bound to `&'a self`.
+    /// The returned reference's lifetime is bound to `&'a mut self`.
     /// Panics if capacity is exceeded.
     #[inline(always)]
-    #[allow(clippy::mut_from_ref)]
-    pub fn alloc<T>(&self, value: T) -> &mut T {
+    pub fn alloc<T>(&mut self, value: T) -> &mut T {
         let layout = Layout::new::<T>();
-        let current_offset = unsafe { *self.offset.get() };
+        let current_offset = self.offset;
         let aligned_offset = (current_offset + (layout.align() - 1)) & !(layout.align() - 1);
         let next_offset = aligned_offset + layout.size();
 
@@ -62,8 +57,8 @@ impl BumpArena {
             self.capacity
         );
 
+        self.offset = next_offset;
         unsafe {
-            *self.offset.get() = next_offset;
             let dest = self.memory.as_ptr().add(aligned_offset) as *mut T;
             std::ptr::write(dest, value);
 
@@ -71,7 +66,7 @@ impl BumpArena {
                 unsafe fn drop_glue<T>(ptr: *mut u8) {
                     std::ptr::drop_in_place(ptr as *mut T);
                 }
-                (*self.drop_chain.get()).push((dest as *mut u8, drop_glue::<T>));
+                self.drop_chain.push((dest as *mut u8, drop_glue::<T>));
             }
 
             &mut *dest
@@ -79,23 +74,22 @@ impl BumpArena {
     }
 
     /// Allocates a contiguous slice of `T` by copying elements.
-    /// The returned slice's lifetime is bound to `&'a self`.
+    /// The returned slice's lifetime is bound to `&'a mut self`.
     #[inline(always)]
-    #[allow(clippy::mut_from_ref)]
-    pub fn alloc_slice<'a, T: Copy>(&'a self, items: &[T]) -> &'a mut [T] {
+    pub fn alloc_slice<'a, T: Copy>(&'a mut self, items: &[T]) -> &'a mut [T] {
         if items.is_empty() {
             return &mut [];
         }
 
         let layout = Layout::array::<T>(items.len()).expect("Array layout error");
-        let current_offset = unsafe { *self.offset.get() };
+        let current_offset = self.offset;
         let aligned_offset = (current_offset + (layout.align() - 1)) & !(layout.align() - 1);
         let next_offset = aligned_offset + layout.size();
 
         assert!(next_offset <= self.capacity, "BumpArena slice overflow!");
 
+        self.offset = next_offset;
         unsafe {
-            *self.offset.get() = next_offset;
             let dest = self.memory.as_ptr().add(aligned_offset) as *mut T;
             std::ptr::copy_nonoverlapping(items.as_ptr(), dest, items.len());
             std::slice::from_raw_parts_mut(dest, items.len())
@@ -104,29 +98,26 @@ impl BumpArena {
 
     /// Allocates a string slice in the arena.
     #[inline(always)]
-    pub fn alloc_str<'a>(&'a self, text: &str) -> &'a str {
+    pub fn alloc_str<'a>(&'a mut self, text: &str) -> &'a str {
         let bytes = self.alloc_slice(text.as_bytes());
         unsafe { std::str::from_utf8_unchecked(bytes) }
     }
 
     /// Single-cycle O(1) bulk reset: executes destructors for all non-Copy allocations
     /// and resets the offset to 0.
-    /// Requires an exclusive mutable borrow (&mut self) to guarantee at compile time that
-    /// no live references to arena memory exist.
     #[inline(always)]
     pub fn reset(&mut self) {
-        unsafe {
-            let drops = &mut *self.drop_chain.get();
-            for (ptr, drop_fn) in drops.drain(..).rev() {
+        for (ptr, drop_fn) in self.drop_chain.drain(..).rev() {
+            unsafe {
                 drop_fn(ptr);
             }
-            *self.offset.get() = 0;
         }
+        self.offset = 0;
     }
 
     #[inline(always)]
     pub fn allocated_bytes(&self) -> usize {
-        unsafe { *self.offset.get() }
+        self.offset
     }
 
     #[inline(always)]
@@ -137,9 +128,8 @@ impl BumpArena {
 
 impl Drop for BumpArena {
     fn drop(&mut self) {
-        unsafe {
-            let drops = &mut *self.drop_chain.get();
-            for (ptr, drop_fn) in drops.drain(..).rev() {
+        for (ptr, drop_fn) in self.drop_chain.drain(..).rev() {
+            unsafe {
                 drop_fn(ptr);
             }
         }
@@ -176,8 +166,18 @@ impl FrameArenaManager {
     }
 
     #[inline(always)]
+    pub fn active_arena_mut(&mut self) -> &mut BumpArena {
+        &mut self.arenas[self.current_index]
+    }
+
+    #[inline(always)]
     pub fn previous_arena(&self) -> &BumpArena {
         &self.arenas[1 - self.current_index]
+    }
+
+    #[inline(always)]
+    pub fn previous_arena_mut(&mut self) -> &mut BumpArena {
+        &mut self.arenas[1 - self.current_index]
     }
 
     #[inline(always)]

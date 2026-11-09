@@ -4,6 +4,12 @@ use std::sync::RwLock;
 
 pub type SignalCallbackInt = extern "C" fn(new_value: i64, user_data: *mut c_void);
 
+/// Internal representation of an active C ABI subscription.
+///
+/// # Safety Invariant
+/// Raw `user_data` pointers passed across C ABI boundaries must point to either:
+/// 1. Data synchronized for concurrent multi-threaded access (`Sync`), or
+/// 2. Data accessed only when mutations are dispatched from designated execution contexts.
 #[derive(Clone, Copy)]
 struct Subscription {
     id: u64,
@@ -11,7 +17,9 @@ struct Subscription {
     user_data: *mut c_void,
 }
 
-// Safety: Subscription holds raw user_data passed from C FFI, safe to transfer across threads
+// Safety: Subscription holds raw user_data passed across the C ABI. The foreign host runtime
+// is contractually required to ensure thread-safe synchronization or thread affinity of user_data.
+// Strata provides internal synchronization via RwLock during dispatch.
 unsafe impl Send for Subscription {}
 unsafe impl Sync for Subscription {}
 

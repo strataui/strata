@@ -119,7 +119,7 @@ fn test_prototype_inheritance_chain_and_delegation() {
 
 #[test]
 fn test_builtin_prototype_extension_and_object_statics() {
-    let mut engine = JsEngine::new();
+    let mut engine = JsEngine::new().with_allow_prototype_mutation(true);
 
     let script = r#"
         Array.prototype.customSum = function() {
@@ -205,3 +205,14 @@ fn test_standard_error_hierarchy_and_runtime_traps() {
     assert_eq!(engine.globals.get("refTrapName"), Some(&JsValue::String("ReferenceError".to_string())));
     assert!(engine.globals.get("refTrapMsg").unwrap().to_string().contains("not defined"));
 }
+
+#[test]
+fn test_sealed_prototype_pollution_rejection_all_builtins() {
+    let mut engine = JsEngine::new();
+    assert!(engine.eval("Object.prototype.polluted = 1;").is_err());
+    assert!(engine.eval("Array.prototype.polluted = 1;").is_err());
+    assert!(engine.eval("Function.prototype.polluted = 1;").is_err());
+    assert!(engine.eval("String.prototype.polluted = 1;").is_err());
+    assert!(engine.eval("Error.prototype.polluted = 1;").is_err());
+}
+

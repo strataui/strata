@@ -545,3 +545,35 @@ fn linux_ayatana_indicator_registers_status_notifier_item() {
         leftovers
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn unix_single_instance_symlink_attack_rejected() {
+    let runtime_dir = temp_runtime_dir("symlink_attack");
+    std::fs::create_dir_all(&runtime_dir).expect("create private runtime dir");
+
+    let app_id = "com.strata.test.symlink";
+    let socket_path = runtime_dir.join(format!("{}.sock", app_id));
+    let decoy_target = runtime_dir.join("decoy_file.txt");
+    std::fs::write(&decoy_target, b"secret_data").unwrap();
+
+    // Adversary creates a symlink pointing to an arbitrary file
+    std::os::unix::fs::symlink(&decoy_target, &socket_path).unwrap();
+    assert!(std::fs::symlink_metadata(&socket_path).unwrap().file_type().is_symlink());
+
+    // SingleInstanceLock must securely neutralize the symlink and acquire primary without overwriting decoy
+    let first = SingleInstanceLock::acquire_in_dir(app_id, &[], &runtime_dir, |_| {})
+        .expect("acquire must succeed despite malicious symlink");
+    let lock = match first {
+        SingleInstanceStatus::Primary(lock) => lock,
+        SingleInstanceStatus::SecondaryExited => panic!("must become primary"),
+    };
+
+    // The decoy file content must remain completely untouched
+    let decoy_content = std::fs::read_to_string(&decoy_target).unwrap();
+    assert_eq!(decoy_content, "secret_data");
+
+    drop(lock);
+    let _ = std::fs::remove_dir_all(&runtime_dir);
+}
+

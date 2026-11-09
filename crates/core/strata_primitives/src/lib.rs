@@ -171,7 +171,7 @@ mod tests {
         // Double-buffered frame manager
         let mut frame_mgr = FrameArenaManager::new(1024 * 32);
         assert_eq!(frame_mgr.frame_epoch(), 0);
-        let _ = frame_mgr.active_arena().alloc(12345u32);
+        let _ = frame_mgr.active_arena_mut().alloc(12345u32);
         frame_mgr.swap_and_reset();
         assert_eq!(frame_mgr.frame_epoch(), 1);
         assert_eq!(frame_mgr.active_arena().allocated_bytes(), 0);
