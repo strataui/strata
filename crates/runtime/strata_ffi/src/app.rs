@@ -11,6 +11,7 @@ pub struct StrataAppHandle {
 
 /// Opaque wrapper for a Strata window instance with authentic frame buffer presentation sink.
 pub struct StrataWindowHandle {
+    pub app: *mut StrataAppHandle,
     pub title: String,
     pub width: u32,
     pub height: u32,
@@ -43,6 +44,7 @@ pub unsafe extern "C" fn strata_app_destroy(app: *mut StrataAppHandle) {
         let mut app_box = Box::from_raw(app);
         for win in app_box.windows.drain(..) {
             if !win.is_null() {
+                (*win).app = std::ptr::null_mut();
                 let _ = Box::from_raw(win);
             }
         }
@@ -81,6 +83,7 @@ pub unsafe extern "C" fn strata_window_create(
     };
 
     let win = Box::new(StrataWindowHandle {
+        app,
         title: title_str,
         width,
         height,
@@ -159,6 +162,11 @@ pub unsafe extern "C" fn strata_window_get_height(win: *const StrataWindowHandle
 #[no_mangle]
 pub unsafe extern "C" fn strata_window_destroy(win: *mut StrataWindowHandle) {
     if !win.is_null() {
+        let app = (*win).app;
+        if !app.is_null() {
+            (*app).windows.retain(|&w| w != win);
+        }
         let _ = Box::from_raw(win);
     }
 }
+

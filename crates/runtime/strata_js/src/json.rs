@@ -15,12 +15,17 @@ pub fn parse_json(input: &str) -> Result<JsValue, String> {
     Ok(val)
 }
 
+const MAX_JSON_DEPTH: usize = 512;
+
 /// Serializes a `JsValue` into a standard JSON string.
-pub fn stringify_json(val: &JsValue) -> String {
+/// Returns an error if a circular reference is detected or maximum depth is exceeded.
+pub fn stringify_json(val: &JsValue) -> Result<String, String> {
     let mut out = String::new();
-    serialize_value(val, &mut out);
-    out
+    let mut stack = Vec::new();
+    serialize_value(val, &mut out, &mut stack, 0)?;
+    Ok(out)
 }
+
 
 fn skip_whitespace<I: Iterator<Item = char>>(chars: &mut std::iter::Peekable<I>) {
     while let Some(&c) = chars.peek() {
@@ -262,9 +267,20 @@ fn parse_undefined<I: Iterator<Item = char>>(
     }
 }
 
-fn serialize_value(val: &JsValue, out: &mut String) {
+fn serialize_value(
+    val: &JsValue,
+    out: &mut String,
+    stack: &mut Vec<*const ()>,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > MAX_JSON_DEPTH {
+        return Err("RangeError: Maximum call stack size exceeded".to_string());
+    }
+
     match val {
-        JsValue::Undefined | JsValue::Null | JsValue::Function(_) | JsValue::Symbol(_) => out.push_str("null"),
+        JsValue::Undefined | JsValue::Null | JsValue::Function(_) | JsValue::Symbol(_) => {
+            out.push_str("null");
+        }
         JsValue::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         JsValue::Number(n) => {
             if n.is_nan() || n.is_infinite() {
@@ -296,18 +312,34 @@ fn serialize_value(val: &JsValue, out: &mut String) {
         }
         JsValue::BigInt(bi) => out.push_str(&bi.to_decimal_string()),
         JsValue::Array(items) => {
+            let ptr = std::rc::Rc::as_ptr(items) as *const ();
+            if stack.contains(&ptr) {
+                return Err("TypeError: Converting circular structure to JSON".to_string());
+            }
+            stack.push(ptr);
             out.push('[');
-            for (i, item) in items.borrow().iter().enumerate() {
+            let borrowed = items.borrow();
+            for (i, item) in borrowed.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
-                serialize_value(item, out);
+                if let Err(e) = serialize_value(item, out, stack, depth + 1) {
+                    stack.pop();
+                    return Err(e);
+                }
             }
             out.push(']');
+            stack.pop();
         }
         JsValue::Object(map) => {
+            let ptr = std::rc::Rc::as_ptr(map) as *const ();
+            if stack.contains(&ptr) {
+                return Err("TypeError: Converting circular structure to JSON".to_string());
+            }
+            stack.push(ptr);
             out.push('{');
-            for (i, (k, v)) in map.borrow().iter().enumerate() {
+            let borrowed = map.borrow();
+            for (i, (k, v)) in borrowed.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
@@ -322,12 +354,33 @@ fn serialize_value(val: &JsValue, out: &mut String) {
                     }
                 }
                 out.push_str("\":");
-                serialize_value(v, out);
+                if let Err(e) = serialize_value(v, out, stack, depth + 1) {
+                    stack.pop();
+                    return Err(e);
+                }
             }
             out.push('}');
+            stack.pop();
         }
         JsValue::Promise(_) => {
             out.push_str("{}");
         }
     }
+    Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[test]
+    fn test_circular_json_rejection() {
+        let map = Rc::new(RefCell::new(BTreeMap::new()));
+        let obj = JsValue::Object(map.clone());
+        map.borrow_mut().insert("self".to_string(), obj.clone());
+        assert!(stringify_json(&obj).is_err());
+    }
+}
+

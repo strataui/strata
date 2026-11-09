@@ -115,19 +115,52 @@ impl SingleInstanceLock {
     {
         #[cfg(unix)]
         {
-            let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| {
+            let runtime_dir = match std::env::var_os("XDG_RUNTIME_DIR") {
+                Some(p) => PathBuf::from(p),
+                None => {
                     extern "C" {
                         fn getuid() -> u32;
                     }
                     let uid = unsafe { getuid() };
                     let dir = PathBuf::from(format!("/tmp/strata-runtime-{}", uid));
-                    let _ = std::fs::create_dir_all(&dir);
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+                    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+
+                    if let Ok(meta) = std::fs::symlink_metadata(&dir) {
+                        if meta.file_type().is_symlink() {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::PermissionDenied,
+                                format!("Security violation: runtime directory {:?} is an insecure symlink (CWE-59)", dir),
+                            ));
+                        }
+                        if meta.uid() != uid {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::PermissionDenied,
+                                format!("Security violation: runtime directory {:?} is not owned by current user (uid {})", dir, uid),
+                            ));
+                        }
+                        if meta.permissions().mode() & 0o777 != 0o700 {
+                            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+                        }
+                    } else {
+                        let mut builder = std::fs::DirBuilder::new();
+                        builder.mode(0o700);
+                        if let Err(e) = builder.create(&dir) {
+                            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                                return Err(e);
+                            }
+                        }
+                        let meta = std::fs::symlink_metadata(&dir)?;
+                        if meta.file_type().is_symlink() || meta.uid() != uid {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::PermissionDenied,
+                                format!("Security violation: created runtime directory {:?} failed verification", dir),
+                            ));
+                        }
+                        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+                    }
                     dir
-                });
+                }
+            };
             Self::acquire_in_dir(app_id, args, &runtime_dir, on_secondary_args)
         }
         #[cfg(windows)]
@@ -196,6 +229,13 @@ impl SingleInstanceLock {
 
         let socket_name = format!("{}.sock", app_id.replace('/', "_"));
         let socket_path = runtime_dir.join(socket_name);
+
+        // Security check: remove any untrusted symlink before socket binding (CWE-59)
+        if let Ok(meta) = std::fs::symlink_metadata(&socket_path) {
+            if meta.file_type().is_symlink() {
+                let _ = std::fs::remove_file(&socket_path);
+            }
+        }
 
         // Try binding the socket as the primary instance.
         match UnixListener::bind(&socket_path) {

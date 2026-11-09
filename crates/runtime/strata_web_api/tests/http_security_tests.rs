@@ -108,3 +108,68 @@ fn test_security_constants_sanity() {
     assert_eq!(MAX_RESPONSE_BODY_SIZE, 128 * 1024 * 1024);
     assert_eq!(MAX_DECOMPRESSED_SIZE, 128 * 1024 * 1024);
 }
+
+#[test]
+fn test_redirect_strips_auth_on_downgrade() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+    use strata_web_api::fetch::{fetch, RequestInit};
+
+    let server2 = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port2 = server2.local_addr().unwrap().port();
+
+    let server1 = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port1 = server1.local_addr().unwrap().port();
+
+    let auth_leaked = Arc::new(AtomicBool::new(false));
+    let cookie_leaked = Arc::new(AtomicBool::new(false));
+
+    let auth_leaked_clone = Arc::clone(&auth_leaked);
+    let cookie_leaked_clone = Arc::clone(&cookie_leaked);
+
+    // Server 2 thread: verifies headers on cross-origin redirect
+    let t2 = thread::spawn(move || {
+        let (mut stream, _) = server2.accept().unwrap();
+        let mut buf = vec![0u8; 4096];
+        let n = stream.read(&mut buf).unwrap();
+        let req_str = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+        if req_str.contains("authorization:") {
+            auth_leaked_clone.store(true, Ordering::SeqCst);
+        }
+        if req_str.contains("cookie:") {
+            cookie_leaked_clone.store(true, Ordering::SeqCst);
+        }
+        let resp = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+        stream.write_all(resp.as_bytes()).unwrap();
+    });
+
+    // Server 1 thread: sends redirect to server 2
+    let t1 = thread::spawn(move || {
+        let (mut stream, _) = server1.accept().unwrap();
+        let mut buf = vec![0u8; 4096];
+        let _ = stream.read(&mut buf).unwrap();
+        let redirect = format!(
+            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{}/target\r\nContent-Length: 0\r\n\r\n",
+            port2
+        );
+        stream.write_all(redirect.as_bytes()).unwrap();
+    });
+
+    let mut req = RequestInit::get();
+    req.headers.set("Authorization", "Bearer SECRET_TOKEN");
+    req.headers.set("Cookie", "session=SECRET_COOKIE");
+
+    let url = format!("http://127.0.0.1:{}/start", port1);
+    let resp = fetch(&url, Some(req));
+
+    t1.join().unwrap();
+    t2.join().unwrap();
+
+    assert!(resp.is_ok(), "Fetch should follow redirect successfully");
+    assert!(!auth_leaked.load(Ordering::SeqCst), "Authorization header must be stripped on cross-origin redirect");
+    assert!(!cookie_leaked.load(Ordering::SeqCst), "Cookie header must be stripped on cross-origin redirect");
+}
+

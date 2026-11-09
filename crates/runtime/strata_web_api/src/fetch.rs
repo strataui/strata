@@ -662,6 +662,27 @@ pub fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, FetchErro
         if (301..=303).contains(&resp.status) || resp.status == 307 || resp.status == 308 {
             if let Some(loc) = resp.headers.get("location") {
                 let next_url = resolve_redirect_url(&current_url, loc)?;
+                let current_parsed = ParsedUrl::parse(&current_url)?;
+                let next_parsed = ParsedUrl::parse(&next_url)?;
+
+                // Disallow redirect downgrade from HTTPS to HTTP (CWE-319 / Goal 31)
+                if current_parsed.scheme == "https" && next_parsed.scheme == "http" {
+                    return Err(FetchError::NetworkError(format!(
+                        "Insecure redirect downgrade from HTTPS to HTTP rejected (CWE-319): {next_url}"
+                    )));
+                }
+
+                // Strip sensitive credentials on cross-origin redirects (RFC 9110 §15.4 / CWE-200)
+                let is_cross_origin = current_parsed.scheme != next_parsed.scheme
+                    || !current_parsed.host.eq_ignore_ascii_case(&next_parsed.host)
+                    || current_parsed.port != next_parsed.port;
+
+                if is_cross_origin {
+                    current_req.headers.delete("authorization");
+                    current_req.headers.delete("proxy-authorization");
+                    current_req.headers.delete("cookie");
+                }
+
                 current_url = next_url;
                 if resp.status == 303 || resp.status == 301 || resp.status == 302 {
                     current_req.method = "GET".to_string();

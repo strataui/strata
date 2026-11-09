@@ -45,7 +45,7 @@ fn test_json_parsing_and_serialization() {
     assert!(parsed["metadata"]["active"].is_null());
 
     // Roundtrip test
-    let serialized = stringify_json(&parsed);
+    let serialized = stringify_json(&parsed).expect("Failed to stringify JSON");
     let roundtripped = parse_json(&serialized).expect("Failed to re-parse serialized JSON");
     assert_eq!(parsed, roundtripped);
 

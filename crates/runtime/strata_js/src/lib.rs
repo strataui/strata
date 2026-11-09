@@ -147,8 +147,14 @@ impl JsValue {
 
     /// Serializes this `JsValue` into a standard JSON string.
     pub fn to_json_string(&self) -> String {
+        json::stringify_json(self).unwrap_or_else(|_| "null".to_string())
+    }
+
+    /// Serializes this `JsValue` into a standard JSON string, returning an error if a cycle is detected.
+    pub fn try_to_json_string(&self) -> Result<String, String> {
         json::stringify_json(self)
     }
+
 
     /// Returns JavaScript `typeof` string for this value.
     pub fn js_typeof(&self) -> &'static str {
@@ -618,7 +624,7 @@ impl JsValue {
                     JsValue::Bool(b) => format!("{}", b),
                     JsValue::BigInt(bi) => bi.to_decimal_string(),
                     JsValue::Null | JsValue::Undefined => String::new(),
-                    other => json::stringify_json(other),
+                    other => json::stringify_json(other).unwrap_or_else(|_| "[object Object]".to_string()),
                 })
                 .collect::<Vec<_>>()
                 .join(separator),
