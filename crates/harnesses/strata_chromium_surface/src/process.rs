@@ -2,13 +2,12 @@
 
 use std::path::PathBuf;
 use std::process::Child;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use strata_primitives::geom::Rect;
 use crate::ipc::{ChromiumCommand, ChromiumEvent, NavigationState};
 use crate::surface::{PixelFormat, ShmSurface};
 
-static SIMULATED_PID_COUNTER: AtomicU32 = AtomicU32::new(42001);
 
 /// Subprocess lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,12 +111,12 @@ impl ChromiumProcessManager {
                     (child_pid, true)
                 }
                 Err(err) => {
-                    eprintln!("Strata Chromium Plugin: Failed to spawn executable {:?}: {}. Falling back to harness mock.", exec, err);
-                    (SIMULATED_PID_COUNTER.fetch_add(1, Ordering::SeqCst), false)
+                    eprintln!("Strata Chromium Plugin: Failed to spawn executable {:?}: {}. Falling back to in-process harness.", exec, err);
+                    (std::process::id(), false)
                 }
             }
         } else {
-            (SIMULATED_PID_COUNTER.fetch_add(1, Ordering::SeqCst), false)
+            (std::process::id(), false)
         };
 
         self.is_mock.store(!is_real, Ordering::SeqCst);
@@ -192,11 +191,10 @@ impl ChromiumProcessManager {
                 ChromiumCommand::Resize { width, height, .. } => {
                     self.surface.resize(width, height);
                 }
-                ChromiumCommand::ExecuteJs { request_id, script } => {
-                    let result = format!("evaluated: {}", script);
+                ChromiumCommand::ExecuteJs { request_id, script: _ } => {
                     self.emit_event(ChromiumEvent::JsResult {
                         request_id,
-                        result: Ok(result),
+                        result: Err("JavaScript execution requires an active Chromium/CEF subprocess or Strata JS runtime engine".to_string()),
                     });
                 }
                 _ => {}

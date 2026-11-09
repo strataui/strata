@@ -256,12 +256,13 @@ where
     let height = config.height as f32;
     let mut runtime = AppRuntime::new(view, width, height, 1.0);
 
-    let window = LivePlatformWindow::new(config.clone());
+    let mut window = LivePlatformWindow::new(config.clone());
     let mut presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
     let mut compositor = SwapchainCompositor::new(config.width, config.height, 1.0);
 
     let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
+    let _ = window.present_surface(&presenter.backing_buffer, presenter.width, presenter.height);
 
     println!(
         "[OK] Strata Live Window active: {}x{} physical pixels, {} commands presented.",
