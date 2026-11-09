@@ -1,6 +1,17 @@
 //! Strata Web API: W3C Web Platform APIs in Pure Idiomatic Rust.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use strata_web_api::cookie::CookieJar;
+//!
+//! let mut jar = CookieJar::new();
+//! jar.process_set_cookie("session=xyz; Path=/", "https://example.com/api");
+//! assert_eq!(jar.len(), 1);
+//! ```
 
 pub mod clipboard;
+pub mod cookie;
 pub mod fetch;
 pub mod geolocation;
 pub mod websocket;
@@ -11,6 +22,10 @@ pub mod http2;
 
 pub use cache::{Cache, CacheEntry, CacheStorage};
 pub use clipboard::{Clipboard, ClipboardError};
+pub use cookie::{
+    can_set_cookie_domain, default_path_for_request, domain_matches, parse_http_date, path_matches,
+    Cookie, CookieJar, SameSite,
+};
 pub use tls::{create_tls_stream, get_or_init_tls_config, HttpTransportStream};
 pub use http2::{
     decode_hpack_headers, encode_hpack_headers, execute_http2_request, Http2Frame,
@@ -19,9 +34,10 @@ pub use http2::{
     FLAG_END_HEADERS, FLAG_END_STREAM,
 };
 pub use fetch::{
-    decode_chunked_body, decompress_body, fetch, fetch_single, parse_http_response,
-    resolve_redirect_url, AbortController, AbortSignal, FetchError, FormData, Headers, ParsedUrl,
-    RequestInit, Response,
+    compute_origin, decode_chunked_body, decompress_body, fetch, fetch_single,
+    is_cors_simple_request, parse_http_response, resolve_redirect_url, AbortController,
+    AbortSignal, FetchError, FormData, Headers, ParsedUrl, RequestCredentials, RequestInit,
+    RequestMode, Response,
 };
 pub use geolocation::{
     haversine_distance_meters, initial_bearing_degrees, GeoCoordinates, Geolocation,
@@ -35,8 +51,10 @@ pub use websocket::{
 pub mod prelude {
     pub use super::cache::{Cache, CacheEntry, CacheStorage};
     pub use super::clipboard::{Clipboard, ClipboardError};
+    pub use super::cookie::{Cookie, CookieJar, SameSite};
     pub use super::fetch::{
-        fetch, AbortController, AbortSignal, FetchError, FormData, Headers, RequestInit, Response,
+        fetch, AbortController, AbortSignal, FetchError, FormData, Headers, RequestCredentials,
+        RequestInit, RequestMode, Response,
     };
     pub use super::geolocation::{
         haversine_distance_meters, GeoCoordinates, Geolocation, GeolocationError,

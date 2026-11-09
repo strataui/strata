@@ -8,6 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::crc32::crc32;
 
 pub const TOMBSTONE_VAL_LEN: u32 = 0xFFFF_FFFF;
+pub const MAX_KEY_SIZE: usize = 65535;
+pub const MAX_RECORD_SIZE: usize = 64 * 1024 * 1024; // 64 MB limit protecting against OOM bombs
 
 /// In-memory index entry pointing to the location of a value on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,6 +17,118 @@ pub struct KeyDirEntry {
     pub value_pos: u64,
     pub value_size: u32,
     pub timestamp: u64,
+}
+
+#[cfg(unix)]
+fn try_lock_exclusive(file: &File) -> io::Result<()> {
+    use std::os::unix::io::AsRawFd;
+    extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    const LOCK_EX: i32 = 2;
+    const LOCK_NB: i32 = 4;
+
+    let res = unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) };
+    if res != 0 {
+        let err = io::Error::last_os_error();
+        if err.kind() == io::ErrorKind::WouldBlock || err.raw_os_error() == Some(11) {
+            Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Bitcask WAL is locked by another process",
+            ))
+        } else {
+            Err(err)
+        }
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn unlock_file(file: &File) -> io::Result<()> {
+    use std::os::unix::io::AsRawFd;
+    extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    const LOCK_UN: i32 = 8;
+    let res = unsafe { flock(file.as_raw_fd(), LOCK_UN) };
+    if res != 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn try_lock_exclusive(file: &File) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    extern "system" {
+        fn LockFileEx(
+            h_file: *mut std::ffi::c_void,
+            dw_flags: u32,
+            dw_reserved: u32,
+            n_number_of_bytes_to_lock_low: u32,
+            n_number_of_bytes_to_lock_high: u32,
+            lp_overlapped: *mut std::ffi::c_void,
+        ) -> i32;
+    }
+    const LOCKFILE_EXCLUSIVE_LOCK: u32 = 0x0000_0002;
+    const LOCKFILE_FAIL_IMMEDIATELY: u32 = 0x0000_0001;
+
+    let mut overlapped = std::mem::MaybeUninit::<[u8; 32]>::zeroed();
+    let res = unsafe {
+        LockFileEx(
+            file.as_raw_handle() as *mut _,
+            LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+            0,
+            1,
+            0,
+            overlapped.as_mut_ptr() as *mut _,
+        )
+    };
+    if res == 0 {
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(33) {
+            Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Bitcask WAL is locked by another process",
+            ))
+        } else {
+            Err(err)
+        }
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn unlock_file(file: &File) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    extern "system" {
+        fn UnlockFile(
+            h_file: *mut std::ffi::c_void,
+            dw_file_offset_low: u32,
+            dw_file_offset_high: u32,
+            n_number_of_bytes_to_unlock_low: u32,
+            n_number_of_bytes_to_unlock_high: u32,
+        ) -> i32;
+    }
+    let res = unsafe { UnlockFile(file.as_raw_handle() as *mut _, 0, 0, 1, 0) };
+    if res == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn try_lock_exclusive(_file: &File) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn unlock_file(_file: &File) -> io::Result<()> {
+    Ok(())
 }
 
 /// Pure-Rust Bitcask key-value store with append-only WAL.
@@ -39,6 +153,8 @@ impl StrataKV {
             .truncate(false)
             .open(&path)?;
 
+        try_lock_exclusive(&file)?;
+
         let mut key_dir = HashMap::new();
         Self::replay_wal(&mut file, &mut key_dir)?;
 
@@ -54,6 +170,7 @@ impl StrataKV {
 
     /// Replays the WAL from start to end, verifying CRC32 checksums and indexing active keys.
     fn replay_wal(file: &mut File, key_dir: &mut HashMap<String, KeyDirEntry>) -> io::Result<()> {
+        let file_len = file.metadata()?.len();
         file.seek(SeekFrom::Start(0))?;
         let mut header_buf = [0u8; 18]; // 4 (crc) + 8 (ts) + 2 (klen) + 4 (vlen)
 
@@ -70,7 +187,21 @@ impl StrataKV {
             let key_len = u16::from_le_bytes(header_buf[12..14].try_into().unwrap()) as usize;
             let val_len_raw = u32::from_le_bytes(header_buf[14..18].try_into().unwrap());
 
-            let mut payload = vec![0u8; key_len + if val_len_raw == TOMBSTONE_VAL_LEN { 0 } else { val_len_raw as usize }];
+            let is_tombstone = val_len_raw == TOMBSTONE_VAL_LEN;
+            let val_len = if is_tombstone { 0 } else { val_len_raw as usize };
+
+            // Reject pre-allocation OOM bomb: validate bounds against max record size and remaining file size
+            if val_len > MAX_RECORD_SIZE {
+                break;
+            }
+
+            let total_payload_len = key_len + val_len;
+            let remaining_file_bytes = file_len.saturating_sub(offset + 18);
+            if (total_payload_len as u64) > remaining_file_bytes {
+                break;
+            }
+
+            let mut payload = vec![0u8; total_payload_len];
             file.read_exact(&mut payload)?;
 
             // Verify checksum over timestamp + key_len + val_len + payload
@@ -89,7 +220,7 @@ impl StrataKV {
                 Err(_) => continue,
             };
 
-            if val_len_raw == TOMBSTONE_VAL_LEN {
+            if is_tombstone {
                 key_dir.remove(&key_str);
             } else {
                 let value_pos = offset + 18 + (key_len as u64);
@@ -114,6 +245,15 @@ impl StrataKV {
             None => return Ok(None),
         };
 
+        if entry.value_size as usize > MAX_RECORD_SIZE {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Record exceeds MAX_RECORD_SIZE"));
+        }
+
+        let file_len = self.wal_file.metadata()?.len();
+        if entry.value_pos.saturating_add(entry.value_size as u64) > file_len {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Record exceeds WAL file length"));
+        }
+
         self.wal_file.seek(SeekFrom::Start(entry.value_pos))?;
         let mut buf = vec![0u8; entry.value_size as usize];
         self.wal_file.read_exact(&mut buf)?;
@@ -122,6 +262,10 @@ impl StrataKV {
 
     /// Stores a key-value pair, appending to the WAL and updating the in-memory index.
     pub fn put(&mut self, key: &str, val: &[u8]) -> io::Result<()> {
+        if val.len() > MAX_RECORD_SIZE {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Value exceeds MAX_RECORD_SIZE"));
+        }
+
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
@@ -204,6 +348,40 @@ impl StrataKV {
         self.key_dir.keys().cloned().collect()
     }
 
+    /// Returns total file size on disk in bytes.
+    pub fn total_bytes(&self) -> io::Result<u64> {
+        self.wal_file.metadata().map(|m| m.len())
+    }
+
+    /// Returns the sum of bytes utilized by all live keys, values, and frame headers.
+    pub fn live_data_bytes(&self) -> u64 {
+        self.key_dir
+            .iter()
+            .map(|(k, entry)| 18 + k.len() as u64 + entry.value_size as u64)
+            .sum()
+    }
+
+    /// Ratio of dead/reclaimable bytes in the WAL (0.0 to 1.0).
+    pub fn dead_bytes_ratio(&self) -> io::Result<f64> {
+        let total = self.total_bytes()?;
+        if total == 0 {
+            return Ok(0.0);
+        }
+        let live = self.live_data_bytes();
+        let dead = total.saturating_sub(live);
+        Ok(dead as f64 / total as f64)
+    }
+
+    /// Compacts the log if the dead bytes ratio exceeds the specified threshold.
+    pub fn maybe_compact(&mut self, threshold: f64) -> io::Result<bool> {
+        if self.dead_bytes_ratio()? >= threshold {
+            self.compact()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// Compacts the log by writing all current active entries into a fresh compacted file.
     pub fn compact(&mut self) -> io::Result<()> {
         let compact_path = self.wal_path.with_extension("compact");
@@ -250,16 +428,41 @@ impl StrataKV {
         }
 
         compact_file.flush()?;
-
-        // Replace old WAL with compacted WAL
         drop(compact_file);
-        self.wal_file = OpenOptions::new()
+
+        // Replace old WAL with compacted WAL safely across operating systems:
+        // On Windows, renaming fails if either the source or target file is open.
+        // We unlock and drop the existing WAL handle first by swapping with an ephemeral file.
+        let swap_path = self.wal_path.with_extension("swap");
+        let swap_file = OpenOptions::new()
             .read(true)
             .write(true)
-            .open(&compact_path)?;
+            .create(true)
+            .truncate(true)
+            .open(&swap_path)?;
+
+        let old_file = std::mem::replace(&mut self.wal_file, swap_file);
+        let _ = unlock_file(&old_file);
+        drop(old_file);
+
         std::fs::rename(&compact_path, &self.wal_path)?;
+        let _ = std::fs::remove_file(&swap_path);
+
+        let mut reloaded = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&self.wal_path)?;
+        try_lock_exclusive(&reloaded)?;
+        reloaded.seek(SeekFrom::End(0))?;
+        self.wal_file = reloaded;
 
         self.key_dir = new_key_dir;
         Ok(())
+    }
+}
+
+impl Drop for StrataKV {
+    fn drop(&mut self) {
+        let _ = unlock_file(&self.wal_file);
     }
 }

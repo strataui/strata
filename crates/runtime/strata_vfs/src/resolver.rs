@@ -9,18 +9,43 @@ use crate::types::VfsRoot;
 static APP_ID: RwLock<Option<String>> = RwLock::new(None);
 static TEST_OVERRIDES: RwLock<Option<HashMap<VfsRoot, PathBuf>>> = RwLock::new(None);
 
+/// Validates that an application identifier consists solely of alphanumeric characters,
+/// periods, dashes, and underscores (`^[a-zA-Z0-9_.-]+$`), preventing path traversal injections.
+pub fn is_valid_app_id(id: &str) -> bool {
+    if id.is_empty() || id == "." || id == ".." {
+        return false;
+    }
+    if id.contains('/') || id.contains('\\') || id.contains("..") {
+        return false;
+    }
+    id.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+}
+
 /// Sets the application identifier used in directory naming (e.g. `com.example.app`).
-pub fn set_app_id(id: impl Into<String>) {
+///
+/// Returns `true` if the identifier is valid and was set; returns `false` if the identifier
+/// contains invalid characters or directory traversal sequences (`..`, `/`, `\`).
+pub fn set_app_id(id: impl Into<String>) -> bool {
+    let id_str = id.into();
+    if !is_valid_app_id(&id_str) {
+        return false;
+    }
     if let Ok(mut lock) = APP_ID.write() {
-        *lock = Some(id.into());
+        *lock = Some(id_str);
+        true
+    } else {
+        false
     }
 }
 
-/// Retrieves the current application identifier.
+/// Retrieves the current application identifier, falling back to `"strata_app"` if unset or invalid.
 pub fn get_app_id() -> String {
     if let Ok(lock) = APP_ID.read() {
         if let Some(ref id) = *lock {
-            return id.clone();
+            if is_valid_app_id(id) {
+                return id.clone();
+            }
         }
     }
     String::from("strata_app")

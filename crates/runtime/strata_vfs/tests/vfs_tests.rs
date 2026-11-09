@@ -257,4 +257,37 @@ fn test_vfs_windows_drive_letters_ads_and_dos_devices_rejected() {
     clear_test_overrides();
 }
 
+#[test]
+fn test_app_id_validation_and_path_traversal_prevention() {
+    use strata_vfs::{get_app_id, is_valid_app_id, set_app_id};
+    let _guard = TEST_LOCK.lock().unwrap();
+
+    // Valid app_ids
+    assert!(is_valid_app_id("com.strata.editor"));
+    assert!(is_valid_app_id("my-app_1.0"));
+    assert!(is_valid_app_id("app123"));
+
+    // Traversal and malicious app_ids rejected
+    assert!(!is_valid_app_id("../../tmp"));
+    assert!(!is_valid_app_id("..\\..\\tmp"));
+    assert!(!is_valid_app_id("/etc/passwd"));
+    assert!(!is_valid_app_id("C:\\Windows"));
+    assert!(!is_valid_app_id("."));
+    assert!(!is_valid_app_id(".."));
+    assert!(!is_valid_app_id(""));
+    assert!(!is_valid_app_id("app$name"));
+    assert!(!is_valid_app_id("app/sub"));
+
+    // Setting invalid app_id fails and retains safe fallback
+    assert!(!set_app_id("../../escape"));
+    assert_ne!(get_app_id(), "../../escape");
+
+    // Setting valid app_id succeeds
+    assert!(set_app_id("com.strata.testapp"));
+    assert_eq!(get_app_id(), "com.strata.testapp");
+
+    // Reset back to default
+    assert!(set_app_id("strata_app"));
+}
+
 

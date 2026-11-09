@@ -65,12 +65,38 @@ pub fn get_or_init_tls_config() -> Arc<ClientConfig> {
         .clone()
 }
 
+use std::time::Duration;
+
 impl HttpTransportStream {
     /// Returns the negotiated ALPN protocol, if TLS was used and negotiated.
     pub fn alpn_protocol(&self) -> Option<&[u8]> {
         match self {
             Self::Plain(_) => None,
             Self::Tls(stream) => stream.conn.alpn_protocol(),
+        }
+    }
+
+    /// Configures read timeout on the underlying socket.
+    pub fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        match self {
+            Self::Plain(stream) => stream.set_read_timeout(timeout),
+            Self::Tls(stream) => stream.sock.set_read_timeout(timeout),
+        }
+    }
+
+    /// Configures write timeout on the underlying socket.
+    pub fn set_write_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        match self {
+            Self::Plain(stream) => stream.set_write_timeout(timeout),
+            Self::Tls(stream) => stream.sock.set_write_timeout(timeout),
+        }
+    }
+
+    /// Configures TCP nodelay to disable Nagle's algorithm for low-latency interactive streaming.
+    pub fn set_nodelay(&self, nodelay: bool) -> std::io::Result<()> {
+        match self {
+            Self::Plain(stream) => stream.set_nodelay(nodelay),
+            Self::Tls(stream) => stream.sock.set_nodelay(nodelay),
         }
     }
 }

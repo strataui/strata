@@ -29,6 +29,37 @@ fn test_url_scheme_and_default_ports() {
 }
 
 #[test]
+fn test_url_query_without_slash_and_fragment_isolation() {
+    // 1. Host with query string directly without slash (RFC 3986 boundary isolation)
+    let url_no_slash = ParsedUrl::parse("https://api.example.com?query=1&page=2").expect("Valid URL");
+    assert_eq!(url_no_slash.scheme, "https");
+    assert_eq!(url_no_slash.host, "api.example.com");
+    assert_eq!(url_no_slash.port, 443);
+    assert_eq!(url_no_slash.path_and_query, "/?query=1&page=2");
+
+    // 2. Custom port with query directly without slash
+    let url_port_query = ParsedUrl::parse("http://localhost:8080?filter=true").expect("Valid URL");
+    assert_eq!(url_port_query.scheme, "http");
+    assert_eq!(url_port_query.host, "localhost");
+    assert_eq!(url_port_query.port, 8080);
+    assert_eq!(url_port_query.path_and_query, "/?filter=true");
+
+    // 3. URL with fragment: fragment must be stripped from path_and_query
+    let url_fragment = ParsedUrl::parse("https://example.com/docs/guide#installation").expect("Valid URL");
+    assert_eq!(url_fragment.scheme, "https");
+    assert_eq!(url_fragment.host, "example.com");
+    assert_eq!(url_fragment.port, 443);
+    assert_eq!(url_fragment.path_and_query, "/docs/guide");
+
+    // 4. Bare host without trailing slash
+    let url_bare = ParsedUrl::parse("https://example.com").expect("Valid URL");
+    assert_eq!(url_bare.scheme, "https");
+    assert_eq!(url_bare.host, "example.com");
+    assert_eq!(url_bare.port, 443);
+    assert_eq!(url_bare.path_and_query, "/");
+}
+
+#[test]
 fn test_tls_config_singleton_and_mozilla_roots() {
     let config = get_or_init_tls_config();
     // Verify ALPN protocol negotiation preference (HTTP/2 prioritized, falling back to HTTP/1.1)

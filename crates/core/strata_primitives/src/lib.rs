@@ -1,4 +1,17 @@
 //! strata_primitives: Zero-dependency mathematical, geometric, color, memory, and atom primitives for Project Strata.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use strata_primitives::geom::Rect;
+//! use strata_primitives::color::Rgba;
+//!
+//! let rect = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+//! assert_eq!(rect.width(), 100.0);
+//!
+//! let white = Rgba::WHITE;
+//! assert_eq!(white.a, 255);
+//! ```
 
 pub mod geom;
 pub mod color;
@@ -6,6 +19,7 @@ pub mod arena;
 pub mod atom;
 pub mod target;
 pub mod quantization;
+pub mod entity;
 
 pub use geom::{Point, Size, Rect, EdgeInsets, Transform2D, LayoutUnit, FixedRect, Matrix4x4};
 pub use color::{Rgba, Hsla, Oklch};
@@ -13,6 +27,7 @@ pub use arena::{BumpArena, FrameArenaManager, ThreadLocalArena, DEFAULT_ARENA_CA
 pub use atom::{AtomId, AtomTable, intern, resolve};
 pub use target::{is_tui_target, set_tui_target_active};
 pub use quantization::largest_remainder_quantization;
+pub use entity::EntityId;
 
 pub mod prelude {
     pub use crate::geom::{Point, Size, Rect, EdgeInsets, Transform2D, LayoutUnit, FixedRect, Matrix4x4};
@@ -21,6 +36,7 @@ pub mod prelude {
     pub use crate::atom::{AtomId, AtomTable, intern, resolve};
     pub use crate::target::{is_tui_target, set_tui_target_active};
     pub use crate::quantization::largest_remainder_quantization;
+    pub use crate::entity::EntityId;
 }
 
 #[cfg(test)]
@@ -188,6 +204,40 @@ mod tests {
             for _ in 0..5 {
                 let _ = arena.alloc(DropCounter(Arc::clone(&counter)));
             }
+        }
+        // Destructors must have executed upon arena drop
+        assert_eq!(counter.load(Ordering::SeqCst), 15);
+    }
+
+    #[test]
+    fn test_thread_local_arena_destructor_cleanup() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        struct DropCounter(Arc<AtomicUsize>);
+        impl Drop for DropCounter {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        {
+            let mut arena = ThreadLocalArena::new(1024 * 64);
+            for _ in 0..10 {
+                let _ = arena.alloc(DropCounter(Arc::clone(&counter)));
+            }
+            assert_eq!(counter.load(Ordering::SeqCst), 0);
+            arena.reset();
+            // Destructors must have executed upon reset
+            assert_eq!(counter.load(Ordering::SeqCst), 10);
+
+            // Allocate more and drop arena
+            for _ in 0..5 {
+                let _ = arena.alloc(DropCounter(Arc::clone(&counter)));
+            }
+            // Alloc copy should not affect drop count
+            let _ = arena.alloc_copy(42u64);
         }
         // Destructors must have executed upon arena drop
         assert_eq!(counter.load(Ordering::SeqCst), 15);

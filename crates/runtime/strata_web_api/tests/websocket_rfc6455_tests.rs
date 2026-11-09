@@ -226,3 +226,122 @@ fn test_rfc6455_unexpected_continuation_frame_returns_protocol_error() {
     }
 }
 
+#[test]
+fn test_rfc6455_server_masked_frame_rejected() {
+    let ws = WebSocket::new("ws://example.com/test");
+    // Server frame masked (RFC 6455 §5.1 violation)
+    let masked_server_frame = encode_frame(
+        true,
+        WsOpcode::Text,
+        b"Illegal masked server message",
+        true,
+        Some([0xAA, 0xBB, 0xCC, 0xDD]),
+    );
+
+    let res = ws.ingest_incoming_bytes(&masked_server_frame);
+    assert!(res.is_err(), "Masked frame from server must be rejected");
+    match res.unwrap_err() {
+        strata_web_api::websocket::WsError::ProtocolError(msg) => {
+            assert!(msg.contains("must not be masked"));
+        }
+        other => panic!("Expected ProtocolError, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_rfc6455_control_frame_fragmentation_rejected() {
+    // Control frame with fin = false (RFC 6455 §5.5 violation)
+    let fragmented_ping = encode_frame(false, WsOpcode::Ping, b"ping", false, None);
+    let res = decode_frame(&fragmented_ping);
+    assert!(res.is_err(), "Fragmented control frame must return error");
+    match res.unwrap_err() {
+        strata_web_api::websocket::WsError::ProtocolError(msg) => {
+            assert!(msg.contains("Control frames must not be fragmented"));
+        }
+        other => panic!("Expected ProtocolError, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_rfc6455_control_frame_oversized_payload_rejected() {
+    // Control frame with payload > 125 bytes (RFC 6455 §5.5 violation)
+    let large_payload = vec![0x42; 126];
+    let oversized_ping = encode_frame(true, WsOpcode::Ping, &large_payload, false, None);
+    let res = decode_frame(&oversized_ping);
+    assert!(res.is_err(), "Oversized control frame must return error");
+    match res.unwrap_err() {
+        strata_web_api::websocket::WsError::ProtocolError(msg) => {
+            assert!(msg.contains("payload length > 125 bytes"));
+        }
+        other => panic!("Expected ProtocolError, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_rfc6455_new_data_frame_during_active_fragmentation_rejected() {
+    let ws = WebSocket::new("ws://example.com/test");
+
+    // Start a fragmented text message (FIN = false)
+    let f1 = encode_frame(false, WsOpcode::Text, b"Part 1...", false, None);
+    ws.ingest_incoming_bytes(&f1).expect("initial fragment accepted");
+
+    // Receive a new Binary frame instead of Continuation frame (RFC 6455 §5.4 violation)
+    let f2 = encode_frame(true, WsOpcode::Binary, b"interleaved new stream", false, None);
+    let res = ws.ingest_incoming_bytes(&f2);
+    assert!(res.is_err(), "Interleaved new data frame must be rejected");
+    match res.unwrap_err() {
+        strata_web_api::websocket::WsError::ProtocolError(msg) => {
+            assert!(msg.contains("Cannot start new data frame"));
+        }
+        other => panic!("Expected ProtocolError, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_rfc6455_client_fragmented_send_and_reassembly() {
+    let ws = WebSocket::new("ws://example.com/test");
+    ws.set_open();
+
+    // Send a 150KB payload using automatic fragmentation (> 64KB DEFAULT_MAX_FRAME_SIZE)
+    let large_text = "Strata RFC 6455 WebSocket High Throughput Streaming Test ".repeat(2600); // ~150 KB
+    assert!(large_text.len() > 65536);
+
+    ws.send_text(&large_text).expect("send_text must succeed");
+
+    let queued_frames = ws.drain_outgoing_frames();
+    assert!(queued_frames.len() >= 3, "Payload should be split into multiple frames");
+
+    // Verify frames properties: first has opcode Text, continuation has Continuation, only last has FIN
+    for (i, frame_bytes) in queued_frames.iter().enumerate() {
+        let (decoded, consumed) = decode_frame(frame_bytes).unwrap().unwrap();
+        assert_eq!(consumed, frame_bytes.len());
+        assert!(decoded.masked, "Client frames must be masked (RFC 6455 §5.1)");
+
+        if i == 0 {
+            assert_eq!(decoded.opcode, WsOpcode::Text);
+            assert!(!decoded.fin);
+        } else if i == queued_frames.len() - 1 {
+            assert_eq!(decoded.opcode, WsOpcode::Continuation);
+            assert!(decoded.fin);
+        } else {
+            assert_eq!(decoded.opcode, WsOpcode::Continuation);
+            assert!(!decoded.fin);
+        }
+    }
+
+    // Now re-assemble using a receiving WebSocket (simulate server forwarding unmasked to another client)
+    let receiver = WebSocket::new("ws://example.com/receiver");
+    for frame_bytes in queued_frames {
+        let (decoded, _) = decode_frame(&frame_bytes).unwrap().unwrap();
+        // Server would forward unmasked frames to client
+        let unmasked_frame = encode_frame(decoded.fin, decoded.opcode, &decoded.payload, false, None);
+        receiver.ingest_incoming_bytes(&unmasked_frame).expect("ingest must succeed");
+    }
+
+    let reassembled = receiver.poll_message().expect("message must be ready");
+    match reassembled {
+        WsMessage::Text(t) => assert_eq!(t, large_text),
+        other => panic!("Expected Text message, got {other:?}"),
+    }
+}
+
