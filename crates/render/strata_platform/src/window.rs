@@ -117,6 +117,57 @@ impl Default for WindowConfig {
     }
 }
 
+/// Physical display monitor descriptor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MonitorInfo {
+    pub id: u64,
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale_factor: f32,
+    pub refresh_rate: u32,
+    pub is_primary: bool,
+}
+
+impl MonitorInfo {
+    /// Creates a new monitor descriptor.
+    pub fn new(
+        id: u64,
+        name: impl Into<String>,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        scale_factor: f32,
+        refresh_rate: u32,
+        is_primary: bool,
+    ) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            x,
+            y,
+            width,
+            height,
+            scale_factor,
+            refresh_rate,
+            is_primary,
+        }
+    }
+
+    /// Default standard 1080p 1.0x display.
+    pub fn standard_1080p() -> Self {
+        Self::new(1, "Primary Display", 0, 0, 1920, 1080, 1.0, 60, true)
+    }
+
+    /// High-DPI 4K 2.0x display.
+    pub fn hidpi_4k() -> Self {
+        Self::new(2, "4K UHD Display", 1920, 0, 3840, 2160, 2.0, 120, false)
+    }
+}
+
 /// Abstract platform window trait defining common cross-platform window operations.
 pub trait PlatformWindow {
     fn title(&self) -> &str;
@@ -135,8 +186,47 @@ pub trait PlatformWindow {
     fn is_redraw_requested(&self) -> bool;
     fn poll_events(&mut self) -> Vec<PlatformEvent>;
     fn push_event(&mut self, event: PlatformEvent);
+    /// Returns the monitor containing the center of this window, if known.
+    fn current_monitor(&self) -> Option<MonitorInfo> {
+        None
+    }
+    /// Returns the list of currently connected physical display monitors.
+    fn available_monitors(&self) -> Vec<MonitorInfo> {
+        Vec::new()
+    }
+    /// Returns the primary system monitor.
+    fn primary_monitor(&self) -> Option<MonitorInfo> {
+        None
+    }
     /// Transmits an incremental AccessKit/OS accessibility tree update to native screen readers.
     fn on_accessibility_update(&mut self, _json_payload: &str) {}
+    /// Sets candidate window positioning following active text caret coordinate.
+    fn set_ime_cursor_location(&mut self, _x: i32, _y: i32, _width: i32, _height: i32) {}
+    /// Updates surrounding text buffer for context-aware IME prediction.
+    fn set_ime_surrounding_text(&mut self, _text: &str, _cursor_index: i32) {}
+    /// Resets active IME composition session.
+    fn reset_ime(&mut self) {}
+    /// Initiates an interactive window drag operation with the native window manager.
+    fn begin_window_drag(&mut self, _x: f32, _y: f32) {}
+    /// Initiates an interactive window resize operation with the native window manager.
+    fn begin_window_resize(&mut self, _edge: crate::csd::CsdHitZone, _x: f32, _y: f32) {}
+    /// Toggles the window maximized state and returns true if the window is now maximized.
+    fn toggle_maximize(&mut self) -> bool {
+        let current = self.mode();
+        let new_mode = if current == WindowMode::Maximized {
+            WindowMode::Windowed
+        } else {
+            WindowMode::Maximized
+        };
+        self.set_mode(new_mode);
+        new_mode == WindowMode::Maximized
+    }
+}
+
+/// Contract for platform windows supporting direct software/swapchain pixel blitting.
+pub trait NativeSurfaceWindow: PlatformWindow {
+    /// Blits a 32-bit BGRA uncompressed buffer to the window client area.
+    fn present_surface(&mut self, pixels: &[u8], width: u32, height: u32) -> Result<(), crate::surface::PresentError>;
 }
 
 /// Headless mock platform window for deterministic testing, CI automation, and headless rendering.
@@ -149,6 +239,10 @@ pub struct MockPlatformWindow {
     pub redraw_requested: bool,
     pub event_queue: VecDeque<PlatformEvent>,
     pub last_accessibility_update: Option<String>,
+    pub ime_cursor_location: Option<(i32, i32, i32, i32)>,
+    pub ime_surrounding: Option<(String, i32)>,
+    pub monitors: Vec<MonitorInfo>,
+    pub current_monitor_id: Option<u64>,
 }
 
 impl MockPlatformWindow {
@@ -162,6 +256,10 @@ impl MockPlatformWindow {
             redraw_requested: false,
             event_queue: VecDeque::new(),
             last_accessibility_update: None,
+            ime_cursor_location: None,
+            ime_surrounding: None,
+            monitors: vec![MonitorInfo::standard_1080p()],
+            current_monitor_id: Some(1),
         }
     }
 
@@ -181,6 +279,21 @@ impl MockPlatformWindow {
         let requested = self.redraw_requested;
         self.redraw_requested = false;
         requested
+    }
+
+    /// Adds a monitor to the mock topology.
+    pub fn add_monitor(&mut self, monitor: MonitorInfo) {
+        self.monitors.push(monitor);
+    }
+
+    /// Moves the window to another monitor, automatically updating high-DPI scaling.
+    pub fn move_to_monitor(&mut self, monitor_id: u64) {
+        if let Some(monitor) = self.monitors.iter().find(|m| m.id == monitor_id).cloned() {
+            self.current_monitor_id = Some(monitor_id);
+            if (self.scale_factor - monitor.scale_factor).abs() > 0.001 {
+                self.set_scale_factor(monitor.scale_factor);
+            }
+        }
     }
 }
 
@@ -217,7 +330,11 @@ impl PlatformWindow for MockPlatformWindow {
     }
 
     fn set_mode(&mut self, mode: WindowMode) {
+        let old = self.config.mode;
         self.config.mode = mode;
+        if old != mode {
+            self.push_event(PlatformEvent::WindowMaximized(mode == WindowMode::Maximized));
+        }
     }
 
     fn is_focused(&self) -> bool {
@@ -253,8 +370,41 @@ impl PlatformWindow for MockPlatformWindow {
         self.event_queue.push_back(event);
     }
 
+    fn current_monitor(&self) -> Option<MonitorInfo> {
+        self.current_monitor_id
+            .and_then(|id| self.monitors.iter().find(|m| m.id == id).cloned())
+    }
+
+    fn available_monitors(&self) -> Vec<MonitorInfo> {
+        self.monitors.clone()
+    }
+
+    fn primary_monitor(&self) -> Option<MonitorInfo> {
+        self.monitors.iter().find(|m| m.is_primary).cloned()
+    }
+
     fn on_accessibility_update(&mut self, json_payload: &str) {
         self.last_accessibility_update = Some(json_payload.to_string());
+    }
+
+    fn set_ime_cursor_location(&mut self, x: i32, y: i32, width: i32, height: i32) {
+        self.ime_cursor_location = Some((x, y, width, height));
+    }
+
+    fn set_ime_surrounding_text(&mut self, text: &str, cursor_index: i32) {
+        self.ime_surrounding = Some((text.to_string(), cursor_index));
+    }
+
+    fn reset_ime(&mut self) {
+        self.ime_cursor_location = None;
+        self.ime_surrounding = None;
+    }
+}
+
+impl NativeSurfaceWindow for MockPlatformWindow {
+    fn present_surface(&mut self, _pixels: &[u8], _width: u32, _height: u32) -> Result<(), crate::surface::PresentError> {
+        self.redraw_requested = false;
+        Ok(())
     }
 }
 
@@ -271,6 +421,8 @@ pub struct LivePlatformWindow {
     pub cursor: CursorIcon,
     pub redraw_requested: bool,
     pub event_queue: VecDeque<PlatformEvent>,
+    pub monitors: Vec<MonitorInfo>,
+    pub current_monitor_id: Option<u64>,
 }
 
 impl LivePlatformWindow {
@@ -295,6 +447,8 @@ impl LivePlatformWindow {
             cursor: CursorIcon::Default,
             redraw_requested: true,
             event_queue: VecDeque::new(),
+            monitors: vec![MonitorInfo::standard_1080p()],
+            current_monitor_id: Some(1),
         }
     }
 
@@ -396,6 +550,45 @@ impl PlatformWindow for LivePlatformWindow {
 
     fn push_event(&mut self, event: PlatformEvent) {
         self.event_queue.push_back(event);
+    }
+
+    fn current_monitor(&self) -> Option<MonitorInfo> {
+        self.current_monitor_id
+            .and_then(|id| self.monitors.iter().find(|m| m.id == id).cloned())
+    }
+
+    fn available_monitors(&self) -> Vec<MonitorInfo> {
+        self.monitors.clone()
+    }
+
+    fn primary_monitor(&self) -> Option<MonitorInfo> {
+        self.monitors.iter().find(|m| m.is_primary).cloned()
+    }
+
+    fn set_ime_cursor_location(&mut self, x: i32, y: i32, width: i32, height: i32) {
+        #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
+        crate::gtk_window::gtk_set_ime_cursor_location(x, y, width, height);
+        #[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
+        let _ = (x, y, width, height);
+    }
+
+    fn set_ime_surrounding_text(&mut self, text: &str, cursor_index: i32) {
+        #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
+        crate::gtk_window::gtk_set_ime_surrounding_text(text, cursor_index);
+        #[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
+        let _ = (text, cursor_index);
+    }
+
+    fn reset_ime(&mut self) {
+        #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
+        crate::gtk_window::gtk_reset_ime();
+    }
+}
+
+impl NativeSurfaceWindow for LivePlatformWindow {
+    fn present_surface(&mut self, _pixels: &[u8], _width: u32, _height: u32) -> Result<(), crate::surface::PresentError> {
+        self.redraw_requested = false;
+        Ok(())
     }
 }
 
