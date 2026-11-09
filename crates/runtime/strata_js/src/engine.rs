@@ -432,11 +432,8 @@ impl JsEngine {
     pub fn create_promise_value(&mut self, promise: JsPromise<JsValue>) -> JsValue {
         let pid = self.next_promise_id;
         self.next_promise_id += 1;
-        self.promises.insert(pid, promise);
-        let mut map = BTreeMap::new();
-        map.insert("__is_promise__".to_string(), JsValue::Bool(true));
-        map.insert("__promise_id__".to_string(), JsValue::Number(pid as f64));
-        JsValue::new_object(map)
+        self.promises.insert(pid, promise.clone());
+        JsValue::Promise(promise)
     }
 
     pub fn resolve_constructor(&self, class_name: &str) -> Option<(Vec<String>, Vec<Stmt>, Option<String>)> {

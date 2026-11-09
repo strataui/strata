@@ -866,47 +866,60 @@ impl JsEngine {
             Expr::Await(inner) => {
                 let val = self.eval_expr(inner)?;
                 drain_microtasks();
-                if let JsValue::Object(ref map) = val {
-                    let b = map.borrow();
-                    if b.get("__is_promise__") == Some(&JsValue::Bool(true)) {
-                        if let Some(JsValue::Number(pid_num)) = b.get("__promise_id__") {
-                            let pid = *pid_num as u64;
-                            if let Some(promise) = self.promises.get(&pid).cloned() {
-                                // Drive event loop / microtasks until promise settles
-                                let mut spins = 0;
-                                while matches!(promise.state(), PromiseState::Pending) && spins < 1000 {
-                                    let fired = crate::web::tick_timers();
-                                    let drained = drain_microtasks();
-                                    if fired == 0 && drained == 0 {
-                                        std::thread::yield_now();
-                                        let drained2 = drain_microtasks();
-                                        if drained2 == 0 {
-                                            break;
-                                        }
-                                    }
-                                    spins += 1;
-                                }
 
-                                match promise.state() {
-                                    PromiseState::Fulfilled(res) => {
-                                        return Ok(res);
-                                    }
-                                    PromiseState::Rejected(err) => {
-                                        self.pending_throw = Some(err);
-                                        return Ok(JsValue::Undefined);
-                                    }
-                                    PromiseState::Pending => {
-                                        return Err(format!(
-                                            "AsyncError: Awaited Promise #{} remained pending after event loop exhaustion",
-                                            pid
-                                        ));
+                let promise_opt = match &val {
+                    JsValue::Promise(p) => Some(p.clone()),
+                    JsValue::Object(ref map) => {
+                        let b = map.borrow();
+                        if b.get("__is_promise__") == Some(&JsValue::Bool(true)) {
+                            b.get("__promise_id__")
+                                .and_then(|v| v.as_f64())
+                                .map(|n| n as u64)
+                                .and_then(|pid| self.promises.get(&pid).cloned())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                if let Some(promise) = promise_opt {
+                    // Cooperative event loop progression until promise settles or progress halts
+                    loop {
+                        match promise.state() {
+                            PromiseState::Fulfilled(res) => return Ok(res),
+                            PromiseState::Rejected(err) => {
+                                self.pending_throw = Some(err);
+                                return Ok(JsValue::Undefined);
+                            }
+                            PromiseState::Pending => {
+                                let fired = crate::web::tick_timers();
+                                let drained = drain_microtasks();
+                                if fired == 0 && drained == 0 {
+                                    std::thread::yield_now();
+                                    let drained2 = drain_microtasks();
+                                    let fired2 = crate::web::tick_timers();
+                                    if drained2 == 0 && fired2 == 0 {
+                                        break;
                                     }
                                 }
                             }
                         }
                     }
+
+                    match promise.state() {
+                        PromiseState::Fulfilled(res) => Ok(res),
+                        PromiseState::Rejected(err) => {
+                            self.pending_throw = Some(err);
+                            Ok(JsValue::Undefined)
+                        }
+                        PromiseState::Pending => {
+                            Err("AsyncError: Awaited Promise remained pending after event loop exhaustion".to_string())
+                        }
+                    }
+                } else {
+                    Ok(val)
                 }
-                Ok(val)
             }
             Expr::Member {
                 object,
@@ -1212,17 +1225,25 @@ impl JsEngine {
                                     if let JsValue::Array(items) = first {
                                         let mut promise_list = Vec::new();
                                         for item in items.borrow().iter() {
-                                            if let JsValue::Object(ref map) = item {
-                                                if map.borrow().get("__is_promise__") == Some(&JsValue::Bool(true)) {
-                                                    if let Some(JsValue::Number(pid_num)) = map.borrow().get("__promise_id__") {
-                                                        if let Some(p) = self.promises.get(&(*pid_num as u64)).cloned() {
-                                                            promise_list.push(p);
-                                                            continue;
+                                            match item {
+                                                JsValue::Promise(p) => {
+                                                    promise_list.push(p.clone());
+                                                }
+                                                JsValue::Object(ref map) => {
+                                                    if map.borrow().get("__is_promise__") == Some(&JsValue::Bool(true)) {
+                                                        if let Some(JsValue::Number(pid_num)) = map.borrow().get("__promise_id__") {
+                                                            if let Some(p) = self.promises.get(&(*pid_num as u64)).cloned() {
+                                                                promise_list.push(p);
+                                                                continue;
+                                                            }
                                                         }
                                                     }
+                                                    promise_list.push(JsPromise::resolve(item.clone()));
+                                                }
+                                                _ => {
+                                                    promise_list.push(JsPromise::resolve(item.clone()));
                                                 }
                                             }
-                                            promise_list.push(JsPromise::resolve(item.clone()));
                                         }
                                         let all_p = JsPromise::all(promise_list);
                                         drain_microtasks();
@@ -2098,6 +2119,113 @@ impl JsEngine {
 
                 if let Expr::Member { object, property, computed: None } | Expr::OptionalMember { object, property, computed: None } = &**callee {
                     let obj_val = self.eval_expr(object)?;
+
+                    // Promise .then / .catch / .finally with authentic JsValue::Promise support
+                    let promise_opt = match &obj_val {
+                        JsValue::Promise(p) => Some(p.clone()),
+                        JsValue::Object(ref map) => {
+                            let b = map.borrow();
+                            if b.get("__is_promise__") == Some(&JsValue::Bool(true)) {
+                                b.get("__promise_id__").and_then(|v| v.as_f64()).map(|n| n as u64).and_then(|pid| self.promises.get(&pid).cloned())
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(promise) = promise_opt {
+                        match property.as_str() {
+                            "then" => {
+                                let cb = evaluated_args.first().cloned();
+                                let (next_promise, resolve, reject) = JsPromise::<JsValue>::new_pending();
+                                let mut next_val = JsValue::Undefined;
+                                let mut had_err = None;
+
+                                match promise.state() {
+                                    PromiseState::Fulfilled(v) => {
+                                        if let Some(ref callback) = cb {
+                                            match self.call_value(callback, vec![v]) {
+                                                Ok(res) => next_val = res,
+                                                Err(e) => had_err = Some(e),
+                                            }
+                                        } else {
+                                            next_val = v;
+                                        }
+                                    }
+                                    PromiseState::Rejected(err) => {
+                                        had_err = Some(err.to_string());
+                                    }
+                                    PromiseState::Pending => {}
+                                }
+
+                                if let Some(e) = had_err {
+                                    reject(JsValue::String(e));
+                                } else {
+                                    if let JsValue::Promise(ref sub_p) = next_val {
+                                        match sub_p.state() {
+                                            PromiseState::Fulfilled(sv) => resolve(sv),
+                                            PromiseState::Rejected(se) => reject(se),
+                                            PromiseState::Pending => resolve(next_val.clone()),
+                                        }
+                                        drain_microtasks();
+                                        return Ok(self.create_promise_value(next_promise));
+                                    }
+                                    if let JsValue::Object(ref m) = next_val {
+                                        let mb = m.borrow();
+                                        if mb.get("__is_promise__") == Some(&JsValue::Bool(true)) {
+                                            if let Some(sub_pid) = mb.get("__promise_id__").and_then(|v| v.as_f64()).map(|n| n as u64) {
+                                                if let Some(sub_p) = self.promises.get(&sub_pid).cloned() {
+                                                    match sub_p.state() {
+                                                        PromiseState::Fulfilled(sv) => resolve(sv),
+                                                        PromiseState::Rejected(se) => reject(se),
+                                                        PromiseState::Pending => resolve(next_val.clone()),
+                                                    }
+                                                    drain_microtasks();
+                                                    return Ok(self.create_promise_value(next_promise));
+                                                }
+                                            }
+                                        }
+                                    }
+                                    resolve(next_val);
+                                }
+                                drain_microtasks();
+                                return Ok(self.create_promise_value(next_promise));
+                            }
+                            "catch" => {
+                                let cb = evaluated_args.first().cloned();
+                                let (next_promise, resolve, reject) = JsPromise::<JsValue>::new_pending();
+
+                                match promise.state() {
+                                    PromiseState::Rejected(err) => {
+                                        if let Some(ref callback) = cb {
+                                            match self.call_value(callback, vec![err]) {
+                                                Ok(recovered) => resolve(recovered),
+                                                Err(e) => reject(JsValue::String(e)),
+                                            }
+                                        } else {
+                                            reject(err);
+                                        }
+                                    }
+                                    PromiseState::Fulfilled(v) => {
+                                        resolve(v);
+                                    }
+                                    PromiseState::Pending => {}
+                                }
+                                drain_microtasks();
+                                return Ok(self.create_promise_value(next_promise));
+                            }
+                            "finally" => {
+                                let cb = evaluated_args.first().cloned();
+                                if let Some(ref callback) = cb {
+                                    let _ = self.call_value(callback, Vec::new());
+                                }
+                                drain_microtasks();
+                                return Ok(obj_val.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+
                     if let JsValue::Object(ref map) = obj_val {
                         // Generator .next()
                         let gen_id_opt = {
@@ -2169,100 +2297,6 @@ impl JsEngine {
                             }
                         }
 
-                        // Promise .then / .catch / .finally
-                        let promise_id_opt = {
-                            let b = map.borrow();
-                            if b.get("__is_promise__") == Some(&JsValue::Bool(true)) {
-                                b.get("__promise_id__").and_then(|v| v.as_f64()).map(|n| n as u64)
-                            } else {
-                                None
-                            }
-                        };
-                        if let Some(pid) = promise_id_opt {
-                            if let Some(promise) = self.promises.get(&pid).cloned() {
-                                match property.as_str() {
-                                    "then" => {
-                                        let cb = evaluated_args.first().cloned();
-                                        let (next_promise, resolve, reject) = JsPromise::<JsValue>::new_pending();
-                                        let mut next_val = JsValue::Undefined;
-                                        let mut had_err = None;
-
-                                        match promise.state() {
-                                            PromiseState::Fulfilled(v) => {
-                                                if let Some(ref callback) = cb {
-                                                    match self.call_value(callback, vec![v]) {
-                                                        Ok(res) => next_val = res,
-                                                        Err(e) => had_err = Some(e),
-                                                    }
-                                                } else {
-                                                    next_val = v;
-                                                }
-                                            }
-                                            PromiseState::Rejected(err) => {
-                                                had_err = Some(err.to_string());
-                                            }
-                                            PromiseState::Pending => {}
-                                        }
-
-                                        if let Some(e) = had_err {
-                                            reject(JsValue::String(e));
-                                        } else {
-                                            if let JsValue::Object(ref m) = next_val {
-                                                let mb = m.borrow();
-                                                if mb.get("__is_promise__") == Some(&JsValue::Bool(true)) {
-                                                    if let Some(sub_pid) = mb.get("__promise_id__").and_then(|v| v.as_f64()).map(|n| n as u64) {
-                                                        if let Some(sub_p) = self.promises.get(&sub_pid).cloned() {
-                                                            match sub_p.state() {
-                                                                PromiseState::Fulfilled(sv) => resolve(sv),
-                                                                PromiseState::Rejected(se) => reject(se),
-                                                                PromiseState::Pending => resolve(next_val.clone()),
-                                                            }
-                                                            drain_microtasks();
-                                                            return Ok(self.create_promise_value(next_promise));
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            resolve(next_val);
-                                        }
-                                        drain_microtasks();
-                                        return Ok(self.create_promise_value(next_promise));
-                                    }
-                                    "catch" => {
-                                        let cb = evaluated_args.first().cloned();
-                                        let (next_promise, resolve, reject) = JsPromise::<JsValue>::new_pending();
-
-                                        match promise.state() {
-                                            PromiseState::Rejected(err) => {
-                                                if let Some(ref callback) = cb {
-                                                    match self.call_value(callback, vec![err]) {
-                                                        Ok(recovered) => resolve(recovered),
-                                                        Err(e) => reject(JsValue::String(e)),
-                                                    }
-                                                } else {
-                                                    reject(err);
-                                                }
-                                            }
-                                            PromiseState::Fulfilled(v) => {
-                                                resolve(v);
-                                            }
-                                            PromiseState::Pending => {}
-                                        }
-                                        drain_microtasks();
-                                        return Ok(self.create_promise_value(next_promise));
-                                    }
-                                    "finally" => {
-                                        let cb = evaluated_args.first().cloned();
-                                        if let Some(ref callback) = cb {
-                                            let _ = self.call_value(callback, Vec::new());
-                                        }
-                                        drain_microtasks();
-                                        return Ok(obj_val.clone());
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
 
                         // Response methods
                         let is_resp = map.borrow().get("__is_response__") == Some(&JsValue::Bool(true));
@@ -2432,7 +2466,7 @@ impl JsEngine {
                             let pid = self.next_promise_id;
                             self.next_promise_id += 1;
                             let (promise, resolve_fn, reject_fn) = JsPromise::<JsValue>::new_pending();
-                            self.promises.insert(pid, promise);
+                            self.promises.insert(pid, promise.clone());
                             self.promise_controllers.insert(pid, (resolve_fn, reject_fn));
 
                             if let Some(executor) = evaluated_args.first().cloned() {
@@ -2448,10 +2482,7 @@ impl JsEngine {
                             }
                             drain_microtasks();
 
-                            let mut map = BTreeMap::new();
-                            map.insert("__is_promise__".to_string(), JsValue::Bool(true));
-                            map.insert("__promise_id__".to_string(), JsValue::Number(pid as f64));
-                            Ok(JsValue::new_object(map))
+                            Ok(JsValue::Promise(promise))
                         } else if matches!(name.as_str(), "Error" | "TypeError" | "ReferenceError" | "SyntaxError" | "RangeError") {
                             let msg = evaluated_args.first().map(|v| v.to_string()).unwrap_or_default();
                             let mut map = BTreeMap::new();
@@ -2593,7 +2624,7 @@ impl JsEngine {
                                     let pid = self.next_promise_id;
                                     self.next_promise_id += 1;
                                     let (promise, resolve_fn, reject_fn) = JsPromise::<JsValue>::new_pending();
-                                    self.promises.insert(pid, promise);
+                                    self.promises.insert(pid, promise.clone());
                                     self.promise_controllers.insert(pid, (resolve_fn, reject_fn));
 
                                     if let Some(executor) = evaluated_args.first().cloned() {
@@ -2609,10 +2640,7 @@ impl JsEngine {
                                     }
                                     drain_microtasks();
 
-                                    let mut map = BTreeMap::new();
-                                    map.insert("__is_promise__".to_string(), JsValue::Bool(true));
-                                    map.insert("__promise_id__".to_string(), JsValue::Number(pid as f64));
-                                    return Ok(JsValue::new_object(map));
+                                    return Ok(JsValue::Promise(promise));
                                 }
                                 if self.classes.contains_key(&cls_name) {
                                     return self.instantiate_class(&cls_name, evaluated_args);
@@ -2712,6 +2740,31 @@ impl JsEngine {
                 }
                 return self.eval_member_access(object, &target, property, computed);
             }
+        }
+
+        if let JsValue::Promise(_) = obj_val {
+            let key = match computed {
+                Some(comp_expr) => {
+                    let prop_val = self.eval_expr(comp_expr)?;
+                    prop_val.to_string()
+                }
+                None => property.to_string(),
+            };
+            if matches!(key.as_str(), "then" | "catch" | "finally") {
+                let mut fn_map = BTreeMap::new();
+                fn_map.insert("__fn__".to_string(), JsValue::String(format!("__promise_method_{key}")));
+                return Ok(JsValue::new_object(fn_map));
+            }
+            if key == "__is_promise__" {
+                return Ok(JsValue::Bool(true));
+            }
+            if key == "Symbol(Symbol.toStringTag)" || key == "toStringTag" {
+                return Ok(JsValue::String("Promise".to_string()));
+            }
+            if let Some(proto_val) = self.object_prototype.get(&key) {
+                return Ok(proto_val.clone());
+            }
+            return Ok(JsValue::Undefined);
         }
 
         if let Some(comp_expr) = computed {
@@ -3076,6 +3129,9 @@ impl JsEngine {
                 let p = JsPromise::reject(JsValue::String(e));
                 return Ok(self.create_promise_value(p));
             }
+            if let JsValue::Promise(_) = ret {
+                return Ok(ret);
+            }
             if let JsValue::Object(ref map) = ret {
                 if map.borrow().get("__is_promise__") == Some(&JsValue::Bool(true)) {
                     return Ok(ret);
@@ -3213,7 +3269,7 @@ impl JsEngine {
             JsValue::Undefined | JsValue::Null | JsValue::Symbol(_) => {
                 Err("TypeError: Cannot convert value to a BigInt".to_string())
             }
-            JsValue::Array(_) | JsValue::Object(_) => {
+            JsValue::Array(_) | JsValue::Object(_) | JsValue::Promise(_) => {
                 let s = self.to_display_string(val);
                 self.to_bigint(&JsValue::String(s))
             }

@@ -326,5 +326,8 @@ fn serialize_value(val: &JsValue, out: &mut String) {
             }
             out.push('}');
         }
+        JsValue::Promise(_) => {
+            out.push_str("{}");
+        }
     }
 }

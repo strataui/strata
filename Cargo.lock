@@ -3447,6 +3447,7 @@ version = "0.1.0"
 dependencies = [
  "strata",
  "strata_dom",
+ "strata_layout",
  "strata_render",
  "strata_style",
 ]
