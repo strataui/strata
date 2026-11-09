@@ -48,7 +48,8 @@ pub unsafe extern "C" fn strata_eval_tailwind_css(
     bytes.len() as i32
 }
 
-/// Renders a solid background with alpha into a caller-allocated RGBA8 offscreen memory buffer.
+/// Renders a background rectangle with alpha into a caller-allocated RGBA8 offscreen memory buffer
+/// through the authentic Strata DisplayList and analytical SDF Rasterizer pipeline.
 /// Returns total bytes written (`width * height * 4`), or -1 on invalid buffer.
 #[no_mangle]
 pub unsafe extern "C" fn strata_render_to_buffer(
@@ -64,16 +65,17 @@ pub unsafe extern "C" fn strata_render_to_buffer(
         return -1;
     }
 
-    let total_pixels = (width as usize) * (height as usize);
-    let total_bytes = total_pixels * 4;
+    let mut fb = strata_render::rasterizer::FrameBuffer::new(width as usize, height as usize);
+    let mut dl = strata_render::compositor::DisplayList::new();
+    dl.push(strata_render::compositor::DrawCommand::DrawRect {
+        bounds: strata_layout::Rect::new(0.0, 0.0, width as f32, height as f32),
+        color: strata_style::types::Color::rgba(r, g, b, a),
+    });
+    fb.render_display_list(&dl);
 
-    for i in 0..total_pixels {
-        let offset = i * 4;
-        *out_rgba_ptr.add(offset) = r;
-        *out_rgba_ptr.add(offset + 1) = g;
-        *out_rgba_ptr.add(offset + 2) = b;
-        *out_rgba_ptr.add(offset + 3) = a;
-    }
+    let total_bytes = fb.pixels.len();
+    std::ptr::copy_nonoverlapping(fb.pixels.as_ptr(), out_rgba_ptr, total_bytes);
 
     total_bytes as i32
 }
+

@@ -12,4 +12,5 @@ crate-type = ["lib", "cdylib"]
 strata = { workspace = true }
 strata_dom = { workspace = true }
 strata_style = { workspace = true }
+strata_layout = { workspace = true }
 strata_render = { workspace = true }
