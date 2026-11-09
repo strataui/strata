@@ -99,4 +99,35 @@ impl AudioBuffer {
         }
         out
     }
+
+    /// Resamples the audio buffer to a new target sample rate using cubic Catmull-Rom interpolation.
+    pub fn resample(&self, target_sample_rate: u32) -> AudioBuffer {
+        self.resample_with_quality(target_sample_rate, crate::resample::ResampleQuality::Cubic)
+    }
+
+    /// Resamples the audio buffer to a new target sample rate with the requested quality mode.
+    pub fn resample_with_quality(
+        &self,
+        target_sample_rate: u32,
+        quality: crate::resample::ResampleQuality,
+    ) -> AudioBuffer {
+        if self.sample_rate == target_sample_rate || self.sample_rate == 0 || target_sample_rate == 0 {
+            return self.clone();
+        }
+
+        let mut resampled_channels = Vec::with_capacity(self.channels.len());
+        for ch in &self.channels {
+            resampled_channels.push(crate::resample::resample_channel(
+                ch,
+                self.sample_rate,
+                target_sample_rate,
+                quality,
+            ));
+        }
+
+        AudioBuffer {
+            sample_rate: target_sample_rate,
+            channels: resampled_channels,
+        }
+    }
 }

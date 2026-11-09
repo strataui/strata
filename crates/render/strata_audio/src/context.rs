@@ -1,7 +1,7 @@
 //! AudioContext coordinator and master graph mixer connected to host soundcards.
 
 use std::sync::{Arc, Mutex};
-use crate::device::{AudioContextState, AudioError, AudioHardwareStream, AudioMixer};
+use crate::device::{ActiveBuffer, AudioCommand, AudioContextState, AudioError, AudioHardwareStream, AudioMixer};
 use crate::filter::BiquadFilter;
 use crate::sample::AudioBuffer;
 use crate::spatial::{AudioListener, Panner3D, Vec3};
@@ -98,6 +98,7 @@ impl AudioContext {
 
         let hw = self.hardware.lock().unwrap();
         if let Some(ref stream) = *hw {
+            let _ = stream.send_command(AudioCommand::SetState(AudioContextState::Running));
             stream.play()?;
         }
         Ok(())
@@ -113,6 +114,7 @@ impl AudioContext {
 
         let hw = self.hardware.lock().unwrap();
         if let Some(ref stream) = *hw {
+            let _ = stream.send_command(AudioCommand::SetState(AudioContextState::Suspended));
             stream.pause()?;
         }
         Ok(())
@@ -125,6 +127,10 @@ impl AudioContext {
         mixer.clear();
 
         let mut hw = self.hardware.lock().unwrap();
+        if let Some(ref stream) = *hw {
+            let _ = stream.send_command(AudioCommand::Clear);
+            let _ = stream.send_command(AudioCommand::SetState(AudioContextState::Closed));
+        }
         *hw = None;
         Ok(())
     }
@@ -135,6 +141,11 @@ impl AudioContext {
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.master_gain = gain;
         }
+        if let Ok(hw) = self.hardware.lock() {
+            if let Some(ref stream) = *hw {
+                let _ = stream.send_command(AudioCommand::SetMasterGain(gain));
+            }
+        }
     }
 
     /// Enqueues an audio buffer for immediate hardware playback through the soundcard.
@@ -144,6 +155,17 @@ impl AudioContext {
 
     /// Enqueues an audio buffer with custom gain for hardware playback.
     pub fn play_buffer_with_gain(&self, buffer: AudioBuffer, gain: f32) {
+        if let Ok(hw) = self.hardware.lock() {
+            if let Some(ref stream) = *hw {
+                let active = ActiveBuffer {
+                    buffer: buffer.clone(),
+                    position: 0,
+                    gain,
+                    looping: false,
+                };
+                let _ = stream.send_command(AudioCommand::Enqueue(active));
+            }
+        }
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.enqueue(buffer, gain, false);
         }
@@ -151,6 +173,17 @@ impl AudioContext {
 
     /// Enqueues an audio buffer to loop continuously on the soundcard.
     pub fn play_buffer_looping(&self, buffer: AudioBuffer, gain: f32) {
+        if let Ok(hw) = self.hardware.lock() {
+            if let Some(ref stream) = *hw {
+                let active = ActiveBuffer {
+                    buffer: buffer.clone(),
+                    position: 0,
+                    gain,
+                    looping: true,
+                };
+                let _ = stream.send_command(AudioCommand::Enqueue(active));
+            }
+        }
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.enqueue(buffer, gain, true);
         }
@@ -208,20 +241,35 @@ impl AudioContext {
             }
         }
 
-        // 4. Calculate spatial distance attenuation & stereo panning
-        let distance_gain = panner.compute_gain(&self.listener);
-        let (left_pan, right_pan) = panner.compute_stereo_panning(&self.listener);
+        // 4. Calculate spatialization: HRTF binaural synthesis or EqualPower stereo panning
+        let (left_ch, right_ch) = match panner.spatialization_mode {
+            crate::spatial::SpatializationMode::Hrtf => {
+                let (mut l, mut r) = panner.render_hrtf(&mono_samples, &self.listener, self.sample_rate);
+                for s in &mut l {
+                    *s *= self.master_gain;
+                }
+                for s in &mut r {
+                    *s *= self.master_gain;
+                }
+                (l, r)
+            }
+            crate::spatial::SpatializationMode::EqualPower => {
+                let distance_gain = panner.compute_gain(&self.listener);
+                let (left_pan, right_pan) = panner.compute_stereo_panning(&self.listener);
 
-        let final_left_gain = distance_gain * left_pan * self.master_gain;
-        let final_right_gain = distance_gain * right_pan * self.master_gain;
+                let final_left_gain = distance_gain * left_pan * self.master_gain;
+                let final_right_gain = distance_gain * right_pan * self.master_gain;
 
-        let mut left_ch = Vec::with_capacity(sample_count);
-        let mut right_ch = Vec::with_capacity(sample_count);
+                let mut left = Vec::with_capacity(sample_count);
+                let mut right = Vec::with_capacity(sample_count);
 
-        for &s in &mono_samples {
-            left_ch.push(s * final_left_gain);
-            right_ch.push(s * final_right_gain);
-        }
+                for &s in &mono_samples {
+                    left.push(s * final_left_gain);
+                    right.push(s * final_right_gain);
+                }
+                (left, right)
+            }
+        };
 
         AudioBuffer {
             sample_rate: self.sample_rate,
