@@ -17,29 +17,37 @@ pub mod transpiler;
 pub mod reader_theme;
 pub mod wikipedia;
 pub mod cache;
+pub mod csp;
 
 pub use ast::SemanticNode;
 pub use tokenizer::{decode_html_entities, HtmlToken, HtmlTokenizer, StreamTokenizer};
-pub use parser::HtmlParser;
-pub use transpiler::WebTranspiler;
+pub use parser::{
+    document_to_semantic_nodes, extract_script_descriptors, extract_scripts,
+    semantic_nodes_to_document, HtmlParser, ScriptDescriptor,
+};
+pub use transpiler::{ArticleMetadata, RenderMode, WebTranspiler};
 pub use reader_theme::ReaderTheme;
 pub use wikipedia::{
     InfoboxRow, WikipediaArticle, WikipediaEngine, WikipediaInfobox, WikipediaSection,
     WikipediaTocItem,
 };
 pub use cache::ArticleCache;
+pub use csp::{extract_meta_csp, ContentSecurityPolicy, DirectiveKind, SourceExpr};
+pub use strata_dom::NodeBlueprint;
 pub use strata_style::MediaContext;
 
 pub mod prelude {
     pub use crate::ast::SemanticNode;
     pub use crate::tokenizer::{decode_html_entities, HtmlToken, HtmlTokenizer, StreamTokenizer};
-    pub use crate::parser::HtmlParser;
-    pub use crate::transpiler::WebTranspiler;
+    pub use crate::parser::{extract_script_descriptors, extract_scripts, HtmlParser, ScriptDescriptor};
+    pub use crate::transpiler::{ArticleMetadata, RenderMode, WebTranspiler};
     pub use crate::reader_theme::ReaderTheme;
     pub use crate::wikipedia::{
         InfoboxRow, WikipediaArticle, WikipediaEngine, WikipediaInfobox, WikipediaSection,
         WikipediaTocItem,
     };
     pub use crate::cache::ArticleCache;
+    pub use crate::csp::{extract_meta_csp, ContentSecurityPolicy, DirectiveKind, SourceExpr};
+    pub use strata_dom::NodeBlueprint;
     pub use strata_style::MediaContext;
 }

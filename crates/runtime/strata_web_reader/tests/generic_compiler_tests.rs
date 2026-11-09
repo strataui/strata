@@ -920,3 +920,167 @@ fn test_custom_tag_bounded_cache_prevents_dos() {
         custom_fallback_count
     );
 }
+
+fn find_element_by_id<'a>(bp: &'a NodeBlueprint, id: &str) -> Option<&'a NodeBlueprint> {
+    match bp {
+        NodeBlueprint::Element {
+            attributes,
+            children,
+            ..
+        } => {
+            for a in attributes {
+                if let Attribute::Property { key, value } = a {
+                    if key.eq_ignore_ascii_case("id") && value == id {
+                        return Some(bp);
+                    }
+                }
+            }
+            for c in children {
+                if let Some(f) = find_element_by_id(c, id) {
+                    return Some(f);
+                }
+            }
+            None
+        }
+        NodeBlueprint::Fragment(children) => {
+            for c in children {
+                if let Some(f) = find_element_by_id(c, id) {
+                    return Some(f);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+#[test]
+fn test_complex_css_selectors_transpiler_cascade() {
+    let html = r##"
+        <!DOCTYPE html>
+        <html>
+            <head>
+                <style>
+                    .container > div:first-child {
+                        color: #111111;
+                    }
+                    .container > div:nth-child(2) {
+                        color: #222222;
+                    }
+                    .container > div:last-child {
+                        color: #333333;
+                    }
+                    .container > div:not(.skip) {
+                        font-size: 24px;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div id="first">Item 1</div>
+                    <div id="second">Item 2</div>
+                    <div id="third" class="skip">Item 3</div>
+                    <div id="fourth">Item 4</div>
+                </div>
+            </body>
+        </html>
+    "##;
+
+    let nodes = HtmlParser::parse(html);
+    let theme = ReaderTheme::dark();
+    let transpiler = WebTranspiler::new(&theme);
+    let media = MediaContext::new(1280.0, 800.0, true);
+    let doc = transpiler.transpile_full_document(&nodes, &media);
+
+    let first = find_element_by_id(&doc, "first").expect("first must exist");
+    let first_style = get_direct_style(first).expect("first direct style");
+    assert_eq!(first_style.color, Color::new(17, 17, 17, 255));
+    assert_eq!(first_style.font_size, 24.0);
+
+    let second = find_element_by_id(&doc, "second").expect("second must exist");
+    let second_style = get_direct_style(second).expect("second direct style");
+    assert_eq!(second_style.color, Color::new(34, 34, 34, 255));
+    assert_eq!(second_style.font_size, 24.0);
+
+    let third = find_element_by_id(&doc, "third").expect("third must exist");
+    let third_style = get_direct_style(third).expect("third direct style");
+    // .skip is excluded from :not(.skip) font-size 24px
+    assert_ne!(third_style.font_size, 24.0);
+
+    let fourth = find_element_by_id(&doc, "fourth").expect("fourth must exist");
+    let fourth_style = get_direct_style(fourth).expect("fourth direct style");
+    assert_eq!(fourth_style.color, Color::new(51, 51, 51, 255));
+    assert_eq!(fourth_style.font_size, 24.0);
+}
+
+#[test]
+fn test_style_media_query_attribute_evaluation() {
+    let html = r##"
+        <!DOCTYPE html>
+        <html>
+            <head>
+                <style media="screen and (min-width: 1000px)">
+                    .responsive-box {
+                        width: 900px;
+                        color: #123456;
+                    }
+                </style>
+                <style media="screen and (max-width: 600px)">
+                    .responsive-box {
+                        width: 400px;
+                        color: #654321;
+                    }
+                </style>
+            </head>
+            <body>
+                <div id="target" class="responsive-box">Content</div>
+            </body>
+        </html>
+    "##;
+
+    let nodes = HtmlParser::parse(html);
+    let theme = ReaderTheme::dark();
+    let transpiler = WebTranspiler::new(&theme);
+
+    // Desktop viewport (1280px wide) -> min-width: 1000px matches, max-width: 600px ignored
+    let desktop_media = MediaContext::new(1280.0, 800.0, true);
+    let desktop_doc = transpiler.transpile_full_document(&nodes, &desktop_media);
+    let desktop_target = find_element_by_id(&desktop_doc, "target").expect("desktop target");
+    let desktop_style = get_direct_style(desktop_target).expect("desktop style");
+    assert_eq!(desktop_style.width, Dimension::Px(900.0));
+    assert_eq!(desktop_style.color, Color::new(18, 52, 86, 255));
+
+    // Mobile viewport (480px wide) -> max-width: 600px matches, min-width: 1000px ignored
+    let mobile_media = MediaContext::new(480.0, 800.0, true);
+    let mobile_doc = transpiler.transpile_full_document(&nodes, &mobile_media);
+    let mobile_target = find_element_by_id(&mobile_doc, "target").expect("mobile target");
+    let mobile_style = get_direct_style(mobile_target).expect("mobile style");
+    assert_eq!(mobile_style.width, Dimension::Px(400.0));
+    assert_eq!(mobile_style.color, Color::new(101, 67, 33, 255));
+}
+
+#[test]
+fn test_external_stylesheet_injection_and_cascade() {
+    let html = r##"
+        <div id="external-target" class="external-btn">Click Me</div>
+    "##;
+    let nodes = HtmlParser::parse(html);
+    let theme = ReaderTheme::dark();
+    let media = MediaContext::new(1280.0, 800.0, true);
+
+    let mut transpiler = WebTranspiler::new(&theme);
+    transpiler
+        .parse_and_add_external_stylesheet(
+            ".external-btn { background-color: #4f46e5; border-radius: 8px; font-weight: bold; }",
+            &media,
+        )
+        .expect("CSS parse must succeed");
+
+    let doc = transpiler.transpile_full_document(&nodes, &media);
+    let target = find_element_by_id(&doc, "external-target").expect("target must exist");
+    let style = get_direct_style(target).expect("target direct style");
+
+    assert_eq!(style.background_color, Some(Color::new(79, 70, 229, 255)));
+    assert_eq!(style.border_radius.top_left, 8.0);
+    assert_eq!(style.font_weight, FontWeight::Bold);
+}

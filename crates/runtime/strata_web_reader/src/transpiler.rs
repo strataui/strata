@@ -404,61 +404,384 @@ fn format_computed_style_declarations(style: &ComputedStyle, inline_style: Optio
     decls.join("; ")
 }
 
+/// Rendering mode for the WebTranspiler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RenderMode {
+    /// Distraction-free reader mode that extracts primary content and formats it cleanly.
+    #[default]
+    Reader,
+    /// Full unmutated document layout with W3C cascade, full width, and canvas propagation.
+    FullDom,
+}
+
+/// Extracted generic article metadata (title, author, publication date, description).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ArticleMetadata {
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub date: Option<String>,
+    pub description: Option<String>,
+}
+
 /// Transpiles semantic HTML AST nodes into native, styled Strata reactive blueprints.
 pub struct WebTranspiler<'a> {
     theme: &'a ReaderTheme,
+    external_stylesheets: Vec<StyleSheet>,
+    render_mode: RenderMode,
 }
 
 impl<'a> WebTranspiler<'a> {
     /// Creates a new transpiler with the specified theme settings.
     pub fn new(theme: &'a ReaderTheme) -> Self {
-        Self { theme }
+        Self {
+            theme,
+            external_stylesheets: Vec::new(),
+            render_mode: RenderMode::Reader,
+        }
     }
 
-    /// Extracts primary readable content from a raw HTML DOM tree (e.g. MediaWiki, article, main).
-    pub fn extract_primary_content(nodes: &[SemanticNode]) -> &[SemanticNode] {
-        for node in nodes {
-            let parser_outputs = node.find_by_class("mw-parser-output");
-            if let Some(po) = parser_outputs.into_iter().max_by_key(|n| match n {
-                SemanticNode::Element { children, .. } => children.len(),
-                _ => 0,
-            }) {
-                if let SemanticNode::Element { children, .. } = po {
-                    if !children.is_empty() {
-                        return children.as_slice();
-                    }
-                }
-            }
+    /// Creates a new transpiler with the specified theme settings and external stylesheets.
+    pub fn with_external_stylesheets(
+        theme: &'a ReaderTheme,
+        external_stylesheets: Vec<StyleSheet>,
+    ) -> Self {
+        Self {
+            theme,
+            external_stylesheets,
+            render_mode: RenderMode::Reader,
+        }
+    }
 
-            if let Some(article) = node.find_first("article") {
-                if let SemanticNode::Element { children, .. } = article {
-                    if !children.is_empty() {
-                        return children.as_slice();
-                    }
-                }
-            }
+    /// Configures the rendering mode for this transpiler.
+    pub fn with_render_mode(mut self, render_mode: RenderMode) -> Self {
+        self.render_mode = render_mode;
+        self
+    }
 
-            if let Some(main) = node.find_first("main") {
-                if let SemanticNode::Element { children, .. } = main {
-                    if !children.is_empty() {
-                        return children.as_slice();
-                    }
-                }
-            }
+    /// Sets the rendering mode for this transpiler.
+    pub fn set_render_mode(&mut self, render_mode: RenderMode) {
+        self.render_mode = render_mode;
+    }
 
-            if let Some(c) = node
-                .find_by_id("content")
-                .or_else(|| node.find_by_id("bodyContent"))
+    /// Returns the current rendering mode.
+    pub fn render_mode(&self) -> RenderMode {
+        self.render_mode
+    }
+
+    /// Adds a parsed external stylesheet to the transpiler.
+    pub fn add_external_stylesheet(&mut self, sheet: StyleSheet) {
+        self.external_stylesheets.push(sheet);
+    }
+
+    /// Parses and adds an external CSS stylesheet into the transpiler.
+    pub fn parse_and_add_external_stylesheet(
+        &mut self,
+        css: &str,
+        context: &MediaContext,
+    ) -> Result<(), String> {
+        let sheet = StyleSheet::parse_with_context(css, context)?;
+        self.external_stylesheets.push(sheet);
+        Ok(())
+    }
+
+    /// Calculates a heuristic readability score for a candidate container node.
+    ///
+    /// Evaluates semantic tag weights, ARIA roles, class/ID sentiment keywords,
+    /// substantive paragraph density, heading distribution, and link density penalties.
+    pub fn calculate_readability_score(node: &SemanticNode) -> f32 {
+        let (tag, attributes, children) = match node {
+            SemanticNode::Element {
+                tag,
+                attributes,
+                children,
+                ..
+            } => (tag, attributes, children),
+            _ => return 0.0,
+        };
+
+        let tag_lower = tag.to_ascii_lowercase();
+        let mut score: f32 = match tag_lower.as_str() {
+            "article" | "main" => 40.0,
+            "section" => 20.0,
+            "div" => 5.0,
+            "p" | "blockquote" | "pre" => 5.0,
+            "header" | "footer" | "nav" | "aside" => -100.0,
+            "form" | "menu" | "dialog" => -50.0,
+            _ => 0.0,
+        };
+
+        // ARIA role evaluation
+        if let Some(role) = attributes
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("role"))
+            .map(|(_, v)| v.trim())
+        {
+            match role.to_ascii_lowercase().as_str() {
+                "main" | "article" => score += 50.0,
+                "navigation" | "banner" | "contentinfo" | "complementary" | "search" => {
+                    score -= 80.0
+                }
+                "region" | "feed" => score += 15.0,
+                _ => {}
+            }
+        }
+
+        // Class and ID sentiment analysis
+        const POSITIVE_KEYWORDS: &[&str] = &[
+            "article",
+            "story",
+            "post",
+            "entry",
+            "content",
+            "main",
+            "body",
+            "text",
+            "page",
+            "mw-parser-output",
+            "markdown-body",
+            "prose",
+        ];
+        const NEGATIVE_KEYWORDS: &[&str] = &[
+            "comment",
+            "comments",
+            "sidebar",
+            "nav",
+            "menu",
+            "header",
+            "footer",
+            "widget",
+            "promo",
+            "ad",
+            "ads",
+            "advertisement",
+            "share",
+            "social",
+            "cookie",
+            "popup",
+            "banner",
+            "sponsor",
+            "modal",
+            "breadcrumb",
+            "toc",
+            "navigation",
+        ];
+
+        let mut pos_matches = 0;
+        let mut neg_matches = 0;
+        let mut is_mw_parser_output = false;
+
+        let mut check_sentiment = |val: &str| {
+            let lower = val.to_ascii_lowercase();
+            if lower.contains("mw-parser-output") {
+                is_mw_parser_output = true;
+            }
+            for token in
+                lower.split(|c: char| c.is_whitespace() || c == '-' || c == '_' || c == '.')
             {
-                if let SemanticNode::Element { children, .. } = c {
-                    if !children.is_empty() {
-                        return children.as_slice();
-                    }
+                if token.is_empty() {
+                    continue;
+                }
+                if POSITIVE_KEYWORDS.contains(&token) {
+                    pos_matches += 1;
+                }
+                if NEGATIVE_KEYWORDS.contains(&token) {
+                    neg_matches += 1;
                 }
             }
+        };
 
-            if let Some(body) = node.find_first("body") {
-                if let SemanticNode::Element { children, .. } = body {
+        if let Some(id) = attributes
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("id"))
+            .map(|(_, v)| v.as_str())
+        {
+            check_sentiment(id);
+        }
+        if let Some(class) = attributes
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+            .map(|(_, v)| v.as_str())
+        {
+            check_sentiment(class);
+        }
+
+        score += (pos_matches as f32 * 25.0).min(75.0);
+        score -= (neg_matches as f32 * 30.0).min(90.0);
+        if is_mw_parser_output {
+            score += 30.0;
+        }
+
+        // Structural and text metric accumulation across descendants
+        struct Metrics {
+            total_text_len: usize,
+            link_text_len: usize,
+            substantive_p_count: usize,
+            paragraph_text_len: usize,
+            heading_count: usize,
+            negative_subtree_count: usize,
+        }
+
+        fn accumulate(node: &SemanticNode, in_link: bool, acc: &mut Metrics) {
+            match node {
+                SemanticNode::Text(t) => {
+                    let len = t.trim().len();
+                    acc.total_text_len += len;
+                    if in_link {
+                        acc.link_text_len += len;
+                    }
+                }
+                SemanticNode::Element {
+                    tag,
+                    attributes,
+                    children,
+                    ..
+                } => {
+                    let tag_lower = tag.to_ascii_lowercase();
+                    let is_link = in_link || tag_lower == "a";
+                    match tag_lower.as_str() {
+                        "p" => {
+                            let text = node.text_content();
+                            let len = text.trim().len();
+                            acc.paragraph_text_len += len;
+                            if len >= 50 {
+                                acc.substantive_p_count += 1;
+                            }
+                        }
+                        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                            acc.heading_count += 1;
+                        }
+                        _ => {}
+                    }
+
+                    let is_negative = matches!(tag_lower.as_str(), "aside" | "nav" | "footer")
+                        || attributes.iter().any(|(k, v)| {
+                            let k_lower = k.to_ascii_lowercase();
+                            if k_lower == "class" || k_lower == "id" {
+                                let v_lower = v.to_ascii_lowercase();
+                                v_lower.contains("sidebar")
+                                    || v_lower.contains("comment")
+                                    || v_lower.contains("ads")
+                                    || v_lower.contains("advert")
+                                    || v_lower.contains("widget")
+                                    || v_lower.contains("social")
+                                    || v_lower.contains("share")
+                            } else {
+                                false
+                            }
+                        });
+                    if is_negative {
+                        acc.negative_subtree_count += 1;
+                    }
+
+                    for child in children {
+                        accumulate(child, is_link, acc);
+                    }
+                }
+                SemanticNode::Comment(_) => {}
+            }
+        }
+
+        let mut metrics = Metrics {
+            total_text_len: 0,
+            link_text_len: 0,
+            substantive_p_count: 0,
+            paragraph_text_len: 0,
+            heading_count: 0,
+            negative_subtree_count: 0,
+        };
+
+        for child in children {
+            accumulate(child, false, &mut metrics);
+        }
+
+        score += (metrics.substantive_p_count as f32 * 10.0)
+            + (metrics.paragraph_text_len as f32 / 50.0).min(100.0);
+        score += (metrics.heading_count as f32 * 5.0).min(25.0);
+        score -= (metrics.negative_subtree_count as f32 * 20.0).min(60.0);
+
+        let link_density = if metrics.total_text_len > 0 {
+            metrics.link_text_len as f32 / metrics.total_text_len as f32
+        } else {
+            0.0
+        };
+
+        if link_density > 0.5 {
+            score -= 50.0 * link_density;
+            if score > 0.0 {
+                score *= 1.0 - link_density;
+            }
+        } else if link_density < 0.25 && metrics.total_text_len > 100 {
+            score += 15.0;
+        }
+
+        score
+    }
+
+    fn collect_candidate_elements<'b>(
+        node: &'b SemanticNode,
+        candidates: &mut Vec<&'b SemanticNode>,
+    ) {
+        if let SemanticNode::Element {
+            tag,
+            attributes,
+            children,
+            ..
+        } = node
+        {
+            if !children.is_empty() {
+                let tag_lower = tag.to_ascii_lowercase();
+                let is_candidate_tag = matches!(
+                    tag_lower.as_str(),
+                    "article" | "main" | "section" | "div" | "body"
+                );
+                let has_candidate_class_or_role = attributes.iter().any(|(k, v)| {
+                    (k.eq_ignore_ascii_case("class")
+                        && (v.contains("mw-parser-output")
+                            || v.contains("content")
+                            || v.contains("post")
+                            || v.contains("entry")
+                            || v.contains("article")
+                            || v.contains("story")
+                            || v.contains("prose")))
+                        || (k.eq_ignore_ascii_case("role")
+                            && (v.eq_ignore_ascii_case("main")
+                                || v.eq_ignore_ascii_case("article")))
+                });
+
+                if is_candidate_tag || has_candidate_class_or_role {
+                    candidates.push(node);
+                }
+            }
+            for child in children {
+                Self::collect_candidate_elements(child, candidates);
+            }
+        }
+    }
+
+    /// Extracts primary readable content from a raw HTML DOM tree using heuristic readability scoring.
+    pub fn extract_primary_content(nodes: &[SemanticNode]) -> &[SemanticNode] {
+        let mut candidates = Vec::new();
+        for node in nodes {
+            Self::collect_candidate_elements(node, &mut candidates);
+        }
+
+        let mut best: Option<(&SemanticNode, f32)> = None;
+        for candidate in candidates {
+            let score = Self::calculate_readability_score(candidate);
+            match best {
+                Some((_, best_score)) if score >= best_score => {
+                    best = Some((candidate, score));
+                }
+                None => {
+                    best = Some((candidate, score));
+                }
+                _ => {}
+            }
+        }
+
+        if let Some((candidate, score)) = best {
+            if score > 15.0 {
+                if let SemanticNode::Element { children, .. } = candidate {
                     if !children.is_empty() {
                         return children.as_slice();
                     }
@@ -467,6 +790,140 @@ impl<'a> WebTranspiler<'a> {
         }
 
         nodes
+    }
+
+    /// Extracts article metadata (title, author, publication date, description) from the DOM.
+    pub fn extract_metadata(nodes: &[SemanticNode]) -> ArticleMetadata {
+        struct MetaCollector {
+            og_title: Option<String>,
+            html_title: Option<String>,
+            h1_title: Option<String>,
+            meta_author: Option<String>,
+            byline_author: Option<String>,
+            meta_date: Option<String>,
+            time_date: Option<String>,
+            description: Option<String>,
+        }
+
+        let mut collector = MetaCollector {
+            og_title: None,
+            html_title: None,
+            h1_title: None,
+            meta_author: None,
+            byline_author: None,
+            meta_date: None,
+            time_date: None,
+            description: None,
+        };
+
+        fn search_nodes(node: &SemanticNode, col: &mut MetaCollector) {
+            if let SemanticNode::Element {
+                tag,
+                attributes,
+                children,
+                ..
+            } = node
+            {
+                let tag_lower = tag.to_ascii_lowercase();
+                if tag_lower == "meta" {
+                    let prop = attributes
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("property"))
+                        .map(|(_, v)| v.as_str());
+                    let name = attributes
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("name"))
+                        .map(|(_, v)| v.as_str());
+                    let content = attributes
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("content"))
+                        .map(|(_, v)| v.trim())
+                        .filter(|v| !v.is_empty());
+
+                    if let Some(content) = content {
+                        if col.og_title.is_none()
+                            && (prop == Some("og:title") || name == Some("twitter:title"))
+                        {
+                            col.og_title = Some(content.to_string());
+                        }
+                        if col.meta_author.is_none()
+                            && (name == Some("author") || prop == Some("article:author"))
+                        {
+                            col.meta_author = Some(content.to_string());
+                        }
+                        if col.meta_date.is_none()
+                            && (prop == Some("article:published_time")
+                                || name == Some("date")
+                                || name == Some("pubdate"))
+                        {
+                            col.meta_date = Some(content.to_string());
+                        }
+                        if col.description.is_none()
+                            && (name == Some("description") || prop == Some("og:description"))
+                        {
+                            col.description = Some(content.to_string());
+                        }
+                    }
+                } else if tag_lower == "title" && col.html_title.is_none() {
+                    let text = node.text_content();
+                    if !text.trim().is_empty() {
+                        col.html_title = Some(text.trim().to_string());
+                    }
+                } else if tag_lower == "time" && col.time_date.is_none() {
+                    if let Some(dt) = attributes
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("datetime"))
+                        .map(|(_, v)| v.trim())
+                        .filter(|v| !v.is_empty())
+                    {
+                        col.time_date = Some(dt.to_string());
+                    } else {
+                        let text = node.text_content();
+                        if !text.trim().is_empty() {
+                            col.time_date = Some(text.trim().to_string());
+                        }
+                    }
+                }
+
+                // Author fallback via classes or rel
+                if col.byline_author.is_none() {
+                    let is_author = attributes.iter().any(|(k, v)| {
+                        (k.eq_ignore_ascii_case("rel") && v.eq_ignore_ascii_case("author"))
+                            || (k.eq_ignore_ascii_case("class")
+                                && (v.contains("author") || v.contains("byline")))
+                    });
+                    if is_author {
+                        let text = node.text_content();
+                        if !text.trim().is_empty() {
+                            col.byline_author = Some(text.trim().to_string());
+                        }
+                    }
+                }
+
+                // H1 fallback for title
+                if col.h1_title.is_none() && tag_lower == "h1" {
+                    let text = node.text_content();
+                    if !text.trim().is_empty() {
+                        col.h1_title = Some(text.trim().to_string());
+                    }
+                }
+
+                for child in children {
+                    search_nodes(child, col);
+                }
+            }
+        }
+
+        for node in nodes {
+            search_nodes(node, &mut collector);
+        }
+
+        ArticleMetadata {
+            title: collector.og_title.or(collector.html_title).or(collector.h1_title),
+            author: collector.meta_author.or(collector.byline_author),
+            date: collector.meta_date.or(collector.time_date),
+            description: collector.description,
+        }
     }
 
     /// Extracts and parses all `<style>` stylesheets within the document tree, evaluating media queries.
@@ -482,8 +939,31 @@ impl<'a> WebTranspiler<'a> {
         out: &mut Vec<StyleSheet>,
     ) {
         for node in nodes {
-            if let SemanticNode::Element { tag, children, .. } = node {
+            if let SemanticNode::Element {
+                tag,
+                attributes,
+                children,
+                ..
+            } = node
+            {
                 if tag.eq_ignore_ascii_case("style") {
+                    let media_matches = attributes
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("media"))
+                        .map(|(_, v)| v.trim())
+                        .filter(|v| !v.is_empty())
+                        .map(|media_query| {
+                            match strata_style::MediaQueryList::parse(media_query) {
+                                Ok(mql) => mql.matches(context),
+                                Err(_) => true,
+                            }
+                        })
+                        .unwrap_or(true);
+
+                    if !media_matches {
+                        continue;
+                    }
+
                     let mut text = String::new();
                     for child in children {
                         if let SemanticNode::Text(t) = child {
@@ -714,7 +1194,8 @@ impl<'a> WebTranspiler<'a> {
         nodes: &[SemanticNode],
         media_context: &MediaContext,
     ) -> NodeBlueprint {
-        let stylesheets = Self::extract_stylesheets(nodes, media_context);
+        let mut stylesheets = Self::extract_stylesheets(nodes, media_context);
+        stylesheets.extend(self.external_stylesheets.clone());
 
         let is_dark = media_context.is_dark;
         let pseudo_state = PseudoState {
@@ -775,6 +1256,24 @@ impl<'a> WebTranspiler<'a> {
         )
     }
 
+    /// Transpiles a document according to the configured `RenderMode`.
+    pub fn transpile(
+        &self,
+        nodes: &[SemanticNode],
+        title: Option<&str>,
+        media_context: &MediaContext,
+    ) -> NodeBlueprint {
+        match self.render_mode {
+            RenderMode::FullDom => self.transpile_full_document(nodes, media_context),
+            RenderMode::Reader => {
+                let auto_title = Self::extract_metadata(nodes).title;
+                let final_title = title.or(auto_title.as_deref());
+                let primary = Self::extract_primary_content(nodes);
+                self.transpile_document_with_roots(primary, nodes, final_title)
+            }
+        }
+    }
+
     /// Transpiles a slice of top-level semantic nodes into a complete article container blueprint.
     pub fn transpile_document(&self, nodes: &[SemanticNode], title: Option<&str>) -> NodeBlueprint {
         self.transpile_document_with_roots(nodes, nodes, title)
@@ -797,6 +1296,7 @@ impl<'a> WebTranspiler<'a> {
             let mut more = Self::extract_stylesheets(nodes, &media_ctx);
             stylesheets.append(&mut more);
         }
+        stylesheets.extend(self.external_stylesheets.clone());
 
         let is_dark = self.theme.name != "Sepia";
         let pseudo_state = PseudoState {
@@ -1004,10 +1504,24 @@ impl<'a> WebTranspiler<'a> {
                 }
                 SemanticNode::Comment(_) => {}
                 SemanticNode::Element { .. } => {
+                    let is_last_child = !nodes[idx + 1..]
+                        .iter()
+                        .any(|n| matches!(n, SemanticNode::Element { .. }));
+                    let cur_tag = c.tag();
+                    let is_last_of_type = match cur_tag {
+                        Some(t) => !nodes[idx + 1..].iter().any(|n| match n {
+                            SemanticNode::Element { tag: nt, .. } => nt.eq_ignore_ascii_case(t),
+                            _ => false,
+                        }),
+                        None => false,
+                    };
+
                     if let Some((mut bp, ctx)) = self.transpile_node_internal(
                         c,
                         ancestors,
                         &child_siblings,
+                        Some(is_last_child),
+                        Some(is_last_of_type),
                         stylesheets,
                         parent_style,
                         state,
@@ -1148,7 +1662,9 @@ impl<'a> WebTranspiler<'a> {
             node,
             &mut ancestors,
             &[],
-            &[],
+            Some(true),
+            Some(true),
+            &self.external_stylesheets,
             None,
             &pseudo_state,
             self.theme.bg_color_rgba(),
@@ -1162,6 +1678,8 @@ impl<'a> WebTranspiler<'a> {
         node: &SemanticNode,
         ancestors: &mut Vec<ElementContext>,
         preceding_siblings: &[ElementContext],
+        is_last_child: Option<bool>,
+        is_last_of_type: Option<bool>,
         stylesheets: &[StyleSheet],
         parent_style: Option<&ComputedStyle>,
         state: &PseudoState,
@@ -1269,6 +1787,7 @@ impl<'a> WebTranspiler<'a> {
                     classes: &class_tokens,
                     id: id_opt,
                     attributes,
+                    children: &[],
                 };
 
                 let anc_refs: Vec<ElementRef> = ancestors
@@ -1278,31 +1797,30 @@ impl<'a> WebTranspiler<'a> {
                         classes: &a.classes,
                         id: a.id.as_deref(),
                         attributes: &a.attributes,
+                        children: &[],
                     })
                     .collect();
 
-                let sib_slice = if preceding_siblings.len() > 8 {
-                    &preceding_siblings[preceding_siblings.len() - 8..]
-                } else {
-                    preceding_siblings
-                };
-                let sib_refs: Vec<ElementRef> = sib_slice
+                let sib_refs: Vec<ElementRef> = preceding_siblings
                     .iter()
                     .map(|s| ElementRef {
                         tag: s.tag.as_str(),
                         classes: &s.classes,
                         id: s.id.as_deref(),
                         attributes: &s.attributes,
+                        children: &[],
                     })
                     .collect();
 
                 let sheet_refs: Vec<&StyleSheet> = stylesheets.iter().collect();
 
                 // Compute exact styles using multi-origin cascade engine (UA + Author + Inline + Inheritance)
-                let mut computed_style = CascadeSolver::resolve_with_hierarchy(
+                let mut computed_style = CascadeSolver::resolve_with_hierarchy_full(
                     &cur_ref,
                     &anc_refs,
                     &sib_refs,
+                    is_last_child,
+                    is_last_of_type,
                     inline_style_opt,
                     &sheet_refs,
                     parent_style,
