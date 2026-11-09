@@ -1,7 +1,7 @@
 //! Semantic DOM AST node definitions and traversal helpers.
 
 /// A node in the semantic DOM tree.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SemanticNode {
     /// HTML Element containing attributes and child nodes.
     Element {

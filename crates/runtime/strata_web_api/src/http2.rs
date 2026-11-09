@@ -873,7 +873,7 @@ pub fn execute_http2_request<T: Read + Write>(
     if !req.headers.has("user-agent") {
         owned_headers.push((
             "user-agent".to_string(),
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Strata/0.1.0".to_string(),
+            "Mozilla/5.0 (compatible; Onyx/1.0; +https://strataui.org)".to_string(),
         ));
     }
     for (k, v) in req.headers.entries() {
@@ -1051,7 +1051,7 @@ pub fn execute_http2_request<T: Read + Write>(
                                 .to_string();
                             }
                         } else if !k.starts_with(':') {
-                            response_headers.set(&k, &v);
+                            response_headers.append(&k, &v);
                         }
                     }
                     headers_received = true;
