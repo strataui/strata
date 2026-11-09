@@ -76,6 +76,7 @@ where
             }
         }
         strata_platform::PlatformEvent::MouseDown { button, x, y } => {
+            runtime.is_mouse_down = true;
             let btn_idx = button.to_button_index();
             if *button == strata_platform::MouseButton::Left {
                 if runtime.check_scrollbar_thumb_press(*x, *y) {
@@ -115,6 +116,7 @@ where
             }
         }
         strata_platform::PlatformEvent::MouseUp { x, y, .. } => {
+            runtime.is_mouse_down = false;
             if runtime.scrollbar_drag.is_some() {
                 runtime.scrollbar_drag = None;
                 needs_redraw = true;
@@ -166,6 +168,7 @@ where
             }
         }
         strata_platform::PlatformEvent::CursorLeft => {
+            runtime.is_mouse_down = false;
             runtime.current_cursor = strata_platform::window::CursorIcon::Default;
             if runtime.clear_hover() {
                 if runtime.hover_is_paint_only() {
@@ -177,13 +180,19 @@ where
         }
         strata_platform::PlatformEvent::KeyDown { .. }
         | strata_platform::PlatformEvent::KeyUp { .. }
-        | strata_platform::PlatformEvent::ReceivedCharacter(_) => {
+        | strata_platform::PlatformEvent::ReceivedCharacter(_)
+        | strata_platform::PlatformEvent::ImePreedit { .. }
+        | strata_platform::PlatformEvent::ImeCommit(_) => {
             let res = runtime.dispatch_key_event(event);
             if res.needs_rebuild() {
                 needs_rebuild = true;
             } else if res.needs_redraw() {
                 needs_redraw = true;
             }
+        }
+        strata_platform::PlatformEvent::WindowMaximized(_) => {
+            needs_rebuild = true;
+            needs_redraw = true;
         }
         _ => {}
     }
@@ -215,56 +224,114 @@ impl AppRuntime {
     }
 }
 
-#[cfg(target_os = "linux")]
-pub fn launch_x11<F>(root_fn: F, config: WindowConfig) -> Result<(), String>
-where
-    F: FnMut() -> View + 'static,
-{
-    launch_x11_with_events(root_fn, config, |_, _| false)
-}
-
-#[cfg(target_os = "linux")]
-/// Launches an interactive native X11 desktop window on Linux with a custom event hook.
-pub fn launch_x11_with_events<F, E>(
-    mut root_fn: F,
-    config: WindowConfig,
+/// Runs an interactive native window event loop against any NativeSurfaceWindow implementation,
+/// pacing frames, evaluating reactive updates, and blitting pixel buffers.
+pub fn run_native_surface_window_loop<W, F, E>(
+    mut window: W,
+    mut root_fn: Option<F>,
+    mut runtime: AppRuntime,
+    mut compositor: SwapchainCompositor,
+    mut presenter: SoftwareSurfacePresenter,
     mut event_handler: E,
+    mut hooks: Option<&mut AppLifecycleHooks>,
 ) -> Result<(), String>
 where
+    W: strata_platform::NativeSurfaceWindow,
     F: FnMut() -> View + 'static,
-    E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
+    E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool,
 {
-    println!(
-        "[+] Launching Strata Native Desktop Window on X11: \"{}\"...",
-        config.title
-    );
-    let mut x11_window = strata_platform::x11_window::X11Window::new(config.clone())?;
-    let view = root_fn();
-    let width = config.width as f32;
-    let height = config.height as f32;
-    let mut runtime = AppRuntime::new(view, width, height, 1.0);
-    let mut presenter =
-        SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
-    let mut compositor = SwapchainCompositor::new(config.width, config.height, 1.0);
-
     // Initial frame presentation
     let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-    let _ = x11_window.present_bgra(&presenter.backing_buffer, presenter.width, presenter.height);
+    let _ = window.present_surface(
+        &presenter.backing_buffer,
+        presenter.width,
+        presenter.height,
+    );
+
+    if let Some(ref mut h) = hooks {
+        if let Some(ref mut on_start) = h.on_start {
+            on_start(&mut runtime);
+        }
+        if let Some(ref mut on_frame) = h.on_frame {
+            let info = AppFrameInfo {
+                frame_index: runtime.frame_count,
+                viewport_width: runtime.viewport_width,
+                viewport_height: runtime.viewport_height,
+                dpr: runtime.dpr,
+                command_count: runtime.display_list.commands.len(),
+            };
+            on_frame(info, &mut runtime);
+        }
+    }
 
     println!(
-        "[OK] Strata Native Desktop Window active on X11 display: {}x{} physical pixels, {} commands presented.",
+        "[OK] Strata Native Window active: {}x{} physical pixels, {} commands presented.",
         presenter.width,
         presenter.height,
         runtime.display_list.commands.len()
     );
 
+    let max_headless_frames = if std::env::var("STRATA_HEADLESS").is_ok() {
+        Some(
+            std::env::var("STRATA_HEADLESS_EXIT_AFTER_FRAMES")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(1),
+        )
+    } else {
+        None
+    };
+    let mut frames_presented: u64 = 1;
+
     let mut running = true;
     while running {
-        let events = x11_window.poll_native_events();
+        if let Some(max_f) = max_headless_frames {
+            if frames_presented >= max_f {
+                break;
+            }
+        }
+        let events = window.poll_events();
         let mut needs_rebuild = false;
         let mut needs_redraw = false;
 
         for event in events {
+            if let Some(ref mut h) = hooks {
+                if let Some(ref mut on_ev) = h.on_event {
+                    let mut control = strata_platform::EventLoopControl::Poll;
+                    on_ev(&event, &mut control, &mut runtime);
+                    if control == strata_platform::EventLoopControl::Exit {
+                        running = false;
+                        break;
+                    }
+                }
+            }
+
+            if let strata_platform::PlatformEvent::DoubleClick { button, x, y } = event {
+                if button == strata_platform::MouseButton::Left {
+                    let region = AppRuntime::hit_test_property(
+                        &runtime.root_blueprint,
+                        &runtime.layout_root,
+                        x,
+                        y,
+                        "data-app-region",
+                    );
+                    let is_drag = region.as_deref() == Some("drag")
+                        || runtime.csd_controller.hit_test(runtime.viewport_width, runtime.viewport_height, x, y)
+                            == strata_platform::CsdHitZone::Titlebar;
+                    if is_drag {
+                        let is_max = window.toggle_maximize();
+                        window.push_event(strata_platform::PlatformEvent::WindowMaximized(is_max));
+                        needs_rebuild = true;
+                    }
+                }
+            }
+
+            if let strata_platform::PlatformEvent::MouseMove { x, y } = event {
+                if runtime.poll_window_drag(x, y) {
+                    window.begin_window_drag(x, y);
+                }
+            }
+
             let (reb, red, exit) = dispatch_native_platform_event(
                 &event,
                 &mut runtime,
@@ -284,6 +351,10 @@ where
             }
         }
 
+        if !running {
+            break;
+        }
+
         let anim_changed = runtime.poll_animations();
         let scroll_changed = runtime.poll_smooth_scroll();
         let caret_changed = runtime.poll_caret_blink();
@@ -294,36 +365,105 @@ where
         if needs_rebuild {
             if runtime.sync_dynamic_text() {
                 let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
-                let _ = x11_window.present_bgra(
+                let _ = window.present_surface(
                     &presenter.backing_buffer,
                     presenter.width,
                     presenter.height,
                 );
-            } else {
-                let new_view = root_fn();
+            } else if let Some(ref mut f) = root_fn {
+                let new_view = f();
                 runtime.update_view(new_view);
                 let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-                let _ = x11_window.present_bgra(
+                let _ = window.present_surface(
                     &presenter.backing_buffer,
                     presenter.width,
                     presenter.height,
                 );
             }
-        } else if needs_redraw || x11_window.redraw_requested {
+        } else if needs_redraw || window.is_redraw_requested() {
+            if let Some(ref mut h) = hooks {
+                if let Some(ref mut on_draw) = h.on_draw {
+                    on_draw(&mut runtime.display_list);
+                }
+            }
             let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
-            let _ = x11_window.present_bgra(
+            let _ = window.present_surface(
                 &presenter.backing_buffer,
                 presenter.width,
                 presenter.height,
             );
+            if let Some(ref mut h) = hooks {
+                if let Some(ref mut on_frame) = h.on_frame {
+                    let info = AppFrameInfo {
+                        frame_index: runtime.frame_count,
+                        viewport_width: runtime.viewport_width,
+                        viewport_height: runtime.viewport_height,
+                        dpr: runtime.dpr,
+                        command_count: runtime.display_list.commands.len(),
+                    };
+                    on_frame(info, &mut runtime);
+                }
+            }
         }
 
-        let is_active =
-            anim_changed || scroll_changed || caret_changed || needs_rebuild || needs_redraw;
-        std::thread::sleep(runtime.compute_idle_sleep(is_active));
+        frames_presented += 1;
+        if max_headless_frames.is_none() {
+            let is_active =
+                anim_changed || scroll_changed || caret_changed || needs_rebuild || needs_redraw;
+            std::thread::sleep(runtime.compute_idle_sleep(is_active));
+        }
+    }
+
+    if let Some(ref mut h) = hooks {
+        if let Some(ref mut on_exit) = h.on_exit {
+            on_exit(&mut runtime);
+        }
     }
 
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub fn launch_x11<F>(root_fn: F, config: WindowConfig) -> Result<(), String>
+where
+    F: FnMut() -> View + 'static,
+{
+    launch_x11_with_events(root_fn, config, |_, _| false)
+}
+
+#[cfg(target_os = "linux")]
+/// Launches an interactive native X11 desktop window on Linux with a custom event hook.
+pub fn launch_x11_with_events<F, E>(
+    mut root_fn: F,
+    config: WindowConfig,
+    event_handler: E,
+) -> Result<(), String>
+where
+    F: FnMut() -> View + 'static,
+    E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
+{
+    println!(
+        "[+] Launching Strata Native Desktop Window on X11: \"{}\"...",
+        config.title
+    );
+    let x11_window = strata_platform::x11_window::X11Window::new(config.clone())?;
+    let view = root_fn();
+    let width = config.width as f32;
+    let height = config.height as f32;
+    let runtime = AppRuntime::new(view, width, height, 1.0);
+    let presenter =
+        SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
+    let compositor = SwapchainCompositor::new(config.width, config.height, 1.0);
+
+    run_native_surface_window_loop(
+        x11_window,
+        Some(root_fn),
+        runtime,
+        compositor,
+        presenter,
+        event_handler,
+        None,
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -340,7 +480,7 @@ where
 pub fn launch_wayland_with_events<F, E>(
     mut root_fn: F,
     config: WindowConfig,
-    mut event_handler: E,
+    event_handler: E,
 ) -> Result<(), String>
 where
     F: FnMut() -> View + 'static,
@@ -350,91 +490,25 @@ where
         "[+] Launching Strata Native Desktop Window on Wayland: \"{}\"...",
         config.title
     );
-    let mut wayland_window = strata_platform::WaylandWindow::new(config.clone())?;
+    let wayland_window = strata_platform::WaylandWindow::new(config.clone())?;
     let view = root_fn();
     let width = config.width as f32;
     let height = config.height as f32;
-    let mut runtime = AppRuntime::new(view, width, height, wayland_window.scale_factor());
-    let mut presenter =
+    let dpr = wayland_window.scale_factor();
+    let runtime = AppRuntime::new(view, width, height, dpr);
+    let presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
-    let mut compositor = SwapchainCompositor::new(config.width, config.height, wayland_window.scale_factor());
+    let compositor = SwapchainCompositor::new(config.width, config.height, dpr);
 
-    let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-    let _ = wayland_window.present_bgra(&presenter.backing_buffer, presenter.width, presenter.height);
-
-    println!(
-        "[OK] Strata Native Desktop Window active on Wayland compositor: {}x{} physical pixels, {} commands presented.",
-        presenter.width,
-        presenter.height,
-        runtime.display_list.commands.len()
-    );
-
-    let mut running = true;
-    while running {
-        let events = wayland_window.poll_native_events();
-        let mut needs_rebuild = false;
-        let mut needs_redraw = false;
-
-        for event in events {
-            let (reb, red, exit) = dispatch_native_platform_event(
-                &event,
-                &mut runtime,
-                &mut compositor,
-                &mut presenter,
-                &mut event_handler,
-            );
-            if reb {
-                needs_rebuild = true;
-            }
-            if red {
-                needs_redraw = true;
-            }
-            if exit {
-                running = false;
-                break;
-            }
-        }
-
-        let anim_changed = runtime.poll_animations();
-        let scroll_changed = runtime.poll_smooth_scroll();
-        let caret_changed = runtime.poll_caret_blink();
-        if anim_changed || scroll_changed || caret_changed {
-            needs_redraw = true;
-        }
-
-        if needs_rebuild {
-            if runtime.sync_dynamic_text() {
-                let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
-                let _ = wayland_window.present_bgra(
-                    &presenter.backing_buffer,
-                    presenter.width,
-                    presenter.height,
-                );
-            } else {
-                let new_view = root_fn();
-                runtime.update_view(new_view);
-                let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-                let _ = wayland_window.present_bgra(
-                    &presenter.backing_buffer,
-                    presenter.width,
-                    presenter.height,
-                );
-            }
-        } else if needs_redraw || wayland_window.is_redraw_requested() {
-            let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
-            let _ = wayland_window.present_bgra(
-                &presenter.backing_buffer,
-                presenter.width,
-                presenter.height,
-            );
-        }
-
-        let is_active =
-            anim_changed || scroll_changed || caret_changed || needs_rebuild || needs_redraw;
-        std::thread::sleep(runtime.compute_idle_sleep(is_active));
-    }
-
-    Ok(())
+    run_native_surface_window_loop(
+        wayland_window,
+        Some(root_fn),
+        runtime,
+        compositor,
+        presenter,
+        event_handler,
+        None,
+    )
 }
 
 #[cfg(windows)]
@@ -451,7 +525,7 @@ where
 pub fn launch_win32_with_events<F, E>(
     mut root_fn: F,
     config: WindowConfig,
-    mut event_handler: E,
+    event_handler: E,
 ) -> Result<(), String>
 where
     F: FnMut() -> View + 'static,
@@ -461,91 +535,25 @@ where
         "[+] Launching Strata Native Desktop Window on Windows (Win32): \"{}\"...",
         config.title
     );
-    let mut win32_window = strata_platform::Win32Window::new(config.clone())?;
+    let win32_window = strata_platform::Win32Window::new(config.clone())?;
     let view = root_fn();
     let width = config.width as f32;
     let height = config.height as f32;
-    let mut runtime = AppRuntime::new(view, width, height, win32_window.scale_factor());
-    let mut presenter =
+    let dpr = win32_window.scale_factor();
+    let runtime = AppRuntime::new(view, width, height, dpr);
+    let presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
-    let mut compositor = SwapchainCompositor::new(config.width, config.height, win32_window.scale_factor());
+    let compositor = SwapchainCompositor::new(config.width, config.height, dpr);
 
-    let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-    let _ = win32_window.present_bgra(&presenter.backing_buffer, presenter.width, presenter.height);
-
-    println!(
-        "[OK] Strata Native Desktop Window active on Win32: {}x{} physical pixels, {} commands presented.",
-        presenter.width,
-        presenter.height,
-        runtime.display_list.commands.len()
-    );
-
-    let mut running = true;
-    while running {
-        let events = win32_window.poll_native_events();
-        let mut needs_rebuild = false;
-        let mut needs_redraw = false;
-
-        for event in events {
-            let (reb, red, exit) = dispatch_native_platform_event(
-                &event,
-                &mut runtime,
-                &mut compositor,
-                &mut presenter,
-                &mut event_handler,
-            );
-            if reb {
-                needs_rebuild = true;
-            }
-            if red {
-                needs_redraw = true;
-            }
-            if exit {
-                running = false;
-                break;
-            }
-        }
-
-        let anim_changed = runtime.poll_animations();
-        let scroll_changed = runtime.poll_smooth_scroll();
-        let caret_changed = runtime.poll_caret_blink();
-        if anim_changed || scroll_changed || caret_changed {
-            needs_redraw = true;
-        }
-
-        if needs_rebuild {
-            if runtime.sync_dynamic_text() {
-                let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
-                let _ = win32_window.present_bgra(
-                    &presenter.backing_buffer,
-                    presenter.width,
-                    presenter.height,
-                );
-            } else {
-                let new_view = root_fn();
-                runtime.update_view(new_view);
-                let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-                let _ = win32_window.present_bgra(
-                    &presenter.backing_buffer,
-                    presenter.width,
-                    presenter.height,
-                );
-            }
-        } else if needs_redraw || win32_window.is_redraw_requested() {
-            let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
-            let _ = win32_window.present_bgra(
-                &presenter.backing_buffer,
-                presenter.width,
-                presenter.height,
-            );
-        }
-
-        let is_active =
-            anim_changed || scroll_changed || caret_changed || needs_rebuild || needs_redraw;
-        std::thread::sleep(runtime.compute_idle_sleep(is_active));
-    }
-
-    Ok(())
+    run_native_surface_window_loop(
+        win32_window,
+        Some(root_fn),
+        runtime,
+        compositor,
+        presenter,
+        event_handler,
+        None,
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -562,7 +570,7 @@ where
 pub fn launch_macos_with_events<F, E>(
     mut root_fn: F,
     config: WindowConfig,
-    mut event_handler: E,
+    event_handler: E,
 ) -> Result<(), String>
 where
     F: FnMut() -> View + 'static,
@@ -572,91 +580,25 @@ where
         "[+] Launching Strata Native Desktop Window on macOS (Cocoa): \"{}\"...",
         config.title
     );
-    let mut macos_window = strata_platform::MacOsWindow::new(config.clone())?;
+    let macos_window = strata_platform::MacOsWindow::new(config.clone())?;
     let view = root_fn();
     let width = config.width as f32;
     let height = config.height as f32;
-    let mut runtime = AppRuntime::new(view, width, height, macos_window.scale_factor());
-    let mut presenter =
+    let dpr = macos_window.scale_factor();
+    let runtime = AppRuntime::new(view, width, height, dpr);
+    let presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
-    let mut compositor = SwapchainCompositor::new(config.width, config.height, macos_window.scale_factor());
+    let compositor = SwapchainCompositor::new(config.width, config.height, dpr);
 
-    let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-    let _ = macos_window.present_bgra(&presenter.backing_buffer, presenter.width, presenter.height);
-
-    println!(
-        "[OK] Strata Native Desktop Window active on macOS Cocoa: {}x{} physical pixels, {} commands presented.",
-        presenter.width,
-        presenter.height,
-        runtime.display_list.commands.len()
-    );
-
-    let mut running = true;
-    while running {
-        let events = macos_window.poll_native_events();
-        let mut needs_rebuild = false;
-        let mut needs_redraw = false;
-
-        for event in events {
-            let (reb, red, exit) = dispatch_native_platform_event(
-                &event,
-                &mut runtime,
-                &mut compositor,
-                &mut presenter,
-                &mut event_handler,
-            );
-            if reb {
-                needs_rebuild = true;
-            }
-            if red {
-                needs_redraw = true;
-            }
-            if exit {
-                running = false;
-                break;
-            }
-        }
-
-        let anim_changed = runtime.poll_animations();
-        let scroll_changed = runtime.poll_smooth_scroll();
-        let caret_changed = runtime.poll_caret_blink();
-        if anim_changed || scroll_changed || caret_changed {
-            needs_redraw = true;
-        }
-
-        if needs_rebuild {
-            if runtime.sync_dynamic_text() {
-                let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
-                let _ = macos_window.present_bgra(
-                    &presenter.backing_buffer,
-                    presenter.width,
-                    presenter.height,
-                );
-            } else {
-                let new_view = root_fn();
-                runtime.update_view(new_view);
-                let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-                let _ = macos_window.present_bgra(
-                    &presenter.backing_buffer,
-                    presenter.width,
-                    presenter.height,
-                );
-            }
-        } else if needs_redraw || macos_window.is_redraw_requested() {
-            let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
-            let _ = macos_window.present_bgra(
-                &presenter.backing_buffer,
-                presenter.width,
-                presenter.height,
-            );
-        }
-
-        let is_active =
-            anim_changed || scroll_changed || caret_changed || needs_rebuild || needs_redraw;
-        std::thread::sleep(runtime.compute_idle_sleep(is_active));
-    }
-
-    Ok(())
+    run_native_surface_window_loop(
+        macos_window,
+        Some(root_fn),
+        runtime,
+        compositor,
+        presenter,
+        event_handler,
+        None,
+    )
 }
 
 #[cfg(target_os = "android")]
@@ -674,90 +616,31 @@ pub fn launch_android_with_events<F, E>(
     native_window: *mut std::ffi::c_void,
     mut root_fn: F,
     config: WindowConfig,
-    mut event_handler: E,
+    event_handler: E,
 ) -> Result<(), String>
 where
     F: FnMut() -> View + 'static,
     E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
 {
-    let mut android_window = strata_platform::AndroidWindow::new(native_window, config.clone())?;
+    let android_window = strata_platform::AndroidWindow::new(native_window, config.clone())?;
     let view = root_fn();
     let width = config.width as f32;
     let height = config.height as f32;
-    let mut runtime = AppRuntime::new(view, width, height, android_window.scale_factor());
-    let mut presenter =
+    let dpr = android_window.scale_factor();
+    let runtime = AppRuntime::new(view, width, height, dpr);
+    let presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
-    let mut compositor = SwapchainCompositor::new(config.width, config.height, android_window.scale_factor());
+    let compositor = SwapchainCompositor::new(config.width, config.height, dpr);
 
-    let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-    let _ = android_window.present_bgra(&presenter.backing_buffer, presenter.width, presenter.height);
-
-    let mut running = true;
-    while running {
-        let events = android_window.poll_events();
-        let mut needs_rebuild = false;
-        let mut needs_redraw = false;
-
-        for event in events {
-            let (reb, red, exit) = dispatch_native_platform_event(
-                &event,
-                &mut runtime,
-                &mut compositor,
-                &mut presenter,
-                &mut event_handler,
-            );
-            if reb {
-                needs_rebuild = true;
-            }
-            if red {
-                needs_redraw = true;
-            }
-            if exit {
-                running = false;
-                break;
-            }
-        }
-
-        let anim_changed = runtime.poll_animations();
-        let scroll_changed = runtime.poll_smooth_scroll();
-        let caret_changed = runtime.poll_caret_blink();
-        if anim_changed || scroll_changed || caret_changed {
-            needs_redraw = true;
-        }
-
-        if needs_rebuild {
-            if runtime.sync_dynamic_text() {
-                let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
-                let _ = android_window.present_bgra(
-                    &presenter.backing_buffer,
-                    presenter.width,
-                    presenter.height,
-                );
-            } else {
-                let new_view = root_fn();
-                runtime.update_view(new_view);
-                let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-                let _ = android_window.present_bgra(
-                    &presenter.backing_buffer,
-                    presenter.width,
-                    presenter.height,
-                );
-            }
-        } else if needs_redraw || android_window.is_redraw_requested() {
-            let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
-            let _ = android_window.present_bgra(
-                &presenter.backing_buffer,
-                presenter.width,
-                presenter.height,
-            );
-        }
-
-        let is_active =
-            anim_changed || scroll_changed || caret_changed || needs_rebuild || needs_redraw;
-        std::thread::sleep(runtime.compute_idle_sleep(is_active));
-    }
-
-    Ok(())
+    run_native_surface_window_loop(
+        android_window,
+        Some(root_fn),
+        runtime,
+        compositor,
+        presenter,
+        event_handler,
+        None,
+    )
 }
 
 #[cfg(target_os = "ios")]
@@ -774,90 +657,31 @@ where
 pub fn launch_ios_with_events<F, E>(
     mut root_fn: F,
     config: WindowConfig,
-    mut event_handler: E,
+    event_handler: E,
 ) -> Result<(), String>
 where
     F: FnMut() -> View + 'static,
     E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
 {
-    let mut ios_window = strata_platform::IosWindow::new(config.clone())?;
+    let ios_window = strata_platform::IosWindow::new(config.clone())?;
     let view = root_fn();
     let width = config.width as f32;
     let height = config.height as f32;
-    let mut runtime = AppRuntime::new(view, width, height, ios_window.scale_factor());
-    let mut presenter =
+    let dpr = ios_window.scale_factor();
+    let runtime = AppRuntime::new(view, width, height, dpr);
+    let presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
-    let mut compositor = SwapchainCompositor::new(config.width, config.height, ios_window.scale_factor());
+    let compositor = SwapchainCompositor::new(config.width, config.height, dpr);
 
-    let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-    let _ = ios_window.present_bgra(&presenter.backing_buffer, presenter.width, presenter.height);
-
-    let mut running = true;
-    while running {
-        let events = ios_window.poll_events();
-        let mut needs_rebuild = false;
-        let mut needs_redraw = false;
-
-        for event in events {
-            let (reb, red, exit) = dispatch_native_platform_event(
-                &event,
-                &mut runtime,
-                &mut compositor,
-                &mut presenter,
-                &mut event_handler,
-            );
-            if reb {
-                needs_rebuild = true;
-            }
-            if red {
-                needs_redraw = true;
-            }
-            if exit {
-                running = false;
-                break;
-            }
-        }
-
-        let anim_changed = runtime.poll_animations();
-        let scroll_changed = runtime.poll_smooth_scroll();
-        let caret_changed = runtime.poll_caret_blink();
-        if anim_changed || scroll_changed || caret_changed {
-            needs_redraw = true;
-        }
-
-        if needs_rebuild {
-            if runtime.sync_dynamic_text() {
-                let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
-                let _ = ios_window.present_bgra(
-                    &presenter.backing_buffer,
-                    presenter.width,
-                    presenter.height,
-                );
-            } else {
-                let new_view = root_fn();
-                runtime.update_view(new_view);
-                let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-                let _ = ios_window.present_bgra(
-                    &presenter.backing_buffer,
-                    presenter.width,
-                    presenter.height,
-                );
-            }
-        } else if needs_redraw || ios_window.is_redraw_requested() {
-            let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
-            let _ = ios_window.present_bgra(
-                &presenter.backing_buffer,
-                presenter.width,
-                presenter.height,
-            );
-        }
-
-        let is_active =
-            anim_changed || scroll_changed || caret_changed || needs_rebuild || needs_redraw;
-        std::thread::sleep(runtime.compute_idle_sleep(is_active));
-    }
-
-    Ok(())
+    run_native_surface_window_loop(
+        ios_window,
+        Some(root_fn),
+        runtime,
+        compositor,
+        presenter,
+        event_handler,
+        None,
+    )
 }
 
 

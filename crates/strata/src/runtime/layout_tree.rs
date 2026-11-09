@@ -142,7 +142,17 @@ impl AppRuntime {
 
     /// Recursively transforms an RSX `NodeBlueprint` into a `LayoutNode` hierarchy with styling and inheritance.
     pub fn build_layout_tree(blueprint: &NodeBlueprint) -> LayoutNode {
-        Self::build_layout_tree_with_hover(blueprint, None)
+        let ctx = InteractionContext::default();
+        Self::build_layout_tree_with_interaction(blueprint, &ctx)
+    }
+
+    /// Recursively transforms an RSX `NodeBlueprint` into a `LayoutNode` hierarchy with styling, inheritance, and interaction state.
+    pub fn build_layout_tree_with_interaction(
+        blueprint: &NodeBlueprint,
+        ctx: &InteractionContext,
+    ) -> LayoutNode {
+        let mut path_buf = Vec::new();
+        Self::build_layout_tree_with_interaction_context(blueprint, None, &mut path_buf, ctx)
     }
 
     /// Recursively transforms an RSX `NodeBlueprint` into a `LayoutNode` hierarchy with styling, inheritance, and hover state.
@@ -150,8 +160,11 @@ impl AppRuntime {
         blueprint: &NodeBlueprint,
         hovered_path: Option<&[usize]>,
     ) -> LayoutNode {
-        let mut path_buf = Vec::new();
-        Self::build_layout_tree_with_context(blueprint, None, &mut path_buf, hovered_path)
+        let ctx = InteractionContext {
+            hovered_path,
+            ..Default::default()
+        };
+        Self::build_layout_tree_with_interaction(blueprint, &ctx)
     }
 
     /// Internal recursive tree builder passing parent ComputedStyle for W3C CSS property inheritance.
@@ -160,7 +173,8 @@ impl AppRuntime {
         parent_style: Option<&ComputedStyle>,
     ) -> LayoutNode {
         let mut path_buf = Vec::new();
-        Self::build_layout_tree_with_context(blueprint, parent_style, &mut path_buf, None)
+        let ctx = InteractionContext::default();
+        Self::build_layout_tree_with_interaction_context(blueprint, parent_style, &mut path_buf, &ctx)
     }
 
     /// Internal recursive tree builder passing parent style, node path, and active hover state.
@@ -169,6 +183,20 @@ impl AppRuntime {
         parent_style: Option<&ComputedStyle>,
         current_path: &mut Vec<usize>,
         hovered_path: Option<&[usize]>,
+    ) -> LayoutNode {
+        let ctx = InteractionContext {
+            hovered_path,
+            ..Default::default()
+        };
+        Self::build_layout_tree_with_interaction_context(blueprint, parent_style, current_path, &ctx)
+    }
+
+    /// Internal recursive tree builder passing parent style, node path, and full interaction context.
+    pub fn build_layout_tree_with_interaction_context(
+        blueprint: &NodeBlueprint,
+        parent_style: Option<&ComputedStyle>,
+        current_path: &mut Vec<usize>,
+        ctx: &InteractionContext,
     ) -> LayoutNode {
         if current_path.len() >= 256 {
             let style = match parent_style {
@@ -185,12 +213,29 @@ impl AppRuntime {
                 children,
                 ..
             } => {
-                let is_hovered = hovered_path.is_some_and(|h| h.starts_with(current_path));
+                let entity_id = blueprint.entity_id().unwrap_or(strata_primitives::EntityId::NONE);
+                let is_hovered = ctx.hovered_path.is_some_and(|h| h.starts_with(current_path));
+                let is_focused = ctx.focused_path.is_some_and(|f| f.starts_with(current_path));
+                let is_active = is_hovered && ctx.is_mouse_down;
+                let is_disabled = attributes.iter().any(|attr| match attr {
+                    strata_dom::Attribute::Property { key, value } => {
+                        key.eq_ignore_ascii_case("disabled") && !value.eq_ignore_ascii_case("false")
+                    }
+                    _ => false,
+                });
+                let is_dark = ctx.is_dark_mode;
+                let pseudo_state = strata_style::selector::PseudoState {
+                    is_hovered,
+                    is_focused,
+                    is_active,
+                    is_disabled,
+                    is_dark,
+                };
                 let mut style = match parent_style {
                     Some(p) => ComputedStyle::inherit_from(p),
                     None => ComputedStyle::default(),
                 };
-                Self::apply_tailwind_classes(&mut style, classes, is_hovered, false, false);
+                Self::apply_tailwind_classes_with_pseudo_state(&mut style, classes, &pseudo_state);
 
                 // 1. Vector SVG handling: extract path data from d attribute or child path
                 if matches!(tag, Tag::Svg | Tag::Path) {
@@ -250,7 +295,7 @@ impl AppRuntime {
                                     16.0
                                 }));
                         }
-                        return LayoutNode::with_svg_items(style, svg_items);
+                        return LayoutNode::with_svg_items(style, svg_items).with_entity_id(entity_id);
                     }
                 }
 
@@ -288,7 +333,7 @@ impl AppRuntime {
                                 approx_width + style.padding.left + style.padding.right,
                             );
                         }
-                        return LayoutNode::with_text(style, val);
+                        return LayoutNode::with_text(style, val).with_entity_id(entity_id);
                     } else if let Some(ph) = placeholder_text {
                         let approx_width = (ph.len() as f32 * char_w).max(40.0);
                         if style.width == Dimension::Auto && style.flex_grow <= 0.0 {
@@ -297,13 +342,13 @@ impl AppRuntime {
                             );
                         }
                         style.color = strata_style::types::Color::new(140, 145, 155, 255);
-                        return LayoutNode::with_text(style, ph);
+                        return LayoutNode::with_text(style, ph).with_entity_id(entity_id);
                     } else {
                         if style.width == Dimension::Auto && style.flex_grow <= 0.0 {
                             style.width =
                                 Dimension::Px(60.0 + style.padding.left + style.padding.right);
                         }
-                        return LayoutNode::with_text(style, String::new());
+                        return LayoutNode::with_text(style, String::new()).with_entity_id(entity_id);
                     }
                 }
 
@@ -483,7 +528,7 @@ impl AppRuntime {
                                         width,
                                         height,
                                     };
-                                    return LayoutNode::with_image(style, image);
+                                    return LayoutNode::with_image(style, image).with_entity_id(entity_id);
                                 }
                             }
                         }
@@ -514,7 +559,7 @@ impl AppRuntime {
                         _ => false,
                     });
                     if is_3d_canvas {
-                        return LayoutNode::new(style);
+                        return LayoutNode::new(style).with_entity_id(entity_id);
                     }
                 }
 
@@ -558,17 +603,17 @@ impl AppRuntime {
                 let mut child_nodes = Vec::with_capacity(children.len());
                 let mut child_counter = 0;
                 for child in children {
-                    Self::append_child_layout_nodes_with_context(
+                    Self::append_child_layout_nodes_with_interaction_context(
                         child,
                         Some(&style),
                         current_path,
                         &mut child_counter,
-                        hovered_path,
+                        ctx,
                         &mut child_nodes,
                     );
                 }
 
-                LayoutNode::with_children(style, child_nodes)
+                LayoutNode::with_children(style, child_nodes).with_entity_id(entity_id)
             }
             NodeBlueprint::Text(text) => {
                 let mut style = match parent_style {
@@ -624,12 +669,12 @@ impl AppRuntime {
                 let mut child_nodes = Vec::with_capacity(children.len());
                 let mut child_counter = 0;
                 for child in children {
-                    Self::append_child_layout_nodes_with_context(
+                    Self::append_child_layout_nodes_with_interaction_context(
                         child,
                         Some(&style),
                         current_path,
                         &mut child_counter,
-                        hovered_path,
+                        ctx,
                         &mut child_nodes,
                     );
                 }
@@ -645,6 +690,44 @@ impl AppRuntime {
     }
 
     /// Recursively flattens Fragment blueprints so child elements splice directly into parent layout contexts.
+    pub(crate) fn append_child_layout_nodes_with_interaction_context(
+        blueprint: &NodeBlueprint,
+        parent_style: Option<&ComputedStyle>,
+        parent_path: &mut Vec<usize>,
+        child_counter: &mut usize,
+        ctx: &InteractionContext,
+        out: &mut Vec<LayoutNode>,
+    ) {
+        if parent_path.len() >= 256 {
+            return;
+        }
+        if let NodeBlueprint::Fragment(children) = blueprint {
+            for child in children {
+                Self::append_child_layout_nodes_with_interaction_context(
+                    child,
+                    parent_style,
+                    parent_path,
+                    child_counter,
+                    ctx,
+                    out,
+                );
+            }
+        } else {
+            let this_idx = *child_counter;
+            *child_counter += 1;
+            parent_path.push(this_idx);
+            let node = Self::build_layout_tree_with_interaction_context(
+                blueprint,
+                parent_style,
+                parent_path,
+                ctx,
+            );
+            parent_path.pop();
+            out.push(node);
+        }
+    }
+
+    /// Recursively flattens Fragment blueprints so child elements splice directly into parent layout contexts.
     pub(crate) fn append_child_layout_nodes_with_context(
         blueprint: &NodeBlueprint,
         parent_style: Option<&ComputedStyle>,
@@ -653,33 +736,18 @@ impl AppRuntime {
         hovered_path: Option<&[usize]>,
         out: &mut Vec<LayoutNode>,
     ) {
-        if parent_path.len() >= 256 {
-            return;
-        }
-        if let NodeBlueprint::Fragment(children) = blueprint {
-            for child in children {
-                Self::append_child_layout_nodes_with_context(
-                    child,
-                    parent_style,
-                    parent_path,
-                    child_counter,
-                    hovered_path,
-                    out,
-                );
-            }
-        } else {
-            let this_idx = *child_counter;
-            *child_counter += 1;
-            parent_path.push(this_idx);
-            let node = Self::build_layout_tree_with_context(
-                blueprint,
-                parent_style,
-                parent_path,
-                hovered_path,
-            );
-            parent_path.pop();
-            out.push(node);
-        }
+        let ctx = InteractionContext {
+            hovered_path,
+            ..Default::default()
+        };
+        Self::append_child_layout_nodes_with_interaction_context(
+            blueprint,
+            parent_style,
+            parent_path,
+            child_counter,
+            &ctx,
+            out,
+        );
     }
 
     /// Recursively flattens Fragment blueprints so child elements splice directly into parent layout contexts.
@@ -714,18 +782,20 @@ impl AppRuntime {
         }
     }
 
-    /// Re-evaluates styling with the current hover path, recomputes layout, and compiles display list.
+    /// Re-evaluates styling with the current interaction state, recomputes layout, and compiles display list.
     pub fn rebuild_layout_tree(&mut self) {
         self.applied_scroll_offsets.clear();
-        self.layout_root = Self::build_layout_tree_with_hover(
+        let ctx = self.interaction_context();
+        self.layout_root = Self::build_layout_tree_with_interaction(
             &self.root_blueprint,
-            self.current_hover_path.as_deref(),
+            &ctx,
         );
         self.sync_active_input_layout();
         let compute_start = std::time::Instant::now();
         self.layout_root
             .compute_layout(self.viewport_width, self.viewport_height);
         Self::sync_layout_to_ir(&self.layout_root, &mut self.ir_graph);
+        self.spatial_index.rebuild(&self.root_blueprint, &self.layout_root);
         self.layout_computations += 1;
         if perf_logging_enabled() {
             perf_log_ms(

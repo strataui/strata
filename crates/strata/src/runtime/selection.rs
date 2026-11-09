@@ -10,7 +10,7 @@ impl AppRuntime {
         self.last_caret_blink_state = true;
     }
 
-    /// Polls caret blink phase and returns true if blink state toggled (requiring a redraw).
+    /// Polls caret blink cycle and returns true if blink state toggled (requiring a redraw).
     pub fn poll_caret_blink(&mut self) -> bool {
         if self.active_focus.is_none() {
             return false;
@@ -32,16 +32,27 @@ impl AppRuntime {
         };
         let target_idx = active.input_index;
         let target_id = active.input_id.clone();
+        let target_entity_id = active.entity_id;
         let mut counter = 0;
         let text_val = active.state.text.get();
 
-        if let Some(layout) = Self::find_input_layout_mut(
-            &self.root_blueprint,
-            &mut self.layout_root,
-            target_idx,
-            target_id.as_deref(),
-            &mut counter,
-        ) {
+        let layout_by_entity = if let Some(eid) = target_entity_id {
+            self.layout_root.find_by_entity_id_mut(eid)
+        } else {
+            None
+        };
+        let layout_match = match layout_by_entity {
+            Some(l) => Some(l),
+            None => Self::find_input_layout_mut(
+                &self.root_blueprint,
+                &mut self.layout_root,
+                target_idx,
+                target_id.as_deref(),
+                &mut counter,
+            ),
+        };
+
+        if let Some(layout) = layout_match {
             let is_mono = strata_layout::is_monospace_family(layout.style.font_family);
             if !text_val.is_empty() {
                 layout.text = Some(text_val.clone());
@@ -61,12 +72,20 @@ impl AppRuntime {
             } else {
                 let mut ph = None;
                 let mut bp_counter = 0;
-                if let Some(bp) = Self::find_input_blueprint(
-                    &self.root_blueprint,
-                    target_idx,
-                    target_id.as_deref(),
-                    &mut bp_counter,
-                ) {
+                let bp_match = if let Some(eid) = target_entity_id {
+                    self.root_blueprint.find_by_entity_id(eid)
+                } else {
+                    None
+                };
+                let bp_match = bp_match.or_else(|| {
+                    Self::find_input_blueprint(
+                        &self.root_blueprint,
+                        target_idx,
+                        target_id.as_deref(),
+                        &mut bp_counter,
+                    )
+                });
+                if let Some(bp) = bp_match {
                     if let NodeBlueprint::Element { attributes, .. } = bp {
                         for attr in attributes {
                             if let strata_dom::Attribute::Property { key, value } = attr {
@@ -85,6 +104,8 @@ impl AppRuntime {
                 }
             }
         }
+
+        self.update_gtk_ime_location();
     }
 
     /// Calculates the exact character index from an x offset within an input using active font metrics and character advances.
@@ -146,13 +167,20 @@ impl AppRuntime {
         let target_idx = active.input_index;
         let target_id = active.input_id.as_deref();
 
-        let Some(layout) = Self::find_input_layout(
-            &self.root_blueprint,
-            &self.layout_root,
-            target_idx,
-            target_id,
-            &mut current_idx,
-        ) else {
+        let layout_by_entity = if let Some(eid) = active.entity_id {
+            self.layout_root.find_by_entity_id(eid)
+        } else {
+            None
+        };
+        let Some(layout) = layout_by_entity.or_else(|| {
+            Self::find_input_layout(
+                &self.root_blueprint,
+                &self.layout_root,
+                target_idx,
+                target_id,
+                &mut current_idx,
+            )
+        }) else {
             return;
         };
 
@@ -271,4 +299,122 @@ impl AppRuntime {
         }
     }
 
+    /// Computes the exact bounding box of the active text caret if an input is currently focused.
+    pub fn active_caret_rect(&self) -> Option<strata_layout::Rect> {
+        let active = self.active_focus.as_ref()?;
+        let mut current_idx = 0;
+        let target_idx = active.input_index;
+        let target_id = active.input_id.as_deref();
+
+        let layout_by_entity = if let Some(eid) = active.entity_id {
+            self.layout_root.find_by_entity_id(eid)
+        } else {
+            None
+        };
+        let layout = layout_by_entity.or_else(|| {
+            Self::find_input_layout(
+                &self.root_blueprint,
+                &self.layout_root,
+                target_idx,
+                target_id,
+                &mut current_idx,
+            )
+        })?;
+
+        let content_box = layout.geometry.content_box;
+        if content_box.width <= 0.0 || content_box.height <= 0.0 {
+            return None;
+        }
+
+        let font_size = layout.style.font_size;
+        let line_height = layout.style.line_height;
+        let is_mono = strata_layout::is_monospace_family(layout.style.font_family);
+        let font_family = layout.style.font_family;
+        let text = active.state.text.get();
+        let total_chars = text.chars().count();
+        let cursor_idx = active.state.cursor_index.get().min(total_chars);
+
+        let align_offset = match layout.style.text_align {
+            strata_style::types::TextAlign::Center => {
+                let (tw, _) = strata_layout::text::measure_text_bounds_with_family(
+                    &text,
+                    font_size,
+                    line_height,
+                    None,
+                    is_mono,
+                    font_family,
+                );
+                ((content_box.width - tw) / 2.0).max(0.0)
+            }
+            strata_style::types::TextAlign::Right => {
+                let (tw, _) = strata_layout::text::measure_text_bounds_with_family(
+                    &text,
+                    font_size,
+                    line_height,
+                    None,
+                    is_mono,
+                    font_family,
+                );
+                (content_box.width - tw).max(0.0)
+            }
+            _ => 0.0,
+        };
+
+        let caret_w = 2.0f32;
+        let caret_h = (font_size * 1.2).min(content_box.height).max(14.0);
+        let caret_y = content_box.y + ((content_box.height - caret_h) / 2.0).max(0.0);
+        let prefix: String = text.chars().take(cursor_idx).collect();
+        let (cursor_w, _) = strata_layout::text::measure_text_bounds_with_family(
+            &prefix,
+            font_size,
+            line_height,
+            None,
+            is_mono,
+            font_family,
+        );
+        let caret_x = (content_box.x + align_offset + cursor_w)
+            .min(content_box.x + content_box.width - caret_w);
+
+        Some(strata_layout::Rect::new(caret_x, caret_y, caret_w, caret_h))
+    }
+
+    /// Synchronizes the IME candidate window location with the active caret position.
+    pub fn sync_ime_cursor_location<W: strata_platform::PlatformWindow>(&self, window: &mut W) {
+        if let Some(rect) = self.active_caret_rect() {
+            window.set_ime_cursor_location(
+                rect.x.round() as i32,
+                rect.y.round() as i32,
+                rect.width.round() as i32,
+                rect.height.round() as i32,
+            );
+            if let Some(ref active) = self.active_focus {
+                window.set_ime_surrounding_text(&active.state.text.get(), active.state.cursor_index.get() as i32);
+            }
+        } else {
+            window.reset_ime();
+        }
+    }
+
+    /// Directly updates GTK IME context with current caret location if running on Linux GTK.
+    pub fn update_gtk_ime_location(&self) {
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(rect) = self.active_caret_rect() {
+                strata_platform::gtk_set_ime_cursor_location(
+                    rect.x.round() as i32,
+                    rect.y.round() as i32,
+                    rect.width.round() as i32,
+                    rect.height.round() as i32,
+                );
+                if let Some(ref active) = self.active_focus {
+                    strata_platform::gtk_set_ime_surrounding_text(
+                        &active.state.text.get(),
+                        active.state.cursor_index.get() as i32,
+                    );
+                }
+            } else {
+                strata_platform::gtk_reset_ime();
+            }
+        }
+    }
 }

@@ -15,15 +15,22 @@ pub enum SwapchainFormat {
     Rgba8Unorm,
     /// 64-bit HDR half-precision floating point.
     Rgba16Float,
+    /// 32-bit floating-point depth buffer format.
+    Depth32Float,
 }
 
 impl SwapchainFormat {
     /// Bytes per pixel for this format.
     pub const fn bytes_per_pixel(&self) -> usize {
         match self {
-            Self::Bgra8Unorm | Self::Rgba8Unorm => 4,
+            Self::Bgra8Unorm | Self::Rgba8Unorm | Self::Depth32Float => 4,
             Self::Rgba16Float => 8,
         }
+    }
+
+    /// Whether this format represents a depth or depth-stencil attachment.
+    pub const fn is_depth(&self) -> bool {
+        matches!(self, Self::Depth32Float)
     }
 }
 
@@ -126,6 +133,11 @@ impl SurfacePresenter for SoftwareSurfacePresenter {
                                 self.backing_buffer[dst_idx + 1] = g;
                                 self.backing_buffer[dst_idx + 2] = b;
                                 self.backing_buffer[dst_idx + 3] = a;
+                            }
+                            SwapchainFormat::Depth32Float => {
+                                let lum = (r as f32 * 0.299 + g as f32 * 0.587 + b as f32 * 0.114) / 255.0;
+                                let bytes = lum.to_ne_bytes();
+                                self.backing_buffer[dst_idx..dst_idx + 4].copy_from_slice(&bytes);
                             }
                         }
                     }

@@ -1,4 +1,15 @@
 //! Strata DOM: Fine-grained reactive signal graph, DOM representations, and node blueprints.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use strata_dom::reactive::Signal;
+//!
+//! let count = Signal::new(100);
+//! assert_eq!(count.get(), 100);
+//! count.set(200);
+//! assert_eq!(count.get(), 200);
+//! ```
 
 use std::rc::Rc;
 
@@ -11,6 +22,13 @@ pub struct View {
 impl View {
     pub fn new(root: NodeBlueprint) -> Self {
         Self { root }
+    }
+
+    /// Recursively flattens nested Fragment nodes within Element children.
+    pub fn flatten_fragments(self) -> Self {
+        Self {
+            root: self.root.flatten_fragments(),
+        }
     }
 }
 
@@ -36,6 +54,7 @@ pub use reactive::{
 };
 pub use spring::{SpringConfig, SpringSignal};
 pub use text_input::{InputKey, InputKeyResult, InputModifiers, TextInputState};
+pub use strata_primitives::EntityId;
 
 /// Trait abstracting event handlers accepting `()` or `(Event)`.
 pub trait EventHandlerMarker<Args> {
@@ -111,6 +130,7 @@ pub enum Attribute {
         handler: Rc<dyn Fn(Event)>,
     },
     DirectStyle(Rc<dyn std::any::Any>),
+    Entity(EntityId),
 }
 
 impl Attribute {
@@ -123,6 +143,10 @@ impl Attribute {
 
     pub fn direct_style<T: 'static>(style: T) -> Self {
         Self::DirectStyle(Rc::new(style))
+    }
+
+    pub fn entity(id: EntityId) -> Self {
+        Self::Entity(id)
     }
 
     pub fn event_listener<Args, F: EventHandlerMarker<Args> + 'static>(
@@ -163,6 +187,7 @@ impl std::fmt::Debug for Attribute {
                 .debug_tuple("DirectStyle")
                 .field(&"<typed_style>")
                 .finish(),
+            Self::Entity(id) => f.debug_tuple("Entity").field(id).finish(),
         }
     }
 }
@@ -249,6 +274,288 @@ impl NodeBlueprint {
         Self::Empty
     }
 
+    /// Returns the EntityId assigned to this blueprint element if present.
+    pub fn entity_id(&self) -> Option<EntityId> {
+        match self {
+            Self::Element { attributes, .. } => {
+                for attr in attributes {
+                    if let Attribute::Entity(id) = attr {
+                        if id.is_valid() {
+                            return Some(*id);
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Assigns or overrides the EntityId for an Element node blueprint.
+    pub fn with_entity_id(mut self, entity_id: EntityId) -> Self {
+        self.set_entity_id(entity_id);
+        self
+    }
+
+    /// Mutably assigns or overrides the EntityId for an Element node blueprint.
+    pub fn set_entity_id(&mut self, entity_id: EntityId) {
+        if let Self::Element { attributes, .. } = self {
+            if let Some(pos) = attributes.iter().position(|a| matches!(a, Attribute::Entity(_))) {
+                attributes[pos] = Attribute::Entity(entity_id);
+            } else {
+                attributes.push(Attribute::Entity(entity_id));
+            }
+        }
+    }
+
+    /// Recursively ensures all Element nodes in this blueprint tree have a valid EntityId.
+    pub fn ensure_entity_ids(&mut self) {
+        match self {
+            Self::Element {
+                attributes,
+                children,
+                ..
+            } => {
+                let has_id = attributes
+                    .iter()
+                    .any(|a| matches!(a, Attribute::Entity(id) if id.is_valid()));
+                if !has_id {
+                    attributes.push(Attribute::Entity(EntityId::next()));
+                }
+                for child in children {
+                    child.ensure_entity_ids();
+                }
+            }
+            Self::Fragment(children) => {
+                for child in children {
+                    child.ensure_entity_ids();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Recursively locates an element blueprint node by its EntityId.
+    pub fn find_by_entity_id(&self, target_id: EntityId) -> Option<&NodeBlueprint> {
+        if !target_id.is_valid() {
+            return None;
+        }
+        if self.entity_id() == Some(target_id) {
+            return Some(self);
+        }
+        match self {
+            Self::Element { children, .. } | Self::Fragment(children) => {
+                for child in children {
+                    if let Some(found) = child.find_by_entity_id(target_id) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Recursively locates a mutable element blueprint node by its EntityId.
+    pub fn find_by_entity_id_mut(&mut self, target_id: EntityId) -> Option<&mut NodeBlueprint> {
+        if !target_id.is_valid() {
+            return None;
+        }
+        if self.entity_id() == Some(target_id) {
+            return Some(self);
+        }
+        match self {
+            Self::Element { children, .. } | Self::Fragment(children) => {
+                for child in children {
+                    if let Some(found) = child.find_by_entity_id_mut(target_id) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Returns the DOM node UID from a `data-strata-node-uid` attribute if present.
+    pub fn dom_uid(&self) -> Option<u64> {
+        match self {
+            Self::Element { attributes, .. } => {
+                for attr in attributes {
+                    if let Attribute::Property { key, value } = attr {
+                        if key == "data-strata-node-uid" {
+                            if let Ok(uid) = value.parse::<u64>() {
+                                return Some(uid);
+                            }
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Recursively locates an element blueprint node by its DOM node UID.
+    pub fn find_by_dom_uid(&self, target_uid: u64) -> Option<&NodeBlueprint> {
+        if self.dom_uid() == Some(target_uid) {
+            return Some(self);
+        }
+        match self {
+            Self::Element { children, .. } | Self::Fragment(children) => {
+                for child in children {
+                    if let Some(found) = child.find_by_dom_uid(target_uid) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Recursively locates a mutable element blueprint node by its DOM node UID.
+    pub fn find_by_dom_uid_mut(&mut self, target_uid: u64) -> Option<&mut NodeBlueprint> {
+        if self.dom_uid() == Some(target_uid) {
+            return Some(self);
+        }
+        match self {
+            Self::Element { children, .. } | Self::Fragment(children) => {
+                for child in children {
+                    if let Some(found) = child.find_by_dom_uid_mut(target_uid) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Recursively calculates the index path to the element blueprint node with matching DOM node UID.
+    pub fn find_path_by_dom_uid(&self, target_uid: u64) -> Option<Vec<usize>> {
+        let mut path = Vec::new();
+        if self.find_path_by_dom_uid_internal(target_uid, &mut path) {
+            Some(path)
+        } else {
+            None
+        }
+    }
+
+    fn find_path_by_dom_uid_internal(&self, target_uid: u64, path: &mut Vec<usize>) -> bool {
+        if self.dom_uid() == Some(target_uid) {
+            return true;
+        }
+        match self {
+            Self::Element { children, .. } | Self::Fragment(children) => {
+                for (i, child) in children.iter().enumerate() {
+                    path.push(i);
+                    if child.find_path_by_dom_uid_internal(target_uid, path) {
+                        return true;
+                    }
+                    path.pop();
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Recursively calculates the index path to the element blueprint node with matching EntityId.
+    pub fn find_path_by_entity_id(&self, target_id: EntityId) -> Option<Vec<usize>> {
+        if !target_id.is_valid() {
+            return None;
+        }
+        let mut path = Vec::new();
+        if self.find_path_by_entity_id_internal(target_id, &mut path) {
+            Some(path)
+        } else {
+            None
+        }
+    }
+
+    fn find_path_by_entity_id_internal(&self, target_id: EntityId, path: &mut Vec<usize>) -> bool {
+        if self.entity_id() == Some(target_id) {
+            return true;
+        }
+        match self {
+            Self::Element { children, .. } | Self::Fragment(children) => {
+                for (i, child) in children.iter().enumerate() {
+                    path.push(i);
+                    if child.find_path_by_entity_id_internal(target_id, path) {
+                        return true;
+                    }
+                    path.pop();
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Recursively flattens nested Fragment nodes within Element children,
+    /// splicing fragment children directly into their parent elements.
+    pub fn flatten_fragments(self) -> Self {
+        match self {
+            Self::Element {
+                tag,
+                classes,
+                attributes,
+                children,
+            } => {
+                let mut flat_children = Vec::with_capacity(children.len());
+                for child in children {
+                    let flat_child = child.flatten_fragments();
+                    Self::splice_fragment_into(flat_child, &mut flat_children);
+                }
+                Self::Element {
+                    tag,
+                    classes,
+                    attributes,
+                    children: flat_children,
+                }
+            }
+            Self::Fragment(children) => {
+                let mut flat_children = Vec::with_capacity(children.len());
+                for child in children {
+                    let flat_child = child.flatten_fragments();
+                    Self::splice_fragment_into(flat_child, &mut flat_children);
+                }
+                Self::Fragment(flat_children)
+            }
+            other => other,
+        }
+    }
+
+    fn splice_fragment_into(node: Self, out: &mut Vec<Self>) {
+        match node {
+            Self::Fragment(children) => {
+                for child in children {
+                    Self::splice_fragment_into(child, out);
+                }
+            }
+            Self::Empty => {}
+            other => out.push(other),
+        }
+    }
+
+    fn append_ir_children(graph: &mut UiIrGraph, parent_id: NodeId, children: &[NodeBlueprint]) {
+        for child in children {
+            match child {
+                NodeBlueprint::Fragment(subchildren) => {
+                    Self::append_ir_children(graph, parent_id, subchildren);
+                }
+                NodeBlueprint::Empty => {}
+                _ => {
+                    let child_id = child.compile_to_ir(graph);
+                    if !child_id.is_null() {
+                        graph.append_child(parent_id, child_id);
+                    }
+                }
+            }
+        }
+    }
+
     /// Compiles this reactive blueprint tree into a contiguous 64-byte aligned `UiIrGraph`.
     pub fn compile_to_ir(&self, graph: &mut UiIrGraph) -> NodeId {
         match self {
@@ -291,12 +598,7 @@ impl NodeBlueprint {
                     node.memo_hash = memo_hash;
                 }
 
-                for child in children {
-                    let child_id = child.compile_to_ir(graph);
-                    if !child_id.is_null() {
-                        graph.append_child(node_id, child_id);
-                    }
-                }
+                Self::append_ir_children(graph, node_id, children);
                 node_id
             }
             Self::Text(text) => {
@@ -580,4 +882,67 @@ impl<T: std::fmt::Display + Clone + 'static> IntoNodeBlueprint for &reactive::Re
         NodeBlueprint::DynamicText(Rc::new(move || sig.get().to_string()))
     }
 }
+
+#[cfg(test)]
+mod entity_tests {
+    use super::*;
+
+    #[test]
+    fn test_node_blueprint_entity_id_assignment_and_lookup() {
+        let id1 = EntityId::new(101);
+        let id2 = EntityId::new(102);
+
+        let bp = NodeBlueprint::element_simple(
+            Tag::Div,
+            "container",
+            vec![
+                NodeBlueprint::element_simple(Tag::P, "child", vec![NodeBlueprint::text("Hello")])
+                    .with_entity_id(id2),
+            ],
+        )
+        .with_entity_id(id1);
+
+        assert_eq!(bp.entity_id(), Some(id1));
+        let found1 = bp.find_by_entity_id(id1);
+        assert!(found1.is_some());
+        assert_eq!(found1.unwrap().entity_id(), Some(id1));
+
+        let found2 = bp.find_by_entity_id(id2);
+        assert!(found2.is_some());
+        assert_eq!(found2.unwrap().entity_id(), Some(id2));
+
+        assert!(bp.find_by_entity_id(EntityId::new(999)).is_none());
+    }
+
+    #[test]
+    fn test_ensure_entity_ids_preserves_flattening() {
+        let mut tree = NodeBlueprint::element_simple(
+            Tag::Div,
+            "root",
+            vec![
+                NodeBlueprint::fragment(vec![
+                    NodeBlueprint::element_simple(Tag::Span, "first", vec![]),
+                    NodeBlueprint::element_simple(Tag::Span, "second", vec![]),
+                ]),
+            ],
+        );
+
+        tree.ensure_entity_ids();
+        let root_id = tree.entity_id().unwrap();
+        assert!(root_id.is_valid());
+
+        let flat = tree.flatten_fragments();
+        assert_eq!(flat.entity_id(), Some(root_id));
+
+        if let NodeBlueprint::Element { children, .. } = &flat {
+            assert_eq!(children.len(), 2);
+            assert!(children[0].entity_id().is_some());
+            assert!(children[1].entity_id().is_some());
+            assert_ne!(children[0].entity_id(), children[1].entity_id());
+        } else {
+            panic!("Expected Element node");
+        }
+    }
+}
+
 

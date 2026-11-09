@@ -51,6 +51,39 @@ fn test_thread_local_arena_allocation_and_single_cycle_reset() {
 }
 
 #[test]
+fn test_parallel_thread_local_arena_destructor_cleanup() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct DropCounter(Arc<AtomicUsize>);
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    {
+        let mut arena = ThreadLocalArena::new(1024 * 64);
+        for _ in 0..10 {
+            let _ = arena.alloc(DropCounter(Arc::clone(&counter)));
+        }
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        arena.reset();
+        // Destructors must have executed upon reset
+        assert_eq!(counter.load(Ordering::SeqCst), 10);
+
+        // Allocate more and drop arena
+        for _ in 0..5 {
+            let _ = arena.alloc(DropCounter(Arc::clone(&counter)));
+        }
+        let _ = arena.alloc_copy(12345u64);
+    }
+    // Destructors must have executed upon arena drop
+    assert_eq!(counter.load(Ordering::SeqCst), 15);
+}
+
+#[test]
 fn test_dirty_signal_queue_concurrency_and_bitset_drain() {
     use std::sync::Arc;
 

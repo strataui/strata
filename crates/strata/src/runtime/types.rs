@@ -5,6 +5,7 @@
 pub struct InputHitTarget {
     pub input_index: usize,
     pub input_id: Option<String>,
+    pub entity_id: Option<strata_primitives::EntityId>,
     pub current_value: String,
     pub font_size: f32,
     pub line_height: f32,
@@ -25,6 +26,7 @@ pub struct InputHitTarget {
 pub struct ActiveInput {
     pub input_index: usize,
     pub input_id: Option<String>,
+    pub entity_id: Option<strata_primitives::EntityId>,
     pub state: strata_dom::text_input::TextInputState,
     pub on_input: Option<std::rc::Rc<dyn Fn(strata_dom::Event)>>,
     pub on_change: Option<std::rc::Rc<dyn Fn(strata_dom::Event)>>,
@@ -252,6 +254,15 @@ impl std::fmt::Debug for DynamicTextBinding {
             .field("last_value", &self.last_value)
             .finish()
     }
+}
+
+/// Interaction context describing active pointer, keyboard focus, and theme interaction state.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InteractionContext<'a> {
+    pub hovered_path: Option<&'a [usize]>,
+    pub focused_path: Option<&'a [usize]>,
+    pub is_mouse_down: bool,
+    pub is_dark_mode: bool,
 }
 
 

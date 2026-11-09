@@ -464,4 +464,85 @@ fn test_caret_blink_timing_and_mouse_move_isolation() {
     );
 }
 
+#[test]
+fn test_launch_auto_headless_execution() {
+    std::env::set_var("STRATA_HEADLESS", "1");
+    std::env::set_var("STRATA_HEADLESS_EXIT_AFTER_FRAMES", "3");
+
+    let res = strata::launch_with_events(
+        TestWindowApp,
+        WindowConfig {
+            title: "Headless Test".to_string(),
+            width: 800,
+            height: 600,
+            ..Default::default()
+        },
+        |_event, _rt| false,
+    );
+
+    assert!(res.is_ok(), "Headless launch_auto must complete cleanly");
+    std::env::remove_var("STRATA_HEADLESS");
+    std::env::remove_var("STRATA_HEADLESS_EXIT_AFTER_FRAMES");
+}
+
+#[test]
+fn test_strata_app_run_headless_lifecycle() {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    std::env::set_var("STRATA_HEADLESS", "1");
+
+    let started = Arc::new(AtomicBool::new(false));
+    let frame_count = Arc::new(AtomicU64::new(0));
+    let exited = Arc::new(AtomicBool::new(false));
+
+    let started_clone = started.clone();
+    let frame_clone = frame_count.clone();
+    let exited_clone = exited.clone();
+
+    let app = strata::app()
+        .with_window(WindowConfig {
+            title: "Lifecycle Test".to_string(),
+            width: 640,
+            height: 480,
+            ..Default::default()
+        })
+        .on_start(move |_rt| {
+            started_clone.store(true, Ordering::SeqCst);
+        })
+        .on_frame(move |info, _rt| {
+            frame_clone.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(info.viewport_width, 640.0);
+            assert_eq!(info.viewport_height, 480.0);
+        })
+        .on_exit(move |_rt| {
+            exited_clone.store(true, Ordering::SeqCst);
+        })
+        .build(TestWindowApp);
+
+    app.run();
+
+    assert!(started.load(Ordering::SeqCst), "on_start hook must fire");
+    assert!(exited.load(Ordering::SeqCst), "on_exit hook must fire");
+    std::env::remove_var("STRATA_HEADLESS");
+}
+
+#[test]
+fn test_native_surface_window_presentation() {
+    use strata_platform::{LivePlatformWindow, NativeSurfaceWindow};
+
+    let view = TestWindowApp();
+    let mut runtime = AppRuntime::new(view, 800.0, 600.0, 1.0);
+    let mut presenter = SoftwareSurfacePresenter::new(800, 600, SwapchainFormat::Bgra8Unorm);
+    let mut compositor = SwapchainCompositor::new(800, 600, 1.0);
+    let mut window = LivePlatformWindow::new(WindowConfig::default());
+
+    let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
+    assert!(!presenter.backing_buffer.is_empty(), "Backing buffer must contain rendered pixels");
+    assert_eq!(presenter.backing_buffer.len(), 800 * 600 * 4);
+
+    let res = window.present_surface(&presenter.backing_buffer, 800, 600);
+    assert!(res.is_ok(), "NativeSurfaceWindow::present_surface must succeed");
+}
+
 

@@ -107,6 +107,18 @@ impl DVec3 {
     pub fn as_f32(self) -> [f32; 3] {
         [self.x as f32, self.y as f32, self.z as f32]
     }
+
+    /// Splits double-precision components into high and low single-precision floats (Float-Float / Double-Single split).
+    #[inline(always)]
+    pub fn split_high_low(self) -> ([f32; 3], [f32; 3]) {
+        let xh = self.x as f32;
+        let xl = (self.x - xh as f64) as f32;
+        let yh = self.y as f32;
+        let yl = (self.y - yh as f64) as f32;
+        let zh = self.z as f32;
+        let zl = (self.z - zh as f64) as f32;
+        ([xh, yh, zh], [xl, yl, zl])
+    }
 }
 
 /// Double-precision 4x4 matrix stored column-major.
@@ -189,6 +201,11 @@ impl DMat4 {
                 1.0,
             ],
         }
+    }
+
+    /// Right-handed look-at without translation, suitable for Relative-To-Eye (RTE) rendering.
+    pub fn view_rotation_only(eye: DVec3, target: DVec3, up: DVec3) -> Self {
+        Self::look_at(DVec3::ZERO, target.sub(eye), up)
     }
 
     /// Perspective projection with depth in `0..=1`, column-major.
@@ -314,6 +331,15 @@ impl RenderFrame64 {
         Self::new(camera, camera.target, width, height)
     }
 
+    /// Computes the Relative-To-Eye (RTE) view-projection matrix without translation.
+    pub fn relative_to_eye_view_proj(camera: &Camera64, aspect: f64) -> DMat4 {
+        let fov_x = camera.fov_horizontal_deg.to_radians();
+        let fov_y = 2.0 * ((fov_x * 0.5).tan() / aspect).atan();
+        let view_rel = DMat4::view_rotation_only(camera.eye, camera.target, camera.up);
+        let proj = DMat4::perspective(fov_y, aspect, camera.near, camera.far);
+        proj.multiply(&view_rel)
+    }
+
     /// Projects a world-space point. Subtraction from the RTC origin happens in
     /// f64 before any narrowing.
     ///
@@ -398,5 +424,45 @@ mod tests {
             separation > 0.0,
             "f64 RTC must resolve the metre, got {pa:?} and {pb:?}"
         );
+    }
+
+    #[test]
+    fn double_single_split_reconstructs_with_sub_millimeter_precision() {
+        let p = DVec3::new(EARTH_RADIUS_M + 123.456789, -234.567891, 56789.012345);
+        let (high, low) = p.split_high_low();
+
+        let rx = high[0] as f64 + low[0] as f64;
+        let ry = high[1] as f64 + low[1] as f64;
+        let rz = high[2] as f64 + low[2] as f64;
+
+        assert!((rx - p.x).abs() < 1e-6, "x reconstruction error: {}", (rx - p.x).abs());
+        assert!((ry - p.y).abs() < 1e-6, "y reconstruction error: {}", (ry - p.y).abs());
+        assert!((rz - p.z).abs() < 1e-6, "z reconstruction error: {}", (rz - p.z).abs());
+    }
+
+    #[test]
+    fn view_rotation_only_matches_look_at_on_relative_position() {
+        let eye = DVec3::new(EARTH_RADIUS_M + 10_000.0, 500.0, 200.0);
+        let target = DVec3::new(EARTH_RADIUS_M, 0.0, 0.0);
+        let up = DVec3::UP;
+
+        let look_at = DMat4::look_at(eye, target, up);
+        let rot_only = DMat4::view_rotation_only(eye, target, up);
+
+        let point = DVec3::new(EARTH_RADIUS_M + 50.0, 10.0, 5.0);
+        let res_look_at = look_at.transform_point4(point);
+
+        let rel = point.sub(eye);
+        let res_rot_only = rot_only.transform_point4(rel);
+
+        for i in 0..4 {
+            assert!(
+                (res_look_at[i] - res_rot_only[i]).abs() < 1e-6,
+                "mismatch at coordinate {}: {} vs {}",
+                i,
+                res_look_at[i],
+                res_rot_only[i]
+            );
+        }
     }
 }

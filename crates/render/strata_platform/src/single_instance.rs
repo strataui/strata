@@ -23,6 +23,68 @@ pub enum SingleInstanceStatus {
     SecondaryExited,
 }
 
+/// Serializes a slice of arguments into length-prefixed binary wire format.
+///
+/// Wire format:
+/// - 4-byte little-endian u32: argument count `N`
+/// - For each argument:
+///   - 4-byte little-endian u32: byte length `L`
+///   - `L` UTF-8 payload bytes
+pub fn encode_args(args: &[String]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&(args.len() as u32).to_le_bytes());
+    for arg in args {
+        let bytes = arg.as_bytes();
+        buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        buf.extend_from_slice(bytes);
+    }
+    buf
+}
+
+/// Decodes arguments from the length-prefixed binary wire format.
+///
+/// Provides graceful backwards-compatible fallback for null-separated and newline-separated
+/// payloads if length-prefixed framing is absent.
+pub fn decode_args(payload: &[u8]) -> Vec<String> {
+    if payload.len() >= 4 {
+        let count = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+        let mut offset = 4;
+        let mut args = Vec::with_capacity(count.min(1024));
+        let mut ok = true;
+        for _ in 0..count {
+            if offset + 4 > payload.len() {
+                ok = false;
+                break;
+            }
+            let len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            if offset + len > payload.len() {
+                ok = false;
+                break;
+            }
+            if let Ok(s) = std::str::from_utf8(&payload[offset..offset + len]) {
+                args.push(s.to_string());
+            } else {
+                args.push(String::from_utf8_lossy(&payload[offset..offset + len]).into_owned());
+            }
+            offset += len;
+        }
+        if ok && offset == payload.len() {
+            return args;
+        }
+    }
+
+    // Backwards-compatible fallback: null-byte or newline delimited payload
+    if let Ok(raw) = std::str::from_utf8(payload) {
+        if raw.contains('\0') {
+            return raw.split('\0').map(|s| s.to_string()).collect();
+        }
+        return raw.lines().map(|s| s.to_string()).filter(|s| !s.is_empty()).collect();
+    }
+
+    Vec::new()
+}
+
 /// Mutex handle holding the single-instance lock and IPC listener thread.
 #[derive(Debug)]
 pub struct SingleInstanceLock {
@@ -32,6 +94,7 @@ pub struct SingleInstanceLock {
     socket_path: PathBuf,
     #[cfg(windows)]
     pipe_handle: usize,
+    listener_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl SingleInstanceLock {
@@ -114,6 +177,7 @@ impl SingleInstanceLock {
         Self {
             app_id: app_id.to_string(),
             running: Arc::new(AtomicBool::new(true)),
+            listener_thread: None,
         }
     }
 
@@ -150,8 +214,8 @@ impl SingleInstanceLock {
                 match UnixStream::connect(&socket_path) {
                     Ok(mut stream) => {
                         // Primary is running: forward CLI arguments and exit cleanly.
-                        let payload = args.join("\n");
-                        let _ = stream.write_all(payload.as_bytes());
+                        let payload = encode_args(args);
+                        let _ = stream.write_all(&payload);
                         let _ = stream.flush();
                         let _ = stream.shutdown(std::net::Shutdown::Write);
                         Ok(SingleInstanceStatus::SecondaryExited)
@@ -187,11 +251,12 @@ impl SingleInstanceLock {
     {
         let running = Arc::new(AtomicBool::new(true));
         let on_args = Arc::new(on_secondary_args);
-        Self::spawn_unix_listener(listener, Arc::clone(&running), on_args)?;
+        let thread = Self::spawn_unix_listener(listener, Arc::clone(&running), on_args)?;
         Ok(Self {
             app_id: app_id.to_string(),
             running,
             socket_path,
+            listener_thread: Some(thread),
         })
     }
 
@@ -200,32 +265,35 @@ impl SingleInstanceLock {
         listener: std::os::unix::net::UnixListener,
         running: Arc<AtomicBool>,
         on_args: Arc<F>,
-    ) -> Result<(), std::io::Error>
+    ) -> Result<std::thread::JoinHandle<()>, std::io::Error>
     where
         F: Fn(Vec<String>) + Send + Sync + 'static,
     {
         use std::io::Read;
 
-        std::thread::Builder::new()
+        listener.set_nonblocking(true)?;
+
+        let handle = std::thread::Builder::new()
             .name("strata-single-instance-listener".to_string())
             .spawn(move || {
                 while running.load(Ordering::Relaxed) {
-                    if let Ok((mut stream, _)) = listener.accept() {
-                        let mut payload = Vec::new();
-                        if stream.read_to_end(&mut payload).is_ok() {
-                            if let Ok(raw) = String::from_utf8(payload) {
-                                let parsed_args: Vec<String> = raw
-                                    .lines()
-                                    .map(|line| line.to_string())
-                                    .filter(|line| !line.is_empty())
-                                    .collect();
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let _ = stream.set_nonblocking(false);
+                            let mut payload = Vec::new();
+                            if stream.read_to_end(&mut payload).is_ok() {
+                                let parsed_args = decode_args(&payload);
                                 on_args(parsed_args);
                             }
                         }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        Err(_) => break,
                     }
                 }
             })?;
-        Ok(())
+        Ok(handle)
     }
 
     #[cfg(windows)]
@@ -257,17 +325,19 @@ impl SingleInstanceLock {
 
         let running = Arc::new(AtomicBool::new(true));
         let on_args = Arc::new(on_secondary_args);
-        if let Err(error) =
-            windows_ipc::spawn_server_listener(handle, Arc::clone(&running), on_args)
-        {
-            windows_ipc::close(handle);
-            return Err(error);
-        }
+        let thread = match windows_ipc::spawn_server_listener(handle, Arc::clone(&running), on_args) {
+            Ok(t) => t,
+            Err(error) => {
+                windows_ipc::close(handle);
+                return Err(error);
+            }
+        };
 
         Ok(SingleInstanceStatus::Primary(Self {
             app_id: app_id.to_string(),
             running,
             pipe_handle: handle,
+            listener_thread: Some(thread),
         }))
     }
 
@@ -286,7 +356,11 @@ impl Drop for SingleInstanceLock {
         }
         #[cfg(windows)]
         {
+            windows_ipc::unblock_server(&self.app_id);
             windows_ipc::close(self.pipe_handle);
+        }
+        if let Some(thread) = self.listener_thread.take() {
+            let _ = thread.join();
         }
     }
 }
@@ -357,6 +431,17 @@ mod windows_ipc {
         ) -> Handle;
         fn CloseHandle(object: Handle) -> i32;
         fn GetLastError() -> u32;
+        fn LocalFree(h_mem: *mut c_void) -> *mut c_void;
+    }
+
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            string_security_descriptor: *const u16,
+            string_sd_revision: u32,
+            security_descriptor: *mut *mut c_void,
+            security_descriptor_size: *mut u32,
+        ) -> i32;
     }
 
     fn pipe_name(app_id: &str) -> Vec<u16> {
@@ -380,13 +465,16 @@ mod windows_ipc {
         value as Handle
     }
 
+    #[repr(C)]
+    struct SecurityAttributes {
+        n_length: u32,
+        lp_security_descriptor: *mut c_void,
+        b_inherit_handle: i32,
+    }
+
     pub(super) fn forward_to_primary(app_id: &str, args: &[String]) -> bool {
         let name = pipe_name(app_id);
-        let mut payload = args.join("\n");
-        if payload.is_empty() {
-            payload.push('\n');
-        }
-        let bytes = payload.as_bytes();
+        let bytes = super::encode_args(args);
 
         for _ in 0..40 {
             let handle = unsafe {
@@ -427,6 +515,26 @@ mod windows_ipc {
 
     pub(super) fn create_server(app_id: &str) -> Option<usize> {
         let name = pipe_name(app_id);
+
+        // Enforce explicit Win32 DACL: Allow Generic All strictly to Principal Self (PS) / Owner
+        let sddl = "D:(A;;GA;;;PS)\0".encode_utf16().collect::<Vec<u16>>();
+        let mut p_sd: *mut c_void = std::ptr::null_mut();
+        let mut sd_size = 0u32;
+        let has_sd = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(),
+                1, // SDDL_REVISION_1
+                &mut p_sd,
+                &mut sd_size,
+            )
+        };
+
+        let mut sa = SecurityAttributes {
+            n_length: std::mem::size_of::<SecurityAttributes>() as u32,
+            lp_security_descriptor: if has_sd != 0 { p_sd } else { std::ptr::null_mut() },
+            b_inherit_handle: 0,
+        };
+
         let handle = unsafe {
             CreateNamedPipeW(
                 name.as_ptr(),
@@ -436,9 +544,16 @@ mod windows_ipc {
                 BUFFER_SIZE,
                 BUFFER_SIZE,
                 0,
-                std::ptr::null_mut(),
+                &mut sa as *mut _ as *mut c_void,
             )
         };
+
+        if !p_sd.is_null() {
+            unsafe {
+                LocalFree(p_sd);
+            }
+        }
+
         if handle == INVALID_HANDLE_VALUE {
             None
         } else {
@@ -446,11 +561,31 @@ mod windows_ipc {
         }
     }
 
+    pub(super) fn unblock_server(app_id: &str) {
+        let name = pipe_name(app_id);
+        let handle = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                GENERIC_WRITE,
+                0,
+                std::ptr::null_mut(),
+                OPEN_EXISTING,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle != INVALID_HANDLE_VALUE {
+            unsafe {
+                CloseHandle(handle);
+            }
+        }
+    }
+
     pub(super) fn spawn_server_listener<F>(
         handle: usize,
         running: Arc<AtomicBool>,
         on_args: Arc<F>,
-    ) -> Result<(), std::io::Error>
+    ) -> Result<std::thread::JoinHandle<()>, std::io::Error>
     where
         F: Fn(Vec<String>) + Send + Sync + 'static,
     {
@@ -469,6 +604,14 @@ mod windows_ipc {
                         }
                     }
 
+                    if !running.load(Ordering::Relaxed) {
+                        unsafe {
+                            DisconnectNamedPipe(pipe);
+                        }
+                        break;
+                    }
+
+                    let mut payload = Vec::new();
                     loop {
                         let mut bytes_read = 0u32;
                         let ok = unsafe {
@@ -483,24 +626,22 @@ mod windows_ipc {
                         if ok == 0 || bytes_read == 0 {
                             break;
                         }
-                        let raw = String::from_utf8_lossy(&buffer[..bytes_read as usize]);
-                        let parsed: Vec<String> = raw
-                            .lines()
-                            .map(|line| line.to_string())
-                            .filter(|line| !line.is_empty())
-                            .collect();
-                        on_args(parsed);
+                        payload.extend_from_slice(&buffer[..bytes_read as usize]);
                         if (bytes_read as usize) < buffer.len() {
                             break;
                         }
+                    }
+
+                    if !payload.is_empty() {
+                        let parsed = super::decode_args(&payload);
+                        on_args(parsed);
                     }
 
                     unsafe {
                         DisconnectNamedPipe(pipe);
                     }
                 }
-            })?;
-        Ok(())
+            })
     }
 
     pub(super) fn close(handle: usize) {

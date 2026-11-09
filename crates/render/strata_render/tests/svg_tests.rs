@@ -44,6 +44,7 @@ fn test_svg_compositor_display_list_emission() {
         padding_box: Rect::new(50.0, 50.0, 200.0, 200.0),
         content_box: Rect::new(50.0, 50.0, 200.0, 200.0),
         margin_box: Rect::new(50.0, 50.0, 200.0, 200.0),
+        ..Default::default()
     };
 
     let display_list = Compositor::build_display_list(&node);
@@ -97,6 +98,7 @@ fn test_svg_multi_item_complex_group_compositing() {
         padding_box: Rect::new(0.0, 0.0, 200.0, 200.0),
         content_box: Rect::new(0.0, 0.0, 200.0, 200.0),
         margin_box: Rect::new(0.0, 0.0, 200.0, 200.0),
+        ..Default::default()
     };
 
     let display_list = Compositor::build_display_list(&node);

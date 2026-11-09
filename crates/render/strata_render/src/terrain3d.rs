@@ -202,6 +202,115 @@ impl MeshBuilder {
         }
     }
 
+    /// Appends a boundary skirt between a top edge and an extruded bottom edge.
+    ///
+    /// Skirts occlude crack seams between adjacent tiles of differing LOD levels.
+    /// `top` and `bottom` must have equal lengths >= 2, and `uvs` must match `top.len()`.
+    /// The triangles are wound counter-clockwise when viewed from the outside with outward normals.
+    pub fn push_skirt(&mut self, top: &[DVec3], bottom: &[DVec3], uvs: &[(f32, f32)]) {
+        if top.len() < 2 || top.len() != bottom.len() || top.len() != uvs.len() {
+            return;
+        }
+        let segments = top.len() - 1;
+        for i in 0..segments {
+            let edge = top[i + 1].sub(top[i]);
+            let down = bottom[i].sub(top[i]);
+            let cross = down.cross(edge);
+            let normal = if cross.length() > 1e-9 {
+                cross.normalize().as_f32()
+            } else {
+                [0.0, 0.0, 1.0]
+            };
+            let a = self.push_vertex(top[i], normal, uvs[i]);
+            let b = self.push_vertex(bottom[i], normal, uvs[i]);
+            let c = self.push_vertex(bottom[i + 1], normal, uvs[i + 1]);
+            let d = self.push_vertex(top[i + 1], normal, uvs[i + 1]);
+            self.push_quad(a, b, c, d);
+        }
+    }
+
+    /// Appends vertical skirts along all four perimeter edges of a terrain grid (South, East, North, West).
+    ///
+    /// `grid_positions` contains `cols * rows` vertices in row-major order (row 0 is South, col 0 is West).
+    /// `skirt_depth` specifies the vertical extrusion distance downward along the -Z axis (or radial inward).
+    /// `uv_rect` specifies `(u0, v0, u1, v1)` texture coordinates.
+    #[allow(clippy::needless_range_loop)]
+    pub fn push_grid_perimeter_skirts(
+        &mut self,
+        grid_positions: &[DVec3],
+        cols: usize,
+        rows: usize,
+        skirt_depth: f64,
+        uv_rect: (f32, f32, f32, f32),
+    ) {
+        if cols < 2 || rows < 2 || grid_positions.len() != cols * rows || skirt_depth <= 0.0 {
+            return;
+        }
+        let (u0, v0, u1, v1) = uv_rect;
+        let get_down = |pos: DVec3| -> DVec3 {
+            let len = pos.length();
+            if len > 1000.0 {
+                // Spherical / ellipsoidal radial downward
+                pos.scale(-skirt_depth / len)
+            } else {
+                // Cartesian downward along -Z
+                DVec3::new(0.0, 0.0, -skirt_depth)
+            }
+        };
+
+        // 1. South edge: row = 0, col from 0 to cols - 1 (West to East)
+        let mut south_top = Vec::with_capacity(cols);
+        let mut south_bot = Vec::with_capacity(cols);
+        let mut south_uvs = Vec::with_capacity(cols);
+        for col in 0..cols {
+            let pos = grid_positions[col];
+            let u = u0 + (u1 - u0) * (col as f32 / (cols - 1) as f32);
+            south_top.push(pos);
+            south_bot.push(pos.add(get_down(pos)));
+            south_uvs.push((u, v0));
+        }
+        self.push_skirt(&south_top, &south_bot, &south_uvs);
+
+        // 2. East edge: col = cols - 1, row from 0 to rows - 1 (South to North)
+        let mut east_top = Vec::with_capacity(rows);
+        let mut east_bot = Vec::with_capacity(rows);
+        let mut east_uvs = Vec::with_capacity(rows);
+        for row in 0..rows {
+            let pos = grid_positions[row * cols + (cols - 1)];
+            let v = v0 + (v1 - v0) * (row as f32 / (rows - 1) as f32);
+            east_top.push(pos);
+            east_bot.push(pos.add(get_down(pos)));
+            east_uvs.push((u1, v));
+        }
+        self.push_skirt(&east_top, &east_bot, &east_uvs);
+
+        // 3. North edge: row = rows - 1, col from cols - 1 down to 0 (East to West)
+        let mut north_top = Vec::with_capacity(cols);
+        let mut north_bot = Vec::with_capacity(cols);
+        let mut north_uvs = Vec::with_capacity(cols);
+        for col in (0..cols).rev() {
+            let pos = grid_positions[(rows - 1) * cols + col];
+            let u = u0 + (u1 - u0) * (col as f32 / (cols - 1) as f32);
+            north_top.push(pos);
+            north_bot.push(pos.add(get_down(pos)));
+            north_uvs.push((u, v1));
+        }
+        self.push_skirt(&north_top, &north_bot, &north_uvs);
+
+        // 4. West edge: col = 0, row from rows - 1 down to 0 (North to South)
+        let mut west_top = Vec::with_capacity(rows);
+        let mut west_bot = Vec::with_capacity(rows);
+        let mut west_uvs = Vec::with_capacity(rows);
+        for row in (0..rows).rev() {
+            let pos = grid_positions[row * cols];
+            let v = v0 + (v1 - v0) * (row as f32 / (rows - 1) as f32);
+            west_top.push(pos);
+            west_bot.push(pos.add(get_down(pos)));
+            west_uvs.push((u0, v));
+        }
+        self.push_skirt(&west_top, &west_bot, &west_uvs);
+    }
+
     /// Appends a building prism plus its roof cap.
     ///
     /// `base` is the footprint centre on the ground, `half` the footprint half
@@ -266,5 +375,84 @@ impl MeshBuilder {
             vertices: self.vertices.clone(),
             indices: self.indices.clone(),
         })
+    }
+
+    /// Appends a vertex storing double-single high and low components without RTC origin subtraction.
+    /// Returns the vertex index along with the split high and low position triples.
+    pub fn push_rte_vertex(
+        &mut self,
+        position: DVec3,
+        normal: [f32; 3],
+        uv: (f32, f32),
+    ) -> (u32, [f32; 3], [f32; 3]) {
+        let (high, low) = position.split_high_low();
+        let idx = self.push_vertex(position, normal, uv);
+        (idx, high, low)
+    }
+}
+
+/// Builder for GPU Relative-To-Eye (RTE) mesh buffers storing interleaved
+/// `[pos_high: 3, pos_low: 3, norm: 3, uv: 2]` = 11 floats per vertex.
+#[derive(Debug, Clone, Default)]
+pub struct RteMeshBuilder {
+    vertices: Vec<f32>,
+    indices: Vec<u32>,
+}
+
+impl RteMeshBuilder {
+    pub const STRIDE: usize = 11;
+
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_capacity(vertex_count: usize, triangle_count: usize) -> Self {
+        Self {
+            vertices: Vec::with_capacity(vertex_count * Self::STRIDE),
+            indices: Vec::with_capacity(triangle_count * 3),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.vertices.clear();
+        self.indices.clear();
+    }
+
+    pub fn vertex_count(&self) -> usize {
+        self.vertices.len() / Self::STRIDE
+    }
+
+    pub fn triangle_count(&self) -> usize {
+        self.indices.len() / 3
+    }
+
+    pub fn push_vertex(&mut self, position: DVec3, normal: [f32; 3], uv: (f32, f32)) -> u32 {
+        let (high, low) = position.split_high_low();
+        self.vertices.extend_from_slice(&high);
+        self.vertices.extend_from_slice(&low);
+        self.vertices.extend_from_slice(&normal);
+        self.vertices.push(uv.0);
+        self.vertices.push(uv.1);
+        (self.vertex_count() - 1) as u32
+    }
+
+    pub fn push_triangle(&mut self, a: u32, b: u32, c: u32) {
+        if a == b || b == c || a == c {
+            return;
+        }
+        self.indices.extend_from_slice(&[a, b, c]);
+    }
+
+    pub fn push_quad(&mut self, a: u32, b: u32, c: u32, d: u32) {
+        self.push_triangle(a, b, c);
+        self.push_triangle(a, c, d);
+    }
+
+    pub fn vertices(&self) -> &[f32] {
+        &self.vertices
+    }
+
+    pub fn indices(&self) -> &[u32] {
+        &self.indices
     }
 }

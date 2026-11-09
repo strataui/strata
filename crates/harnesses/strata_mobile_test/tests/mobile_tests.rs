@@ -233,7 +233,6 @@ fn test_monkey_fuzzing_and_runner_execution() {
     let config = StrataMobileTestConfig {
         is_android: true,
         is_ios: false,
-        is_mock_ios: false,
         device_serial: Some("emulator-5554".to_string()),
         enable_monkey_fuzz: true,
         fuzz_event_count: 10,

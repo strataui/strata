@@ -84,7 +84,7 @@ fn parse_dynamic_object(stream: TokenStream) -> String {
     }
 
     format!(
-        "strata_js::JsValue::Object(std::collections::BTreeMap::from([{}]))",
+        "strata_js::JsValue::new_object(std::collections::BTreeMap::from([{}]))",
         entries.join(", ")
     )
 }
@@ -103,5 +103,5 @@ fn parse_dynamic_array(stream: TokenStream) -> String {
         cursor.consume_punct(',');
     }
 
-    format!("strata_js::JsValue::Array(vec![{}])", items.join(", "))
+    format!("strata_js::JsValue::new_array(vec![{}])", items.join(", "))
 }

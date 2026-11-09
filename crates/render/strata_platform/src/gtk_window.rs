@@ -1598,6 +1598,50 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                         }
                     }
                 }
+            DrawCommand::DrawViewport3D { bounds, scene }
+                if bounds.width > 0.0 && bounds.height > 0.0 =>
+            {
+                let w = bounds.width.max(1.0).round() as usize;
+                let h = bounds.height.max(1.0).round() as usize;
+                let mut fb = strata_render::rasterizer::FrameBuffer::new(w, h);
+                strata_render::rasterizer3d::render_scene_3d(
+                    &mut fb,
+                    strata_layout::Rect::new(0.0, 0.0, bounds.width, bounds.height),
+                    scene,
+                    None,
+                );
+
+                if let Ok(mut surface) = cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32) {
+                    if let Ok(mut data) = surface.data() {
+                        for (src, dst) in fb.pixels.chunks_exact(4).zip(data.chunks_exact_mut(4)) {
+                            let r = src[0] as u32;
+                            let g = src[1] as u32;
+                            let b = src[2] as u32;
+                            let a = src[3] as u32;
+                            if a == 255 {
+                                dst[0] = b as u8;
+                                dst[1] = g as u8;
+                                dst[2] = r as u8;
+                                dst[3] = 255;
+                            } else if a == 0 {
+                                dst[0] = 0;
+                                dst[1] = 0;
+                                dst[2] = 0;
+                                dst[3] = 0;
+                            } else {
+                                dst[0] = ((b * a + 127) / 255) as u8;
+                                dst[1] = ((g * a + 127) / 255) as u8;
+                                dst[2] = ((r * a + 127) / 255) as u8;
+                                dst[3] = a as u8;
+                            }
+                        }
+                    }
+                    let _ = cr.save();
+                    let _ = cr.set_source_surface(&surface, bounds.x as f64, bounds.y as f64);
+                    let _ = cr.paint();
+                    let _ = cr.restore();
+                }
+            }
             _ => {}
         }
     }
@@ -2033,6 +2077,114 @@ pub fn gtk_set_cursor(cursor_icon: crate::window::CursorIcon) {
     });
 }
 
+thread_local! {
+    static CURRENT_IM_CONTEXT: std::cell::RefCell<Option<gtk::IMMulticontext>> = const { std::cell::RefCell::new(None) };
+    static IME_SURROUNDING_TEXT: std::cell::RefCell<(String, i32)> = const { std::cell::RefCell::new((String::new(), 0)) };
+}
+
+/// Sets the candidate window positioning following the active text caret coordinate.
+pub fn gtk_set_ime_cursor_location(x: i32, y: i32, width: i32, height: i32) {
+    CURRENT_IM_CONTEXT.with(|im| {
+        use gtk::prelude::*;
+        if let Some(ctx) = im.borrow().as_ref() {
+            let rect = gtk::gdk::Rectangle::new(x, y, width, height);
+            ctx.set_cursor_location(&rect);
+        }
+    });
+}
+
+/// Updates the surrounding text buffer and cursor index for context-aware IME prediction.
+pub fn gtk_set_ime_surrounding_text(text: &str, cursor_index: i32) {
+    IME_SURROUNDING_TEXT.with(|st| {
+        *st.borrow_mut() = (text.to_string(), cursor_index);
+    });
+    CURRENT_IM_CONTEXT.with(|im| {
+        use gtk::prelude::*;
+        if let Some(ctx) = im.borrow().as_ref() {
+            ctx.set_surrounding(text, cursor_index);
+        }
+    });
+}
+
+/// Resets or cancels any active IME composition session.
+pub fn gtk_reset_ime() {
+    CURRENT_IM_CONTEXT.with(|im| {
+        use gtk::prelude::*;
+        if let Some(ctx) = im.borrow().as_ref() {
+            ctx.reset();
+        }
+    });
+}
+
+/// Maps a GDK keyval name to an internal KeyCode.
+fn map_key_name_to_keycode(key_name: &str) -> crate::events::KeyCode {
+    match key_name {
+        "a" | "A" => crate::events::KeyCode::KeyA,
+        "b" | "B" => crate::events::KeyCode::KeyB,
+        "c" | "C" => crate::events::KeyCode::KeyC,
+        "d" | "D" => crate::events::KeyCode::KeyD,
+        "e" | "E" => crate::events::KeyCode::KeyE,
+        "f" | "F" => crate::events::KeyCode::KeyF,
+        "g" | "G" => crate::events::KeyCode::KeyG,
+        "h" | "H" => crate::events::KeyCode::KeyH,
+        "i" | "I" => crate::events::KeyCode::KeyI,
+        "j" | "J" => crate::events::KeyCode::KeyJ,
+        "k" | "K" => crate::events::KeyCode::KeyK,
+        "l" | "L" => crate::events::KeyCode::KeyL,
+        "m" | "M" => crate::events::KeyCode::KeyM,
+        "n" | "N" => crate::events::KeyCode::KeyN,
+        "o" | "O" => crate::events::KeyCode::KeyO,
+        "p" | "P" => crate::events::KeyCode::KeyP,
+        "q" | "Q" => crate::events::KeyCode::KeyQ,
+        "r" | "R" => crate::events::KeyCode::KeyR,
+        "s" | "S" => crate::events::KeyCode::KeyS,
+        "t" | "T" => crate::events::KeyCode::KeyT,
+        "u" | "U" => crate::events::KeyCode::KeyU,
+        "v" | "V" => crate::events::KeyCode::KeyV,
+        "w" | "W" => crate::events::KeyCode::KeyW,
+        "x" | "X" => crate::events::KeyCode::KeyX,
+        "y" | "Y" => crate::events::KeyCode::KeyY,
+        "z" | "Z" => crate::events::KeyCode::KeyZ,
+        "0" => crate::events::KeyCode::Digit0,
+        "1" => crate::events::KeyCode::Digit1,
+        "2" => crate::events::KeyCode::Digit2,
+        "3" => crate::events::KeyCode::Digit3,
+        "4" => crate::events::KeyCode::Digit4,
+        "5" => crate::events::KeyCode::Digit5,
+        "6" => crate::events::KeyCode::Digit6,
+        "7" => crate::events::KeyCode::Digit7,
+        "8" => crate::events::KeyCode::Digit8,
+        "9" => crate::events::KeyCode::Digit9,
+        "BackSpace" => crate::events::KeyCode::Backspace,
+        "Return" => crate::events::KeyCode::Enter,
+        "Tab" => crate::events::KeyCode::Tab,
+        "Escape" => crate::events::KeyCode::Escape,
+        "Delete" => crate::events::KeyCode::Delete,
+        "Left" => crate::events::KeyCode::ArrowLeft,
+        "Right" => crate::events::KeyCode::ArrowRight,
+        "Up" => crate::events::KeyCode::ArrowUp,
+        "Down" => crate::events::KeyCode::ArrowDown,
+        "Home" => crate::events::KeyCode::Home,
+        "End" => crate::events::KeyCode::End,
+        "Page_Up" => crate::events::KeyCode::PageUp,
+        "Page_Down" => crate::events::KeyCode::PageDown,
+        "F1" => crate::events::KeyCode::F1,
+        "F2" => crate::events::KeyCode::F2,
+        "F3" => crate::events::KeyCode::F3,
+        "F4" => crate::events::KeyCode::F4,
+        "F5" => crate::events::KeyCode::F5,
+        "F6" => crate::events::KeyCode::F6,
+        "F7" => crate::events::KeyCode::F7,
+        "F8" => crate::events::KeyCode::F8,
+        "F9" => crate::events::KeyCode::F9,
+        "F10" => crate::events::KeyCode::F10,
+        "F11" => crate::events::KeyCode::F11,
+        "F12" => crate::events::KeyCode::F12,
+        "space" => crate::events::KeyCode::Space,
+        _ => crate::events::KeyCode::Unknown,
+    }
+}
+
 /// Launches a live native GTK3 desktop window with Cairo graphics presentation.
 pub fn launch_gtk_window<F, E>(
     title: &str,
@@ -2069,6 +2221,8 @@ where
             | gtk::gdk::EventMask::BUTTON_RELEASE_MASK
             | gtk::gdk::EventMask::POINTER_MOTION_MASK
             | gtk::gdk::EventMask::KEY_PRESS_MASK
+            | gtk::gdk::EventMask::KEY_RELEASE_MASK
+            | gtk::gdk::EventMask::FOCUS_CHANGE_MASK
             | gtk::gdk::EventMask::STRUCTURE_MASK
             | gtk::gdk::EventMask::ENTER_NOTIFY_MASK
             | gtk::gdk::EventMask::LEAVE_NOTIFY_MASK
@@ -2079,6 +2233,40 @@ where
     drawing_area.set_hexpand(true);
     drawing_area.set_vexpand(true);
     drawing_area.set_size_request(width as i32, height as i32);
+
+    // Initialize OS Input Method Editor (IME) context for CJK and international text entry
+    let im_context = gtk::IMMulticontext::new();
+    CURRENT_IM_CONTEXT.with(|im| {
+        *im.borrow_mut() = Some(im_context.clone());
+    });
+
+    let im_realize = im_context.clone();
+    drawing_area.connect_realize(move |widget| {
+        use gtk::prelude::*;
+        if let Some(gdk_win) = widget.window() {
+            im_realize.set_client_window(Some(&gdk_win));
+        }
+    });
+
+    let im_unrealize = im_context.clone();
+    drawing_area.connect_unrealize(move |_widget| {
+        use gtk::prelude::*;
+        im_unrealize.set_client_window(None::<&gtk::gdk::Window>);
+    });
+
+    let im_focus_in = im_context.clone();
+    drawing_area.connect_focus_in_event(move |_widget, _event| {
+        use gtk::prelude::*;
+        im_focus_in.focus_in();
+        gtk::glib::Propagation::Proceed
+    });
+
+    let im_focus_out = im_context.clone();
+    drawing_area.connect_focus_out_event(move |_widget, _event| {
+        use gtk::prelude::*;
+        im_focus_out.focus_out();
+        gtk::glib::Propagation::Proceed
+    });
 
     let on_draw_rc = std::rc::Rc::new(std::cell::RefCell::new(on_draw));
     let on_draw_cb = on_draw_rc.clone();
@@ -2284,10 +2472,66 @@ where
         gtk::glib::Propagation::Proceed
     });
 
-    // Keyboard handler on Window to capture global shortcuts reliably
+    // Connect IME signals (preedit-changed, commit, retrieve-surrounding, delete-surrounding)
+    let on_event_preedit = on_event_rc.clone();
+    let da_preedit = drawing_area.clone();
+    im_context.connect_preedit_changed(move |ctx| {
+        use gtk::prelude::*;
+        let (text, _attrs, cursor_pos) = ctx.preedit_string();
+        let text_str = text.to_string();
+        let cursor = if cursor_pos >= 0 {
+            Some((cursor_pos as usize, cursor_pos as usize))
+        } else {
+            None
+        };
+        let plat_event = crate::events::PlatformEvent::ImePreedit {
+            text: text_str,
+            cursor,
+        };
+        if (on_event_preedit.borrow_mut())(&plat_event) {
+            da_preedit.queue_draw();
+        }
+    });
+
+    let on_event_commit = on_event_rc.clone();
+    let da_commit = drawing_area.clone();
+    im_context.connect_commit(move |_ctx, text| {
+        let plat_event = crate::events::PlatformEvent::ImeCommit(text.to_string());
+        if (on_event_commit.borrow_mut())(&plat_event) {
+            da_commit.queue_draw();
+        }
+    });
+
+    im_context.connect_retrieve_surrounding(move |ctx| {
+        use gtk::prelude::*;
+        let (text, cursor) = IME_SURROUNDING_TEXT.with(|st| st.borrow().clone());
+        ctx.set_surrounding(&text, cursor);
+        true
+    });
+
+    let on_event_del = on_event_rc.clone();
+    let da_del = drawing_area.clone();
+    im_context.connect_delete_surrounding(move |_ctx, offset, n_chars| {
+        let plat_event = crate::events::PlatformEvent::ImeDeleteSurrounding {
+            offset,
+            n_chars: n_chars as u32,
+        };
+        if (on_event_del.borrow_mut())(&plat_event) {
+            da_del.queue_draw();
+        }
+        true
+    });
+
+    // Keyboard handlers on Window to capture global shortcuts reliably with IME filtering
+    let im_key_press = im_context.clone();
     let on_event_key = on_event_rc.clone();
     let da_key = drawing_area.clone();
     window.connect_key_press_event(move |_widget, event| {
+        use gtk::prelude::*;
+        if im_key_press.filter_keypress(event) {
+            return gtk::glib::Propagation::Stop;
+        }
+
         let state = event.state();
         let modifiers = crate::events::Modifiers {
             shift: state.contains(gtk::gdk::ModifierType::SHIFT_MASK),
@@ -2299,71 +2543,7 @@ where
 
         let keyval = event.keyval();
         let key_name = keyval.name().unwrap_or_default();
-        let key_code = match key_name.as_str() {
-            "a" | "A" => crate::events::KeyCode::KeyA,
-            "b" | "B" => crate::events::KeyCode::KeyB,
-            "c" | "C" => crate::events::KeyCode::KeyC,
-            "d" | "D" => crate::events::KeyCode::KeyD,
-            "e" | "E" => crate::events::KeyCode::KeyE,
-            "f" | "F" => crate::events::KeyCode::KeyF,
-            "g" | "G" => crate::events::KeyCode::KeyG,
-            "h" | "H" => crate::events::KeyCode::KeyH,
-            "i" | "I" => crate::events::KeyCode::KeyI,
-            "j" | "J" => crate::events::KeyCode::KeyJ,
-            "k" | "K" => crate::events::KeyCode::KeyK,
-            "l" | "L" => crate::events::KeyCode::KeyL,
-            "m" | "M" => crate::events::KeyCode::KeyM,
-            "n" | "N" => crate::events::KeyCode::KeyN,
-            "o" | "O" => crate::events::KeyCode::KeyO,
-            "p" | "P" => crate::events::KeyCode::KeyP,
-            "q" | "Q" => crate::events::KeyCode::KeyQ,
-            "r" | "R" => crate::events::KeyCode::KeyR,
-            "s" | "S" => crate::events::KeyCode::KeyS,
-            "t" | "T" => crate::events::KeyCode::KeyT,
-            "u" | "U" => crate::events::KeyCode::KeyU,
-            "v" | "V" => crate::events::KeyCode::KeyV,
-            "w" | "W" => crate::events::KeyCode::KeyW,
-            "x" | "X" => crate::events::KeyCode::KeyX,
-            "y" | "Y" => crate::events::KeyCode::KeyY,
-            "z" | "Z" => crate::events::KeyCode::KeyZ,
-            "0" => crate::events::KeyCode::Digit0,
-            "1" => crate::events::KeyCode::Digit1,
-            "2" => crate::events::KeyCode::Digit2,
-            "3" => crate::events::KeyCode::Digit3,
-            "4" => crate::events::KeyCode::Digit4,
-            "5" => crate::events::KeyCode::Digit5,
-            "6" => crate::events::KeyCode::Digit6,
-            "7" => crate::events::KeyCode::Digit7,
-            "8" => crate::events::KeyCode::Digit8,
-            "9" => crate::events::KeyCode::Digit9,
-            "BackSpace" => crate::events::KeyCode::Backspace,
-            "Return" => crate::events::KeyCode::Enter,
-            "Tab" => crate::events::KeyCode::Tab,
-            "Escape" => crate::events::KeyCode::Escape,
-            "Delete" => crate::events::KeyCode::Delete,
-            "Left" => crate::events::KeyCode::ArrowLeft,
-            "Right" => crate::events::KeyCode::ArrowRight,
-            "Up" => crate::events::KeyCode::ArrowUp,
-            "Down" => crate::events::KeyCode::ArrowDown,
-            "Home" => crate::events::KeyCode::Home,
-            "End" => crate::events::KeyCode::End,
-            "Page_Up" => crate::events::KeyCode::PageUp,
-            "Page_Down" => crate::events::KeyCode::PageDown,
-            "F1" => crate::events::KeyCode::F1,
-            "F2" => crate::events::KeyCode::F2,
-            "F3" => crate::events::KeyCode::F3,
-            "F4" => crate::events::KeyCode::F4,
-            "F5" => crate::events::KeyCode::F5,
-            "F6" => crate::events::KeyCode::F6,
-            "F7" => crate::events::KeyCode::F7,
-            "F8" => crate::events::KeyCode::F8,
-            "F9" => crate::events::KeyCode::F9,
-            "F10" => crate::events::KeyCode::F10,
-            "F11" => crate::events::KeyCode::F11,
-            "F12" => crate::events::KeyCode::F12,
-            "space" => crate::events::KeyCode::Space,
-            _ => crate::events::KeyCode::Unknown,
-        };
+        let key_code = map_key_name_to_keycode(key_name.as_str());
 
         let mut redraw = false;
 
@@ -2390,6 +2570,40 @@ where
 
         if redraw {
             da_key.queue_draw();
+        }
+
+        gtk::glib::Propagation::Proceed
+    });
+
+    let im_key_release = im_context.clone();
+    let on_event_key_up = on_event_rc.clone();
+    let da_key_up = drawing_area.clone();
+    window.connect_key_release_event(move |_widget, event| {
+        use gtk::prelude::*;
+        if im_key_release.filter_keypress(event) {
+            return gtk::glib::Propagation::Stop;
+        }
+
+        let state = event.state();
+        let modifiers = crate::events::Modifiers {
+            shift: state.contains(gtk::gdk::ModifierType::SHIFT_MASK),
+            ctrl: state.contains(gtk::gdk::ModifierType::CONTROL_MASK),
+            alt: state.contains(gtk::gdk::ModifierType::MOD1_MASK),
+            meta: state.contains(gtk::gdk::ModifierType::META_MASK)
+                || state.contains(gtk::gdk::ModifierType::SUPER_MASK),
+        };
+
+        let keyval = event.keyval();
+        let key_name = keyval.name().unwrap_or_default();
+        let key_code = map_key_name_to_keycode(key_name.as_str());
+
+        let plat_event = crate::events::PlatformEvent::KeyUp {
+            key: key_code,
+            modifiers,
+        };
+
+        if (on_event_key_up.borrow_mut())(&plat_event) {
+            da_key_up.queue_draw();
         }
 
         gtk::glib::Propagation::Proceed

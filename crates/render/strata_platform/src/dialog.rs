@@ -8,6 +8,7 @@
 //! allowing automated CI and headless tests to verify dialog logic deterministically.
 
 use std::path::PathBuf;
+#[cfg(any(test, feature = "test-internals"))]
 use std::sync::Mutex;
 
 /// File type filter used by file picker dialogs.
@@ -162,16 +163,28 @@ pub enum DialogMockResponse {
     MessageBox(MessageBoxResult),
 }
 
+#[cfg(any(test, feature = "test-internals"))]
 static DIALOG_MOCK: Mutex<Option<DialogMockResponse>> = Mutex::new(None);
 
 /// Sets an explicit mock response for testing.
+///
+/// NOTE: This hook is strictly feature-gated to `test-internals` and unit tests to prevent
+/// unauthorized backdoor overrides in production release builds.
+#[cfg(any(test, feature = "test-internals"))]
 pub fn set_dialog_mock_response(response: Option<DialogMockResponse>) {
     let mut lock = DIALOG_MOCK.lock().unwrap();
     *lock = response;
 }
 
+#[cfg(any(test, feature = "test-internals"))]
 fn check_mock_response() -> Option<DialogMockResponse> {
     DIALOG_MOCK.lock().unwrap().clone()
+}
+
+#[cfg(not(any(test, feature = "test-internals")))]
+#[inline(always)]
+fn check_mock_response() -> Option<DialogMockResponse> {
+    None
 }
 
 /// Prompts user to select a single file to open.
@@ -304,7 +317,7 @@ pub fn show_message_box(
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 mod linux_backend {
     use super::*;
     use gtk::prelude::*;
@@ -460,6 +473,37 @@ mod linux_backend {
             }
             dialog.add_filter(filter);
         }
+    }
+}
+
+#[cfg(all(target_os = "linux", not(feature = "gtk-compat")))]
+mod linux_backend {
+    use super::*;
+    use std::path::PathBuf;
+
+    pub fn open_file(_options: &OpenFileOptions) -> Option<PathBuf> {
+        None
+    }
+
+    pub fn open_multiple_files(_options: &OpenFileOptions) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    pub fn save_file(_options: &SaveFileOptions) -> Option<PathBuf> {
+        None
+    }
+
+    pub fn pick_folder(_options: &PickFolderOptions) -> Option<PathBuf> {
+        None
+    }
+
+    pub fn show_message_box(
+        _title: &str,
+        _message: &str,
+        _box_type: MessageBoxType,
+        _buttons: MessageBoxButtons,
+    ) -> MessageBoxResult {
+        MessageBoxResult::Ok
     }
 }
 

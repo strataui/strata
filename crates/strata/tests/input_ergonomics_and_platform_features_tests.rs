@@ -251,12 +251,12 @@ fn test_automatic_mouse_cursor_switching() {
 
 #[test]
 fn test_single_instance_lock_mutex_and_ipc_forwarding() {
-    let test_app_id = "com.strata.test_single_instance_ipc";
+    let test_app_id = format!("com.strata.test_single_instance_ipc_{}", std::process::id());
     let received_args = Arc::new(Mutex::new(Vec::new()));
     let received_args_clone = received_args.clone();
 
     // Primary instance acquires the lock
-    let status1 = SingleInstanceLock::acquire(test_app_id, &["--main".to_string()], move |args| {
+    let status1 = SingleInstanceLock::acquire(&test_app_id, &["--main".to_string()], move |args| {
         let mut guard = received_args_clone.lock().unwrap();
         *guard = args;
     });
@@ -269,7 +269,7 @@ fn test_single_instance_lock_mutex_and_ipc_forwarding() {
 
     // Secondary instance launches with new arguments
     let secondary_args = vec!["--focus".to_string(), "--url".to_string(), "https://rust-lang.org".to_string()];
-    let status2 = SingleInstanceLock::acquire(test_app_id, &secondary_args, |_| {});
+    let status2 = SingleInstanceLock::acquire(&test_app_id, &secondary_args, |_| {});
 
     assert!(status2.is_ok());
     match status2.unwrap() {
@@ -279,9 +279,18 @@ fn test_single_instance_lock_mutex_and_ipc_forwarding() {
         SingleInstanceStatus::Primary(_) => panic!("Second instance must not become Primary"),
     }
 
-    // Give IPC listener thread a moment to process the socket payload
-    std::thread::sleep(std::time::Duration::from_millis(50));
-
-    let args = received_args.lock().unwrap().clone();
+    // Wait up to 2 seconds for IPC listener thread to process the socket payload
+    let start = std::time::Instant::now();
+    let mut args = Vec::new();
+    while start.elapsed() < std::time::Duration::from_secs(2) {
+        {
+            let guard = received_args.lock().unwrap();
+            if *guard == secondary_args {
+                args = guard.clone();
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     assert_eq!(args, secondary_args, "Primary instance must receive forwarded arguments from secondary process");
 }

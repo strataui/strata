@@ -409,9 +409,10 @@ impl AppRuntime {
     /// the new styles; the previous geometry, line boxes, and inline item streams
     /// are transplanted so the display list can be recompiled immediately.
     pub fn restyle_for_hover_paint(&mut self) {
-        let new_tree = Self::build_layout_tree_with_hover(
+        let ctx = self.interaction_context();
+        let new_tree = Self::build_layout_tree_with_interaction(
             &self.root_blueprint,
-            self.current_hover_path.as_deref(),
+            &ctx,
         );
         let mut previous = std::mem::replace(&mut self.layout_root, new_tree);
         if Self::transplant_layout_state(&mut previous, &mut self.layout_root) {

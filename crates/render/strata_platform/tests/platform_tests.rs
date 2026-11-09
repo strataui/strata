@@ -213,3 +213,18 @@ fn test_platform_target_detection_properties() {
     let web_target = PlatformTarget::WebWasm;
     assert!(web_target.is_web());
 }
+
+#[test]
+fn test_pure_rust_headless_png_export_in_platform() {
+    let mut dl = strata_render::DisplayList::new();
+    dl.push(strata_render::DrawCommand::DrawRect {
+        bounds: strata_layout::Rect::new(0.0, 0.0, 50.0, 50.0),
+        color: strata_style::types::Color::from_f32(0.1, 0.2, 0.3, 1.0),
+    });
+
+    let png_bytes = strata_platform::render_to_png_bytes_pure(&dl, 50, 50, None)
+        .expect("Pure-Rust headless PNG export failed");
+
+    assert!(png_bytes.len() > 24);
+    assert_eq!(&png_bytes[0..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+}

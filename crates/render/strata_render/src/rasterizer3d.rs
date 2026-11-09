@@ -1217,3 +1217,19 @@ fn render_cloud_shell(
         }
     }
 }
+
+/// Evaluates the GPU Relative-To-Eye (RTE) double-single vertex shader transformation in software.
+///
+/// Computes `(pos_high - eye_high) + (pos_low - eye_low)` and projects via `view_proj_rel`.
+pub fn evaluate_gpu_rte_vertex(
+    pos_high: [f32; 3],
+    pos_low: [f32; 3],
+    eye_high: [f32; 3],
+    eye_low: [f32; 3],
+    view_proj_rel: &Mat4,
+) -> Vec4 {
+    let rel_x = (pos_high[0] - eye_high[0]) + (pos_low[0] - eye_low[0]);
+    let rel_y = (pos_high[1] - eye_high[1]) + (pos_low[1] - eye_low[1]);
+    let rel_z = (pos_high[2] - eye_high[2]) + (pos_low[2] - eye_low[2]);
+    view_proj_rel.transform_vec4(Vec4::from_vec3(Vec3::new(rel_x, rel_y, rel_z), 1.0))
+}

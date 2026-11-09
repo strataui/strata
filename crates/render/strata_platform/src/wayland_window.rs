@@ -60,6 +60,8 @@ pub const XDG_SURFACE_ACK_CONFIGURE: u16 = 4;
 pub const XDG_TOPLEVEL_DESTROY: u16 = 0;
 pub const XDG_TOPLEVEL_SET_TITLE: u16 = 2;
 pub const XDG_TOPLEVEL_SET_APP_ID: u16 = 3;
+pub const XDG_TOPLEVEL_MOVE: u16 = 5;
+pub const XDG_TOPLEVEL_RESIZE: u16 = 6;
 pub const XDG_TOPLEVEL_SET_MAXIMIZED: u16 = 9;
 pub const XDG_TOPLEVEL_UNSET_MAXIMIZED: u16 = 10;
 pub const XDG_TOPLEVEL_SET_MINIMIZED: u16 = 13;
@@ -366,6 +368,7 @@ pub struct WaylandWindow {
     pub xdg_toplevel_id: u32,
     pub pointer_id: u32,
     pub keyboard_id: u32,
+    pub last_serial: u32,
     // Swapchain Shm Buffer
     pub shm_buffer: Option<ShmBuffer>,
     read_buffer: Vec<u8>,
@@ -404,6 +407,7 @@ impl WaylandWindow {
             xdg_toplevel_id: 9,
             pointer_id: 10,
             keyboard_id: 11,
+            last_serial: 0,
             shm_buffer: None,
             read_buffer: Vec::with_capacity(4096),
             cursor_pos: (0.0, 0.0),
@@ -759,6 +763,9 @@ impl WaylandWindow {
                 3 => {
                     let mut decoder = WaylandDecoder::new(payload);
                     let _serial = decoder.read_u32();
+                    if let Some(s) = _serial {
+                        self.last_serial = s;
+                    }
                     let _time = decoder.read_u32();
                     if let (Some(btn), Some(state)) = (decoder.read_u32(), decoder.read_u32()) {
                         let button = match btn {
@@ -975,12 +982,16 @@ impl PlatformWindow for WaylandWindow {
     }
 
     fn set_mode(&mut self, mode: WindowMode) {
+        let prev = self.config.mode;
         self.config.mode = mode;
         match mode {
             WindowMode::Maximized => {
                 self.encoder.begin_message();
                 self.encoder.finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_SET_MAXIMIZED);
                 let _ = self.send_message(None);
+                if prev != WindowMode::Maximized {
+                    self.push_event(PlatformEvent::WindowMaximized(true));
+                }
             }
             WindowMode::Minimized => {
                 self.encoder.begin_message();
@@ -991,6 +1002,9 @@ impl PlatformWindow for WaylandWindow {
                 self.encoder.begin_message();
                 self.encoder.finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_UNSET_MAXIMIZED);
                 let _ = self.send_message(None);
+                if prev == WindowMode::Maximized {
+                    self.push_event(PlatformEvent::WindowMaximized(false));
+                }
             }
             _ => {}
         }
@@ -1022,11 +1036,46 @@ impl PlatformWindow for WaylandWindow {
     }
 
     fn poll_events(&mut self) -> Vec<PlatformEvent> {
-        self.event_queue.drain(..).collect()
+        self.poll_native_events()
     }
 
     fn push_event(&mut self, event: PlatformEvent) {
         self.event_queue.push_back(event);
+    }
+
+    fn begin_window_drag(&mut self, _x: f32, _y: f32) {
+        if self.seat_id != 0 {
+            self.encoder.begin_message();
+            self.encoder.push_u32(self.seat_id);
+            self.encoder.push_u32(self.last_serial);
+            self.encoder.finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_MOVE);
+            let _ = self.send_message(None);
+        }
+    }
+
+    fn begin_window_resize(&mut self, edge: crate::csd::CsdHitZone, _x: f32, _y: f32) {
+        if self.seat_id != 0 {
+            if let Some(wayland_edge) = edge.to_wayland_resize_edge() {
+                self.encoder.begin_message();
+                self.encoder.push_u32(self.seat_id);
+                self.encoder.push_u32(self.last_serial);
+                self.encoder.push_u32(wayland_edge);
+                self.encoder.finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_RESIZE);
+                let _ = self.send_message(None);
+            }
+        }
+    }
+}
+
+impl crate::window::NativeSurfaceWindow for WaylandWindow {
+    fn present_surface(
+        &mut self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<(), crate::surface::PresentError> {
+        self.present_bgra(pixels, width, height)
+            .map_err(crate::surface::PresentError::Custom)
     }
 }
 

@@ -11,7 +11,6 @@ use crate::visual::SsimEngine;
 pub struct StrataMobileTestConfig {
     pub is_android: bool,
     pub is_ios: bool,
-    pub is_mock_ios: bool,
     pub device_serial: Option<String>,
     pub enable_monkey_fuzz: bool,
     pub fuzz_event_count: usize,
@@ -23,7 +22,6 @@ impl Default for StrataMobileTestConfig {
         Self {
             is_android: true,
             is_ios: false,
-            is_mock_ios: false,
             device_serial: None,
             enable_monkey_fuzz: false,
             fuzz_event_count: 50,

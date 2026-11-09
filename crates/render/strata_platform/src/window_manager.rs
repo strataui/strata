@@ -1,7 +1,7 @@
 //! Multi-window desktop manager with parent-child modality, focus arbitration, and event multiplexing.
 
 use crate::events::PlatformEvent;
-use crate::window::{MockPlatformWindow, PlatformWindow, WindowConfig};
+use crate::window::{LivePlatformWindow, PlatformWindow, WindowConfig};
 use std::collections::HashMap;
 
 /// Unique 64-bit identifier for an active platform window.
@@ -47,8 +47,8 @@ impl WindowManager {
 
     /// Spawns a new independent top-level window with the specified configuration.
     pub fn create_window(&mut self, config: WindowConfig) -> WindowId {
-        let mock = Box::new(MockPlatformWindow::new(config));
-        self.register_window(mock)
+        let win = Box::new(LivePlatformWindow::new(config));
+        self.register_window(win)
     }
 
     /// Registers an existing platform window instance into the manager.
@@ -79,8 +79,8 @@ impl WindowManager {
         parent: WindowId,
         config: WindowConfig,
     ) -> Result<WindowId, String> {
-        let mock = Box::new(MockPlatformWindow::new(config));
-        self.register_modal(parent, mock)
+        let win = Box::new(LivePlatformWindow::new(config));
+        self.register_modal(parent, win)
     }
 
     /// Registers a modal platform window attached to a parent window.

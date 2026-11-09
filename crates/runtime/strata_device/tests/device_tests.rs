@@ -202,3 +202,144 @@ fn test_real_os_hardware_telemetry_probing() {
     let _detected = strata_device::refresh_from_hardware();
 }
 
+#[test]
+fn test_win32_power_status_decoding() {
+    use strata_device::os_telemetry::{decode_win32_power_status, Win32SystemPowerStatus};
+
+    // Scenario 1: AC power plugged in, battery fully charged at 100%
+    let ac_full = Win32SystemPowerStatus {
+        ac_line_status: 1,
+        battery_flag: 1, // High
+        battery_life_percent: 100,
+        system_status_flag: 0,
+        battery_life_time: 0xFFFF_FFFF,
+        battery_full_life_time: 0xFFFF_FFFF,
+    };
+    let info = decode_win32_power_status(&ac_full).expect("Must decode AC full status");
+    assert_eq!(info.level, 1.0);
+    assert_eq!(info.state, BatteryState::Full);
+    assert!(!info.is_low_power_mode);
+    assert_eq!(info.time_to_empty_secs, None);
+
+    // Scenario 2: Charging at 45% with 1800 seconds to full
+    let charging = Win32SystemPowerStatus {
+        ac_line_status: 1,
+        battery_flag: 8, // Charging
+        battery_life_percent: 45,
+        system_status_flag: 0,
+        battery_life_time: 0xFFFF_FFFF,
+        battery_full_life_time: 1800,
+    };
+    let info = decode_win32_power_status(&charging).expect("Must decode charging status");
+    assert_eq!(info.level, 0.45);
+    assert_eq!(info.state, BatteryState::Charging);
+    assert_eq!(info.time_to_full_secs, Some(1800));
+
+    // Scenario 3: Discharging on battery at 72% with 7200 seconds remaining
+    let discharging = Win32SystemPowerStatus {
+        ac_line_status: 0,
+        battery_flag: 1,
+        battery_life_percent: 72,
+        system_status_flag: 1, // Low power mode enabled
+        battery_life_time: 7200,
+        battery_full_life_time: 0xFFFF_FFFF,
+    };
+    let info = decode_win32_power_status(&discharging).expect("Must decode discharging status");
+    assert_eq!(info.level, 0.72);
+    assert_eq!(info.state, BatteryState::Discharging);
+    assert!(info.is_low_power_mode);
+    assert_eq!(info.time_to_empty_secs, Some(7200));
+
+    // Scenario 4: Desktop PC without battery (flag 128)
+    let no_battery = Win32SystemPowerStatus {
+        ac_line_status: 1,
+        battery_flag: 128,
+        battery_life_percent: 255,
+        system_status_flag: 0,
+        battery_life_time: 0xFFFF_FFFF,
+        battery_full_life_time: 0xFFFF_FFFF,
+    };
+    assert!(decode_win32_power_status(&no_battery).is_none());
+}
+
+#[test]
+fn test_macos_power_source_snapshot_decoding() {
+    use strata_device::os_telemetry::{decode_macos_power_snapshot, MacOsPowerSourceSnapshot};
+
+    // Scenario 1: Fully charged on AC
+    let charged = MacOsPowerSourceSnapshot {
+        current_capacity: 5200,
+        max_capacity: 5200,
+        is_charging: false,
+        is_charged: true,
+        is_low_power_mode: false,
+        time_to_empty_min: None,
+        time_to_full_min: None,
+        power_source_state: "AC Power".to_string(),
+    };
+    let info = decode_macos_power_snapshot(&charged).expect("Must decode charged snapshot");
+    assert_eq!(info.level, 1.0);
+    assert_eq!(info.state, BatteryState::Full);
+    assert!(!info.is_low_power_mode);
+
+    // Scenario 2: Fast charging at 60% with 30 minutes to full
+    let charging = MacOsPowerSourceSnapshot {
+        current_capacity: 3120,
+        max_capacity: 5200,
+        is_charging: true,
+        is_charged: false,
+        is_low_power_mode: true,
+        time_to_empty_min: None,
+        time_to_full_min: Some(30),
+        power_source_state: "AC Power".to_string(),
+    };
+    let info = decode_macos_power_snapshot(&charging).expect("Must decode charging snapshot");
+    assert_eq!(info.level, 0.60);
+    assert_eq!(info.state, BatteryState::Charging);
+    assert!(info.is_low_power_mode);
+    assert_eq!(info.time_to_full_secs, Some(1800));
+
+    // Scenario 3: Discharging on battery at 80% with 240 minutes remaining
+    let discharging = MacOsPowerSourceSnapshot {
+        current_capacity: 4000,
+        max_capacity: 5000,
+        is_charging: false,
+        is_charged: false,
+        is_low_power_mode: false,
+        time_to_empty_min: Some(240),
+        time_to_full_min: None,
+        power_source_state: "Battery Power".to_string(),
+    };
+    let info = decode_macos_power_snapshot(&discharging).expect("Must decode discharging snapshot");
+    assert_eq!(info.level, 0.80);
+    assert_eq!(info.state, BatteryState::Discharging);
+    assert_eq!(info.time_to_empty_secs, Some(14400));
+
+    // Scenario 4: Connected to AC adapter but paused/not charging
+    let ac_not_charging = MacOsPowerSourceSnapshot {
+        current_capacity: 4000,
+        max_capacity: 5000,
+        is_charging: false,
+        is_charged: false,
+        is_low_power_mode: false,
+        time_to_empty_min: None,
+        time_to_full_min: None,
+        power_source_state: "AC Power".to_string(),
+    };
+    let info = decode_macos_power_snapshot(&ac_not_charging).expect("Must decode AC not charging");
+    assert_eq!(info.state, BatteryState::NotCharging);
+
+    // Scenario 5: Zero max capacity returns None
+    let invalid = MacOsPowerSourceSnapshot {
+        current_capacity: 0,
+        max_capacity: 0,
+        is_charging: false,
+        is_charged: false,
+        is_low_power_mode: false,
+        time_to_empty_min: None,
+        time_to_full_min: None,
+        power_source_state: "Battery Power".to_string(),
+    };
+    assert!(decode_macos_power_snapshot(&invalid).is_none());
+}
+

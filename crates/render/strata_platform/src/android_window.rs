@@ -348,6 +348,18 @@ impl PlatformWindow for AndroidWindow {
     }
 }
 
+impl crate::window::NativeSurfaceWindow for AndroidWindow {
+    fn present_surface(
+        &mut self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<(), crate::surface::PresentError> {
+        self.present_bgra(pixels, width, height)
+            .map_err(crate::surface::PresentError::Custom)
+    }
+}
+
 /// Native Android NDK event loop driving event dispatch and frame pacing.
 pub struct AndroidEventLoop {
     pub window: AndroidWindow,

@@ -2,19 +2,232 @@
 
 use super::*;
 
+/// Standard public entry point launching an interactive Strata desktop window.
+/// Automatically detects operating system display server, opens native window,
+/// and runs the event pump until the window is closed.
 pub fn launch<F>(root: F)
 where
-    F: FnOnce() -> View + 'static,
+    F: FnMut() -> View + 'static,
 {
-    println!("[+] Initializing Strata Universal Frontend Runtime...");
-    let view = root();
-    let runtime = AppRuntime::new(view, 1280.0, 800.0, 1.0);
+    let config = WindowConfig::default();
+    if let Err(e) = launch_with_config(root, config) {
+        eprintln!("[Strata] Fatal runtime launch error: {}", e);
+    }
+}
+
+/// Standard public entry point launching with custom window configuration.
+pub fn launch_with_config<F>(root: F, config: WindowConfig) -> Result<(), String>
+where
+    F: FnMut() -> View + 'static,
+{
+    launch_with_events(root, config, |_, _| false)
+}
+
+/// Launches a Strata window with custom window configuration and low-level platform event hook.
+pub fn launch_with_events<F, E>(root: F, config: WindowConfig, event_handler: E) -> Result<(), String>
+where
+    F: FnMut() -> View + 'static,
+    E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
+{
+    launch_auto(root, config, event_handler)
+}
+
+/// Auto-detects the host platform display server and launches an interactive desktop window.
+pub fn launch_auto<F, E>(
+    root_fn: F,
+    config: WindowConfig,
+    event_handler: E,
+) -> Result<(), String>
+where
+    F: FnMut() -> View + 'static,
+    E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
+{
+    // 1. Explicit or detected headless execution
+    if std::env::var("STRATA_HEADLESS").is_ok() {
+        return launch_headless_pump(root_fn, config, event_handler);
+    }
+
+    let root_rc = std::rc::Rc::new(std::cell::RefCell::new(root_fn));
+    let event_rc = std::rc::Rc::new(std::cell::RefCell::new(event_handler));
+
+    #[cfg(target_os = "linux")]
+    {
+        let backend = std::env::var("STRATA_BACKEND").unwrap_or_default().to_lowercase();
+        if backend == "x11" {
+            let r = root_rc.clone();
+            let ev = event_rc.clone();
+            return launch_x11_with_events(
+                move || (r.borrow_mut())(),
+                config,
+                move |event, rt| (ev.borrow_mut())(event, rt),
+            );
+        } else if backend == "wayland" {
+            let r = root_rc.clone();
+            let ev = event_rc.clone();
+            return launch_wayland_with_events(
+                move || (r.borrow_mut())(),
+                config,
+                move |event, rt| (ev.borrow_mut())(event, rt),
+            );
+        } else if backend == "gtk" {
+            let r = root_rc.clone();
+            let ev = event_rc.clone();
+            return launch_gtk_with_events(
+                move || (r.borrow_mut())(),
+                config,
+                move |event, rt| (ev.borrow_mut())(event, rt),
+            );
+        }
+
+        // Automatic Linux detection:
+        // If DISPLAY or WAYLAND_DISPLAY is present, attempt GTK first for Cairo/Pango typography.
+        if std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok() {
+            let r = root_rc.clone();
+            let ev = event_rc.clone();
+            let gtk_res = launch_gtk_with_events(
+                move || (r.borrow_mut())(),
+                config.clone(),
+                move |event, rt| (ev.borrow_mut())(event, rt),
+            );
+            match gtk_res {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    eprintln!("[Strata] GTK display launch failed: {}. Falling back to native display servers...", e);
+                }
+            }
+
+            if std::env::var("WAYLAND_DISPLAY").is_ok() {
+                let r = root_rc.clone();
+                let ev = event_rc.clone();
+                if let Ok(()) = launch_wayland_with_events(
+                    move || (r.borrow_mut())(),
+                    config.clone(),
+                    move |event, rt| (ev.borrow_mut())(event, rt),
+                ) {
+                    return Ok(());
+                }
+            }
+
+            if std::env::var("DISPLAY").is_ok() {
+                let r = root_rc.clone();
+                let ev = event_rc.clone();
+                if let Ok(()) = launch_x11_with_events(
+                    move || (r.borrow_mut())(),
+                    config.clone(),
+                    move |event, rt| (ev.borrow_mut())(event, rt),
+                ) {
+                    return Ok(());
+                }
+            }
+        }
+
+        // Fallback to headless pump if no display servers are connected
+        let r = root_rc.clone();
+        let ev = event_rc.clone();
+        launch_headless_pump(
+            move || (r.borrow_mut())(),
+            config,
+            move |event, rt| (ev.borrow_mut())(event, rt),
+        )
+    }
+
+    #[cfg(windows)]
+    {
+        let r = root_rc.clone();
+        let ev = event_rc.clone();
+        launch_win32_with_events(
+            move || (r.borrow_mut())(),
+            config,
+            move |event, rt| (ev.borrow_mut())(event, rt),
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let r = root_rc.clone();
+        let ev = event_rc.clone();
+        launch_macos_with_events(
+            move || (r.borrow_mut())(),
+            config,
+            move |event, rt| (ev.borrow_mut())(event, rt),
+        )
+    }
+
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+    {
+        let r = root_rc.clone();
+        let ev = event_rc.clone();
+        launch_headless_pump(
+            move || (r.borrow_mut())(),
+            config,
+            move |event, rt| (ev.borrow_mut())(event, rt),
+        )
+    }
+}
+
+/// Runs a deterministic headless event pump for testing, CI automation, and non-display environments.
+pub fn launch_headless_pump<F, E>(
+    mut root_fn: F,
+    config: WindowConfig,
+    mut event_handler: E,
+) -> Result<(), String>
+where
+    F: FnMut() -> View + 'static,
+    E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
+{
     println!(
-        "[OK] Strata Runtime active: viewport {}x{}, rendered {} display commands.",
-        runtime.viewport_width,
-        runtime.viewport_height,
-        runtime.display_list.commands.len()
+        "[+] Launching Strata Headless Engine: \"{}\"...",
+        config.title
     );
+    let mut window = strata_platform::MockPlatformWindow::new(config.clone());
+    let view = root_fn();
+    let width = config.width as f32;
+    let height = config.height as f32;
+    let mut runtime = AppRuntime::new(view, width, height, 1.0);
+    let mut presenter = SoftwareSurfacePresenter::new(
+        config.width,
+        config.height,
+        SwapchainFormat::Bgra8Unorm,
+    );
+    let mut compositor = SwapchainCompositor::new(config.width, config.height, 1.0);
+
+    let max_frames = std::env::var("STRATA_HEADLESS_EXIT_AFTER_FRAMES")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(1);
+
+    let mut frames_rendered = 0u64;
+
+    while frames_rendered < max_frames {
+        let _ = runtime.render_frame(&mut compositor, &mut presenter, frames_rendered == 0);
+        let _ = window.present_surface(&presenter.backing_buffer, presenter.width, presenter.height);
+        frames_rendered += 1;
+
+        let events = window.poll_events();
+        let mut should_exit = false;
+        for ev in events {
+            let (_, _, exit) = platforms::dispatch_native_platform_event(
+                &ev,
+                &mut runtime,
+                &mut compositor,
+                &mut presenter,
+                &mut event_handler,
+            );
+            if exit {
+                should_exit = true;
+                break;
+            }
+        }
+        if should_exit {
+            break;
+        }
+    }
+
+    println!(
+        "[OK] Strata Headless execution complete: {} physical frames presented.",
+        frames_rendered
+    );
+    Ok(())
 }
 
 /// Headless runner returning the initialized `AppRuntime` for testing and layout inspection.
@@ -348,6 +561,8 @@ where
                 strata_platform::PlatformEvent::KeyDown { .. }
                     | strata_platform::PlatformEvent::KeyUp { .. }
                     | strata_platform::PlatformEvent::ReceivedCharacter(_)
+                    | strata_platform::PlatformEvent::ImePreedit { .. }
+                    | strata_platform::PlatformEvent::ImeCommit(_)
             ) {
                 let res = rt.dispatch_key_event(event);
                 if res.needs_rebuild() {

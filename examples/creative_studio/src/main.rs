@@ -19,13 +19,7 @@ fn main() {
         ..Default::default()
     };
 
-    #[cfg(target_os = "linux")]
-    {
-        let _ = strata::launch_gtk(App, config);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        strata::app().with_window(config).build(App).run();
+    if let Err(e) = strata::launch_with_config(App, config) {
+        eprintln!("[Strata] Failed to launch Creative Studio: {}", e);
     }
 }

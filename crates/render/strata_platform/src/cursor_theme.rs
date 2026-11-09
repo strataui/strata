@@ -191,7 +191,7 @@ impl CursorTheme {
     }
 
     /// Renders the cursor into a Cairo graphics context with opacity and press indicator.
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
     pub fn render_cairo(
         &self,
         cr: &cairo::Context,

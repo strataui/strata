@@ -3,7 +3,7 @@
 use strata_dom::{NodeBlueprint, Tag, View};
 use strata_layout::prelude::*;
 use strata_platform::{
-    EventLoop, EventLoopControl, LivePlatformWindow, PlatformEvent, PlatformWindow,
+    EventLoop, EventLoopControl, LivePlatformWindow, NativeSurfaceWindow, PlatformEvent, PlatformWindow,
     SoftwareSurfacePresenter, SwapchainCompositor, SwapchainFormat, WindowConfig,
 };
 use strata_render::compositor::DisplayList;
@@ -30,6 +30,8 @@ mod hover;
 mod scroll;
 mod scrollbar;
 mod canvas3d;
+pub mod spatial;
+pub mod dom_hydration;
 
 pub use types::*;
 pub use edit::*;
@@ -37,6 +39,8 @@ pub(crate) use image::*;
 pub use launch::*;
 pub use platforms::*;
 pub use app::*;
+pub use spatial::*;
+pub use dom_hydration::*;
 
 /// Live running application instance holding active state, layout tree, and display list.
 #[derive(Debug)]
@@ -45,6 +49,7 @@ pub struct AppRuntime {
     pub ir_graph: strata_dom::UiIrGraph,
     pub layout_root: LayoutNode,
     pub display_list: DisplayList,
+    pub spatial_index: SpatialIndex,
     pub viewport_width: f32,
     pub viewport_height: f32,
     pub dpr: f32,
@@ -62,6 +67,12 @@ pub struct AppRuntime {
     pub last_drag_click: Option<(std::time::Instant, f32, f32)>,
     /// Hierarchical index path of the currently hovered element node.
     pub current_hover_path: Option<Vec<usize>>,
+    /// Hierarchical index path of the currently focused element node.
+    pub current_focus_path: Option<Vec<usize>>,
+    /// Whether pointer primary button is currently held down.
+    pub is_mouse_down: bool,
+    /// Whether dark mode is active for theme-dependent utility styling.
+    pub is_dark_mode: bool,
     /// Last recorded pointer coordinates.
     pub last_mouse_pos: (f32, f32),
     /// Scroll offsets keyed by hierarchical tree path (e.g. [0, 1, 0]).
@@ -112,9 +123,13 @@ pub struct AppRuntime {
     pub a11y_updates_count: u64,
     /// Fine-grained dynamic text bindings mapped directly to layout node paths.
     pub dynamic_text_bindings: Vec<DynamicTextBinding>,
+    /// Background channel receiver for live DOM mutations from scripts or browser tabs.
+    pub dom_mutation_receiver: Option<std::sync::mpsc::Receiver<strata_js::DomMutationRecord>>,
     #[cfg(feature = "devtools")]
     /// Integrated DevTools diagnostics suite (HUD, Profiler, Heap Tracker, CDP).
     pub devtools: Option<strata_devtools::DevTools>,
+    /// Client-Side Decorations (CSD) controller managing titlebar geometry and drag tracking.
+    pub csd_controller: strata_platform::CsdController,
 }
 
 /// Whether opt-in `[perf]` timing output is enabled through `STRATA_PERF_LOG`.
@@ -136,27 +151,32 @@ pub(crate) fn perf_log_ms(label: &str, start: std::time::Instant, detail: impl s
 }
 
 pub(crate) fn perf_count_layout_nodes(node: &strata_layout::LayoutNode) -> usize {
-    1 + node
-        .children
-        .iter()
-        .map(perf_count_layout_nodes)
-        .sum::<usize>()
+    let mut count = 0;
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        count += 1;
+        for child in &n.children {
+            stack.push(child);
+        }
+    }
+    count
 }
 
 pub(crate) fn perf_count_blueprint_nodes(node: &NodeBlueprint) -> usize {
-    match node {
-        NodeBlueprint::Element { children, .. } => {
-            1 + children
-                .iter()
-                .map(perf_count_blueprint_nodes)
-                .sum::<usize>()
+    let mut count = 0;
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        count += 1;
+        match n {
+            NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children) => {
+                for child in children {
+                    stack.push(child);
+                }
+            }
+            NodeBlueprint::Text(_) | NodeBlueprint::DynamicText(_) | NodeBlueprint::Empty => {}
         }
-        NodeBlueprint::Fragment(children) => children
-            .iter()
-            .map(perf_count_blueprint_nodes)
-            .sum::<usize>(),
-        _ => 1,
     }
+    count
 }
 
 impl AppRuntime {
@@ -165,7 +185,8 @@ impl AppRuntime {
         #[cfg(target_os = "linux")]
         strata_platform::init_pango_text_measurement();
 
-        let root_blueprint = root_view.root;
+        let mut root_blueprint = root_view.root.flatten_fragments();
+        root_blueprint.ensure_entity_ids();
         let mut ir_graph = Self::build_ir_graph(&root_blueprint);
 
         let build_start = std::time::Instant::now();
@@ -181,6 +202,8 @@ impl AppRuntime {
         let compute_start = std::time::Instant::now();
         layout_root.compute_layout(viewport_width, viewport_height);
         Self::sync_layout_to_ir(&layout_root, &mut ir_graph);
+        let mut spatial_index = SpatialIndex::new();
+        spatial_index.rebuild(&root_blueprint, &layout_root);
         if perf_logging_enabled() {
             perf_log_ms(
                 "compute_layout_initial",
@@ -198,6 +221,7 @@ impl AppRuntime {
             ir_graph,
             layout_root,
             display_list: DisplayList::new(),
+            spatial_index,
             viewport_width,
             viewport_height,
             dpr,
@@ -212,6 +236,9 @@ impl AppRuntime {
             pending_window_drag: None,
             last_drag_click: None,
             current_hover_path: None,
+            current_focus_path: None,
+            is_mouse_down: false,
+            is_dark_mode: false,
             last_mouse_pos: (0.0, 0.0),
             scroll_offsets: std::collections::HashMap::new(),
             scroll_offsets_by_id: std::collections::HashMap::new(),
@@ -237,8 +264,10 @@ impl AppRuntime {
             a11y_tree: None,
             a11y_updates_count: 0,
             dynamic_text_bindings,
+            dom_mutation_receiver: None,
             #[cfg(feature = "devtools")]
             devtools: None,
+            csd_controller: strata_platform::CsdController::default(),
         };
 
         runtime.sync_tree_animations(0.0);
@@ -257,6 +286,7 @@ impl AppRuntime {
         self.layout_root
             .compute_layout(self.viewport_width, self.viewport_height);
         Self::sync_layout_to_ir(&self.layout_root, &mut self.ir_graph);
+        self.spatial_index.rebuild(&self.root_blueprint, &self.layout_root);
         self.layout_computations += 1;
         if perf_logging_enabled() {
             perf_log_ms(
@@ -275,15 +305,94 @@ impl AppRuntime {
         &self.display_list
     }
 
+    /// Returns the current interaction context.
+    pub fn interaction_context(&self) -> InteractionContext<'_> {
+        InteractionContext {
+            hovered_path: self.current_hover_path.as_deref(),
+            focused_path: self.current_focus_path.as_deref(),
+            is_mouse_down: self.is_mouse_down,
+            is_dark_mode: self.is_dark_mode,
+        }
+    }
+
+    /// Sets the active dark mode state and triggers a layout and style recomputation if changed.
+    pub fn set_dark_mode(&mut self, is_dark: bool) -> bool {
+        if self.is_dark_mode != is_dark {
+            self.is_dark_mode = is_dark;
+            self.rebuild_layout_tree();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Sets the active focused element path and triggers a layout and style recomputation if changed.
+    pub fn set_focus_path(&mut self, path: Option<Vec<usize>>) -> bool {
+        if self.current_focus_path != path {
+            self.current_focus_path = path;
+            self.rebuild_layout_tree();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clears and rebuilds the spatial acceleration index.
+    pub fn rebuild_spatial_index(&mut self) {
+        self.spatial_index.rebuild(&self.root_blueprint, &self.layout_root);
+    }
+
+    /// Queries the front-most EntityId at point (px, py).
+    pub fn query_entity_at_point(&self, px: f32, py: f32) -> Option<strata_primitives::EntityId> {
+        self.spatial_index.query_entity_at_point(px, py)
+    }
+
+    /// Queries the front-most event listener registered for `event_type` at point (px, py).
+    pub fn query_event_at_point(
+        &self,
+        px: f32,
+        py: f32,
+        event_type: strata_dom::EventType,
+    ) -> Option<(
+        strata_primitives::EntityId,
+        std::rc::Rc<dyn Fn(strata_dom::Event)>,
+        strata_layout::Rect,
+    )> {
+        self.spatial_index.query_event_at_point(px, py, event_type)
+    }
+
+    /// Recursively locates a layout node by its EntityId.
+    pub fn find_layout_by_entity(&self, entity_id: strata_primitives::EntityId) -> Option<&LayoutNode> {
+        self.layout_root.find_by_entity_id(entity_id)
+    }
+
+    /// Recursively locates a mutable layout node by its EntityId.
+    pub fn find_layout_mut_by_entity(
+        &mut self,
+        entity_id: strata_primitives::EntityId,
+    ) -> Option<&mut LayoutNode> {
+        self.layout_root.find_by_entity_id_mut(entity_id)
+    }
+
+    /// Recursively locates a blueprint node by its EntityId.
+    pub fn find_blueprint_by_entity(
+        &self,
+        entity_id: strata_primitives::EntityId,
+    ) -> Option<&NodeBlueprint> {
+        self.root_blueprint.find_by_entity_id(entity_id)
+    }
+
     /// Updates the application root view, reconstructing the layout tree and compiling a new display list.
     pub fn update_view(&mut self, new_view: View) {
         self.applied_scroll_offsets.clear();
-        self.root_blueprint = new_view.root;
+        self.root_blueprint = new_view.root.flatten_fragments();
+        self.root_blueprint.ensure_entity_ids();
         self.ir_graph = Self::build_ir_graph(&self.root_blueprint);
         let build_start = std::time::Instant::now();
-        self.layout_root = Self::build_layout_tree_with_hover(
+        let ctx = self.interaction_context();
+        self.layout_root = Self::build_layout_tree_with_interaction(
             &self.root_blueprint,
-            self.current_hover_path.as_deref(),
+            &ctx,
         );
         if perf_logging_enabled() {
             perf_log_ms(
@@ -417,7 +526,7 @@ impl AppRuntime {
             }
         }
 
-        match event {
+        let mut needs_redraw = match event {
             PlatformEvent::WindowResized { width, height } => {
                 self.viewport_width = *width as f32;
                 self.viewport_height = *height as f32;
@@ -456,27 +565,41 @@ impl AppRuntime {
                 self.dispatch_pointer_move_action(*x, *y).needs_redraw()
             }
             PlatformEvent::MouseDown { x, y, .. } => {
+                self.is_mouse_down = true;
                 let action = self.dispatch_pointer_down_action(*x, *y);
                 let click_invoked = self.dispatch_mouse_click(*x, *y, 0, 1);
                 let dynamic_updated = self.sync_dynamic_text();
-                action.needs_redraw() || click_invoked || dynamic_updated
+                self.rebuild_layout_tree();
+                action.needs_redraw() || click_invoked || dynamic_updated || true
             }
             PlatformEvent::MouseUp { x, y, .. } => {
-                self.dispatch_pointer_up_action(*x, *y).needs_redraw()
+                self.is_mouse_down = false;
+                let redraw = self.dispatch_pointer_up_action(*x, *y).needs_redraw();
+                self.rebuild_layout_tree();
+                redraw || true
             }
             PlatformEvent::CursorLeft => {
+                self.is_mouse_down = false;
                 self.current_cursor = strata_platform::window::CursorIcon::Default;
                 self.clear_hover()
             }
             PlatformEvent::KeyDown { .. }
             | PlatformEvent::KeyUp { .. }
-            | PlatformEvent::ReceivedCharacter(_) => {
+            | PlatformEvent::ReceivedCharacter(_)
+            | PlatformEvent::ImePreedit { .. }
+            | PlatformEvent::ImeCommit(_) => {
                 let res = self.dispatch_key_event(event);
                 let dynamic_updated = self.sync_dynamic_text();
                 res.needs_redraw() || dynamic_updated
             }
             _ => false,
+        };
+
+        if self.poll_dom_mutations(None) {
+            needs_redraw = true;
         }
+
+        needs_redraw
     }
 
     /// Renders the current frame and presents it to the given surface presenter via the swapchain compositor.
@@ -604,6 +727,22 @@ impl AppRuntime {
         });
     }
 
+    /// Rasterizes the current application frame to an offscreen headless FrameBuffer.
+    pub fn render_to_framebuffer(&mut self) -> strata_render::rasterizer::FrameBuffer {
+        self.tick_frame();
+        let width = (self.viewport_width * self.dpr).max(1.0).ceil() as usize;
+        let height = (self.viewport_height * self.dpr).max(1.0).ceil() as usize;
+        let mut fb = strata_render::rasterizer::FrameBuffer::new(width, height);
+        fb.execute_display_list(&self.display_list);
+        fb
+    }
+
+    /// Captures a headless screenshot of the current application state and writes it to a PNG file.
+    pub fn export_png<P: AsRef<std::path::Path>>(&mut self, path: P) -> Result<(), String> {
+        let fb = self.render_to_framebuffer();
+        fb.export_png(path).map_err(|e| e.to_string())
+    }
+
     #[cfg(feature = "devtools")]
     /// Synchronizes the current live DOM tree, computed styles, and frame metrics to a Chrome DevTools dispatcher.
     pub fn sync_to_devtools(&self, dispatcher: &strata_devtools::cdp::CdpDispatcher) {
@@ -614,5 +753,4 @@ impl AppRuntime {
             self.layout_computations,
         );
     }
-
 }

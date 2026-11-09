@@ -3,6 +3,8 @@
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::ptr::NonNull;
 
+type DropEntry = (*mut u8, unsafe fn(*mut u8));
+
 /// 64-byte aligned thread-local bump arena for zero heap contention across worker threads.
 #[repr(align(64))]
 pub struct ThreadLocalArena {
@@ -11,6 +13,7 @@ pub struct ThreadLocalArena {
     end: *mut u8,
     capacity: usize,
     layout: Layout,
+    drop_chain: Vec<DropEntry>,
 }
 
 unsafe impl Send for ThreadLocalArena {}
@@ -34,12 +37,47 @@ impl ThreadLocalArena {
             end,
             capacity,
             layout,
+            drop_chain: Vec::new(),
         }
     }
 
     /// Allocates space for an item of type `T` and moves `value` into it.
     #[inline(always)]
     pub fn alloc<T>(&mut self, value: T) -> &mut T {
+        let align = std::mem::align_of::<T>();
+        let size = std::mem::size_of::<T>();
+
+        let current = self.ptr as usize;
+        let aligned = (current + align - 1) & !(align - 1);
+        let next = aligned + size;
+
+        assert!(
+            next <= self.end as usize,
+            "ThreadLocalArena capacity overflow (requested {}, remaining {})",
+            size,
+            (self.end as usize).saturating_sub(aligned)
+        );
+
+        self.ptr = next as *mut u8;
+
+        unsafe {
+            let target = aligned as *mut T;
+            std::ptr::write(target, value);
+
+            if std::mem::needs_drop::<T>() {
+                unsafe fn drop_glue<T>(ptr: *mut u8) {
+                    std::ptr::drop_in_place(ptr as *mut T);
+                }
+                self.drop_chain.push((target as *mut u8, drop_glue::<T>));
+            }
+
+            &mut *target
+        }
+    }
+
+    /// Fast path allocation for `Copy` types without drop tracking overhead.
+    #[inline(always)]
+    pub fn alloc_copy<T: Copy>(&mut self, value: T) -> &mut T {
         let align = std::mem::align_of::<T>();
         let size = std::mem::size_of::<T>();
 
@@ -84,13 +122,28 @@ impl ThreadLocalArena {
             for (i, item) in slice.iter().enumerate() {
                 std::ptr::write(target.add(i), item.clone());
             }
+
+            if std::mem::needs_drop::<T>() {
+                unsafe fn drop_glue<T>(ptr: *mut u8) {
+                    std::ptr::drop_in_place(ptr as *mut T);
+                }
+                for i in 0..slice.len() {
+                    self.drop_chain.push((target.add(i) as *mut u8, drop_glue::<T>));
+                }
+            }
+
             std::slice::from_raw_parts_mut(target, slice.len())
         }
     }
 
-    /// Resets the bump pointer to the beginning of the arena in 1 CPU cycle.
+    /// Resets the bump pointer to the beginning of the arena, running destructors.
     #[inline(always)]
     pub fn reset(&mut self) {
+        for (ptr, drop_fn) in self.drop_chain.drain(..).rev() {
+            unsafe {
+                drop_fn(ptr);
+            }
+        }
         self.ptr = self.start.as_ptr();
     }
 
@@ -107,11 +160,17 @@ impl ThreadLocalArena {
 
 impl Drop for ThreadLocalArena {
     fn drop(&mut self) {
+        for (ptr, drop_fn) in self.drop_chain.drain(..).rev() {
+            unsafe {
+                drop_fn(ptr);
+            }
+        }
         unsafe {
             dealloc(self.start.as_ptr(), self.layout);
         }
     }
 }
+
 
 thread_local! {
     static PER_THREAD_ARENA: std::cell::RefCell<ThreadLocalArena> = std::cell::RefCell::new(ThreadLocalArena::new(1024 * 512));

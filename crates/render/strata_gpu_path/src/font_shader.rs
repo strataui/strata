@@ -310,3 +310,84 @@ impl SlugGlyphBuffer {
         }
     }
 }
+
+/// Solves quadratic equation A*t^2 + B*t + C = 0 returning valid roots in [0, 1].
+pub fn solve_quadratic_roots_f32(a: f32, b: f32, c: f32) -> (Option<f32>, Option<f32>) {
+    if a.abs() < 1e-6 {
+        if b.abs() < 1e-6 {
+            return (None, None);
+        }
+        let t = -c / b;
+        if (0.0..=1.0).contains(&t) {
+            return (Some(t), None);
+        }
+        return (None, None);
+    }
+
+    let discr = b * b - 4.0 * a * c;
+    if discr < 0.0 {
+        return (None, None);
+    }
+
+    let sqrt_d = discr.sqrt();
+    let t1 = (-b - sqrt_d) / (2.0 * a);
+    let t2 = (-b + sqrt_d) / (2.0 * a);
+
+    let r1 = if (0.0..=1.0).contains(&t1) { Some(t1) } else { None };
+    let r2 = if (0.0..=1.0).contains(&t2) { Some(t2) } else { None };
+    (r1, r2)
+}
+
+/// Evaluates Slug-tier analytical subpixel glyph coverage at a given design/glyph point.
+///
+/// Returns subpixel coverage alpha in [0.0, 1.0] without polygon tessellation at any zoom scale.
+pub fn evaluate_slug_analytical_coverage(glyph: &AnalyticGlyph, p: [f32; 2], pixel_scale: f32) -> f32 {
+    let mut winding: i32 = 0;
+    let mut min_dist: f32 = 1e6;
+
+    for curve in &glyph.curves {
+        let p0 = [curve.p0.x, curve.p0.y];
+        let p1 = [curve.p1.x, curve.p1.y];
+        let p2 = [curve.p2.x, curve.p2.y];
+
+        let a = p0[1] - 2.0 * p1[1] + p2[1];
+        let b = 2.0 * (p1[1] - p0[1]);
+        let c = p0[1] - p[1];
+
+        let (r1, r2) = solve_quadratic_roots_f32(a, b, c);
+
+        for t_opt in [r1, r2] {
+            if let Some(t) = t_opt {
+                let u = 1.0 - t;
+                let x = u * u * p0[0] + 2.0 * u * t * p1[0] + t * t * p2[0];
+                if x > p[0] {
+                    let dy = 2.0 * a * t + b;
+                    if dy > 0.0 {
+                        winding += 1;
+                    } else if dy < 0.0 {
+                        winding -= 1;
+                    }
+                }
+            }
+        }
+
+        // Segment distance
+        let v = [p2[0] - p0[0], p2[1] - p0[1]];
+        let w = [p[0] - p0[0], p[1] - p0[1]];
+        let c1 = w[0] * v[0] + w[1] * v[1];
+        let c2 = v[0] * v[0] + v[1] * v[1];
+        let t = (c1 / c2.max(1e-6)).clamp(0.0, 1.0);
+        let proj = [p0[0] + t * v[0], p0[1] + t * v[1]];
+        let d = ((p[0] - proj[0]).powi(2) + (p[1] - proj[1]).powi(2)).sqrt();
+        min_dist = min_dist.min(d);
+    }
+
+    let pixel_dist = min_dist / pixel_scale.max(1e-4);
+    let inside = winding != 0;
+    if inside {
+        (0.5 + pixel_dist).clamp(0.0, 1.0)
+    } else {
+        (0.5 - pixel_dist).clamp(0.0, 1.0)
+    }
+}
+

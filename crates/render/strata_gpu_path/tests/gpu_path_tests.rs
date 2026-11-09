@@ -300,3 +300,25 @@ fn test_geometry_types_bidirectional_conversions() {
     assert_eq!(r_back.height(), 200.0);
 }
 
+#[test]
+fn test_standard_ascii_analytical_glyph_cache() {
+    let cache = AnalyticGlyphCache::with_standard_ascii();
+    for c in ' '..='~' {
+        let glyph = cache.get(c).expect("Every printable ASCII char must exist");
+        assert!(glyph.advance_width > 0.0);
+        if c != ' ' {
+            assert!(!glyph.curves.is_empty(), "Character '{}' must have curves", c);
+            assert!(glyph.bounds.width() > 0.0);
+            assert!(glyph.bounds.height() > 0.0);
+        }
+    }
+
+    // Verify analytical SDF queries for 'A' and 'O'
+    let sdf_a = cache.evaluate_glyph_sdf('A', Point2D::new(0.3, 0.4)).expect("SDF must evaluate");
+    assert!(sdf_a.is_finite());
+
+    let sdf_o = cache.evaluate_glyph_sdf('O', Point2D::new(0.32, 0.4)).expect("SDF must evaluate");
+    assert!(sdf_o.is_finite());
+}
+
+

@@ -388,3 +388,70 @@ fn test_generational_subscriber_disposal_and_leak_elimination() {
     ReactiveRuntime::unregister_subscriber(sub2);
 }
 
+#[test]
+fn test_circular_memo_evaluation_no_borrow_mut_panic() {
+    let trigger = use_signal(1);
+
+    let memo_b_holder: Rc<RefCell<Option<strata_dom::Memo<i32>>>> = Rc::new(RefCell::new(None));
+    let mb_clone = memo_b_holder.clone();
+    let tr_a = trigger.clone();
+
+    let memo_a = use_memo(move || {
+        let t = tr_a.get();
+        if let Some(ref mb) = *mb_clone.borrow() {
+            t + mb.get()
+        } else {
+            t * 10
+        }
+    });
+
+    let ma_clone = memo_a.clone();
+    let tr_b = trigger.clone();
+    let memo_b = use_memo(move || {
+        let _ = tr_b.get();
+        ma_clone.get() + 5
+    });
+
+    *memo_b_holder.borrow_mut() = Some(memo_b.clone());
+
+    // Trigger update that causes mutual cascade between A and B
+    trigger.set(2);
+
+    // Verify neither memo panicked with BorrowMutError and values are resolved
+    let val_a = memo_a.get();
+    let val_b = memo_b.get();
+    assert!(val_a > 0);
+    assert!(val_b > 0);
+}
+
+#[test]
+fn test_self_referential_memo_cycle_resilience() {
+    let sig = use_signal(100);
+    let sig_c = sig.clone();
+
+    let memo_holder: Rc<RefCell<Option<strata_dom::Memo<i32>>>> = Rc::new(RefCell::new(None));
+    let mh_clone = memo_holder.clone();
+
+    let memo = use_memo(move || {
+        let base = sig_c.get();
+        if let Some(ref m) = *mh_clone.borrow() {
+            // Re-entrant self-read
+            base + m.get()
+        } else {
+            base
+        }
+    });
+
+    *memo_holder.borrow_mut() = Some(memo.clone());
+
+    // Initial value
+    assert_eq!(memo.get(), 100);
+
+    // Mutate signal triggering evaluation
+    sig.set(200);
+
+    // In a circular self-read, it should return cached value (100) and not panic
+    let val = memo.get();
+    assert_eq!(val, 300); // 200 + cached 100
+}
+

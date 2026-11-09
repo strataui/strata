@@ -417,3 +417,53 @@ fn test_content_visibility_hidden_and_contain_intrinsic_size() {
     assert_eq!(node.geometry.border_box.width, 800.0);
 }
 
+#[test]
+fn test_compositor_scroll_clipping_and_translation() {
+    use strata_style::types::{ComputedStyle, Dimension, Display, Overflow};
+    use strata_layout::Point;
+
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Block;
+    container_style.width = Dimension::Px(400.0);
+    container_style.height = Dimension::Px(300.0);
+    container_style.overflow_y = Overflow::Scroll;
+
+    let mut container = LayoutNode::new(container_style);
+
+    let mut child_style = ComputedStyle::default();
+    child_style.display = Display::Block;
+    child_style.width = Dimension::Px(400.0);
+    child_style.height = Dimension::Px(200.0);
+    let child = LayoutNode::new(child_style);
+    container.add_child(child);
+
+    container.compute_layout(800.0, 600.0);
+
+    // Set scroll offset
+    container.geometry.scroll_offset = Point::new(0.0, 75.0);
+
+    let display_list = Compositor::build_display_list(&container);
+
+    // Verify display list contains PushClip to padding_box and PushTransform with translation -75.0
+    let mut found_clip = false;
+    let mut found_transform = false;
+    for cmd in &display_list.commands {
+        match cmd {
+            DrawCommand::PushClip { bounds, .. } => {
+                if *bounds == container.geometry.padding_box {
+                    found_clip = true;
+                }
+            }
+            DrawCommand::PushTransform { matrix } => {
+                let expected = strata_primitives::geom::Matrix4x4::translation(0.0, -75.0, 0.0);
+                if *matrix == expected {
+                    found_transform = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(found_clip, "Compositor must clip scroll container to padding box");
+    assert!(found_transform, "Compositor must push translation transform for scroll offset");
+}
+

@@ -14,3 +14,4 @@ strata_dom = { workspace = true }
 strata_macro = { workspace = true }
 strata_js = { workspace = true }
 strata_gpu_path = { workspace = true }
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }

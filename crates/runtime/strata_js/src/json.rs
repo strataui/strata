@@ -59,7 +59,7 @@ fn parse_object<I: Iterator<Item = char>>(
 
     if let Some(&'}') = chars.peek() {
         chars.next();
-        return Ok(JsValue::Object(map));
+        return Ok(JsValue::new_object(map));
     }
 
     loop {
@@ -94,7 +94,7 @@ fn parse_object<I: Iterator<Item = char>>(
         }
     }
 
-    Ok(JsValue::Object(map))
+    Ok(JsValue::new_object(map))
 }
 
 fn parse_array<I: Iterator<Item = char>>(
@@ -107,7 +107,7 @@ fn parse_array<I: Iterator<Item = char>>(
 
     if let Some(&']') = chars.peek() {
         chars.next();
-        return Ok(JsValue::Array(items));
+        return Ok(JsValue::new_array(items));
     }
 
     loop {
@@ -130,7 +130,7 @@ fn parse_array<I: Iterator<Item = char>>(
         }
     }
 
-    Ok(JsValue::Array(items))
+    Ok(JsValue::new_array(items))
 }
 
 fn parse_string<I: Iterator<Item = char>>(
@@ -262,7 +262,7 @@ fn parse_undefined<I: Iterator<Item = char>>(
 
 fn serialize_value(val: &JsValue, out: &mut String) {
     match val {
-        JsValue::Undefined | JsValue::Null => out.push_str("null"),
+        JsValue::Undefined | JsValue::Null | JsValue::Function(_) | JsValue::Symbol(_) => out.push_str("null"),
         JsValue::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         JsValue::Number(n) => {
             if n.is_nan() || n.is_infinite() {
@@ -292,9 +292,10 @@ fn serialize_value(val: &JsValue, out: &mut String) {
             }
             out.push('"');
         }
+        JsValue::BigInt(bi) => out.push_str(&bi.to_decimal_string()),
         JsValue::Array(items) => {
             out.push('[');
-            for (i, item) in items.iter().enumerate() {
+            for (i, item) in items.borrow().iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
@@ -304,7 +305,7 @@ fn serialize_value(val: &JsValue, out: &mut String) {
         }
         JsValue::Object(map) => {
             out.push('{');
-            for (i, (k, v)) in map.iter().enumerate() {
+            for (i, (k, v)) in map.borrow().iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
