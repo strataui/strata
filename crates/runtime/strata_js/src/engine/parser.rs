@@ -3,9 +3,13 @@
 use super::ast::*;
 use crate::JsValue;
 
+/// Maximum AST parsing recursion depth before returning RangeError (CWE-674).
+pub const MAX_PARSER_DEPTH: usize = 256;
+
 pub struct JsParser<'a> {
     src: &'a str,
     pos: usize,
+    pub depth: usize,
 }
 
 impl<'a> JsParser<'a> {
@@ -13,6 +17,7 @@ impl<'a> JsParser<'a> {
         Self {
             src,
             pos: 0,
+            depth: 0,
         }
     }
 
@@ -80,6 +85,16 @@ impl<'a> JsParser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Stmt, String> {
+        if self.depth >= MAX_PARSER_DEPTH {
+            return Err("RangeError: Maximum call stack size exceeded (parser recursion limit)".to_string());
+        }
+        self.depth += 1;
+        let res = self.parse_statement_inner();
+        self.depth -= 1;
+        res
+    }
+
+    fn parse_statement_inner(&mut self) -> Result<Stmt, String> {
         self.skip_whitespace_and_comments();
         if self.is_eof() {
             return Err("Unexpected EOF while parsing statement".to_string());
@@ -667,7 +682,13 @@ impl<'a> JsParser<'a> {
 
     // Expressions
     pub fn parse_expression(&mut self) -> Result<Expr, String> {
-        self.parse_assignment()
+        if self.depth >= MAX_PARSER_DEPTH {
+            return Err("RangeError: Maximum call stack size exceeded (parser recursion limit)".to_string());
+        }
+        self.depth += 1;
+        let res = self.parse_assignment();
+        self.depth -= 1;
+        res
     }
 
     fn parse_assignment(&mut self) -> Result<Expr, String> {

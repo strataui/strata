@@ -86,6 +86,11 @@ impl SecureKeystore {
     fn get_or_create_master_key() -> Result<[u8; 32], KeystoreError> {
         let key_path = Self::key_file_path();
         if key_path.exists() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600));
+            }
             if let Ok(bytes) = fs::read(&key_path) {
                 if bytes.len() == 32 {
                     let mut key = [0u8; 32];

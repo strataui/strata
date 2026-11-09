@@ -380,3 +380,58 @@ fn test_storage_api() {
     storage.clear();
     assert_eq!(storage.length(), 0);
 }
+
+#[test]
+fn test_prototype_pollution_guard() {
+    let mut engine = JsEngine::new();
+
+    // 1. Direct mutation of Object.prototype in default sealed mode must fail
+    let res = engine.eval("Object.prototype.isAdmin = true;");
+    assert!(res.is_err(), "Mutating Object.prototype must return error in sealed mode");
+    let err_msg = res.unwrap_err();
+    assert!(
+        err_msg.contains("TypeError: Cannot modify sealed prototype Object.prototype"),
+        "Expected sealed prototype TypeError, got: {err_msg}"
+    );
+
+    // 2. Direct mutation of __proto__ must fail
+    let res_proto = engine.eval("var x = {}; x.__proto__ = { polluted: true };");
+    assert!(res_proto.is_err(), "Mutating __proto__ must fail in sealed mode");
+
+    // 3. Object.assign with JSON payload containing __proto__ must NOT pollute global objects
+    let assign_script = r#"
+        var payload = JSON.parse('{"__proto__": {"injected": "hacked"}, "valid": 42}');
+        var target = {};
+        Object.assign(target, payload);
+        var probe = {};
+        var is_polluted = (probe.injected !== undefined);
+        var target_valid = target.valid;
+    "#;
+    engine.eval(assign_script).expect("Execution should succeed safely");
+    assert_eq!(engine.globals.get("is_polluted"), Some(&JsValue::Bool(false)));
+    assert_eq!(engine.globals.get("target_valid"), Some(&JsValue::Number(42.0)));
+}
+
+#[test]
+fn test_deeply_nested_expression_recursion_guard() {
+    let mut engine = JsEngine::new();
+
+    // Generate 300 levels of nested parentheses: (((...1...)))
+    let mut nested = String::new();
+    for _ in 0..300 {
+        nested.push('(');
+    }
+    nested.push('1');
+    for _ in 0..300 {
+        nested.push(')');
+    }
+
+    let res = engine.eval(&nested);
+    assert!(res.is_err(), "Deeply nested expression must trigger recursion guard");
+    let err = res.unwrap_err();
+    assert!(
+        err.contains("Maximum call stack size exceeded"),
+        "Expected call stack exceeded error, got: {err}"
+    );
+}
+

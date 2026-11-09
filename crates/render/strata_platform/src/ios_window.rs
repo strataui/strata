@@ -16,7 +16,7 @@ use std::ffi::{c_char, c_void};
 extern "C" {
     fn objc_getClass(name: *const c_char) -> *mut c_void;
     fn sel_registerName(name: *const c_char) -> *mut c_void;
-    fn objc_msgSend(receiver: *mut c_void, op: *mut c_void, ...) -> *mut c_void;
+    fn objc_msgSend();
 }
 
 #[repr(C)]

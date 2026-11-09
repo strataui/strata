@@ -76,7 +76,9 @@ fn parse_object<I: Iterator<Item = char>>(
         }
 
         let val = parse_value(chars)?;
-        map.insert(key, val);
+        if key != "__proto__" {
+            map.insert(key, val);
+        }
 
         skip_whitespace(chars);
         match chars.next() {

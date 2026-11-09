@@ -46,6 +46,8 @@ pub struct JsEngine {
     pub memory_limit_bytes: Option<usize>,
     pub allocated_memory_bytes: usize,
     pub freeze_prototypes: bool,
+    pub allow_prototype_mutation: bool,
+    pub eval_depth: usize,
     pub is_strict: bool,
     pub weak_maps: RefCell<HashMap<u64, HashMap<usize, JsValue>>>,
     pub next_weak_id: u64,
@@ -63,6 +65,9 @@ pub struct GeneratorInstance {
     pub pc: usize,
     pub done: bool,
 }
+
+/// Maximum AST expression evaluation recursion depth before returning RangeError (CWE-674).
+pub const MAX_EVAL_DEPTH: usize = 256;
 
 impl Default for JsEngine {
     fn default() -> Self {
@@ -223,6 +228,8 @@ impl JsEngine {
             memory_limit_bytes: None,
             allocated_memory_bytes: 0,
             freeze_prototypes: false,
+            allow_prototype_mutation: false,
+            eval_depth: 0,
             is_strict: false,
             weak_maps: RefCell::new(HashMap::new()),
             next_weak_id: 1,
@@ -243,6 +250,17 @@ impl JsEngine {
     /// Enables or disables prototype freezing to prevent prototype pollution.
     pub fn set_freeze_prototypes(&mut self, freeze: bool) {
         self.freeze_prototypes = freeze;
+    }
+
+    /// Sets whether prototype mutation is allowed on root Object.prototype or via __proto__.
+    pub fn with_allow_prototype_mutation(mut self, allow: bool) -> Self {
+        self.allow_prototype_mutation = allow;
+        self
+    }
+
+    /// Toggles prototype mutation permissions on root prototypes and __proto__.
+    pub fn set_allow_prototype_mutation(&mut self, allow: bool) {
+        self.allow_prototype_mutation = allow;
     }
 
     /// Tracks heap memory allocations and enforces memory limit quotas.

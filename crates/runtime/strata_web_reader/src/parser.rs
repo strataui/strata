@@ -59,6 +59,9 @@ pub struct TreeBuilder {
     skipping_tag: Option<String>,
 }
 
+/// Maximum depth of nested element frames in the WHATWG parser tree builder to prevent stack exhaustion / OOM (CWE-400).
+pub const MAX_TREE_DEPTH: usize = 512;
+
 impl TreeBuilder {
     pub fn new(is_full_document: bool) -> Self {
         Self {
@@ -74,6 +77,19 @@ impl TreeBuilder {
     }
 
     fn push_element(&mut self, tag: String, attributes: Vec<(String, String)>) {
+        if self.stack.len() >= MAX_TREE_DEPTH {
+            let node = SemanticNode::Element {
+                tag,
+                attributes,
+                children: Vec::new(),
+            };
+            if let Some(top) = self.stack.last_mut() {
+                top.children.push(node);
+            } else {
+                self.root_nodes.push(node);
+            }
+            return;
+        }
         self.stack.push(ElementFrame {
             tag,
             attributes,
