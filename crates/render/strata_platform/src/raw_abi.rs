@@ -260,4 +260,23 @@ pub mod cocoa {
             }
         }
     }
+
+    /// CoreVideo DisplayLink return codes.
+    pub type CvReturn = i32;
+    pub const K_CV_RETURN_SUCCESS: CvReturn = 0;
+
+    /// CoreVideo time stamp representation for hardware display refresh synchronization.
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy, PartialEq, Default)]
+    pub struct CvTimeStamp {
+        pub version: u32,
+        pub video_time_scale: i32,
+        pub video_time: i64,
+        pub host_time: u64,
+        pub rate_scalar: f64,
+        pub video_refresh_period: i64,
+        pub smpte_time: [u8; 16],
+        pub flags: u64,
+        pub reserved: u64,
+    }
 }

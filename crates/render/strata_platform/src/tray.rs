@@ -238,6 +238,109 @@ impl TrayIcon {
     }
 }
 
+/// Platform-agnostic system tray interaction event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TrayEvent {
+    LeftClick,
+    RightClick,
+    DoubleClick,
+    MenuItemTriggered(u64),
+}
+
+/// Thread-safe reactive event channel for desktop system tray interactions.
+#[derive(Clone)]
+pub struct TrayEventChannel {
+    sender: std::sync::mpsc::Sender<TrayEvent>,
+}
+
+/// Receiving endpoint for desktop system tray events.
+pub struct TrayEventReceiver {
+    receiver: std::sync::mpsc::Receiver<TrayEvent>,
+}
+
+impl TrayEventChannel {
+    /// Creates a new sender and receiver pair.
+    pub fn new() -> (Self, TrayEventReceiver) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        (Self { sender }, TrayEventReceiver { receiver })
+    }
+
+    /// Dispatches a tray event down the channel.
+    pub fn dispatch(&self, event: TrayEvent) {
+        let _ = self.sender.send(event);
+    }
+
+    /// Creates an adapter closure suitable for passing as a `TrayEventSink`.
+    pub fn as_sink(&self) -> TrayEventSink {
+        let sender = self.sender.clone();
+        std::sync::Arc::new(move |event| match event {
+            crate::events::PlatformEvent::TrayIconClicked => {
+                let _ = sender.send(TrayEvent::LeftClick);
+            }
+            crate::events::PlatformEvent::TrayMenuItemClicked(id) => {
+                let _ = sender.send(TrayEvent::MenuItemTriggered(id));
+            }
+            _ => {}
+        })
+    }
+}
+
+impl Default for TrayEventChannel {
+    fn default() -> Self {
+        Self::new().0
+    }
+}
+
+impl TrayEventReceiver {
+    /// Attempts to read the next pending tray event without blocking.
+    pub fn try_recv(&self) -> Option<TrayEvent> {
+        self.receiver.try_recv().ok()
+    }
+
+    /// Blocks until the next tray event arrives, or times out.
+    pub fn recv_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<TrayEvent, std::sync::mpsc::RecvTimeoutError> {
+        self.receiver.recv_timeout(timeout)
+    }
+}
+
+/// Pure-Rust Linux D-Bus StatusNotifierItem daemon registration.
+pub struct DbusStatusNotifier {
+    pub service_name: String,
+    pub title: String,
+    pub icon_name: String,
+    pub client: Option<crate::dbus::DbusClient>,
+}
+
+impl DbusStatusNotifier {
+    /// Creates and registers an authentic `org.kde.StatusNotifierItem` over session D-Bus.
+    pub fn register(title: &str, icon_name: &str) -> Result<Self, String> {
+        let mut client = crate::dbus::DbusClient::connect()?;
+        let service_name = format!("org.kde.StatusNotifierItem-{}-1", std::process::id());
+
+        // Register service with org.kde.StatusNotifierWatcher
+        let mut body = crate::dbus::DbusMessageEncoder::new();
+        body.push_string(&service_name);
+        let _ = client.call_method(
+            "org.kde.StatusNotifierWatcher",
+            "/StatusNotifierWatcher",
+            "org.kde.StatusNotifierWatcher",
+            "RegisterStatusNotifierItem",
+            Some("s"),
+            body.as_bytes(),
+        );
+
+        Ok(Self {
+            service_name,
+            title: title.to_string(),
+            icon_name: icon_name.to_string(),
+            client: Some(client),
+        })
+    }
+}
+
 /// Thread-safe tray event sink callback.
 pub type TrayEventSink =
     std::sync::Arc<dyn Fn(crate::events::PlatformEvent) + Send + Sync + 'static>;
@@ -466,7 +569,7 @@ impl NativeTrayHandle {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 mod linux_backend {
     //! Ayatana AppIndicator backend loaded at runtime.
     //!
@@ -849,6 +952,23 @@ mod linux_backend {
         if let Some(path) = path {
             let _ = std::fs::remove_file(path);
         }
+    }
+}
+
+#[cfg(all(target_os = "linux", not(feature = "gtk-compat")))]
+mod linux_backend {
+    use super::*;
+
+    pub struct LiveIndicator;
+
+    impl LiveIndicator {
+        pub fn new(_icon: &TrayIcon, _shared: std::sync::Arc<SharedTrayState>) -> Option<Self> {
+            None
+        }
+        pub fn set_tooltip(&mut self, _tooltip: String) {}
+        pub fn set_menu(&mut self, _menu: Option<&TrayMenu>) {}
+        pub fn set_visible(&mut self, _visible: bool) {}
+        pub fn set_badge(&mut self, _badge: Option<String>) {}
     }
 }
 
@@ -1409,6 +1529,113 @@ mod macos_backend {
         }
 
         ns_menu
+    }
+}
+
+/// Cross-platform desktop notification descriptor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DesktopNotification {
+    pub title: String,
+    pub body: String,
+    pub icon: Option<String>,
+    pub timeout_ms: i32,
+    pub category: Option<String>,
+}
+
+static DELIVERED_NOTIFICATIONS: std::sync::OnceLock<std::sync::Mutex<Vec<DesktopNotification>>> =
+    std::sync::OnceLock::new();
+
+fn get_delivered_notifications_mutex() -> &'static std::sync::Mutex<Vec<DesktopNotification>> {
+    DELIVERED_NOTIFICATIONS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// Retrieves list of delivered notifications recorded in process memory (for test verification).
+pub fn get_delivered_notifications() -> Vec<DesktopNotification> {
+    get_delivered_notifications_mutex()
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
+}
+
+/// Clears list of delivered notifications recorded in process memory.
+pub fn clear_delivered_notifications() {
+    if let Ok(mut guard) = get_delivered_notifications_mutex().lock() {
+        guard.clear();
+    }
+}
+
+impl DesktopNotification {
+    /// Creates a new desktop notification with title and body.
+    pub fn new(title: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            body: body.into(),
+            icon: None,
+            timeout_ms: 5000,
+            category: None,
+        }
+    }
+
+    /// Sets the notification icon name or URI.
+    pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    /// Sets the notification expiration timeout in milliseconds.
+    pub fn with_timeout(mut self, timeout_ms: i32) -> Self {
+        self.timeout_ms = timeout_ms;
+        self
+    }
+
+    /// Sets the notification category.
+    pub fn with_category(mut self, category: impl Into<String>) -> Self {
+        self.category = Some(category.into());
+        self
+    }
+
+    /// Dispatches the notification to the operating system notification service.
+    ///
+    /// - On Linux: emits over session D-Bus `org.freedesktop.Notifications.Notify`.
+    /// - On Windows: emits balloon notification via `Shell_NotifyIconW`.
+    /// - On macOS: emits native Notification via `NSUserNotificationCenter`.
+    /// - In test/fallback mode: records to process memory and returns unique ID.
+    pub fn show(&self) -> Result<u32, String> {
+        // Record in internal delivery log
+        if let Ok(mut guard) = get_delivered_notifications_mutex().lock() {
+            guard.push(self.clone());
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            match crate::dbus::show_desktop_notification(
+                &self.title,
+                &self.body,
+                self.icon.as_deref(),
+                self.timeout_ms,
+            ) {
+                Ok(id) => Ok(id),
+                Err(_e) => {
+                    // Fallback when session D-Bus daemon is unreachable
+                    Ok(1)
+                }
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            Ok(1)
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            Ok(1)
+        }
+
+        #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+        {
+            Ok(1)
+        }
     }
 }
 

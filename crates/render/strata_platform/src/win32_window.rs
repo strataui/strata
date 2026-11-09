@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, SetFocus, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_MENU,
     VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
@@ -29,10 +29,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     RegisterClassExW, SetCursor, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage,
     WaitMessage, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP,
     IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT,
-    MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, SWP_NOMOVE, SWP_NOZORDER, SW_SHOW,
+    MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_SHOW,
     WM_CHAR, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
     WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
     WM_SIZE, WNDCLASSEXW, WS_EX_ACCEPTFILES, WS_EX_APPWINDOW, WS_EX_NOREDIRECTIONBITMAP,
     WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
 };
@@ -66,6 +66,24 @@ impl Win32Window {
         unsafe {
             let instance = GetModuleHandleW(std::ptr::null());
             let class_name: Vec<u16> = "StrataEngineWindowClass\0".encode_utf16().collect();
+
+            // Enable Per-Monitor v2 DPI awareness if supported (Windows 10 1703+)
+            static DPI_ONCE: OnceLock<()> = OnceLock::new();
+            DPI_ONCE.get_or_init(|| {
+                let user32 = GetModuleHandleA(b"user32.dll\0".as_ptr());
+                if user32 != 0 {
+                    let set_dpi_ctx = GetProcAddress(
+                        user32,
+                        b"SetProcessDpiAwarenessContext\0".as_ptr(),
+                    );
+                    if let Some(set_dpi_ctx_fn) = set_dpi_ctx {
+                        let set_dpi_ctx: unsafe extern "system" fn(isize) -> windows_sys::Win32::Foundation::BOOL =
+                            std::mem::transmute(set_dpi_ctx_fn);
+                        // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+                        set_dpi_ctx(-4);
+                    }
+                }
+            });
 
             static REGISTER_ONCE: OnceLock<()> = OnceLock::new();
             REGISTER_ONCE.get_or_init(|| {
@@ -307,7 +325,41 @@ impl PlatformWindow for Win32Window {
     }
 
     fn set_mode(&mut self, mode: WindowMode) {
+        let prev = self.state.lock().unwrap().config.mode;
         self.state.lock().unwrap().config.mode = mode;
+        match mode {
+            WindowMode::Maximized => {
+                unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
+                        self.hwnd,
+                        windows_sys::Win32::UI::WindowsAndMessaging::SW_MAXIMIZE,
+                    );
+                }
+                if prev != WindowMode::Maximized {
+                    self.push_event(PlatformEvent::WindowMaximized(true));
+                }
+            }
+            WindowMode::Minimized => {
+                unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
+                        self.hwnd,
+                        windows_sys::Win32::UI::WindowsAndMessaging::SW_MINIMIZE,
+                    );
+                }
+            }
+            WindowMode::Windowed => {
+                unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
+                        self.hwnd,
+                        windows_sys::Win32::UI::WindowsAndMessaging::SW_RESTORE,
+                    );
+                }
+                if prev == WindowMode::Maximized {
+                    self.push_event(PlatformEvent::WindowMaximized(false));
+                }
+            }
+            _ => {}
+        }
     }
 
     fn is_focused(&self) -> bool {
@@ -360,12 +412,35 @@ impl PlatformWindow for Win32Window {
     }
 
     fn poll_events(&mut self) -> Vec<PlatformEvent> {
-        let mut lock = self.state.lock().unwrap();
-        lock.event_queue.drain(..).collect()
+        self.poll_native_events()
     }
 
     fn push_event(&mut self, event: PlatformEvent) {
         self.state.lock().unwrap().event_queue.push_back(event);
+    }
+
+    fn begin_window_drag(&mut self, _x: f32, _y: f32) {
+        unsafe {
+            windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+            windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+                self.hwnd,
+                windows_sys::Win32::UI::WindowsAndMessaging::WM_SYSCOMMAND,
+                (windows_sys::Win32::UI::WindowsAndMessaging::SC_MOVE | 2) as usize,
+                0,
+            );
+        }
+    }
+}
+
+impl crate::window::NativeSurfaceWindow for Win32Window {
+    fn present_surface(
+        &mut self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<(), crate::surface::PresentError> {
+        self.present_bgra(pixels, width, height)
+            .map_err(crate::surface::PresentError::Custom)
     }
 }
 
@@ -496,6 +571,19 @@ unsafe extern "system" fn win32_wnd_proc(
                 lock.redraw_requested = true;
                 lock.event_queue
                     .push_back(PlatformEvent::ScaleFactorChanged { scale_factor });
+
+                if lparam != 0 {
+                    let suggested = *(lparam as *const RECT);
+                    SetWindowPos(
+                        hwnd,
+                        0 as HWND,
+                        suggested.left,
+                        suggested.top,
+                        suggested.right - suggested.left,
+                        suggested.bottom - suggested.top,
+                        SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                }
                 return 0;
             }
             WM_SETFOCUS => {
@@ -511,6 +599,25 @@ unsafe extern "system" fn win32_wnd_proc(
                 lock.event_queue
                     .push_back(PlatformEvent::WindowFocused(false));
                 return 0;
+            }
+            WM_NCHITTEST => {
+                let lock = state.lock().unwrap();
+                if lock.config.decoration == WindowDecoration::ClientSideDecorations {
+                    let screen_x = (lparam & 0xFFFF) as i16 as i32;
+                    let screen_y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
+                    let mut pt = windows_sys::Win32::Foundation::POINT { x: screen_x, y: screen_y };
+                    unsafe {
+                        windows_sys::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
+                    }
+                    let csd = crate::csd::CsdGeometry::default();
+                    let zone = csd.hit_test(
+                        lock.config.width as f32,
+                        lock.config.height as f32,
+                        pt.x as f32,
+                        pt.y as f32,
+                    );
+                    return zone.to_win32_nchittest();
+                }
             }
             WM_MOUSEMOVE => {
                 let x = (lparam & 0xFFFF) as i16 as f32;

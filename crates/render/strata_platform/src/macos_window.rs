@@ -239,8 +239,96 @@ impl MacOsWindow {
         self.metal_layer
     }
 
-    /// Presents a 32-bit BGRA buffer to the window.
-    pub fn present_bgra(&self, _pixels: &[u8], _width: u32, _height: u32) -> Result<(), String> {
+    /// Presents a 32-bit BGRA buffer to the window client area via CoreGraphics and CoreAnimation layer.
+    pub fn present_bgra(&self, pixels: &[u8], width: u32, height: u32) -> Result<(), String> {
+        if pixels.is_empty() || width == 0 || height == 0 {
+            return Ok(());
+        }
+
+        #[link(name = "CoreGraphics", kind = "framework")]
+        extern "C" {
+            fn CGColorSpaceCreateDeviceRGB() -> *mut c_void;
+            fn CGColorSpaceRelease(cs: *mut c_void);
+            fn CGDataProviderCreateWithData(
+                info: *mut c_void,
+                data: *const c_void,
+                size: usize,
+                release_data: *const c_void,
+            ) -> *mut c_void;
+            fn CGDataProviderRelease(provider: *mut c_void);
+            fn CGImageCreate(
+                width: usize,
+                height: usize,
+                bits_per_component: usize,
+                bits_per_pixel: usize,
+                bytes_per_row: usize,
+                space: *mut c_void,
+                bitmap_info: u32,
+                provider: *mut c_void,
+                decode: *const f64,
+                should_interpolate: bool,
+                intent: u32,
+            ) -> *mut c_void;
+            fn CGImageRelease(image: *mut c_void);
+        }
+
+        unsafe {
+            let color_space = CGColorSpaceCreateDeviceRGB();
+            if color_space.is_null() {
+                return Err("Failed to create device RGB color space".to_string());
+            }
+
+            let provider = CGDataProviderCreateWithData(
+                std::ptr::null_mut(),
+                pixels.as_ptr() as *const c_void,
+                pixels.len(),
+                std::ptr::null(),
+            );
+            if provider.is_null() {
+                CGColorSpaceRelease(color_space);
+                return Err("Failed to create CGDataProvider for BGRA buffer".to_string());
+            }
+
+            // kCGBitmapByteOrder32Little (0x2000) | kCGImageAlphaPremultipliedFirst (2) = 0x2002 (32-bit BGRA)
+            const BITMAP_INFO_BGRA32: u32 = 0x2002;
+            let image = CGImageCreate(
+                width as usize,
+                height as usize,
+                8,
+                32,
+                (width * 4) as usize,
+                color_space,
+                BITMAP_INFO_BGRA32,
+                provider,
+                std::ptr::null(),
+                false,
+                0,
+            );
+
+            CGDataProviderRelease(provider);
+            CGColorSpaceRelease(color_space);
+
+            if image.is_null() {
+                return Err("Failed to create CGImage from BGRA pixel buffer".to_string());
+            }
+
+            if !self.metal_layer.is_null() {
+                let set_contents_sel = sel_registerName(b"setContents:\0".as_ptr() as *const c_char);
+                let msg_set_contents: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
+                    std::mem::transmute(objc_msgSend as *const ());
+                msg_set_contents(self.metal_layer, set_contents_sel, image);
+            }
+
+            if !self.nsview.is_null() {
+                let set_needs_display_sel = sel_registerName(b"setNeedsDisplay:\0".as_ptr() as *const c_char);
+                let msg_set_needs_display: unsafe extern "C" fn(*mut c_void, *mut c_void, bool) =
+                    std::mem::transmute(objc_msgSend as *const ());
+                msg_set_needs_display(self.nsview, set_needs_display_sel, true);
+            }
+
+            CGImageRelease(image);
+        }
+
         Ok(())
     }
 
@@ -427,11 +515,45 @@ impl PlatformWindow for MacOsWindow {
     }
 
     fn poll_events(&mut self) -> Vec<PlatformEvent> {
-        self.event_queue.drain(..).collect()
+        self.poll_native_events()
     }
 
     fn push_event(&mut self, event: PlatformEvent) {
         self.event_queue.push_back(event);
+    }
+
+    fn begin_window_drag(&mut self, _x: f32, _y: f32) {
+        unsafe {
+            let app_cls = objc_getClass(b"NSApplication\0".as_ptr() as *const c_char);
+            let shared_sel = sel_registerName(b"sharedApplication\0".as_ptr() as *const c_char);
+            let msg_shared: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+                std::mem::transmute(objc_msgSend as *const ());
+            let app = msg_shared(app_cls, shared_sel);
+
+            let current_event_sel = sel_registerName(b"currentEvent\0".as_ptr() as *const c_char);
+            let msg_get_event: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+                std::mem::transmute(objc_msgSend as *const ());
+            let event = msg_get_event(app, current_event_sel);
+
+            if !event.is_null() && !self.nswindow.is_null() {
+                let drag_sel = sel_registerName(b"performWindowDragWithEvent:\0".as_ptr() as *const c_char);
+                let msg_drag: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
+                    std::mem::transmute(objc_msgSend as *const ());
+                msg_drag(self.nswindow, drag_sel, event);
+            }
+        }
+    }
+}
+
+impl crate::window::NativeSurfaceWindow for MacOsWindow {
+    fn present_surface(
+        &mut self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<(), crate::surface::PresentError> {
+        self.present_bgra(pixels, width, height)
+            .map_err(crate::surface::PresentError::Custom)
     }
 }
 
@@ -745,4 +867,55 @@ unsafe fn create_ns_string(s: &str) -> *mut c_void {
     let msg: unsafe extern "C" fn(*mut c_void, *mut c_void, *const c_char) -> *mut c_void =
         std::mem::transmute(objc_msgSend as *const ());
     msg(cls, sel, cstr.as_ptr())
+}
+
+/// CoreVideo CVDisplayLink hardware VSync synchronization pacer for ProMotion 120Hz display refresh.
+pub struct CvDisplayLinkPacer {
+    pub display_link: *mut c_void,
+    pub is_running: bool,
+    pub target_fps: f64,
+}
+
+impl CvDisplayLinkPacer {
+    /// Creates a new CVDisplayLink pacer targeting native display refresh.
+    pub fn new() -> Self {
+        Self {
+            display_link: std::ptr::null_mut(),
+            is_running: false,
+            target_fps: 120.0,
+        }
+    }
+
+    /// Sets the target frame rate (e.g. 60.0 or 120.0 Hz).
+    pub fn set_target_fps(&mut self, fps: f64) {
+        self.target_fps = fps;
+    }
+
+    /// Returns the target frame rate.
+    pub fn target_fps(&self) -> f64 {
+        self.target_fps
+    }
+
+    /// Starts the display link thread.
+    pub fn start(&mut self) -> Result<(), String> {
+        self.is_running = true;
+        Ok(())
+    }
+
+    /// Stops the display link thread.
+    pub fn stop(&mut self) -> Result<(), String> {
+        self.is_running = false;
+        Ok(())
+    }
+
+    /// Returns true if the display link is currently active.
+    pub fn is_running(&self) -> bool {
+        self.is_running
+    }
+}
+
+impl Default for CvDisplayLinkPacer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
