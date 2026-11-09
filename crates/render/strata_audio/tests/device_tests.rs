@@ -159,3 +159,42 @@ fn test_audio_host_and_device_enumeration() {
         }
     }
 }
+
+#[test]
+fn test_lock_free_spsc_ring_buffer_concurrency() {
+    use strata_audio::SpscRingBuffer;
+    use std::thread;
+
+    const COUNT: usize = 100_000;
+    let (mut producer, mut consumer) = SpscRingBuffer::<usize>::new(1024).split();
+
+    let sender = thread::spawn(move || {
+        for i in 0..COUNT {
+            let mut item = i;
+            while let Err(returned) = producer.push(item) {
+                item = returned;
+                std::hint::spin_loop();
+            }
+        }
+    });
+
+    let receiver = thread::spawn(move || {
+        let mut received = Vec::with_capacity(COUNT);
+        while received.len() < COUNT {
+            if let Some(item) = consumer.pop() {
+                received.push(item);
+            } else {
+                std::hint::spin_loop();
+            }
+        }
+        received
+    });
+
+    sender.join().expect("sender thread failed");
+    let received = receiver.join().expect("receiver thread failed");
+
+    assert_eq!(received.len(), COUNT);
+    for (idx, &val) in received.iter().enumerate() {
+        assert_eq!(val, idx, "FIFO sequence corrupted at index {}", idx);
+    }
+}
