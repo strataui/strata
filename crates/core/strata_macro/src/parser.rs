@@ -9,17 +9,25 @@ const VOID_TAGS: &[&str] = &[
     "track", "wbr",
 ];
 
+/// Maximum allowed RSX element hierarchy nesting depth (CWE-674 recursion prevention).
+pub const MAX_MACRO_DEPTH: usize = 256;
+
 pub fn parse_rsx(cursor: &mut TokenCursor) -> Result<Vec<RsxNode>, String> {
     let mut nodes = Vec::new();
     while !cursor.is_eof() {
-        nodes.push(parse_node(cursor)?);
+        nodes.push(parse_node(cursor, 0)?);
     }
     Ok(nodes)
 }
 
-fn parse_node(cursor: &mut TokenCursor) -> Result<RsxNode, String> {
+fn parse_node(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNode, String> {
+    if depth > MAX_MACRO_DEPTH {
+        return Err(format!(
+            "Recursion limit exceeded: RSX element hierarchy exceeds MAX_MACRO_DEPTH ({MAX_MACRO_DEPTH}) (CWE-674 prevention)"
+        ));
+    }
     if cursor.peek_punct('<') {
-        parse_tag_or_fragment(cursor)
+        parse_tag_or_fragment(cursor, depth)
     } else if cursor.peek_group(Delimiter::Brace).is_some() {
         let g = cursor.consume_group(Delimiter::Brace).unwrap();
         Ok(RsxNode::Expression(g.stream()))
@@ -35,12 +43,12 @@ fn parse_node(cursor: &mut TokenCursor) -> Result<RsxNode, String> {
     }
 }
 
-fn parse_tag_or_fragment(cursor: &mut TokenCursor) -> Result<RsxNode, String> {
+fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNode, String> {
     cursor.consume_punct('<');
 
     // Case 1: Fragment opening `<>`
     if cursor.consume_punct('>') {
-        return parse_fragment(cursor);
+        return parse_fragment(cursor, depth);
     }
 
     // Case 2: Unexpected closing tag `</...>`
@@ -182,7 +190,7 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor) -> Result<RsxNode, String> {
             }
         }
 
-        push_child_node(&mut children, parse_node(cursor)?);
+        push_child_node(&mut children, parse_node(cursor, depth + 1)?);
     }
 
     if is_custom_component {
@@ -222,7 +230,7 @@ fn push_child_node(children: &mut Vec<RsxNode>, next_node: RsxNode) {
     }
 }
 
-fn parse_fragment(cursor: &mut TokenCursor) -> Result<RsxNode, String> {
+fn parse_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNode, String> {
     let mut children = Vec::new();
     loop {
         if cursor.is_eof() {
@@ -236,7 +244,7 @@ fn parse_fragment(cursor: &mut TokenCursor) -> Result<RsxNode, String> {
             break;
         }
 
-        push_child_node(&mut children, parse_node(cursor)?);
+        push_child_node(&mut children, parse_node(cursor, depth + 1)?);
     }
     Ok(RsxNode::Fragment(children))
 }

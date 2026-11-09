@@ -383,6 +383,14 @@ impl ParsedUrl {
             return Err(FetchError::InvalidUrl(format!("Missing host in URL: {url}")));
         }
 
+        // CWE-319 / Goal 27: Enforce strict TLS transport on HTTPS standard port 443.
+        // Cleartext transmission on port 443 is forbidden.
+        if scheme == "http" && port == 443 {
+            return Err(FetchError::InvalidUrl(format!(
+                "Cleartext transmission on HTTPS standard port 443 is forbidden (CWE-319): {url}"
+            )));
+        }
+
         Ok(Self {
             scheme: scheme.to_string(),
             host,
