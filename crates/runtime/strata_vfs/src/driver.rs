@@ -6,6 +6,19 @@ use std::time::UNIX_EPOCH;
 use crate::resolver::resolve_root_dir;
 use crate::types::{FsError, VfsMetadata, VfsPath};
 
+/// Checks whether a path contains Windows UNC, NT device namespace, or extended prefix injections.
+pub fn is_windows_unc_device_namespace(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.contains(r"\\.\")
+        || lower.contains(r"\\?\")
+        || lower.contains(r"\??\")
+        || lower.contains("//./")
+        || lower.contains("//?/")
+        || lower.contains("/??/")
+        || lower.starts_with(r"\\")
+        || lower.starts_with("//")
+}
+
 /// Identifies legacy DOS and Windows device names that bypass standard filesystem sandboxes.
 pub fn is_windows_reserved_device(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or(name);
@@ -15,8 +28,9 @@ pub fn is_windows_reserved_device(name: &str) -> bool {
         "CON" | "PRN" | "AUX" | "NUL"
             | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
             | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
-    )
+    ) || is_windows_unc_device_namespace(name)
 }
+
 
 /// Canonicalizes existing ancestors of a path and appends remaining non-existent components.
 fn canonicalize_ancestor(path: &Path) -> Result<PathBuf, FsError> {
@@ -64,8 +78,17 @@ pub fn resolve_secure_physical_path(path: &VfsPath, create_root_if_missing: bool
         FsError::IoError(format!("Failed to canonicalize sandbox root {}: {e}", base.display()))
     })?;
 
+    let raw_subpath = path.subpath().to_string_lossy();
+    if is_windows_unc_device_namespace(&raw_subpath) {
+        return Err(FsError::SecurityViolation(format!(
+            "Illegal Windows UNC or NT device namespace in sandboxed path: {}",
+            path.to_uri()
+        )));
+    }
+
     let mut current = canonical_base.clone();
     for comp in path.subpath().components() {
+
         match comp {
             Component::Normal(c) => {
                 let comp_str = c.to_string_lossy();

@@ -253,9 +253,26 @@ fn test_vfs_windows_drive_letters_ads_and_dos_devices_rejected() {
         "Expected ADS colon path to be rejected with SecurityViolation, got {res:?}"
     );
 
+    // 4. Windows UNC device namespaces rejected
+    for unc in &[
+        r"\\.\COM1",
+        r"\\?\C:\Windows\System32",
+        r"\??\C:\Secret",
+        r"//./PhysicalDrive0",
+        r"//?/Volume{123}",
+    ] {
+        let unc_path = VfsPath::new(VfsRoot::AppData, std::path::PathBuf::from(unc));
+        let res = strata_vfs::driver::to_physical_path(&unc_path);
+        assert!(
+            matches!(res, Err(FsError::SecurityViolation(_))),
+            "Expected UNC device path {unc} to be rejected with SecurityViolation, got {res:?}"
+        );
+    }
+
     let _ = std::fs::remove_dir_all(&test_dir);
     clear_test_overrides();
 }
+
 
 #[test]
 fn test_app_id_validation_and_path_traversal_prevention() {
