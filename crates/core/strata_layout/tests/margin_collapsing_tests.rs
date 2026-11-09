@@ -222,3 +222,57 @@ fn test_bfc_boundary_prevents_parent_child_collapsing() {
         "BFC container top margin remains 10"
     );
 }
+
+#[test]
+fn test_nested_bfc_child_prevents_margin_collapsing() {
+    // Parent has normal in-flow block layout (overflow: visible), no border, no padding
+    let mut parent_style = ComputedStyle::default();
+    parent_style.display = Display::Block;
+    parent_style.width = Dimension::Px(400.0);
+    parent_style.height = Dimension::Auto;
+    parent_style.margin.top = 15.0;
+    parent_style.margin.bottom = 20.0;
+
+    // First child establishes BFC via overflow: hidden
+    let mut bfc_child_style = ComputedStyle::default();
+    bfc_child_style.display = Display::Block;
+    bfc_child_style.width = Dimension::Px(200.0);
+    bfc_child_style.height = Dimension::Px(50.0);
+    bfc_child_style.overflow_x = Overflow::Hidden;
+    bfc_child_style.overflow_y = Overflow::Hidden;
+    bfc_child_style.margin.top = 30.0;
+    bfc_child_style.margin.bottom = 25.0;
+
+    let mut container = LayoutNode::with_children(
+        parent_style,
+        vec![LayoutNode::new(bfc_child_style)],
+    );
+    container.compute_layout(400.0, 600.0);
+
+    // 1. Under W3C CSS 2.1 §8.3.1, child establishing BFC must NOT collapse its top margin with parent
+    assert_eq!(
+        container.style.margin.top,
+        15.0,
+        "Parent top margin must remain uncollapsed (15.0) when child establishes BFC"
+    );
+    assert_eq!(
+        container.children[0].geometry.border_box.y,
+        30.0,
+        "BFC child must sit at y = 30.0 inside parent due to its uncollapsed top margin"
+    );
+
+    // 2. Child establishing BFC must NOT collapse its bottom margin with parent
+    assert_eq!(
+        container.style.margin.bottom,
+        20.0,
+        "Parent bottom margin must remain uncollapsed (20.0) when child establishes BFC"
+    );
+    // Parent height must enclose the child plus child's uncollapsed top and bottom margins:
+    // current_y = child.top_margin(30) + child.height(50) + child.bottom_margin(25) = 105.0
+    assert_eq!(
+        container.geometry.border_box.height,
+        105.0,
+        "Parent auto height must enclose child plus uncollapsed top and bottom margins (105.0)"
+    );
+}
+

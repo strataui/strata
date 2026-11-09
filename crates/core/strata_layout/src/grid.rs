@@ -586,6 +586,11 @@ pub fn solve_grid_with_subgrid_guarded(
     container.geometry.snap_to_pixel();
 }
 
+#[inline(always)]
+fn snap_subpixel_grid(v: f32) -> f32 {
+    (v * 64.0).round() / 64.0
+}
+
 fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f32> {
     let count = tracks.len();
     if count == 0 {
@@ -606,13 +611,13 @@ fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f
     for (i, track) in tracks.iter().enumerate() {
         match *track {
             GridTrack::Px(px) => {
-                let val = if is_tui { px.round() } else { px };
+                let val = if is_tui { px.round() } else { snap_subpixel_grid(px) };
                 resolved[i] = val;
                 total_fixed += val;
             }
             GridTrack::Percent(pct) => {
                 let px = available_space * (pct / 100.0);
-                let val = if is_tui { px.round() } else { px };
+                let val = if is_tui { px.round() } else { snap_subpixel_grid(px) };
                 resolved[i] = val;
                 total_fixed += val;
             }
@@ -631,7 +636,7 @@ fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f
                     GridTrackBreadth::Percent(pct) => available_space * (pct / 100.0),
                     _ => 0.0,
                 };
-                let min_px = if is_tui { min_px.round() } else { min_px };
+                let min_px = if is_tui { min_px.round() } else { snap_subpixel_grid(min_px) };
                 match max_b {
                     GridTrackBreadth::Fr(fr) => {
                         resolved[i] = min_px;
@@ -640,13 +645,13 @@ fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f
                     }
                     GridTrackBreadth::Px(px) => {
                         let sz = px.max(min_px);
-                        let val = if is_tui { sz.round() } else { sz };
+                        let val = if is_tui { sz.round() } else { snap_subpixel_grid(sz) };
                         resolved[i] = val;
                         total_fixed += val;
                     }
                     GridTrackBreadth::Percent(pct) => {
                         let sz = (available_space * (pct / 100.0)).max(min_px);
-                        let val = if is_tui { sz.round() } else { sz };
+                        let val = if is_tui { sz.round() } else { snap_subpixel_grid(sz) };
                         resolved[i] = val;
                         total_fixed += val;
                     }

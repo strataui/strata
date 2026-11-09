@@ -342,26 +342,42 @@ impl ContentSecurityPolicy {
         })
     }
 
-    /// Resolves the effective sources for a requested directive kind, falling back to default-src.
-    fn effective_sources(&self, primary: DirectiveKind) -> Option<&[SourceExpr]> {
+    /// Resolves the effective sources for a requested directive kind, falling back per W3C CSP Level 3.
+    pub fn effective_sources(&self, primary: DirectiveKind) -> Option<&[SourceExpr]> {
         if let Some(sources) = self.directives.get(&primary) {
             return Some(sources);
         }
 
-        let fallback = match primary {
-            DirectiveKind::ScriptSrcElem | DirectiveKind::ScriptSrcAttr => DirectiveKind::ScriptSrc,
-            DirectiveKind::StyleSrcElem | DirectiveKind::StyleSrcAttr => DirectiveKind::StyleSrc,
-            _ => DirectiveKind::DefaultSrc,
+        // Full W3C CSP Level 3 directive fallback cascade:
+        // - script-src-elem -> script-src -> default-src
+        // - script-src-attr -> script-src -> default-src
+        // - style-src-elem -> style-src -> default-src
+        // - style-src-attr -> style-src -> default-src
+        // - worker-src -> script-src -> default-src
+        // - frame-src -> default-src
+        // - img-src, connect-src, font-src, object-src, media-src -> default-src
+        let fallbacks: &[DirectiveKind] = match primary {
+            DirectiveKind::ScriptSrcElem | DirectiveKind::ScriptSrcAttr => {
+                &[DirectiveKind::ScriptSrc, DirectiveKind::DefaultSrc]
+            }
+            DirectiveKind::StyleSrcElem | DirectiveKind::StyleSrcAttr => {
+                &[DirectiveKind::StyleSrc, DirectiveKind::DefaultSrc]
+            }
+            DirectiveKind::WorkerSrc => {
+                &[DirectiveKind::ScriptSrc, DirectiveKind::DefaultSrc]
+            }
+            DirectiveKind::ScriptSrc | DirectiveKind::StyleSrc | DirectiveKind::ImgSrc
+            | DirectiveKind::ConnectSrc | DirectiveKind::FontSrc | DirectiveKind::ObjectSrc
+            | DirectiveKind::MediaSrc | DirectiveKind::FrameSrc => {
+                &[DirectiveKind::DefaultSrc]
+            }
+            DirectiveKind::DefaultSrc | DirectiveKind::BaseUri | DirectiveKind::FormAction => {
+                &[]
+            }
         };
 
-        if fallback != primary {
+        for &fallback in fallbacks {
             if let Some(sources) = self.directives.get(&fallback) {
-                return Some(sources);
-            }
-        }
-
-        if fallback != DirectiveKind::DefaultSrc {
-            if let Some(sources) = self.directives.get(&DirectiveKind::DefaultSrc) {
                 return Some(sources);
             }
         }
@@ -431,7 +447,54 @@ impl ContentSecurityPolicy {
             }
         }
 
+        // W3C CSP Level 3 §strict-dynamic:
+        // When 'strict-dynamic' is present in the policy, host and scheme sources
+        // are ignored. Only scripts with valid nonces/hashes or dynamically created scripts are allowed.
+        let has_strict_dynamic = sources.iter().any(|s| matches!(s, SourceExpr::StrictDynamic));
+        if has_strict_dynamic {
+            return false;
+        }
+
         self.matches_source_list(sources, page_origin, script_url)
+    }
+
+    /// Validates a resource request against the policy, returning Ok(()) if permitted or an error message.
+    pub fn enforce(
+        &self,
+        directive: DirectiveKind,
+        page_origin: &str,
+        target_url: &str,
+        nonce: Option<&str>,
+    ) -> Result<(), String> {
+        let sources = match self.effective_sources(directive) {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+
+        if sources.iter().any(|s| matches!(s, SourceExpr::None)) {
+            return Err(format!("Blocked by CSP: directive {:?} specifies 'none'", directive));
+        }
+
+        if let Some(n) = nonce {
+            if sources.iter().any(|s| match s {
+                SourceExpr::Nonce(expected) => expected == n,
+                _ => false,
+            }) {
+                return Ok(());
+            }
+        }
+
+        if matches!(directive, DirectiveKind::ScriptSrc | DirectiveKind::ScriptSrcElem)
+            && sources.iter().any(|s| matches!(s, SourceExpr::StrictDynamic))
+        {
+            return Err("Blocked by CSP: 'strict-dynamic' active without matching nonce/hash".into());
+        }
+
+        if self.matches_source_list(sources, page_origin, target_url) {
+            Ok(())
+        } else {
+            Err(format!("Blocked by CSP: URL {} violates {:?}", target_url, directive))
+        }
     }
 
     /// Evaluates whether `eval()` and `new Function()` dynamic JavaScript execution is permitted.
@@ -658,3 +721,6 @@ pub fn extract_meta_csp(html: &str) -> Option<ContentSecurityPolicy> {
     }
     None
 }
+
+/// Convenience alias for ContentSecurityPolicy.
+pub type CspPolicy = ContentSecurityPolicy;
