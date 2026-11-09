@@ -12,12 +12,16 @@ pub use parser::*;
 pub use scope::*;
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use crate::promise::{JsPromise, PromiseState, RejectFn, ResolveFn};
 use crate::{ClosureHandle, JsValue, SymbolId};
 
 pub type WeakObjectMap = HashMap<u64, std::rc::Weak<RefCell<BTreeMap<String, JsValue>>>>;
+
+thread_local! {
+    pub(crate) static ENGINE_TIMER_CALLBACKS: RefCell<VecDeque<(JsValue, Vec<JsValue>)>> = const { RefCell::new(VecDeque::new()) };
+}
 
 pub struct JsEngine {
     pub globals: BTreeMap<String, JsValue>,
@@ -103,6 +107,34 @@ impl JsEngine {
         let mut fetch_obj = BTreeMap::new();
         fetch_obj.insert("__fn__".to_string(), JsValue::String("fetch".to_string()));
         globals.insert("fetch".to_string(), JsValue::new_object(fetch_obj));
+
+        let mut set_timeout_obj = BTreeMap::new();
+        set_timeout_obj.insert("__fn__".to_string(), JsValue::String("setTimeout".to_string()));
+        let set_timeout_val = JsValue::new_object(set_timeout_obj);
+        globals.insert("setTimeout".to_string(), set_timeout_val.clone());
+
+        let mut clear_timeout_obj = BTreeMap::new();
+        clear_timeout_obj.insert("__fn__".to_string(), JsValue::String("clearTimeout".to_string()));
+        let clear_timeout_val = JsValue::new_object(clear_timeout_obj);
+        globals.insert("clearTimeout".to_string(), clear_timeout_val.clone());
+
+        let mut set_interval_obj = BTreeMap::new();
+        set_interval_obj.insert("__fn__".to_string(), JsValue::String("setInterval".to_string()));
+        let set_interval_val = JsValue::new_object(set_interval_obj);
+        globals.insert("setInterval".to_string(), set_interval_val.clone());
+
+        let mut clear_interval_obj = BTreeMap::new();
+        clear_interval_obj.insert("__fn__".to_string(), JsValue::String("clearInterval".to_string()));
+        let clear_interval_val = JsValue::new_object(clear_interval_obj);
+        globals.insert("clearInterval".to_string(), clear_interval_val.clone());
+
+        if let Some(JsValue::Object(win_map)) = globals.get("window") {
+            let mut wb = win_map.borrow_mut();
+            wb.insert("setTimeout".to_string(), set_timeout_val);
+            wb.insert("clearTimeout".to_string(), clear_timeout_val);
+            wb.insert("setInterval".to_string(), set_interval_val);
+            wb.insert("clearInterval".to_string(), clear_interval_val);
+        }
 
         // Built-in prototypes (W3C / ECMAScript specification)
         let mut object_prototype = BTreeMap::new();
@@ -434,6 +466,27 @@ impl JsEngine {
         self.next_promise_id += 1;
         self.promises.insert(pid, promise.clone());
         JsValue::Promise(promise)
+    }
+
+    pub fn tick_engine_timers(&mut self) -> usize {
+        let fired_timers = crate::web::tick_timers();
+        let mut executed = 0;
+        loop {
+            let next_cb = ENGINE_TIMER_CALLBACKS.with(|q| q.borrow_mut().pop_front());
+            match next_cb {
+                Some((cb, args)) => {
+                    let _ = self.call_value(&cb, args);
+                    crate::promise::drain_microtasks();
+                    executed += 1;
+                }
+                None => break,
+            }
+        }
+        fired_timers + executed
+    }
+
+    pub fn tick_timers(&mut self) -> usize {
+        self.tick_engine_timers()
     }
 
     pub fn resolve_constructor(&self, class_name: &str) -> Option<(Vec<String>, Vec<Stmt>, Option<String>)> {

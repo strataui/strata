@@ -869,22 +869,13 @@ impl JsEngine {
 
                 let promise_opt = match &val {
                     JsValue::Promise(p) => Some(p.clone()),
-                    JsValue::Object(ref map) => {
-                        let b = map.borrow();
-                        if b.get("__is_promise__") == Some(&JsValue::Bool(true)) {
-                            b.get("__promise_id__")
-                                .and_then(|v| v.as_f64())
-                                .map(|n| n as u64)
-                                .and_then(|pid| self.promises.get(&pid).cloned())
-                        } else {
-                            None
-                        }
-                    }
                     _ => None,
                 };
 
                 if let Some(promise) = promise_opt {
                     // Cooperative event loop progression until promise settles or progress halts
+                    let max_wait = std::time::Duration::from_secs(5);
+                    let start = std::time::Instant::now();
                     loop {
                         match promise.state() {
                             PromiseState::Fulfilled(res) => return Ok(res),
@@ -893,15 +884,26 @@ impl JsEngine {
                                 return Ok(JsValue::Undefined);
                             }
                             PromiseState::Pending => {
-                                let fired = crate::web::tick_timers();
                                 let drained = drain_microtasks();
-                                if fired == 0 && drained == 0 {
-                                    std::thread::yield_now();
-                                    let drained2 = drain_microtasks();
-                                    let fired2 = crate::web::tick_timers();
-                                    if drained2 == 0 && fired2 == 0 {
+                                let fired = self.tick_engine_timers();
+                                if drained > 0 || fired > 0 {
+                                    continue;
+                                }
+                                if let Some(wait_dur) = crate::web::time_until_next_timer() {
+                                    if start.elapsed() > max_wait {
                                         break;
                                     }
+                                    let sleep_chunk = wait_dur.min(std::time::Duration::from_millis(5));
+                                    if sleep_chunk > std::time::Duration::ZERO {
+                                        std::thread::sleep(sleep_chunk);
+                                    } else {
+                                        std::thread::yield_now();
+                                    }
+                                } else {
+                                    if start.elapsed().as_millis() > 50 {
+                                        break;
+                                    }
+                                    std::thread::sleep(std::time::Duration::from_millis(1));
                                 }
                             }
                         }
@@ -1228,17 +1230,6 @@ impl JsEngine {
                                             match item {
                                                 JsValue::Promise(p) => {
                                                     promise_list.push(p.clone());
-                                                }
-                                                JsValue::Object(ref map) => {
-                                                    if map.borrow().get("__is_promise__") == Some(&JsValue::Bool(true)) {
-                                                        if let Some(JsValue::Number(pid_num)) = map.borrow().get("__promise_id__") {
-                                                            if let Some(p) = self.promises.get(&(*pid_num as u64)).cloned() {
-                                                                promise_list.push(p);
-                                                                continue;
-                                                            }
-                                                        }
-                                                    }
-                                                    promise_list.push(JsPromise::resolve(item.clone()));
                                                 }
                                                 _ => {
                                                     promise_list.push(JsPromise::resolve(item.clone()));
@@ -2123,14 +2114,6 @@ impl JsEngine {
                     // Promise .then / .catch / .finally with authentic JsValue::Promise support
                     let promise_opt = match &obj_val {
                         JsValue::Promise(p) => Some(p.clone()),
-                        JsValue::Object(ref map) => {
-                            let b = map.borrow();
-                            if b.get("__is_promise__") == Some(&JsValue::Bool(true)) {
-                                b.get("__promise_id__").and_then(|v| v.as_f64()).map(|n| n as u64).and_then(|pid| self.promises.get(&pid).cloned())
-                            } else {
-                                None
-                            }
-                        }
                         _ => None,
                     };
                     if let Some(promise) = promise_opt {
@@ -2169,22 +2152,6 @@ impl JsEngine {
                                         }
                                         drain_microtasks();
                                         return Ok(self.create_promise_value(next_promise));
-                                    }
-                                    if let JsValue::Object(ref m) = next_val {
-                                        let mb = m.borrow();
-                                        if mb.get("__is_promise__") == Some(&JsValue::Bool(true)) {
-                                            if let Some(sub_pid) = mb.get("__promise_id__").and_then(|v| v.as_f64()).map(|n| n as u64) {
-                                                if let Some(sub_p) = self.promises.get(&sub_pid).cloned() {
-                                                    match sub_p.state() {
-                                                        PromiseState::Fulfilled(sv) => resolve(sv),
-                                                        PromiseState::Rejected(se) => reject(se),
-                                                        PromiseState::Pending => resolve(next_val.clone()),
-                                                    }
-                                                    drain_microtasks();
-                                                    return Ok(self.create_promise_value(next_promise));
-                                                }
-                                            }
-                                        }
                                     }
                                     resolve(next_val);
                                 }
@@ -2755,9 +2722,6 @@ impl JsEngine {
                 fn_map.insert("__fn__".to_string(), JsValue::String(format!("__promise_method_{key}")));
                 return Ok(JsValue::new_object(fn_map));
             }
-            if key == "__is_promise__" {
-                return Ok(JsValue::Bool(true));
-            }
             if key == "Symbol(Symbol.toStringTag)" || key == "toStringTag" {
                 return Ok(JsValue::String("Promise".to_string()));
             }
@@ -3132,11 +3096,6 @@ impl JsEngine {
             if let JsValue::Promise(_) = ret {
                 return Ok(ret);
             }
-            if let JsValue::Object(ref map) = ret {
-                if map.borrow().get("__is_promise__") == Some(&JsValue::Bool(true)) {
-                    return Ok(ret);
-                }
-            }
             let p = JsPromise::resolve(ret);
             return Ok(self.create_promise_value(p));
         }
@@ -3427,6 +3386,44 @@ impl JsEngine {
                 String::new()
             };
             return self.create_regex_value(&pat, &flg);
+        }
+
+        if name == "setTimeout" {
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let delay_ms = args.get(1).and_then(|v| v.as_f64()).map(|n| n.max(0.0) as u64).unwrap_or(0);
+            let extra_args = if args.len() > 2 { args[2..].to_vec() } else { Vec::new() };
+            let timer_id = crate::web::set_timeout(move || {
+                crate::engine::ENGINE_TIMER_CALLBACKS.with(|q| {
+                    q.borrow_mut().push_back((callback, extra_args));
+                });
+            }, delay_ms);
+            return Ok(JsValue::Number(timer_id as f64));
+        }
+
+        if name == "clearTimeout" {
+            if let Some(id_num) = args.first().and_then(|v| v.as_f64()) {
+                crate::web::clear_timeout(id_num as usize);
+            }
+            return Ok(JsValue::Undefined);
+        }
+
+        if name == "setInterval" {
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let interval_ms = args.get(1).and_then(|v| v.as_f64()).map(|n| n.max(0.0) as u64).unwrap_or(0);
+            let extra_args = if args.len() > 2 { args[2..].to_vec() } else { Vec::new() };
+            let timer_id = crate::web::set_interval(move || {
+                crate::engine::ENGINE_TIMER_CALLBACKS.with(|q| {
+                    q.borrow_mut().push_back((callback.clone(), extra_args.clone()));
+                });
+            }, interval_ms);
+            return Ok(JsValue::Number(timer_id as f64));
+        }
+
+        if name == "clearInterval" {
+            if let Some(id_num) = args.first().and_then(|v| v.as_f64()) {
+                crate::web::clear_interval(id_num as usize);
+            }
+            return Ok(JsValue::Undefined);
         }
 
         if name == "fetch" {

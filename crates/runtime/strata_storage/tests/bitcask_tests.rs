@@ -19,7 +19,6 @@ fn test_torn_write_recovery() {
     // Simulate a crash/torn write: append 9 corrupted bytes to the WAL tail
     {
         let mut f = OpenOptions::new()
-            .write(true)
             .append(true)
             .open(&test_wal)
             .expect("Failed to open for corrupt append");

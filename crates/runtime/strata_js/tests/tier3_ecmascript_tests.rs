@@ -413,3 +413,41 @@ fn test_async_await_cooperative_settlement() {
 
     assert_eq!(engine.globals.get("result"), Some(&JsValue::Number(42.0)));
 }
+
+#[test]
+fn test_async_await_timer_progression() {
+    let mut engine = JsEngine::new();
+    let script = r#"
+        var finished = false;
+        var message = "";
+        async function main() {
+            var res = await new Promise(function(resolve) {
+                setTimeout(function() {
+                    resolve("success");
+                }, 50);
+            });
+            message = res;
+            finished = true;
+        }
+        main();
+    "#;
+    engine.eval(script).expect("eval async await timer progression");
+    assert_eq!(engine.globals.get("finished"), Some(&JsValue::Bool(true)));
+    assert_eq!(engine.globals.get("message"), Some(&JsValue::String("success".to_string())));
+}
+
+#[test]
+fn test_no_promise_dictionary_tagging() {
+    let mut engine = JsEngine::new();
+    let script = r#"
+        var p = new Promise(function(resolve) {
+            resolve(123);
+        });
+        var isPromiseTagged = (p.__is_promise__ === true);
+        var hasPromiseId = (p.__promise_id__ !== undefined);
+    "#;
+    engine.eval(script).expect("eval promise tagging check");
+    assert_eq!(engine.globals.get("isPromiseTagged"), Some(&JsValue::Bool(false)));
+    assert_eq!(engine.globals.get("hasPromiseId"), Some(&JsValue::Bool(false)));
+}
+
