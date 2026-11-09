@@ -426,8 +426,19 @@ impl GpuSlugTextPipeline {
         self.total_curves = 0;
     }
 
+    /// Advances and returns the hardware synchronization fence.
+    pub fn sync_barrier(&self) -> u64 {
+        self.buffer.sync_barrier()
+    }
+
+    /// Checks if a hardware synchronization fence has been signaled.
+    pub fn is_fence_synchronized(&self, fence: u64) -> bool {
+        self.buffer.is_fence_synchronized(fence)
+    }
+
     /// Compiles all DrawText commands in a DisplayList into the Slug GPU buffer.
     pub fn compile_display_list(
+
         &mut self,
         list: &DisplayList,
         viewport_width: f32,

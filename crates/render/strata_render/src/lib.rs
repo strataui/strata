@@ -82,8 +82,10 @@ pub use rasterizer::{sd_rounded_rect, sdf_coverage, FrameBuffer, Rasterizer};
 pub use scene3d::{Camera3D, Geometry3D, Light3D, Material3D, Mesh3D, Scene3D, Transform3D};
 pub use shared_target::{render_hybrid_frame, SharedRenderTarget};
 pub use swapchain::{
-    PresentError, SoftwareSurfacePresenter, SurfacePresenter, SwapchainCompositor, SwapchainFormat,
+    HardwareBackend, HardwareSwapchainPresenter, PresentError, PresentMode,
+    SoftwareSurfacePresenter, SurfacePresenter, SwapchainCompositor, SwapchainFormat,
 };
+
 pub use tiling::{DEFAULT_TILE_SIZE, OcclusionTracker, Tile, TileCoord, TilingSet};
 pub use gpu_context::{
     GpuAdapter, GpuBackend, GpuBufferHandle, GpuBufferUsage, GpuCommandEncoder, GpuContext,

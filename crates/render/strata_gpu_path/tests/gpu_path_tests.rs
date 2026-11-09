@@ -245,6 +245,10 @@ fn test_slug_font_shader_and_glyph_buffer() {
     assert!(WGSL_SLUG_FONT_SHADER.contains("GpuGlyphCurve"));
     assert!(WGSL_SLUG_FONT_SHADER.contains("@vertex"));
     assert!(WGSL_SLUG_FONT_SHADER.contains("@fragment"));
+    assert!(WGSL_SLUG_FONT_SHADER.contains("arrayLength(&glyph_curves)"));
+
+    assert_eq!(strata_gpu_path::MAX_GLYPH_CURVES, 1_048_576);
+    assert_eq!(strata_gpu_path::MAX_GLYPH_INSTANCES, 65_536);
 
     let glyph = AnalyticGlyph {
         char_code: 'A',
@@ -257,19 +261,26 @@ fn test_slug_font_shader_and_glyph_buffer() {
     };
 
     let mut buffer = SlugGlyphBuffer::new();
-    buffer.push_glyph(
+    let admitted = buffer.push_glyph(
         &glyph,
         Rect2D::new(100.0, 100.0, 124.0, 132.0),
         [1.0, 1.0, 1.0, 1.0],
         Rect2D::new(0.0, 0.0, 1920.0, 1080.0),
     );
+    assert!(admitted);
 
     assert_eq!(buffer.instances.len(), 1);
     assert_eq!(buffer.curves.len(), 2);
     assert_eq!(buffer.instances[0].curve_range, [0, 2]);
     assert!(!buffer.instances_as_bytes().is_empty());
     assert!(!buffer.curves_as_bytes().is_empty());
+
+    let fence1 = buffer.sync_barrier();
+    assert_eq!(fence1, 1);
+    assert!(buffer.is_fence_synchronized(1));
+    assert!(!buffer.is_fence_synchronized(2));
 }
+
 
 #[test]
 fn test_geometry_types_bidirectional_conversions() {

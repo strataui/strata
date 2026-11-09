@@ -47,6 +47,7 @@ pub use text::{
     measure_text_bounds_with_white_space,
 };
 pub use tree::{
+    clear_layout_overflow, last_layout_overflow, record_layout_overflow, set_on_layout_overflow,
     FillRule, ImageResource, LayoutDepthGuard, LayoutNode, StrokeLineCap, StrokeLineJoin, SvgItem,
     MAX_LAYOUT_DEPTH,
 };

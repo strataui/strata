@@ -1,5 +1,6 @@
 //! Layout tree node definition and top-level formatting context dispatcher.
 
+use std::cell::{Cell, RefCell};
 use crate::geometry::LayoutGeometry;
 use strata_style::types::{ComputedStyle, Display};
 
@@ -147,9 +148,49 @@ impl LayoutDepthGuard {
     }
 
     #[inline]
+    pub fn max_depth(&self) -> usize {
+        self.max_depth
+    }
+
+    #[inline]
     pub fn is_exhausted(&self) -> bool {
         self.depth >= self.max_depth
     }
+}
+
+type LayoutOverflowCallback = Box<dyn Fn(usize, usize) + Send + Sync>;
+
+thread_local! {
+    static LAYOUT_OVERFLOW_CALLBACK: RefCell<Option<LayoutOverflowCallback>> = const { RefCell::new(None) };
+    static LAST_LAYOUT_OVERFLOW: Cell<Option<(usize, usize)>> = const { Cell::new(None) };
+}
+
+/// Registers an event callback triggered when layout depth exceeds MAX_LAYOUT_DEPTH.
+pub fn set_on_layout_overflow<F: Fn(usize, usize) + Send + Sync + 'static>(cb: Option<F>) {
+    LAYOUT_OVERFLOW_CALLBACK.with(|c| {
+        *c.borrow_mut() = cb.map(|f| Box::new(f) as LayoutOverflowCallback);
+    });
+}
+
+
+/// Returns the last recorded layout depth overflow as (depth, max_depth), if any.
+pub fn last_layout_overflow() -> Option<(usize, usize)> {
+    LAST_LAYOUT_OVERFLOW.with(|c| c.get())
+}
+
+/// Clears any recorded layout depth overflow.
+pub fn clear_layout_overflow() {
+    LAST_LAYOUT_OVERFLOW.with(|c| c.set(None));
+}
+
+/// Records a layout depth overflow occurrence, updates diagnostics, and fires the registered callback.
+pub fn record_layout_overflow(depth: usize, max_depth: usize) {
+    LAST_LAYOUT_OVERFLOW.with(|c| c.set(Some((depth, max_depth))));
+    LAYOUT_OVERFLOW_CALLBACK.with(|cb| {
+        if let Some(ref f) = *cb.borrow() {
+            f(depth, max_depth);
+        }
+    });
 }
 
 /// A node participating in the layout tree.
@@ -579,6 +620,7 @@ impl LayoutNode {
         }
 
         if guard.is_exhausted() {
+            record_layout_overflow(guard.current_depth(), guard.max_depth());
             let padding = self.style.padding;
             let border = self.style.border_width;
             let margin = self.style.margin;

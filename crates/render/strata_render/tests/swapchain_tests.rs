@@ -102,3 +102,45 @@ fn test_swapchain_compositor_clean_frame_skip_and_force_redraw() {
     assert_eq!(compositor.framebuffer.width, 1200);
     assert_eq!(compositor.framebuffer.height, 900);
 }
+
+#[test]
+fn test_hardware_swapchain_presenter_multibuffered_fences() {
+    use strata_render::swapchain::{HardwareBackend, HardwareSwapchainPresenter, PresentMode};
+    use std::time::Duration;
+
+    let width = 320;
+    let height = 240;
+    let mut presenter = HardwareSwapchainPresenter::new(
+        HardwareBackend::Vulkan,
+        PresentMode::Mailbox,
+        width,
+        height,
+        SwapchainFormat::Bgra8Unorm,
+        3, // Triple buffering
+    );
+
+    assert_eq!(presenter.surface_size(), (320, 240));
+    assert_eq!(presenter.buffer_count, 3);
+    assert_eq!(presenter.buffers.len(), 3);
+    assert_eq!(presenter.frame_fences.len(), 3);
+
+    let mut fb = FrameBuffer::new(width as usize, height as usize);
+    fb.clear(Color::rgba(100, 150, 200, 255));
+
+    // Present 5 frames to cycle through triple buffer rings
+    for i in 1..=5 {
+        presenter.present(&fb, None).expect("Present failed");
+        assert_eq!(presenter.presented_frames, i);
+        assert_eq!(presenter.last_submitted_fence(), i);
+        assert!(presenter.wait_for_fence(i, Duration::from_millis(50)).is_ok());
+    }
+
+    assert_eq!(presenter.damage_clipped_frames, 0);
+
+    // Present damaged frame
+    let damage = Rect::new(10.0, 10.0, 50.0, 50.0);
+    presenter.present(&fb, Some(damage)).expect("Damage present failed");
+    assert_eq!(presenter.damage_clipped_frames, 1);
+    assert_eq!(presenter.presented_frames, 6);
+}
+
