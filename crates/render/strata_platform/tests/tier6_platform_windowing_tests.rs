@@ -646,3 +646,112 @@ fn test_goal_20_win32_raw_abi_and_event_loop_soundness() {
     assert_eq!(msg.hwnd.0, 0x1234);
     assert_eq!(msg.message, WM_PAINT);
 }
+
+#[test]
+fn test_window_anchor_bottom_right_workarea_docking_and_config_flags() {
+    use strata_platform::window::WindowAnchor;
+
+    // Simulate a 1920x1080 primary display with a 28px top bar and 40px bottom panel
+    let (wa_x, wa_y, wa_w, wa_h) = (0, 28, 1920, 1012);
+
+    let cfg = WindowConfig {
+        title: "Aerovex Toolbox".to_string(),
+        width: 420,
+        height: 680,
+        resizable: false,
+        decoration: WindowDecoration::FramelessTransparent,
+        transparent: true,
+        always_on_top: true,
+        dock_bottom_right: true,
+        ..Default::default()
+    };
+
+    assert_eq!(cfg.effective_anchor(), Some(WindowAnchor::BottomRight));
+    assert!(cfg.is_docked());
+    assert_eq!(
+        cfg.compute_anchored_position(wa_x, wa_y, wa_w, wa_h),
+        Some((1920 - 420, 28 + 1012 - 680))
+    );
+
+    let via_builder = WindowConfig {
+        width: 420,
+        height: 680,
+        ..Default::default()
+    }
+    .with_anchor(WindowAnchor::BottomRight);
+    assert!(via_builder.dock_bottom_right);
+    assert!(via_builder.is_docked());
+    assert_eq!(
+        via_builder.compute_anchored_position(wa_x, wa_y, wa_w, wa_h),
+        Some((1500, 360))
+    );
+
+    assert_eq!(
+        WindowAnchor::TopLeft.compute_position(wa_x, wa_y, wa_w, wa_h, 420, 680),
+        (0, 28)
+    );
+    assert_eq!(
+        WindowAnchor::TopRight.compute_position(wa_x, wa_y, wa_w, wa_h, 420, 680),
+        (1500, 28)
+    );
+    assert_eq!(
+        WindowAnchor::BottomLeft.compute_position(wa_x, wa_y, wa_w, wa_h, 420, 680),
+        (0, 360)
+    );
+    assert!(!WindowAnchor::Center.is_sticky_dock());
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk-compat"))]
+#[test]
+fn test_transparent_cairo_clear_preserves_rounded_corner_alpha() {
+    use strata_layout::Rect as LayoutRect;
+    use strata_platform::cairo;
+    use strata_primitives::geom::EdgeInsets;
+    use strata_render::{DisplayList, DrawCommand};
+    use strata_style::types::{BorderRadius, Color};
+
+    let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 64, 64)
+        .expect("create ARgb32 surface");
+    {
+        let cr = cairo::Context::new(&surface).expect("create cairo context");
+        // Paint non-zero garbage first to verify Source operator truly clears alpha to 0
+        cr.set_source_rgb(0.035, 0.035, 0.043);
+        let _ = cr.paint();
+
+        // Clear with Source rgba(0, 0, 0, 0) then restore Over operator (same sequence as launch.rs)
+        cr.set_operator(cairo::Operator::Source);
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+        let _ = cr.paint();
+        cr.set_operator(cairo::Operator::Over);
+
+        let mut dl = DisplayList::new();
+        dl.push(DrawCommand::DrawRoundedRect {
+            bounds: LayoutRect::new(0.0, 0.0, 64.0, 64.0),
+            color: Color::rgba(24, 24, 28, 255),
+            border_radius: BorderRadius::new(20.0, 0.0, 0.0, 0.0),
+            border_width: EdgeInsets::all(0.0),
+            border_color: None,
+        });
+        strata_platform::render_display_list_to_cairo(&cr, &dl);
+    }
+
+    let stride = surface.stride() as usize;
+    let data = surface.data().expect("surface data");
+    // Top-left pixel (0, 0) lies outside the 20px top-left rounded corner and must remain transparent
+    let alpha_top_left = data[3];
+    assert_eq!(
+        alpha_top_left, 0,
+        "rounded-tl corner outside arc must have alpha 0, got {}",
+        alpha_top_left
+    );
+    // Sharp corners (top-right, bottom-right, bottom-left) and center must remain opaque (alpha 255)
+    let alpha_top_right = data[63 * 4 + 3];
+    let alpha_bottom_right = data[63 * stride + 63 * 4 + 3];
+    let alpha_bottom_left = data[63 * stride + 3];
+    let alpha_center = data[32 * stride + 32 * 4 + 3];
+    assert_eq!(alpha_top_right, 255);
+    assert_eq!(alpha_bottom_right, 255);
+    assert_eq!(alpha_bottom_left, 255);
+    assert_eq!(alpha_center, 255);
+}
+

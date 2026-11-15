@@ -343,6 +343,10 @@ where
         1.0,
     )));
 
+    let transparent_bg = config.transparent
+        || config.decoration == strata_platform::WindowDecoration::FramelessTransparent;
+    let allow_maximize = config.resizable && !config.is_docked();
+
     let runtime_draw = runtime.clone();
     let on_draw = move |width: f32, height: f32, cr: &strata_platform::cairo::Context| {
         let mut rt = runtime_draw.borrow_mut();
@@ -357,12 +361,20 @@ where
             AppRuntime::sync_layout_to_ir(&rt.layout_root, &mut rt.ir_graph);
             rt.apply_viewport_clamps();
             rt.apply_scroll_offsets();
+            rt.spatial_index.rebuild(&rt.root_blueprint, &rt.layout_root);
         }
         rt.compile_display_list();
 
-        // Fill background
-        cr.set_source_rgb(0.035, 0.035, 0.043);
-        let _ = cr.paint();
+        // Clear or fill window background
+        if transparent_bg {
+            cr.set_operator(strata_platform::cairo::Operator::Source);
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+            let _ = cr.paint();
+            cr.set_operator(strata_platform::cairo::Operator::Over);
+        } else {
+            cr.set_source_rgb(0.035, 0.035, 0.043);
+            let _ = cr.paint();
+        }
 
         strata_platform::render_display_list_to_cairo(cr, &rt.display_list);
 
@@ -419,7 +431,7 @@ where
             }
             if let strata_platform::PlatformEvent::DoubleClick { button, x, y } = event {
                 let _btn_idx = button.to_button_index();
-                if *button == strata_platform::MouseButton::Left {
+                if *button == strata_platform::MouseButton::Left && allow_maximize {
                     let region = AppRuntime::hit_test_property(
                         &rt.root_blueprint,
                         &rt.layout_root,
@@ -601,16 +613,8 @@ where
         }
     };
 
-    let decorated = config.decoration == strata_platform::WindowDecoration::NativeOs;
     let _ = crate::mcp_bridge::start_mcp_dev_listener(None);
-    strata_platform::launch_gtk_window(
-        &config.title,
-        config.width,
-        config.height,
-        decorated,
-        on_draw,
-        on_event,
-    )
+    strata_platform::launch_gtk_window_with_config(&config, on_draw, on_event)
 }
 
 

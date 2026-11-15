@@ -464,8 +464,11 @@ fn test_caret_blink_timing_and_mouse_move_isolation() {
     );
 }
 
+static HEADLESS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn test_launch_auto_headless_execution() {
+    let _guard = HEADLESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("STRATA_HEADLESS", "1");
     std::env::set_var("STRATA_HEADLESS_EXIT_AFTER_FRAMES", "3");
 
@@ -490,6 +493,7 @@ fn test_strata_app_run_headless_lifecycle() {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
 
+    let _guard = HEADLESS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("STRATA_HEADLESS", "1");
 
     let started = Arc::new(AtomicBool::new(false));
