@@ -864,6 +864,37 @@ pub fn use_signal<T: Clone + 'static>(initial: T) -> Signal<T> {
     Signal::new(initial)
 }
 
+thread_local! {
+    static PERSISTENT_SIGNALS: RefCell<std::collections::HashMap<String, Box<dyn std::any::Any>>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+/// Returns a signal that survives root re-invocation, identified by `key`.
+///
+/// Component bodies run again on every rebuild, so `use_signal` creates fresh state each
+/// time. This looks `key` up in a per-thread store and only calls `init` the first time.
+/// Keys must be unique per logical piece of state; components derive them from an `id`
+/// prop. Asking for the same key with a different type panics, since that is a key clash.
+pub fn use_persistent_signal<T: Clone + 'static>(key: &str, init: impl FnOnce() -> T) -> Signal<T> {
+    PERSISTENT_SIGNALS.with(|store| {
+        let mut store = store.borrow_mut();
+        if let Some(existing) = store.get(key) {
+            return existing
+                .downcast_ref::<Signal<T>>()
+                .unwrap_or_else(|| panic!("persistent signal key `{key}` reused with another type"))
+                .clone();
+        }
+        let signal = Signal::new(init());
+        store.insert(key.to_string(), Box::new(signal.clone()));
+        signal
+    })
+}
+
+/// Drops all persistent signals on this thread. Intended for tests.
+pub fn clear_persistent_signals() {
+    PERSISTENT_SIGNALS.with(|store| store.borrow_mut().clear());
+}
+
 pub fn use_state<T: Clone + 'static>(init: impl FnOnce() -> T) -> (Signal<T>, Signal<T>) {
     let s = Signal::new(init());
     (s.clone(), s)
