@@ -98,7 +98,7 @@ pub enum DrawCommand {
     },
     DrawViewport3D {
         bounds: Rect,
-        scene: Scene3D,
+        scene: std::sync::Arc<Scene3D>,
     },
     DrawCanvas2D {
         bounds: Rect,
@@ -1427,10 +1427,14 @@ impl Compositor {
                 bounds
             };
             if vp_bounds.width > 0.0 && vp_bounds.height > 0.0 {
-                if let Some(scene) = handle.0.downcast_ref::<crate::scene3d::Scene3D>() {
+                // The payload is normally the `Arc<Scene3D>` itself, so this
+                // is a refcount bump with no mesh copy.
+                if let Ok(scene) =
+                    std::sync::Arc::clone(&handle.0).downcast::<crate::scene3d::Scene3D>()
+                {
                     list.push(DrawCommand::DrawViewport3D {
                         bounds: vp_bounds,
-                        scene: scene.clone(),
+                        scene,
                     });
                 } else if let Some(scene_arc) = handle
                     .0
@@ -1438,7 +1442,7 @@ impl Compositor {
                 {
                     list.push(DrawCommand::DrawViewport3D {
                         bounds: vp_bounds,
-                        scene: (**scene_arc).clone(),
+                        scene: std::sync::Arc::clone(scene_arc),
                     });
                 }
             }

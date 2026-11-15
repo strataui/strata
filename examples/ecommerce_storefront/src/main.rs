@@ -12,5 +12,5 @@ use strata::prelude::*;
 fn main() {
     println!("[*] Starting Apex Athletics Storefront in Pure Rust...");
 
-    strata::launch(|| App());
+    strata::launch(App);
 }

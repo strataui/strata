@@ -72,7 +72,7 @@ impl AppRuntime {
                     };
                     commands.push(strata_render::compositor::DrawCommand::DrawViewport3D {
                         bounds,
-                        scene,
+                        scene: std::sync::Arc::new(scene),
                     });
                     if matches!(tag, Tag::Canvas | Tag::Custom("Canvas3D")) {
                         return;

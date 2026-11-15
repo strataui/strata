@@ -839,6 +839,21 @@ impl GpuPathPipeline {
 
     /// Compiles a frame from a DisplayList and optional damage rectangle into the internal path batch buffer.
     pub fn compile_frame(&mut self, list: &DisplayList, damage: Option<Rect>) -> usize {
+        // Most frames contain no vector paths; avoid walking clips and
+        // rebuilding an empty batch when nothing needs compiling.
+        let has_paths = list.commands().iter().any(|cmd| {
+            matches!(
+                cmd,
+                DrawCommand::DrawGpuPath { .. } | DrawCommand::DrawSvgPath { .. }
+            )
+        });
+        if !has_paths {
+            if !self.batch.is_empty() {
+                self.batch.clear();
+                self.uniforms.curve_count = 0;
+            }
+            return 0;
+        }
         self.batch = GpuPathBatch::from_display_list_damaged(
             list,
             damage,
