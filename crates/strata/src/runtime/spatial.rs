@@ -21,6 +21,7 @@ pub struct SpatialEntry {
     root_z_key: i64,
     clip_bounds: Option<Rect>,
     hittable: bool,
+    layout_path: Vec<usize>,
 }
 
 impl SpatialEntry {
@@ -85,22 +86,47 @@ impl SpatialIndex {
         }
     }
 
+    /// Synchronizes cached entry bounding boxes from `layout_root` in O(entries) without
+    /// walking blueprints or reallocating the index (used on high-frequency scroll ticks).
+    pub fn sync_bounds(&mut self, layout_root: &LayoutNode) {
+        if self.entries.is_empty() {
+            return;
+        }
+        for entry in &mut self.entries {
+            let mut cur = layout_root;
+            let mut valid = true;
+            for &idx in &entry.layout_path {
+                if let Some(child) = cur.children.get(idx) {
+                    cur = child;
+                } else {
+                    valid = false;
+                    break;
+                }
+            }
+            if valid {
+                entry.bounds = cur.geometry.border_box;
+            }
+        }
+    }
+
     /// Clears and rebuilds the spatial index from the active blueprint and computed layout hierarchy.
     pub fn rebuild(&mut self, blueprint: &NodeBlueprint, layout: &LayoutNode) {
         self.entries.clear();
         self.entity_to_index.clear();
 
         let mut order = 0;
+        let mut path = Vec::new();
         let root_z = layout.style.z_index.unwrap_or(0);
         Self::collect_stacking_context(
             blueprint,
             layout,
+            &mut path,
             &mut self.entries,
             &mut order,
             root_z,
             i64::MIN,
             true,
-            None,
+            &[],
             0,
         );
 
@@ -111,9 +137,22 @@ impl SpatialIndex {
         }
     }
 
+    #[inline]
+    fn steps_to_clip(steps: &[super::hit_test::HitClipStep]) -> Option<Rect> {
+        let mut acc: Option<Rect> = None;
+        for s in steps {
+            if let Some(r) = s.clip {
+                acc = intersect_clip(acc, r);
+            }
+        }
+        acc
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn emit_node_entry(
         blueprint: &NodeBlueprint,
         layout: &LayoutNode,
+        layout_path: &[usize],
         out: &mut Vec<SpatialEntry>,
         order: &mut usize,
         effective_z: i32,
@@ -144,6 +183,7 @@ impl SpatialIndex {
                 root_z_key,
                 clip_bounds: active_clip,
                 hittable,
+                layout_path: layout_path.to_vec(),
             };
             *order += 1;
             out.push(entry);
@@ -154,7 +194,7 @@ impl SpatialIndex {
         node_bp: &'a NodeBlueprint,
         node_layout: &'a LayoutNode,
         fallback_bp: &'a NodeBlueprint,
-    ) -> Vec<(&'a NodeBlueprint, &'a LayoutNode)> {
+    ) -> Vec<(usize, &'a NodeBlueprint, &'a LayoutNode)> {
         let mut flat_children = Vec::new();
         match node_bp {
             NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children) => {
@@ -184,53 +224,96 @@ impl SpatialIndex {
             } else {
                 flat_children.get(idx).copied().unwrap_or(fallback_bp)
             };
-            out.push((resolved_bp, child_layout));
+            out.push((idx, resolved_bp, child_layout));
         }
         out
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn collect_hoisted_participants<'a>(
         bp: &'a NodeBlueprint,
         layout: &'a LayoutNode,
         fallback_bp: &'a NodeBlueprint,
-        negative_z: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode)>,
-        auto_or_zero_z: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode, bool)>,
-        positive_z: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode)>,
+        current_path: &mut Vec<usize>,
+        steps: &[super::hit_test::HitClipStep],
+        negative_z: &mut Vec<(
+            &'a NodeBlueprint,
+            &'a LayoutNode,
+            Vec<usize>,
+            Vec<super::hit_test::HitClipStep>,
+        )>,
+        auto_or_zero_z: &mut Vec<(
+            &'a NodeBlueprint,
+            &'a LayoutNode,
+            Vec<usize>,
+            bool,
+            Vec<super::hit_test::HitClipStep>,
+        )>,
+        positive_z: &mut Vec<(
+            &'a NodeBlueprint,
+            &'a LayoutNode,
+            Vec<usize>,
+            Vec<super::hit_test::HitClipStep>,
+        )>,
         depth: usize,
     ) {
         if depth >= 256 {
             return;
         }
-        for (child_bp, child_layout) in
+        let parent_display = Some(layout.style.display);
+        for (idx, child_bp, child_layout) in
             Self::paired_children_with_fallback(bp, layout, fallback_bp)
         {
             if child_layout.style.display == Display::None {
                 continue;
             }
-            if AppRuntime::establishes_stacking_context(child_layout, false) {
+            current_path.push(idx);
+            if AppRuntime::establishes_stacking_context_in(child_layout, parent_display, false) {
+                let eff_steps = AppRuntime::effective_hit_clip_steps(child_layout, steps).to_vec();
                 let z = child_layout.style.z_index.unwrap_or(0);
                 if z < 0 {
-                    negative_z.push((child_bp, child_layout));
+                    negative_z.push((child_bp, child_layout, current_path.clone(), eff_steps));
                 } else if z > 0 {
-                    positive_z.push((child_bp, child_layout));
+                    positive_z.push((child_bp, child_layout, current_path.clone(), eff_steps));
                 } else {
-                    auto_or_zero_z.push((child_bp, child_layout, true));
+                    auto_or_zero_z.push((
+                        child_bp,
+                        child_layout,
+                        current_path.clone(),
+                        true,
+                        eff_steps,
+                    ));
                 }
             } else {
+                let eff_for_child = AppRuntime::effective_hit_clip_steps(child_layout, steps);
                 if child_layout.style.position != Position::Static {
-                    auto_or_zero_z.push((child_bp, child_layout, false));
+                    auto_or_zero_z.push((
+                        child_bp,
+                        child_layout,
+                        current_path.clone(),
+                        false,
+                        eff_for_child.to_vec(),
+                    ));
+                }
+                let mut child_steps = Vec::with_capacity(eff_for_child.len() + 1);
+                child_steps.extend_from_slice(eff_for_child);
+                let step = AppRuntime::hit_clip_step_for(child_layout);
+                if step.clip.is_some() || step.is_abs_cb || step.is_fixed_cb {
+                    child_steps.push(step);
                 }
                 Self::collect_hoisted_participants(
                     child_bp,
                     child_layout,
                     fallback_bp,
+                    current_path,
+                    &child_steps,
                     negative_z,
                     auto_or_zero_z,
                     positive_z,
                     depth + 1,
                 );
             }
+            current_path.pop();
         }
     }
 
@@ -238,6 +321,7 @@ impl SpatialIndex {
     fn collect_direct_in_flow_children(
         bp: &NodeBlueprint,
         layout: &LayoutNode,
+        current_path: &mut Vec<usize>,
         out: &mut Vec<SpatialEntry>,
         order: &mut usize,
         inherited_z: i32,
@@ -251,9 +335,10 @@ impl SpatialIndex {
             return;
         }
 
+        let parent_display = Some(layout.style.display);
         let is_in_flow_non_sc = |c: &LayoutNode| {
             c.style.display != Display::None
-                && !AppRuntime::establishes_stacking_context(c, false)
+                && !AppRuntime::establishes_stacking_context_in(c, parent_display, false)
                 && c.style.position == Position::Static
         };
         let is_inline_level = |c: &LayoutNode| {
@@ -264,14 +349,16 @@ impl SpatialIndex {
         };
 
         // Layer 3: In-flow blocks
-        for &(child_bp, child_layout) in &paired {
+        for &(idx, child_bp, child_layout) in &paired {
             if is_in_flow_non_sc(child_layout)
                 && child_layout.style.float == Float::None
                 && !is_inline_level(child_layout)
             {
+                current_path.push(idx);
                 Self::collect_in_flow_non_hoisted(
                     child_bp,
                     child_layout,
+                    current_path,
                     out,
                     order,
                     inherited_z,
@@ -279,15 +366,18 @@ impl SpatialIndex {
                     active_clip,
                     depth + 1,
                 );
+                current_path.pop();
             }
         }
 
         // Layer 4: Floats
-        for &(child_bp, child_layout) in &paired {
+        for &(idx, child_bp, child_layout) in &paired {
             if is_in_flow_non_sc(child_layout) && child_layout.style.float != Float::None {
+                current_path.push(idx);
                 Self::collect_in_flow_non_hoisted(
                     child_bp,
                     child_layout,
+                    current_path,
                     out,
                     order,
                     inherited_z,
@@ -295,18 +385,21 @@ impl SpatialIndex {
                     active_clip,
                     depth + 1,
                 );
+                current_path.pop();
             }
         }
 
         // Layer 5: In-flow inlines
-        for &(child_bp, child_layout) in &paired {
+        for &(idx, child_bp, child_layout) in &paired {
             if is_in_flow_non_sc(child_layout)
                 && child_layout.style.float == Float::None
                 && is_inline_level(child_layout)
             {
+                current_path.push(idx);
                 Self::collect_in_flow_non_hoisted(
                     child_bp,
                     child_layout,
+                    current_path,
                     out,
                     order,
                     inherited_z,
@@ -314,6 +407,7 @@ impl SpatialIndex {
                     active_clip,
                     depth + 1,
                 );
+                current_path.pop();
             }
         }
     }
@@ -322,6 +416,7 @@ impl SpatialIndex {
     fn collect_in_flow_non_hoisted(
         bp: &NodeBlueprint,
         layout: &LayoutNode,
+        current_path: &mut Vec<usize>,
         out: &mut Vec<SpatialEntry>,
         order: &mut usize,
         inherited_z: i32,
@@ -333,15 +428,32 @@ impl SpatialIndex {
             return;
         }
         let effective_z = layout.style.z_index.unwrap_or(inherited_z);
-        Self::emit_node_entry(bp, layout, out, order, effective_z, root_z_key, active_clip);
-        Self::collect_direct_in_flow_children(
+        Self::emit_node_entry(
             bp,
             layout,
+            current_path,
             out,
             order,
             effective_z,
             root_z_key,
             active_clip,
+        );
+        let child_clip = if layout.style.overflow_x != Overflow::Visible
+            || layout.style.overflow_y != Overflow::Visible
+        {
+            intersect_clip(active_clip, layout.geometry.border_box)
+        } else {
+            active_clip
+        };
+        Self::collect_direct_in_flow_children(
+            bp,
+            layout,
+            current_path,
+            out,
+            order,
+            effective_z,
+            root_z_key,
+            child_clip,
             depth,
         );
     }
@@ -350,36 +462,41 @@ impl SpatialIndex {
     fn collect_stacking_context(
         bp: &NodeBlueprint,
         layout: &LayoutNode,
+        current_path: &mut Vec<usize>,
         out: &mut Vec<SpatialEntry>,
         order: &mut usize,
         effective_z: i32,
         self_root_z_key: i64,
         is_root: bool,
-        parent_clip: Option<Rect>,
+        inherited_steps: &[super::hit_test::HitClipStep],
         depth: usize,
     ) {
         if depth >= 256 || layout.style.display == Display::None {
             return;
         }
 
+        let eff_inherited = AppRuntime::effective_hit_clip_steps(layout, inherited_steps);
+        let self_clip = Self::steps_to_clip(eff_inherited);
+
         // Layer 1: Stacking context root element itself
         Self::emit_node_entry(
             bp,
             layout,
+            current_path,
             out,
             order,
             effective_z,
             self_root_z_key,
-            parent_clip,
+            self_clip,
         );
 
-        let child_clip = if layout.style.overflow_x != Overflow::Visible
-            || layout.style.overflow_y != Overflow::Visible
-        {
-            intersect_clip(parent_clip, layout.geometry.border_box)
-        } else {
-            parent_clip
-        };
+        let mut base_steps = Vec::with_capacity(eff_inherited.len() + 1);
+        base_steps.extend_from_slice(eff_inherited);
+        let own_step = AppRuntime::hit_clip_step_for(layout);
+        if own_step.clip.is_some() || own_step.is_abs_cb || own_step.is_fixed_cb {
+            base_steps.push(own_step);
+        }
+        let in_flow_clip = Self::steps_to_clip(&base_steps);
 
         let fallback_bp = NodeBlueprint::Empty;
         let mut negative_z = Vec::new();
@@ -389,28 +506,31 @@ impl SpatialIndex {
             bp,
             layout,
             &fallback_bp,
+            current_path,
+            &base_steps,
             &mut negative_z,
             &mut auto_or_zero_z,
             &mut positive_z,
             depth + 1,
         );
 
-        negative_z.sort_by_key(|(_, l)| l.style.z_index.unwrap_or(0));
-        positive_z.sort_by_key(|(_, l)| l.style.z_index.unwrap_or(0));
+        negative_z.sort_by_key(|(_, l, _, _)| l.style.z_index.unwrap_or(0));
+        positive_z.sort_by_key(|(_, l, _, _)| l.style.z_index.unwrap_or(0));
 
         // Layer 2: Child stacking contexts with negative z-index (ascending)
-        for (c_bp, c_layout) in negative_z {
+        for (c_bp, c_layout, mut c_path, c_steps) in negative_z {
             let cz = c_layout.style.z_index.unwrap_or(0);
             let child_root_key = if is_root { cz as i64 } else { self_root_z_key };
             Self::collect_stacking_context(
                 c_bp,
                 c_layout,
+                &mut c_path,
                 out,
                 order,
                 cz,
                 child_root_key,
                 false,
-                child_clip,
+                &c_steps,
                 depth + 1,
             );
         }
@@ -420,56 +540,62 @@ impl SpatialIndex {
         Self::collect_direct_in_flow_children(
             bp,
             layout,
+            current_path,
             out,
             order,
             effective_z,
             normal_root_key,
-            child_clip,
+            in_flow_clip,
             depth,
         );
 
         // Layer 6: Positioned descendants with z-index: auto and child stacking contexts with z-index: 0
-        for (c_bp, c_layout, is_sc) in auto_or_zero_z {
+        for (c_bp, c_layout, mut c_path, is_sc, c_steps) in auto_or_zero_z {
             if is_sc {
                 let cz = c_layout.style.z_index.unwrap_or(effective_z);
                 Self::collect_stacking_context(
                     c_bp,
                     c_layout,
+                    &mut c_path,
                     out,
                     order,
                     cz,
                     normal_root_key,
                     false,
-                    child_clip,
+                    &c_steps,
                     depth + 1,
                 );
             } else {
+                let eff_c = AppRuntime::effective_hit_clip_steps(c_layout, &c_steps);
+                let c_clip = Self::steps_to_clip(eff_c);
                 Self::collect_in_flow_non_hoisted(
                     c_bp,
                     c_layout,
+                    &mut c_path,
                     out,
                     order,
                     effective_z,
                     normal_root_key,
-                    child_clip,
+                    c_clip,
                     depth + 1,
                 );
             }
         }
 
         // Layer 7: Child stacking contexts with positive z-index (ascending)
-        for (c_bp, c_layout) in positive_z {
+        for (c_bp, c_layout, mut c_path, c_steps) in positive_z {
             let cz = c_layout.style.z_index.unwrap_or(0);
             let child_root_key = if is_root { cz as i64 } else { self_root_z_key };
             Self::collect_stacking_context(
                 c_bp,
                 c_layout,
+                &mut c_path,
                 out,
                 order,
                 cz,
                 child_root_key,
                 false,
-                child_clip,
+                &c_steps,
                 depth + 1,
             );
         }

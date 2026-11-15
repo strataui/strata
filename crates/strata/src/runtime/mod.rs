@@ -277,6 +277,9 @@ impl AppRuntime {
         runtime.sync_tree_animations(0.0);
         runtime.apply_viewport_clamps();
         runtime.apply_scroll_offsets();
+        runtime
+            .spatial_index
+            .rebuild(&runtime.root_blueprint, &runtime.layout_root);
         runtime.update_accessibility_tree();
         runtime.compile_display_list();
         runtime
@@ -290,7 +293,6 @@ impl AppRuntime {
         self.layout_root
             .compute_layout(self.viewport_width, self.viewport_height);
         Self::sync_layout_to_ir(&self.layout_root, &mut self.ir_graph);
-        self.spatial_index.rebuild(&self.root_blueprint, &self.layout_root);
         self.layout_computations += 1;
         if perf_logging_enabled() {
             perf_log_ms(
@@ -304,6 +306,8 @@ impl AppRuntime {
         }
         self.apply_viewport_clamps();
         self.apply_scroll_offsets();
+        self.spatial_index
+            .rebuild(&self.root_blueprint, &self.layout_root);
         self.update_accessibility_tree();
         self.compile_display_list();
         &self.display_list

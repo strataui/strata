@@ -62,20 +62,39 @@ impl AppRuntime {
         py: f32,
         current_path: &mut Vec<usize>,
     ) -> Option<Vec<usize>> {
-        Self::hit_test_node_path_sc(blueprint, layout, px, py, current_path)
+        Self::hit_test_node_path_sc(blueprint, layout, px, py, &[], current_path)
     }
 
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn collect_hoisted_hover_participants<'a>(
         bp: &'a NodeBlueprint,
         layout: &'a LayoutNode,
+        steps: &[super::hit_test::HitClipStep],
         current_path: &mut Vec<usize>,
-        negative_z: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode, Vec<usize>)>,
-        auto_or_zero_z: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode, Vec<usize>, bool)>,
-        positive_z: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode, Vec<usize>)>,
+        negative_z: &mut Vec<(
+            &'a NodeBlueprint,
+            &'a LayoutNode,
+            Vec<usize>,
+            Vec<super::hit_test::HitClipStep>,
+        )>,
+        auto_or_zero_z: &mut Vec<(
+            &'a NodeBlueprint,
+            &'a LayoutNode,
+            Vec<usize>,
+            bool,
+            Vec<super::hit_test::HitClipStep>,
+        )>,
+        positive_z: &mut Vec<(
+            &'a NodeBlueprint,
+            &'a LayoutNode,
+            Vec<usize>,
+            Vec<super::hit_test::HitClipStep>,
+        )>,
     ) {
         if current_path.len() >= 256 {
             return;
         }
+        let parent_display = Some(layout.style.display);
         for (idx, child_bp, child_layout) in Self::paired_blueprint_children(bp, layout) {
             if matches!(child_layout.style.display, strata_style::types::Display::None)
                 || matches!(
@@ -90,22 +109,43 @@ impl AppRuntime {
                 continue;
             }
             current_path.push(idx);
-            if Self::establishes_stacking_context(child_layout, false) {
+            if Self::establishes_stacking_context_in(child_layout, parent_display, false) {
+                let eff_steps = Self::effective_hit_clip_steps(child_layout, steps).to_vec();
                 let z = child_layout.style.z_index.unwrap_or(0);
                 if z < 0 {
-                    negative_z.push((child_bp, child_layout, current_path.clone()));
+                    negative_z.push((child_bp, child_layout, current_path.clone(), eff_steps));
                 } else if z > 0 {
-                    positive_z.push((child_bp, child_layout, current_path.clone()));
+                    positive_z.push((child_bp, child_layout, current_path.clone(), eff_steps));
                 } else {
-                    auto_or_zero_z.push((child_bp, child_layout, current_path.clone(), true));
+                    auto_or_zero_z.push((
+                        child_bp,
+                        child_layout,
+                        current_path.clone(),
+                        true,
+                        eff_steps,
+                    ));
                 }
             } else {
+                let eff_for_child = Self::effective_hit_clip_steps(child_layout, steps);
                 if child_layout.style.position != strata_style::types::Position::Static {
-                    auto_or_zero_z.push((child_bp, child_layout, current_path.clone(), false));
+                    auto_or_zero_z.push((
+                        child_bp,
+                        child_layout,
+                        current_path.clone(),
+                        false,
+                        eff_for_child.to_vec(),
+                    ));
+                }
+                let mut child_steps = Vec::with_capacity(eff_for_child.len() + 1);
+                child_steps.extend_from_slice(eff_for_child);
+                let step = Self::hit_clip_step_for(child_layout);
+                if step.clip.is_some() || step.is_abs_cb || step.is_fixed_cb {
+                    child_steps.push(step);
                 }
                 Self::collect_hoisted_hover_participants(
                     child_bp,
                     child_layout,
+                    &child_steps,
                     current_path,
                     negative_z,
                     auto_or_zero_z,
@@ -121,6 +161,7 @@ impl AppRuntime {
         layout: &LayoutNode,
         px: f32,
         py: f32,
+        inherited_steps: &[super::hit_test::HitClipStep],
         current_path: &mut Vec<usize>,
     ) -> Option<Vec<usize>> {
         if current_path.len() >= 256
@@ -137,18 +178,35 @@ impl AppRuntime {
             return None;
         }
 
+        let eff_inherited = Self::effective_hit_clip_steps(layout, inherited_steps);
+        if !Self::hit_clip_steps_allow(eff_inherited, px, py) {
+            return None;
+        }
+        if (layout.style.overflow_x != strata_style::types::Overflow::Visible
+            || layout.style.overflow_y != strata_style::types::Overflow::Visible)
+            && !layout.geometry.border_box.contains_point(px, py)
+        {
+            return None;
+        }
+
+        let parent_display = Some(layout.style.display);
         let paired = Self::paired_blueprint_children(blueprint, layout);
         for &(idx, child_bp, child_layout) in paired.iter().rev() {
             if matches!(child_layout.style.display, strata_style::types::Display::None)
-                || Self::establishes_stacking_context(child_layout, false)
+                || Self::establishes_stacking_context_in(child_layout, parent_display, false)
                 || child_layout.style.position != strata_style::types::Position::Static
             {
                 continue;
             }
             current_path.push(idx);
-            if let Some(res) =
-                Self::hit_test_node_path_in_flow(child_bp, child_layout, px, py, current_path)
-            {
+            if let Some(res) = Self::hit_test_node_path_in_flow(
+                child_bp,
+                child_layout,
+                px,
+                py,
+                &[],
+                current_path,
+            ) {
                 return Some(res);
             }
             current_path.pop();
@@ -173,6 +231,7 @@ impl AppRuntime {
         layout: &LayoutNode,
         px: f32,
         py: f32,
+        inherited_steps: &[super::hit_test::HitClipStep],
         current_path: &mut Vec<usize>,
     ) -> Option<Vec<usize>> {
         if current_path.len() >= 256
@@ -189,14 +248,20 @@ impl AppRuntime {
             return None;
         }
 
+        let eff_inherited = Self::effective_hit_clip_steps(layout, inherited_steps);
+        let inherited_allows = Self::hit_clip_steps_allow(eff_inherited, px, py);
+
         let (px, py) = Self::unproject_point(layout, px, py);
 
-        // If element clips overflow, coordinates outside its border box are clipped
-        if (layout.style.overflow_x != strata_style::types::Overflow::Visible
-            || layout.style.overflow_y != strata_style::types::Overflow::Visible)
-            && !layout.geometry.border_box.contains_point(px, py)
-        {
-            return None;
+        let own_clips = layout.style.overflow_x != strata_style::types::Overflow::Visible
+            || layout.style.overflow_y != strata_style::types::Overflow::Visible;
+        let own_allows = !own_clips || layout.geometry.border_box.contains_point(px, py);
+
+        let mut base_steps = Vec::with_capacity(eff_inherited.len() + 1);
+        base_steps.extend_from_slice(eff_inherited);
+        let own_step = Self::hit_clip_step_for(layout);
+        if own_step.clip.is_some() || own_step.is_abs_cb || own_step.is_fixed_cb {
+            base_steps.push(own_step);
         }
 
         let mut negative_z = Vec::new();
@@ -205,32 +270,33 @@ impl AppRuntime {
         Self::collect_hoisted_hover_participants(
             blueprint,
             layout,
+            &base_steps,
             current_path,
             &mut negative_z,
             &mut auto_or_zero_z,
             &mut positive_z,
         );
 
-        negative_z.sort_by_key(|(_, l, _)| l.style.z_index.unwrap_or(0));
-        positive_z.sort_by_key(|(_, l, _)| l.style.z_index.unwrap_or(0));
+        negative_z.sort_by_key(|(_, l, _, _)| l.style.z_index.unwrap_or(0));
+        positive_z.sort_by_key(|(_, l, _, _)| l.style.z_index.unwrap_or(0));
 
         // Layer 7: positive z-index child stacking contexts
-        for (c_bp, c_layout, c_path) in positive_z.into_iter().rev() {
+        for (c_bp, c_layout, c_path, c_steps) in positive_z.into_iter().rev() {
             let mut path_buf = c_path;
             if let Some(res) =
-                Self::hit_test_node_path_sc(c_bp, c_layout, px, py, &mut path_buf)
+                Self::hit_test_node_path_sc(c_bp, c_layout, px, py, &c_steps, &mut path_buf)
             {
                 return Some(res);
             }
         }
 
         // Layer 6: positioned auto/0 z-index descendants
-        for (c_bp, c_layout, c_path, is_sc) in auto_or_zero_z.into_iter().rev() {
+        for (c_bp, c_layout, c_path, is_sc, c_steps) in auto_or_zero_z.into_iter().rev() {
             let mut path_buf = c_path;
             let hit = if is_sc {
-                Self::hit_test_node_path_sc(c_bp, c_layout, px, py, &mut path_buf)
+                Self::hit_test_node_path_sc(c_bp, c_layout, px, py, &c_steps, &mut path_buf)
             } else {
-                Self::hit_test_node_path_in_flow(c_bp, c_layout, px, py, &mut path_buf)
+                Self::hit_test_node_path_in_flow(c_bp, c_layout, px, py, &c_steps, &mut path_buf)
             };
             if hit.is_some() {
                 return hit;
@@ -238,45 +304,57 @@ impl AppRuntime {
         }
 
         // Layers 5, 4, 3: direct static non-stacking-context children
-        let paired = Self::paired_blueprint_children(blueprint, layout);
-        for &(idx, child_bp, child_layout) in paired.iter().rev() {
-            if matches!(child_layout.style.display, strata_style::types::Display::None)
-                || Self::establishes_stacking_context(child_layout, false)
-                || child_layout.style.position != strata_style::types::Position::Static
-            {
-                continue;
+        if inherited_allows && own_allows {
+            let parent_display = Some(layout.style.display);
+            let paired = Self::paired_blueprint_children(blueprint, layout);
+            for &(idx, child_bp, child_layout) in paired.iter().rev() {
+                if matches!(child_layout.style.display, strata_style::types::Display::None)
+                    || Self::establishes_stacking_context_in(child_layout, parent_display, false)
+                    || child_layout.style.position != strata_style::types::Position::Static
+                {
+                    continue;
+                }
+                current_path.push(idx);
+                if let Some(res) = Self::hit_test_node_path_in_flow(
+                    child_bp,
+                    child_layout,
+                    px,
+                    py,
+                    &[],
+                    current_path,
+                ) {
+                    return Some(res);
+                }
+                current_path.pop();
             }
-            current_path.push(idx);
-            if let Some(res) =
-                Self::hit_test_node_path_in_flow(child_bp, child_layout, px, py, current_path)
-            {
-                return Some(res);
-            }
-            current_path.pop();
         }
 
         // Layer 2: negative z-index child stacking contexts
-        for (c_bp, c_layout, c_path) in negative_z.into_iter().rev() {
+        for (c_bp, c_layout, c_path, c_steps) in negative_z.into_iter().rev() {
             let mut path_buf = c_path;
             if let Some(res) =
-                Self::hit_test_node_path_sc(c_bp, c_layout, px, py, &mut path_buf)
+                Self::hit_test_node_path_sc(c_bp, c_layout, px, py, &c_steps, &mut path_buf)
             {
                 return Some(res);
             }
         }
 
         // Layer 1: stacking context root itself
-        match blueprint {
-            NodeBlueprint::Element { .. }
-            | NodeBlueprint::Text(_)
-            | NodeBlueprint::DynamicText(_) => {
-                if layout.geometry.border_box.contains_point(px, py) {
-                    Some(current_path.clone())
-                } else {
-                    None
+        if inherited_allows {
+            match blueprint {
+                NodeBlueprint::Element { .. }
+                | NodeBlueprint::Text(_)
+                | NodeBlueprint::DynamicText(_) => {
+                    if layout.geometry.border_box.contains_point(px, py) {
+                        Some(current_path.clone())
+                    } else {
+                        None
+                    }
                 }
+                _ => None,
             }
-            _ => None,
+        } else {
+            None
         }
     }
 
