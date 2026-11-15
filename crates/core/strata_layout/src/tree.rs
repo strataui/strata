@@ -36,6 +36,8 @@ pub struct SvgItem {
     pub path_data: String,
     pub stroke_color: Option<strata_style::types::Color>,
     pub fill_color: Option<strata_style::types::Color>,
+    pub stroke_is_current_color: bool,
+    pub fill_is_current_color: bool,
     pub stroke_width: f32,
     pub stroke_linecap: StrokeLineCap,
     pub stroke_linejoin: StrokeLineJoin,
@@ -50,6 +52,8 @@ impl SvgItem {
             path_data,
             stroke_color: None,
             fill_color: None,
+            stroke_is_current_color: false,
+            fill_is_current_color: false,
             stroke_width: 1.0,
             stroke_linecap: StrokeLineCap::Butt,
             stroke_linejoin: StrokeLineJoin::Miter,
@@ -218,6 +222,8 @@ pub struct LayoutNode {
     pub table_grid: Option<crate::table::TableBorderGrid>,
     /// Unique 64-bit entity identifier associating this layout node with its blueprint element.
     pub entity_id: strata_primitives::EntityId,
+    /// True when one or more CSS `transition-*` interpolations are currently in-flight on this node.
+    pub active_transitions: bool,
 }
 
 impl LayoutNode {
@@ -237,6 +243,7 @@ impl LayoutNode {
             last_child_layout_content: None,
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
+            active_transitions: false,
         }
     }
 
@@ -256,6 +263,7 @@ impl LayoutNode {
             last_child_layout_content: None,
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
+            active_transitions: false,
         }
     }
 
@@ -275,6 +283,7 @@ impl LayoutNode {
             last_child_layout_content: None,
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
+            active_transitions: false,
         }
     }
 
@@ -294,6 +303,7 @@ impl LayoutNode {
             last_child_layout_content: None,
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
+            active_transitions: false,
         }
     }
 
@@ -309,6 +319,8 @@ impl LayoutNode {
                 path_data: svg_path,
                 stroke_color: None,
                 fill_color: None,
+                stroke_is_current_color: true,
+                fill_is_current_color: false,
                 stroke_width: 2.0,
                 stroke_linecap: StrokeLineCap::Round,
                 stroke_linejoin: StrokeLineJoin::Round,
@@ -323,6 +335,7 @@ impl LayoutNode {
             last_child_layout_content: None,
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
+            active_transitions: false,
         }
     }
 
@@ -343,6 +356,7 @@ impl LayoutNode {
             last_child_layout_content: None,
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
+            active_transitions: false,
         }
     }
 
@@ -362,7 +376,16 @@ impl LayoutNode {
             last_child_layout_content: None,
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
+            active_transitions: false,
         }
+    }
+
+    /// Returns `true` if this node or any of its descendants currently has an active CSS transition.
+    pub fn has_active_transitions(&self) -> bool {
+        if self.active_transitions {
+            return true;
+        }
+        self.children.iter().any(|c| c.has_active_transitions())
     }
 
     /// Sets the EntityId on this layout node.

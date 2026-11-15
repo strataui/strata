@@ -666,6 +666,22 @@ impl CompoundSelector {
         }
         true
     }
+
+    /// Returns true if this compound selector references `:hover`, `:active`, or `:focus`.
+    pub fn has_interactive_pseudo(&self) -> bool {
+        self.parts.iter().any(|p| match p {
+            SelectorPart::PseudoClass(name) => {
+                let n = name.trim().to_ascii_lowercase();
+                n == "hover"
+                    || n == "active"
+                    || n == "focus"
+                    || n.contains(":hover")
+                    || n.contains(":active")
+                    || n.contains(":focus")
+            }
+            _ => false,
+        })
+    }
 }
 
 /// Light-weight reference to a DOM element for hierarchical selector matching.
@@ -912,6 +928,43 @@ impl Selector {
         })
     }
 
+    /// Returns true if this compound selector references `:hover`, `:active`, or `:focus` (including inside `:is`/`:where`).
+    pub fn has_interactive_pseudo(&self) -> bool {
+        self.parts.iter().any(|p| match p {
+            SelectorPart::PseudoClass(name) => {
+                let n = name.trim().to_ascii_lowercase();
+                n == "hover"
+                    || n == "active"
+                    || n == "focus"
+                    || n.contains(":hover")
+                    || n.contains(":active")
+                    || n.contains(":focus")
+            }
+            _ => false,
+        })
+    }
+
+    /// Returns true if this selector (either on the target or any ancestor/sibling combinator step)
+    /// depends on `:hover`, `:active`, or `:focus`.
+    pub fn has_any_interactive_pseudo(&self) -> bool {
+        self.target.has_interactive_pseudo()
+            || self.steps.iter().any(|(_, comp)| comp.has_interactive_pseudo())
+    }
+
+    /// Returns true if this selector (either on target or any ancestor/sibling step) uses `:hover`.
+    pub fn has_any_hover_pseudo(&self) -> bool {
+        let compound_has_hover = |comp: &CompoundSelector| {
+            comp.parts.iter().any(|p| match p {
+                SelectorPart::PseudoClass(name) => {
+                    let n = name.trim().to_ascii_lowercase();
+                    n == "hover" || n.contains(":hover")
+                }
+                _ => false,
+            })
+        };
+        compound_has_hover(&self.target) || self.steps.iter().any(|(_, c)| compound_has_hover(c))
+    }
+
     /// Evaluates whether this selector matches an element without ancestors (simple matching).
     pub fn matches(
         &self,
@@ -940,6 +993,32 @@ impl Selector {
         target: &ElementRef,
         ancestors: &[ElementRef],
         preceding_siblings: &[ElementRef],
+        is_last_child: Option<bool>,
+        is_last_of_type: Option<bool>,
+        state: &PseudoState,
+    ) -> bool {
+        self.matches_hierarchy_with_ancestor_states(
+            target,
+            ancestors,
+            None,
+            preceding_siblings,
+            None,
+            is_last_child,
+            is_last_of_type,
+            state,
+        )
+    }
+
+    /// Evaluates whether this selector matches an element using per-ancestor and per-sibling `PseudoState`s
+    /// when provided (enabling descendant rules like `.resizer:hover .resizer-line` when the ancestor is hovered).
+    #[allow(clippy::too_many_arguments)]
+    pub fn matches_hierarchy_with_ancestor_states(
+        &self,
+        target: &ElementRef,
+        ancestors: &[ElementRef],
+        ancestor_states: Option<&[PseudoState]>,
+        preceding_siblings: &[ElementRef],
+        sibling_states: Option<&[PseudoState]>,
         is_last_child: Option<bool>,
         is_last_of_type: Option<bool>,
         state: &PseudoState,
@@ -975,13 +1054,20 @@ impl Selector {
                     }
                     cur_ancestor_idx -= 1;
                     let parent = &ancestors[cur_ancestor_idx];
-                    let _parent_preceding = if cur_ancestor_idx > 0 { &ancestors[..cur_ancestor_idx] } else { &[] };
+                    let parent_state = ancestor_states
+                        .and_then(|s| s.get(cur_ancestor_idx))
+                        .unwrap_or(state);
+                    let _parent_preceding = if cur_ancestor_idx > 0 {
+                        &ancestors[..cur_ancestor_idx]
+                    } else {
+                        &[]
+                    };
                     if !compound.matches_with_context(
                         parent.tag,
                         parent.classes,
                         parent.id,
                         parent.attributes,
-                        state,
+                        parent_state,
                         _parent_preceding,
                         None,
                         None,
@@ -995,12 +1081,15 @@ impl Selector {
                     while cur_ancestor_idx > 0 {
                         cur_ancestor_idx -= 1;
                         let anc = &ancestors[cur_ancestor_idx];
+                        let anc_state = ancestor_states
+                            .and_then(|s| s.get(cur_ancestor_idx))
+                            .unwrap_or(state);
                         if compound.matches_with_context(
                             anc.tag,
                             anc.classes,
                             anc.id,
                             anc.attributes,
-                            state,
+                            anc_state,
                             &[],
                             None,
                             None,
@@ -1020,13 +1109,16 @@ impl Selector {
                     }
                     cur_sibling_idx -= 1;
                     let sib = &preceding_siblings[cur_sibling_idx];
+                    let sib_state = sibling_states
+                        .and_then(|s| s.get(cur_sibling_idx))
+                        .unwrap_or(state);
                     let sib_preceding = &preceding_siblings[..cur_sibling_idx];
                     if !compound.matches_with_context(
                         sib.tag,
                         sib.classes,
                         sib.id,
                         sib.attributes,
-                        state,
+                        sib_state,
                         sib_preceding,
                         None,
                         None,
@@ -1040,13 +1132,16 @@ impl Selector {
                     while cur_sibling_idx > 0 {
                         cur_sibling_idx -= 1;
                         let sib = &preceding_siblings[cur_sibling_idx];
+                        let sib_state = sibling_states
+                            .and_then(|s| s.get(cur_sibling_idx))
+                            .unwrap_or(state);
                         let sib_preceding = &preceding_siblings[..cur_sibling_idx];
                         if compound.matches_with_context(
                             sib.tag,
                             sib.classes,
                             sib.id,
                             sib.attributes,
-                            state,
+                            sib_state,
                             sib_preceding,
                             None,
                             None,

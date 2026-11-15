@@ -26,6 +26,7 @@ pub enum DrawCommand {
     DrawShadow {
         bounds: Rect,
         shadow: BoxShadow,
+        border_radius: BorderRadius,
     },
     DrawInsetShadow {
         bounds: Rect,
@@ -186,7 +187,7 @@ impl DrawCommand {
         match self {
             Self::DrawRect { bounds, .. } => Some(*bounds),
             Self::DrawRoundedRect { bounds, .. } => Some(*bounds),
-            Self::DrawShadow { bounds, shadow } => {
+            Self::DrawShadow { bounds, shadow, .. } => {
                 let spread = shadow.spread_radius + shadow.blur_radius;
                 Some(Rect::new(
                     bounds.x + shadow.offset_x - spread,
@@ -616,13 +617,13 @@ impl Compositor {
 
         let bounds = node.geometry.border_box;
         let border_radius = node.style.border_radius;
-        let has_clip = border_radius.top_left > 0.0
+        let has_any_radius = border_radius.top_left > 0.0
             || border_radius.top_right > 0.0
             || border_radius.bottom_left > 0.0
             || border_radius.bottom_right > 0.0;
         let clips_overflow = node.style.overflow_x != Overflow::Visible
             || node.style.overflow_y != Overflow::Visible;
-        let should_clip = has_clip || clips_overflow;
+        let should_clip = clips_overflow || (has_any_radius && node.image.is_some());
 
         // Resolve the child cull rect before emitting any stack push commands so
         // that an early return never leaves an unbalanced push on the display
@@ -760,13 +761,14 @@ impl Compositor {
                     list.push(DrawCommand::DrawShadow {
                         bounds,
                         shadow: shadow.clone(),
+                        border_radius,
                     });
                 }
             }
 
             // Solid / Rounded Background
             if let Some(bg_color) = node.style.background_color {
-                if has_clip {
+                if has_any_radius {
                     list.push(DrawCommand::DrawRoundedRect {
                         bounds,
                         color: bg_color,
@@ -949,18 +951,27 @@ impl Compositor {
             // SVG Vector Path content on this node
             if !node.svg_items.is_empty() {
                 for item in &node.svg_items {
-                    let stroke = item.stroke_color.or_else(|| {
-                        if item.fill_color.is_none() {
-                            Some(node.style.color)
-                        } else {
-                            None
-                        }
-                    });
+                    let fill = if item.fill_is_current_color {
+                        Some(node.style.color)
+                    } else {
+                        item.fill_color
+                    };
+                    let stroke = if item.stroke_is_current_color {
+                        Some(node.style.color)
+                    } else {
+                        item.stroke_color.or_else(|| {
+                            if fill.is_none() {
+                                Some(node.style.color)
+                            } else {
+                                None
+                            }
+                        })
+                    };
                     list.push(DrawCommand::DrawSvgPath {
                         bounds,
                         path_data: item.path_data.clone(),
                         stroke_color: stroke,
-                        fill_color: item.fill_color,
+                        fill_color: fill,
                         stroke_width: item.stroke_width,
                         stroke_linecap: item.stroke_linecap,
                         stroke_linejoin: item.stroke_linejoin,
@@ -1175,8 +1186,11 @@ impl Compositor {
         let clips_overflow = node.style.overflow_x != Overflow::Visible
             || node.style.overflow_y != Overflow::Visible;
         let border_radius = node.style.border_radius;
-        let has_clip = border_radius.top_left > 0.0;
-        let should_clip = has_clip || clips_overflow;
+        let has_any_radius = border_radius.top_left > 0.0
+            || border_radius.top_right > 0.0
+            || border_radius.bottom_left > 0.0
+            || border_radius.bottom_right > 0.0;
+        let should_clip = clips_overflow || (has_any_radius && node.image.is_some());
 
         let child_cull = if clips_overflow
             && bounds.width > 0.0
@@ -1234,13 +1248,14 @@ impl Compositor {
                     list.push(DrawCommand::DrawShadow {
                         bounds,
                         shadow: shadow.clone(),
+                        border_radius,
                     });
                 }
             }
 
             // Solid / Rounded Background
             if let Some(bg_color) = node.style.background_color {
-                if has_clip {
+                if has_any_radius {
                     list.push(DrawCommand::DrawRoundedRect {
                         bounds,
                         color: bg_color,
@@ -1421,18 +1436,27 @@ impl Compositor {
             // SVG Vector Path content
             if !node.svg_items.is_empty() {
                 for item in &node.svg_items {
-                    let stroke = item.stroke_color.or_else(|| {
-                        if item.fill_color.is_none() {
-                            Some(node.style.color)
-                        } else {
-                            None
-                        }
-                    });
+                    let fill = if item.fill_is_current_color {
+                        Some(node.style.color)
+                    } else {
+                        item.fill_color
+                    };
+                    let stroke = if item.stroke_is_current_color {
+                        Some(node.style.color)
+                    } else {
+                        item.stroke_color.or_else(|| {
+                            if fill.is_none() {
+                                Some(node.style.color)
+                            } else {
+                                None
+                            }
+                        })
+                    };
                     list.push(DrawCommand::DrawSvgPath {
                         bounds,
                         path_data: item.path_data.clone(),
                         stroke_color: stroke,
-                        fill_color: item.fill_color,
+                        fill_color: fill,
                         stroke_width: item.stroke_width,
                         stroke_linecap: item.stroke_linecap,
                         stroke_linejoin: item.stroke_linejoin,

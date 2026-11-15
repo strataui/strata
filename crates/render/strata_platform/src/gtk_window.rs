@@ -225,13 +225,23 @@ fn stroke_border_side(
     cr.set_line_cap(cairo::LineCap::Butt);
 }
 
-/// Renders an outer box shadow with analytical concentric Gaussian falloff in Cairo.
+#[inline]
+fn expand_shadow_corner(base_r: f32, spread: f64, blur_expand: f64) -> f32 {
+    if base_r > 0.001 {
+        (base_r as f64 + spread + blur_expand).max(0.0) as f32
+    } else {
+        (blur_expand * 0.5).max(0.0) as f32
+    }
+}
+
+/// Renders an outer box shadow with per-corner border-radius contour and Even-Odd interior knockout.
 pub fn cairo_draw_shadow(
     cr: &cairo::Context,
     bounds: &strata_layout::Rect,
     shadow: &strata_style::types::BoxShadow,
+    border_radius: strata_style::types::BorderRadius,
 ) {
-    if shadow.color.a() <= 0.001 {
+    if shadow.color.a() <= 0.001 || bounds.width <= 0.0 || bounds.height <= 0.0 {
         return;
     }
     let r = shadow.color.r() as f64;
@@ -239,39 +249,91 @@ pub fn cairo_draw_shadow(
     let b = shadow.color.b() as f64;
     let base_a = shadow.color.a() as f64;
 
+    let _ = cr.save();
+
+    // CSS Backgrounds and Borders Level 3: clip out the element's own rounded border-box
+    // via Even-Odd fill rule so outer drop shadows never darken translucent glass interiors.
+    let max_expand = (shadow.spread_radius.max(0.0) + shadow.blur_radius.max(0.0) * 1.5 + 8.0) as f64;
+    let bx1 = bounds.x as f64;
+    let by1 = bounds.y as f64;
+    let bx2 = (bounds.x + bounds.width) as f64;
+    let by2 = (bounds.y + bounds.height) as f64;
+    let sx1 = (bounds.x + shadow.offset_x) as f64 - max_expand;
+    let sy1 = (bounds.y + shadow.offset_y) as f64 - max_expand;
+    let sx2 = (bounds.x + bounds.width + shadow.offset_x) as f64 + max_expand;
+    let sy2 = (bounds.y + bounds.height + shadow.offset_y) as f64 + max_expand;
+    let outer_x1 = bx1.min(sx1) - 4.0;
+    let outer_y1 = by1.min(sy1) - 4.0;
+    let outer_x2 = bx2.max(sx2) + 4.0;
+    let outer_y2 = by2.max(sy2) + 4.0;
+
+    cr.new_path();
+    cr.rectangle(
+        outer_x1,
+        outer_y1,
+        (outer_x2 - outer_x1).max(0.0),
+        (outer_y2 - outer_y1).max(0.0),
+    );
+    cairo_rounded_rect_radii(
+        cr,
+        bx1,
+        by1,
+        bounds.width as f64,
+        bounds.height as f64,
+        border_radius,
+    );
+    cr.set_fill_rule(cairo::FillRule::EvenOdd);
+    cr.clip();
+    cr.set_fill_rule(cairo::FillRule::Winding);
+
+    let spread = shadow.spread_radius as f64;
+
     if shadow.blur_radius <= 0.5 {
-        let x = (bounds.x + shadow.offset_x - shadow.spread_radius) as f64;
-        let y = (bounds.y + shadow.offset_y - shadow.spread_radius) as f64;
-        let w = (bounds.width + shadow.spread_radius * 2.0).max(0.0) as f64;
-        let h = (bounds.height + shadow.spread_radius * 2.0).max(0.0) as f64;
+        let x = (bounds.x + shadow.offset_x) as f64 - spread;
+        let y = (bounds.y + shadow.offset_y) as f64 - spread;
+        let w = (bounds.width as f64 + spread * 2.0).max(0.0);
+        let h = (bounds.height as f64 + spread * 2.0).max(0.0);
+        let sharp_r = strata_style::types::BorderRadius::new(
+            expand_shadow_corner(border_radius.top_left, spread, 0.0),
+            expand_shadow_corner(border_radius.top_right, spread, 0.0),
+            expand_shadow_corner(border_radius.bottom_right, spread, 0.0),
+            expand_shadow_corner(border_radius.bottom_left, spread, 0.0),
+        );
+        cairo_rounded_rect_radii(cr, x, y, w, h, sharp_r);
         cr.set_source_rgba(r, g, b, base_a);
-        cr.rectangle(x, y, w, h);
         let _ = cr.fill();
+        let _ = cr.restore();
         return;
     }
 
-    // Concentric Gaussian approximation
-    let steps = (shadow.blur_radius.ceil() as usize).clamp(3, 12);
+    // Concentric Gaussian approximation following per-corner radii
+    let steps = (shadow.blur_radius.ceil() as usize).clamp(4, 16);
     let blur = shadow.blur_radius as f64;
-    let spread = shadow.spread_radius as f64;
     let total_layers = steps as f64;
 
     for i in 0..steps {
         let t = (i as f64 + 0.5) / total_layers;
-        // Gaussian falloff approximation: (1 - t^2)
         let alpha = base_a * (1.0 - t * t) / (total_layers * 0.65);
-        let current_expand = spread + t * blur;
+        let blur_expand = t * blur;
+        let current_expand = spread + blur_expand;
 
         let x = (bounds.x + shadow.offset_x) as f64 - current_expand;
         let y = (bounds.y + shadow.offset_y) as f64 - current_expand;
         let w = (bounds.width as f64 + current_expand * 2.0).max(0.0);
         let h = (bounds.height as f64 + current_expand * 2.0).max(0.0);
 
-        let corner_r = (current_expand * 0.5).max(0.0);
-        cairo_rounded_rect(cr, x, y, w, h, corner_r);
+        let step_r = strata_style::types::BorderRadius::new(
+            expand_shadow_corner(border_radius.top_left, spread, blur_expand),
+            expand_shadow_corner(border_radius.top_right, spread, blur_expand),
+            expand_shadow_corner(border_radius.bottom_right, spread, blur_expand),
+            expand_shadow_corner(border_radius.bottom_left, spread, blur_expand),
+        );
+        cairo_rounded_rect_radii(cr, x, y, w, h, step_r);
         cr.set_source_rgba(r, g, b, alpha);
         let _ = cr.fill();
     }
+
+    let _ = cr.restore();
 }
 
 /// Renders an inset box shadow clipped to the element's border box in Cairo.
@@ -323,6 +385,53 @@ pub fn cairo_draw_inset_shadow(
     let _ = cr.restore();
 }
 
+/// Resolves missing and out-of-order color stop positions per CSS Images Level 3 section 3.4.3.
+fn resolve_gradient_stop_positions(stops: &[strata_style::types::ColorStop]) -> Vec<f64> {
+    let n = stops.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut positions: Vec<Option<f64>> = stops.iter().map(|s| s.position.map(|p| p as f64)).collect();
+    if positions[0].is_none() {
+        positions[0] = Some(0.0);
+    }
+    if positions[n - 1].is_none() {
+        positions[n - 1] = Some(1.0);
+    }
+
+    let mut max_seen = positions[0].unwrap_or(0.0);
+    for pos in positions.iter_mut().flatten() {
+        if *pos < max_seen {
+            *pos = max_seen;
+        } else {
+            max_seen = *pos;
+        }
+    }
+
+    let mut out = vec![0.0; n];
+    let mut idx = 0;
+    while idx < n {
+        if let Some(p) = positions[idx] {
+            out[idx] = p;
+            idx += 1;
+        } else {
+            let start_idx = idx - 1;
+            let start_pos = out[start_idx];
+            let mut end_idx = idx + 1;
+            while end_idx < n && positions[end_idx].is_none() {
+                end_idx += 1;
+            }
+            let end_pos = positions[end_idx.min(n - 1)].unwrap_or(1.0);
+            let span = (end_idx - start_idx) as f64;
+            for (k, slot) in out.iter_mut().enumerate().take(end_idx).skip(idx) {
+                *slot = start_pos + (end_pos - start_pos) * ((k - start_idx) as f64 / span);
+            }
+            idx = end_idx;
+        }
+    }
+    out
+}
+
 /// Renders a CSS Linear Gradient using high-precision Cairo LinearGradient patterns.
 pub fn cairo_draw_linear_gradient(
     cr: &cairo::Context,
@@ -351,18 +460,8 @@ pub fn cairo_draw_linear_gradient(
     let y1 = cy + dy;
 
     let pattern = cairo::LinearGradient::new(x0, y0, x1, y1);
-    let n = stops.len();
-    for (idx, stop) in stops.iter().enumerate() {
-        let pos = match stop.position {
-            Some(p) => p as f64,
-            None => {
-                if n > 1 {
-                    idx as f64 / (n - 1) as f64
-                } else {
-                    0.0
-                }
-            }
-        };
+    let resolved_positions = resolve_gradient_stop_positions(stops);
+    for (stop, pos) in stops.iter().zip(resolved_positions) {
         pattern.add_color_stop_rgba(
             pos.clamp(0.0, 1.0),
             stop.color.r() as f64,
@@ -397,18 +496,8 @@ pub fn cairo_draw_radial_gradient(
     let radius = (w.max(h) / 2.0).max(1.0);
 
     let pattern = cairo::RadialGradient::new(cx, cy, 0.0, cx, cy, radius);
-    let n = stops.len();
-    for (idx, stop) in stops.iter().enumerate() {
-        let pos = match stop.position {
-            Some(p) => p as f64,
-            None => {
-                if n > 1 {
-                    idx as f64 / (n - 1) as f64
-                } else {
-                    0.0
-                }
-            }
-        };
+    let resolved_positions = resolve_gradient_stop_positions(stops);
+    for (stop, pos) in stops.iter().zip(resolved_positions) {
         pattern.add_color_stop_rgba(
             pos.clamp(0.0, 1.0),
             stop.color.r() as f64,
@@ -422,6 +511,311 @@ pub fn cairo_draw_radial_gradient(
 
     let _ = cr.set_source(&pattern);
     let _ = cr.fill();
+}
+
+fn box_blur_horizontal(src: &[u8], dst: &mut [u8], w: usize, h: usize, radius: usize) {
+    let diam = (2 * radius + 1) as u32;
+    let half = diam / 2;
+    for y in 0..h {
+        let row = y * w * 4;
+        let mut sum_b = src[row] as u32 * (radius as u32 + 1);
+        let mut sum_g = src[row + 1] as u32 * (radius as u32 + 1);
+        let mut sum_r = src[row + 2] as u32 * (radius as u32 + 1);
+        let mut sum_a = src[row + 3] as u32 * (radius as u32 + 1);
+        for ix in 1..=radius {
+            let p = row + ix.min(w - 1) * 4;
+            sum_b += src[p] as u32;
+            sum_g += src[p + 1] as u32;
+            sum_r += src[p + 2] as u32;
+            sum_a += src[p + 3] as u32;
+        }
+        for x in 0..w {
+            let out = row + x * 4;
+            dst[out] = ((sum_b + half) / diam) as u8;
+            dst[out + 1] = ((sum_g + half) / diam) as u8;
+            dst[out + 2] = ((sum_r + half) / diam) as u8;
+            dst[out + 3] = ((sum_a + half) / diam) as u8;
+
+            let left = row + x.saturating_sub(radius) * 4;
+            let right = row + (x + radius + 1).min(w - 1) * 4;
+            sum_b = sum_b + src[right] as u32 - src[left] as u32;
+            sum_g = sum_g + src[right + 1] as u32 - src[left + 1] as u32;
+            sum_r = sum_r + src[right + 2] as u32 - src[left + 2] as u32;
+            sum_a = sum_a + src[right + 3] as u32 - src[left + 3] as u32;
+        }
+    }
+}
+
+fn box_blur_vertical(src: &[u8], dst: &mut [u8], w: usize, h: usize, radius: usize) {
+    let diam = (2 * radius + 1) as u32;
+    let half = diam / 2;
+    for x in 0..w {
+        let col0 = x * 4;
+        let mut sum_b = src[col0] as u32 * (radius as u32 + 1);
+        let mut sum_g = src[col0 + 1] as u32 * (radius as u32 + 1);
+        let mut sum_r = src[col0 + 2] as u32 * (radius as u32 + 1);
+        let mut sum_a = src[col0 + 3] as u32 * (radius as u32 + 1);
+        for iy in 1..=radius {
+            let p = iy.min(h - 1) * w * 4 + col0;
+            sum_b += src[p] as u32;
+            sum_g += src[p + 1] as u32;
+            sum_r += src[p + 2] as u32;
+            sum_a += src[p + 3] as u32;
+        }
+        for y in 0..h {
+            let out = y * w * 4 + col0;
+            dst[out] = ((sum_b + half) / diam) as u8;
+            dst[out + 1] = ((sum_g + half) / diam) as u8;
+            dst[out + 2] = ((sum_r + half) / diam) as u8;
+            dst[out + 3] = ((sum_a + half) / diam) as u8;
+
+            let top = y.saturating_sub(radius) * w * 4 + col0;
+            let bot = (y + radius + 1).min(h - 1) * w * 4 + col0;
+            sum_b = sum_b + src[bot] as u32 - src[top] as u32;
+            sum_g = sum_g + src[bot + 1] as u32 - src[top + 1] as u32;
+            sum_r = sum_r + src[bot + 2] as u32 - src[top + 2] as u32;
+            sum_a = sum_a + src[bot + 3] as u32 - src[top + 3] as u32;
+        }
+    }
+}
+
+fn box_blur_3pass(buf: &mut [u8], w: usize, h: usize, radius: usize) {
+    if radius == 0 || w == 0 || h == 0 {
+        return;
+    }
+    let mut tmp = vec![0u8; buf.len()];
+    for _ in 0..3 {
+        box_blur_horizontal(buf, &mut tmp, w, h, radius);
+        box_blur_vertical(&tmp, buf, w, h, radius);
+    }
+}
+
+fn apply_color_filter_op_premul(buf: &mut [u8], op: strata_style::effects::FilterOp) {
+    use strata_style::effects::FilterOp;
+    match op {
+        FilterOp::Blur(_) | FilterOp::DropShadow { .. } => {}
+        FilterOp::Brightness(amount) => {
+            let f = amount.max(0.0);
+            for px in buf.chunks_exact_mut(4) {
+                let a = px[3] as f32;
+                px[0] = (px[0] as f32 * f).round().clamp(0.0, a) as u8;
+                px[1] = (px[1] as f32 * f).round().clamp(0.0, a) as u8;
+                px[2] = (px[2] as f32 * f).round().clamp(0.0, a) as u8;
+            }
+        }
+        FilterOp::Contrast(amount) => {
+            let f = amount.max(0.0);
+            for px in buf.chunks_exact_mut(4) {
+                let a = px[3] as f32;
+                let mid = 0.5 * a;
+                px[0] = ((px[0] as f32 - mid) * f + mid).round().clamp(0.0, a) as u8;
+                px[1] = ((px[1] as f32 - mid) * f + mid).round().clamp(0.0, a) as u8;
+                px[2] = ((px[2] as f32 - mid) * f + mid).round().clamp(0.0, a) as u8;
+            }
+        }
+        FilterOp::Saturate(amount) => {
+            let s = amount.max(0.0);
+            for px in buf.chunks_exact_mut(4) {
+                let a = px[3] as f32;
+                let b = px[0] as f32;
+                let g = px[1] as f32;
+                let r = px[2] as f32;
+                let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                px[0] = (lum + (b - lum) * s).round().clamp(0.0, a) as u8;
+                px[1] = (lum + (g - lum) * s).round().clamp(0.0, a) as u8;
+                px[2] = (lum + (r - lum) * s).round().clamp(0.0, a) as u8;
+            }
+        }
+        FilterOp::Grayscale(amount) => {
+            let t = amount.clamp(0.0, 1.0);
+            for px in buf.chunks_exact_mut(4) {
+                let a = px[3] as f32;
+                let b = px[0] as f32;
+                let g = px[1] as f32;
+                let r = px[2] as f32;
+                let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                px[0] = (b + (lum - b) * t).round().clamp(0.0, a) as u8;
+                px[1] = (g + (lum - g) * t).round().clamp(0.0, a) as u8;
+                px[2] = (r + (lum - r) * t).round().clamp(0.0, a) as u8;
+            }
+        }
+        FilterOp::Invert(amount) => {
+            let t = amount.clamp(0.0, 1.0);
+            for px in buf.chunks_exact_mut(4) {
+                let a = px[3] as f32;
+                px[0] = (px[0] as f32 + (a - 2.0 * px[0] as f32) * t).round().clamp(0.0, a) as u8;
+                px[1] = (px[1] as f32 + (a - 2.0 * px[1] as f32) * t).round().clamp(0.0, a) as u8;
+                px[2] = (px[2] as f32 + (a - 2.0 * px[2] as f32) * t).round().clamp(0.0, a) as u8;
+            }
+        }
+        FilterOp::Sepia(amount) => {
+            let t = amount.clamp(0.0, 1.0);
+            for px in buf.chunks_exact_mut(4) {
+                let a = px[3] as f32;
+                let b = px[0] as f32;
+                let g = px[1] as f32;
+                let r = px[2] as f32;
+                let sr = (0.393 * r + 0.769 * g + 0.189 * b).min(a);
+                let sg = (0.349 * r + 0.686 * g + 0.168 * b).min(a);
+                let sb = (0.272 * r + 0.534 * g + 0.131 * b).min(a);
+                px[0] = (b + (sb - b) * t).round().clamp(0.0, a) as u8;
+                px[1] = (g + (sg - g) * t).round().clamp(0.0, a) as u8;
+                px[2] = (r + (sr - r) * t).round().clamp(0.0, a) as u8;
+            }
+        }
+        FilterOp::Opacity(amount) => {
+            let f = amount.clamp(0.0, 1.0);
+            for px in buf.chunks_exact_mut(4) {
+                px[0] = (px[0] as f32 * f).round() as u8;
+                px[1] = (px[1] as f32 * f).round() as u8;
+                px[2] = (px[2] as f32 * f).round() as u8;
+                px[3] = (px[3] as f32 * f).round() as u8;
+            }
+        }
+        FilterOp::HueRotate(deg) => {
+            let rad = deg.to_radians();
+            let cos_a = rad.cos();
+            let sin_a = rad.sin();
+            let m00 = 0.213 + cos_a * 0.787 - sin_a * 0.213;
+            let m01 = 0.715 - cos_a * 0.715 - sin_a * 0.715;
+            let m02 = 0.072 - cos_a * 0.072 + sin_a * 0.928;
+            let m10 = 0.213 - cos_a * 0.213 + sin_a * 0.143;
+            let m11 = 0.715 + cos_a * 0.285 + sin_a * 0.140;
+            let m12 = 0.072 - cos_a * 0.072 - sin_a * 0.283;
+            let m20 = 0.213 - cos_a * 0.213 - sin_a * 0.787;
+            let m21 = 0.715 - cos_a * 0.715 + sin_a * 0.715;
+            let m22 = 0.072 + cos_a * 0.928 + sin_a * 0.072;
+            for px in buf.chunks_exact_mut(4) {
+                let a = px[3] as f32;
+                let b = px[0] as f32;
+                let g = px[1] as f32;
+                let r = px[2] as f32;
+                px[2] = (r * m00 + g * m01 + b * m02).round().clamp(0.0, a) as u8;
+                px[1] = (r * m10 + g * m11 + b * m12).round().clamp(0.0, a) as u8;
+                px[0] = (r * m20 + g * m21 + b * m22).round().clamp(0.0, a) as u8;
+            }
+        }
+    }
+}
+
+/// Applies CSS `backdrop-filter` operations (3-pass separable Gaussian-approximating box blur,
+/// saturate, brightness, contrast, etc.) to the underlying Cairo surface pixels inside `bounds`
+/// clipped to `radius`, restoring the Cairo clip immediately so outer shadows and children are not clipped.
+pub fn cairo_apply_backdrop_filter(
+    cr: &cairo::Context,
+    bounds: &strata_layout::Rect,
+    radius: strata_style::types::BorderRadius,
+    filter: &strata_style::effects::BackdropFilter,
+) {
+    if filter.is_empty() || bounds.width <= 0.0 || bounds.height <= 0.0 {
+        return;
+    }
+
+    let (d0x, d0y) = cr.user_to_device(bounds.x as f64, bounds.y as f64);
+    let (d1x, d1y) = cr.user_to_device(
+        (bounds.x + bounds.width) as f64,
+        (bounds.y + bounds.height) as f64,
+    );
+    let bx1 = d0x.min(d1x);
+    let by1 = d0y.min(d1y);
+    let bx2 = d0x.max(d1x);
+    let by2 = d0y.max(d1y);
+
+    let dev_scale = ((bx2 - bx1) / bounds.width as f64).abs().max(1.0);
+    let max_blur = filter
+        .operations
+        .iter()
+        .fold(0.0_f64, |acc, op| match op {
+            strata_style::effects::FilterOp::Blur(r) => acc.max(*r as f64),
+            _ => acc,
+        });
+    let pad = ((max_blur * dev_scale).ceil() as i32).clamp(0, 128);
+
+    let (cx1, cy1, cx2, cy2) = if let Ok((ux1, uy1, ux2, uy2)) = cr.clip_extents() {
+        let (dc0x, dc0y) = cr.user_to_device(ux1, uy1);
+        let (dc1x, dc1y) = cr.user_to_device(ux2, uy2);
+        (
+            dc0x.min(dc1x).floor() as i32,
+            dc0y.min(dc1y).floor() as i32,
+            dc0x.max(dc1x).ceil() as i32,
+            dc0y.max(dc1y).ceil() as i32,
+        )
+    } else {
+        (i32::MIN / 2, i32::MIN / 2, i32::MAX / 2, i32::MAX / 2)
+    };
+
+    let sx1 = (bx1.floor() as i32 - pad).max(cx1);
+    let sy1 = (by1.floor() as i32 - pad).max(cy1);
+    let sx2 = (bx2.ceil() as i32 + pad).min(cx2);
+    let sy2 = (by2.ceil() as i32 + pad).min(cy2);
+    let sw = sx2 - sx1;
+    let sh = sy2 - sy1;
+    if sw <= 0 || sh <= 0 {
+        return;
+    }
+
+    let mut snapshot = match cairo::ImageSurface::create(cairo::Format::ARgb32, sw, sh) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    {
+        let target = cr.target();
+        target.flush();
+        if let Ok(snap_cr) = cairo::Context::new(&snapshot) {
+            snap_cr.set_operator(cairo::Operator::Source);
+            let _ = snap_cr.set_source_surface(&target, -sx1 as f64, -sy1 as f64);
+            let _ = snap_cr.paint();
+        }
+    }
+    snapshot.flush();
+
+    let w_us = sw as usize;
+    let h_us = sh as usize;
+    let stride = snapshot.stride() as usize;
+    if let Ok(mut data) = snapshot.data() {
+        let mut buf = vec![0u8; w_us * h_us * 4];
+        for row in 0..h_us {
+            let src_off = row * stride;
+            let dst_off = row * w_us * 4;
+            buf[dst_off..dst_off + w_us * 4].copy_from_slice(&data[src_off..src_off + w_us * 4]);
+        }
+
+        for op in &filter.operations {
+            match *op {
+                strata_style::effects::FilterOp::Blur(radius_px) => {
+                    let blur_r = ((radius_px as f64 * dev_scale).round() as usize).min(128);
+                    if blur_r >= 1 {
+                        box_blur_3pass(&mut buf, w_us, h_us, blur_r);
+                    }
+                }
+                other => apply_color_filter_op_premul(&mut buf, other),
+            }
+        }
+
+        for row in 0..h_us {
+            let src_off = row * w_us * 4;
+            let dst_off = row * stride;
+            data[dst_off..dst_off + w_us * 4].copy_from_slice(&buf[src_off..src_off + w_us * 4]);
+        }
+    }
+    snapshot.mark_dirty();
+
+    let _ = cr.save();
+    cairo_rounded_rect_radii(
+        cr,
+        bounds.x as f64,
+        bounds.y as f64,
+        bounds.width as f64,
+        bounds.height as f64,
+        radius,
+    );
+    cr.clip();
+    cr.identity_matrix();
+    cr.set_operator(cairo::Operator::Source);
+    let _ = cr.set_source_surface(&snapshot, sx1 as f64, sy1 as f64);
+    let _ = cr.paint();
+    let _ = cr.restore();
 }
 
 fn skip_ws(chars: &mut std::iter::Peekable<std::str::Chars>) {
@@ -953,7 +1347,7 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                 border_width,
                 border_color,
             } => {
-                cairo_rounded_rect(
+                cairo_rounded_rect_radii(
                     cr,
                     bounds.x as f64,
                     bounds.y as f64,
@@ -993,8 +1387,12 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                     }
                 }
             }
-            DrawCommand::DrawShadow { bounds, shadow } => {
-                cairo_draw_shadow(cr, bounds, shadow);
+            DrawCommand::DrawShadow {
+                bounds,
+                shadow,
+                border_radius,
+            } => {
+                cairo_draw_shadow(cr, bounds, shadow, *border_radius);
             }
             DrawCommand::DrawInsetShadow {
                 bounds,
@@ -1024,28 +1422,9 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                 radius,
                 filter,
             } => {
-                let _ = cr.save();
-                cairo_rounded_rect_radii(
-                    cr,
-                    bounds.x as f64,
-                    bounds.y as f64,
-                    bounds.width as f64,
-                    bounds.height as f64,
-                    radius.top_left as f64,
-                );
-                cr.clip();
-                if filter
-                    .operations
-                    .iter()
-                    .any(|op| matches!(op, strata_style::effects::FilterOp::Blur(_)))
-                {
-                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.04);
-                    let _ = cr.paint();
-                }
+                cairo_apply_backdrop_filter(cr, bounds, *radius, filter);
             }
-            DrawCommand::PopBackdropFilter => {
-                let _ = cr.restore();
-            }
+            DrawCommand::PopBackdropFilter => {}
             DrawCommand::DrawBorder {
                 bounds,
                 widths,
@@ -1783,6 +2162,7 @@ pub fn render_to_png_bytes(
 thread_local! {
     static CURRENT_GTK_WINDOW: std::cell::RefCell<Option<gtk::Window>> = const { std::cell::RefCell::new(None) };
     static IS_MAXIMIZED_TRACKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static IS_WINDOW_DOCKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static WINDOW_NORMAL_GEOMETRY: std::cell::Cell<(i32, i32, i32, i32)> = const { std::cell::Cell::new((100, 100, 1280, 800)) };
 }
 
@@ -1812,6 +2192,9 @@ pub fn gtk_minimize() {
 /// Toggles maximize / restore state on the current native GTK desktop window.
 /// Returns true if the window is now maximized, false otherwise.
 pub fn gtk_toggle_maximize() -> bool {
+    if IS_WINDOW_DOCKED.with(|d| d.get()) {
+        return false;
+    }
     CURRENT_GTK_WINDOW.with(|w| {
         use gtk::prelude::*;
         if let Some(win) = w.borrow().as_ref() {
@@ -1931,6 +2314,9 @@ pub fn gtk_current_modifiers() -> crate::events::Modifiers {
 /// Starts a window-manager move for the current press. When the window is maximized it is first
 /// restored and repositioned so the pointer keeps its proportional place on the title strip.
 pub fn gtk_begin_window_drag(fraction_x: f32, local_y: f32) {
+    if IS_WINDOW_DOCKED.with(|d| d.get()) {
+        return;
+    }
     let (rx, ry, button, time) = LAST_PRESS.with(|p| p.get());
     CURRENT_GTK_WINDOW.with(|w| {
         use gtk::prelude::*;
@@ -2162,7 +2548,6 @@ fn map_key_name_to_keycode(key_name: &str) -> crate::events::KeyCode {
         "b" | "B" => crate::events::KeyCode::KeyB,
         "c" | "C" => crate::events::KeyCode::KeyC,
         "d" | "D" => crate::events::KeyCode::KeyD,
-    static IS_WINDOW_DOCKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         "e" | "E" => crate::events::KeyCode::KeyE,
         "f" | "F" => crate::events::KeyCode::KeyF,
         "g" | "G" => crate::events::KeyCode::KeyG,
@@ -2192,9 +2577,6 @@ fn map_key_name_to_keycode(key_name: &str) -> crate::events::KeyCode {
         "4" => crate::events::KeyCode::Digit4,
         "5" => crate::events::KeyCode::Digit5,
         "6" => crate::events::KeyCode::Digit6,
-    if IS_WINDOW_DOCKED.with(|d| d.get()) {
-        return false;
-    }
         "7" => crate::events::KeyCode::Digit7,
         "8" => crate::events::KeyCode::Digit8,
         "9" => crate::events::KeyCode::Digit9,
@@ -2228,6 +2610,46 @@ fn map_key_name_to_keycode(key_name: &str) -> crate::events::KeyCode {
     }
 }
 
+fn query_primary_workarea() -> Option<(i32, i32, i32, i32)> {
+    use gtk::gdk::prelude::MonitorExt;
+    let display = gtk::gdk::Display::default()?;
+    let monitor = display.primary_monitor().or_else(|| display.monitor(0))?;
+    let workarea = monitor.workarea();
+    Some((
+        workarea.x(),
+        workarea.y(),
+        workarea.width(),
+        workarea.height(),
+    ))
+}
+
+fn snap_window_to_anchor(
+    win: &gtk::Window,
+    anchor: crate::window::WindowAnchor,
+    fallback_w: i32,
+    fallback_h: i32,
+) {
+    use gtk::prelude::*;
+    if let Some((wx, wy, ww, wh)) = query_primary_workarea() {
+        let (sw, sh) = win.size();
+        let w = if sw > 0 { sw } else { fallback_w };
+        let h = if sh > 0 { sh } else { fallback_h };
+        let (tx, ty) = anchor.compute_position(wx, wy, ww, wh, w, h);
+        if win.position() != (tx, ty) {
+            win.move_(tx, ty);
+        }
+    }
+}
+
+fn attach_rgba_visual(win: &gtk::Window) {
+    use gtk::prelude::*;
+    if let Some(screen) = gtk::prelude::WidgetExt::screen(win) {
+        if let Some(visual) = screen.rgba_visual() {
+            win.set_visual(Some(&visual));
+        }
+    }
+}
+
 /// Launches a live native GTK3 desktop window with Cairo graphics presentation.
 pub fn launch_gtk_window<F, E>(
     title: &str,
@@ -2241,11 +2663,52 @@ where
     F: FnMut(f32, f32, &cairo::Context) + 'static,
     E: FnMut(&crate::events::PlatformEvent) -> bool + 'static,
 {
+    let config = crate::window::WindowConfig {
+        title: title.to_string(),
+        width,
+        height,
+        decoration: if decorated {
+            crate::window::WindowDecoration::NativeOs
+        } else {
+            crate::window::WindowDecoration::ClientSideDecorations
+        },
+        ..Default::default()
+    };
+    launch_gtk_window_with_config(&config, on_draw, on_event)
+}
+
+/// Launches a live native GTK3 desktop window honoring the full [`crate::window::WindowConfig`]
+/// (resizability, always-on-top, RGBA visual transparency, window mode, and monitor workarea docking).
+pub fn launch_gtk_window_with_config<F, E>(
+    config: &crate::window::WindowConfig,
+    on_draw: F,
+    on_event: E,
+) -> Result<(), String>
+where
+    F: FnMut(f32, f32, &cairo::Context) + 'static,
+    E: FnMut(&crate::events::PlatformEvent) -> bool + 'static,
+{
     use gtk::prelude::*;
 
     if gtk::init().is_err() {
         return Err("Failed to initialize GTK on current DISPLAY".to_string());
     }
+
+    IS_CLOSING.with(|c| c.set(false));
+
+    let width = config.width.max(1);
+    let height = config.height.max(1);
+    let win_w = width as i32;
+    let win_h = height as i32;
+    let effective_anchor = config.effective_anchor();
+    let docked = config.is_docked();
+    let decorated = config.decoration == crate::window::WindowDecoration::NativeOs;
+    let transparent = config.transparent
+        || config.decoration == crate::window::WindowDecoration::FramelessTransparent;
+    let resizable = if docked { false } else { config.resizable };
+    let always_on_top = docked || config.always_on_top;
+
+    IS_WINDOW_DOCKED.with(|d| d.set(docked));
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
     window.set_title(&config.title);
@@ -2259,12 +2722,60 @@ where
     }
     window.resize(win_w, win_h);
     window.set_decorated(decorated);
+    window.set_resizable(resizable);
+    window.set_keep_above(always_on_top);
+    window.add_events(gtk::gdk::EventMask::STRUCTURE_MASK);
+
+    if transparent {
+        window.set_app_paintable(true);
+        attach_rgba_visual(&window);
+        window.connect_screen_changed(|win, _prev_screen| {
+            attach_rgba_visual(win);
+        });
+    }
+
+    match effective_anchor {
+        Some(crate::window::WindowAnchor::Center) | None => {
+            window.set_position(gtk::WindowPosition::Center);
+        }
+        Some(anchor) => {
+            let gravity = match anchor {
+                crate::window::WindowAnchor::TopLeft => gtk::gdk::Gravity::NorthWest,
+                crate::window::WindowAnchor::TopRight => gtk::gdk::Gravity::NorthEast,
+                crate::window::WindowAnchor::BottomLeft => gtk::gdk::Gravity::SouthWest,
+                crate::window::WindowAnchor::BottomRight => gtk::gdk::Gravity::SouthEast,
+                crate::window::WindowAnchor::Center => gtk::gdk::Gravity::Center,
+            };
+            window.set_gravity(gravity);
+            snap_window_to_anchor(&window, anchor, win_w, win_h);
+        }
+    }
+
+    if !docked {
+        match config.mode {
+            crate::window::WindowMode::Maximized => {
+                IS_MAXIMIZED_TRACKER.with(|t| t.set(true));
+                window.maximize();
+            }
+            crate::window::WindowMode::Minimized => {
+                window.iconify();
+            }
+            crate::window::WindowMode::BorderlessFullscreen
+            | crate::window::WindowMode::ExclusiveFullscreen => {
+                window.fullscreen();
+            }
+            crate::window::WindowMode::Windowed => {}
+        }
+    }
 
     CURRENT_GTK_WINDOW.with(|w| {
         *w.borrow_mut() = Some(window.clone());
     });
 
     let drawing_area = gtk::DrawingArea::new();
+    if transparent {
+        drawing_area.set_app_paintable(true);
+    }
     drawing_area.add_events(
         gtk::gdk::EventMask::BUTTON_PRESS_MASK
             | gtk::gdk::EventMask::BUTTON_RELEASE_MASK
@@ -2326,9 +2837,6 @@ where
     let on_draw_rc = std::rc::Rc::new(std::cell::RefCell::new(on_draw));
     let on_draw_cb = on_draw_rc.clone();
     drawing_area.connect_draw(move |widget, cr| {
-    if IS_WINDOW_DOCKED.with(|d| d.get()) {
-        return;
-    }
         let w = widget.allocated_width() as f32;
         let h = widget.allocated_height() as f32;
         // Live paint must use the same font options as measurement.
@@ -2624,46 +3132,6 @@ where
                     if (on_event_key.borrow_mut())(&char_event) {
                         redraw = true;
                     }
-fn query_primary_workarea() -> Option<(i32, i32, i32, i32)> {
-    use gtk::gdk::prelude::MonitorExt;
-    let display = gtk::gdk::Display::default()?;
-    let monitor = display.primary_monitor().or_else(|| display.monitor(0))?;
-    let workarea = monitor.workarea();
-    Some((
-        workarea.x(),
-        workarea.y(),
-        workarea.width(),
-        workarea.height(),
-    ))
-}
-
-fn snap_window_to_anchor(
-    win: &gtk::Window,
-    anchor: crate::window::WindowAnchor,
-    fallback_w: i32,
-    fallback_h: i32,
-) {
-    use gtk::prelude::*;
-    if let Some((wx, wy, ww, wh)) = query_primary_workarea() {
-        let (sw, sh) = win.size();
-        let w = if sw > 0 { sw } else { fallback_w };
-        let h = if sh > 0 { sh } else { fallback_h };
-        let (tx, ty) = anchor.compute_position(wx, wy, ww, wh, w, h);
-        if win.position() != (tx, ty) {
-            win.move_(tx, ty);
-        }
-    }
-}
-
-fn attach_rgba_visual(win: &gtk::Window) {
-    use gtk::prelude::*;
-    if let Some(screen) = gtk::prelude::WidgetExt::screen(win) {
-        if let Some(visual) = screen.rgba_visual() {
-            win.set_visual(Some(&visual));
-        }
-    }
-}
-
                 }
             }
         }
@@ -2673,31 +3141,6 @@ fn attach_rgba_visual(win: &gtk::Window) {
         }
 
         gtk::glib::Propagation::Proceed
-where
-    F: FnMut(f32, f32, &cairo::Context) + 'static,
-    E: FnMut(&crate::events::PlatformEvent) -> bool + 'static,
-{
-    let config = crate::window::WindowConfig {
-        title: title.to_string(),
-        width,
-        height,
-        decoration: if decorated {
-            crate::window::WindowDecoration::NativeOs
-        } else {
-            crate::window::WindowDecoration::ClientSideDecorations
-        },
-        ..Default::default()
-    };
-    launch_gtk_window_with_config(&config, on_draw, on_event)
-}
-
-/// Launches a live native GTK3 desktop window honoring the full [`crate::window::WindowConfig`]
-/// (resizability, always-on-top, RGBA visual transparency, window mode, and monitor workarea docking).
-pub fn launch_gtk_window_with_config<F, E>(
-    config: &crate::window::WindowConfig,
-    on_draw: F,
-    on_event: E,
-) -> Result<(), String>
     });
 
     let im_key_release = im_context.clone();
@@ -2708,82 +3151,18 @@ pub fn launch_gtk_window_with_config<F, E>(
         if im_key_release.filter_keypress(event) {
             return gtk::glib::Propagation::Stop;
         }
-    IS_CLOSING.with(|c| c.set(false));
-
-    let width = config.width.max(1);
-    let height = config.height.max(1);
-    let win_w = width as i32;
-    let win_h = height as i32;
-    let effective_anchor = config.effective_anchor();
-    let docked = config.is_docked();
-    let decorated = config.decoration == crate::window::WindowDecoration::NativeOs;
-    let transparent = config.transparent
-        || config.decoration == crate::window::WindowDecoration::FramelessTransparent;
-    let resizable = if docked { false } else { config.resizable };
-    let always_on_top = docked || config.always_on_top;
-
-    IS_WINDOW_DOCKED.with(|d| d.set(docked));
-
 
         let state = event.state();
         let modifiers = crate::events::Modifiers {
             shift: state.contains(gtk::gdk::ModifierType::SHIFT_MASK),
             ctrl: state.contains(gtk::gdk::ModifierType::CONTROL_MASK),
             alt: state.contains(gtk::gdk::ModifierType::MOD1_MASK),
-    window.set_resizable(resizable);
-    window.set_keep_above(always_on_top);
-    window.add_events(gtk::gdk::EventMask::STRUCTURE_MASK);
-
-    if transparent {
-        window.set_app_paintable(true);
-        attach_rgba_visual(&window);
-        window.connect_screen_changed(|win, _prev_screen| {
-            attach_rgba_visual(win);
-        });
-    }
-
-    match effective_anchor {
-        Some(crate::window::WindowAnchor::Center) | None => {
-            window.set_position(gtk::WindowPosition::Center);
-        }
-        Some(anchor) => {
-            let gravity = match anchor {
-                crate::window::WindowAnchor::TopLeft => gtk::gdk::Gravity::NorthWest,
-                crate::window::WindowAnchor::TopRight => gtk::gdk::Gravity::NorthEast,
-                crate::window::WindowAnchor::BottomLeft => gtk::gdk::Gravity::SouthWest,
-                crate::window::WindowAnchor::BottomRight => gtk::gdk::Gravity::SouthEast,
-                crate::window::WindowAnchor::Center => gtk::gdk::Gravity::Center,
-            };
-            window.set_gravity(gravity);
-            snap_window_to_anchor(&window, anchor, win_w, win_h);
-        }
-    }
-
-    if !docked {
-        match config.mode {
-            crate::window::WindowMode::Maximized => {
-                IS_MAXIMIZED_TRACKER.with(|t| t.set(true));
-                window.maximize();
-            }
-            crate::window::WindowMode::Minimized => {
-                window.iconify();
-            }
-            crate::window::WindowMode::BorderlessFullscreen
-            | crate::window::WindowMode::ExclusiveFullscreen => {
-                window.fullscreen();
-            }
-            crate::window::WindowMode::Windowed => {}
-        }
-    }
             meta: state.contains(gtk::gdk::ModifierType::META_MASK)
                 || state.contains(gtk::gdk::ModifierType::SUPER_MASK),
         };
 
         let keyval = event.keyval();
         let key_name = keyval.name().unwrap_or_default();
-    if transparent {
-        drawing_area.set_app_paintable(true);
-    }
         let key_code = map_key_name_to_keycode(key_name.as_str());
 
         let plat_event = crate::events::PlatformEvent::KeyUp {
@@ -2818,6 +3197,48 @@ pub fn launch_gtk_window_with_config<F, E>(
         gtk::glib::Propagation::Proceed
     });
 
+    if let Some(anchor) = effective_anchor {
+        if anchor.is_sticky_dock() {
+            window.connect_realize(move |win| {
+                snap_window_to_anchor(win, anchor, win_w, win_h);
+            });
+            window.connect_map_event(move |win, _event| {
+                snap_window_to_anchor(win, anchor, win_w, win_h);
+                gtk::glib::Propagation::Proceed
+            });
+            window.connect_size_allocate(move |win, alloc| {
+                if let Some((wx, wy, ww, wh)) = query_primary_workarea() {
+                    let aw = if alloc.width() > 0 {
+                        alloc.width()
+                    } else {
+                        win_w
+                    };
+                    let ah = if alloc.height() > 0 {
+                        alloc.height()
+                    } else {
+                        win_h
+                    };
+                    let (tx, ty) = anchor.compute_position(wx, wy, ww, wh, aw, ah);
+                    if win.position() != (tx, ty) {
+                        win.move_(tx, ty);
+                    }
+                }
+            });
+            window.connect_configure_event(move |win, event| {
+                if let Some((wx, wy, ww, wh)) = query_primary_workarea() {
+                    let (ew, eh) = event.size();
+                    let cw = if ew > 0 { ew as i32 } else { win_w };
+                    let ch = if eh > 0 { eh as i32 } else { win_h };
+                    let (tx, ty) = anchor.compute_position(wx, wy, ww, wh, cw, ch);
+                    if event.position() != (tx, ty) {
+                        win.move_(tx, ty);
+                    }
+                }
+                false
+            });
+        }
+    }
+
     window.connect_delete_event(|_, _| {
         IS_CLOSING.with(|c| c.set(true));
         gtk::main_quit();
@@ -2827,6 +3248,8 @@ pub fn launch_gtk_window_with_config<F, E>(
     window.connect_destroy(|_| {
         IS_CLOSING.with(|c| c.set(true));
         IS_MAXIMIZED_TRACKER.with(|t| t.set(false));
+        IS_WINDOW_DOCKED.with(|d| d.set(false));
+        DRAG_STATE.with(|d| d.set(None));
         CURRENT_GTK_WINDOW.with(|w| {
             *w.borrow_mut() = None;
         });
@@ -2841,15 +3264,45 @@ pub fn launch_gtk_window_with_config<F, E>(
 
     window.add(&drawing_area);
     window.show_all();
+    if let Some(anchor) = effective_anchor {
+        if anchor.is_sticky_dock() {
+            snap_window_to_anchor(&window, anchor, win_w, win_h);
+        }
+    }
     drawing_area.grab_focus();
     gtk_set_cursor(crate::window::CursorIcon::Default);
 
-    // Hardware VSync frame tick callback for smooth 120 FPS kinetic physics and animations
+    // Hardware VSync frame tick callback plus 16ms (60 FPS) timer fallback so CSS transitions
+    // and animations advance smoothly to completion even when pointer input is stationary
+    // or the compositor pauses idle widget frame clocks.
+    let last_frame_tick = std::rc::Rc::new(std::cell::Cell::new(std::time::Instant::now()));
+    let last_tick_vsync = last_frame_tick.clone();
     let on_event_tick = on_event_rc.clone();
     drawing_area.add_tick_callback(move |widget, _frame_clock| {
+        if IS_CLOSING.with(|c| c.get()) {
+            return gtk::glib::ControlFlow::Break;
+        }
+        last_tick_vsync.set(std::time::Instant::now());
         let tick_ev = crate::events::PlatformEvent::AnimationTick;
         if (on_event_tick.borrow_mut())(&tick_ev) {
             widget.queue_draw();
+        }
+        gtk::glib::ControlFlow::Continue
+    });
+
+    let last_tick_timer = last_frame_tick;
+    let on_event_timer = on_event_rc.clone();
+    let da_timer = drawing_area.clone();
+    gtk::glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+        if IS_CLOSING.with(|c| c.get()) {
+            return gtk::glib::ControlFlow::Break;
+        }
+        if last_tick_timer.get().elapsed() >= std::time::Duration::from_millis(14) {
+            last_tick_timer.set(std::time::Instant::now());
+            let tick_ev = crate::events::PlatformEvent::AnimationTick;
+            if (on_event_timer.borrow_mut())(&tick_ev) {
+                da_timer.queue_draw();
+            }
         }
         gtk::glib::ControlFlow::Continue
     });
@@ -3150,52 +3603,3 @@ pub fn init_pango_text_measurement() {
     strata_layout::text::register_family_styled_text_measurer(pango_measure_styled_text_family);
     strata_layout::text::register_font_metrics(pango_font_metrics);
 }
-    if let Some(anchor) = effective_anchor {
-        if anchor.is_sticky_dock() {
-            window.connect_realize(move |win| {
-                snap_window_to_anchor(win, anchor, win_w, win_h);
-            });
-            window.connect_map_event(move |win, _event| {
-                snap_window_to_anchor(win, anchor, win_w, win_h);
-                gtk::glib::Propagation::Proceed
-            });
-            window.connect_size_allocate(move |win, alloc| {
-                if let Some((wx, wy, ww, wh)) = query_primary_workarea() {
-                    let aw = if alloc.width() > 0 {
-                        alloc.width()
-                    } else {
-                        win_w
-                    };
-                    let ah = if alloc.height() > 0 {
-                        alloc.height()
-                    } else {
-                        win_h
-                    };
-                    let (tx, ty) = anchor.compute_position(wx, wy, ww, wh, aw, ah);
-                    if win.position() != (tx, ty) {
-                        win.move_(tx, ty);
-                    }
-                }
-            });
-            window.connect_configure_event(move |win, event| {
-                if let Some((wx, wy, ww, wh)) = query_primary_workarea() {
-                    let (ew, eh) = event.size();
-                    let cw = if ew > 0 { ew as i32 } else { win_w };
-                    let ch = if eh > 0 { eh as i32 } else { win_h };
-                    let (tx, ty) = anchor.compute_position(wx, wy, ww, wh, cw, ch);
-                    if event.position() != (tx, ty) {
-                        win.move_(tx, ty);
-                    }
-                }
-                false
-            });
-        }
-    }
-
-        IS_WINDOW_DOCKED.with(|d| d.set(false));
-        DRAG_STATE.with(|d| d.set(None));
-    if let Some(anchor) = effective_anchor {
-        if anchor.is_sticky_dock() {
-            snap_window_to_anchor(&window, anchor, win_w, win_h);
-        }
-    }

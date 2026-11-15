@@ -62,22 +62,130 @@ impl AppRuntime {
         py: f32,
         current_path: &mut Vec<usize>,
     ) -> Option<Vec<usize>> {
+        Self::hit_test_node_path_sc(blueprint, layout, px, py, current_path)
+    }
+
+    fn collect_hoisted_hover_participants<'a>(
+        bp: &'a NodeBlueprint,
+        layout: &'a LayoutNode,
+        current_path: &mut Vec<usize>,
+        negative_z: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode, Vec<usize>)>,
+        auto_or_zero_z: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode, Vec<usize>, bool)>,
+        positive_z: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode, Vec<usize>)>,
+    ) {
         if current_path.len() >= 256 {
+            return;
+        }
+        for (idx, child_bp, child_layout) in Self::paired_blueprint_children(bp, layout) {
+            if matches!(child_layout.style.display, strata_style::types::Display::None)
+                || matches!(
+                    child_layout.style.visibility,
+                    strata_style::types::Visibility::Hidden
+                )
+                || matches!(
+                    child_layout.style.pointer_events,
+                    strata_style::types::PointerEvents::None
+                )
+            {
+                continue;
+            }
+            current_path.push(idx);
+            if Self::establishes_stacking_context(child_layout, false) {
+                let z = child_layout.style.z_index.unwrap_or(0);
+                if z < 0 {
+                    negative_z.push((child_bp, child_layout, current_path.clone()));
+                } else if z > 0 {
+                    positive_z.push((child_bp, child_layout, current_path.clone()));
+                } else {
+                    auto_or_zero_z.push((child_bp, child_layout, current_path.clone(), true));
+                }
+            } else {
+                if child_layout.style.position != strata_style::types::Position::Static {
+                    auto_or_zero_z.push((child_bp, child_layout, current_path.clone(), false));
+                }
+                Self::collect_hoisted_hover_participants(
+                    child_bp,
+                    child_layout,
+                    current_path,
+                    negative_z,
+                    auto_or_zero_z,
+                    positive_z,
+                );
+            }
+            current_path.pop();
+        }
+    }
+
+    fn hit_test_node_path_in_flow(
+        blueprint: &NodeBlueprint,
+        layout: &LayoutNode,
+        px: f32,
+        py: f32,
+        current_path: &mut Vec<usize>,
+    ) -> Option<Vec<usize>> {
+        if current_path.len() >= 256
+            || matches!(layout.style.display, strata_style::types::Display::None)
+            || matches!(
+                layout.style.visibility,
+                strata_style::types::Visibility::Hidden
+            )
+            || matches!(
+                layout.style.pointer_events,
+                strata_style::types::PointerEvents::None
+            )
+        {
             return None;
         }
-        if matches!(layout.style.display, strata_style::types::Display::None) {
-            return None;
+
+        let paired = Self::paired_blueprint_children(blueprint, layout);
+        for &(idx, child_bp, child_layout) in paired.iter().rev() {
+            if matches!(child_layout.style.display, strata_style::types::Display::None)
+                || Self::establishes_stacking_context(child_layout, false)
+                || child_layout.style.position != strata_style::types::Position::Static
+            {
+                continue;
+            }
+            current_path.push(idx);
+            if let Some(res) =
+                Self::hit_test_node_path_in_flow(child_bp, child_layout, px, py, current_path)
+            {
+                return Some(res);
+            }
+            current_path.pop();
         }
-        if matches!(
-            layout.style.visibility,
-            strata_style::types::Visibility::Hidden
-        ) {
-            return None;
+
+        match blueprint {
+            NodeBlueprint::Element { .. }
+            | NodeBlueprint::Text(_)
+            | NodeBlueprint::DynamicText(_) => {
+                if layout.geometry.border_box.contains_point(px, py) {
+                    Some(current_path.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
-        if matches!(
-            layout.style.pointer_events,
-            strata_style::types::PointerEvents::None
-        ) {
+    }
+
+    fn hit_test_node_path_sc(
+        blueprint: &NodeBlueprint,
+        layout: &LayoutNode,
+        px: f32,
+        py: f32,
+        current_path: &mut Vec<usize>,
+    ) -> Option<Vec<usize>> {
+        if current_path.len() >= 256
+            || matches!(layout.style.display, strata_style::types::Display::None)
+            || matches!(
+                layout.style.visibility,
+                strata_style::types::Visibility::Hidden
+            )
+            || matches!(
+                layout.style.pointer_events,
+                strata_style::types::PointerEvents::None
+            )
+        {
             return None;
         }
 
@@ -86,97 +194,89 @@ impl AppRuntime {
         // If element clips overflow, coordinates outside its border box are clipped
         if (layout.style.overflow_x != strata_style::types::Overflow::Visible
             || layout.style.overflow_y != strata_style::types::Overflow::Visible)
-            && !layout.geometry.border_box.contains_point(px, py) {
-                return None;
-            }
+            && !layout.geometry.border_box.contains_point(px, py)
+        {
+            return None;
+        }
 
+        let mut negative_z = Vec::new();
+        let mut auto_or_zero_z = Vec::new();
+        let mut positive_z = Vec::new();
+        Self::collect_hoisted_hover_participants(
+            blueprint,
+            layout,
+            current_path,
+            &mut negative_z,
+            &mut auto_or_zero_z,
+            &mut positive_z,
+        );
+
+        negative_z.sort_by_key(|(_, l, _)| l.style.z_index.unwrap_or(0));
+        positive_z.sort_by_key(|(_, l, _)| l.style.z_index.unwrap_or(0));
+
+        // Layer 7: positive z-index child stacking contexts
+        for (c_bp, c_layout, c_path) in positive_z.into_iter().rev() {
+            let mut path_buf = c_path;
+            if let Some(res) =
+                Self::hit_test_node_path_sc(c_bp, c_layout, px, py, &mut path_buf)
+            {
+                return Some(res);
+            }
+        }
+
+        // Layer 6: positioned auto/0 z-index descendants
+        for (c_bp, c_layout, c_path, is_sc) in auto_or_zero_z.into_iter().rev() {
+            let mut path_buf = c_path;
+            let hit = if is_sc {
+                Self::hit_test_node_path_sc(c_bp, c_layout, px, py, &mut path_buf)
+            } else {
+                Self::hit_test_node_path_in_flow(c_bp, c_layout, px, py, &mut path_buf)
+            };
+            if hit.is_some() {
+                return hit;
+            }
+        }
+
+        // Layers 5, 4, 3: direct static non-stacking-context children
+        let paired = Self::paired_blueprint_children(blueprint, layout);
+        for &(idx, child_bp, child_layout) in paired.iter().rev() {
+            if matches!(child_layout.style.display, strata_style::types::Display::None)
+                || Self::establishes_stacking_context(child_layout, false)
+                || child_layout.style.position != strata_style::types::Position::Static
+            {
+                continue;
+            }
+            current_path.push(idx);
+            if let Some(res) =
+                Self::hit_test_node_path_in_flow(child_bp, child_layout, px, py, current_path)
+            {
+                return Some(res);
+            }
+            current_path.pop();
+        }
+
+        // Layer 2: negative z-index child stacking contexts
+        for (c_bp, c_layout, c_path) in negative_z.into_iter().rev() {
+            let mut path_buf = c_path;
+            if let Some(res) =
+                Self::hit_test_node_path_sc(c_bp, c_layout, px, py, &mut path_buf)
+            {
+                return Some(res);
+            }
+        }
+
+        // Layer 1: stacking context root itself
         match blueprint {
-            NodeBlueprint::Element { children, .. } => {
-                let has_fragments = children
-                    .iter()
-                    .any(|c| matches!(c, NodeBlueprint::Fragment(_)));
-                if !has_fragments {
-                    for (i, (child_bp, child_layout)) in children
-                        .iter()
-                        .zip(layout.children.iter())
-                        .enumerate()
-                        .rev()
-                    {
-                        current_path.push(i);
-                        if let Some(res) = Self::hit_test_node_path_rec(
-                            child_bp,
-                            child_layout,
-                            px,
-                            py,
-                            current_path,
-                        ) {
-                            return Some(res);
-                        }
-                        current_path.pop();
-                    }
-                } else {
-                    let mut flat_children = Vec::new();
-                    for c in children {
-                        Self::flatten_blueprints(c, &mut flat_children);
-                    }
-
-                    // Check children in reverse order (front-to-back stacking order)
-                    for (i, (&child_bp, child_layout)) in flat_children
-                        .iter()
-                        .zip(layout.children.iter())
-                        .enumerate()
-                        .rev()
-                    {
-                        current_path.push(i);
-                        if let Some(res) = Self::hit_test_node_path_rec(
-                            child_bp,
-                            child_layout,
-                            px,
-                            py,
-                            current_path,
-                        ) {
-                            return Some(res);
-                        }
-                        current_path.pop();
-                    }
-                }
-
+            NodeBlueprint::Element { .. }
+            | NodeBlueprint::Text(_)
+            | NodeBlueprint::DynamicText(_) => {
                 if layout.geometry.border_box.contains_point(px, py) {
                     Some(current_path.clone())
                 } else {
                     None
                 }
             }
-            NodeBlueprint::Fragment(children) => {
-                let mut flat_children = Vec::new();
-                for c in children {
-                    Self::flatten_blueprints(c, &mut flat_children);
-                }
-
-                for (i, (&child_bp, child_layout)) in flat_children
-                    .iter()
-                    .zip(layout.children.iter())
-                    .enumerate()
-                    .rev()
-                {
-                    current_path.push(i);
-                    if let Some(res) =
-                        Self::hit_test_node_path_rec(child_bp, child_layout, px, py, current_path)
-                    {
-                        return Some(res);
-                    }
-                    current_path.pop();
-                }
-                None
-            }
-            NodeBlueprint::Text(_) | NodeBlueprint::DynamicText(_) => {
-                if layout.geometry.border_box.contains_point(px, py) {
-                    Some(current_path.clone())
-                } else {
-                    None
-                }
-            }
-            NodeBlueprint::Empty => None,
+            _ => None,
         }
     }
 
@@ -283,12 +383,14 @@ impl AppRuntime {
         }
     }
 
-    /// Checks whether any element along the index path has active hover styles or boundary handlers.
+    /// Checks whether any element along the index path has active hover styles (Tailwind or `<style>`) or boundary handlers.
     pub fn node_path_has_hover_effects(blueprint: &NodeBlueprint, path: &[usize]) -> bool {
+        let mut path_nodes: Vec<&NodeBlueprint> = Vec::with_capacity(path.len() + 1);
         let mut cur_bp = blueprint;
         if Self::node_has_hover_effects(cur_bp) {
             return true;
         }
+        path_nodes.push(cur_bp);
 
         for &idx in path {
             match cur_bp {
@@ -298,7 +400,7 @@ impl AppRuntime {
                         Self::flatten_blueprints(c, &mut flat);
                     }
                     if idx >= flat.len() {
-                        return false;
+                        break;
                     }
                     cur_bp = flat[idx];
                 }
@@ -308,21 +410,137 @@ impl AppRuntime {
                         Self::flatten_blueprints(c, &mut flat);
                     }
                     if idx >= flat.len() {
-                        return false;
+                        break;
                     }
                     cur_bp = flat[idx];
                 }
-                _ => return false,
+                _ => break,
             }
             if Self::node_has_hover_effects(cur_bp) {
                 return true;
             }
+            path_nodes.push(cur_bp);
         }
 
+        let stylesheets = Self::collect_stylesheets_from_blueprint(blueprint);
+        if stylesheets.is_empty() {
+            return false;
+        }
+
+        Self::path_nodes_match_stylesheet_hover(&path_nodes, &stylesheets)
+    }
+
+    /// Returns true if any element in `path_nodes` matches a `:hover`-bearing compound selector in `stylesheets`.
+    pub(crate) fn path_nodes_match_stylesheet_hover(
+        path_nodes: &[&NodeBlueprint],
+        stylesheets: &[std::sync::Arc<strata_style::StyleSheet>],
+    ) -> bool {
+        let compound_has_hover = |comp: &strata_style::selector::CompoundSelector| {
+            comp.parts.iter().any(|p| match p {
+                strata_style::selector::SelectorPart::PseudoClass(name) => {
+                    let n = name.trim().to_ascii_lowercase();
+                    n == "hover" || n.contains(":hover")
+                }
+                _ => false,
+            })
+        };
+
+        let probe_state = strata_style::selector::PseudoState {
+            is_hovered: true,
+            is_focused: false,
+            is_active: false,
+            is_disabled: false,
+            is_dark: false,
+        };
+        let probe_state_dark = strata_style::selector::PseudoState {
+            is_hovered: true,
+            is_focused: false,
+            is_active: false,
+            is_disabled: false,
+            is_dark: true,
+        };
+
+        for bp in path_nodes {
+            if let NodeBlueprint::Element {
+                tag,
+                classes,
+                attributes,
+                ..
+            } = bp
+            {
+                if Self::is_style_tag(tag) {
+                    continue;
+                }
+                let tag_str = Self::tag_as_str(tag);
+                let (class_vec, id_val, attr_vec) =
+                    Self::extract_element_selector_meta(classes, attributes);
+                for sheet in stylesheets {
+                    for rule in &sheet.rules {
+                        for sel in &rule.selectors {
+                            if !sel.has_any_hover_pseudo() {
+                                continue;
+                            }
+                            if compound_has_hover(&sel.target)
+                                && (sel.target.matches_with_context(
+                                    tag_str,
+                                    &class_vec,
+                                    id_val.as_deref(),
+                                    &attr_vec,
+                                    &probe_state,
+                                    &[],
+                                    Some(true),
+                                    Some(true),
+                                    &[],
+                                ) || sel.target.matches_with_context(
+                                    tag_str,
+                                    &class_vec,
+                                    id_val.as_deref(),
+                                    &attr_vec,
+                                    &probe_state_dark,
+                                    &[],
+                                    Some(true),
+                                    Some(true),
+                                    &[],
+                                ))
+                            {
+                                return true;
+                            }
+                            for (_, step_comp) in &sel.steps {
+                                if compound_has_hover(step_comp)
+                                    && (step_comp.matches_with_context(
+                                        tag_str,
+                                        &class_vec,
+                                        id_val.as_deref(),
+                                        &attr_vec,
+                                        &probe_state,
+                                        &[],
+                                        Some(true),
+                                        Some(true),
+                                        &[],
+                                    ) || step_comp.matches_with_context(
+                                        tag_str,
+                                        &class_vec,
+                                        id_val.as_deref(),
+                                        &attr_vec,
+                                        &probe_state_dark,
+                                        &[],
+                                        Some(true),
+                                        Some(true),
+                                        &[],
+                                    ))
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         false
     }
 
-    /// Checks if a single blueprint node has hover utility classes or boundary event listeners.
+    /// Checks if a single blueprint node has hover utility classes (including chained modifiers like `dark:hover:*`) or boundary event listeners.
     pub fn node_has_hover_effects(node: &NodeBlueprint) -> bool {
         match node {
             NodeBlueprint::Element {
@@ -330,9 +548,21 @@ impl AppRuntime {
                 attributes,
                 ..
             } => {
-                let has_hover_class = classes
-                    .iter()
-                    .any(|c| c.split_whitespace().any(|tok| tok.starts_with("hover:")));
+                let has_hover_class = classes.iter().any(|c| {
+                    strata_style::tailwind::tokenize_classes(c)
+                        .into_iter()
+                        .any(|tok| {
+                            let mut cur = tok;
+                            while let (Some(m), rest) = strata_style::tailwind::split_modifier(cur)
+                            {
+                                if m == "hover" {
+                                    return true;
+                                }
+                                cur = rest;
+                            }
+                            false
+                        })
+                });
                 if has_hover_class {
                     return true;
                 }
@@ -402,20 +632,27 @@ impl AppRuntime {
         }
     }
 
-    /// Re-applies hover styles and recompiles paint commands without re-running layout.
+    /// Re-applies hover/active styles, synchronizes CSS transitions, and recompiles paint commands without re-running layout when paint-only.
     ///
     /// Paint-only hover variants (`hover:bg-*`, `hover:text-*`, `hover:underline`,
-    /// shadows, opacity) do not change box geometry. Rebuilding the tree carries
-    /// the new styles; the previous geometry, line boxes, and inline item streams
+    /// shadows, opacity, `<style>` `:hover` color/background rules) do not change box geometry.
+    /// Rebuilding the tree carries the new styles; the previous geometry, line boxes, and inline item streams
     /// are transplanted so the display list can be recompiled immediately.
     pub fn restyle_for_hover_paint(&mut self) {
+        let stylesheets = Self::collect_stylesheets_from_blueprint(&self.root_blueprint);
+        for sheet in &stylesheets {
+            self.register_keyframes_stylesheet(sheet);
+        }
         let ctx = self.interaction_context();
         let new_tree = Self::build_layout_tree_with_interaction(
             &self.root_blueprint,
             &ctx,
         );
         let mut previous = std::mem::replace(&mut self.layout_root, new_tree);
-        if Self::transplant_layout_state(&mut previous, &mut self.layout_root) {
+        let transplanted = Self::transplant_layout_state(&mut previous, &mut self.layout_root);
+        let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
+        self.sync_tree_animations(now_ms);
+        if transplanted && !self.transition_manager.has_layout_affecting_transitions() {
             strata_layout::box_model::refresh_inline_fragment_styles(&mut self.layout_root);
         } else {
             self.applied_scroll_offsets.clear();

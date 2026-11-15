@@ -144,9 +144,14 @@ pub fn translate_draw_command(cmd: &DrawCommand, offset: (f32, f32)) -> DrawComm
             border_width: *border_width,
             border_color: *border_color,
         },
-        DrawCommand::DrawShadow { bounds, shadow } => DrawCommand::DrawShadow {
+        DrawCommand::DrawShadow {
+            bounds,
+            shadow,
+            border_radius,
+        } => DrawCommand::DrawShadow {
             bounds: Rect::new(bounds.x + dx, bounds.y + dy, bounds.width, bounds.height),
             shadow: shadow.clone(),
+            border_radius: *border_radius,
         },
         DrawCommand::DrawBorder {
             bounds,

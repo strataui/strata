@@ -189,6 +189,8 @@ impl AppRuntime {
             default_view_box,
             inherited_stroke,
             inherited_fill,
+            false,
+            false,
             inherited_stroke_width,
             inherited_linecap,
             inherited_linejoin,
@@ -199,11 +201,14 @@ impl AppRuntime {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn collect_svg_items_with_transform(
         blueprint: &NodeBlueprint,
         default_view_box: (f32, f32),
         inherited_stroke: Option<strata_style::types::Color>,
         inherited_fill: Option<strata_style::types::Color>,
+        inherited_stroke_is_current: bool,
+        inherited_fill_is_current: bool,
         inherited_stroke_width: f32,
         inherited_linecap: strata_layout::StrokeLineCap,
         inherited_linejoin: strata_layout::StrokeLineJoin,
@@ -223,6 +228,8 @@ impl AppRuntime {
                 let mut d = None;
                 let mut stroke = inherited_stroke;
                 let mut fill = inherited_fill;
+                let mut stroke_is_current = inherited_stroke_is_current;
+                let mut fill_is_current = inherited_fill_is_current;
                 let mut stroke_width = inherited_stroke_width;
                 let mut stroke_linecap = inherited_linecap;
                 let mut stroke_linejoin = inherited_linejoin;
@@ -266,21 +273,29 @@ impl AppRuntime {
                         match key.as_str() {
                             "d" => d = Some(value.clone()),
                             "stroke" => {
-                                if value == "currentColor" {
+                                let v = value.trim();
+                                if v.eq_ignore_ascii_case("currentcolor") {
                                     stroke = Some(parent_color);
-                                } else if value == "none" {
+                                    stroke_is_current = true;
+                                } else if v.eq_ignore_ascii_case("none") {
                                     stroke = None;
-                                } else if let Some(c) = Self::parse_svg_color_attr(value) {
+                                    stroke_is_current = false;
+                                } else if let Some(c) = Self::parse_svg_color_attr(v) {
                                     stroke = Some(c);
+                                    stroke_is_current = false;
                                 }
                             }
                             "fill" => {
-                                if value == "currentColor" {
+                                let v = value.trim();
+                                if v.eq_ignore_ascii_case("currentcolor") {
                                     fill = Some(parent_color);
-                                } else if value == "none" {
+                                    fill_is_current = true;
+                                } else if v.eq_ignore_ascii_case("none") {
                                     fill = None;
-                                } else if let Some(c) = Self::parse_svg_color_attr(value) {
+                                    fill_is_current = false;
+                                } else if let Some(c) = Self::parse_svg_color_attr(v) {
                                     fill = Some(c);
+                                    fill_is_current = false;
                                 }
                             }
                             "transform" => {
@@ -396,6 +411,8 @@ impl AppRuntime {
                         path_data: path_str,
                         stroke_color: stroke,
                         fill_color: fill,
+                        stroke_is_current_color: stroke_is_current,
+                        fill_is_current_color: fill_is_current,
                         stroke_width,
                         stroke_linecap,
                         stroke_linejoin,
@@ -409,6 +426,8 @@ impl AppRuntime {
                             path_data: poly_path,
                             stroke_color: stroke,
                             fill_color: fill,
+                            stroke_is_current_color: stroke_is_current,
+                            fill_is_current_color: fill_is_current,
                             stroke_width,
                             stroke_linecap,
                             stroke_linejoin,
@@ -422,6 +441,8 @@ impl AppRuntime {
                         path_data: format!("M {} {} L {} {}", x1, y1, x2, y2),
                         stroke_color: stroke.or(Some(parent_color)),
                         fill_color: None,
+                        stroke_is_current_color: stroke_is_current || stroke.is_none(),
+                        fill_is_current_color: false,
                         stroke_width,
                         stroke_linecap,
                         stroke_linejoin,
@@ -436,6 +457,8 @@ impl AppRuntime {
                         ),
                         stroke_color: stroke,
                         fill_color: fill,
+                        stroke_is_current_color: stroke_is_current,
+                        fill_is_current_color: fill_is_current,
                         stroke_width,
                         stroke_linecap,
                         stroke_linejoin,
@@ -450,6 +473,8 @@ impl AppRuntime {
                         ),
                         stroke_color: stroke,
                         fill_color: fill,
+                        stroke_is_current_color: stroke_is_current,
+                        fill_is_current_color: fill_is_current,
                         stroke_width,
                         stroke_linecap,
                         stroke_linejoin,
@@ -488,6 +513,8 @@ impl AppRuntime {
                         path_data: rect_path,
                         stroke_color: stroke,
                         fill_color: fill,
+                        stroke_is_current_color: stroke_is_current,
+                        fill_is_current_color: fill_is_current,
                         stroke_width,
                         stroke_linecap,
                         stroke_linejoin,
@@ -504,6 +531,8 @@ impl AppRuntime {
                         default_view_box,
                         stroke,
                         fill,
+                        stroke_is_current,
+                        fill_is_current,
                         stroke_width,
                         stroke_linecap,
                         stroke_linejoin,
@@ -522,6 +551,8 @@ impl AppRuntime {
                         default_view_box,
                         inherited_stroke,
                         inherited_fill,
+                        inherited_stroke_is_current,
+                        inherited_fill_is_current,
                         inherited_stroke_width,
                         inherited_linecap,
                         inherited_linejoin,
