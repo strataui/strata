@@ -253,9 +253,12 @@ impl AppRuntime {
             dom_handled = true;
         }
 
+        let focus_path = self.find_focus_path_at(px, py);
+        let focus_changed = self.set_focus_path(focus_path);
+
         if dom_handled {
             PointerDownAction::DomListenerInvoked
-        } else if input_handled {
+        } else if input_handled || focus_changed {
             PointerDownAction::FocusChanged
         } else {
             PointerDownAction::Ignored
@@ -423,23 +426,204 @@ impl AppRuntime {
         self.dispatch_pointer_up_action(px, py).is_handled()
     }
 
+    /// Finds the deepest focusable element path at `(px, py)`.
+    pub(crate) fn find_focus_path_at(&self, px: f32, py: f32) -> Option<Vec<usize>> {
+        let hit_path = Self::hit_test_node_path(&self.root_blueprint, &self.layout_root, px, py)?;
+        let mut cur = &self.root_blueprint;
+        let is_focusable = |bp: &NodeBlueprint| -> bool {
+            if let NodeBlueprint::Element {
+                tag, attributes, ..
+            } = bp
+            {
+                let tag_lower = Self::tag_as_str(tag).to_ascii_lowercase();
+                if matches!(
+                    tag_lower.as_str(),
+                    "button" | "input" | "textarea" | "select" | "a"
+                ) {
+                    return true;
+                }
+                for attr in attributes {
+                    match attr {
+                        strata_dom::Attribute::EventListener { event, .. }
+                            if *event == strata_dom::EventType::KeyDown
+                                || *event == strata_dom::EventType::KeyUp =>
+                        {
+                            return true;
+                        }
+                        strata_dom::Attribute::Property { key, .. }
+                            if key == "tabindex" || key == "role" =>
+                        {
+                            return true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            false
+        };
+        let mut best: Option<Vec<usize>> = if is_focusable(cur) {
+            Some(Vec::new())
+        } else {
+            None
+        };
+        let mut prefix = Vec::with_capacity(hit_path.len());
+        for &idx in &hit_path {
+            let mut flat = Vec::new();
+            match cur {
+                NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children) => {
+                    for c in children {
+                        Self::flatten_blueprints(c, &mut flat);
+                    }
+                }
+                _ => break,
+            }
+            if idx >= flat.len() {
+                break;
+            }
+            cur = flat[idx];
+            prefix.push(idx);
+            if is_focusable(cur) {
+                best = Some(prefix.clone());
+            }
+        }
+        best
+    }
+
+    fn keycode_to_dom_key(key: strata_platform::KeyCode, shift: bool) -> String {
+        use strata_platform::KeyCode;
+        match key {
+            KeyCode::ArrowDown => "ArrowDown".to_string(),
+            KeyCode::ArrowUp => "ArrowUp".to_string(),
+            KeyCode::ArrowLeft => "ArrowLeft".to_string(),
+            KeyCode::ArrowRight => "ArrowRight".to_string(),
+            KeyCode::Home => "Home".to_string(),
+            KeyCode::End => "End".to_string(),
+            KeyCode::PageUp => "PageUp".to_string(),
+            KeyCode::PageDown => "PageDown".to_string(),
+            KeyCode::Enter => "Enter".to_string(),
+            KeyCode::Escape => "Escape".to_string(),
+            KeyCode::Tab => "Tab".to_string(),
+            KeyCode::Space => " ".to_string(),
+            KeyCode::Backspace => "Backspace".to_string(),
+            KeyCode::Delete => "Delete".to_string(),
+            KeyCode::Digit0 => "0".to_string(),
+            KeyCode::Digit1 => "1".to_string(),
+            KeyCode::Digit2 => "2".to_string(),
+            KeyCode::Digit3 => "3".to_string(),
+            KeyCode::Digit4 => "4".to_string(),
+            KeyCode::Digit5 => "5".to_string(),
+            KeyCode::Digit6 => "6".to_string(),
+            KeyCode::Digit7 => "7".to_string(),
+            KeyCode::Digit8 => "8".to_string(),
+            KeyCode::Digit9 => "9".to_string(),
+            other => {
+                let dbg = format!("{:?}", other);
+                if let Some(letter) = dbg.strip_prefix("Key") {
+                    if shift {
+                        letter.to_string()
+                    } else {
+                        letter.to_ascii_lowercase()
+                    }
+                } else {
+                    dbg
+                }
+            }
+        }
+    }
+
+    fn dispatch_dom_key_event(
+        &self,
+        event_type: strata_dom::EventType,
+        key: strata_platform::KeyCode,
+        modifiers: strata_platform::Modifiers,
+    ) -> bool {
+        let Some(ref path) = self.current_focus_path else {
+            return false;
+        };
+        let mut chain: Vec<&NodeBlueprint> = Vec::with_capacity(path.len() + 1);
+        let mut cur = &self.root_blueprint;
+        chain.push(cur);
+        for &idx in path {
+            let mut flat = Vec::new();
+            match cur {
+                NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children) => {
+                    for c in children {
+                        Self::flatten_blueprints(c, &mut flat);
+                    }
+                }
+                _ => break,
+            }
+            if idx >= flat.len() {
+                break;
+            }
+            cur = flat[idx];
+            chain.push(cur);
+        }
+
+        let dom_key = Self::keycode_to_dom_key(key, modifiers.shift);
+        let mut ev = strata_dom::Event::new(event_type);
+        ev.key = dom_key;
+        ev.ctrl_key = modifiers.ctrl;
+        ev.shift_key = modifiers.shift;
+        ev.alt_key = modifiers.alt;
+        ev.meta_key = modifiers.meta;
+
+        let mut handled = false;
+        for bp in chain.into_iter().rev() {
+            if let NodeBlueprint::Element { attributes, .. } = bp {
+                for attr in attributes {
+                    if let strata_dom::Attribute::EventListener { event, handler } = attr {
+                        if *event == event_type {
+                            handler(ev.clone());
+                            handled = true;
+                            if ev.propagation_stopped.get() {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        handled
+    }
+
     /// Dispatches keyboard events to the active focused input element, returning a fine-grained KeyDispatchResult.
     pub fn dispatch_key_event(&mut self, event: &PlatformEvent) -> KeyDispatchResult {
         if self.active_focus.is_none() {
-            if let PlatformEvent::KeyDown { key, .. } = event {
-                let (px, py) = self.last_mouse_pos;
-                let scrolled = match key {
-                    strata_platform::KeyCode::ArrowDown => self.dispatch_scroll(px, py, 0.0, 40.0),
-                    strata_platform::KeyCode::ArrowUp => self.dispatch_scroll(px, py, 0.0, -40.0),
-                    strata_platform::KeyCode::PageDown => self.dispatch_scroll(px, py, 0.0, 400.0),
-                    strata_platform::KeyCode::PageUp => self.dispatch_scroll(px, py, 0.0, -400.0),
-                    strata_platform::KeyCode::Home => self.scroll_to_top(px, py),
-                    strata_platform::KeyCode::End => self.scroll_to_bottom(px, py),
-                    _ => false,
-                };
-                if scrolled {
-                    return KeyDispatchResult::RedrawOnly;
+            match event {
+                PlatformEvent::KeyDown { key, modifiers } => {
+                    if self.dispatch_dom_key_event(strata_dom::EventType::KeyDown, *key, *modifiers)
+                    {
+                        return KeyDispatchResult::NeedsRebuild;
+                    }
+                    let (px, py) = self.last_mouse_pos;
+                    let scrolled = match key {
+                        strata_platform::KeyCode::ArrowDown => {
+                            self.dispatch_scroll(px, py, 0.0, 40.0)
+                        }
+                        strata_platform::KeyCode::ArrowUp => {
+                            self.dispatch_scroll(px, py, 0.0, -40.0)
+                        }
+                        strata_platform::KeyCode::PageDown => {
+                            self.dispatch_scroll(px, py, 0.0, 400.0)
+                        }
+                        strata_platform::KeyCode::PageUp => {
+                            self.dispatch_scroll(px, py, 0.0, -400.0)
+                        }
+                        strata_platform::KeyCode::Home => self.scroll_to_top(px, py),
+                        strata_platform::KeyCode::End => self.scroll_to_bottom(px, py),
+                        _ => false,
+                    };
+                    if scrolled {
+                        return KeyDispatchResult::RedrawOnly;
+                    }
                 }
+                PlatformEvent::KeyUp { key, modifiers } => {
+                    if self.dispatch_dom_key_event(strata_dom::EventType::KeyUp, *key, *modifiers) {
+                        return KeyDispatchResult::NeedsRebuild;
+                    }
+                }
+                _ => {}
             }
             return KeyDispatchResult::Ignored;
         }

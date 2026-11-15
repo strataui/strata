@@ -78,3 +78,187 @@ fn select_step_index_clamps() {
     assert_eq!(select_step_index(3, 2, 1), 2);
     assert_eq!(select_step_index(0, 5, 1), 0);
 }
+
+fn send_key(runtime: &mut AppRuntime, key: strata_platform::KeyCode) {
+    runtime.step_event(&PlatformEvent::KeyDown {
+        key,
+        modifiers: strata_platform::Modifiers::default(),
+    });
+    runtime.update_view(root());
+}
+
+fn find_rect_by_role<'a>(
+    bp: &'a strata_dom::NodeBlueprint,
+    layout: &'a strata_layout::LayoutNode,
+    role: &str,
+) -> Option<strata_layout::Rect> {
+    if let strata_dom::NodeBlueprint::Element { attributes, .. } = bp {
+        for attr in attributes {
+            if let strata_dom::Attribute::Property { key, value } = attr {
+                if key == "role" && value == role {
+                    return Some(layout.geometry.border_box);
+                }
+            }
+        }
+    }
+    let mut flat_bp = Vec::new();
+    match bp {
+        strata_dom::NodeBlueprint::Element { children, .. }
+        | strata_dom::NodeBlueprint::Fragment(children) => {
+            fn flatten<'x>(
+                n: &'x strata_dom::NodeBlueprint,
+                out: &mut Vec<&'x strata_dom::NodeBlueprint>,
+            ) {
+                if let strata_dom::NodeBlueprint::Fragment(c) = n {
+                    for x in c {
+                        flatten(x, out);
+                    }
+                } else {
+                    out.push(n);
+                }
+            }
+            for c in children {
+                flatten(c, &mut flat_bp);
+            }
+        }
+        _ => {}
+    }
+    for (child_bp, child_layout) in flat_bp.iter().zip(layout.children.iter()) {
+        if let Some(r) = find_rect_by_role(child_bp, child_layout, role) {
+            return Some(r);
+        }
+    }
+    None
+}
+
+#[test]
+fn select_keyboard_navigation_opens_steps_selects_and_escapes() {
+    clear_persistent_signals();
+    let mut runtime = AppRuntime::new(root(), 400.0, 300.0, 1.0);
+    runtime.tick_frame();
+
+    // Click trigger to focus and open, then Escape to close while keeping focus.
+    let (tx, ty) = (60.0, 16.0 + 14.0 + 20.0);
+    click(&mut runtime, tx, ty);
+    runtime.update_view(root());
+    assert!(has_listbox(&runtime));
+
+    send_key(&mut runtime, strata_platform::KeyCode::Escape);
+    assert!(!has_listbox(&runtime), "Escape closes the open listbox");
+
+    // ArrowDown on focused trigger opens the listbox.
+    send_key(&mut runtime, strata_platform::KeyCode::ArrowDown);
+    assert!(has_listbox(&runtime), "ArrowDown opens the listbox");
+
+    // ArrowDown steps from index 0 ("United States") to index 1 ("Europe").
+    send_key(&mut runtime, strata_platform::KeyCode::ArrowDown);
+    // Enter selects "Europe" and closes the listbox.
+    send_key(&mut runtime, strata_platform::KeyCode::Enter);
+    assert!(!has_listbox(&runtime), "Enter closes after selection");
+
+    let rendered = format!("{:?}", runtime.root_blueprint);
+    assert!(
+        rendered.contains("Europe"),
+        "selected option Europe should be rendered in trigger"
+    );
+}
+
+#[test]
+fn select_portal_flips_above_trigger_near_bottom_viewport_edge() {
+    clear_persistent_signals();
+    let bottom_root = || {
+        rsx! {
+            <div class="w-80 h-[200px] flex flex-col justify-end p-2">
+                <Select
+                    id="bottom-sel"
+                    options={vec![
+                        SelectOption::new("a", "Alpha"),
+                        SelectOption::new("b", "Beta"),
+                        SelectOption::new("c", "Gamma"),
+                        SelectOption::new("d", "Delta"),
+                    ]}
+                />
+            </div>
+        }
+    };
+    let mut runtime = AppRuntime::new(bottom_root(), 400.0, 200.0, 1.0);
+    runtime.tick_frame();
+
+    let trigger_rect = find_rect_by_role(&runtime.root_blueprint, &runtime.layout_root, "combobox")
+        .expect("trigger combobox rect");
+    click(
+        &mut runtime,
+        trigger_rect.x + trigger_rect.width * 0.5,
+        trigger_rect.y + trigger_rect.height * 0.5,
+    );
+    runtime.update_view(bottom_root());
+
+    let listbox_rect = find_rect_by_role(&runtime.root_blueprint, &runtime.layout_root, "listbox")
+        .expect("listbox rect when open");
+    assert!(
+        listbox_rect.y + listbox_rect.height <= 200.0 + 1.0,
+        "portal listbox should stay inside viewport bottom (rect={:?})",
+        listbox_rect
+    );
+    assert!(
+        listbox_rect.y < trigger_rect.y,
+        "portal listbox should flip above trigger near bottom edge (trigger={:?}, listbox={:?})",
+        trigger_rect,
+        listbox_rect
+    );
+}
+
+#[test]
+fn select_portal_tracks_scrolled_container_position() {
+    clear_persistent_signals();
+    let scroll_root = || {
+        rsx! {
+            <div class="w-80 h-[200px] overflow-y-auto p-2">
+                <div class="h-[140px]">"Spacer"</div>
+                <Select
+                    id="scroll-sel"
+                    options={vec![
+                        SelectOption::new("x", "X-Ray"),
+                        SelectOption::new("y", "Yankee"),
+                    ]}
+                />
+                <div class="h-[240px]">"Bottom"</div>
+            </div>
+        }
+    };
+    let mut runtime = AppRuntime::new(scroll_root(), 400.0, 200.0, 1.0);
+    runtime.tick_frame();
+
+    let trigger_before =
+        find_rect_by_role(&runtime.root_blueprint, &runtime.layout_root, "combobox")
+            .expect("trigger combobox rect before scroll");
+
+    // Scroll container down (wheel negative delta_y scrolls content up / scroll_y increases).
+    runtime.dispatch_scroll(50.0, 50.0, 0.0, 80.0);
+
+    let trigger_after =
+        find_rect_by_role(&runtime.root_blueprint, &runtime.layout_root, "combobox")
+            .expect("trigger combobox rect after scroll");
+    assert!(
+        trigger_after.y < trigger_before.y,
+        "scrolling down should move trigger upward (before={:?}, after={:?})",
+        trigger_before,
+        trigger_after
+    );
+
+    click(
+        &mut runtime,
+        trigger_after.x + 20.0,
+        trigger_after.y + trigger_after.height * 0.5,
+    );
+    runtime.update_view(scroll_root());
+
+    let listbox_rect = find_rect_by_role(&runtime.root_blueprint, &runtime.layout_root, "listbox")
+        .expect("listbox rect when open");
+    assert!(
+        listbox_rect.y < 140.0,
+        "portal listbox should reflect scroll offset (trigger={:?}, listbox={:?})",
+        trigger_after,
+        listbox_rect
+    );
+}

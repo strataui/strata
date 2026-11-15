@@ -798,6 +798,73 @@ impl AppRuntime {
         self.compile_display_list();
     }
 
+    /// Returns `true` when the currently hovered path (or any stylesheet rule)
+    /// can visually respond to `:active` state changes on `MouseDown` / `MouseUp`.
+    pub(crate) fn path_has_active_styles(&self) -> bool {
+        let Some(ref path) = self.current_hover_path else {
+            return false;
+        };
+        let mut cur_bp = &self.root_blueprint;
+        let has_active_class = |bp: &NodeBlueprint| -> bool {
+            if let NodeBlueprint::Element { classes, .. } = bp {
+                classes
+                    .iter()
+                    .any(|c| c.split_whitespace().any(|tok| tok.contains("active:")))
+            } else {
+                false
+            }
+        };
+        if has_active_class(cur_bp) {
+            return true;
+        }
+        for &idx in path {
+            let mut flat = Vec::new();
+            match cur_bp {
+                NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children) => {
+                    for c in children {
+                        Self::flatten_blueprints(c, &mut flat);
+                    }
+                }
+                _ => break,
+            }
+            if idx >= flat.len() {
+                break;
+            }
+            cur_bp = flat[idx];
+            if has_active_class(cur_bp) {
+                return true;
+            }
+        }
+        let stylesheets = Self::collect_stylesheets_from_blueprint(&self.root_blueprint);
+        for sheet in &stylesheets {
+            for rule in &sheet.rules {
+                for sel in &rule.selectors {
+                    let has_active_pseudo = sel.target.parts.iter().any(|p| {
+                        matches!(
+                            p,
+                            strata_style::selector::SelectorPart::PseudoClass(name)
+                                if name.eq_ignore_ascii_case("active")
+                        )
+                    });
+                    if has_active_pseudo {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Re-applies `:active` styles only when the hovered path can visually react
+    /// to pointer press/release, returning `true` if a repaint is needed.
+    pub fn restyle_for_active_change(&mut self) -> bool {
+        if !self.path_has_active_styles() {
+            return false;
+        }
+        self.restyle_for_hover_paint();
+        true
+    }
+
     /// Copies resolved geometry and text state from a previous tree into a newly styled tree.
     pub(crate) fn transplant_layout_state(
         previous: &mut LayoutNode,
