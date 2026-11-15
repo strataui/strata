@@ -215,43 +215,67 @@ impl AppRuntime {
         }
 
         // Also dispatch PointerDown and MouseDown to DOM listeners
+        self.pointer_capture_target = None;
         let mut dom_handled = false;
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+        let mut captured_target: Option<(Vec<usize>, bool)> = None;
+        if let Some((handler, target_box, eid)) = Self::hit_test_event_with_box_and_entity(
             &self.root_blueprint,
             &self.layout_root,
             px,
             py,
             strata_dom::EventType::PointerDown,
         ) {
+            let target_box_copy = *target_box;
             let ev = self.create_mouse_event(
                 strata_dom::EventType::PointerDown,
                 px,
                 py,
                 0,
                 1,
-                Some(target_box),
+                Some(&target_box_copy),
             );
+            let capture_req = ev.pointer_capture_requested.clone();
             handler(ev);
             dom_handled = true;
+            if let Some(target_path) = self.layout_root.find_path_by_entity_id(eid) {
+                match capture_req.get() {
+                    Some(true) => captured_target = Some((target_path, true)),
+                    Some(false) => {}
+                    None => captured_target = Some((target_path, false)),
+                }
+            }
         }
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+        if let Some((handler, target_box, eid)) = Self::hit_test_event_with_box_and_entity(
             &self.root_blueprint,
             &self.layout_root,
             px,
             py,
             strata_dom::EventType::MouseDown,
         ) {
+            let target_box_copy = *target_box;
             let ev = self.create_mouse_event(
                 strata_dom::EventType::MouseDown,
                 px,
                 py,
                 0,
                 1,
-                Some(target_box),
+                Some(&target_box_copy),
             );
+            let capture_req = ev.pointer_capture_requested.clone();
             handler(ev);
             dom_handled = true;
+            if let Some(target_path) = self.layout_root.find_path_by_entity_id(eid) {
+                match capture_req.get() {
+                    Some(true) => captured_target = Some((target_path, true)),
+                    Some(false) => captured_target = None,
+                    None if captured_target.is_none() => {
+                        captured_target = Some((target_path, false));
+                    }
+                    None => {}
+                }
+            }
         }
+        self.pointer_capture_target = captured_target;
 
         let focus_path = self.find_focus_path_at(px, py);
         let focus_changed = self.set_focus_path(focus_path);
@@ -308,41 +332,81 @@ impl AppRuntime {
         }
 
         let mut dom_handled = false;
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
-            &self.root_blueprint,
-            &self.layout_root,
-            px,
-            py,
+        let capture = self.pointer_capture_target.clone();
+        for ev_type in [
             strata_dom::EventType::PointerMove,
-        ) {
-            let ev = self.create_mouse_event(
-                strata_dom::EventType::PointerMove,
-                px,
-                py,
-                0,
-                0,
-                Some(target_box),
-            );
-            handler(ev);
-            dom_handled = true;
-        }
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
-            &self.root_blueprint,
-            &self.layout_root,
-            px,
-            py,
             strata_dom::EventType::MouseMove,
-        ) {
-            let ev = self.create_mouse_event(
-                strata_dom::EventType::MouseMove,
-                px,
-                py,
-                0,
-                0,
-                Some(target_box),
-            );
-            handler(ev);
-            dom_handled = true;
+        ] {
+            match capture {
+                Some((ref cap_path, true)) => {
+                    if let Some((handler, target_box, _)) = Self::find_event_at_or_above_path(
+                        &self.root_blueprint,
+                        &self.layout_root,
+                        cap_path,
+                        ev_type,
+                    ) {
+                        let target_box_copy = *target_box;
+                        let ev =
+                            self.create_mouse_event(ev_type, px, py, 0, 0, Some(&target_box_copy));
+                        let capture_req = ev.pointer_capture_requested.clone();
+                        handler(ev);
+                        dom_handled = true;
+                        if capture_req.get() == Some(false) {
+                            self.pointer_capture_target = None;
+                        }
+                    }
+                }
+                Some((ref cap_path, false)) => {
+                    let mut hit_eid = None;
+                    if let Some((handler, target_box, eid)) =
+                        Self::hit_test_event_with_box_and_entity(
+                            &self.root_blueprint,
+                            &self.layout_root,
+                            px,
+                            py,
+                            ev_type,
+                        )
+                    {
+                        hit_eid = Some(eid);
+                        let ev = self.create_mouse_event(ev_type, px, py, 0, 0, Some(target_box));
+                        handler(ev);
+                        dom_handled = true;
+                    }
+                    if let Some((handler, target_box, cap_eid)) = Self::find_event_at_or_above_path(
+                        &self.root_blueprint,
+                        &self.layout_root,
+                        cap_path,
+                        ev_type,
+                    ) {
+                        if hit_eid != Some(cap_eid) {
+                            let target_box_copy = *target_box;
+                            let ev = self.create_mouse_event(
+                                ev_type,
+                                px,
+                                py,
+                                0,
+                                0,
+                                Some(&target_box_copy),
+                            );
+                            handler(ev);
+                            dom_handled = true;
+                        }
+                    }
+                }
+                None => {
+                    if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+                        &self.root_blueprint,
+                        &self.layout_root,
+                        px,
+                        py,
+                        ev_type,
+                    ) {
+                        let ev = self.create_mouse_event(ev_type, px, py, 0, 0, Some(target_box));
+                        handler(ev);
+                        dom_handled = true;
+                    }
+                }
+            }
         }
 
         if dom_handled {
@@ -374,42 +438,69 @@ impl AppRuntime {
             selection_ended = true;
         }
 
+        let capture = self.pointer_capture_target.take();
         let mut dom_handled = false;
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
-            &self.root_blueprint,
-            &self.layout_root,
-            px,
-            py,
+        for ev_type in [
             strata_dom::EventType::PointerUp,
-        ) {
-            let ev = self.create_mouse_event(
-                strata_dom::EventType::PointerUp,
-                px,
-                py,
-                0,
-                1,
-                Some(target_box),
-            );
-            handler(ev);
-            dom_handled = true;
-        }
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
-            &self.root_blueprint,
-            &self.layout_root,
-            px,
-            py,
             strata_dom::EventType::MouseUp,
-        ) {
-            let ev = self.create_mouse_event(
-                strata_dom::EventType::MouseUp,
-                px,
-                py,
-                0,
-                1,
-                Some(target_box),
-            );
-            handler(ev);
-            dom_handled = true;
+        ] {
+            match capture {
+                Some((ref cap_path, true)) => {
+                    if let Some((handler, target_box, _)) = Self::find_event_at_or_above_path(
+                        &self.root_blueprint,
+                        &self.layout_root,
+                        cap_path,
+                        ev_type,
+                    ) {
+                        let ev = self.create_mouse_event(ev_type, px, py, 0, 1, Some(target_box));
+                        handler(ev);
+                        dom_handled = true;
+                    }
+                }
+                Some((ref cap_path, false)) => {
+                    let mut hit_eid = None;
+                    if let Some((handler, target_box, eid)) =
+                        Self::hit_test_event_with_box_and_entity(
+                            &self.root_blueprint,
+                            &self.layout_root,
+                            px,
+                            py,
+                            ev_type,
+                        )
+                    {
+                        hit_eid = Some(eid);
+                        let ev = self.create_mouse_event(ev_type, px, py, 0, 1, Some(target_box));
+                        handler(ev);
+                        dom_handled = true;
+                    }
+                    if let Some((handler, target_box, cap_eid)) = Self::find_event_at_or_above_path(
+                        &self.root_blueprint,
+                        &self.layout_root,
+                        cap_path,
+                        ev_type,
+                    ) {
+                        if hit_eid != Some(cap_eid) {
+                            let ev =
+                                self.create_mouse_event(ev_type, px, py, 0, 1, Some(target_box));
+                            handler(ev);
+                            dom_handled = true;
+                        }
+                    }
+                }
+                None => {
+                    if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+                        &self.root_blueprint,
+                        &self.layout_root,
+                        px,
+                        py,
+                        ev_type,
+                    ) {
+                        let ev = self.create_mouse_event(ev_type, px, py, 0, 1, Some(target_box));
+                        handler(ev);
+                        dom_handled = true;
+                    }
+                }
+            }
         }
 
         if dom_handled {

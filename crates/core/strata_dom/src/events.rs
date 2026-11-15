@@ -37,6 +37,7 @@ pub enum EventType {
     AnimationIteration,
     AnimationEnd,
     AnimationCancel,
+    Resize,
     Custom(&'static str),
 }
 
@@ -78,6 +79,12 @@ pub struct Event {
     pub button: i16,
     pub buttons: u16,
     pub detail: i32,
+    pub pointer_id: i32,
+    pub pointer_capture_requested: std::rc::Rc<Cell<Option<bool>>>,
+
+    // Element Layout Measurement Properties (ResizeObserver / onresize)
+    pub width: f64,
+    pub height: f64,
 
     // Keyboard Properties (W3C KeyboardEvent)
     pub key: String,
@@ -131,6 +138,10 @@ impl Default for Event {
             button: 0,
             buttons: 0,
             detail: 0,
+            pointer_id: 1,
+            pointer_capture_requested: std::rc::Rc::new(Cell::new(None)),
+            width: 0.0,
+            height: 0.0,
             key: String::new(),
             code: String::new(),
             repeat: false,
@@ -157,6 +168,17 @@ impl Event {
             event_type,
             ..Default::default()
         }
+    }
+
+    /// Requests pointer capture on the current event target for `pointer_id` so subsequent
+    /// `PointerMove`/`MouseMove` and `PointerUp`/`MouseUp` events continue firing even outside bounds.
+    pub fn set_pointer_capture(&self, _pointer_id: i32) {
+        self.pointer_capture_requested.set(Some(true));
+    }
+
+    /// Releases an active pointer capture on the current event target.
+    pub fn release_pointer_capture(&self, _pointer_id: i32) {
+        self.pointer_capture_requested.set(Some(false));
     }
 
     pub fn with_value(event_type: EventType, val: impl Into<String>) -> Self {

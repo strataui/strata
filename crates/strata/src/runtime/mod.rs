@@ -148,6 +148,12 @@ pub struct AppRuntime {
     pub(crate) frame_profile_hook: Option<FrameProfileHook>,
     /// Cached `<style>` stylesheets collected from `root_blueprint`.
     pub(crate) cached_stylesheets: Vec<std::sync::Arc<strata_style::StyleSheet>>,
+    /// Active pointer capture or drag target `(tree_path, explicit_capture)`.
+    pub pointer_capture_target: Option<(Vec<usize>, bool)>,
+    /// True when the current `root_blueprint` contains any `EventType::Resize` listeners.
+    pub(crate) has_resize_listeners: bool,
+    /// Last observed `(width, height)` for elements with `onresize` listeners, keyed by node ID.
+    pub observed_element_sizes: std::collections::HashMap<u64, (f32, f32)>,
 }
 
 /// Whether opt-in `[perf]` timing output is enabled through `STRATA_PERF_LOG`.
@@ -298,8 +304,13 @@ impl AppRuntime {
             compiles_skipped: 0,
             frame_profile_hook: None,
             cached_stylesheets: Vec::new(),
+            pointer_capture_target: None,
+            has_resize_listeners: false,
+            observed_element_sizes: std::collections::HashMap::new(),
         };
 
+        runtime.has_resize_listeners =
+            Self::blueprint_has_resize_listeners(&runtime.root_blueprint);
         let initial_sheets = Self::collect_stylesheets_from_blueprint(&runtime.root_blueprint);
         for sheet in &initial_sheets {
             runtime.register_keyframes_stylesheet(sheet);
@@ -308,6 +319,7 @@ impl AppRuntime {
         runtime.sync_tree_animations(0.0);
         runtime.apply_viewport_clamps();
         runtime.apply_scroll_offsets();
+        runtime.dispatch_resize_observers();
         runtime
             .spatial_index
             .rebuild(&runtime.root_blueprint, &runtime.layout_root);
@@ -338,6 +350,7 @@ impl AppRuntime {
         }
         self.apply_viewport_clamps();
         self.apply_scroll_offsets();
+        self.dispatch_resize_observers();
         self.spatial_index
             .rebuild(&self.root_blueprint, &self.layout_root);
         self.update_accessibility_tree();
@@ -426,12 +439,156 @@ impl AppRuntime {
         self.root_blueprint.find_by_entity_id(entity_id)
     }
 
+    /// Queries the laid-out border-box rectangle `(x, y, width, height)` for an element by `id`.
+    pub fn query_element_rect(&self, element_id: &str) -> Option<strata_layout::Rect> {
+        fn find_rec(node: &LayoutNode, target_id: &str) -> Option<strata_layout::Rect> {
+            if node.element_id.as_deref() == Some(target_id) {
+                return Some(node.geometry.border_box);
+            }
+            for child in &node.children {
+                if let Some(rect) = find_rec(child, target_id) {
+                    return Some(rect);
+                }
+            }
+            None
+        }
+        find_rec(&self.layout_root, element_id)
+    }
+
+    /// Returns true if any element in `bp` registers an `EventType::Resize` listener.
+    pub(crate) fn blueprint_has_resize_listeners(bp: &NodeBlueprint) -> bool {
+        match bp {
+            NodeBlueprint::Element {
+                attributes,
+                children,
+                ..
+            } => {
+                attributes.iter().any(|a| {
+                    matches!(
+                        a,
+                        strata_dom::Attribute::EventListener {
+                            event: strata_dom::EventType::Resize,
+                            ..
+                        }
+                    )
+                }) || children.iter().any(Self::blueprint_has_resize_listeners)
+            }
+            NodeBlueprint::Fragment(children) => {
+                children.iter().any(Self::blueprint_has_resize_listeners)
+            }
+            _ => false,
+        }
+    }
+
+    /// Dispatches `EventType::Resize` (`onresize`) callbacks for any element whose laid-out
+    /// `(width, height)` changed since the last observation. Returns `true` if any callback fired.
+    pub fn dispatch_resize_observers(&mut self) -> bool {
+        if !self.has_resize_listeners {
+            return false;
+        }
+        let mut pending: Vec<(std::rc::Rc<dyn Fn(strata_dom::Event)>, strata_layout::Rect)> =
+            Vec::new();
+        let mut active_ids = std::collections::HashSet::new();
+        let mut path = Vec::new();
+
+        #[allow(clippy::too_many_arguments)]
+        fn collect_rec(
+            bp: &NodeBlueprint,
+            layout: &LayoutNode,
+            path: &mut Vec<usize>,
+            path_node_ids: &std::collections::HashMap<Vec<usize>, u64>,
+            observed: &mut std::collections::HashMap<u64, (f32, f32)>,
+            active_ids: &mut std::collections::HashSet<u64>,
+            pending: &mut Vec<(std::rc::Rc<dyn Fn(strata_dom::Event)>, strata_layout::Rect)>,
+        ) {
+            if let NodeBlueprint::Element {
+                attributes,
+                children,
+                ..
+            } = bp
+            {
+                let node_id = path_node_ids
+                    .get(path)
+                    .copied()
+                    .unwrap_or_else(|| path_to_node_id(path));
+                let mut resize_handlers = Vec::new();
+                for attr in attributes {
+                    if let strata_dom::Attribute::EventListener {
+                        event: strata_dom::EventType::Resize,
+                        handler,
+                    } = attr
+                    {
+                        resize_handlers.push(handler.clone());
+                    }
+                }
+                if !resize_handlers.is_empty() {
+                    active_ids.insert(node_id);
+                    let w = layout.geometry.border_box.width;
+                    let h = layout.geometry.border_box.height;
+                    let changed = match observed.get(&node_id) {
+                        Some(&(pw, ph)) => (w - pw).abs() > 0.25 || (h - ph).abs() > 0.25,
+                        None => true,
+                    };
+                    if changed {
+                        observed.insert(node_id, (w, h));
+                        for handler in resize_handlers {
+                            pending.push((handler, layout.geometry.border_box));
+                        }
+                    }
+                }
+                for (idx, child_layout) in layout.children.iter().enumerate() {
+                    if let Some(child_bp) = children.get(idx) {
+                        path.push(idx);
+                        collect_rec(
+                            child_bp,
+                            child_layout,
+                            path,
+                            path_node_ids,
+                            observed,
+                            active_ids,
+                            pending,
+                        );
+                        path.pop();
+                    }
+                }
+            }
+        }
+
+        collect_rec(
+            &self.root_blueprint,
+            &self.layout_root,
+            &mut path,
+            &self.path_node_ids,
+            &mut self.observed_element_sizes,
+            &mut active_ids,
+            &mut pending,
+        );
+        self.observed_element_sizes
+            .retain(|id, _| active_ids.contains(id));
+
+        if pending.is_empty() {
+            return false;
+        }
+        for (handler, rect) in pending {
+            let mut ev = strata_dom::Event::new(strata_dom::EventType::Resize);
+            ev.client_x = rect.x as f64;
+            ev.client_y = rect.y as f64;
+            ev.offset_x = rect.width as f64;
+            ev.offset_y = rect.height as f64;
+            ev.width = rect.width as f64;
+            ev.height = rect.height as f64;
+            handler(ev);
+        }
+        true
+    }
+
     /// Updates the application root view, reconstructing the layout tree and compiling a new display list.
     pub fn update_view(&mut self, new_view: View) {
         self.applied_scroll_offsets.clear();
         self.applied_portal_offsets.clear();
         self.root_blueprint = new_view.root.flatten_fragments();
         self.root_blueprint.ensure_entity_ids();
+        self.has_resize_listeners = Self::blueprint_has_resize_listeners(&self.root_blueprint);
         self.ir_graph = Self::build_ir_graph(&self.root_blueprint);
         let sheets = Self::collect_stylesheets_from_blueprint(&self.root_blueprint);
         for sheet in &sheets {

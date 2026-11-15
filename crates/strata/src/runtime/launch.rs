@@ -453,25 +453,35 @@ where
     let allow_maximize = config.resizable && !config.is_docked();
 
     let runtime_draw = runtime.clone();
+    let root_fn_draw = root_fn_rc.clone();
     let on_draw = move |width: f32, height: f32, cr: &strata_platform::cairo::Context| {
+        let mut resize_fired = false;
+        {
+            let mut rt = runtime_draw.borrow_mut();
+            let size_changed = (rt.viewport_width - width).abs() > 0.01
+                || (rt.viewport_height - height).abs() > 0.01;
+            rt.viewport_width = width;
+            rt.viewport_height = height;
+            if size_changed {
+                {
+                    let rt = &mut *rt;
+                    rt.unapply_scroll_offsets();
+                    rt.layout_root.compute_layout(width, height);
+                    AppRuntime::sync_layout_to_ir(&rt.layout_root, &mut rt.ir_graph);
+                    rt.apply_viewport_clamps();
+                    rt.apply_scroll_offsets();
+                    rt.spatial_index
+                        .rebuild(&rt.root_blueprint, &rt.layout_root);
+                }
+                resize_fired = rt.dispatch_resize_observers();
+                rt.mark_paint_dirty();
+            }
+        }
+        if resize_fired {
+            let new_view = (root_fn_draw.borrow_mut())();
+            runtime_draw.borrow_mut().update_view(new_view);
+        }
         let mut rt = runtime_draw.borrow_mut();
-        let size_changed =
-            (rt.viewport_width - width).abs() > 0.01 || (rt.viewport_height - height).abs() > 0.01;
-        rt.viewport_width = width;
-        rt.viewport_height = height;
-        if size_changed {
-            let rt = &mut *rt;
-            rt.unapply_scroll_offsets();
-            rt.layout_root.compute_layout(width, height);
-            AppRuntime::sync_layout_to_ir(&rt.layout_root, &mut rt.ir_graph);
-            rt.apply_viewport_clamps();
-            rt.apply_scroll_offsets();
-            rt.spatial_index
-                .rebuild(&rt.root_blueprint, &rt.layout_root);
-        }
-        if size_changed {
-            rt.mark_paint_dirty();
-        }
         // Repaints with no state change (expose, focus) reuse the compiled list.
         rt.compile_display_list_if_dirty();
 

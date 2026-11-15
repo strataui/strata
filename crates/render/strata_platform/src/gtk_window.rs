@@ -2541,6 +2541,38 @@ pub fn gtk_set_cursor(cursor_icon: crate::window::CursorIcon) {
                             )
                         })
                     }
+                    crate::window::CursorIcon::ResizeN | crate::window::CursorIcon::ResizeS => {
+                        gtk::gdk::Cursor::from_name(&display, "ns-resize").or_else(|| {
+                            gtk::gdk::Cursor::for_display(
+                                &display,
+                                gtk::gdk::CursorType::SbVDoubleArrow,
+                            )
+                        })
+                    }
+                    crate::window::CursorIcon::ResizeE | crate::window::CursorIcon::ResizeW => {
+                        gtk::gdk::Cursor::from_name(&display, "ew-resize").or_else(|| {
+                            gtk::gdk::Cursor::for_display(
+                                &display,
+                                gtk::gdk::CursorType::SbHDoubleArrow,
+                            )
+                        })
+                    }
+                    crate::window::CursorIcon::ResizeNw | crate::window::CursorIcon::ResizeSe => {
+                        gtk::gdk::Cursor::from_name(&display, "nwse-resize").or_else(|| {
+                            gtk::gdk::Cursor::for_display(
+                                &display,
+                                gtk::gdk::CursorType::TopLeftCorner,
+                            )
+                        })
+                    }
+                    crate::window::CursorIcon::ResizeNe | crate::window::CursorIcon::ResizeSw => {
+                        gtk::gdk::Cursor::from_name(&display, "nesw-resize").or_else(|| {
+                            gtk::gdk::Cursor::for_display(
+                                &display,
+                                gtk::gdk::CursorType::TopRightCorner,
+                            )
+                        })
+                    }
                     crate::window::CursorIcon::Help => {
                         gtk::gdk::Cursor::from_name(&display, "help").or_else(|| {
                             gtk::gdk::Cursor::for_display(
@@ -2562,9 +2594,6 @@ pub fn gtk_set_cursor(cursor_icon: crate::window::CursorIcon) {
                             gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::LeftPtr)
                         })
                     }
-                    _ => gtk::gdk::Cursor::from_name(&display, "default").or_else(|| {
-                        gtk::gdk::Cursor::for_display(&display, gtk::gdk::CursorType::LeftPtr)
-                    }),
                 };
                 gdk_win.set_cursor(cursor.as_ref());
                 CURRENT_CURSOR.with(|c| c.set(Some(cursor_icon)));
@@ -3011,10 +3040,33 @@ where
     });
 
     // Mouse button click handler
+    let frameless_resizable =
+        resizable && config.decoration == crate::window::WindowDecoration::FramelessTransparent;
+    let window_for_resize = window.clone();
     let on_event_mouse = on_event_rc.clone();
     drawing_area.connect_button_press_event(move |widget, event| {
+        use gtk::prelude::GtkWindowExt;
+        use gtk::prelude::WidgetExt;
         let (x, y) = event.position();
         let (root_x, root_y) = event.root();
+
+        if frameless_resizable
+            && event.button() == 1
+            && event.event_type() == gtk::gdk::EventType::ButtonPress
+        {
+            let alloc = widget.allocation();
+            if let Some((edge, _)) = frameless_resize_edge(x, y, alloc.width(), alloc.height()) {
+                window_for_resize.begin_resize_drag(
+                    edge,
+                    1,
+                    root_x as i32,
+                    root_y as i32,
+                    event.time(),
+                );
+                return gtk::glib::Propagation::Stop;
+            }
+        }
+
         LAST_PRESS.with(|p| p.set((root_x, root_y, event.button(), event.time())));
 
         let state = event.state();
@@ -3094,6 +3146,7 @@ where
     // Pointer motion handler
     let on_event_motion = on_event_rc.clone();
     drawing_area.connect_motion_notify_event(move |widget, event| {
+        use gtk::prelude::WidgetExt;
         let (x, y) = event.position();
         let (root_x, root_y) = event.root();
 
@@ -3136,6 +3189,13 @@ where
 
         if (on_event_motion.borrow_mut())(&plat_event) {
             widget.queue_draw();
+        }
+
+        if frameless_resizable {
+            let alloc = widget.allocation();
+            if let Some((_, cursor)) = frameless_resize_edge(x, y, alloc.width(), alloc.height()) {
+                gtk_set_cursor(cursor);
+            }
         }
 
         gtk::glib::Propagation::Proceed
@@ -3727,4 +3787,103 @@ pub fn init_pango_text_measurement() {
     strata_layout::text::register_family_text_measurer(pango_measure_text_family);
     strata_layout::text::register_family_styled_text_measurer(pango_measure_styled_text_family);
     strata_layout::text::register_font_metrics(pango_font_metrics);
+}
+
+/// Hit-tests a 6px resize border/corner zone around a frameless window, returning the
+/// corresponding `gdk::WindowEdge` and directional resize `CursorIcon`.
+pub fn frameless_resize_edge(
+    x: f64,
+    y: f64,
+    width: i32,
+    height: i32,
+) -> Option<(gtk::gdk::WindowEdge, crate::window::CursorIcon)> {
+    const BORDER: f64 = 6.0;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let w = width as f64;
+    let h = height as f64;
+    let left = x < BORDER;
+    let right = x >= w - BORDER;
+    let top = y < BORDER;
+    let bottom = y >= h - BORDER;
+
+    match (left, right, top, bottom) {
+        (true, _, true, _) => Some((
+            gtk::gdk::WindowEdge::NorthWest,
+            crate::window::CursorIcon::ResizeNw,
+        )),
+        (_, true, true, _) => Some((
+            gtk::gdk::WindowEdge::NorthEast,
+            crate::window::CursorIcon::ResizeNe,
+        )),
+        (true, _, _, true) => Some((
+            gtk::gdk::WindowEdge::SouthWest,
+            crate::window::CursorIcon::ResizeSw,
+        )),
+        (_, true, _, true) => Some((
+            gtk::gdk::WindowEdge::SouthEast,
+            crate::window::CursorIcon::ResizeSe,
+        )),
+        (true, _, _, _) => Some((
+            gtk::gdk::WindowEdge::West,
+            crate::window::CursorIcon::ResizeW,
+        )),
+        (_, true, _, _) => Some((
+            gtk::gdk::WindowEdge::East,
+            crate::window::CursorIcon::ResizeE,
+        )),
+        (_, _, true, _) => Some((
+            gtk::gdk::WindowEdge::North,
+            crate::window::CursorIcon::ResizeN,
+        )),
+        (_, _, _, true) => Some((
+            gtk::gdk::WindowEdge::South,
+            crate::window::CursorIcon::ResizeS,
+        )),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod frameless_resize_tests {
+    use super::frameless_resize_edge;
+    use crate::window::CursorIcon;
+
+    #[test]
+    fn test_frameless_resize_edge_hit_testing() {
+        assert_eq!(
+            frameless_resize_edge(2.0, 2.0, 800, 600),
+            Some((gtk::gdk::WindowEdge::NorthWest, CursorIcon::ResizeNw))
+        );
+        assert_eq!(
+            frameless_resize_edge(798.0, 2.0, 800, 600),
+            Some((gtk::gdk::WindowEdge::NorthEast, CursorIcon::ResizeNe))
+        );
+        assert_eq!(
+            frameless_resize_edge(2.0, 598.0, 800, 600),
+            Some((gtk::gdk::WindowEdge::SouthWest, CursorIcon::ResizeSw))
+        );
+        assert_eq!(
+            frameless_resize_edge(798.0, 598.0, 800, 600),
+            Some((gtk::gdk::WindowEdge::SouthEast, CursorIcon::ResizeSe))
+        );
+        assert_eq!(
+            frameless_resize_edge(2.0, 300.0, 800, 600),
+            Some((gtk::gdk::WindowEdge::West, CursorIcon::ResizeW))
+        );
+        assert_eq!(
+            frameless_resize_edge(798.0, 300.0, 800, 600),
+            Some((gtk::gdk::WindowEdge::East, CursorIcon::ResizeE))
+        );
+        assert_eq!(
+            frameless_resize_edge(400.0, 2.0, 800, 600),
+            Some((gtk::gdk::WindowEdge::North, CursorIcon::ResizeN))
+        );
+        assert_eq!(
+            frameless_resize_edge(400.0, 598.0, 800, 600),
+            Some((gtk::gdk::WindowEdge::South, CursorIcon::ResizeS))
+        );
+        assert_eq!(frameless_resize_edge(400.0, 300.0, 800, 600), None);
+    }
 }

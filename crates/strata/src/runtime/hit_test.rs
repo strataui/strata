@@ -481,8 +481,8 @@ impl AppRuntime {
     }
 
     /// Recursively hit tests a coordinate point against the blueprint and computed layout hierarchy,
-    /// returning the nearest listener registered for `event_type` and its element border box.
-    pub fn hit_test_event_with_box<'a>(
+    /// returning the nearest listener registered for `event_type`, its element border box, and its `EntityId`.
+    pub fn hit_test_event_with_box_and_entity<'a>(
         blueprint: &'a NodeBlueprint,
         layout: &'a LayoutNode,
         px: f32,
@@ -491,6 +491,7 @@ impl AppRuntime {
     ) -> Option<(
         std::rc::Rc<dyn Fn(strata_dom::Event)>,
         &'a strata_layout::Rect,
+        strata_primitives::EntityId,
     )> {
         Self::hit_test_stacking_context_with(
             blueprint,
@@ -519,6 +520,7 @@ impl AppRuntime {
                                     return Some((
                                         handler.clone(),
                                         &node_layout.geometry.border_box,
+                                        node_layout.entity_id,
                                     ));
                                 }
                             }
@@ -528,6 +530,69 @@ impl AppRuntime {
                 None
             },
         )
+    }
+
+    /// Recursively hit tests a coordinate point against the blueprint and computed layout hierarchy,
+    /// returning the nearest listener registered for `event_type` and its element border box.
+    pub fn hit_test_event_with_box<'a>(
+        blueprint: &'a NodeBlueprint,
+        layout: &'a LayoutNode,
+        px: f32,
+        py: f32,
+        event_type: strata_dom::EventType,
+    ) -> Option<(
+        std::rc::Rc<dyn Fn(strata_dom::Event)>,
+        &'a strata_layout::Rect,
+    )> {
+        Self::hit_test_event_with_box_and_entity(blueprint, layout, px, py, event_type)
+            .map(|(h, r, _)| (h, r))
+    }
+
+    /// Walks from `path` up toward the root to find the nearest ancestor (or self)
+    /// registering a listener for `event_type`, returning `(handler, border_box, entity_id)`.
+    pub fn find_event_at_or_above_path<'a>(
+        blueprint: &'a NodeBlueprint,
+        layout: &'a LayoutNode,
+        path: &[usize],
+        event_type: strata_dom::EventType,
+    ) -> Option<(
+        std::rc::Rc<dyn Fn(strata_dom::Event)>,
+        &'a strata_layout::Rect,
+        strata_primitives::EntityId,
+    )> {
+        for len in (0..=path.len()).rev() {
+            let prefix = &path[..len];
+            let Some(bp) = Self::find_blueprint_at_path(blueprint, prefix) else {
+                continue;
+            };
+            let mut node_layout = layout;
+            let mut valid = true;
+            for &idx in prefix {
+                if let Some(child) = node_layout.children.get(idx) {
+                    node_layout = child;
+                } else {
+                    valid = false;
+                    break;
+                }
+            }
+            if !valid {
+                continue;
+            }
+            if let NodeBlueprint::Element { attributes, .. } = bp {
+                for attr in attributes {
+                    if let strata_dom::Attribute::EventListener { event: ev, handler } = attr {
+                        if *ev == event_type {
+                            return Some((
+                                handler.clone(),
+                                &node_layout.geometry.border_box,
+                                node_layout.entity_id,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Recursively hit tests a coordinate point against the blueprint and computed layout hierarchy,
