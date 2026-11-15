@@ -18,11 +18,15 @@ strata_render = { workspace = true }
 strata_style = { workspace = true }
 strata_primitives = { workspace = true }
 strata_layout = { workspace = true }
+wgpu = { version = "24.0", optional = true }
+pollster = { version = "0.4", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
 
 [features]
-default = ["gtk-compat", "xlib"]
+default = ["gtk-compat", "xlib", "wgpu-backend"]
 gtk-compat = ["dep:gtk", "dep:cairo-rs", "dep:pangocairo", "dep:pango"]
 xlib = ["dep:x11"]
+wgpu-backend = ["dep:wgpu", "dep:pollster", "dep:raw-window-handle", "strata_render/wgpu-backend"]
 test-internals = []
 
 [dev-dependencies]

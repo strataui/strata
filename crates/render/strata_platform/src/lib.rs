@@ -44,6 +44,8 @@ pub mod tray;
 pub mod vibrancy;
 #[cfg(target_os = "linux")]
 pub mod wayland_window;
+#[cfg(feature = "wgpu-backend")]
+pub mod wgpu_surface;
 #[cfg(windows)]
 pub mod win32_window;
 pub mod window;

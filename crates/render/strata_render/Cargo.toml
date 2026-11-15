@@ -18,8 +18,12 @@ strata_macro = { workspace = true }
 strata_js = { workspace = true }
 strata_gpu_path = { workspace = true }
 miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+wgpu = { version = "24.0", optional = true }
+bytemuck = { version = "1.25", features = ["derive"], optional = true }
+pollster = { version = "0.4", optional = true }
 
 [features]
-default = []
+default = ["wgpu-backend"]
 gpu = []
+wgpu-backend = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 

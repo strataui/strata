@@ -368,6 +368,329 @@ impl CloudShell3D {
     }
 }
 
+/// Compact, backend-agnostic identifier for a terrain tile in a quadtree or flat-patch pyramid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TileKeyId {
+    pub level: u8,
+    pub col: u32,
+    pub row: u32,
+    pub face: u8,
+}
+
+impl TileKeyId {
+    #[inline]
+    pub const fn new(level: u8, col: u32, row: u32, face: u8) -> Self {
+        Self {
+            level,
+            col,
+            row,
+            face,
+        }
+    }
+
+    #[inline]
+    pub const fn quadtree(level: u8, col: u32, row: u32) -> Self {
+        Self::new(level, col, row, 0)
+    }
+}
+
+/// Tile-local RTC terrain vertex packed into two `vec4<f32>`s for GPU vertex pulling.
+///
+/// `pos_u = [local_x, local_y, local_z, u]` relative to the tile's `center_ecef`,
+/// `norm_v = [nx, ny, nz, v]`. Using two 16-byte vectors eliminates WGSL `vec3` alignment padding.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "wgpu-backend", derive(bytemuck::Pod, bytemuck::Zeroable))]
+pub struct RteTileVertex {
+    pub pos_u: [f32; 4],
+    pub norm_v: [f32; 4],
+}
+
+impl RteTileVertex {
+    #[inline]
+    pub const fn new(pos: [f32; 3], normal: [f32; 3], uv: [f32; 2]) -> Self {
+        Self {
+            pos_u: [pos[0], pos[1], pos[2], uv[0]],
+            norm_v: [normal[0], normal[1], normal[2], uv[1]],
+        }
+    }
+
+    #[inline]
+    pub const fn position(self) -> [f32; 3] {
+        [self.pos_u[0], self.pos_u[1], self.pos_u[2]]
+    }
+
+    #[inline]
+    pub const fn normal(self) -> [f32; 3] {
+        [self.norm_v[0], self.norm_v[1], self.norm_v[2]]
+    }
+
+    #[inline]
+    pub const fn uv(self) -> [f32; 2] {
+        [self.pos_u[3], self.norm_v[3]]
+    }
+}
+
+/// Persistent GPU-ready tile geometry computed once per `(TileKeyId, revision)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetainedTileMesh {
+    pub key: TileKeyId,
+    pub revision: u64,
+    pub center_ecef: [f64; 3],
+    pub grid_res: u32,
+    pub has_skirts: bool,
+    pub vertices: std::sync::Arc<Vec<RteTileVertex>>,
+    pub bounding_radius: f32,
+}
+
+/// Persistent GPU-ready tile imagery payload computed once per `(id, revision)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetainedTileTexture {
+    pub id: u64,
+    pub revision: u64,
+    pub width: u32,
+    pub height: u32,
+    pub rgba8: std::sync::Arc<Vec<u8>>,
+}
+
+/// Lightweight per-frame tile draw instance referencing cached geometry and imagery.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetainedTileInstance {
+    pub key: TileKeyId,
+    pub mesh_revision: u64,
+    pub center_ecef: [f64; 3],
+    pub texture_id: Option<u64>,
+    pub texture_revision: u64,
+    pub uv_rect: [f32; 4],
+    pub tint: [f32; 4],
+    pub unlit: bool,
+}
+
+/// Dynamic or non-grid RTC geometry (buildings, vector ribbons, trajectories) anchored in ECEF.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetainedDynamicMesh {
+    pub id: u64,
+    pub revision: u64,
+    pub anchor_ecef: [f64; 3],
+    pub vertices: std::sync::Arc<Vec<RteTileVertex>>,
+    pub indices: std::sync::Arc<Vec<u32>>,
+    pub color: [f32; 4],
+    pub unlit: bool,
+}
+
+/// Camera and lighting uniforms needed for O(1) RTE GPU frame presentation without scene rebuilds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RetainedCameraUniforms {
+    /// Column-major projection matrix.
+    pub proj: [[f32; 4]; 4],
+    /// Column-major camera rotation matrix with camera positioned at world origin `[0, 0, 0]`.
+    pub view_rot: [[f32; 4]; 4],
+    /// Pre-multiplied column-major `proj * view_rot` matrix.
+    pub view_proj_rte: [[f32; 4]; 4],
+    /// High-precision eye position in world / ECEF coordinates.
+    pub eye_ecef: [f64; 3],
+    /// World-space directional sun direction (pointing from surface toward light).
+    pub sun_dir: [f32; 3],
+    pub sun_color: [f32; 3],
+    pub ambient_color: [f32; 3],
+    pub background: Background3D,
+    pub near: f32,
+    pub far: f32,
+}
+
+impl Default for RetainedCameraUniforms {
+    fn default() -> Self {
+        let ident = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        Self {
+            proj: ident,
+            view_rot: ident,
+            view_proj_rte: ident,
+            eye_ecef: [0.0, 0.0, 5.0],
+            sun_dir: [0.577_350_26, 0.577_350_26, 0.577_350_26],
+            sun_color: [1.0, 0.98, 0.95],
+            ambient_color: [0.22, 0.24, 0.28],
+            background: Background3D::Transparent,
+            near: 0.1,
+            far: 100_000_000.0,
+        }
+    }
+}
+
+/// Snapshot of retained terrain tiles, textures, dynamic meshes, and camera parameters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetainedTerrainFrame {
+    pub camera: RetainedCameraUniforms,
+    pub geometry_revision: u64,
+    pub meshes: Vec<std::sync::Arc<RetainedTileMesh>>,
+    pub instances: Vec<RetainedTileInstance>,
+    pub textures: Vec<std::sync::Arc<RetainedTileTexture>>,
+    pub dynamic_meshes: Vec<RetainedDynamicMesh>,
+}
+
+#[derive(Debug)]
+struct RetainedSceneState {
+    camera: RetainedCameraUniforms,
+    terrain: Option<std::sync::Arc<RetainedTerrainFrame>>,
+    fallback_scene: Option<std::sync::Arc<Scene3D>>,
+}
+
+#[derive(Debug)]
+struct RetainedScene3DInner {
+    camera_generation: std::sync::atomic::AtomicU64,
+    geometry_generation: std::sync::atomic::AtomicU64,
+    overlay_generation: std::sync::atomic::AtomicU64,
+    state: std::sync::RwLock<RetainedSceneState>,
+}
+
+/// Thread-safe retained 3D scene handle shared between host state (camera/worker) and `Canvas3D`.
+///
+/// Calling [`RetainedScene3D::update_camera`] updates camera uniforms in place and bumps only
+/// `camera_generation`, allowing the GPU backend to re-render at uncapped framerates without
+/// rebuilding DOM nodes, layout, display lists, or tile meshes.
+#[derive(Clone)]
+pub struct RetainedScene3D {
+    inner: std::sync::Arc<RetainedScene3DInner>,
+}
+
+impl std::fmt::Debug for RetainedScene3D {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (cam, geom, overlay) = self.generations();
+        f.debug_struct("RetainedScene3D")
+            .field("camera_generation", &cam)
+            .field("geometry_generation", &geom)
+            .field("overlay_generation", &overlay)
+            .finish()
+    }
+}
+
+impl PartialEq for RetainedScene3D {
+    fn eq(&self, other: &Self) -> bool {
+        if std::sync::Arc::ptr_eq(&self.inner, &other.inner) {
+            return true;
+        }
+        let Ok(a) = self.inner.state.read() else {
+            return false;
+        };
+        let Ok(b) = other.inner.state.read() else {
+            return false;
+        };
+        a.camera == b.camera && a.terrain == b.terrain && a.fallback_scene == b.fallback_scene
+    }
+}
+
+impl RetainedScene3D {
+    pub fn new(camera: RetainedCameraUniforms) -> Self {
+        Self {
+            inner: std::sync::Arc::new(RetainedScene3DInner {
+                camera_generation: std::sync::atomic::AtomicU64::new(1),
+                geometry_generation: std::sync::atomic::AtomicU64::new(0),
+                overlay_generation: std::sync::atomic::AtomicU64::new(0),
+                state: std::sync::RwLock::new(RetainedSceneState {
+                    camera,
+                    terrain: None,
+                    fallback_scene: None,
+                }),
+            }),
+        }
+    }
+
+    pub fn update_camera(&self, camera: RetainedCameraUniforms) {
+        if let Ok(mut guard) = self.inner.state.write() {
+            guard.camera = camera;
+        }
+        self.inner
+            .camera_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    pub fn update_terrain(&self, terrain: std::sync::Arc<RetainedTerrainFrame>) {
+        if let Ok(mut guard) = self.inner.state.write() {
+            guard.camera = terrain.camera;
+            guard.terrain = Some(terrain);
+        }
+        self.inner
+            .geometry_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+        self.inner
+            .camera_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Publishes a new terrain tile frame from a background LOD worker while preserving the live camera.
+    pub fn update_terrain_preserving_camera(&self, terrain: std::sync::Arc<RetainedTerrainFrame>) {
+        if let Ok(mut guard) = self.inner.state.write() {
+            guard.terrain = Some(terrain);
+        }
+        self.inner
+            .geometry_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    pub fn set_fallback_scene(&self, scene: std::sync::Arc<Scene3D>) {
+        if let Ok(mut guard) = self.inner.state.write() {
+            guard.fallback_scene = Some(scene);
+        }
+        self.inner
+            .overlay_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    #[inline]
+    pub fn camera_generation(&self) -> u64 {
+        self.inner
+            .camera_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    #[inline]
+    pub fn geometry_generation(&self) -> u64 {
+        self.inner
+            .geometry_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    #[inline]
+    pub fn overlay_generation(&self) -> u64 {
+        self.inner
+            .overlay_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    #[inline]
+    pub fn generations(&self) -> (u64, u64, u64) {
+        (
+            self.camera_generation(),
+            self.geometry_generation(),
+            self.overlay_generation(),
+        )
+    }
+
+    pub fn camera(&self) -> RetainedCameraUniforms {
+        self.inner
+            .state
+            .read()
+            .map(|g| g.camera)
+            .unwrap_or_default()
+    }
+
+    pub fn snapshot_terrain(&self) -> Option<std::sync::Arc<RetainedTerrainFrame>> {
+        self.inner.state.read().ok().and_then(|g| g.terrain.clone())
+    }
+
+    pub fn fallback_scene(&self) -> Option<std::sync::Arc<Scene3D>> {
+        self.inner
+            .state
+            .read()
+            .ok()
+            .and_then(|g| g.fallback_scene.clone())
+    }
+}
+
 /// Top-Level 3D Scene representation embedded in a Strata Viewport.
 ///
 /// The background, celestial, cloud, overlay, and texture store state are private so adding
@@ -386,11 +709,41 @@ pub struct Scene3D {
     camera_up: Option<[f64; 3]>,
     /// Optional shared texture registry resolved automatically by software, Cairo, and GPU viewport rasterizers.
     textures: Option<std::sync::Arc<crate::texture3d::TextureStore>>,
+    /// Optional retained terrain snapshot attached for zero-rebuild GPU vertex pulling.
+    retained_terrain: Option<std::sync::Arc<RetainedTerrainFrame>>,
+    /// Optional retained scene handle allowing out-of-band O(1) camera/worker updates.
+    retained_handle: Option<RetainedScene3D>,
 }
 
 impl Scene3D {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_retained_terrain(mut self, terrain: std::sync::Arc<RetainedTerrainFrame>) -> Self {
+        self.retained_terrain = Some(terrain);
+        self
+    }
+
+    pub fn set_retained_terrain(&mut self, terrain: Option<std::sync::Arc<RetainedTerrainFrame>>) {
+        self.retained_terrain = terrain;
+    }
+
+    pub fn retained_terrain(&self) -> Option<&std::sync::Arc<RetainedTerrainFrame>> {
+        self.retained_terrain.as_ref()
+    }
+
+    pub fn with_retained_handle(mut self, handle: RetainedScene3D) -> Self {
+        self.retained_handle = Some(handle);
+        self
+    }
+
+    pub fn set_retained_handle(&mut self, handle: Option<RetainedScene3D>) {
+        self.retained_handle = handle;
+    }
+
+    pub fn retained_handle(&self) -> Option<&RetainedScene3D> {
+        self.retained_handle.as_ref()
     }
 
     pub fn add_mesh(&mut self, mesh: Mesh3D) {
@@ -697,6 +1050,8 @@ pub fn attach_orbit_controls_listeners(
 #[derive(Default)]
 pub struct Canvas3DBuilder {
     pub scene: Option<std::sync::Arc<Scene3D>>,
+    pub retained: Option<RetainedScene3D>,
+    pub uncapped: bool,
     pub class: Option<strata_dom::ClassList>,
     pub style: Option<String>,
     pub id: Option<String>,
@@ -784,14 +1139,29 @@ impl Canvas3DBuilder {
         self.push_event(strata_dom::EventType::Click, handler)
     }
 
+    /// Binds a persistent [`RetainedScene3D`] handle for out-of-band zero-rebuild GPU updates.
+    pub fn retained(mut self, handle: impl Into<Option<RetainedScene3D>>) -> Self {
+        self.retained = handle.into();
+        self
+    }
+
+    /// Opts this 3D canvas into uncapped vsync-off presentation when supported by the surface.
+    pub fn uncapped(mut self, uncapped: bool) -> Self {
+        self.uncapped = uncapped;
+        self
+    }
+
     pub fn children(mut self, children: Vec<NodeBlueprint>) -> Self {
         self.children = Some(children);
         self
     }
 
     pub fn build(self) -> View {
-        let mut attrs = Vec::with_capacity(4 + self.events.len());
+        let mut attrs = Vec::with_capacity(5 + self.events.len());
         attrs.push(Attribute::property("data-strata-canvas3d", "true"));
+        if self.uncapped {
+            attrs.push(Attribute::property("data-strata-uncapped", "true"));
+        }
         if let Some(id) = self.id {
             attrs.push(Attribute::property("id", id));
         }
@@ -805,16 +1175,35 @@ impl Canvas3DBuilder {
             attrs.push(Attribute::property("style", style));
         }
         attrs.extend(self.events);
+        let effective_scene = match (self.scene, self.retained) {
+            (Some(mut scene), Some(retained)) => {
+                if scene.retained_handle().is_none() {
+                    let s = std::sync::Arc::make_mut(&mut scene);
+                    s.set_retained_handle(Some(retained));
+                }
+                Some(scene)
+            }
+            (Some(scene), None) => Some(scene),
+            (None, Some(retained)) => {
+                let mut scene = retained
+                    .fallback_scene()
+                    .map(|s| (*s).clone())
+                    .unwrap_or_default();
+                scene.set_retained_handle(Some(retained));
+                Some(std::sync::Arc::new(scene))
+            }
+            (None, None) => None,
+        };
         if let Some(cb) = self.on_camera_change {
             attach_orbit_controls_listeners(
                 &mut attrs,
-                self.scene.as_deref(),
+                effective_scene.as_deref(),
                 self.width,
                 self.height,
                 cb,
             );
         }
-        if let Some(scene) = self.scene {
+        if let Some(scene) = effective_scene {
             let payload: std::sync::Arc<dyn std::any::Any + Send + Sync> = scene;
             attrs.push(Attribute::scene_payload_arc(payload));
         }

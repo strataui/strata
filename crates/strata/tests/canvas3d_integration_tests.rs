@@ -478,3 +478,70 @@ fn test_canvas3d_on_camera_change_orbit_and_wheel() {
     assert_eq!(observed.borrow().len(), 2);
     assert!((observed.borrow()[1].2 - 20.0).abs() > 0.1);
 }
+
+#[test]
+fn test_canvas3d_retained_uncapped_skips_display_list_recompiles() {
+    use strata_platform::{SoftwareSurfacePresenter, SwapchainCompositor, SwapchainFormat};
+    use strata_render::scene3d::{RetainedCameraUniforms, RetainedScene3D};
+
+    let retained = RetainedScene3D::new(RetainedCameraUniforms::default());
+    let canvas_el = Canvas3D::builder()
+        .retained(retained.clone())
+        .uncapped(true)
+        .width(640.0)
+        .height(480.0)
+        .build();
+
+    let view = rsx! {
+        <div class="w-full h-full">
+            {canvas_el}
+        </div>
+    };
+
+    let mut runtime = AppRuntime::new(view, 640.0, 480.0, 1.0);
+    assert!(
+        runtime.has_uncapped_canvas3d(),
+        "uncapped Canvas3D attribute should be detected by AppRuntime"
+    );
+
+    let mut compositor = SwapchainCompositor::new(640, 480, 1.0);
+    let mut presenter = SoftwareSurfacePresenter::new(640, 480, SwapchainFormat::Bgra8Unorm);
+
+    runtime
+        .render_frame(&mut compositor, &mut presenter, true)
+        .expect("initial present");
+    assert!(
+        !runtime.poll_retained_3d_dirty(),
+        "initial render_frame must acknowledge retained 3D generations"
+    );
+
+    let initial_skipped = runtime.compiles_skipped();
+
+    // Update camera on RetainedScene3D directly 10 times without marking 2D layout/DOM dirty.
+    for i in 0..10u32 {
+        let cam = RetainedCameraUniforms {
+            eye_ecef: [(i + 1) as f64 * 1.5, 0.0, 5.0],
+            ..Default::default()
+        };
+        retained.update_camera(cam);
+        assert!(runtime.poll_retained_3d_dirty());
+
+        let presented = runtime
+            .render_frame(&mut compositor, &mut presenter, false)
+            .expect("camera-only present");
+        assert!(
+            presented,
+            "camera update must trigger GPU/swapchain present"
+        );
+        assert!(
+            !runtime.poll_retained_3d_dirty(),
+            "presented generations must be acknowledged cleanly"
+        );
+    }
+
+    assert_eq!(
+        runtime.compiles_skipped(),
+        initial_skipped + 10,
+        "all 10 camera-only updates must skip 2D DOM/layout/display-list compilation"
+    );
+}
