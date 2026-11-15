@@ -1,6 +1,7 @@
 [package]
 name = "saas_dashboard"
 version.workspace = true
+publish = false
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

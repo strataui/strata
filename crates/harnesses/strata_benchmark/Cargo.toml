@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Automated universal performance benchmark and profiling suite for Project Strata"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 strata_primitives = { workspace = true }

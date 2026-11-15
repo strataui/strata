@@ -524,7 +524,7 @@ dependencies = [
 name = "creative_studio"
 version = "0.1.0"
 dependencies = [
- "strata",
+ "strata-ui",
  "strata_icons",
  "strata_ui",
 ]
@@ -815,7 +815,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 name = "ecommerce_storefront"
 version = "0.1.0"
 dependencies = [
- "strata",
+ "strata-ui",
  "strata_icons",
  "strata_ui",
 ]
@@ -2871,7 +2871,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 name = "saas_dashboard"
 version = "0.1.0"
 dependencies = [
- "strata",
+ "strata-ui",
  "strata_icons",
  "strata_ui",
 ]
@@ -3250,7 +3250,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff7589a1859b09232522bb9edf076ca7fcf14ded96685d3fa629db73023ffbb7"
 
 [[package]]
-name = "strata"
+name = "strata-ui"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -3334,7 +3334,7 @@ dependencies = [
 name = "strata_benchmark"
 version = "0.1.0"
 dependencies = [
- "strata",
+ "strata-ui",
  "strata_dom",
  "strata_layout",
  "strata_platform",
@@ -3348,7 +3348,7 @@ dependencies = [
 name = "strata_browser"
 version = "0.1.0"
 dependencies = [
- "strata",
+ "strata-ui",
  "strata_dom",
  "strata_icons",
  "strata_layout",
@@ -3445,7 +3445,7 @@ dependencies = [
 name = "strata_ffi"
 version = "0.1.0"
 dependencies = [
- "strata",
+ "strata-ui",
  "strata_dom",
  "strata_layout",
  "strata_render",
@@ -3523,7 +3523,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "strata",
+ "strata-ui",
  "strata_dom",
  "strata_platform",
  "strata_primitives",
@@ -3565,7 +3565,7 @@ dependencies = [
  "cairo-rs",
  "gtk",
  "image",
- "strata",
+ "strata-ui",
  "strata_dom",
  "strata_layout",
  "strata_mobile_test",
@@ -3642,7 +3642,7 @@ dependencies = [
 name = "strata_sim"
 version = "0.1.0"
 dependencies = [
- "strata",
+ "strata-ui",
  "strata_device",
  "strata_dom",
  "strata_icons",

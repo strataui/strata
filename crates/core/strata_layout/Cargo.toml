@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Chromium-parity Box Model, Flexbox (L1), and CSS Grid (L2) layout engine in pure Rust"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 strata_style = { workspace = true }

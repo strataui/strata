@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Core DOM, reactive signals, and synthetic event routing for Strata"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 strata_primitives = { workspace = true }

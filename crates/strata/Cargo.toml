@@ -1,10 +1,20 @@
 [package]
-name = "strata"
+name = "strata-ui"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
 description = "Universal frontend framework in pure Rust with pixel-perfect CSS emulation and React/TSX ergonomics"
+
+[lib]
+name = "strata"
+path = "src/lib.rs"
 
 [dependencies]
 # Core mandatory primitives & runtime

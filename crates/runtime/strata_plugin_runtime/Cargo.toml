@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Sandboxed dynamic plugin loader and runtime extension host for Project Strata"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 strata_dom = { workspace = true }
