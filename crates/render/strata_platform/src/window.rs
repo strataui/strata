@@ -126,9 +126,17 @@ pub struct WindowConfig {
     pub dock_bottom_right: bool,
     pub single_instance_id: Option<String>,
     pub vibrancy: crate::vibrancy::VibrancyEffect,
+    /// Swapchain presentation mode (`Immediate` / `Mailbox` for uncapped 3D viewports, `Fifo` default).
+    pub present_mode: crate::surface::PresentMode,
 }
 
 impl WindowConfig {
+    /// Sets swapchain present mode (e.g. `PresentMode::Immediate` for uncapped framerate).
+    pub fn with_present_mode(mut self, present_mode: crate::surface::PresentMode) -> Self {
+        self.present_mode = present_mode;
+        self
+    }
+
     /// Configures the window to enforce a single-instance mutex and focus existing instance on launch.
     pub fn with_single_instance(mut self, app_id: impl Into<String>) -> Self {
         self.single_instance_id = Some(app_id.into());
@@ -222,6 +230,7 @@ impl Default for WindowConfig {
             dock_bottom_right: false,
             single_instance_id: None,
             vibrancy: crate::vibrancy::VibrancyEffect::None,
+            present_mode: crate::surface::PresentMode::Fifo,
         }
     }
 }

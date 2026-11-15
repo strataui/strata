@@ -142,6 +142,10 @@ pub struct AppRuntime {
     pub(crate) frame_profile: FrameProfile,
     /// True when anything that affects painting changed since the display list was compiled.
     pub(crate) paint_dirty: bool,
+    /// True when only retained 3D state changed without invalidating 2D layout or display list.
+    pub(crate) viewport_3d_dirty: bool,
+    /// Retained 3D scene handles in the compiled display list paired with last presented generations.
+    pub(crate) tracked_retained_3d: Vec<(strata_render::scene3d::RetainedScene3D, (u64, u64, u64))>,
     /// Number of display-list compilations skipped because nothing changed.
     pub(crate) compiles_skipped: u64,
     /// Optional observer invoked with the completed profile after each present.
@@ -305,6 +309,8 @@ impl AppRuntime {
             csd_controller: strata_platform::CsdController::default(),
             frame_profile: FrameProfile::default(),
             paint_dirty: true,
+            viewport_3d_dirty: false,
+            tracked_retained_3d: Vec::new(),
             compiles_skipped: 0,
             frame_profile_hook: None,
             cached_stylesheets: Vec::new(),
@@ -938,6 +944,57 @@ impl AppRuntime {
             .get_or_init(strata_platform::CursorTheme::load_active)
     }
 
+    /// Marks only 3D viewports dirty without invalidating 2D layout or recompiling the display list.
+    pub fn mark_viewport_3d_dirty(&mut self) {
+        self.viewport_3d_dirty = true;
+    }
+
+    /// Returns `true` when any retained 3D viewport has newer camera/geometry/overlay generations
+    /// than what was last presented, or when `viewport_3d_dirty` was set explicitly.
+    pub fn poll_retained_3d_dirty(&self) -> bool {
+        if self.viewport_3d_dirty {
+            return true;
+        }
+        self.tracked_retained_3d
+            .iter()
+            .any(|(handle, last_gens)| handle.generations() != *last_gens)
+    }
+
+    /// Records the current generations of all tracked [`RetainedScene3D`] handles as presented.
+    pub fn acknowledge_retained_3d_presented(&mut self) {
+        self.viewport_3d_dirty = false;
+        for (handle, last_gens) in &mut self.tracked_retained_3d {
+            *last_gens = handle.generations();
+        }
+    }
+
+    /// Returns `true` if any `<Canvas3D>` in the current blueprint opted into uncapped presentation.
+    pub fn has_uncapped_canvas3d(&self) -> bool {
+        fn walk(node: &NodeBlueprint) -> bool {
+            if let NodeBlueprint::Element {
+                attributes,
+                children,
+                ..
+            } = node
+            {
+                if attributes.iter().any(|a| {
+                    matches!(
+                        a,
+                        strata_dom::Attribute::Property { key, value }
+                            if key == "data-strata-uncapped" && value == "true"
+                    )
+                }) {
+                    return true;
+                }
+                if children.iter().any(walk) {
+                    return true;
+                }
+            }
+            false
+        }
+        walk(&self.root_blueprint)
+    }
+
     /// Marks the compiled display list stale so the next dirty-gated compile rebuilds it.
     pub fn mark_paint_dirty(&mut self) {
         self.paint_dirty = true;
@@ -981,6 +1038,15 @@ impl AppRuntime {
             &self.layout_root,
             viewport,
         );
+        self.tracked_retained_3d.clear();
+        for cmd in &self.display_list.commands {
+            if let strata_render::compositor::DrawCommand::DrawViewport3D { scene, .. } = cmd {
+                if let Some(handle) = scene.retained_handle() {
+                    self.tracked_retained_3d
+                        .push((handle.clone(), handle.generations()));
+                }
+            }
+        }
         self.render_scrollbars();
         self.render_active_input_caret();
         self.gpu_path_pipeline
@@ -1169,6 +1235,7 @@ impl AppRuntime {
         #[cfg(feature = "devtools")]
         let frame_start = std::time::Instant::now();
 
+        let retained_3d_dirty = self.poll_retained_3d_dirty();
         if self.paint_dirty || self.frame_count == 0 || force_redraw {
             self.tick_frame();
         } else {
@@ -1187,7 +1254,12 @@ impl AppRuntime {
         let submit_start = std::time::Instant::now();
 
         let present_start = std::time::Instant::now();
-        let res = compositor.render_and_present(&self.display_list, presenter, force_redraw);
+        let res = compositor.render_and_present(
+            &self.display_list,
+            presenter,
+            force_redraw || retained_3d_dirty,
+        );
+        self.acknowledge_retained_3d_presented();
         self.frame_profile.present += present_start.elapsed();
         self.finish_frame_profile();
 

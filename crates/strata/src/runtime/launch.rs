@@ -207,6 +207,7 @@ where
 pub(crate) fn compute_next_wakeup(
     rt: &AppRuntime,
     frame_hook_due_in: Option<std::time::Duration>,
+    uncapped_present: bool,
 ) -> Option<std::time::Duration> {
     let mut best = strata_js::web::time_until_next_timer();
     let mut consider = |d: std::time::Duration| {
@@ -218,6 +219,10 @@ pub(crate) fn compute_next_wakeup(
     if let Some(d) = frame_hook_due_in {
         consider(d);
     }
+    if rt.poll_retained_3d_dirty() {
+        consider(std::time::Duration::ZERO);
+    }
+    let uncapped = uncapped_present || rt.has_uncapped_canvas3d();
     if rt.has_active_animations()
         || rt.active_smooth_scroll.is_some()
         || rt.scrollbar_drag.is_some()
@@ -225,7 +230,12 @@ pub(crate) fn compute_next_wakeup(
         || rt.drag_selection_active
         || rt.mcp_cursor.is_some()
     {
-        consider(std::time::Duration::from_millis(16));
+        let anim_interval = if uncapped {
+            std::time::Duration::ZERO
+        } else {
+            std::time::Duration::from_millis(16)
+        };
+        consider(anim_interval);
     } else if rt.active_focus.is_some() {
         consider(std::time::Duration::from_millis(250));
     }
@@ -497,6 +507,7 @@ where
         }
 
         strata_platform::render_display_list_to_cairo(cr, &rt.display_list);
+        rt.acknowledge_retained_3d_presented();
 
         // Render MCP emulated cursor overlay if active and visible
         if let Some(ref mcp_cursor) = rt.mcp_cursor {
@@ -526,7 +537,7 @@ where
     let root_fn_event = root_fn_rc.clone();
     let event_handler_event = event_handler_rc.clone();
     let runtime_dirty = runtime.clone();
-    let on_event_inner = move |event: &strata_platform::PlatformEvent| -> bool {
+    let on_event_inner = move |event: &strata_platform::PlatformEvent| -> (bool, bool) {
         let mut needs_rebuild = false;
         let mut needs_redraw = false;
         {
@@ -762,39 +773,51 @@ where
             eprintln!("[perf] rebuild_trigger: {:?}", event);
         }
 
+        let retained_3d_dirty =
+            !needs_rebuild && !needs_redraw && runtime_event.borrow().poll_retained_3d_dirty();
+
         if needs_rebuild {
             #[cfg(target_os = "linux")]
             if strata_platform::gtk_is_closing() {
-                return false;
+                return (false, false);
             }
             if runtime_event.borrow_mut().sync_dynamic_text() {
-                true
+                (true, true)
             } else {
                 let new_view = (root_fn_event.borrow_mut())();
                 runtime_event.borrow_mut().update_view(new_view);
-                true
+                (true, true)
             }
         } else if needs_redraw {
             #[cfg(target_os = "linux")]
             if strata_platform::gtk_is_closing() {
-                return false;
+                return (false, false);
             }
-            true
+            (true, true)
+        } else if retained_3d_dirty {
+            #[cfg(target_os = "linux")]
+            if strata_platform::gtk_is_closing() {
+                return (false, false);
+            }
+            (true, false)
         } else {
-            false
+            (false, false)
         }
     };
 
-    // Any event that requests a redraw invalidates the compiled display list.
-    let on_event_inner = on_event_inner;
+    // Only 2D/UI updates invalidate the compiled display list; 3D-only retained updates keep it cached.
     let on_event = move |event: &strata_platform::PlatformEvent| -> bool {
-        let redraw = on_event_inner(event);
-        if redraw {
+        let (redraw, paint_dirty) = on_event_inner(event);
+        if paint_dirty {
             runtime_dirty.borrow_mut().mark_paint_dirty();
         }
         redraw
     };
 
+    let uncapped_present = matches!(
+        config.present_mode,
+        strata_platform::PresentMode::Immediate | strata_platform::PresentMode::Mailbox
+    );
     let runtime_wakeup = runtime.clone();
     let frame_hook_wakeup = frame_hook_state;
     let next_wakeup = move || -> Option<std::time::Duration> {
@@ -802,7 +825,7 @@ where
             .borrow()
             .as_ref()
             .map(|(interval, last_called, _)| interval.saturating_sub(last_called.elapsed()));
-        compute_next_wakeup(&runtime_wakeup.borrow(), hook_due)
+        compute_next_wakeup(&runtime_wakeup.borrow(), hook_due, uncapped_present)
     };
 
     let _ = crate::mcp_bridge::start_mcp_dev_listener(None);

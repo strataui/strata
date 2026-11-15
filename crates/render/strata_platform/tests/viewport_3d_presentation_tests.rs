@@ -108,3 +108,52 @@ fn test_draw_viewport_3d_cairo_presentation_renders_cube() {
         "Rendered 3D scene must contain slate blue background pixels"
     );
 }
+
+#[cfg(feature = "wgpu-backend")]
+#[test]
+fn test_retained_3d_wgpu_cairo_presentation_and_presenter() {
+    use strata_platform::wgpu_surface::WgpuWindowPresenter;
+    use strata_platform::PresentMode;
+    use strata_render::scene3d::{RetainedCameraUniforms, RetainedScene3D};
+
+    // 1. Validate WgpuWindowPresenter offscreen & overlay upload when adapter is present.
+    if let Ok(mut presenter) = WgpuWindowPresenter::new_offscreen(PresentMode::Immediate) {
+        assert_eq!(presenter.present_mode(), PresentMode::Immediate);
+        let overlay_bgra = vec![255u8; 64 * 64 * 4];
+        presenter.upload_ui_overlay_bgra(64, 64, &overlay_bgra);
+
+        let mut cam = RetainedCameraUniforms {
+            background: Background3D::Solid(Color::rgb(20, 40, 110)),
+            ..Default::default()
+        };
+        let retained = RetainedScene3D::new(cam);
+        let scene = Scene3D::new().with_retained_handle(retained.clone());
+        let bgra = presenter
+            .render_offscreen_bgra(&scene, 64, 64, true)
+            .expect("offscreen bgra render");
+        assert_eq!(bgra.len(), 64 * 64 * 4);
+        assert!(
+            bgra[0] > bgra[2],
+            "solid blue background must render via wgpu"
+        );
+
+        // 2. Validate Cairo DisplayList bridge uses wgpu when retained_handle is attached,
+        // and updates output when retained.camera_generation() advances on same Arc<Scene3D>.
+        let scene_arc = std::sync::Arc::new(scene);
+        let mut dl = DisplayList::new();
+        dl.push(DrawCommand::DrawViewport3D {
+            bounds: Rect::new(0.0, 0.0, 64.0, 64.0),
+            scene: std::sync::Arc::clone(&scene_arc),
+        });
+        let png1 = render_to_png_bytes(&dl, 64, 64, None).expect("first retained png");
+        assert_eq!(&png1[0..8], &[137, 80, 78, 71, 13, 10, 26, 10]);
+
+        cam.background = Background3D::Solid(Color::rgb(180, 30, 30));
+        retained.update_camera(cam);
+        let png2 = render_to_png_bytes(&dl, 64, 64, None).expect("second retained png");
+        assert_ne!(
+            png1, png2,
+            "cache key must include RetainedScene3D generations so updates re-render"
+        );
+    }
+}

@@ -28,10 +28,10 @@ strata = { package = "strata-ui", path = "crates/strata", version = "0.1.0" }
 
 # Core
 strata_primitives = { path = "crates/core/strata_primitives", version = "0.1.0" }
-strata_dom = { path = "crates/core/strata_dom", version = "0.1.0" }
+strata_dom = { path = "crates/core/strata_dom", version = "0.1.1" }
 strata_style = { path = "crates/core/strata_style", version = "0.1.0" }
 strata_layout = { path = "crates/core/strata_layout", version = "0.1.0" }
-strata_macro = { path = "crates/core/strata_macro", version = "0.1.0" }
+strata_macro = { path = "crates/core/strata_macro", version = "0.1.1" }
 strata_aria = { path = "crates/core/strata_aria", version = "0.1.0" }
 
 # Render

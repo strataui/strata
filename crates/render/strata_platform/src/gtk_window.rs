@@ -1307,14 +1307,23 @@ pub fn blend_mode_to_cairo_operator(mode: strata_style::types::BlendMode) -> cai
     }
 }
 
-///// One rasterized 3D viewport frame, keyed by scene identity and pixel size.
+///// One rasterized 3D viewport frame, keyed by scene identity, retained generations, and pixel size.
 struct Viewport3DCacheEntry {
     /// Held so the allocation, and therefore the pointer identity, stays valid.
     scene: std::sync::Arc<strata_render::scene3d::Scene3D>,
+    generations: (u64, u64, u64),
     width: usize,
     height: usize,
     is_half_res: bool,
     surface: cairo::ImageSurface,
+}
+
+#[inline]
+fn scene_retained_generations(scene: &strata_render::scene3d::Scene3D) -> (u64, u64, u64) {
+    scene
+        .retained_handle()
+        .map(|h| h.generations())
+        .unwrap_or_default()
 }
 
 struct Viewport3DSurfaceResult {
@@ -1379,6 +1388,23 @@ fn rasterize_scene_3d_to_cairo_surface(
 ) -> Option<cairo::ImageSurface> {
     let mut surface =
         cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32).ok()?;
+    #[cfg(feature = "wgpu-backend")]
+    if scene.retained_handle().is_some() || scene.retained_terrain().is_some() {
+        if let Some(bgra) =
+            crate::wgpu_surface::render_scene_3d_wgpu_bgra(scene, w as u32, h as u32)
+        {
+            let copied = if let Ok(mut data) = surface.data() {
+                let copy_len = data.len().min(bgra.len());
+                data[..copy_len].copy_from_slice(&bgra[..copy_len]);
+                true
+            } else {
+                false
+            };
+            if copied {
+                return Some(surface);
+            }
+        }
+    }
     VIEWPORT_3D_SCRATCH_FB.with(|scratch| {
         let mut scratch = scratch.borrow_mut();
         let fb = match scratch.as_mut() {
@@ -1439,12 +1465,15 @@ fn viewport_3d_surface_with_fallback(
     allow_interactive_fallback: bool,
 ) -> Option<Viewport3DSurfaceResult> {
     let now = std::time::Instant::now();
+    let gens = scene_retained_generations(scene);
+    let is_gpu_retained = scene.retained_handle().is_some() || scene.retained_terrain().is_some();
 
     // 1. Exact full-res cache hit.
     let exact_hit = VIEWPORT_3D_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let idx = cache.iter().position(|e| {
             std::sync::Arc::ptr_eq(&e.scene, scene)
+                && e.generations == gens
                 && e.width == w
                 && e.height == h
                 && !e.is_half_res
@@ -1464,7 +1493,7 @@ fn viewport_3d_surface_with_fallback(
         return exact_hit;
     }
 
-    // 2. Interactive resize fallback: same Arc<Scene3D> at a different cached size.
+    // 2. Interactive resize fallback: same Arc<Scene3D> + generations at a different cached size.
     if allow_interactive_fallback {
         let debounce_elapsed = VIEWPORT_3D_RESIZE_DEBOUNCE.with(|d| {
             let cur = d.get();
@@ -1493,7 +1522,7 @@ fn viewport_3d_surface_with_fallback(
                 cache
                     .iter()
                     .rev()
-                    .find(|e| std::sync::Arc::ptr_eq(&e.scene, scene))
+                    .find(|e| std::sync::Arc::ptr_eq(&e.scene, scene) && e.generations == gens)
                     .map(|e| Viewport3DSurfaceResult {
                         surface: e.surface.clone(),
                         src_width: e.width,
@@ -1507,8 +1536,9 @@ fn viewport_3d_surface_with_fallback(
         }
     }
 
-    // 3. Interactive camera pan/zoom half-res fallback when rasterizing rapidly.
+    // 3. Interactive camera pan/zoom half-res fallback when software rasterizing rapidly.
     let use_half_res = allow_interactive_fallback
+        && !is_gpu_retained
         && w >= 128
         && h >= 128
         && VIEWPORT_3D_LAST_RASTER_AT.with(|last| {
@@ -1535,6 +1565,7 @@ fn viewport_3d_surface_with_fallback(
         }
         cache.push(Viewport3DCacheEntry {
             scene: std::sync::Arc::clone(scene),
+            generations: gens,
             width: raster_w,
             height: raster_h,
             is_half_res: use_half_res,
@@ -2593,6 +2624,30 @@ pub fn gtk_begin_window_drag(fraction_x: f32, local_y: f32) {
     });
 }
 
+/// Computes the next manual window drag position when active and left-button is held,
+/// clearing stale `DRAG_STATE` when a WM move grab consumed the release event.
+fn step_window_drag_motion(
+    button1_held: bool,
+    is_docked: bool,
+    root_x: f64,
+    root_y: f64,
+) -> Option<(i32, i32)> {
+    DRAG_STATE.with(|d| {
+        let ds = d.get()?;
+        if !button1_held || is_docked {
+            d.set(None);
+            return None;
+        }
+        if ds.active {
+            let dx = (root_x - ds.start_root_x) as i32;
+            let dy = (root_y - ds.start_root_y) as i32;
+            Some((ds.start_win_x + dx, (ds.start_win_y + dy).max(0)))
+        } else {
+            None
+        }
+    })
+}
+
 thread_local! {
     static IS_CLOSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -3156,7 +3211,13 @@ where
     let im_focus_out = im_context.clone();
     drawing_area.connect_focus_out_event(move |_widget, _event| {
         use gtk::prelude::*;
+        DRAG_STATE.with(|d| d.set(None));
         im_focus_out.focus_out();
+        gtk::glib::Propagation::Proceed
+    });
+
+    drawing_area.connect_grab_broken_event(|_widget, _event| {
+        DRAG_STATE.with(|d| d.set(None));
         gtk::glib::Propagation::Proceed
     });
 
@@ -3193,8 +3254,7 @@ where
         let Some(delay) = delay else {
             return;
         };
-        let clamped = delay.max(std::time::Duration::from_millis(1));
-        gtk::glib::timeout_add_local_once(clamped, move || {
+        let run_tick = move || {
             if IS_CLOSING.with(|c| c.get()) || tick_gen.get() != next_gen {
                 return;
             }
@@ -3208,7 +3268,13 @@ where
                 da.queue_draw();
             }
             arm_next_tick(da, on_event, next_wakeup, tick_gen);
-        });
+        };
+        if delay.is_zero() {
+            gtk::glib::idle_add_local_once(run_tick);
+        } else {
+            let clamped = delay.max(std::time::Duration::from_millis(1));
+            gtk::glib::timeout_add_local_once(clamped, run_tick);
+        }
     }
 
     let on_event_rc: std::rc::Rc<
@@ -3369,20 +3435,17 @@ where
         };
         CURRENT_MODIFIERS.with(|m| m.set(modifiers));
 
-        // If manual window drag fallback is active, update window position (unless docked)
-        if !IS_WINDOW_DOCKED.with(|d| d.get()) {
-            DRAG_STATE.with(|d| {
-                if let Some(ds) = d.get() {
-                    if ds.active {
-                        CURRENT_GTK_WINDOW.with(|w| {
-                            use gtk::prelude::*;
-                            if let Some(win) = w.borrow().as_ref() {
-                                let dx = (root_x - ds.start_root_x) as i32;
-                                let dy = (root_y - ds.start_root_y) as i32;
-                                win.move_(ds.start_win_x + dx, (ds.start_win_y + dy).max(0));
-                            }
-                        });
-                    }
+        // If manual window drag fallback is active, update window position only while left button is held
+        if let Some((next_x, next_y)) = step_window_drag_motion(
+            state.contains(gtk::gdk::ModifierType::BUTTON1_MASK),
+            IS_WINDOW_DOCKED.with(|d| d.get()),
+            root_x,
+            root_y,
+        ) {
+            CURRENT_GTK_WINDOW.with(|w| {
+                use gtk::prelude::*;
+                if let Some(win) = w.borrow().as_ref() {
+                    win.move_(next_x, next_y);
                 }
             });
         }
@@ -4128,5 +4191,33 @@ mod frameless_resize_tests {
             super::viewport_3d_surface_with_fallback(&scene_moved, 210, 200, true).unwrap();
         assert_eq!((panned.src_width, panned.src_height), (105, 100));
         assert!(panned.needs_debounced_full_res);
+    }
+
+    #[test]
+    fn test_window_drag_clears_when_button1_released_after_wm_grab() {
+        super::DRAG_STATE.with(|d| {
+            d.set(Some(super::WindowDragState {
+                start_root_x: 100.0,
+                start_root_y: 50.0,
+                start_win_x: 200,
+                start_win_y: 120,
+                active: true,
+            }));
+        });
+
+        // While left mouse button is still held, motion updates window coordinates.
+        assert_eq!(
+            super::step_window_drag_motion(true, false, 145.0, 80.0),
+            Some((245, 150))
+        );
+        assert!(super::DRAG_STATE.with(|d| d.get().is_some()));
+
+        // When WM consumed button release, next motion arrives without BUTTON1_MASK:
+        // must clear DRAG_STATE and stop moving the window.
+        assert_eq!(
+            super::step_window_drag_motion(false, false, 300.0, 200.0),
+            None
+        );
+        assert!(super::DRAG_STATE.with(|d| d.get().is_none()));
     }
 }

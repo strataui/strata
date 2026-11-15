@@ -28,6 +28,8 @@ pub mod geometry3d;
 pub mod gpu3d;
 pub mod gpu_context;
 pub mod gpu_pipeline;
+#[cfg(feature = "wgpu-backend")]
+pub mod gpu_wgpu;
 pub mod kinetic_scroll;
 pub mod math3d;
 pub mod multi_window_compositor;
