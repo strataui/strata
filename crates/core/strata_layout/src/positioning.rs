@@ -18,8 +18,10 @@ use strata_style::types::{
 pub struct ContainingBlock {
     /// The padding box of the containing block in global coordinates.
     pub padding_box: Rect,
-    /// The viewport bounds (for position: fixed).
+    /// The viewport bounds (for `position: fixed`, overridden by `transform`/`filter` ancestors).
     pub viewport: Rect,
+    /// The root initial containing block viewport (for Top-Layer `<Portal>` elements).
+    pub initial_viewport: Rect,
     /// Scroll offset of the viewport or scroll container (scroll_x, scroll_y).
     pub scroll_offset: (f32, f32),
 }
@@ -30,6 +32,7 @@ impl ContainingBlock {
         Self {
             padding_box,
             viewport,
+            initial_viewport: viewport,
             scroll_offset: (0.0, 0.0),
         }
     }
@@ -40,6 +43,7 @@ impl ContainingBlock {
         Self {
             padding_box: vp,
             viewport: vp,
+            initial_viewport: vp,
             scroll_offset: (0.0, 0.0),
         }
     }
@@ -54,6 +58,7 @@ impl ContainingBlock {
         Self {
             padding_box,
             viewport,
+            initial_viewport: viewport,
             scroll_offset: (scroll_x, scroll_y),
         }
     }
@@ -224,6 +229,7 @@ pub fn solve_positioning_children_guarded(
                         ContainingBlock {
                             padding_box: child.geometry.padding_box,
                             viewport: child.geometry.padding_box,
+                            initial_viewport: cb.initial_viewport,
                             scroll_offset: cb.scroll_offset,
                         }
                     } else {
@@ -270,6 +276,7 @@ pub fn solve_positioning_children_guarded(
                 let child_cb = ContainingBlock {
                     padding_box: child.geometry.padding_box,
                     viewport: child_vp,
+                    initial_viewport: cb.initial_viewport,
                     scroll_offset: cb.scroll_offset,
                 };
 
@@ -290,6 +297,7 @@ pub fn solve_positioning_children_guarded(
                 let child_cb = ContainingBlock {
                     padding_box: child.geometry.padding_box,
                     viewport: child_vp,
+                    initial_viewport: cb.initial_viewport,
                     scroll_offset: cb.scroll_offset,
                 };
 
@@ -298,18 +306,25 @@ pub fn solve_positioning_children_guarded(
                 }
             }
             Position::Fixed => {
-                // Out-of-flow positioning relative to the viewport (or nearest transformed/filtered ancestor)
-                solve_out_of_flow_box_guarded(child, cb.viewport, cb.viewport, true, child_guard);
+                // Top-layer `<Portal>` elements always resolve against the root initial viewport,
+                // escaping even `transform` / `filter` / `backdrop-filter` ancestors.
+                let fixed_vp = if child.is_top_layer {
+                    cb.initial_viewport
+                } else {
+                    cb.viewport
+                };
+                solve_out_of_flow_box_guarded(child, fixed_vp, fixed_vp, true, child_guard);
 
                 // Fixed elements establish a containing block for descendants
                 let child_vp = if child.style.establishes_fixed_containing_block() {
                     child.geometry.padding_box
                 } else {
-                    cb.viewport
+                    fixed_vp
                 };
                 let child_cb = ContainingBlock {
                     padding_box: child.geometry.padding_box,
                     viewport: child_vp,
+                    initial_viewport: cb.initial_viewport,
                     scroll_offset: (0.0, 0.0),
                 };
 
@@ -331,6 +346,7 @@ pub fn solve_positioning_children_guarded(
                 let sticky_cb = ContainingBlock {
                     padding_box: parent_box,
                     viewport: cb.viewport,
+                    initial_viewport: cb.initial_viewport,
                     scroll_offset: cb.scroll_offset,
                 };
                 solve_sticky_box(child, sticky_cb);
@@ -343,6 +359,7 @@ pub fn solve_positioning_children_guarded(
                 let child_cb = ContainingBlock {
                     padding_box: child.geometry.padding_box,
                     viewport: child_vp,
+                    initial_viewport: cb.initial_viewport,
                     scroll_offset: cb.scroll_offset,
                 };
 

@@ -525,27 +525,33 @@ impl AppRuntime {
                     is_last_element_child,
                 );
 
+                Self::apply_top_layer_position_override(tag, attributes, &mut style);
+
                 // 1. Vector SVG handling (runs AFTER full cascade so inherited `color`, `w-*`/`h-*`,
                 // custom properties, and `:hover` overrides apply to `<svg stroke="currentColor">`).
                 if matches!(tag, Tag::Svg | Tag::Path) {
-                    if let Some(svg_node) =
+                    if let Some(mut svg_node) =
                         Self::try_build_svg_leaf_node(blueprint, attributes, &mut style, entity_id)
                     {
+                        Self::apply_portal_and_anchor_metadata(&mut svg_node, tag, attributes);
                         return svg_node;
                     }
                 }
 
                 // 2. Input handling: synthesize text from value or placeholder attributes
                 if matches!(tag, Tag::Input) {
-                    return Self::build_input_leaf_node(attributes, *style, entity_id);
+                    let mut input_node = Self::build_input_leaf_node(attributes, *style, entity_id);
+                    Self::apply_portal_and_anchor_metadata(&mut input_node, tag, attributes);
+                    return input_node;
                 }
 
                 // Replaced raster images: decode a base64 PNG data URI and carry
                 // its intrinsic dimensions on the layout node for painting.
                 if matches!(tag, Tag::Img) {
-                    if let Some(img_node) =
+                    if let Some(mut img_node) =
                         Self::try_build_img_leaf_node(attributes, &mut style, entity_id)
                     {
+                        Self::apply_portal_and_anchor_metadata(&mut img_node, tag, attributes);
                         return img_node;
                     }
                 }
@@ -554,7 +560,9 @@ impl AppRuntime {
                 if (matches!(tag, Tag::Canvas) || matches!(tag, Tag::Custom("Canvas3D")))
                     && Self::apply_canvas3d_sizing_and_check_leaf(attributes, children, &mut style)
                 {
-                    return LayoutNode::new(*style).with_entity_id(entity_id);
+                    let mut canvas_node = LayoutNode::new(*style).with_entity_id(entity_id);
+                    Self::apply_portal_and_anchor_metadata(&mut canvas_node, tag, attributes);
+                    return canvas_node;
                 }
 
                 Self::apply_single_text_inline_intrinsic_sizing(&mut style, children);
@@ -579,56 +587,20 @@ impl AppRuntime {
                     ancestors.pop();
                 }
 
-                LayoutNode::with_children(*style, child_nodes).with_entity_id(entity_id)
+                let mut node =
+                    LayoutNode::with_children(*style, child_nodes).with_entity_id(entity_id);
+                Self::apply_portal_and_anchor_metadata(&mut node, tag, attributes);
+                node
             }
-            NodeBlueprint::Text(text) => {
-                let mut style = match parent_style {
-                    Some(p) => ComputedStyle::inherit_from(p),
-                    None => ComputedStyle::default(),
-                };
-                style.display = Display::Inline;
-                let is_mono = strata_layout::is_monospace_family(style.font_family);
-                let (w, h) = strata_layout::measure_text_bounds_styled_with_family(
-                    text,
-                    style.font_size,
-                    style.line_height,
-                    None,
-                    is_mono,
-                    style.font_family,
-                    style.font_weight,
-                    style.font_style,
-                );
-                style.width = Dimension::Px(w.ceil());
-                style.height = Dimension::Px(h);
-                LayoutNode::with_text(style, text.clone())
-            }
+            NodeBlueprint::Text(text) => Self::build_text_leaf_layout_node(text.clone(), parent_style),
             NodeBlueprint::DynamicText(dyn_fn) => {
-                let text = dyn_fn();
-                let mut style = match parent_style {
-                    Some(p) => ComputedStyle::inherit_from(p),
-                    None => ComputedStyle::default(),
-                };
-                style.display = Display::Inline;
-                let is_mono = strata_layout::is_monospace_family(style.font_family);
-                let (w, h) = strata_layout::measure_text_bounds_styled_with_family(
-                    &text,
-                    style.font_size,
-                    style.line_height,
-                    None,
-                    is_mono,
-                    style.font_family,
-                    style.font_weight,
-                    style.font_style,
-                );
-                style.width = Dimension::Px(w.ceil());
-                style.height = Dimension::Px(h);
-                LayoutNode::with_text(style, text)
+                Self::build_text_leaf_layout_node(dyn_fn(), parent_style)
             }
             NodeBlueprint::Fragment(children) => {
-                let mut style = match parent_style {
+                let mut style = Box::new(match parent_style {
                     Some(p) => ComputedStyle::inherit_from(p),
                     None => ComputedStyle::default(),
-                };
+                });
                 style.display = Display::Flex;
                 style.flex_direction = FlexDirection::Column;
 
@@ -641,14 +613,43 @@ impl AppRuntime {
                     ancestors,
                 );
 
-                LayoutNode::with_children(style, child_nodes)
+                LayoutNode::with_children(*style, child_nodes)
             }
-            NodeBlueprint::Empty => {
-                let mut style = ComputedStyle::default();
-                style.display = Display::None;
-                LayoutNode::new(style)
-            }
+            NodeBlueprint::Empty => Self::build_empty_leaf_layout_node(),
         }
+    }
+
+    #[inline(never)]
+    fn build_text_leaf_layout_node(
+        text: String,
+        parent_style: Option<&ComputedStyle>,
+    ) -> LayoutNode {
+        let mut style = match parent_style {
+            Some(p) => ComputedStyle::inherit_from(p),
+            None => ComputedStyle::default(),
+        };
+        style.display = Display::Inline;
+        let is_mono = strata_layout::is_monospace_family(style.font_family);
+        let (w, h) = strata_layout::measure_text_bounds_styled_with_family(
+            &text,
+            style.font_size,
+            style.line_height,
+            None,
+            is_mono,
+            style.font_family,
+            style.font_weight,
+            style.font_style,
+        );
+        style.width = Dimension::Px(w.ceil());
+        style.height = Dimension::Px(h);
+        LayoutNode::with_text(style, text)
+    }
+
+    #[inline(never)]
+    fn build_empty_leaf_layout_node() -> LayoutNode {
+        let mut style = ComputedStyle::default();
+        style.display = Display::None;
+        LayoutNode::new(style)
     }
 
     fn build_flattened_children_full(
@@ -829,9 +830,196 @@ impl AppRuntime {
         }
     }
 
+    fn extract_inline_style_decl(style_raw: &str, target_prop: &str) -> Option<String> {
+        for decl in style_raw.split(';') {
+            if let Some((k, v)) = decl.split_once(':') {
+                if k.trim().eq_ignore_ascii_case(target_prop) {
+                    let val = v.trim().trim_end_matches("!important").trim();
+                    if !val.is_empty() && !val.eq_ignore_ascii_case("none") {
+                        return Some(val.trim_matches('"').trim_matches('\'').to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    #[inline(never)]
+    fn apply_top_layer_position_override(
+        tag: &Tag,
+        attributes: &[strata_dom::Attribute],
+        style: &mut ComputedStyle,
+    ) {
+        if matches!(tag, Tag::Custom(name) if name.eq_ignore_ascii_case("portal")) {
+            style.position = strata_style::types::Position::Fixed;
+            return;
+        }
+        for attr in attributes {
+            if let strata_dom::Attribute::Property { key, value } = attr {
+                let k = key.trim();
+                let v = value.trim();
+                match k {
+                    "data-portal" => {
+                        if !matches!(
+                            v.to_ascii_lowercase().as_str(),
+                            "false" | "0" | "no" | "off"
+                        ) {
+                            style.position = strata_style::types::Position::Fixed;
+                            return;
+                        }
+                    }
+                    "popover" => {
+                        style.position = strata_style::types::Position::Fixed;
+                        return;
+                    }
+                    "data-portal-anchor" | "anchor" | "position-anchor" if !v.is_empty() => {
+                        style.position = strata_style::types::Position::Fixed;
+                        return;
+                    }
+                    "style" => {
+                        if Self::extract_inline_style_decl(v, "position-anchor").is_some() {
+                            style.position = strata_style::types::Position::Fixed;
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    #[inline(never)]
+    pub(crate) fn apply_portal_and_anchor_metadata(
+        node: &mut LayoutNode,
+        tag: &Tag,
+        attributes: &[strata_dom::Attribute],
+    ) {
+        let is_portal_tag = matches!(tag, Tag::Custom(name) if name.eq_ignore_ascii_case("portal"));
+        if !is_portal_tag && attributes.is_empty() {
+            return;
+        }
+
+        let mut element_id: Option<String> = None;
+        let mut anchor_name: Option<String> = None;
+        let mut is_portal_attr = false;
+        let mut anchor_target: Option<String> = None;
+        let mut placement_raw: Option<String> = None;
+        let mut offset_opt: Option<f32> = None;
+        let mut flip_opt: Option<bool> = None;
+        let mut shift_opt: Option<bool> = None;
+        let mut padding_opt: Option<f32> = None;
+        let mut match_width_opt: Option<bool> = None;
+        let mut inline_style_raw: Option<&str> = None;
+
+        for attr in attributes {
+            if let strata_dom::Attribute::Property { key, value } = attr {
+                let k = key.trim();
+                let v = value.trim();
+                match k {
+                    "id" | "data-anchor-id" => {
+                        if !v.is_empty() {
+                            element_id = Some(v.to_string());
+                        }
+                    }
+                    "data-anchor-name" | "anchor-name" => {
+                        if !v.is_empty() {
+                            anchor_name = Some(v.to_string());
+                        }
+                    }
+                    "data-portal" => {
+                        is_portal_attr = !matches!(
+                            v.to_ascii_lowercase().as_str(),
+                            "false" | "0" | "no" | "off"
+                        );
+                    }
+                    "popover" => {
+                        is_portal_attr = true;
+                    }
+                    "data-portal-anchor" | "anchor" | "position-anchor" => {
+                        if !v.is_empty() {
+                            anchor_target = Some(v.to_string());
+                        }
+                    }
+                    "data-portal-placement" | "placement" | "position-area" | "inset-area" => {
+                        if !v.is_empty() {
+                            placement_raw = Some(v.to_string());
+                        }
+                    }
+                    "data-portal-offset" => {
+                        if let Ok(parsed) = v.trim_end_matches("px").trim().parse::<f32>() {
+                            offset_opt = Some(parsed);
+                        }
+                    }
+                    "data-portal-flip" => {
+                        flip_opt = Some(!matches!(
+                            v.to_ascii_lowercase().as_str(),
+                            "false" | "0" | "no" | "off"
+                        ));
+                    }
+                    "data-portal-shift" => {
+                        shift_opt = Some(!matches!(
+                            v.to_ascii_lowercase().as_str(),
+                            "false" | "0" | "no" | "off"
+                        ));
+                    }
+                    "data-portal-padding" => {
+                        if let Ok(parsed) = v.trim_end_matches("px").trim().parse::<f32>() {
+                            padding_opt = Some(parsed);
+                        }
+                    }
+                    "data-portal-match-width" => {
+                        match_width_opt = Some(matches!(
+                            v.to_ascii_lowercase().as_str(),
+                            "true" | "1" | "yes" | "on"
+                        ));
+                    }
+                    "style" => {
+                        inline_style_raw = Some(v);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if let Some(style_str) = inline_style_raw {
+            if anchor_name.is_none() {
+                anchor_name = Self::extract_inline_style_decl(style_str, "anchor-name");
+            }
+            if anchor_target.is_none() {
+                anchor_target = Self::extract_inline_style_decl(style_str, "position-anchor");
+            }
+            if placement_raw.is_none() {
+                placement_raw = Self::extract_inline_style_decl(style_str, "position-area")
+                    .or_else(|| Self::extract_inline_style_decl(style_str, "inset-area"));
+            }
+        }
+
+        let portal_anchor = anchor_target.map(|anchor_id| {
+            let placement = placement_raw
+                .as_deref()
+                .and_then(strata_layout::AnchorPlacement::parse)
+                .unwrap_or(strata_layout::AnchorPlacement::BottomEnd);
+            Box::new(strata_layout::PortalAnchorSpec {
+                anchor_id,
+                placement,
+                offset: offset_opt.unwrap_or(4.0),
+                flip: flip_opt.unwrap_or(true),
+                shift: shift_opt.unwrap_or(true),
+                viewport_padding: padding_opt.unwrap_or(8.0),
+                match_width: match_width_opt.unwrap_or(false),
+            })
+        });
+
+        node.element_id = element_id;
+        node.anchor_name = anchor_name;
+        node.is_top_layer = is_portal_tag || is_portal_attr || portal_anchor.is_some();
+        node.portal_anchor = portal_anchor;
+    }
+
     /// Re-evaluates styling with the current interaction state, recomputes layout, and compiles display list.
     pub fn rebuild_layout_tree(&mut self) {
         self.applied_scroll_offsets.clear();
+        self.applied_portal_offsets.clear();
         let stylesheets = Self::collect_stylesheets_from_blueprint(&self.root_blueprint);
         for sheet in &stylesheets {
             self.register_keyframes_stylesheet(sheet);

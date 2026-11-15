@@ -75,9 +75,30 @@ impl AppRuntime {
         Some(current)
     }
 
-    /// Restores any scrollable containers previously translated by `apply_scroll_offsets` back to their
-    /// baseline unshifted coordinates so layout computations and metric measurements are invariant.
+    /// Traverses the LayoutNode hierarchy down a slice of child indices in O(depth).
+    pub fn get_layout_node<'a>(root: &'a LayoutNode, path: &[usize]) -> Option<&'a LayoutNode> {
+        let mut current = root;
+        for &idx in path {
+            current = current.children.get(idx)?;
+        }
+        Some(current)
+    }
+
+    /// Restores any scrollable containers and anchored `<Portal>` nodes previously translated by
+    /// `apply_scroll_offsets` back to their baseline unshifted coordinates so layout computations
+    /// and metric measurements remain invariant.
     pub fn unapply_scroll_offsets(&mut self) {
+        if !self.applied_portal_offsets.is_empty() {
+            for (path, &(dx, dy)) in &self.applied_portal_offsets {
+                if dx.abs() > 0.0001 || dy.abs() > 0.0001 {
+                    if let Some(target) = Self::get_layout_node_mut(&mut self.layout_root, path) {
+                        target.translate(-dx, -dy);
+                    }
+                }
+            }
+            self.applied_portal_offsets.clear();
+        }
+
         if self.applied_scroll_offsets.is_empty() {
             return;
         }
@@ -115,7 +136,8 @@ impl AppRuntime {
         self.applied_scroll_offsets.clear();
     }
 
-    /// Discovers scrollable containers, clamps offsets, translates children, and computes scrollbars.
+    /// Discovers scrollable containers, clamps offsets, translates children, computes scrollbars,
+    /// and anchors top-layer `<Portal>` overlays to their trigger elements' live post-scroll bounds.
     pub fn apply_scroll_offsets(&mut self) {
         self.active_scrollbars.clear();
         let mut path = Vec::new();
@@ -129,6 +151,178 @@ impl AppRuntime {
             &mut self.active_scrollbars,
         );
         self.sync_scroll_animations();
+        self.resolve_top_layer_portals();
+    }
+
+    fn subtree_has_portal_anchor(node: &LayoutNode, depth: usize) -> bool {
+        if depth >= 256 || matches!(node.style.display, strata_style::types::Display::None) {
+            return false;
+        }
+        if node.portal_anchor.is_some() {
+            return true;
+        }
+        node.children
+            .iter()
+            .any(|c| Self::subtree_has_portal_anchor(c, depth + 1))
+    }
+
+    fn insert_anchor_key(
+        map: &mut std::collections::HashMap<String, Vec<usize>>,
+        raw_key: &str,
+        path: &[usize],
+    ) {
+        let trimmed = raw_key.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let p = path.to_vec();
+        map.insert(trimmed.to_string(), p.clone());
+        if let Some(stripped) = trimmed.strip_prefix("--") {
+            if !stripped.is_empty() {
+                map.entry(stripped.to_string()).or_insert_with(|| p.clone());
+            }
+        } else {
+            map.entry(format!("--{}", trimmed)).or_insert(p);
+        }
+    }
+
+    fn collect_anchor_paths(
+        node: &LayoutNode,
+        current_path: &mut Vec<usize>,
+        out: &mut std::collections::HashMap<String, Vec<usize>>,
+    ) {
+        if current_path.len() >= 256
+            || matches!(node.style.display, strata_style::types::Display::None)
+        {
+            return;
+        }
+        if let Some(ref id) = node.element_id {
+            Self::insert_anchor_key(out, id, current_path);
+        }
+        if let Some(ref aname) = node.anchor_name {
+            Self::insert_anchor_key(out, aname, current_path);
+        }
+        for (idx, child) in node.children.iter().enumerate() {
+            current_path.push(idx);
+            Self::collect_anchor_paths(child, current_path, out);
+            current_path.pop();
+        }
+    }
+
+    fn collect_anchored_portal_paths(
+        node: &LayoutNode,
+        current_path: &mut Vec<usize>,
+        out: &mut Vec<Vec<usize>>,
+    ) {
+        if current_path.len() >= 256
+            || matches!(node.style.display, strata_style::types::Display::None)
+        {
+            return;
+        }
+        if node.portal_anchor.is_some() {
+            out.push(current_path.clone());
+        }
+        for (idx, child) in node.children.iter().enumerate() {
+            current_path.push(idx);
+            Self::collect_anchored_portal_paths(child, current_path, out);
+            current_path.pop();
+        }
+    }
+
+    /// Resolves anchored `<Portal>` / CSS `position-anchor` nodes against their trigger elements'
+    /// live post-scroll bounding boxes with automatic viewport collision flipping (`bottom-end <-> top-end`)
+    /// and viewport margin shifting.
+    pub fn resolve_top_layer_portals(&mut self) {
+        let has_any = Self::subtree_has_portal_anchor(&self.layout_root, 0);
+        self.has_anchored_portals = has_any;
+        if !has_any {
+            return;
+        }
+
+        let mut anchor_paths = std::collections::HashMap::new();
+        let mut path_buf = Vec::new();
+        Self::collect_anchor_paths(&self.layout_root, &mut path_buf, &mut anchor_paths);
+
+        let mut portal_paths = Vec::new();
+        path_buf.clear();
+        Self::collect_anchored_portal_paths(&self.layout_root, &mut path_buf, &mut portal_paths);
+
+        let viewport_rect =
+            strata_layout::Rect::new(0.0, 0.0, self.viewport_width, self.viewport_height);
+
+        for portal_path in portal_paths {
+            let Some((spec, cur_box)) =
+                Self::get_layout_node(&self.layout_root, &portal_path).and_then(|n| {
+                    n.portal_anchor
+                        .as_deref()
+                        .cloned()
+                        .map(|s| (s, n.geometry.border_box))
+                })
+            else {
+                continue;
+            };
+
+            let key = spec.anchor_id.trim();
+            let anchor_path_opt = anchor_paths.get(key).or_else(|| {
+                key.strip_prefix("--")
+                    .and_then(|s| anchor_paths.get(s))
+            });
+            let Some(anchor_rect) = anchor_path_opt
+                .and_then(|ap| Self::get_layout_node(&self.layout_root, ap))
+                .map(|n| n.geometry.border_box)
+            else {
+                continue;
+            };
+
+            let mut active_box = cur_box;
+            if spec.match_width && (active_box.width - anchor_rect.width).abs() > 0.5 {
+                let prior = self
+                    .applied_portal_offsets
+                    .remove(&portal_path)
+                    .unwrap_or((0.0, 0.0));
+                if let Some(target) = Self::get_layout_node_mut(&mut self.layout_root, &portal_path)
+                {
+                    if prior.0.abs() > 0.0001 || prior.1.abs() > 0.0001 {
+                        target.translate(-prior.0, -prior.1);
+                    }
+                    target.style.width = strata_style::types::Dimension::Px(anchor_rect.width);
+                    strata_layout::solve_out_of_flow_box(
+                        target,
+                        viewport_rect,
+                        viewport_rect,
+                        true,
+                    );
+                    active_box = target.geometry.border_box;
+                }
+            }
+
+            let (target_x, target_y, _resolved_placement) = strata_layout::solve_anchored_position(
+                anchor_rect,
+                active_box.width,
+                active_box.height,
+                spec.placement,
+                spec.offset,
+                spec.flip,
+                spec.shift,
+                spec.viewport_padding,
+                viewport_rect,
+            );
+
+            let dx = target_x - active_box.x;
+            let dy = target_y - active_box.y;
+            if dx.abs() > 0.0001 || dy.abs() > 0.0001 {
+                if let Some(target) = Self::get_layout_node_mut(&mut self.layout_root, &portal_path)
+                {
+                    target.translate(dx, dy);
+                }
+                let entry = self
+                    .applied_portal_offsets
+                    .entry(portal_path)
+                    .or_insert((0.0, 0.0));
+                entry.0 += dx;
+                entry.1 += dy;
+            }
+        }
     }
 
     pub(crate) fn apply_scroll_walk(
@@ -370,6 +564,9 @@ impl AppRuntime {
                     atomic.bounds.y -= dy;
                 }
             }
+        }
+        if self.has_anchored_portals {
+            self.resolve_top_layer_portals();
         }
         self.spatial_index.sync_bounds(&self.layout_root);
     }

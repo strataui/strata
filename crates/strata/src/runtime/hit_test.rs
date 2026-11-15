@@ -142,6 +142,28 @@ impl AppRuntime {
         out
     }
 
+    fn collect_top_layer_portals<'a>(
+        bp: &'a NodeBlueprint,
+        layout: &'a LayoutNode,
+        out: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode)>,
+        depth: usize,
+    ) {
+        if depth >= 256 {
+            return;
+        }
+        for (_idx, child_bp, child_layout) in Self::paired_blueprint_children(bp, layout) {
+            if child_layout.style.display == strata_style::types::Display::None {
+                continue;
+            }
+            if child_layout.is_top_layer {
+                out.push((child_bp, child_layout));
+            }
+            if !child_layout.children.is_empty() {
+                Self::collect_top_layer_portals(child_bp, child_layout, out, depth + 1);
+            }
+        }
+    }
+
     fn collect_hoisted_stacking_participants<'a>(
         bp: &'a NodeBlueprint,
         layout: &'a LayoutNode,
@@ -156,7 +178,9 @@ impl AppRuntime {
         }
         let parent_display = Some(layout.style.display);
         for (_idx, child_bp, child_layout) in Self::paired_blueprint_children(bp, layout) {
-            if child_layout.style.display == strata_style::types::Display::None {
+            if child_layout.style.display == strata_style::types::Display::None
+                || child_layout.is_top_layer
+            {
                 continue;
             }
             if Self::establishes_stacking_context_in(child_layout, parent_display, false) {
@@ -212,6 +236,7 @@ impl AppRuntime {
         let parent_display = Some(layout.style.display);
         let is_in_flow_non_sc = |c: &LayoutNode| {
             c.style.display != strata_style::types::Display::None
+                && !c.is_top_layer
                 && !Self::establishes_stacking_context_in(c, parent_display, false)
                 && c.style.position == strata_style::types::Position::Static
         };
@@ -334,6 +359,18 @@ impl AppRuntime {
     {
         if depth >= 256 || layout.style.display == strata_style::types::Display::None {
             return None;
+        }
+
+        if depth == 0 {
+            let mut top_layer_portals = Vec::new();
+            Self::collect_top_layer_portals(bp, layout, &mut top_layer_portals, 0);
+            for &(p_bp, p_layout) in top_layer_portals.iter().rev() {
+                if let Some(hit) =
+                    Self::hit_test_stacking_context_with(p_bp, p_layout, px, py, &[], 1, test_self)
+                {
+                    return Some(hit);
+                }
+            }
         }
 
         let eff_inherited = Self::effective_hit_clip_steps(layout, inherited_steps);

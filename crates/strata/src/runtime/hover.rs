@@ -55,6 +55,30 @@ impl AppRuntime {
         Self::hit_test_node_path_rec(blueprint, layout, px, py, &mut path)
     }
 
+    fn collect_top_layer_hover_portals<'a>(
+        bp: &'a NodeBlueprint,
+        layout: &'a LayoutNode,
+        current_path: &mut Vec<usize>,
+        out: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode, Vec<usize>)>,
+    ) {
+        if current_path.len() >= 256 {
+            return;
+        }
+        for (idx, child_bp, child_layout) in Self::paired_blueprint_children(bp, layout) {
+            if matches!(child_layout.style.display, strata_style::types::Display::None) {
+                continue;
+            }
+            current_path.push(idx);
+            if child_layout.is_top_layer {
+                out.push((child_bp, child_layout, current_path.clone()));
+            }
+            if !child_layout.children.is_empty() {
+                Self::collect_top_layer_hover_portals(child_bp, child_layout, current_path, out);
+            }
+            current_path.pop();
+        }
+    }
+
     pub(crate) fn hit_test_node_path_rec(
         blueprint: &NodeBlueprint,
         layout: &LayoutNode,
@@ -62,6 +86,18 @@ impl AppRuntime {
         py: f32,
         current_path: &mut Vec<usize>,
     ) -> Option<Vec<usize>> {
+        if current_path.is_empty() {
+            let mut portals = Vec::new();
+            let mut scan_path = Vec::new();
+            Self::collect_top_layer_hover_portals(blueprint, layout, &mut scan_path, &mut portals);
+            for (p_bp, p_layout, mut p_path) in portals.into_iter().rev() {
+                if let Some(hit) =
+                    Self::hit_test_node_path_sc(p_bp, p_layout, px, py, &[], &mut p_path)
+                {
+                    return Some(hit);
+                }
+            }
+        }
         Self::hit_test_node_path_sc(blueprint, layout, px, py, &[], current_path)
     }
 
@@ -96,7 +132,8 @@ impl AppRuntime {
         }
         let parent_display = Some(layout.style.display);
         for (idx, child_bp, child_layout) in Self::paired_blueprint_children(bp, layout) {
-            if matches!(child_layout.style.display, strata_style::types::Display::None)
+            if child_layout.is_top_layer
+                || matches!(child_layout.style.display, strata_style::types::Display::None)
                 || matches!(
                     child_layout.style.visibility,
                     strata_style::types::Visibility::Hidden
@@ -192,7 +229,8 @@ impl AppRuntime {
         let parent_display = Some(layout.style.display);
         let paired = Self::paired_blueprint_children(blueprint, layout);
         for &(idx, child_bp, child_layout) in paired.iter().rev() {
-            if matches!(child_layout.style.display, strata_style::types::Display::None)
+            if child_layout.is_top_layer
+                || matches!(child_layout.style.display, strata_style::types::Display::None)
                 || Self::establishes_stacking_context_in(child_layout, parent_display, false)
                 || child_layout.style.position != strata_style::types::Position::Static
             {
@@ -308,7 +346,8 @@ impl AppRuntime {
             let parent_display = Some(layout.style.display);
             let paired = Self::paired_blueprint_children(blueprint, layout);
             for &(idx, child_bp, child_layout) in paired.iter().rev() {
-                if matches!(child_layout.style.display, strata_style::types::Display::None)
+                if child_layout.is_top_layer
+                    || matches!(child_layout.style.display, strata_style::types::Display::None)
                     || Self::establishes_stacking_context_in(child_layout, parent_display, false)
                     || child_layout.style.position != strata_style::types::Position::Static
                 {
@@ -734,6 +773,7 @@ impl AppRuntime {
             strata_layout::box_model::refresh_inline_fragment_styles(&mut self.layout_root);
         } else {
             self.applied_scroll_offsets.clear();
+            self.applied_portal_offsets.clear();
             let localized_layout = if let Some(ref path) = self.current_hover_path {
                 self.layout_root.compute_subgrid_or_boundary_layout(path)
             } else {

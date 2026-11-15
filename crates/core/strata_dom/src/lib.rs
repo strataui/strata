@@ -36,6 +36,7 @@ pub mod classes;
 pub mod events;
 pub mod hooks;
 pub mod ir;
+pub mod portal;
 pub mod reactive;
 pub mod spring;
 pub mod text_input;
@@ -46,6 +47,10 @@ pub use hooks::*;
 pub use ir::{
     ChildIter, DisplayChunkRange, FixedRect, IrNodeFlags, IrTag, MemoCache, MemoEntry, NodeId,
     StackGuard, UiIrGraph, UiIrNode,
+};
+pub use portal::{
+    create_anchored_portal, create_dropdown_portal, create_portal, AnchorPlacement, Portal,
+    PortalBuilder,
 };
 pub use reactive::{
     batch, create_signal, has_dirty_signals, mark_dirty, take_dirty_signals, untrack, use_effect,
