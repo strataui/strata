@@ -641,7 +641,8 @@ impl AppRuntime {
                 self.last_mouse_pos = (*x, *y);
                 let cur = Self::hit_test_cursor(&self.root_blueprint, &self.layout_root, *x, *y);
                 self.current_cursor = cur;
-                self.dispatch_pointer_move_action(*x, *y).needs_redraw()
+                let hover_changed = self.update_hover(*x, *y);
+                self.dispatch_pointer_move_action(*x, *y).needs_redraw() || hover_changed
             }
             PlatformEvent::MouseDown { x, y, .. } => {
                 self.is_mouse_down = true;
@@ -650,11 +651,10 @@ impl AppRuntime {
                 let dynamic_updated = self.sync_dynamic_text();
                 if action.needs_rebuild() || click_invoked || dynamic_updated {
                     self.rebuild_layout_tree();
+                    true
                 } else {
-                    // Pressed/active state is paint-only: restyle, no rebuild.
-                    self.restyle_for_hover_paint();
+                    action.needs_redraw() || self.restyle_for_active_change()
                 }
-                true
             }
             PlatformEvent::MouseUp { x, y, .. } => {
                 let was_mouse_down = self.is_mouse_down;
@@ -664,8 +664,7 @@ impl AppRuntime {
                     self.rebuild_layout_tree();
                     true
                 } else if was_mouse_down {
-                    self.restyle_for_hover_paint();
-                    true
+                    action.needs_redraw() || self.restyle_for_active_change()
                 } else {
                     action.needs_redraw()
                 }

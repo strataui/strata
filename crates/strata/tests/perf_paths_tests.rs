@@ -140,8 +140,23 @@ fn dirty_gated_compile_skips_unchanged_frames_and_recompiles_on_change() {
 
 #[test]
 fn input_that_requests_a_redraw_marks_the_list_dirty() {
-    let view = rsx! { <div class="w-full h-full">"x"</div> };
+    let inert = rsx! { <div class="w-full h-full">"x"</div> };
+    let mut inert_rt = AppRuntime::new(inert, 400.0, 300.0, 1.0);
+    inert_rt.tick_frame();
+    assert!(!inert_rt.is_paint_dirty());
+    let inert_redraw = inert_rt.step_event(&PlatformEvent::MouseDown {
+        button: strata_platform::MouseButton::Left,
+        x: 5.0,
+        y: 5.0,
+    });
+    assert!(!inert_redraw, "inert click should not request a redraw");
+    assert!(!inert_rt.is_paint_dirty());
+
+    let view =
+        rsx! { <div class="w-full h-full hover:bg-neutral-800 active:bg-neutral-700">"x"</div> };
     let mut runtime = AppRuntime::new(view, 400.0, 300.0, 1.0);
+    runtime.tick_frame();
+    let _ = runtime.step_event(&PlatformEvent::MouseMove { x: 5.0, y: 5.0 });
     runtime.tick_frame();
     assert!(!runtime.is_paint_dirty());
     let redraw = runtime.step_event(&PlatformEvent::MouseDown {

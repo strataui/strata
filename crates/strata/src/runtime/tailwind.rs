@@ -27,14 +27,21 @@ impl AppRuntime {
         classes: &strata_dom::ClassList,
         state: &strata_style::selector::PseudoState,
     ) {
-        for cls in classes.iter() {
-            for single_class in strata_style::tailwind::tokenize_classes(cls) {
-                strata_style::tailwind::TailwindEngine::apply_class_with_pseudo_state(
-                    style,
-                    single_class,
-                    state,
-                );
+        let active_count =
+            u8::from(state.is_focused) + u8::from(state.is_hovered) + u8::from(state.is_active);
+        if active_count <= 1 {
+            for cls in classes.iter() {
+                for single_class in strata_style::tailwind::tokenize_classes(cls) {
+                    strata_style::tailwind::TailwindEngine::apply_class_with_pseudo_state(
+                        style,
+                        single_class,
+                        state,
+                    );
+                }
             }
+        } else {
+            Self::apply_base_tailwind_classes(style, classes, state);
+            Self::apply_interactive_tailwind_classes(style, classes, state);
         }
     }
 
@@ -61,14 +68,50 @@ impl AppRuntime {
         classes: &strata_dom::ClassList,
         state: &strata_style::selector::PseudoState,
     ) {
-        for cls in classes.iter() {
-            for single_class in strata_style::tailwind::tokenize_classes(cls) {
-                strata_style::tailwind::TailwindEngine::apply_interactive_class_with_pseudo_state(
-                    style,
-                    single_class,
-                    state,
-                );
+        let active_count =
+            u8::from(state.is_focused) + u8::from(state.is_hovered) + u8::from(state.is_active);
+        if active_count <= 1 {
+            for cls in classes.iter() {
+                for single_class in strata_style::tailwind::tokenize_classes(cls) {
+                    strata_style::tailwind::TailwindEngine::apply_interactive_class_with_pseudo_state(
+                        style,
+                        single_class,
+                        state,
+                    );
+                }
             }
+            return;
+        }
+        // CSS/Tailwind LVFHA cascade order: focus -> hover -> active.
+        let mut apply_phase = |phase: u8| {
+            for cls in classes.iter() {
+                for single_class in strata_style::tailwind::tokenize_classes(cls) {
+                    let is_active = single_class.contains("active:");
+                    let is_hover = single_class.contains("hover:");
+                    let is_focus = single_class.contains("focus");
+                    let matches_phase = match phase {
+                        0 => is_focus && !is_hover && !is_active,
+                        1 => is_hover && !is_active,
+                        _ => is_active,
+                    };
+                    if matches_phase {
+                        strata_style::tailwind::TailwindEngine::apply_interactive_class_with_pseudo_state(
+                            style,
+                            single_class,
+                            state,
+                        );
+                    }
+                }
+            }
+        };
+        if state.is_focused {
+            apply_phase(0);
+        }
+        if state.is_hovered {
+            apply_phase(1);
+        }
+        if state.is_active {
+            apply_phase(2);
         }
     }
 
