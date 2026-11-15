@@ -36,7 +36,7 @@ fn grid_view(cells: usize) -> View {
     rsx! {
         <div class="flex flex-wrap w-full h-full">
             {(0..cells).map(|i| rsx! {
-                <div class="w-8 h-8 m-0.5 bg-red-500 rounded">{i.to_string()}</div>
+                <div class="w-8 h-8 m-0.5 bg-red-500 hover:bg-red-600 rounded">{i.to_string()}</div>
             })}
         </div>
     }
@@ -74,6 +74,13 @@ fn frame_pipeline_report() {
         runtime.step_event(&PlatformEvent::MouseMove { x: 100.0, y: 100.0 });
         runtime.compile_display_list_if_dirty();
     });
+    let mut toggle = false;
+    let hover_switch = measure(|| {
+        toggle = !toggle;
+        let x = if toggle { 20.0 } else { 56.0 };
+        runtime.step_event(&PlatformEvent::MouseMove { x, y: 20.0 });
+        runtime.compile_display_list_if_dirty();
+    });
     let press = measure(|| click(&mut runtime, 100.0, 100.0));
     let rebuild = measure(|| runtime.rebuild_layout_tree());
 
@@ -81,7 +88,8 @@ fn frame_pipeline_report() {
     println!("AppRuntime::new (empty)   : {empty:?}");
     println!("compile (unchanged, gated): {compile_unchanged:?}");
     println!("compile (forced)          : {compile_forced:?}");
-    println!("move + compile            : {hover:?}");
+    println!("move + compile (same)     : {hover:?}");
+    println!("move + compile (switch)   : {hover_switch:?}");
     println!("press + release           : {press:?}");
     println!("rebuild_layout_tree       : {rebuild:?}");
     let profile = runtime.finish_frame_profile();

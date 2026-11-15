@@ -144,6 +144,8 @@ pub struct AppRuntime {
     pub(crate) compiles_skipped: u64,
     /// Optional observer invoked with the completed profile after each present.
     pub(crate) frame_profile_hook: Option<FrameProfileHook>,
+    /// Cached `<style>` stylesheets collected from `root_blueprint`.
+    pub(crate) cached_stylesheets: Vec<std::sync::Arc<strata_style::StyleSheet>>,
 }
 
 /// Whether opt-in `[perf]` timing output is enabled through `STRATA_PERF_LOG`.
@@ -292,12 +294,14 @@ impl AppRuntime {
             paint_dirty: true,
             compiles_skipped: 0,
             frame_profile_hook: None,
+            cached_stylesheets: Vec::new(),
         };
 
         let initial_sheets = Self::collect_stylesheets_from_blueprint(&runtime.root_blueprint);
         for sheet in &initial_sheets {
             runtime.register_keyframes_stylesheet(sheet);
         }
+        runtime.cached_stylesheets = initial_sheets;
         runtime.sync_tree_animations(0.0);
         runtime.apply_viewport_clamps();
         runtime.apply_scroll_offsets();
@@ -430,6 +434,7 @@ impl AppRuntime {
         for sheet in &sheets {
             self.register_keyframes_stylesheet(sheet);
         }
+        self.cached_stylesheets = sheets;
         let build_start = std::time::Instant::now();
         let ctx = self.interaction_context();
         self.layout_root = Self::build_layout_tree_with_interaction(&self.root_blueprint, &ctx);
