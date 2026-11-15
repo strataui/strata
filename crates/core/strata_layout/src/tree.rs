@@ -436,6 +436,25 @@ impl PortalAnchorSpec {
     }
 }
 
+/// Thread-safe type-erased handle to an embedded 3D scene (`Arc<Scene3D>`) carried on a layout node
+/// so the 2D CSS compositor can emit `DrawViewport3D` at the exact stacking-context paint order.
+#[derive(Clone)]
+pub struct ViewportSceneHandle(pub std::sync::Arc<dyn std::any::Any + Send + Sync>);
+
+impl std::fmt::Debug for ViewportSceneHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ViewportSceneHandle")
+            .field(&"<scene_3d>")
+            .finish()
+    }
+}
+
+impl PartialEq for ViewportSceneHandle {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 /// A node participating in the layout tree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayoutNode {
@@ -446,6 +465,7 @@ pub struct LayoutNode {
     pub svg_path: Option<String>,
     pub svg_items: Vec<SvgItem>,
     pub image: Option<ImageResource>,
+    pub scene_3d: Option<ViewportSceneHandle>,
     pub inline_items: Vec<InlineItem>,
     pub line_boxes: Vec<LineBox>,
     pub layout_cache: LayoutCacheEntry,
@@ -479,6 +499,7 @@ impl LayoutNode {
             svg_path: None,
             svg_items: Vec::new(),
             image: None,
+            scene_3d: None,
             inline_items: Vec::new(),
             line_boxes: Vec::new(),
             layout_cache: LayoutCacheEntry::invalid(),
@@ -503,6 +524,7 @@ impl LayoutNode {
             svg_path: None,
             svg_items: Vec::new(),
             image: None,
+            scene_3d: None,
             inline_items: Vec::new(),
             line_boxes: Vec::new(),
             layout_cache: LayoutCacheEntry::invalid(),
@@ -527,6 +549,7 @@ impl LayoutNode {
             svg_path: None,
             svg_items: Vec::new(),
             image: None,
+            scene_3d: None,
             inline_items: Vec::new(),
             line_boxes: Vec::new(),
             layout_cache: LayoutCacheEntry::invalid(),
@@ -551,6 +574,7 @@ impl LayoutNode {
             svg_path: None,
             svg_items: Vec::new(),
             image: None,
+            scene_3d: None,
             inline_items,
             line_boxes: Vec::new(),
             layout_cache: LayoutCacheEntry::invalid(),
@@ -587,6 +611,7 @@ impl LayoutNode {
                 view_box: (24.0, 24.0),
             }],
             image: None,
+            scene_3d: None,
             inline_items: Vec::new(),
             line_boxes: Vec::new(),
             layout_cache: LayoutCacheEntry::invalid(),
@@ -612,6 +637,7 @@ impl LayoutNode {
             svg_path: first_path,
             svg_items,
             image: None,
+            scene_3d: None,
             inline_items: Vec::new(),
             line_boxes: Vec::new(),
             layout_cache: LayoutCacheEntry::invalid(),
@@ -636,6 +662,7 @@ impl LayoutNode {
             svg_path: None,
             svg_items: Vec::new(),
             image: Some(image),
+            scene_3d: None,
             inline_items: Vec::new(),
             line_boxes: Vec::new(),
             layout_cache: LayoutCacheEntry::invalid(),
@@ -656,6 +683,17 @@ impl LayoutNode {
             return true;
         }
         self.children.iter().any(|c| c.has_active_transitions())
+    }
+
+    /// Attaches a 3D viewport scene handle to this layout node.
+    pub fn with_scene_3d(mut self, handle: ViewportSceneHandle) -> Self {
+        self.scene_3d = Some(handle);
+        self
+    }
+
+    /// Mutably sets or clears the 3D viewport scene handle on this layout node.
+    pub fn set_scene_3d(&mut self, handle: Option<ViewportSceneHandle>) {
+        self.scene_3d = handle;
     }
 
     /// Sets the EntityId on this layout node.

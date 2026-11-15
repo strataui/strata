@@ -94,3 +94,241 @@ fn test_canvas3d_declarative_pipeline_in_runtime() {
         }
     }
 }
+
+#[test]
+fn test_scene_viewport_programmatic_scene_textures_and_hud_stacking_order() {
+    use std::sync::Arc;
+    use strata_render::rasterizer::FrameBuffer;
+    use strata_render::scene3d::{Background3D, TexturedMaterial3D};
+    use strata_render::texture3d::TextureStore;
+    use strata_style::types::Color;
+    use strata_ui::scene3d::{HudCard, SceneViewport};
+
+    // 1. Build a TextureStore with a bright vivid cyan-blue satellite tile (R=16, G=196, B=248)
+    // and attach a Textured mesh whose fallback tint is white, while an untextured fallback
+    // without TextureStore would produce pure white instead of (16, 196, 248).
+    let mut store = TextureStore::new();
+    let tex_pixels = vec![
+        16, 196, 248, 255, 16, 196, 248, 255, 16, 196, 248, 255, 16, 196, 248, 255,
+    ];
+    let tex_id = store
+        .insert_rgba8(2, 2, tex_pixels)
+        .expect("2x2 RGBA8 texture must insert");
+
+    // Full-viewport quad facing +Z camera at z = 0; layout per vertex: x, y, z, nx, ny, nz, u, v
+    let quad_geom = Geometry3D::CustomTextured {
+        vertices: vec![
+            -10.0, -10.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, //
+            10.0, -10.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, //
+            10.0, 10.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, //
+            -10.0, 10.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+        ],
+        indices: vec![0, 1, 2, 0, 2, 3],
+    };
+    let mut tex_mat = TexturedMaterial3D::new(tex_id);
+    tex_mat.tint = Color::rgba(255, 255, 255, 255);
+    tex_mat.lit = false;
+
+    let mut scene = Scene3D::new()
+        .with_background(Background3D::Solid(Color::rgba(5, 8, 15, 255)))
+        .with_textures(Arc::new(store));
+    scene.camera = Camera3D::Perspective {
+        fov_horizontal_deg: 60.0,
+        near: 0.1,
+        far: 100.0,
+        position: [0.0, 0.0, 5.0],
+        target: [0.0, 0.0, 0.0],
+    };
+    scene.add_mesh(Mesh3D::new(quad_geom, Material3D::Textured(tex_mat)));
+    assert!(scene.overlay_mut().is_empty());
+
+    let shared_scene = Arc::new(scene);
+
+    // 2. Render <SceneViewport scene={&shared_scene}> inside a flexbox dock with both:
+    //    - an in-viewport 2D HUD bar at the top (bright red #ff2040, z-10)
+    //    - a Top-Layer <Portal> context menu overlay
+    let hud_color_hex = "background-color: #ff2040; width: 200px; height: 60px;";
+    let view = rsx! {
+        <div class="flex flex-row w-full h-full">
+            <div class="w-48 h-full bg-slate-900">"Sidebar"</div>
+            <div class="flex-1 h-full">
+                <SceneViewport scene={&shared_scene} class="rounded-none border-0">
+                    <div style={hud_color_hex}>
+                        <HudCard title="Noxus PFD">"ALT 1240m"</HudCard>
+                    </div>
+                </SceneViewport>
+            </div>
+            <strata_dom::Portal>
+                <div style="position: fixed; left: 260px; top: 120px; width: 120px; height: 50px; background-color: #20ff60;">
+                    "Portal Menu"
+                </div>
+            </strata_dom::Portal>
+        </div>
+    };
+
+    let mut runtime = AppRuntime::new(view, 800.0, 600.0, 1.0);
+    runtime.tick_frame();
+
+    // 3. Verify DrawViewport3D is emitted ONCE and precedes both the z-10 HUD rect and Top-Layer Portal rect!
+    let vp_indices: Vec<usize> = runtime
+        .display_list
+        .commands
+        .iter()
+        .enumerate()
+        .filter_map(|(i, cmd)| matches!(cmd, DrawCommand::DrawViewport3D { .. }).then_some(i))
+        .collect();
+    assert_eq!(
+        vp_indices.len(),
+        1,
+        "Expected exactly 1 DrawViewport3D command, got {:?}",
+        vp_indices
+    );
+    let vp_idx = vp_indices[0];
+
+    let hud_idx = runtime
+        .display_list
+        .commands
+        .iter()
+        .position(|cmd| {
+            matches!(
+                cmd,
+                DrawCommand::DrawRect { color, .. }
+                    if color.r == 0xff && color.g == 0x20 && color.b == 0x40
+            )
+        })
+        .expect("Expected z-10 HUD #ff2040 DrawRect in display list");
+    let portal_idx = runtime
+        .display_list
+        .commands
+        .iter()
+        .position(|cmd| {
+            matches!(
+                cmd,
+                DrawCommand::DrawRect { color, .. }
+                    if color.r == 0x20 && color.g == 0xff && color.b == 0x60
+            )
+        })
+        .expect("Expected Portal #20ff60 DrawRect in display list");
+
+    assert!(
+        vp_idx < hud_idx,
+        "3D viewport (cmd #{vp_idx}) must paint BEFORE z-10 2D HUD overlay (cmd #{hud_idx})"
+    );
+    assert!(
+        hud_idx < portal_idx,
+        "z-10 2D HUD overlay (cmd #{hud_idx}) must paint BEFORE Top-Layer Portal (cmd #{portal_idx})"
+    );
+
+    // 4. Execute the DisplayList into a FrameBuffer and verify:
+    //    (a) Uncovered 3D viewport pixels show the satellite texture colour (16, 196, 248), NOT white (255, 255, 255)!
+    //    (b) Pixels inside the z-10 HUD rect show #ff2040 on top of the 3D scene!
+    //    (c) Pixels inside the Top-Layer Portal rect show #20ff60 on top of the 3D scene!
+    let mut fb = FrameBuffer::new(800, 600);
+    fb.execute_display_list(&runtime.display_list);
+
+    let pixel_at = |fb: &FrameBuffer, x: usize, y: usize| -> [u8; 4] {
+        let off = (y * fb.width + x) * 4;
+        [
+            fb.pixels[off],
+            fb.pixels[off + 1],
+            fb.pixels[off + 2],
+            fb.pixels[off + 3],
+        ]
+    };
+
+    // Uncovered 3D viewport center (sidebar is 192px wide, so x=500, y=400 is squarely inside the 3D canvas)
+    let scene_px = pixel_at(&fb, 500, 400);
+    assert!(
+        (scene_px[0] as i32 - 16).abs() <= 2
+            && (scene_px[1] as i32 - 196).abs() <= 2
+            && (scene_px[2] as i32 - 248).abs() <= 2,
+        "Expected satellite texture RGB ~(16, 196, 248) at uncovered 3D pixel, got {:?}",
+        scene_px
+    );
+
+    // HUD box has p-4 (16px) padding on hud_overlay: sidebar=192, so HUD #ff2040 spans x=[208..408], y=[16..76].
+    // Sample near right edge of HUD bar (x=395, y=30) away from inner HudCard so we hit pure #ff2040.
+    let hud_px = pixel_at(&fb, 395, 30);
+    assert!(
+        hud_px[0] > hud_px[1] && hud_px[0] > hud_px[2] && hud_px[0] > 40,
+        "2D HUD overlay (red bar, translucent card) must composite ON TOP of the 3D scene, got {:?}",
+        hud_px
+    );
+
+    // Top-Layer Portal spans x=[260..380], y=[120..170]; sample near right edge (x=370, y=160)
+    let portal_px = pixel_at(&fb, 370, 160);
+    assert_eq!(
+        [portal_px[0], portal_px[1], portal_px[2]],
+        [0x20, 0xff, 0x60],
+        "Top-Layer Portal must composite ON TOP of the 3D scene, got {:?}",
+        portal_px
+    );
+}
+
+#[test]
+fn test_scene_viewport_on_camera_change_pointer_and_wheel_interaction() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use strata_render::orbit_controls::OrbitControls;
+    use strata_ui::scene3d::SceneViewport;
+
+    let mut scene = Scene3D::new();
+    scene.camera = Camera3D::Perspective {
+        fov_horizontal_deg: 60.0,
+        near: 0.1,
+        far: 1000.0,
+        position: [0.0, 0.0, 20.0],
+        target: [0.0, 0.0, 0.0],
+    };
+
+    let observed: Rc<RefCell<Vec<(f32, f32, f32)>>> = Rc::new(RefCell::new(Vec::new()));
+    let observed_cb = Rc::clone(&observed);
+
+    let view = rsx! {
+        <SceneViewport
+            scene={scene}
+            width={600.0}
+            height={400.0}
+            on_camera_change={move |ctrl: &OrbitControls| {
+                observed_cb.borrow_mut().push((ctrl.theta, ctrl.phi, ctrl.radius));
+            }}
+        />
+    };
+
+    let mut runtime = AppRuntime::new(view, 600.0, 400.0, 1.0);
+    runtime.tick_frame();
+
+    // Drag across the 3D viewport to orbit rotate
+    runtime.dispatch_pointer_down(300.0, 200.0);
+    runtime.dispatch_pointer_move(360.0, 230.0);
+    runtime.dispatch_pointer_up(360.0, 230.0);
+
+    assert_eq!(
+        observed.borrow().len(),
+        1,
+        "Expected on_camera_change to fire on pointer drag"
+    );
+    let (theta_after_drag, _phi_after_drag, radius_after_drag) = observed.borrow()[0];
+    assert!(
+        theta_after_drag.abs() > 0.05,
+        "Expected non-zero orbit theta rotation after drag, got {}",
+        theta_after_drag
+    );
+    assert!((radius_after_drag - 20.0).abs() < 1e-3);
+
+    // Wheel scroll over the 3D viewport to zoom in
+    let wheel_handled = runtime.dispatch_scroll(300.0, 200.0, 0.0, 5.0);
+    assert!(wheel_handled, "SceneViewport wheel listener should handle scroll");
+    assert_eq!(
+        observed.borrow().len(),
+        2,
+        "Expected on_camera_change to fire on wheel zoom"
+    );
+    let (_theta_after_zoom, _phi_after_zoom, radius_after_zoom) = observed.borrow()[1];
+    assert!(
+        (radius_after_zoom - 20.0).abs() > 0.1,
+        "Expected orbit radius to change on wheel zoom, got {}",
+        radius_after_zoom
+    );
+}
+

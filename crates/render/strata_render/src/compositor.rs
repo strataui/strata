@@ -557,7 +557,11 @@ impl Compositor {
 
     /// Evaluates if an inline element or its descendants have paintable atomic/SVG non-text visual content.
     fn inline_has_paintable_non_text_content(node: &LayoutNode) -> bool {
-        if !node.svg_items.is_empty() || node.svg_path.is_some() {
+        if !node.svg_items.is_empty()
+            || node.svg_path.is_some()
+            || node.image.is_some()
+            || node.scene_3d.is_some()
+        {
             return true;
         }
         for c in &node.children {
@@ -637,7 +641,8 @@ impl Compositor {
             || border_radius.bottom_right > 0.0;
         let clips_overflow = node.style.overflow_x != Overflow::Visible
             || node.style.overflow_y != Overflow::Visible;
-        let should_clip = clips_overflow || (has_any_radius && node.image.is_some());
+        let should_clip =
+            clips_overflow || (has_any_radius && (node.image.is_some() || node.scene_3d.is_some()));
         let clip = if should_clip {
             let clip_bounds = if clips_overflow
                 && node.geometry.padding_box.width > 0.0
@@ -866,7 +871,8 @@ impl Compositor {
             || border_radius.bottom_right > 0.0;
         let clips_overflow = node.style.overflow_x != Overflow::Visible
             || node.style.overflow_y != Overflow::Visible;
-        let should_clip = clips_overflow || (has_any_radius && node.image.is_some());
+        let should_clip =
+            clips_overflow || (has_any_radius && (node.image.is_some() || node.scene_3d.is_some()));
 
         let mut static_cull_empty =
             base_cull.is_some_and(|c| c.width < 0.0 || c.height < 0.0);
@@ -1408,6 +1414,32 @@ impl Compositor {
     ) {
         let bounds = node.geometry.border_box;
 
+        // Embedded 3D viewport paints inside the content box at this exact CSS stacking-context layer.
+        if let Some(ref handle) = node.scene_3d {
+            let vp_bounds = if node.geometry.content_box.width > 0.0
+                && node.geometry.content_box.height > 0.0
+            {
+                node.geometry.content_box
+            } else {
+                bounds
+            };
+            if vp_bounds.width > 0.0 && vp_bounds.height > 0.0 {
+                if let Some(scene) = handle.0.downcast_ref::<crate::scene3d::Scene3D>() {
+                    list.push(DrawCommand::DrawViewport3D {
+                        bounds: vp_bounds,
+                        scene: scene.clone(),
+                    });
+                } else if let Some(scene_arc) =
+                    handle.0.downcast_ref::<std::sync::Arc<crate::scene3d::Scene3D>>()
+                {
+                    list.push(DrawCommand::DrawViewport3D {
+                        bounds: vp_bounds,
+                        scene: (**scene_arc).clone(),
+                    });
+                }
+            }
+        }
+
         // Replaced raster content paints inside the content box.
         if let Some(ref image) = node.image {
             let image_bounds = if node.geometry.content_box.width > 0.0
@@ -1569,7 +1601,8 @@ impl Compositor {
             || border_radius.top_right > 0.0
             || border_radius.bottom_left > 0.0
             || border_radius.bottom_right > 0.0;
-        let should_clip = clips_overflow || (has_any_radius && node.image.is_some());
+        let should_clip =
+            clips_overflow || (has_any_radius && (node.image.is_some() || node.scene_3d.is_some()));
 
         let child_cull = if clips_overflow
             && bounds.width > 0.0

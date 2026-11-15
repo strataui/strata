@@ -571,12 +571,70 @@ impl AppRuntime {
         self.spatial_index.sync_bounds(&self.layout_root);
     }
 
+    fn blueprint_has_wheel_listener(bp: &NodeBlueprint) -> bool {
+        match bp {
+            NodeBlueprint::Element {
+                attributes,
+                children,
+                ..
+            } => {
+                attributes.iter().any(|a| {
+                    matches!(
+                        a,
+                        strata_dom::Attribute::EventListener {
+                            event: strata_dom::EventType::Wheel,
+                            ..
+                        }
+                    )
+                }) || children.iter().any(Self::blueprint_has_wheel_listener)
+            }
+            NodeBlueprint::Fragment(children) => {
+                children.iter().any(Self::blueprint_has_wheel_listener)
+            }
+            _ => false,
+        }
+    }
+
+    fn dispatch_dom_wheel_event(&mut self, px: f32, py: f32, delta_x: f32, delta_y: f32) -> (bool, bool) {
+        if !Self::blueprint_has_wheel_listener(&self.root_blueprint) {
+            return (false, false);
+        }
+        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+            &self.root_blueprint,
+            &self.layout_root,
+            px,
+            py,
+            strata_dom::EventType::Wheel,
+        ) {
+            let mut ev = self.create_mouse_event(
+                strata_dom::EventType::Wheel,
+                px,
+                py,
+                0,
+                0,
+                Some(target_box),
+            );
+            ev.delta_x = delta_x as f64;
+            ev.delta_y = delta_y as f64;
+            let prevented_cell = ev.default_prevented.clone();
+            handler(ev);
+            return (true, prevented_cell.get());
+        }
+        (false, false)
+    }
+
     /// Dispatches an immediate synchronous scroll wheel delta to the innermost scrollable container under (px, py).
     /// Cancels any active kinetic smooth scroll animation.
-    /// Returns true if a scroll offset changed and redraw is required.
-    pub fn dispatch_scroll(&mut self, px: f32, py: f32, _delta_x: f32, delta_y: f32) -> bool {
+    /// Returns true if a scroll offset changed or a DOM wheel listener handled the event.
+    pub fn dispatch_scroll(&mut self, px: f32, py: f32, delta_x: f32, delta_y: f32) -> bool {
         self.last_mouse_pos = (px, py);
         self.active_smooth_scroll = None;
+
+        let (wheel_handled, default_prevented) =
+            self.dispatch_dom_wheel_event(px, py, delta_x, delta_y);
+        if default_prevented {
+            return true;
+        }
 
         let mut matching_bars: Vec<ActiveScrollbar> = self
             .active_scrollbars
@@ -634,7 +692,7 @@ impl AppRuntime {
             }
         }
 
-        false
+        wheel_handled
     }
 
     /// Dispatches a smooth kinetic scroll impulse to the innermost scrollable container under (px, py).
@@ -644,12 +702,21 @@ impl AppRuntime {
         &mut self,
         px: f32,
         py: f32,
-        _delta_x: f32,
+        delta_x: f32,
         delta_y: f32,
     ) -> bool {
         self.last_mouse_pos = (px, py);
-        if delta_y.abs() < 0.01 {
+        if delta_y.abs() < 0.01 && delta_x.abs() < 0.01 {
             return false;
+        }
+
+        let (wheel_handled, default_prevented) =
+            self.dispatch_dom_wheel_event(px, py, delta_x, delta_y);
+        if default_prevented {
+            return true;
+        }
+        if delta_y.abs() < 0.01 {
+            return wheel_handled;
         }
 
         let mut matching_bars: Vec<ActiveScrollbar> = self
