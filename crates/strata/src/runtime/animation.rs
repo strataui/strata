@@ -2,11 +2,77 @@
 
 use super::*;
 
+fn fnv1a_mix(mut hash: u64, bytes: &[u8]) -> u64 {
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3u64);
+    }
+    hash
+}
+
+fn blueprint_has_explicit_identity(bp: Option<&NodeBlueprint>) -> bool {
+    let Some(NodeBlueprint::Element { attributes, .. }) = bp else {
+        return false;
+    };
+    attributes.iter().any(|attr| {
+        matches!(
+            attr,
+            strata_dom::Attribute::Property { key, .. }
+                if key == "id" || key == "key" || key == "data-key"
+        )
+    })
+}
+
+fn blueprint_node_identity_hash(
+    parent_hash: u64,
+    child_index: usize,
+    bp: Option<&NodeBlueprint>,
+) -> u64 {
+    let mut hash = fnv1a_mix(parent_hash, &child_index.to_le_bytes());
+    match bp {
+        Some(NodeBlueprint::Element {
+            tag, attributes, ..
+        }) => {
+            hash = fnv1a_mix(hash, &[1]);
+            let mut tag_hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(tag, &mut tag_hasher);
+            hash = fnv1a_mix(hash, &std::hash::Hasher::finish(&tag_hasher).to_le_bytes());
+            for attr in attributes {
+                if let strata_dom::Attribute::Property { key, value } = attr {
+                    if key == "id" || key == "key" || key == "data-key" {
+                        hash = fnv1a_mix(hash, key.as_bytes());
+                        hash = fnv1a_mix(hash, &[0xff]);
+                        hash = fnv1a_mix(hash, value.as_bytes());
+                        hash = fnv1a_mix(hash, &[0xfe]);
+                    }
+                }
+            }
+        }
+        Some(NodeBlueprint::Text(_)) => {
+            hash = fnv1a_mix(hash, &[2]);
+        }
+        Some(NodeBlueprint::DynamicText(_)) => {
+            hash = fnv1a_mix(hash, &[3]);
+        }
+        Some(NodeBlueprint::Fragment(_)) => {
+            hash = fnv1a_mix(hash, &[4]);
+        }
+        Some(NodeBlueprint::Empty) => {
+            hash = fnv1a_mix(hash, &[5]);
+        }
+        None => {
+            hash = fnv1a_mix(hash, &[0]);
+        }
+    }
+    hash
+}
+
 impl AppRuntime {
     /// Synchronizes running animations and transitions with the current layout tree.
     pub fn sync_tree_animations(&mut self, now_ms: f64) {
         let mut new_base_styles = std::collections::HashMap::new();
         let mut new_node_paths = std::collections::HashMap::new();
+        let mut new_path_node_ids = std::collections::HashMap::new();
         let mut path_buf = Vec::new();
 
         let mut trans_events = Vec::new();
@@ -14,11 +80,15 @@ impl AppRuntime {
 
         Self::sync_tree_animations_rec(
             &self.layout_root,
+            Some(&self.root_blueprint),
+            0xcbf29ce484222325u64,
+            0,
             &mut path_buf,
             now_ms,
             &self.previous_node_styles,
             &mut new_base_styles,
             &mut new_node_paths,
+            &mut new_path_node_ids,
             &mut self.transition_manager,
             &mut self.animation_manager,
             &mut trans_events,
@@ -28,6 +98,14 @@ impl AppRuntime {
         self.base_node_styles = new_base_styles;
         self.previous_node_styles = self.base_node_styles.clone();
         self.node_paths = new_node_paths;
+        self.path_node_ids = new_path_node_ids;
+
+        // Prune any transitions/animations belonging to unmounted or replaced elements
+        // so dead nodes never leak state or keep frame ticks alive.
+        self.transition_manager
+            .retain_nodes(|id| self.base_node_styles.contains_key(id));
+        self.animation_manager
+            .retain_nodes(|id| self.base_node_styles.contains_key(id));
 
         // Evaluate scroll-driven animations progress
         self.evaluate_scroll_animations(&mut anim_events);
@@ -45,23 +123,37 @@ impl AppRuntime {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn sync_tree_animations_rec(
         node: &LayoutNode,
+        blueprint: Option<&NodeBlueprint>,
+        parent_hash: u64,
+        child_index: usize,
         path: &mut Vec<usize>,
         now_ms: f64,
         previous_styles: &std::collections::HashMap<u64, ComputedStyle>,
         new_base_styles: &mut std::collections::HashMap<u64, ComputedStyle>,
         new_node_paths: &mut std::collections::HashMap<u64, Vec<usize>>,
+        new_path_node_ids: &mut std::collections::HashMap<Vec<usize>, u64>,
         transition_manager: &mut strata_style::transition::TransitionManager,
         animation_manager: &mut strata_style::animation::AnimationManager,
         trans_events: &mut Vec<strata_style::transition::TransitionLifecycleEvent>,
         anim_events: &mut Vec<strata_style::animation::AnimationLifecycleEvent>,
     ) {
-        let node_id = path_to_node_id(path);
+        let node_id = blueprint_node_identity_hash(parent_hash, child_index, blueprint);
         new_base_styles.insert(node_id, node.style.clone());
         new_node_paths.insert(node_id, path.clone());
+        new_path_node_ids.insert(path.clone(), node_id);
 
         // Check for transitions if we have a previous style or @starting-style
         let effective_old_style = match previous_styles.get(&node_id) {
-            Some(old) if old.display != strata_style::Display::None => Some(old),
+            Some(old) if old.display != strata_style::Display::None => {
+                if old.transitions.is_empty()
+                    && !node.style.transitions.is_empty()
+                    && !blueprint_has_explicit_identity(blueprint)
+                {
+                    node.style.starting_style.as_deref()
+                } else {
+                    Some(old)
+                }
+            }
             _ => node.style.starting_style.as_deref(),
         };
 
@@ -81,15 +173,26 @@ impl AppRuntime {
             anim_events.extend(animation_manager.update_styles(node_id, &node.style, now_ms));
         }
 
+        let bp_children = match blueprint {
+            Some(NodeBlueprint::Element { children, .. }) => Some(children.as_slice()),
+            Some(NodeBlueprint::Fragment(children)) => Some(children.as_slice()),
+            _ => None,
+        };
+
         for (idx, child) in node.children.iter().enumerate() {
             path.push(idx);
+            let child_bp = bp_children.and_then(|c| c.get(idx));
             Self::sync_tree_animations_rec(
                 child,
+                child_bp,
+                node_id,
+                idx,
                 path,
                 now_ms,
                 previous_styles,
                 new_base_styles,
                 new_node_paths,
+                new_path_node_ids,
                 transition_manager,
                 animation_manager,
                 trans_events,
@@ -112,6 +215,7 @@ impl AppRuntime {
         Self::apply_animations_rec(
             &mut self.layout_root,
             &mut path,
+            &self.path_node_ids,
             &self.base_node_styles,
             &self.transition_manager,
             &self.animation_manager,
@@ -122,12 +226,16 @@ impl AppRuntime {
     pub(crate) fn apply_animations_rec(
         node: &mut LayoutNode,
         path: &mut Vec<usize>,
+        path_node_ids: &std::collections::HashMap<Vec<usize>, u64>,
         base_styles: &std::collections::HashMap<u64, ComputedStyle>,
         transition_manager: &strata_style::transition::TransitionManager,
         animation_manager: &strata_style::animation::AnimationManager,
         inherited_color_override: Option<(strata_style::types::Color, strata_style::types::Color)>,
     ) {
-        let node_id = path_to_node_id(path);
+        let node_id = path_node_ids
+            .get(path)
+            .copied()
+            .unwrap_or_else(|| path_to_node_id(path));
         if let Some(base) = base_styles.get(&node_id) {
             node.style = base.clone();
         }
@@ -152,6 +260,7 @@ impl AppRuntime {
             Self::apply_animations_rec(
                 child,
                 path,
+                path_node_ids,
                 base_styles,
                 transition_manager,
                 animation_manager,

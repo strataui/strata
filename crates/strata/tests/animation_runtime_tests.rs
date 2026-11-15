@@ -242,3 +242,126 @@ fn test_runtime_synthetic_animation_events() {
     let dirty = runtime.poll_animations();
     assert!(dirty);
 }
+
+#[test]
+fn test_conditional_swap_does_not_trigger_spurious_transition() {
+    // 1. Parent branch identity change (id="tab-a" -> id="tab-b") with unkeyed child at same path
+    let tab_a = rsx! {
+        <div>
+            <div id="tab-a" class="p-6">
+                <div class="p-6">"Tab A"</div>
+            </div>
+        </div>
+    };
+    let mut runtime = AppRuntime::new(tab_a, 400.0, 300.0, 1.0);
+    assert!(!runtime.has_active_animations());
+
+    let tab_b = rsx! {
+        <div>
+            <div id="tab-b">
+                <div class="h-8 transition-all duration-150">"Card"</div>
+            </div>
+        </div>
+    };
+    runtime.update_view(tab_b);
+    assert!(
+        !runtime.has_active_animations(),
+        "Swapping parent branch id must not trigger transition on newly mounted child"
+    );
+    let card = &runtime.layout_root.children[0].children[0];
+    assert_eq!(card.style.padding.top, 0.0);
+    assert!((card.geometry.border_box.height - 32.0).abs() < 0.5);
+
+    // 2. Unkeyed same-tag swap where previous element had p-6 (no transition) and new has transition-all
+    let view_p6 = rsx! {
+        <div>
+            <div class="p-6">"Old"</div>
+        </div>
+    };
+    let mut runtime2 = AppRuntime::new(view_p6, 400.0, 300.0, 1.0);
+    let view_card = rsx! {
+        <div>
+            <div class="h-8 transition-all duration-150">"Card"</div>
+        </div>
+    };
+    runtime2.update_view(view_card);
+    assert!(
+        !runtime2.has_active_animations(),
+        "Newly mounted transition-all element replacing non-transitioning element must not interpolate old padding"
+    );
+    let card2 = &runtime2.layout_root.children[0];
+    assert_eq!(card2.style.padding.top, 0.0);
+    assert!((card2.geometry.border_box.height - 32.0).abs() < 0.5);
+
+    // 3. Keyed swap where BOTH branches have transition-all duration-150
+    let keyed_a = rsx! {
+        <div>
+            <div key="panel-a" class="p-6 transition-all duration-150">"A"</div>
+        </div>
+    };
+    let mut runtime3 = AppRuntime::new(keyed_a, 400.0, 300.0, 1.0);
+    let keyed_b = rsx! {
+        <div>
+            <div key="panel-b" class="h-8 transition-all duration-150">"B"</div>
+        </div>
+    };
+    runtime3.update_view(keyed_b);
+    assert!(
+        !runtime3.has_active_animations(),
+        "Swapping elements with distinct keys must not inherit previous_node_styles"
+    );
+
+    // 4. Tag change (section -> div) where both have transition-all
+    let tag_a = rsx! {
+        <div>
+            <section class="p-6 transition-all duration-150">"A"</section>
+        </div>
+    };
+    let mut runtime4 = AppRuntime::new(tag_a, 400.0, 300.0, 1.0);
+    let tag_b = rsx! {
+        <div>
+            <div class="h-8 transition-all duration-150">"B"</div>
+        </div>
+    };
+    runtime4.update_view(tag_b);
+    assert!(
+        !runtime4.has_active_animations(),
+        "Swapping elements with different tags must not inherit previous_node_styles"
+    );
+}
+
+#[test]
+fn test_unmounted_transition_is_pruned_and_active_schedules_16ms_sleep() {
+    let view1 = rsx! {
+        <div>
+            <div key="item-1" class="w-[200px] h-8 transition-all duration-200">"Item"</div>
+        </div>
+    };
+    let mut runtime = AppRuntime::new(view1, 400.0, 300.0, 1.0);
+    assert!(!runtime.has_active_animations());
+
+    let view2 = rsx! {
+        <div>
+            <div key="item-1" class="w-[100px] h-8 transition-all duration-200">"Item"</div>
+        </div>
+    };
+    runtime.update_view(view2);
+    assert!(runtime.has_active_animations());
+    assert_eq!(
+        runtime.compute_idle_sleep(false),
+        Duration::from_millis(16),
+        "Active transition must schedule 16ms frame ticks"
+    );
+
+    // Unmount item-1 by swapping to item-2
+    let view3 = rsx! {
+        <div>
+            <div key="item-2" class="w-[100px] h-8 transition-all duration-200">"Other"</div>
+        </div>
+    };
+    runtime.update_view(view3);
+    assert!(
+        !runtime.has_active_animations(),
+        "Unmounting an element with an in-flight transition must prune its transition"
+    );
+}

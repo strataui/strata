@@ -732,4 +732,9 @@ impl TransitionManager {
     pub fn clear(&mut self) {
         self.node_transitions.clear();
     }
+
+    /// Retains only active transitions whose `node_id` satisfies `keep`.
+    pub fn retain_nodes<F: FnMut(&u64) -> bool>(&mut self, mut keep: F) {
+        self.node_transitions.retain(|id, _| keep(id));
+    }
 }

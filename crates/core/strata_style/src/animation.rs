@@ -771,6 +771,11 @@ impl AnimationManager {
         })
     }
 
+    /// Retains only active animations whose `node_id` satisfies `keep`.
+    pub fn retain_nodes<F: FnMut(&u64) -> bool>(&mut self, mut keep: F) {
+        self.node_animations.retain(|id, _| keep(id));
+    }
+
     /// Steps active scroll-driven animations on `node_id` at progress `progress` in [0.0, 1.0].
     pub fn step_node_scroll_progress(
         &mut self,
