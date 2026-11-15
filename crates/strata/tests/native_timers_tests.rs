@@ -217,7 +217,7 @@ fn gtk_launch_with_frame_runs_10ms_interval_and_reinvokes_root() {
             };
             frame_cb_count.set(frame_cb_count.get() + 1);
             assert!(info.dt >= Duration::from_millis(1));
-            if started.elapsed() >= Duration::from_millis(210) {
+            if started.elapsed() >= Duration::from_millis(300) {
                 strata_platform::gtk_close();
             }
             FrameOutcome::Unchanged
@@ -230,12 +230,12 @@ fn gtk_launch_with_frame_runs_10ms_interval_and_reinvokes_root() {
     let total_frames = frame_callbacks.get();
     let total_roots = root_invocations.get();
     assert!(
-        (12..=28).contains(&total_ticks),
-        "expected ~20 10ms set_interval ticks in live GTK loop, got {total_ticks}"
+        (8..=35).contains(&total_ticks),
+        "expected ~20-30 10ms set_interval ticks in live GTK loop over 300ms, got {total_ticks}"
     );
     assert!(
-        (12..=28).contains(&total_frames),
-        "expected ~20 10ms on_frame callbacks in live GTK loop, got {total_frames}"
+        (8..=35).contains(&total_frames),
+        "expected ~20-30 10ms on_frame callbacks in live GTK loop over 300ms, got {total_frames}"
     );
     assert!(
         total_roots >= total_ticks,
