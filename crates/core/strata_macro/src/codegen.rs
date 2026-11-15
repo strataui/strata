@@ -239,33 +239,37 @@ fn lower_element(el: &RsxElement, errors: &mut Vec<String>) -> String {
 }
 
 fn lower_component(comp: &RsxComponent, errors: &mut Vec<String>) -> String {
-    let full_path = comp.path.join("::");
+    let full_path = comp.full_path();
+    let last_is_upper = comp
+        .path
+        .last()
+        .is_some_and(|seg| segment_starts_uppercase(seg));
+    let penultimate_is_upper =
+        comp.path.len() >= 2 && segment_starts_uppercase(&comp.path[comp.path.len() - 2]);
 
-    // Case A: Namespaced path (e.g. `Icons::Plus`)
-    if comp.path.len() > 1 {
-        if comp.props.is_empty() {
+    // Case A1: Associated function on a PascalCase type namespace (e.g. `Icons::Plus` or
+    // `strata_icons::Icons::Plus`). In Rust, structs/enums cannot contain nested companion
+    // builder structs (`Icons::Plus::builder()` is impossible), so type-associated tags invoke
+    // the associated function directly.
+    if penultimate_is_upper {
+        if comp.props.is_empty() && comp.children.is_empty() {
             return format!(
                 "strata_dom::IntoNodeBlueprint::into_node_blueprint({}(None))",
                 full_path
             );
-        } else {
-            let mut arg_exprs = Vec::new();
-            for prop in &comp.props {
-                match &prop.value {
-                    RsxAttrValue::Literal(s) => arg_exprs.push(format!("{:?}", s)),
-                    RsxAttrValue::Expression(stream) => arg_exprs.push(format!("{}", stream)),
-                    RsxAttrValue::Flag => arg_exprs.push("true".to_string()),
-                }
-            }
-            return format!(
-                "strata_dom::IntoNodeBlueprint::into_node_blueprint({}({}))",
-                full_path,
-                arg_exprs.join(", ")
-            );
         }
+        return lower_positional_call(&full_path, comp, errors);
     }
 
-    // Case B: Component with 0 props and 0 children: zero-overhead direct function call
+    // Case A2: Function-component call (final path segment starts with a lowercase character,
+    // e.g. `<my_mod::render_badge label="ok" />` or `<::helpers::divider />`).
+    if !last_is_upper {
+        return lower_positional_call(&full_path, comp, errors);
+    }
+
+    // Case B: PascalCase component (bare `<Portal>` or path-qualified `<strata_dom::Portal>`,
+    // `<::strata_dom::Portal>`, `<crate::ui::Modal>`, `<self::Card>`, `<super::Dialog>`)
+    // with 0 props and 0 children: zero-overhead direct call.
     if comp.props.is_empty() && comp.children.is_empty() {
         return format!(
             "strata_dom::IntoNodeBlueprint::into_node_blueprint({}())",
@@ -273,7 +277,8 @@ fn lower_component(comp: &RsxComponent, errors: &mut Vec<String>) -> String {
         );
     }
 
-    // Case C: Component with props and/or children: uses companion builder
+    // Case C: PascalCase component with props and/or children: uses companion builder
+    // (`#full_path::builder()...build()`).
     let mut builder_calls = Vec::new();
 
     for prop in &comp.props {
@@ -304,6 +309,33 @@ fn lower_component(comp: &RsxComponent, errors: &mut Vec<String>) -> String {
         "strata_dom::IntoNodeBlueprint::into_node_blueprint({}::builder(){}.build())",
         full_path,
         builder_calls.join("")
+    )
+}
+
+fn lower_positional_call(
+    full_path: &str,
+    comp: &RsxComponent,
+    errors: &mut Vec<String>,
+) -> String {
+    let mut arg_exprs = Vec::new();
+    for prop in &comp.props {
+        match &prop.value {
+            RsxAttrValue::Literal(s) => arg_exprs.push(format!("{:?}", s)),
+            RsxAttrValue::Expression(stream) => arg_exprs.push(format!("{}", stream)),
+            RsxAttrValue::Flag => arg_exprs.push("true".to_string()),
+        }
+    }
+    if !comp.children.is_empty() {
+        let mut children_code = Vec::new();
+        for child in &comp.children {
+            children_code.push(lower_node(child, errors));
+        }
+        arg_exprs.push(format!("vec![{}]", children_code.join(", ")));
+    }
+    format!(
+        "strata_dom::IntoNodeBlueprint::into_node_blueprint({}({}))",
+        full_path,
+        arg_exprs.join(", ")
     )
 }
 
@@ -345,5 +377,107 @@ mod tests {
         let errors = generate_rsx(&nodes).expect_err("flag handler must be rejected");
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("requires a callable expression"));
+    }
+
+    #[test]
+    fn path_qualified_pascal_case_component_uses_builder() {
+        let nodes = vec![RsxNode::Component(RsxComponent {
+            leading_colon: false,
+            path: vec!["strata_dom".to_string(), "Portal".to_string()],
+            props: vec![RsxAttribute {
+                name: "anchor".to_string(),
+                value: RsxAttrValue::Literal("trigger-btn".to_string()),
+            }],
+            children: vec![RsxNode::Text("Menu".to_string())],
+            self_closing: false,
+        })];
+        let code = generate_rsx(&nodes).expect("codegen must succeed");
+        assert!(
+            code.contains("strata_dom::Portal::builder().anchor(\"trigger-btn\").children(vec!["),
+            "unexpected codegen: {code}"
+        );
+    }
+
+    #[test]
+    fn path_qualified_pascal_case_component_with_only_children_uses_builder() {
+        let nodes = vec![RsxNode::Component(RsxComponent {
+            leading_colon: false,
+            path: vec!["strata_dom".to_string(), "Portal".to_string()],
+            props: vec![],
+            children: vec![RsxNode::Text("Top layer".to_string())],
+            self_closing: false,
+        })];
+        let code = generate_rsx(&nodes).expect("codegen must succeed");
+        assert!(
+            code.contains("strata_dom::Portal::builder().children(vec!["),
+            "unexpected codegen: {code}"
+        );
+    }
+
+    #[test]
+    fn leading_colon_and_empty_path_qualified_component_codegen() {
+        let empty_nodes = vec![RsxNode::Component(RsxComponent {
+            leading_colon: false,
+            path: vec!["strata_dom".to_string(), "Portal".to_string()],
+            props: vec![],
+            children: vec![],
+            self_closing: true,
+        })];
+        let empty_code = generate_rsx(&empty_nodes).expect("empty component codegen must succeed");
+        assert!(
+            empty_code.contains(
+                "strata_dom::IntoNodeBlueprint::into_node_blueprint(strata_dom::Portal())"
+            ),
+            "unexpected empty codegen: {empty_code}"
+        );
+
+        let root_nodes = vec![RsxNode::Component(RsxComponent {
+            leading_colon: true,
+            path: vec!["strata_dom".to_string(), "Portal".to_string()],
+            props: vec![],
+            children: vec![RsxNode::Text("Global".to_string())],
+            self_closing: false,
+        })];
+        let root_code = generate_rsx(&root_nodes).expect("leading-colon codegen must succeed");
+        assert!(
+            root_code.contains("::strata_dom::Portal::builder().children(vec!["),
+            "unexpected leading-colon codegen: {root_code}"
+        );
+    }
+
+    #[test]
+    fn type_associated_and_lowercase_function_paths_use_call_syntax() {
+        let icon_nodes = vec![RsxNode::Component(RsxComponent {
+            leading_colon: false,
+            path: vec![
+                "strata_icons".to_string(),
+                "Icons".to_string(),
+                "Plus".to_string(),
+            ],
+            props: vec![],
+            children: vec![],
+            self_closing: true,
+        })];
+        let icon_code = generate_rsx(&icon_nodes).expect("icon codegen must succeed");
+        assert!(
+            icon_code.contains("strata_icons::Icons::Plus(None)"),
+            "unexpected icon codegen: {icon_code}"
+        );
+
+        let fn_nodes = vec![RsxNode::Component(RsxComponent {
+            leading_colon: false,
+            path: vec!["helpers".to_string(), "render_badge".to_string()],
+            props: vec![RsxAttribute {
+                name: "label".to_string(),
+                value: RsxAttrValue::Literal("v1".to_string()),
+            }],
+            children: vec![],
+            self_closing: true,
+        })];
+        let fn_code = generate_rsx(&fn_nodes).expect("fn codegen must succeed");
+        assert!(
+            fn_code.contains("helpers::render_badge(\"v1\")"),
+            "unexpected fn codegen: {fn_code}"
+        );
     }
 }

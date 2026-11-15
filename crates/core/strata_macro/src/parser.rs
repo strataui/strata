@@ -56,10 +56,22 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
         return Err("Unexpected closing tag '</' without matching opening tag".to_string());
     }
 
-    // Case 3: Tag path (e.g. `div` or `Sidebar` or `Icons::Plus`)
-    let first_ident = cursor
-        .consume_ident()
-        .ok_or_else(|| "Expected tag name or identifier after '<'".to_string())?;
+    // Case 3: Tag path (e.g. `div`, `Sidebar`, `strata_dom::Portal`, `::strata_dom::Portal`, or `Icons::Plus`)
+    let leading_colon = if cursor.peek_punct(':') && cursor.peek_punct_at(1, ':') {
+        cursor.consume_punct(':');
+        cursor.consume_punct(':');
+        true
+    } else {
+        false
+    };
+
+    let first_ident = cursor.consume_ident().ok_or_else(|| {
+        if leading_colon {
+            "Expected identifier after leading '::' in tag path".to_string()
+        } else {
+            "Expected tag name or identifier after '<'".to_string()
+        }
+    })?;
 
     let mut path = vec![first_ident];
     while cursor.peek_punct(':') && cursor.peek_punct_at(1, ':') {
@@ -71,12 +83,8 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
         path.push(next_id);
     }
 
-    let is_custom_component = path.len() > 1
-        || path[0]
-            .chars()
-            .next()
-            .map(|c| c.is_uppercase())
-            .unwrap_or(false);
+    let is_custom_component =
+        leading_colon || path.len() > 1 || segment_starts_uppercase(&path[0]);
 
     // Parse attributes
     let attributes = parse_attributes(cursor)?;
@@ -87,6 +95,7 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
         cursor.consume_punct('>');
         if is_custom_component {
             return Ok(RsxNode::Component(RsxComponent {
+                leading_colon,
                 path,
                 props: attributes,
                 children: Vec::new(),
@@ -106,7 +115,7 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
     if !cursor.consume_punct('>') {
         return Err(format!(
             "Expected '>' or '/>' to close opening tag for '<{}>'",
-            path.join("::")
+            format_tag_path(leading_colon, &path)
         ));
     }
 
@@ -148,10 +157,10 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
     let mut children = Vec::new();
     loop {
         if cursor.is_eof() {
+            let formatted = format_tag_path(leading_colon, &path);
             return Err(format!(
                 "Unclosed tag '<{}>': reached end of input without finding '</{}>'",
-                path.join("::"),
-                path.join("::")
+                formatted, formatted
             ));
         }
 
@@ -160,6 +169,14 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
             let saved_pos = cursor.current_pos();
             cursor.consume_punct('<');
             cursor.consume_punct('/');
+
+            let close_leading_colon = if cursor.peek_punct(':') && cursor.peek_punct_at(1, ':') {
+                cursor.consume_punct(':');
+                cursor.consume_punct(':');
+                true
+            } else {
+                false
+            };
 
             let mut close_path = Vec::new();
             if let Some(id) = cursor.consume_ident() {
@@ -176,13 +193,13 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
             }
 
             if cursor.consume_punct('>') {
-                if close_path == path {
+                if close_leading_colon == leading_colon && close_path == path {
                     break;
                 } else {
                     return Err(format!(
                         "Mismatched closing tag: expected '</{}>', found '</{}>'",
-                        path.join("::"),
-                        close_path.join("::")
+                        format_tag_path(leading_colon, &path),
+                        format_tag_path(close_leading_colon, &close_path)
                     ));
                 }
             } else {
@@ -195,6 +212,7 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
 
     if is_custom_component {
         Ok(RsxNode::Component(RsxComponent {
+            leading_colon,
             path,
             props: attributes,
             children,
