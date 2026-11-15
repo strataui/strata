@@ -5,14 +5,34 @@ use super::*;
 pub fn app() -> StrataAppBuilder {
     StrataApp::builder()
 }
+/// Outcome returned by a periodic application frame callback.
+///
+/// Returning [`FrameOutcome::Dirty`] marks the runtime dirty so the root view
+/// function is re-invoked and the window is repainted. Returning
+/// [`FrameOutcome::Unchanged`] skips rebuild, layout, compile, and paint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FrameOutcome {
+    #[default]
+    Unchanged,
+    Dirty,
+}
+
+impl FrameOutcome {
+    /// Returns `true` when the callback modified application state and needs a redraw.
+    pub fn is_dirty(self) -> bool {
+        matches!(self, Self::Dirty)
+    }
+}
+
 /// Frame timing and metrics information passed to frame lifecycle callbacks.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct AppFrameInfo {
     pub frame_index: u64,
     pub viewport_width: f32,
     pub viewport_height: f32,
     pub dpr: f32,
     pub command_count: usize,
+    pub dt: std::time::Duration,
 }
 
 /// Low-level lifecycle callbacks.
@@ -84,6 +104,7 @@ impl StrataApp {
                 viewport_height: self.runtime.viewport_height,
                 dpr: self.runtime.dpr,
                 command_count: self.runtime.display_list.commands.len(),
+                dt: std::time::Duration::ZERO,
             };
             if let Some(ref mut on_frame) = self.hooks.on_frame {
                 on_frame(info, &mut self.runtime);
@@ -160,6 +181,7 @@ impl StrataApp {
                         viewport_height: runtime.viewport_height,
                         dpr: runtime.dpr,
                         command_count: runtime.display_list.commands.len(),
+                        dt: std::time::Duration::ZERO,
                     };
                     on_frame(info, runtime);
                 }

@@ -104,8 +104,7 @@ where
                     if runtime.drain_edit_commands() {
                         needs_rebuild = true;
                     }
-                    if !needs_rebuild {
-                        runtime.restyle_for_hover_paint();
+                    if !needs_rebuild && runtime.restyle_for_active_change() {
                         needs_redraw = true;
                     }
                 }
@@ -144,8 +143,7 @@ where
             } else if action.needs_redraw() {
                 needs_redraw = true;
             }
-            if was_mouse_down && !needs_rebuild {
-                runtime.restyle_for_hover_paint();
+            if was_mouse_down && !needs_rebuild && runtime.restyle_for_active_change() {
                 needs_redraw = true;
             }
         }
@@ -232,7 +230,7 @@ impl AppRuntime {
     /// - 50ms if a text input currently has active focus (to service responsive caret blinking).
     /// - 200ms if the runtime is completely idle (dropping CPU consumption to ~0%).
     pub fn compute_idle_sleep(&self, was_active: bool) -> std::time::Duration {
-        if was_active
+        let base = if was_active
             || self.has_active_animations()
             || self.active_smooth_scroll.is_some()
             || self.scrollbar_drag.is_some()
@@ -245,6 +243,11 @@ impl AppRuntime {
             std::time::Duration::from_millis(50)
         } else {
             std::time::Duration::from_millis(200)
+        };
+        if let Some(next_timer) = strata_js::web::time_until_next_timer() {
+            base.min(next_timer.max(std::time::Duration::from_millis(1)))
+        } else {
+            base
         }
     }
 }
@@ -280,6 +283,7 @@ where
                 viewport_height: runtime.viewport_height,
                 dpr: runtime.dpr,
                 command_count: runtime.display_list.commands.len(),
+                dt: std::time::Duration::ZERO,
             };
             on_frame(info, &mut runtime);
         }
@@ -383,6 +387,11 @@ where
         let anim_changed = runtime.poll_animations();
         let scroll_changed = runtime.poll_smooth_scroll();
         let caret_changed = runtime.poll_caret_blink();
+        let timers_fired = strata_js::web::tick_timers() > 0;
+        if timers_fired {
+            needs_rebuild = true;
+            needs_redraw = true;
+        }
         if anim_changed || scroll_changed || caret_changed {
             needs_redraw = true;
         }
@@ -431,6 +440,7 @@ where
                         viewport_height: runtime.viewport_height,
                         dpr: runtime.dpr,
                         command_count: runtime.display_list.commands.len(),
+                        dt: std::time::Duration::ZERO,
                     };
                     on_frame(info, &mut runtime);
                 }
@@ -439,8 +449,12 @@ where
 
         frames_presented += 1;
         if max_headless_frames.is_none() {
-            let is_active =
-                anim_changed || scroll_changed || caret_changed || needs_rebuild || needs_redraw;
+            let is_active = anim_changed
+                || scroll_changed
+                || caret_changed
+                || timers_fired
+                || needs_rebuild
+                || needs_redraw;
             std::thread::sleep(runtime.compute_idle_sleep(is_active));
         }
     }
