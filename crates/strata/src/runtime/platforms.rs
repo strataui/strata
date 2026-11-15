@@ -389,6 +389,7 @@ where
 
         if needs_rebuild {
             if runtime.sync_dynamic_text() {
+                runtime.mark_paint_dirty();
                 let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
                 let _ = window.present_surface(
                     &presenter.backing_buffer,
@@ -406,6 +407,11 @@ where
                 );
             }
         } else if needs_redraw || window.is_redraw_requested() {
+            // A per-frame draw hook edits the display list, so it forces a fresh compile.
+            let has_draw_hook = hooks.as_ref().is_some_and(|h| h.on_draw.is_some());
+            if needs_redraw || has_draw_hook {
+                runtime.mark_paint_dirty();
+            }
             if let Some(ref mut h) = hooks {
                 if let Some(ref mut on_draw) = h.on_draw {
                     on_draw(&mut runtime.display_list);
