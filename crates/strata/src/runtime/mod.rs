@@ -120,7 +120,7 @@ pub struct AppRuntime {
     /// Active MCP emulated cursor state (smooth interpolation, hotspot, fade timer).
     pub mcp_cursor: Option<strata_platform::McpCursorState>,
     /// System cursor theme loaded dynamically or from embedded fallback assets (Yaru on Linux).
-    pub cursor_theme: strata_platform::CursorTheme,
+    pub(crate) cursor_theme: std::sync::OnceLock<strata_platform::CursorTheme>,
     /// Accessibility tree bridge connecting Strata layout and reactive DOM with AccessKit and screen readers.
     pub a11y_bridge: strata_a11y::A11yBridge,
     /// Latest snapshot of the accessible hierarchy.
@@ -279,7 +279,7 @@ impl AppRuntime {
             layout_computations: 1,
             hover_paint_only: false,
             mcp_cursor: None,
-            cursor_theme: strata_platform::CursorTheme::load_active(),
+            cursor_theme: std::sync::OnceLock::new(),
             a11y_bridge: strata_a11y::A11yBridge::new(),
             a11y_tree: None,
             a11y_updates_count: 0,
@@ -504,6 +504,13 @@ impl AppRuntime {
         } else {
             false
         }
+    }
+
+    /// System cursor theme, loaded on first use. Reading cursor files from disk costs
+    /// several milliseconds and only the MCP cursor overlay needs it.
+    pub fn cursor_theme(&self) -> &strata_platform::CursorTheme {
+        self.cursor_theme
+            .get_or_init(strata_platform::CursorTheme::load_active)
     }
 
     /// Marks the compiled display list stale so the next dirty-gated compile rebuilds it.

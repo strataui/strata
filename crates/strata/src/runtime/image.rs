@@ -72,7 +72,7 @@ pub(crate) fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 impl AppRuntime {
     /// Captures a high-resolution PNG screenshot with the active MCP cursor composited.
     pub fn mcp_capture_screenshot_png(&mut self) -> Result<Vec<u8>, String> {
-        let overlay = self.mcp_cursor.as_ref().map(|c| (c, &self.cursor_theme));
+        let overlay = self.mcp_cursor.as_ref().map(|c| (c, self.cursor_theme()));
         strata_platform::render_to_png_bytes(
             &self.display_list,
             self.viewport_width as i32,

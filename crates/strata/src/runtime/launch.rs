@@ -386,7 +386,7 @@ where
         // Render MCP emulated cursor overlay if active and visible
         if let Some(ref mcp_cursor) = rt.mcp_cursor {
             if mcp_cursor.fade_opacity > 0.001 {
-                rt.cursor_theme.render_cairo(
+                rt.cursor_theme().render_cairo(
                     cr,
                     mcp_cursor.cursor_icon,
                     mcp_cursor.current_x,

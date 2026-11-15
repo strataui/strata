@@ -319,7 +319,7 @@ pub fn execute_mcp_command_core(
                 "frame_count": runtime.frame_count,
                 "cursor": cursor_info,
                 "active_focus": focus_info,
-                "cursor_theme": runtime.cursor_theme.name,
+                "cursor_theme": runtime.cursor_theme().name,
             });
 
             (Ok(info), false)
