@@ -579,6 +579,121 @@ impl Canvas3D {
     }
 }
 
+/// Conversion trait allowing `on_camera_change` on 3D viewports (`Canvas3D`, `SceneViewport`)
+/// to accept closures, `Rc<dyn Fn(&OrbitControls)>`, or `Option<Rc<dyn Fn(&OrbitControls)>>`.
+pub trait IntoCameraChangeProp {
+    fn into_camera_change_prop(
+        self,
+    ) -> Option<std::rc::Rc<dyn Fn(&crate::orbit_controls::OrbitControls)>>;
+}
+
+impl IntoCameraChangeProp for Option<std::rc::Rc<dyn Fn(&crate::orbit_controls::OrbitControls)>> {
+    fn into_camera_change_prop(
+        self,
+    ) -> Option<std::rc::Rc<dyn Fn(&crate::orbit_controls::OrbitControls)>> {
+        self
+    }
+}
+
+impl IntoCameraChangeProp for std::rc::Rc<dyn Fn(&crate::orbit_controls::OrbitControls)> {
+    fn into_camera_change_prop(
+        self,
+    ) -> Option<std::rc::Rc<dyn Fn(&crate::orbit_controls::OrbitControls)>> {
+        Some(self)
+    }
+}
+
+impl<F: Fn(&crate::orbit_controls::OrbitControls) + 'static> IntoCameraChangeProp for F {
+    fn into_camera_change_prop(
+        self,
+    ) -> Option<std::rc::Rc<dyn Fn(&crate::orbit_controls::OrbitControls)>> {
+        Some(std::rc::Rc::new(self))
+    }
+}
+
+/// Attaches built-in `OrbitControls` pointer drag (orbit/pan) and wheel (zoom) listeners
+/// to a 3D canvas attribute list, invoking `cb` whenever the camera state changes.
+pub fn attach_orbit_controls_listeners(
+    attrs: &mut Vec<Attribute>,
+    scene: Option<&Scene3D>,
+    width: Option<f32>,
+    height: Option<f32>,
+    cb: std::rc::Rc<dyn Fn(&crate::orbit_controls::OrbitControls)>,
+) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use strata_dom::{Event, EventType};
+
+    let mut initial_controls = match scene {
+        Some(s) => crate::orbit_controls::OrbitControls::from_camera(&s.camera),
+        None => crate::orbit_controls::OrbitControls::default(),
+    };
+    initial_controls.enable_damping = false;
+    let fov_deg = match scene.map(|s| &s.camera) {
+        Some(Camera3D::Perspective {
+            fov_horizontal_deg, ..
+        }) => *fov_horizontal_deg,
+        _ => 60.0,
+    };
+    let vw = width.unwrap_or(800.0).max(1.0);
+    let vh = height.unwrap_or(600.0).max(1.0);
+    let controls = Rc::new(RefCell::new(initial_controls));
+
+    let ctrl_down = Rc::clone(&controls);
+    attrs.push(Attribute::event_listener(
+        EventType::PointerDown,
+        move |ev: Event| {
+            let btn = ev.button.max(0) as u8;
+            ctrl_down
+                .borrow_mut()
+                .on_pointer_down(ev.client_x as f32, ev.client_y as f32, btn);
+        },
+    ));
+
+    let ctrl_move = Rc::clone(&controls);
+    let cb_move = Rc::clone(&cb);
+    attrs.push(Attribute::event_listener(
+        EventType::PointerMove,
+        move |ev: Event| {
+            let changed = {
+                let mut c = ctrl_move.borrow_mut();
+                let active = c.active_mode != crate::orbit_controls::OrbitInteractionMode::None;
+                if active {
+                    c.on_pointer_move(ev.client_x as f32, ev.client_y as f32, vw, vh, fov_deg);
+                }
+                active
+            };
+            if changed {
+                let c = ctrl_move.borrow();
+                cb_move(&c);
+            }
+        },
+    ));
+
+    let ctrl_up = Rc::clone(&controls);
+    attrs.push(Attribute::event_listener(
+        EventType::PointerUp,
+        move |_ev: Event| {
+            ctrl_up.borrow_mut().on_pointer_up();
+        },
+    ));
+
+    let ctrl_wheel = Rc::clone(&controls);
+    let cb_wheel = Rc::clone(&cb);
+    attrs.push(Attribute::event_listener(
+        EventType::Wheel,
+        move |ev: Event| {
+            ev.default_prevented.set(true);
+            {
+                let mut c = ctrl_wheel.borrow_mut();
+                c.on_wheel(ev.delta_y as f32);
+            }
+            let c = ctrl_wheel.borrow();
+            cb_wheel(&c);
+        },
+    ));
+}
+
 #[derive(Default)]
 pub struct Canvas3DBuilder {
     pub scene: Option<std::sync::Arc<Scene3D>>,
@@ -587,6 +702,8 @@ pub struct Canvas3DBuilder {
     pub id: Option<String>,
     pub width: Option<f32>,
     pub height: Option<f32>,
+    pub on_camera_change: Option<std::rc::Rc<dyn Fn(&crate::orbit_controls::OrbitControls)>>,
+    pub events: Vec<Attribute>,
     pub children: Option<Vec<NodeBlueprint>>,
 }
 
@@ -621,13 +738,59 @@ impl Canvas3DBuilder {
         self
     }
 
+    pub fn on_camera_change(mut self, cb: impl IntoCameraChangeProp) -> Self {
+        self.on_camera_change = cb.into_camera_change_prop();
+        self
+    }
+
+    fn push_event(
+        mut self,
+        ty: strata_dom::EventType,
+        handler: impl Fn(strata_dom::Event) + 'static,
+    ) -> Self {
+        self.events.push(Attribute::event_listener(ty, handler));
+        self
+    }
+
+    pub fn onmousedown(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.push_event(strata_dom::EventType::MouseDown, handler)
+    }
+
+    pub fn onmousemove(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.push_event(strata_dom::EventType::MouseMove, handler)
+    }
+
+    pub fn onmouseup(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.push_event(strata_dom::EventType::MouseUp, handler)
+    }
+
+    pub fn onwheel(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.push_event(strata_dom::EventType::Wheel, handler)
+    }
+
+    pub fn onpointerdown(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.push_event(strata_dom::EventType::PointerDown, handler)
+    }
+
+    pub fn onpointermove(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.push_event(strata_dom::EventType::PointerMove, handler)
+    }
+
+    pub fn onpointerup(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.push_event(strata_dom::EventType::PointerUp, handler)
+    }
+
+    pub fn onclick(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.push_event(strata_dom::EventType::Click, handler)
+    }
+
     pub fn children(mut self, children: Vec<NodeBlueprint>) -> Self {
         self.children = Some(children);
         self
     }
 
     pub fn build(self) -> View {
-        let mut attrs = Vec::with_capacity(4);
+        let mut attrs = Vec::with_capacity(4 + self.events.len());
         attrs.push(Attribute::property("data-strata-canvas3d", "true"));
         if let Some(id) = self.id {
             attrs.push(Attribute::property("id", id));
@@ -640,6 +803,16 @@ impl Canvas3DBuilder {
         }
         if let Some(style) = self.style {
             attrs.push(Attribute::property("style", style));
+        }
+        attrs.extend(self.events);
+        if let Some(cb) = self.on_camera_change {
+            attach_orbit_controls_listeners(
+                &mut attrs,
+                self.scene.as_deref(),
+                self.width,
+                self.height,
+                cb,
+            );
         }
         if let Some(scene) = self.scene {
             let payload: std::sync::Arc<dyn std::any::Any + Send + Sync> = scene;

@@ -353,3 +353,128 @@ fn test_scene_viewport_on_camera_change_pointer_and_wheel_interaction() {
         radius_after_zoom
     );
 }
+
+#[test]
+fn test_canvas3d_pointer_and_wheel_listeners_fire_and_request_rebuild() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use strata_dom::Event;
+    use strata_platform::PlatformEvent;
+
+    let down_count = Rc::new(Cell::new(0u32));
+    let move_count = Rc::new(Cell::new(0u32));
+    let up_count = Rc::new(Cell::new(0u32));
+    let wheel_delta = Rc::new(Cell::new(0.0f64));
+
+    let down_c = Rc::clone(&down_count);
+    let move_c = Rc::clone(&move_count);
+    let up_c = Rc::clone(&up_count);
+    let wheel_c = Rc::clone(&wheel_delta);
+
+    let scene = Scene3D::new();
+    let view = rsx! {
+        <Canvas3D
+            scene={scene}
+            width={600.0}
+            height={400.0}
+            onmousedown={move |_ev: Event| {
+                down_c.set(down_c.get() + 1);
+            }}
+            onmousemove={move |_ev: Event| {
+                move_c.set(move_c.get() + 1);
+            }}
+            onmouseup={move |_ev: Event| {
+                up_c.set(up_c.get() + 1);
+            }}
+            onwheel={move |ev: Event| {
+                wheel_c.set(wheel_c.get() + ev.delta_y);
+            }}
+        />
+    };
+
+    let mut runtime = AppRuntime::new(view, 600.0, 400.0, 1.0);
+    runtime.tick_frame();
+
+    assert!(runtime.step_event(&PlatformEvent::MouseDown {
+        x: 300.0,
+        y: 200.0,
+        button: strata_platform::MouseButton::Left,
+    }));
+    assert_eq!(down_count.get(), 1);
+
+    runtime.step_event(&PlatformEvent::MouseMove { x: 320.0, y: 210.0 });
+    assert!(move_count.get() >= 1);
+
+    runtime.step_event(&PlatformEvent::MouseUp {
+        x: 320.0,
+        y: 210.0,
+        button: strata_platform::MouseButton::Left,
+    });
+    assert_eq!(up_count.get(), 1);
+
+    let scroll_handled = runtime.step_event(&PlatformEvent::Scroll {
+        delta_x: 0.0,
+        delta_y: -3.5,
+        is_momentum: false,
+    });
+    assert!(
+        scroll_handled,
+        "PlatformEvent::Scroll over Canvas3D with onwheel listener must be handled even without a scrollbar"
+    );
+    assert!((wheel_delta.get() - (-3.5)).abs() < 1e-6);
+
+    let (wheel_handled, scroll_changed) =
+        runtime.dispatch_smooth_scroll_action(320.0, 210.0, 0.0, 2.0);
+    assert!(wheel_handled);
+    assert!(!scroll_changed);
+    assert!((wheel_delta.get() - (-1.5)).abs() < 1e-6);
+}
+
+#[test]
+fn test_canvas3d_on_camera_change_orbit_and_wheel() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use strata_platform::PlatformEvent;
+    use strata_render::orbit_controls::OrbitControls;
+
+    let mut scene = Scene3D::new();
+    scene.camera = Camera3D::Perspective {
+        fov_horizontal_deg: 60.0,
+        near: 0.1,
+        far: 1000.0,
+        position: [0.0, 0.0, 20.0],
+        target: [0.0, 0.0, 0.0],
+    };
+
+    let observed: Rc<RefCell<Vec<(f32, f32, f32)>>> = Rc::new(RefCell::new(Vec::new()));
+    let observed_cb = Rc::clone(&observed);
+
+    let view = rsx! {
+        <Canvas3D
+            scene={scene}
+            width={600.0}
+            height={400.0}
+            on_camera_change={move |ctrl: &OrbitControls| {
+                observed_cb.borrow_mut().push((ctrl.theta, ctrl.phi, ctrl.radius));
+            }}
+        />
+    };
+
+    let mut runtime = AppRuntime::new(view, 600.0, 400.0, 1.0);
+    runtime.tick_frame();
+
+    runtime.dispatch_pointer_down(300.0, 200.0);
+    runtime.dispatch_pointer_move(360.0, 230.0);
+    runtime.dispatch_pointer_up(360.0, 230.0);
+
+    assert_eq!(observed.borrow().len(), 1);
+    assert!(observed.borrow()[0].0.abs() > 0.05);
+
+    assert!(runtime.step_event(&PlatformEvent::Scroll {
+        delta_x: 0.0,
+        delta_y: 5.0,
+        is_momentum: false,
+    }));
+    assert_eq!(observed.borrow().len(), 2);
+    assert!((observed.borrow()[1].2 - 20.0).abs() > 0.1);
+}

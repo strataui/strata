@@ -702,19 +702,26 @@ impl AppRuntime {
     /// Dispatches a smooth kinetic scroll impulse to the innermost scrollable container under (px, py).
     /// Accumulates velocity for rapid consecutive wheel events and initiates a critically damped
     /// kinetic transition curve with Chromium Blink parity.
-    pub fn dispatch_smooth_scroll(&mut self, px: f32, py: f32, delta_x: f32, delta_y: f32) -> bool {
+    /// Dispatches a smooth scroll or DOM wheel event, returning `(wheel_handled, scroll_changed)`.
+    pub fn dispatch_smooth_scroll_action(
+        &mut self,
+        px: f32,
+        py: f32,
+        delta_x: f32,
+        delta_y: f32,
+    ) -> (bool, bool) {
         self.last_mouse_pos = (px, py);
         if delta_y.abs() < 0.01 && delta_x.abs() < 0.01 {
-            return false;
+            return (false, false);
         }
 
         let (wheel_handled, default_prevented) =
             self.dispatch_dom_wheel_event(px, py, delta_x, delta_y);
         if default_prevented {
-            return true;
+            return (wheel_handled, false);
         }
         if delta_y.abs() < 0.01 {
-            return wheel_handled;
+            return (wheel_handled, false);
         }
 
         let mut matching_bars: Vec<ActiveScrollbar> = self
@@ -768,7 +775,7 @@ impl AppRuntime {
             .or_else(|| matching_bars.iter().find(|b| b.max_scroll_y > 0.0).cloned());
 
         let Some(bar) = target_bar else {
-            return false;
+            return (wheel_handled, false);
         };
 
         let now = std::time::Instant::now();
@@ -819,7 +826,7 @@ impl AppRuntime {
                 tracker.max_scroll_y = bar.max_scroll_y;
                 tracker.available_travel = bar.available_travel;
                 tracker.bounds_y = bar.bounds.y;
-                return true;
+                return (wheel_handled, true);
             }
         }
 
@@ -840,7 +847,15 @@ impl AppRuntime {
             omega: 18.0,
         });
 
-        true
+        (wheel_handled, true)
+    }
+
+    /// Dispatches a smooth kinetic scroll impulse to the innermost scrollable container under (px, py).
+    /// Returns `true` if either a DOM `wheel` listener handled the event or a scroll animation updated.
+    pub fn dispatch_smooth_scroll(&mut self, px: f32, py: f32, delta_x: f32, delta_y: f32) -> bool {
+        let (wheel_handled, scroll_changed) =
+            self.dispatch_smooth_scroll_action(px, py, delta_x, delta_y);
+        wheel_handled || scroll_changed
     }
 
     /// Polls and updates active kinetic smooth scroll animation at a specific timestamp.

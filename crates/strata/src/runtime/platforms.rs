@@ -49,7 +49,12 @@ where
             delta_x, delta_y, ..
         } => {
             let (px, py) = runtime.last_mouse_pos;
-            if runtime.dispatch_smooth_scroll(px, py, *delta_x, *delta_y) {
+            let (wheel_handled, scroll_changed) =
+                runtime.dispatch_smooth_scroll_action(px, py, *delta_x, *delta_y);
+            if wheel_handled {
+                needs_rebuild = true;
+            }
+            if scroll_changed {
                 needs_redraw = true;
             }
         }
