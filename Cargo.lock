@@ -3255,6 +3255,8 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "strata-ui-platform",
+ "strata-ui-store",
  "strata_a11y",
  "strata_agent_ui",
  "strata_aria",
@@ -3276,14 +3278,12 @@ dependencies = [
  "strata_mobile_test",
  "strata_motion",
  "strata_parallel",
- "strata_platform",
  "strata_primitives",
  "strata_query",
  "strata_render",
  "strata_router",
  "strata_sim",
  "strata_storage",
- "strata_store",
  "strata_style",
  "strata_table",
  "strata_toast",
@@ -3293,6 +3293,35 @@ dependencies = [
  "strata_virtual",
  "strata_web_api",
  "strata_web_reader",
+]
+
+[[package]]
+name = "strata-ui-platform"
+version = "0.1.0"
+dependencies = [
+ "cairo-rs",
+ "gtk",
+ "libc",
+ "pango",
+ "pangocairo",
+ "strata-ui-platform",
+ "strata_layout",
+ "strata_primitives",
+ "strata_render",
+ "strata_style",
+ "windows-sys 0.52.0",
+ "x11",
+]
+
+[[package]]
+name = "strata-ui-store"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "strata_dom",
+ "strata_macro",
+ "strata_storage",
 ]
 
 [[package]]
@@ -3335,9 +3364,9 @@ name = "strata_benchmark"
 version = "0.1.0"
 dependencies = [
  "strata-ui",
+ "strata-ui-platform",
  "strata_dom",
  "strata_layout",
- "strata_platform",
  "strata_primitives",
  "strata_render",
  "strata_style",
@@ -3349,11 +3378,11 @@ name = "strata_browser"
 version = "0.1.0"
 dependencies = [
  "strata-ui",
+ "strata-ui-platform",
  "strata_dom",
  "strata_icons",
  "strata_layout",
  "strata_macro",
- "strata_platform",
  "strata_render",
  "strata_style",
  "strata_ui",
@@ -3376,8 +3405,8 @@ dependencies = [
 name = "strata_chromium_surface"
 version = "0.1.0"
 dependencies = [
+ "strata-ui-platform",
  "strata_dom",
- "strata_platform",
  "strata_primitives",
  "strata_render",
 ]
@@ -3411,9 +3440,9 @@ dependencies = [
 name = "strata_devtools"
 version = "0.1.0"
 dependencies = [
+ "strata-ui-platform",
  "strata_dom",
  "strata_layout",
- "strata_platform",
  "strata_primitives",
  "strata_render",
  "strata_style",
@@ -3524,8 +3553,8 @@ dependencies = [
  "serde",
  "serde_json",
  "strata-ui",
+ "strata-ui-platform",
  "strata_dom",
- "strata_platform",
  "strata_primitives",
 ]
 
@@ -3533,8 +3562,8 @@ dependencies = [
 name = "strata_mobile_test"
 version = "0.1.0"
 dependencies = [
+ "strata-ui-platform",
  "strata_device",
- "strata_platform",
  "strata_primitives",
 ]
 
@@ -3566,33 +3595,15 @@ dependencies = [
  "gtk",
  "image",
  "strata-ui",
+ "strata-ui-platform",
  "strata_dom",
  "strata_layout",
  "strata_mobile_test",
- "strata_platform",
  "strata_render",
  "strata_style",
  "strata_web_reader",
  "tauri",
  "tauri-build",
-]
-
-[[package]]
-name = "strata_platform"
-version = "0.1.0"
-dependencies = [
- "cairo-rs",
- "gtk",
- "libc",
- "pango",
- "pangocairo",
- "strata_layout",
- "strata_platform",
- "strata_primitives",
- "strata_render",
- "strata_style",
- "windows-sys 0.52.0",
- "x11",
 ]
 
 [[package]]
@@ -3643,12 +3654,12 @@ name = "strata_sim"
 version = "0.1.0"
 dependencies = [
  "strata-ui",
+ "strata-ui-platform",
  "strata_device",
  "strata_dom",
  "strata_icons",
  "strata_layout",
  "strata_macro",
- "strata_platform",
  "strata_primitives",
  "strata_render",
  "strata_style",
@@ -3662,17 +3673,6 @@ version = "0.1.0"
 dependencies = [
  "ring",
  "strata_vfs",
-]
-
-[[package]]
-name = "strata_store"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "strata_dom",
- "strata_macro",
- "strata_storage",
 ]
 
 [[package]]
@@ -3704,9 +3704,9 @@ name = "strata_tui"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "strata-ui-platform",
  "strata_dom",
  "strata_layout",
- "strata_platform",
  "strata_primitives",
  "strata_style",
  "windows-sys 0.52.0",

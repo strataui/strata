@@ -1,5 +1,5 @@
 [package]
-name = "strata_platform"
+name = "strata-ui-platform"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -8,6 +8,10 @@ description = "Native Hardware Abstraction Layer for Android, iOS, macOS, Window
 repository.workspace = true
 homepage.workspace = true
 documentation.workspace = true
+
+[lib]
+name = "strata_platform"
+path = "src/lib.rs"
 
 [dependencies]
 strata_render = { workspace = true }
@@ -22,7 +26,7 @@ xlib = ["dep:x11"]
 test-internals = []
 
 [dev-dependencies]
-strata_platform = { path = ".", features = ["test-internals"] }
+strata_platform = { package = "strata-ui-platform", path = ".", features = ["test-internals"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11 = { version = "2.21", features = ["xlib"], optional = true }

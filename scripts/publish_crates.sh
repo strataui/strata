@@ -31,8 +31,9 @@ for p in sorted(glob.glob(f"{base}/crates/**/Cargo.toml", recursive=True)):
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
+            repo = (data.get("crate") or {}).get("repository") or ""
             versions = [v["num"] for v in data.get("versions", [])]
-            if ver in versions:
+            if "strataui" in repo and ver in versions:
                 print(name)
     except urllib.error.HTTPError as e:
         if e.code != 404:
