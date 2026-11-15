@@ -561,6 +561,12 @@ impl AppRuntime {
                     && Self::apply_canvas3d_sizing_and_check_leaf(attributes, children, &mut style)
                 {
                     let mut canvas_node = LayoutNode::new(*style).with_entity_id(entity_id);
+                    if let Some(scene_arc) =
+                        strata_render::scene3d::extract_scene3d_arc_from_blueprint(blueprint)
+                    {
+                        canvas_node.scene_3d =
+                            Some(strata_layout::ViewportSceneHandle(scene_arc));
+                    }
                     Self::apply_portal_and_anchor_metadata(&mut canvas_node, tag, attributes);
                     return canvas_node;
                 }
@@ -589,6 +595,13 @@ impl AppRuntime {
 
                 let mut node =
                     LayoutNode::with_children(*style, child_nodes).with_entity_id(entity_id);
+                for attr in attributes {
+                    if let strata_dom::Attribute::ScenePayload(payload) = attr {
+                        node.scene_3d =
+                            Some(strata_layout::ViewportSceneHandle(std::sync::Arc::clone(payload)));
+                        break;
+                    }
+                }
                 Self::apply_portal_and_anchor_metadata(&mut node, tag, attributes);
                 node
             }
@@ -1725,7 +1738,8 @@ impl AppRuntime {
             }
         }
         attributes.iter().any(|a| {
-            matches!(a, strata_dom::Attribute::Property { key, value } if key == "data-strata-canvas3d" && value == "true")
+            matches!(a, strata_dom::Attribute::ScenePayload(_))
+                || matches!(a, strata_dom::Attribute::Property { key, value } if key == "data-strata-canvas3d" && value == "true")
         }) || children.iter().any(|c| match c {
             NodeBlueprint::Element {
                 tag: Tag::Custom(name),

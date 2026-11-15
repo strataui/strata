@@ -500,7 +500,6 @@ impl AppRuntime {
         );
         self.render_scrollbars();
         self.render_active_input_caret();
-        self.render_canvas_3d_scenes();
         self.gpu_path_pipeline
             .resize(self.viewport_width, self.viewport_height);
         self.gpu_path_pipeline

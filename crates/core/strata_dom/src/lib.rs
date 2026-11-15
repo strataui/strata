@@ -135,6 +135,8 @@ pub enum Attribute {
         handler: Rc<dyn Fn(Event)>,
     },
     DirectStyle(Rc<dyn std::any::Any>),
+    /// Thread-safe type-erased 3D scene handle (e.g. `Arc<strata_render::Scene3D>`) attached to a viewport element.
+    ScenePayload(std::sync::Arc<dyn std::any::Any + Send + Sync>),
     Entity(EntityId),
 }
 
@@ -148,6 +150,14 @@ impl Attribute {
 
     pub fn direct_style<T: 'static>(style: T) -> Self {
         Self::DirectStyle(Rc::new(style))
+    }
+
+    pub fn scene_payload<T: Send + Sync + 'static>(payload: T) -> Self {
+        Self::ScenePayload(std::sync::Arc::new(payload))
+    }
+
+    pub fn scene_payload_arc(payload: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> Self {
+        Self::ScenePayload(payload)
     }
 
     pub fn entity(id: EntityId) -> Self {
@@ -191,6 +201,10 @@ impl std::fmt::Debug for Attribute {
             Self::DirectStyle(_) => f
                 .debug_tuple("DirectStyle")
                 .field(&"<typed_style>")
+                .finish(),
+            Self::ScenePayload(_) => f
+                .debug_tuple("ScenePayload")
+                .field(&"<scene_3d>")
                 .finish(),
             Self::Entity(id) => f.debug_tuple("Entity").field(id).finish(),
         }

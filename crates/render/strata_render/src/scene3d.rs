@@ -370,7 +370,7 @@ impl CloudShell3D {
 
 /// Top-Level 3D Scene representation embedded in a Strata Viewport.
 ///
-/// The background, celestial, cloud, and overlay state are private so adding
+/// The background, celestial, cloud, overlay, and texture store state are private so adding
 /// them does not break struct literals written by existing callers. Use the
 /// `with_*` builders; the accessors below read them back.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -384,6 +384,8 @@ pub struct Scene3D {
     overlay: Option<Overlay3D>,
     /// Camera up hint in world space. `None` uses the renderer's fallback.
     camera_up: Option<[f64; 3]>,
+    /// Optional shared texture registry resolved automatically by software, Cairo, and GPU viewport rasterizers.
+    textures: Option<std::sync::Arc<crate::texture3d::TextureStore>>,
 }
 
 impl Scene3D {
@@ -425,6 +427,40 @@ impl Scene3D {
 
     pub fn overlay(&self) -> Option<&Overlay3D> {
         self.overlay.as_ref()
+    }
+
+    /// Returns a mutable reference to the scene's 3D overlay pass, initializing an empty
+    /// [`Overlay3D`] if none is attached yet.
+    pub fn overlay_mut(&mut self) -> &mut Overlay3D {
+        self.overlay.get_or_insert_with(Overlay3D::new)
+    }
+
+    /// Attaches a shared [`crate::texture3d::TextureStore`] carried with the scene through
+    /// `DrawCommand::DrawViewport3D` into live window and offscreen rasterizers.
+    pub fn with_textures(
+        mut self,
+        textures: std::sync::Arc<crate::texture3d::TextureStore>,
+    ) -> Self {
+        self.textures = Some(textures);
+        self
+    }
+
+    /// Sets or clears the shared [`crate::texture3d::TextureStore`] attached to this scene.
+    pub fn set_textures(
+        &mut self,
+        textures: Option<std::sync::Arc<crate::texture3d::TextureStore>>,
+    ) {
+        self.textures = textures;
+    }
+
+    /// Borrows the shared [`crate::texture3d::TextureStore`] handle attached to this scene, if any.
+    pub fn textures(&self) -> Option<&std::sync::Arc<crate::texture3d::TextureStore>> {
+        self.textures.as_ref()
+    }
+
+    /// Borrows the underlying [`crate::texture3d::TextureStore`] attached to this scene, if any.
+    pub fn textures_deref(&self) -> Option<&crate::texture3d::TextureStore> {
+        self.textures.as_deref()
     }
 
     /// Sets the camera's up direction. A downward-looking camera has no unique
@@ -474,21 +510,148 @@ pub fn overlay_text_rasterizer() -> Option<TextRasterizer> {
 }
 
 // ---------------------------------------------------------------------------
-// Declarative 3D RSX Viewport Components
+// Declarative & Programmatic 3D RSX Viewport Components
 // ---------------------------------------------------------------------------
 
 use strata_dom::{Attribute, NodeBlueprint, Tag, View};
 use strata_macro::component;
 
-#[component]
+/// Conversion trait allowing RSX `<Canvas3D scene={...}>` and `<SceneViewport scene={...}>`
+/// props to accept owned [`Scene3D`], `Option<Scene3D>`, or zero-copy `Arc<Scene3D>` handles.
+pub trait IntoScene3DProp {
+    fn into_scene3d_prop(self) -> Option<std::sync::Arc<Scene3D>>;
+}
+
+impl IntoScene3DProp for Scene3D {
+    fn into_scene3d_prop(self) -> Option<std::sync::Arc<Scene3D>> {
+        Some(std::sync::Arc::new(self))
+    }
+}
+
+impl IntoScene3DProp for Option<Scene3D> {
+    fn into_scene3d_prop(self) -> Option<std::sync::Arc<Scene3D>> {
+        self.map(std::sync::Arc::new)
+    }
+}
+
+impl IntoScene3DProp for std::sync::Arc<Scene3D> {
+    fn into_scene3d_prop(self) -> Option<std::sync::Arc<Scene3D>> {
+        Some(self)
+    }
+}
+
+impl IntoScene3DProp for &std::sync::Arc<Scene3D> {
+    fn into_scene3d_prop(self) -> Option<std::sync::Arc<Scene3D>> {
+        Some(std::sync::Arc::clone(self))
+    }
+}
+
+impl IntoScene3DProp for Option<std::sync::Arc<Scene3D>> {
+    fn into_scene3d_prop(self) -> Option<std::sync::Arc<Scene3D>> {
+        self
+    }
+}
+
+impl IntoScene3DProp for Option<&std::sync::Arc<Scene3D>> {
+    fn into_scene3d_prop(self) -> Option<std::sync::Arc<Scene3D>> {
+        self.map(std::sync::Arc::clone)
+    }
+}
+
+#[allow(non_snake_case)]
 pub fn Canvas3D(class: Option<&'static str>, children: Option<Vec<NodeBlueprint>>) -> View {
-    let classes: strata_dom::ClassList = class.map(strata_dom::ClassList::from).unwrap_or_default();
-    View::new(NodeBlueprint::element(
-        Tag::Canvas,
-        classes,
-        vec![Attribute::property("data-strata-canvas3d", "true")],
-        children.unwrap_or_default(),
-    ))
+    let mut builder = Canvas3D::builder();
+    if let Some(c) = class {
+        builder = builder.class(c);
+    }
+    if let Some(ch) = children {
+        builder = builder.children(ch);
+    }
+    builder.build()
+}
+
+#[allow(non_snake_case)]
+pub struct Canvas3D {}
+
+impl Canvas3D {
+    pub fn builder() -> Canvas3DBuilder {
+        Canvas3DBuilder::default()
+    }
+}
+
+#[derive(Default)]
+pub struct Canvas3DBuilder {
+    pub scene: Option<std::sync::Arc<Scene3D>>,
+    pub class: Option<strata_dom::ClassList>,
+    pub style: Option<String>,
+    pub id: Option<String>,
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+    pub children: Option<Vec<NodeBlueprint>>,
+}
+
+impl Canvas3DBuilder {
+    pub fn scene(mut self, scene: impl IntoScene3DProp) -> Self {
+        self.scene = scene.into_scene3d_prop();
+        self
+    }
+
+    pub fn class(mut self, class: impl Into<strata_dom::ClassList>) -> Self {
+        self.class = Some(class.into());
+        self
+    }
+
+    pub fn style(mut self, style: impl Into<String>) -> Self {
+        self.style = Some(style.into());
+        self
+    }
+
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn width(mut self, width: impl Into<Option<f32>>) -> Self {
+        self.width = width.into();
+        self
+    }
+
+    pub fn height(mut self, height: impl Into<Option<f32>>) -> Self {
+        self.height = height.into();
+        self
+    }
+
+    pub fn children(mut self, children: Vec<NodeBlueprint>) -> Self {
+        self.children = Some(children);
+        self
+    }
+
+    pub fn build(self) -> View {
+        let mut attrs = Vec::with_capacity(4);
+        attrs.push(Attribute::property("data-strata-canvas3d", "true"));
+        if let Some(id) = self.id {
+            attrs.push(Attribute::property("id", id));
+        }
+        if let Some(w) = self.width {
+            attrs.push(Attribute::property("width", w.to_string()));
+        }
+        if let Some(h) = self.height {
+            attrs.push(Attribute::property("height", h.to_string()));
+        }
+        if let Some(style) = self.style {
+            attrs.push(Attribute::property("style", style));
+        }
+        if let Some(scene) = self.scene {
+            let payload: std::sync::Arc<dyn std::any::Any + Send + Sync> = scene;
+            attrs.push(Attribute::scene_payload_arc(payload));
+        }
+        View::new(NodeBlueprint::element(
+            Tag::Canvas,
+            self.class.unwrap_or_default(),
+            attrs,
+            self.children.unwrap_or_default(),
+        ))
+    }
 }
 
 #[component]
@@ -776,14 +939,71 @@ fn parse_3d_vec3(s: &str) -> Option<[f32; 3]> {
     Some([x, y, z])
 }
 
-/// Compiles a declarative `<Canvas3D>` blueprint subtree into a populated [`Scene3D`] instance.
-pub fn compile_scene3d_from_blueprint(canvas_node: &NodeBlueprint) -> Scene3D {
-    let mut scene = Scene3D::new();
-
-    let children = match canvas_node {
-        NodeBlueprint::Element { children, .. } => children,
-        _ => return scene,
+/// Extracts an `Arc<Scene3D>` from a `<Canvas3D>` or viewport [`NodeBlueprint`]:
+/// returns a zero-copy `Arc::clone` when an explicit `Attribute::ScenePayload` is attached
+/// with no declarative child overrides, or compiles declarative children when present.
+pub fn extract_scene3d_arc_from_blueprint(
+    canvas_node: &NodeBlueprint,
+) -> Option<std::sync::Arc<Scene3D>> {
+    let NodeBlueprint::Element {
+        attributes,
+        children,
+        ..
+    } = canvas_node
+    else {
+        return None;
     };
+
+    let mut payload_scene: Option<std::sync::Arc<Scene3D>> = None;
+    for attr in attributes {
+        if let strata_dom::Attribute::ScenePayload(any) = attr {
+            if let Ok(arc_scene) = any.clone().downcast::<Scene3D>() {
+                payload_scene = Some(arc_scene);
+                break;
+            }
+            if let Some(nested_arc) = any.downcast_ref::<std::sync::Arc<Scene3D>>() {
+                payload_scene = Some(std::sync::Arc::clone(nested_arc));
+                break;
+            }
+        }
+    }
+
+    if let Some(arc_scene) = payload_scene {
+        if children.is_empty() {
+            return Some(arc_scene);
+        }
+        return Some(std::sync::Arc::new(compile_scene3d_from_blueprint(
+            canvas_node,
+        )));
+    }
+
+    Some(std::sync::Arc::new(compile_scene3d_from_blueprint(
+        canvas_node,
+    )))
+}
+
+/// Compiles a `<Canvas3D>` blueprint subtree (including any attached programmatic `ScenePayload`)
+/// into a populated [`Scene3D`] instance.
+pub fn compile_scene3d_from_blueprint(canvas_node: &NodeBlueprint) -> Scene3D {
+    let (attributes, children) = match canvas_node {
+        NodeBlueprint::Element {
+            attributes,
+            children,
+            ..
+        } => (attributes, children),
+        _ => return Scene3D::new(),
+    };
+
+    let mut scene = attributes
+        .iter()
+        .find_map(|attr| match attr {
+            strata_dom::Attribute::ScenePayload(any) => any
+                .downcast_ref::<Scene3D>()
+                .cloned()
+                .or_else(|| any.downcast_ref::<std::sync::Arc<Scene3D>>().map(|a| (**a).clone())),
+            _ => None,
+        })
+        .unwrap_or_default();
 
     for child in children {
         if let NodeBlueprint::Element { tag, attributes, children: mesh_children, .. } = child {

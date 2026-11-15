@@ -161,7 +161,7 @@ pub struct Texture {
 /// Ids are stable for the lifetime of the store and are never reused, so a
 /// handle held by a mesh cannot accidentally resolve to a different image
 /// after an eviction.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TextureStore {
     textures: HashMap<TextureId, Texture>,
     next_id: u32,

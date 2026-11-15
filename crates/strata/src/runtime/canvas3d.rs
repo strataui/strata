@@ -3,8 +3,16 @@
 use super::*;
 
 impl AppRuntime {
-    /// Extracts declarative 3D canvas viewports from the blueprint and layout hierarchies and emits DrawViewport3D commands.
+    /// Extracts declarative or programmatic 3D canvas viewports when not already emitted by [`Compositor`].
     pub fn render_canvas_3d_scenes(&mut self) {
+        if self.display_list.commands.iter().any(|cmd| {
+            matches!(
+                cmd,
+                strata_render::compositor::DrawCommand::DrawViewport3D { .. }
+            )
+        }) {
+            return;
+        }
         Self::collect_canvas_3d_recursive(
             &self.root_blueprint,
             &self.layout_root,
@@ -24,15 +32,18 @@ impl AppRuntime {
                 children,
                 ..
             } => {
-                let is_3d_canvas = matches!(tag, Tag::Canvas | Tag::Custom("Canvas3D"))
-                    && (attributes.iter().any(|a| {
-                        matches!(a, strata_dom::Attribute::Property { key, value } if key == "data-strata-canvas3d" && value == "true")
-                    }) || children.iter().any(|c| match c {
-                        NodeBlueprint::Element {
-                            tag: Tag::Custom(name),
-                            ..
-                        } => {
-                            matches!(
+                let has_scene_payload = attributes
+                    .iter()
+                    .any(|a| matches!(a, strata_dom::Attribute::ScenePayload(_)));
+                let is_3d_canvas = has_scene_payload
+                    || (matches!(tag, Tag::Canvas | Tag::Custom("Canvas3D"))
+                        && (attributes.iter().any(|a| {
+                            matches!(a, strata_dom::Attribute::Property { key, value } if key == "data-strata-canvas3d" && value == "true")
+                        }) || children.iter().any(|c| match c {
+                            NodeBlueprint::Element {
+                                tag: Tag::Custom(name),
+                                ..
+                            } => matches!(
                                 *name,
                                 "PerspectiveCamera"
                                     | "OrthographicCamera"
@@ -46,10 +57,9 @@ impl AppRuntime {
                                     | "CylinderGeometry"
                                     | "StandardMaterial"
                                     | "ShaderMaterial"
-                            )
-                        }
-                        _ => false,
-                    }));
+                            ),
+                            _ => false,
+                        })));
 
                 if is_3d_canvas {
                     let scene = strata_render::scene3d::compile_scene3d_from_blueprint(blueprint);
@@ -64,7 +74,9 @@ impl AppRuntime {
                         bounds,
                         scene,
                     });
-                    return;
+                    if matches!(tag, Tag::Canvas | Tag::Custom("Canvas3D")) {
+                        return;
+                    }
                 }
 
                 let mut flat_children = Vec::new();

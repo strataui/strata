@@ -364,7 +364,8 @@ impl Gpu3DPipeline {
         }
     }
 
-    /// Renders a Scene3D directly onto the hardware GPU device target.
+    /// Renders a Scene3D directly onto the hardware GPU device target, resolving any
+    /// [`crate::texture3d::TextureStore`] attached to `scene`.
     pub fn render_scene(
         &mut self,
         device: &mut GpuDevice,
@@ -372,6 +373,19 @@ impl Gpu3DPipeline {
         viewport: Rect,
         clip: Option<Rect>,
     ) {
+        self.render_scene_with_textures(device, scene, viewport, clip, scene.textures_deref());
+    }
+
+    /// Renders a Scene3D onto the hardware GPU device target using `textures` (or `scene.textures_deref()`).
+    pub fn render_scene_with_textures(
+        &mut self,
+        device: &mut GpuDevice,
+        scene: &Scene3D,
+        viewport: Rect,
+        clip: Option<Rect>,
+        textures: Option<&crate::texture3d::TextureStore>,
+    ) {
+        let eff_textures = textures.or_else(|| scene.textures_deref());
         let mut encoder = device.create_command_encoder();
 
         let pass_desc = GpuRenderPassDescriptor {
@@ -387,6 +401,10 @@ impl Gpu3DPipeline {
         // Upload uniforms
         let mut uniforms = Gpu3DUniforms::default();
         let aspect = viewport.width / viewport.height.max(1.0);
+        let up_vec = scene
+            .camera_up()
+            .map(|u| Vec3::new(u[0] as f32, u[1] as f32, u[2] as f32))
+            .unwrap_or(Vec3::UP);
         let (proj_mat, view_mat, cam_pos) = match &scene.camera {
             Camera3D::Perspective {
                 fov_horizontal_deg,
@@ -400,7 +418,7 @@ impl Gpu3DPipeline {
                 let p = Mat4::perspective(fov_y, aspect, *near, *far);
                 let eye = Vec3::new(position[0], position[1], position[2]);
                 let tgt = Vec3::new(target[0], target[1], target[2]);
-                let v = Mat4::look_at(eye, tgt, Vec3::UP);
+                let v = Mat4::look_at(eye, tgt, up_vec);
                 (p, v, *position)
             }
             Camera3D::Orthographic {
@@ -416,7 +434,7 @@ impl Gpu3DPipeline {
                 let p = Mat4::orthographic(*left, *right, *bottom, *top, *near, *far);
                 let eye = Vec3::new(position[0], position[1], position[2]);
                 let tgt = Vec3::new(target[0], target[1], target[2]);
-                let v = Mat4::look_at(eye, tgt, Vec3::UP);
+                let v = Mat4::look_at(eye, tgt, up_vec);
                 (p, v, *position)
             }
         };
@@ -430,21 +448,18 @@ impl Gpu3DPipeline {
             match light {
                 Light3D::Ambient { color, intensity } => {
                     let (r, g, b, _) = color.to_f32();
-                    uniforms.ambient_color = [
-                        r * intensity,
-                        g * intensity,
-                        b * intensity,
-                    ];
+                    uniforms.ambient_color = [r * intensity, g * intensity, b * intensity];
                 }
-                Light3D::Directional { position, color, intensity, .. } => {
+                Light3D::Directional {
+                    position,
+                    color,
+                    intensity,
+                    ..
+                } => {
                     let dir = Vec3::new(position[0], position[1], position[2]).normalize();
                     uniforms.dir_light_dir = [dir.x, dir.y, dir.z];
                     let (r, g, b, _) = color.to_f32();
-                    uniforms.dir_light_color = [
-                        r * intensity,
-                        g * intensity,
-                        b * intensity,
-                    ];
+                    uniforms.dir_light_color = [r * intensity, g * intensity, b * intensity];
                 }
                 _ => {}
             }
@@ -473,27 +488,59 @@ impl Gpu3DPipeline {
             uniforms.model_matrix = mat4_to_cols_2d(&model_mat);
             uniforms.normal_matrix = mat4_to_cols_2d(&normal_mat);
 
+            let mesh_index_count: usize = match &mesh.geometry {
+                crate::scene3d::Geometry3D::Custom { indices, .. }
+                | crate::scene3d::Geometry3D::CustomTextured { indices, .. } => indices.len(),
+                _ => 36,
+            };
+
             match &mesh.material {
-                Material3D::Standard { color, roughness, metalness, .. } => {
+                Material3D::Standard {
+                    color,
+                    roughness,
+                    metalness,
+                    ..
+                } => {
                     let (r, g, b, a) = color.to_f32();
                     uniforms.material_color = [r, g, b, a];
                     uniforms.roughness = *roughness;
                     uniforms.metalness = *metalness;
+                    self.uniform_buffer.write_bytes(0, uniforms.as_bytes());
+                    encoder.draw_indexed(mesh_index_count.max(3), 1);
                 }
                 Material3D::Basic { color } => {
                     let (r, g, b, a) = color.to_f32();
                     uniforms.material_color = [r, g, b, a];
                     uniforms.roughness = 1.0;
                     uniforms.metalness = 0.0;
+                    self.uniform_buffer.write_bytes(0, uniforms.as_bytes());
+                    encoder.draw_indexed(mesh_index_count.max(3), 1);
                 }
-                _ => {}
+                Material3D::Textured(tex_mat) => {
+                    uniforms.material_color = sample_textured_material_color(tex_mat, eff_textures);
+                    uniforms.roughness = 0.9;
+                    uniforms.metalness = 0.0;
+                    self.uniform_buffer.write_bytes(0, uniforms.as_bytes());
+                    encoder.draw_indexed(mesh_index_count.max(3), 1);
+                }
+                Material3D::TexturedBatch(batch) => {
+                    uniforms.roughness = 0.9;
+                    uniforms.metalness = 0.0;
+                    for draw in &batch.draws {
+                        if draw.index_count == 0 {
+                            continue;
+                        }
+                        uniforms.material_color =
+                            sample_textured_material_color(&draw.material, eff_textures);
+                        self.uniform_buffer.write_bytes(0, uniforms.as_bytes());
+                        encoder.draw_indexed(draw.index_count as usize, 1);
+                    }
+                }
+                _ => {
+                    self.uniform_buffer.write_bytes(0, uniforms.as_bytes());
+                    encoder.draw_indexed(mesh_index_count.max(3), 1);
+                }
             }
-
-            // Upload uniforms into GPU buffer for this mesh draw
-            self.uniform_buffer.write_bytes(0, uniforms.as_bytes());
-
-            // Record draw call for the mesh geometry
-            encoder.draw_indexed(36, 1);
         }
 
         encoder.end_render_pass();
@@ -552,4 +599,25 @@ impl Gpu3DPipeline {
         encoder.end_render_pass();
         device.submit(encoder);
     }
+}
+
+fn sample_textured_material_color(
+    mat: &crate::scene3d::TexturedMaterial3D,
+    textures: Option<&crate::texture3d::TextureStore>,
+) -> [f32; 4] {
+    let (tr, tg, tb, ta) = mat.tint.to_f32();
+    let opacity = mat.opacity.clamp(0.0, 1.0);
+    if let Some(store) = textures {
+        if let Some(tex) = store.get(mat.texture) {
+            let uv = mat.uv_transform.apply((0.5, 0.5));
+            let sampled = crate::texture3d::sample_texture(tex, uv);
+            return [
+                (sampled[0] as f32 / 255.0) * tr,
+                (sampled[1] as f32 / 255.0) * tg,
+                (sampled[2] as f32 / 255.0) * tb,
+                (sampled[3] as f32 / 255.0) * ta * opacity,
+            ];
+        }
+    }
+    [tr, tg, tb, ta * opacity]
 }

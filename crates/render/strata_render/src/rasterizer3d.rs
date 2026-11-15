@@ -15,20 +15,21 @@ use crate::texture3d::{
 use strata_layout::Rect;
 use strata_style::types::Color;
 
-/// Renders a Scene3D directly into a FrameBuffer viewport region with Z-buffering.
+/// Renders a Scene3D directly into a FrameBuffer viewport region with Z-buffering,
+/// automatically resolving any [`TextureStore`] attached to `scene`.
 pub fn render_scene_3d(
     frame_buffer: &mut FrameBuffer,
     viewport: Rect,
     scene: &Scene3D,
     clip: Option<Rect>,
 ) {
-    render_scene_3d_with_textures(frame_buffer, viewport, scene, clip, None);
+    render_scene_3d_with_textures(frame_buffer, viewport, scene, clip, scene.textures_deref());
 }
 
-/// Renders a Scene3D, resolving textured materials against `textures`, then
-/// draws the scene overlay pass on top.
+/// Renders a Scene3D, resolving textured materials against `textures` (or `scene.textures_deref()`
+/// when `textures` is `None`), then draws the scene overlay pass on top.
 ///
-/// Passing `None` keeps the untextured behaviour: textured meshes fall back to
+/// When neither `textures` nor `scene.textures()` is populated, textured meshes fall back to
 /// their tint colour so a scene that references a missing texture is still
 /// visible instead of silently disappearing.
 ///
@@ -42,6 +43,7 @@ pub fn render_scene_3d_with_textures(
     clip: Option<Rect>,
     textures: Option<&TextureStore>,
 ) {
+    let textures = textures.or_else(|| scene.textures_deref());
     if viewport.width <= 1.0 || viewport.height <= 1.0 {
         return;
     }

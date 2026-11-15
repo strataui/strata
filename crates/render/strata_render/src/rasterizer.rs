@@ -1326,11 +1326,12 @@ impl FrameBuffer {
                     target.draw_text((ox, oy), text, *font_size, *color, Some(effective_clip));
                 }
                 DrawCommand::DrawViewport3D { bounds, scene } => {
-                    crate::rasterizer3d::render_scene_3d(
+                    crate::rasterizer3d::render_scene_3d_with_textures(
                         target,
                         transform_rect_fn(*bounds),
                         scene,
                         Some(effective_clip),
+                        scene.textures_deref(),
                     );
                 }
                 DrawCommand::DrawCanvas2D { bounds, commands } => {

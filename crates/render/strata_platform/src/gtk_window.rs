@@ -2022,11 +2022,12 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                 let w = bounds.width.max(1.0).round() as usize;
                 let h = bounds.height.max(1.0).round() as usize;
                 let mut fb = strata_render::rasterizer::FrameBuffer::new(w, h);
-                strata_render::rasterizer3d::render_scene_3d(
+                strata_render::rasterizer3d::render_scene_3d_with_textures(
                     &mut fb,
                     strata_layout::Rect::new(0.0, 0.0, bounds.width, bounds.height),
                     scene,
                     None,
+                    scene.textures_deref(),
                 );
 
                 if let Ok(mut surface) = cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32) {
