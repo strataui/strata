@@ -53,9 +53,10 @@ pub use portal::{
     PortalBuilder,
 };
 pub use reactive::{
-    batch, create_signal, has_dirty_signals, mark_dirty, take_dirty_signals, untrack, use_effect,
-    use_memo, use_signal, use_state, Effect, Memo, ReactiveRuntime, ReadSignal, ScopeId, SetSignal,
-    Signal, SignalId, SubscriberId, WriteSignal,
+    batch, clear_persistent_signals, create_signal, has_dirty_signals, mark_dirty,
+    take_dirty_signals, untrack, use_effect, use_memo, use_persistent_signal, use_signal,
+    use_state, Effect, Memo, ReactiveRuntime, ReadSignal, ScopeId, SetSignal, Signal, SignalId,
+    SubscriberId, WriteSignal,
 };
 pub use spring::{SpringConfig, SpringSignal};
 pub use strata_primitives::EntityId;

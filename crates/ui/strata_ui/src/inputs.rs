@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-use strata_dom::{Signal, View};
+use strata_dom::{create_dropdown_portal, use_persistent_signal, AnchorPlacement, Signal, View};
 use strata_icons::prelude::{Icon, IconName};
 use strata_macro::{component, rsx};
 
@@ -364,18 +364,202 @@ pub fn Switch(
     }
 }
 
-/// Accessible dropdown select field.
+/// One entry of a [`Select`]: the submitted `value` and the displayed `label`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectOption {
+    pub value: String,
+    pub label: String,
+}
+
+impl SelectOption {
+    pub fn new(value: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            label: label.into(),
+        }
+    }
+}
+
+impl From<&str> for SelectOption {
+    fn from(text: &str) -> Self {
+        Self::new(text, text)
+    }
+}
+
+impl From<String> for SelectOption {
+    fn from(text: String) -> Self {
+        Self::new(text.clone(), text)
+    }
+}
+
+/// Moves `current` by `delta` within `len` options, clamping at both ends.
+pub fn select_step_index(len: usize, current: usize, delta: isize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    (current as isize + delta).clamp(0, len as isize - 1) as usize
+}
+
+/// Accessible dropdown select with built-in open/close, highlight and value state.
+///
+/// State lives in persistent signals keyed by `id` (or by label and options when no `id` is
+/// given), so it survives root re-invocation without the caller owning any signal. Pass
+/// `value` to control the selection from outside, and `on_change` to observe it. Give each
+/// `Select` that shares the same options and label its own `id`.
+///
+/// Keyboard: Arrow keys move the highlight (and open the list), Home/End jump, Enter or
+/// Space picks, Escape closes. The list renders in the top layer anchored to the trigger, so
+/// it escapes `overflow` containers and flips when it would leave the viewport.
 #[component]
 pub fn Select(
+    id: Option<&'static str>,
     label: Option<&'static str>,
-    options: Vec<&'static str>,
+    options: Vec<SelectOption>,
     value: Option<Signal<String>>,
+    on_change: Option<std::rc::Rc<dyn Fn(&str)>>,
     disabled: Option<bool>,
     class: Option<&'static str>,
 ) -> View {
     let custom = class.unwrap_or("");
-    let base = "w-full h-10 bg-neutral-900 border border-neutral-800 rounded-lg px-3.5 text-sm text-white focus:outline-none focus:border-indigo-500 transition-colors cursor-pointer";
+    let is_dis = disabled.unwrap_or(false);
+    let key = match id {
+        Some(id) => format!("select:{id}"),
+        None => format!(
+            "select:{}:{}",
+            label.unwrap_or(""),
+            options
+                .iter()
+                .map(|o| o.value.as_str())
+                .collect::<Vec<_>>()
+                .join("|")
+        ),
+    };
+    let trigger_id = format!("{key}-trigger");
+
+    let open = use_persistent_signal(&format!("{key}:open"), || false);
+    let first_value = options.first().map(|o| o.value.clone()).unwrap_or_default();
+    let value_sig =
+        value.unwrap_or_else(|| use_persistent_signal(&format!("{key}:value"), || first_value));
+    let current_value = value_sig.get();
+    let selected_idx = options.iter().position(|o| o.value == current_value);
+    let active = use_persistent_signal(&format!("{key}:active"), || 0usize);
+    let is_open = open.get() && !is_dis;
+    let active_idx = active.get().min(options.len().saturating_sub(1));
+
+    let selected_label = selected_idx
+        .map(|i| options[i].label.clone())
+        .unwrap_or_default();
+
+    let option_values: Vec<String> = options.iter().map(|o| o.value.clone()).collect();
+    let pick = {
+        let value_sig = value_sig.clone();
+        let open = open.clone();
+        let on_change = on_change.clone();
+        move |idx: usize| {
+            if let Some(v) = option_values.get(idx) {
+                value_sig.set(v.clone());
+                open.set(false);
+                if let Some(cb) = on_change.as_ref() {
+                    cb(v);
+                }
+            }
+        }
+    };
+
+    let on_keydown = {
+        let open = open.clone();
+        let active = active.clone();
+        let pick = pick.clone();
+        let len = options.len();
+        move |e: strata_dom::Event| {
+            if is_dis {
+                return;
+            }
+            let is_open_now = open.get();
+            match e.key.as_str() {
+                "ArrowDown" | "ArrowUp" => {
+                    let delta = if e.key == "ArrowDown" { 1 } else { -1 };
+                    if is_open_now {
+                        active.set(select_step_index(len, active.get(), delta));
+                    } else {
+                        open.set(true);
+                    }
+                    e.prevent_default();
+                }
+                "Home" if is_open_now => {
+                    active.set(0);
+                    e.prevent_default();
+                }
+                "End" if is_open_now => {
+                    active.set(len.saturating_sub(1));
+                    e.prevent_default();
+                }
+                "Enter" | " " => {
+                    if is_open_now {
+                        pick(active.get());
+                    } else {
+                        open.set(true);
+                    }
+                    e.prevent_default();
+                }
+                "Escape" if is_open_now => {
+                    open.set(false);
+                    e.prevent_default();
+                }
+                _ => {}
+            }
+        }
+    };
+
+    let base = "w-full h-10 flex items-center justify-between bg-neutral-900 border border-neutral-800 rounded-lg px-3.5 text-sm text-white focus:outline-none focus:border-indigo-500 transition-colors cursor-pointer";
     let combined = format!("{base} {custom}");
+
+    let menu = if is_open {
+        let items: Vec<_> = options
+            .iter()
+            .enumerate()
+            .map(|(i, opt)| {
+                let chosen = Some(i) == selected_idx;
+                let highlighted = i == active_idx;
+                let pick = pick.clone();
+                let row_class = format!(
+                    "px-3.5 py-2 text-sm cursor-pointer {}",
+                    if highlighted {
+                        "bg-neutral-800 text-white"
+                    } else {
+                        "text-neutral-300"
+                    }
+                );
+                rsx! {
+                    <div
+                        role="option"
+                        aria-selected={if chosen { "true" } else { "false" }}
+                        class={row_class}
+                        onclick={move |_| pick(i)}
+                    >
+                        {opt.label.clone()}
+                    </div>
+                }
+            })
+            .collect();
+        let close = open.clone();
+        Some(create_dropdown_portal(
+            trigger_id.clone(),
+            AnchorPlacement::BottomStart,
+            4.0,
+            move |_| close.set(false),
+            rsx! {
+                <div
+                    role="listbox"
+                    class="min-w-40 max-h-64 overflow-y-auto rounded-lg bg-neutral-900 border border-neutral-800 shadow-xl py-1"
+                >
+                    {items}
+                </div>
+            },
+        ))
+    } else {
+        None
+    };
 
     rsx! {
         <div class="flex flex-col gap-1.5 w-full">
@@ -384,12 +568,28 @@ pub fn Select(
             } else {
                 rsx! { <></> }
             }}
-            <select
+            <button
+                type="button"
+                id={trigger_id.clone()}
+                role="combobox"
+                aria-haspopup="listbox"
+                aria-expanded={if is_open { "true" } else { "false" }}
+                disabled={is_dis}
                 class={combined}
-                disabled={disabled.unwrap_or(false)}
+                onclick={{
+                    let open = open.clone();
+                    move |_| {
+                        if !is_dis {
+                            open.update(|o| *o = !*o);
+                        }
+                    }
+                }}
+                onkeydown={on_keydown}
             >
-                {options.into_iter().map(|opt| rsx! { <option value={opt}>{opt}</option> })}
-            </select>
+                <span>{selected_label}</span>
+                {Icon(IconName::ChevronDown, Some("w-4 h-4 text-neutral-400")).root}
+            </button>
+            {if let Some(menu) = menu { menu } else { rsx! { <></> } }}
         </div>
     }
 }
