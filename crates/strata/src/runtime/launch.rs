@@ -167,6 +167,71 @@ where
     }
 }
 
+/// Launches a Strata application with an event hook and a periodic `on_frame` callback.
+///
+/// On Linux GTK windows, `on_frame` is driven by the unified window scheduler at
+/// `interval` (or ~16 ms when `None`). Returning [`FrameOutcome::Dirty`] re-invokes
+/// `root_fn` and repaints; returning [`FrameOutcome::Unchanged`] skips rebuild and paint.
+pub fn launch_with_frame<F, E, H>(
+    root_fn: F,
+    config: WindowConfig,
+    event_handler: E,
+    interval: Option<std::time::Duration>,
+    on_frame: H,
+) -> Result<(), String>
+where
+    F: FnMut() -> View + 'static,
+    E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
+    H: FnMut(AppFrameInfo, &mut AppRuntime) -> FrameOutcome + 'static,
+{
+    #[cfg(target_os = "linux")]
+    {
+        let backend = std::env::var("STRATA_BACKEND")
+            .unwrap_or_default()
+            .to_lowercase();
+        if (backend.is_empty() || backend == "gtk")
+            && (std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok())
+        {
+            return launch_gtk_with_frame(root_fn, config, event_handler, interval, on_frame);
+        }
+        launch_with_events(root_fn, config, event_handler)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (interval, on_frame);
+        launch_with_events(root_fn, config, event_handler)
+    }
+}
+
+pub(crate) fn compute_next_wakeup(
+    rt: &AppRuntime,
+    frame_hook_due_in: Option<std::time::Duration>,
+) -> Option<std::time::Duration> {
+    let mut best = strata_js::web::time_until_next_timer();
+    let mut consider = |d: std::time::Duration| {
+        best = Some(match best {
+            Some(cur) => cur.min(d),
+            None => d,
+        });
+    };
+    if let Some(d) = frame_hook_due_in {
+        consider(d);
+    }
+    if rt.has_active_animations()
+        || rt.active_smooth_scroll.is_some()
+        || rt.scrollbar_drag.is_some()
+        || rt.pending_window_drag.is_some()
+        || rt.drag_selection_active
+        || rt.mcp_cursor.is_some()
+    {
+        consider(std::time::Duration::from_millis(16));
+    } else if rt.active_focus.is_some() {
+        consider(std::time::Duration::from_millis(250));
+    }
+    best
+}
+
 /// Runs a deterministic headless event pump for testing, CI automation, and non-display environments.
 pub fn launch_headless_pump<F, E>(
     mut root_fn: F,
@@ -298,11 +363,51 @@ where
 }
 
 #[cfg(target_os = "linux")]
+type FrameHookFn = Box<dyn FnMut(AppFrameInfo, &mut AppRuntime) -> FrameOutcome>;
+
+#[cfg(target_os = "linux")]
 /// Launches an interactive native GTK3/Cairo desktop window on Linux with a custom event hook.
 pub fn launch_gtk_with_events<F, E>(
     root_fn: F,
     config: WindowConfig,
     event_handler: E,
+) -> Result<(), String>
+where
+    F: FnMut() -> View + 'static,
+    E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
+{
+    launch_gtk_with_frame_inner(root_fn, config, event_handler, None)
+}
+
+#[cfg(target_os = "linux")]
+/// Launches an interactive native GTK3/Cairo desktop window on Linux with a custom
+/// event hook and a periodic `on_frame` callback.
+pub fn launch_gtk_with_frame<F, E, H>(
+    root_fn: F,
+    config: WindowConfig,
+    event_handler: E,
+    interval: Option<std::time::Duration>,
+    on_frame: H,
+) -> Result<(), String>
+where
+    F: FnMut() -> View + 'static,
+    E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
+    H: FnMut(AppFrameInfo, &mut AppRuntime) -> FrameOutcome + 'static,
+{
+    launch_gtk_with_frame_inner(
+        root_fn,
+        config,
+        event_handler,
+        Some((interval, Box::new(on_frame))),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn launch_gtk_with_frame_inner<F, E>(
+    root_fn: F,
+    config: WindowConfig,
+    event_handler: E,
+    on_frame_opt: Option<(Option<std::time::Duration>, FrameHookFn)>,
 ) -> Result<(), String>
 where
     F: FnMut() -> View + 'static,
@@ -398,6 +503,15 @@ where
         }
     };
 
+    let frame_hook_state = std::rc::Rc::new(std::cell::RefCell::new(on_frame_opt.map(
+        |(interval, cb)| {
+            let interval = interval.unwrap_or(std::time::Duration::from_millis(16));
+            let now = std::time::Instant::now();
+            (interval, now, cb)
+        },
+    )));
+    let frame_hook_tick = frame_hook_state.clone();
+
     let runtime_event = runtime.clone();
     let root_fn_event = root_fn_rc.clone();
     let event_handler_event = event_handler_rc.clone();
@@ -433,6 +547,31 @@ where
                 };
                 if scroll_changed || anim_changed || caret_changed || mcp_changed {
                     needs_redraw = true;
+                }
+                if strata_js::web::tick_timers() > 0 {
+                    needs_rebuild = true;
+                    needs_redraw = true;
+                }
+                if let Some((interval, ref mut last_called, ref mut cb)) =
+                    *frame_hook_tick.borrow_mut()
+                {
+                    let now = std::time::Instant::now();
+                    let elapsed = now.saturating_duration_since(*last_called);
+                    if elapsed >= interval {
+                        *last_called = now;
+                        let info = AppFrameInfo {
+                            frame_index: rt.frame_count,
+                            viewport_width: rt.viewport_width,
+                            viewport_height: rt.viewport_height,
+                            dpr: rt.dpr,
+                            command_count: rt.display_list.commands.len(),
+                            dt: elapsed,
+                        };
+                        if cb(info, &mut rt).is_dirty() {
+                            needs_rebuild = true;
+                            needs_redraw = true;
+                        }
+                    }
                 }
             }
             if let strata_platform::PlatformEvent::DoubleClick { button, x, y } = event {
@@ -486,8 +625,7 @@ where
                         if rt.drain_edit_commands() {
                             needs_rebuild = true;
                         }
-                        if !needs_rebuild {
-                            rt.restyle_for_hover_paint();
+                        if !needs_rebuild && rt.restyle_for_active_change() {
                             needs_redraw = true;
                         }
                     }
@@ -526,8 +664,7 @@ where
                 } else if action.needs_redraw() {
                     needs_redraw = true;
                 }
-                if was_mouse_down && !needs_rebuild {
-                    rt.restyle_for_hover_paint();
+                if was_mouse_down && !needs_rebuild && rt.restyle_for_active_change() {
                     needs_redraw = true;
                 }
             }
@@ -643,6 +780,16 @@ where
         redraw
     };
 
+    let runtime_wakeup = runtime.clone();
+    let frame_hook_wakeup = frame_hook_state;
+    let next_wakeup = move || -> Option<std::time::Duration> {
+        let hook_due = frame_hook_wakeup
+            .borrow()
+            .as_ref()
+            .map(|(interval, last_called, _)| interval.saturating_sub(last_called.elapsed()));
+        compute_next_wakeup(&runtime_wakeup.borrow(), hook_due)
+    };
+
     let _ = crate::mcp_bridge::start_mcp_dev_listener(None);
-    strata_platform::launch_gtk_window_with_config(&config, on_draw, on_event)
+    strata_platform::launch_gtk_window_with_scheduler(&config, on_draw, on_event, next_wakeup)
 }

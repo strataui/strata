@@ -112,14 +112,15 @@ pub use low_level::{LowLevelRenderer, OffscreenBuffer, RawSurfaceHandle};
 pub use mcp_bridge::{default_dev_socket_path, start_mcp_dev_listener};
 pub use runtime::{
     app, launch, launch_auto, launch_headless, launch_headless_pump, launch_window,
-    launch_with_config, launch_with_events, queue_edit_command, AppFrameInfo, AppLifecycleHooks,
-    AppRuntime, DynamicTextBinding, EditCommand, KeyDispatchResult, PointerDownAction,
-    PointerMoveAction, PointerUpAction, StrataApp, StrataAppBuilder,
+    launch_with_config, launch_with_events, launch_with_frame, queue_edit_command, AppFrameInfo,
+    AppLifecycleHooks, AppRuntime, DynamicTextBinding, EditCommand, FrameOutcome,
+    KeyDispatchResult, PointerDownAction, PointerMoveAction, PointerUpAction, StrataApp,
+    StrataAppBuilder,
 };
 #[cfg(target_os = "linux")]
 pub use runtime::{
-    launch_gtk, launch_gtk_with_events, launch_wayland, launch_wayland_with_events, launch_x11,
-    launch_x11_with_events,
+    launch_gtk, launch_gtk_with_events, launch_gtk_with_frame, launch_wayland,
+    launch_wayland_with_events, launch_x11, launch_x11_with_events,
 };
 #[cfg(target_os = "macos")]
 pub use runtime::{launch_macos, launch_macos_with_events};
@@ -248,14 +249,15 @@ pub mod prelude {
     pub use crate::benchmarks::{BenchmarkHarness, BenchmarkReport};
     pub use crate::runtime::{
         app, launch, launch_auto, launch_headless, launch_headless_pump, launch_window,
-        launch_with_config, launch_with_events, queue_edit_command, AppFrameInfo,
-        AppLifecycleHooks, AppRuntime, DynamicTextBinding, EditCommand, KeyDispatchResult,
-        PointerDownAction, PointerMoveAction, PointerUpAction, StrataApp, StrataAppBuilder,
+        launch_with_config, launch_with_events, launch_with_frame, queue_edit_command,
+        AppFrameInfo, AppLifecycleHooks, AppRuntime, DynamicTextBinding, EditCommand, FrameOutcome,
+        KeyDispatchResult, PointerDownAction, PointerMoveAction, PointerUpAction, StrataApp,
+        StrataAppBuilder,
     };
     #[cfg(target_os = "linux")]
     pub use crate::runtime::{
-        launch_gtk, launch_gtk_with_events, launch_wayland, launch_wayland_with_events, launch_x11,
-        launch_x11_with_events,
+        launch_gtk, launch_gtk_with_events, launch_gtk_with_frame, launch_wayland,
+        launch_wayland_with_events, launch_x11, launch_x11_with_events,
     };
     #[cfg(target_os = "macos")]
     pub use crate::runtime::{launch_macos, launch_macos_with_events};

@@ -2759,6 +2759,26 @@ where
     F: FnMut(f32, f32, &cairo::Context) + 'static,
     E: FnMut(&crate::events::PlatformEvent) -> bool + 'static,
 {
+    launch_gtk_window_with_scheduler(config, on_draw, on_event, || None)
+}
+
+/// Launches a live native GTK3 desktop window with a unified wakeup scheduler.
+///
+/// `next_wakeup` is queried after every input event and every tick to determine
+/// when the next [`crate::events::PlatformEvent::AnimationTick`] should fire.
+/// Returning `None` suspends the tick timer completely so an idle window wakes
+/// zero times per second.
+pub fn launch_gtk_window_with_scheduler<F, E, S>(
+    config: &crate::window::WindowConfig,
+    on_draw: F,
+    on_event: E,
+    next_wakeup: S,
+) -> Result<(), String>
+where
+    F: FnMut(f32, f32, &cairo::Context) + 'static,
+    E: FnMut(&crate::events::PlatformEvent) -> bool + 'static,
+    S: FnMut() -> Option<std::time::Duration> + 'static,
+{
     use gtk::prelude::*;
 
     if gtk::init().is_err() {
@@ -2916,18 +2936,71 @@ where
         gtk::glib::Propagation::Proceed
     });
 
-    // Any non-tick event marks the UI active so the animation clock runs at
-    // full rate; the tick source drops to a slow poll while nothing happens.
-    let last_activity = std::rc::Rc::new(std::cell::Cell::new(std::time::Instant::now()));
-    let activity_marker = last_activity.clone();
-    let mut on_event = on_event;
-    let on_event = move |event: &crate::events::PlatformEvent| -> bool {
-        if !matches!(event, crate::events::PlatformEvent::AnimationTick) {
-            activity_marker.set(std::time::Instant::now());
-        }
-        on_event(event)
-    };
-    let on_event_rc = std::rc::Rc::new(std::cell::RefCell::new(on_event));
+    let tick_gen = std::rc::Rc::new(std::cell::Cell::new(0u64));
+    let next_wakeup_rc: std::rc::Rc<
+        std::cell::RefCell<dyn FnMut() -> Option<std::time::Duration>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(next_wakeup));
+
+    fn arm_next_tick(
+        da: gtk::DrawingArea,
+        on_event: std::rc::Weak<
+            std::cell::RefCell<dyn FnMut(&crate::events::PlatformEvent) -> bool>,
+        >,
+        next_wakeup: std::rc::Rc<std::cell::RefCell<dyn FnMut() -> Option<std::time::Duration>>>,
+        tick_gen: std::rc::Rc<std::cell::Cell<u64>>,
+    ) {
+        let delay = (next_wakeup.borrow_mut())();
+        let next_gen = tick_gen.get().wrapping_add(1);
+        tick_gen.set(next_gen);
+        let Some(delay) = delay else {
+            return;
+        };
+        let clamped = delay.max(std::time::Duration::from_millis(1));
+        gtk::glib::timeout_add_local_once(clamped, move || {
+            if IS_CLOSING.with(|c| c.get()) || tick_gen.get() != next_gen {
+                return;
+            }
+            let Some(on_event_strong) = on_event.upgrade() else {
+                return;
+            };
+            let tick_ev = crate::events::PlatformEvent::AnimationTick;
+            let changed = (on_event_strong.borrow_mut())(&tick_ev);
+            if changed {
+                use gtk::prelude::WidgetExt;
+                da.queue_draw();
+            }
+            arm_next_tick(da, on_event, next_wakeup, tick_gen);
+        });
+    }
+
+    let on_event_rc: std::rc::Rc<
+        std::cell::RefCell<dyn FnMut(&crate::events::PlatformEvent) -> bool>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(on_event));
+
+    // Re-arm the single wakeup timer whenever a non-tick event arrives so
+    // newly started animations, timers, or caret focus wake promptly.
+    let rearm_da = drawing_area.clone();
+    let rearm_weak = std::rc::Rc::downgrade(&on_event_rc);
+    let rearm_wakeup = next_wakeup_rc.clone();
+    let rearm_gen = tick_gen.clone();
+    let inner_rc = on_event_rc.clone();
+    let inner_weak = std::rc::Rc::downgrade(&inner_rc);
+    let on_event_rc: std::rc::Rc<
+        std::cell::RefCell<dyn FnMut(&crate::events::PlatformEvent) -> bool>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(
+        move |event: &crate::events::PlatformEvent| -> bool {
+            let changed = (inner_rc.borrow_mut())(event);
+            if !matches!(event, crate::events::PlatformEvent::AnimationTick) {
+                arm_next_tick(
+                    rearm_da.clone(),
+                    rearm_weak.clone(),
+                    rearm_wakeup.clone(),
+                    rearm_gen.clone(),
+                );
+            }
+            changed
+        },
+    ));
 
     DRAWING_AREA_HANDLE.with(|da| {
         *da.borrow_mut() = Some(drawing_area.clone());
@@ -3354,49 +3427,10 @@ where
     drawing_area.grab_focus();
     gtk_set_cursor(crate::window::CursorIcon::Default);
 
-    // Single adaptive tick source. The previous vsync tick callback plus 16 ms
-    // timer woke the process twice per frame and the frame clock never slept.
-    // Now one timer runs at ~60 Hz while input or animation is recent and
-    // backs off to a slow poll when idle, which still lets caret blink and
-    // externally started transitions advance.
-    const ACTIVE_INTERVAL_MS: u64 = 16;
-    const IDLE_INTERVAL_MS: u64 = 100;
-    const ACTIVE_WINDOW: std::time::Duration = std::time::Duration::from_millis(1000);
-
-    fn schedule_tick(
-        da: gtk::DrawingArea,
-        on_event: std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::events::PlatformEvent) -> bool>>,
-        activity: std::rc::Rc<std::cell::Cell<std::time::Instant>>,
-        delay_ms: u64,
-    ) {
-        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(delay_ms), move || {
-            if IS_CLOSING.with(|c| c.get()) {
-                return;
-            }
-            let tick_ev = crate::events::PlatformEvent::AnimationTick;
-            let changed = (on_event.borrow_mut())(&tick_ev);
-            if changed {
-                use gtk::prelude::WidgetExt;
-                da.queue_draw();
-                activity.set(std::time::Instant::now());
-            }
-            let next = if activity.get().elapsed() < ACTIVE_WINDOW {
-                ACTIVE_INTERVAL_MS
-            } else {
-                IDLE_INTERVAL_MS
-            };
-            schedule_tick(da, on_event, activity, next);
-        });
-    }
-    let tick_target: std::rc::Rc<
-        std::cell::RefCell<dyn FnMut(&crate::events::PlatformEvent) -> bool>,
-    > = on_event_rc.clone();
-    schedule_tick(
-        drawing_area.clone(),
-        tick_target,
-        last_activity,
-        ACTIVE_INTERVAL_MS,
-    );
+    // Single unified wakeup scheduler: arms one timer for the minimum of any
+    // active animation, caret blink, JS/native timer, or periodic on_frame hook.
+    // When nothing is pending (next_wakeup returns None), no timer is armed.
+    arm_next_tick(drawing_area.clone(), inner_weak, next_wakeup_rc, tick_gen);
 
     gtk::main();
 
