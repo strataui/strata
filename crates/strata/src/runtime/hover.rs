@@ -509,6 +509,15 @@ impl AppRuntime {
 
     /// Checks whether any element along the index path has active hover styles (Tailwind or `<style>`) or boundary handlers.
     pub fn node_path_has_hover_effects(blueprint: &NodeBlueprint, path: &[usize]) -> bool {
+        let stylesheets = Self::collect_stylesheets_from_blueprint(blueprint);
+        Self::node_path_has_hover_effects_with_sheets(blueprint, path, &stylesheets)
+    }
+
+    pub(crate) fn node_path_has_hover_effects_with_sheets(
+        blueprint: &NodeBlueprint,
+        path: &[usize],
+        stylesheets: &[std::sync::Arc<strata_style::StyleSheet>],
+    ) -> bool {
         let mut path_nodes: Vec<&NodeBlueprint> = Vec::with_capacity(path.len() + 1);
         let mut cur_bp = blueprint;
         if Self::node_has_hover_effects(cur_bp) {
@@ -546,12 +555,11 @@ impl AppRuntime {
             path_nodes.push(cur_bp);
         }
 
-        let stylesheets = Self::collect_stylesheets_from_blueprint(blueprint);
         if stylesheets.is_empty() {
             return false;
         }
 
-        Self::path_nodes_match_stylesheet_hover(&path_nodes, &stylesheets)
+        Self::path_nodes_match_stylesheet_hover(&path_nodes, stylesheets)
     }
 
     /// Returns true if any element in `path_nodes` matches a `:hover`-bearing compound selector in `stylesheets`.
@@ -720,12 +728,20 @@ impl AppRuntime {
 
         self.dispatch_boundary_events(old_path.as_deref(), new_path.as_deref(), px, py);
 
-        let old_has_effects = old_path
-            .as_deref()
-            .is_some_and(|p| Self::node_path_has_hover_effects(&self.root_blueprint, p));
-        let new_has_effects = new_path
-            .as_deref()
-            .is_some_and(|p| Self::node_path_has_hover_effects(&self.root_blueprint, p));
+        let old_has_effects = old_path.as_deref().is_some_and(|p| {
+            Self::node_path_has_hover_effects_with_sheets(
+                &self.root_blueprint,
+                p,
+                &self.cached_stylesheets,
+            )
+        });
+        let new_has_effects = new_path.as_deref().is_some_and(|p| {
+            Self::node_path_has_hover_effects_with_sheets(
+                &self.root_blueprint,
+                p,
+                &self.cached_stylesheets,
+            )
+        });
 
         if old_has_effects || new_has_effects {
             let has_listeners = old_path
@@ -746,7 +762,21 @@ impl AppRuntime {
             } else {
                 self.hover_paint_only = true;
                 let hover_start = std::time::Instant::now();
-                self.restyle_for_hover_paint();
+                let fast_ok = self.restyle_hover_subtrees_fast(
+                    if old_has_effects {
+                        old_path.as_deref()
+                    } else {
+                        None
+                    },
+                    if new_has_effects {
+                        new_path.as_deref()
+                    } else {
+                        None
+                    },
+                );
+                if !fast_ok {
+                    self.restyle_for_hover_paint();
+                }
                 if perf_logging_enabled() {
                     perf_log_ms("hover_repaint", hover_start, "paint-only hover");
                 }
@@ -798,6 +828,99 @@ impl AppRuntime {
         self.compile_display_list();
     }
 
+    /// Fast paint-only hover restyle that updates only the diverging subtrees along
+    /// `old_path` and `new_path` when no `<style>` sheets or CSS transitions apply.
+    pub(crate) fn restyle_hover_subtrees_fast(
+        &mut self,
+        old_path: Option<&[usize]>,
+        new_path: Option<&[usize]>,
+    ) -> bool {
+        if !self.cached_stylesheets.is_empty()
+            || self.transition_manager.has_active_transitions()
+            || Self::node_has_hover_effects(&self.root_blueprint)
+        {
+            return false;
+        }
+
+        fn subtree_has_transitions_or_anims(node: &LayoutNode) -> bool {
+            if !node.style.transitions.is_empty() || !node.style.animations.is_empty() {
+                return true;
+            }
+            node.children.iter().any(subtree_has_transitions_or_anims)
+        }
+
+        fn restyle_one_path(
+            bp_root: &NodeBlueprint,
+            layout_root: &mut LayoutNode,
+            target_path: &[usize],
+            ctx: &InteractionContext,
+        ) -> bool {
+            let mut cur_bp = bp_root;
+            let mut cur_layout = layout_root;
+            let mut prefix = Vec::with_capacity(target_path.len());
+            for &idx in target_path {
+                let mut flat = Vec::new();
+                match cur_bp {
+                    NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children) => {
+                        for c in children {
+                            AppRuntime::flatten_blueprints(c, &mut flat);
+                        }
+                    }
+                    _ => return false,
+                }
+                if idx >= flat.len() || idx >= cur_layout.children.len() {
+                    return false;
+                }
+                let child_bp = flat[idx];
+                prefix.push(idx);
+                if AppRuntime::node_has_hover_effects(child_bp) {
+                    let parent_style = cur_layout.style.clone();
+                    let child_layout = &mut cur_layout.children[idx];
+                    if subtree_has_transitions_or_anims(child_layout) {
+                        return false;
+                    }
+                    let mut rebuilt = AppRuntime::build_layout_tree_with_interaction_context(
+                        child_bp,
+                        Some(&parent_style),
+                        &mut prefix,
+                        ctx,
+                    );
+                    if !AppRuntime::transplant_layout_state(child_layout, &mut rebuilt) {
+                        return false;
+                    }
+                    strata_layout::box_model::refresh_inline_fragment_styles(&mut rebuilt);
+                    *child_layout = rebuilt;
+                    return true;
+                }
+                cur_bp = child_bp;
+                cur_layout = &mut cur_layout.children[idx];
+            }
+            true
+        }
+
+        let hovered_owned = self.current_hover_path.clone();
+        let focused_owned = self.current_focus_path.clone();
+        let ctx = InteractionContext {
+            hovered_path: hovered_owned.as_deref(),
+            focused_path: focused_owned.as_deref(),
+            is_mouse_down: self.is_mouse_down,
+            is_dark_mode: self.is_dark_mode,
+        };
+        if let Some(p) = old_path {
+            if !restyle_one_path(&self.root_blueprint, &mut self.layout_root, p, &ctx) {
+                return false;
+            }
+        }
+        if let Some(p) = new_path {
+            if !restyle_one_path(&self.root_blueprint, &mut self.layout_root, p, &ctx) {
+                return false;
+            }
+        }
+        self.sync_active_input_layout();
+        self.compile_display_list();
+        true
+    }
+
     /// Returns `true` when the currently hovered path (or any stylesheet rule)
     /// can visually respond to `:active` state changes on `MouseDown` / `MouseUp`.
     pub(crate) fn path_has_active_styles(&self) -> bool {
@@ -835,8 +958,7 @@ impl AppRuntime {
                 return true;
             }
         }
-        let stylesheets = Self::collect_stylesheets_from_blueprint(&self.root_blueprint);
-        for sheet in &stylesheets {
+        for sheet in &self.cached_stylesheets {
             for rule in &sheet.rules {
                 for sel in &rule.selectors {
                     let has_active_pseudo = sel.target.parts.iter().any(|p| {
