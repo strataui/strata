@@ -23,5 +23,5 @@ strata_platform = { workspace = true }
 strata_web_api = { workspace = true }
 
 [dev-dependencies]
-strata = { workspace = true }
+strata = { package = "strata-ui", path = "../../strata" }
 
