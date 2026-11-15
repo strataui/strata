@@ -25,7 +25,6 @@ pub struct AppLifecycleHooks {
     pub on_exit: Option<Box<dyn FnMut(&mut AppRuntime)>>,
 }
 
-
 /// Low-level application orchestrator with fine-grained control over windowing, swapchain presentation,
 /// lifecycle hooks, and manual frame pacing.
 pub struct StrataApp {
@@ -149,7 +148,11 @@ impl StrataApp {
                     on_draw(&mut runtime.display_list);
                 }
                 let _ = runtime.render_frame(compositor, presenter, false);
-                let _ = window.present_surface(&presenter.backing_buffer, presenter.width, presenter.height);
+                let _ = window.present_surface(
+                    &presenter.backing_buffer,
+                    presenter.width,
+                    presenter.height,
+                );
                 if let Some(ref mut on_frame) = hooks.on_frame {
                     let info = AppFrameInfo {
                         frame_index: runtime.frame_count,
@@ -190,7 +193,8 @@ impl StrataApp {
         #[cfg(target_os = "linux")]
         {
             if std::env::var("WAYLAND_DISPLAY").is_ok() {
-                if let Ok(window) = strata_platform::WaylandWindow::new(self.window_config.clone()) {
+                if let Ok(window) = strata_platform::WaylandWindow::new(self.window_config.clone())
+                {
                     let _ = crate::runtime::platforms::run_native_surface_window_loop(
                         window,
                         None::<fn() -> View>,
@@ -346,4 +350,3 @@ impl StrataAppBuilder {
         }
     }
 }
-

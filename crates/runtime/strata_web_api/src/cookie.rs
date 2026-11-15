@@ -8,9 +8,9 @@
 //! - Thread-safe, serializable `CookieJar` with automatic cookie injection into requests
 //!   and response extraction.
 
-use std::path::Path;
-use serde::{Deserialize, Serialize};
 use crate::fetch::{Headers, ParsedUrl};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// Cookie SameSite policy attribute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -40,7 +40,11 @@ pub struct Cookie {
 
 impl Cookie {
     /// Constructs a basic cookie with default path "/" and current timestamp.
-    pub fn new(name: impl Into<String>, value: impl Into<String>, domain: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        value: impl Into<String>,
+        domain: impl Into<String>,
+    ) -> Self {
         let now = current_time_secs();
         Self {
             name: name.into(),
@@ -210,7 +214,9 @@ pub struct CookieJar {
 impl CookieJar {
     /// Creates a new empty `CookieJar`.
     pub fn new() -> Self {
-        Self { cookies: Vec::new() }
+        Self {
+            cookies: Vec::new(),
+        }
     }
 
     /// Stores a cookie in the jar according to RFC 6265 §5.3 storage model.
@@ -347,8 +353,7 @@ impl CookieJar {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let json = serde_json::to_string_pretty(self)
-            .map_err(std::io::Error::other)?;
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
 
@@ -380,7 +385,10 @@ pub fn default_path_for_request(request_path: &str) -> String {
 /// Verifies whether `request_host` domain-matches `cookie_domain` per RFC 6265 §5.1.3.
 pub fn domain_matches(request_host: &str, cookie_domain: &str, host_only: bool) -> bool {
     let req = request_host.trim().to_ascii_lowercase();
-    let cookie = cookie_domain.trim().trim_start_matches('.').to_ascii_lowercase();
+    let cookie = cookie_domain
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
 
     if host_only {
         return req == cookie;
@@ -400,7 +408,10 @@ pub fn domain_matches(request_host: &str, cookie_domain: &str, host_only: bool) 
 /// Checks whether an origin host is authorized to set a cookie for `cookie_domain`.
 pub fn can_set_cookie_domain(request_host: &str, cookie_domain: &str) -> bool {
     let req = request_host.trim().to_ascii_lowercase();
-    let domain = cookie_domain.trim().trim_start_matches('.').to_ascii_lowercase();
+    let domain = cookie_domain
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
     if domain.is_empty() {
         return false;
     }
@@ -413,8 +424,16 @@ pub fn can_set_cookie_domain(request_host: &str, cookie_domain: &str) -> bool {
 
 /// Evaluates path matching between request path and cookie path per RFC 6265 §5.1.4.
 pub fn path_matches(request_path: &str, cookie_path: &str) -> bool {
-    let req = if request_path.is_empty() { "/" } else { request_path };
-    let c_path = if cookie_path.is_empty() { "/" } else { cookie_path };
+    let req = if request_path.is_empty() {
+        "/"
+    } else {
+        request_path
+    };
+    let c_path = if cookie_path.is_empty() {
+        "/"
+    } else {
+        cookie_path
+    };
 
     if req == c_path {
         return true;
@@ -451,7 +470,10 @@ pub fn parse_http_date(date_str: &str) -> Option<u64> {
     }
 
     // Strip leading day-of-week if present without comma (e.g. asctime "Wed Jun  9 10:18:14 2021")
-    if tokens.len() >= 5 && parse_month_name(tokens[0]).is_none() && tokens[0].parse::<u32>().is_err() {
+    if tokens.len() >= 5
+        && parse_month_name(tokens[0]).is_none()
+        && tokens[0].parse::<u32>().is_err()
+    {
         tokens.remove(0);
     }
 
@@ -461,7 +483,11 @@ pub fn parse_http_date(date_str: &str) -> Option<u64> {
         let d = dash_parts.next()?.parse::<u32>().ok()?;
         let m = parse_month_name(dash_parts.next()?)?;
         let y_raw = dash_parts.next()?.parse::<i32>().ok()?;
-        let y = if y_raw < 70 { 2000 + y_raw } else { 1900 + y_raw };
+        let y = if y_raw < 70 {
+            2000 + y_raw
+        } else {
+            1900 + y_raw
+        };
         (d, m, y, tokens[1])
     } else if tokens.len() >= 4 && parse_month_name(tokens[0]).is_some() {
         // asctime: "Nov  6 08:49:37 1994"
@@ -485,7 +511,15 @@ pub fn parse_http_date(date_str: &str) -> Option<u64> {
     let min = time_parts.next()?.parse::<u32>().ok()?;
     let sec = time_parts.next()?.parse::<u32>().ok()?;
 
-    if day == 0 || day > 31 || month == 0 || month > 12 || hour >= 24 || min >= 60 || sec >= 60 || year < 1970 {
+    if day == 0
+        || day > 31
+        || month == 0
+        || month > 12
+        || hour >= 24
+        || min >= 60
+        || sec >= 60
+        || year < 1970
+    {
         return None;
     }
 

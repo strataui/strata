@@ -53,7 +53,12 @@ impl QueryClient {
     }
 
     /// Store fresh data for a query key with specified stale duration.
-    pub fn set<T: Send + Sync + 'static>(&self, key: impl Into<String>, data: T, stale_time: Duration) {
+    pub fn set<T: Send + Sync + 'static>(
+        &self,
+        key: impl Into<String>,
+        data: T,
+        stale_time: Duration,
+    ) {
         let mut entries = self.entries.write().unwrap();
         entries.insert(
             key.into(),

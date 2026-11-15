@@ -4,11 +4,11 @@ pub mod buffer;
 pub mod compute;
 pub mod curve;
 pub mod font_cache;
+pub mod font_shader;
 pub mod path;
 pub mod sdf;
 pub mod shaders;
 pub mod stroke;
-pub mod font_shader;
 
 pub use buffer::{GpuCurveInstance, PathCommandBuffer};
 pub use compute::{
@@ -34,4 +34,3 @@ pub use shaders::{
 pub use stroke::{
     expand_stroke_quadratics, offset_quadratic, unit_normal, LineCap, LineJoin, StrokeOptions,
 };
-

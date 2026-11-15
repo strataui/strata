@@ -48,9 +48,15 @@ impl ChassisRenderer {
         let total_h = screen.logical_height + bezels.top + bezels.bottom;
 
         let (is_articulated, axis) = match &profile.form_factor {
-            crate::profile::DeviceFormFactor::ClamshellFlip { hinge_axis, .. } => (true, Some(*hinge_axis)),
-            crate::profile::DeviceFormFactor::BookFoldable { hinge_axis, .. } => (true, Some(*hinge_axis)),
-            crate::profile::DeviceFormFactor::DualScreen { .. } => (true, Some(HingeAxis::Vertical)),
+            crate::profile::DeviceFormFactor::ClamshellFlip { hinge_axis, .. } => {
+                (true, Some(*hinge_axis))
+            }
+            crate::profile::DeviceFormFactor::BookFoldable { hinge_axis, .. } => {
+                (true, Some(*hinge_axis))
+            }
+            crate::profile::DeviceFormFactor::DualScreen { .. } => {
+                (true, Some(HingeAxis::Vertical))
+            }
             crate::profile::DeviceFormFactor::Monolithic(_) => (false, None),
         };
 

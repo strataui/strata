@@ -4,7 +4,6 @@ use strata_dom::{NodeBlueprint, View};
 
 pub use strata_primitives::target::{is_tui_target, set_tui_target_active};
 
-
 /// A component providing declarative fallback between rich GUI surfaces and terminal representations.
 pub fn tui_fallback(gui: View, tui: View) -> View {
     if is_tui_target() {

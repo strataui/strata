@@ -12,7 +12,9 @@ pub use action::{AgentActionBus, ToolActionCallback};
 pub use delta::AgentPatch;
 pub use history::{RevisionSnapshot, TimeTravelHistory};
 pub use sandbox::{AgentUiSandbox, SandboxedNode};
-pub use schema::{is_attribute_safe, is_tag_allowed, AgentSchemaValidator, ALLOWED_TAGS, PROHIBITED_TAGS};
+pub use schema::{
+    is_attribute_safe, is_tag_allowed, AgentSchemaValidator, ALLOWED_TAGS, PROHIBITED_TAGS,
+};
 pub use stream::StreamingUiParser;
 pub use widgets::{
     ApprovalStatus, ApprovalWidget, ExecutionStep, FormField, FormFieldType, FormWidget,

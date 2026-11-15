@@ -75,8 +75,8 @@ impl BidiClass {
             '\u{2067}' => return BidiClass::RLI,
             '\u{2068}' => return BidiClass::FSI,
             '\u{2069}' => return BidiClass::PDI,
-            '\u{200E}' => return BidiClass::L,  // Left-to-Right Mark
-            '\u{200F}' => return BidiClass::R,  // Right-to-Left Mark
+            '\u{200E}' => return BidiClass::L, // Left-to-Right Mark
+            '\u{200F}' => return BidiClass::R, // Right-to-Left Mark
             '\u{061C}' => return BidiClass::AL, // Arabic Letter Mark
             _ => {}
         }
@@ -88,7 +88,8 @@ impl BidiClass {
             || ('\u{08A0}'..='\u{08FF}').contains(&c)
             || ('\u{FB50}'..='\u{FDFF}').contains(&c)
             || ('\u{FE70}'..='\u{FEFF}').contains(&c)
-            || ('\u{0700}'..='\u{074F}').contains(&c) // Syriac
+            || ('\u{0700}'..='\u{074F}').contains(&c)
+        // Syriac
         {
             // Nonspacing diacritics/harakat inside Arabic
             if ('\u{064B}'..='\u{065F}').contains(&c) || c == '\u{0670}' {
@@ -107,7 +108,8 @@ impl BidiClass {
             || ('\u{FB1D}'..='\u{FB4F}').contains(&c)
             || ('\u{0780}'..='\u{07BF}').contains(&c) // Thaana
             || ('\u{0800}'..='\u{083F}').contains(&c) // Samaritan
-            || ('\u{0840}'..='\u{085F}').contains(&c) // Mandaic
+            || ('\u{0840}'..='\u{085F}').contains(&c)
+        // Mandaic
         {
             if ('\u{0591}'..='\u{05BD}').contains(&c)
                 || c == '\u{05BF}'
@@ -633,13 +635,25 @@ impl BidiEngine {
                 let left_dir = match left_type {
                     BidiClass::L => BidiClass::L,
                     BidiClass::R | BidiClass::EN | BidiClass::AN => BidiClass::R,
-                    _ => if levels[start] % 2 == 1 { BidiClass::R } else { BidiClass::L },
+                    _ => {
+                        if levels[start] % 2 == 1 {
+                            BidiClass::R
+                        } else {
+                            BidiClass::L
+                        }
+                    }
                 };
 
                 let right_dir = match right_type {
                     BidiClass::L => BidiClass::L,
                     BidiClass::R | BidiClass::EN | BidiClass::AN => BidiClass::R,
-                    _ => if levels[start] % 2 == 1 { BidiClass::R } else { BidiClass::L },
+                    _ => {
+                        if levels[start] % 2 == 1 {
+                            BidiClass::R
+                        } else {
+                            BidiClass::L
+                        }
+                    }
                 };
 
                 // Rule N1: If both delimiters have the same direction, adopt it

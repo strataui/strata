@@ -1,7 +1,7 @@
 //! Zero-dependency, pure-Rust JSON parser and serializer for JsValue.
 
-use std::collections::BTreeMap;
 use crate::JsValue;
+use std::collections::BTreeMap;
 
 /// Parses a JSON string into a dynamic `JsValue`.
 pub fn parse_json(input: &str) -> Result<JsValue, String> {
@@ -25,7 +25,6 @@ pub fn stringify_json(val: &JsValue) -> Result<String, String> {
     serialize_value(val, &mut out, &mut stack, 0)?;
     Ok(out)
 }
-
 
 fn skip_whitespace<I: Iterator<Item = char>>(chars: &mut std::iter::Peekable<I>) {
     while let Some(&c) = chars.peek() {
@@ -383,4 +382,3 @@ mod tests {
         assert!(stringify_json(&obj).is_err());
     }
 }
-

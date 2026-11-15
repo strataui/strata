@@ -17,7 +17,10 @@ impl JsTranspiler {
             "import {{ el, txt, frag, on, bindText, bindAttr, bindClass, mount }} from '{}';\n\n",
             runtime_module
         ));
-        js.push_str(&format!("export function {}() {{\n  return ", component_name));
+        js.push_str(&format!(
+            "export function {}() {{\n  return ",
+            component_name
+        ));
         Self::render_blueprint(blueprint, &mut js, 1);
         js.push_str(";\n}\n");
         js
@@ -72,7 +75,11 @@ impl JsTranspiler {
                             if !first_attr {
                                 out.push_str(", ");
                             }
-                            out.push_str(&format!("'{}': '{}'", Self::escape_str(key), Self::escape_str(value)));
+                            out.push_str(&format!(
+                                "'{}': '{}'",
+                                Self::escape_str(key),
+                                Self::escape_str(value)
+                            ));
                             first_attr = false;
                         }
                         Attribute::EventListener { event, .. } => {
@@ -80,7 +87,10 @@ impl JsTranspiler {
                                 out.push_str(", ");
                             }
                             let evt_name = Self::event_name(*event);
-                            out.push_str(&format!("'on{}': (e) => {{ /* event handler */ }}", evt_name));
+                            out.push_str(&format!(
+                                "'on{}': (e) => {{ /* event handler */ }}",
+                                evt_name
+                            ));
                             first_attr = false;
                         }
                         Attribute::DirectStyle(_)

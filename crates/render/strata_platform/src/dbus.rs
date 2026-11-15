@@ -205,8 +205,8 @@ impl DbusMessageEncoder {
         // Fixed 16-byte header
         self.push_u8(b'l'); // Little-endian
         self.push_u8(DBUS_MESSAGE_TYPE_METHOD_CALL);
-        self.push_u8(0);    // Flags
-        self.push_u8(1);    // Protocol version 1
+        self.push_u8(0); // Flags
+        self.push_u8(1); // Protocol version 1
         self.push_u32(body_len);
         self.push_u32(serial);
         self.push_u32(fields_len);
@@ -263,8 +263,8 @@ impl DbusMessageEncoder {
         // Fixed 16-byte header
         self.push_u8(b'l'); // Little-endian
         self.push_u8(DBUS_MESSAGE_TYPE_METHOD_RETURN);
-        self.push_u8(0);    // Flags
-        self.push_u8(1);    // Protocol version 1
+        self.push_u8(0); // Flags
+        self.push_u8(1); // Protocol version 1
         self.push_u32(body_len);
         self.push_u32(serial);
         self.push_u32(fields_len);
@@ -315,7 +315,8 @@ impl<'a> DbusMessageDecoder<'a> {
     pub fn read_u16(&mut self) -> Option<u16> {
         self.align_to(2);
         if self.offset + 2 <= self.data.len() {
-            let val = u16::from_le_bytes(self.data[self.offset..self.offset + 2].try_into().unwrap());
+            let val =
+                u16::from_le_bytes(self.data[self.offset..self.offset + 2].try_into().unwrap());
             self.offset += 2;
             Some(val)
         } else {
@@ -327,7 +328,8 @@ impl<'a> DbusMessageDecoder<'a> {
     pub fn read_u32(&mut self) -> Option<u32> {
         self.align_to(4);
         if self.offset + 4 <= self.data.len() {
-            let val = u32::from_le_bytes(self.data[self.offset..self.offset + 4].try_into().unwrap());
+            let val =
+                u32::from_le_bytes(self.data[self.offset..self.offset + 4].try_into().unwrap());
             self.offset += 4;
             Some(val)
         } else {
@@ -339,7 +341,8 @@ impl<'a> DbusMessageDecoder<'a> {
     pub fn read_i32(&mut self) -> Option<i32> {
         self.align_to(4);
         if self.offset + 4 <= self.data.len() {
-            let val = i32::from_le_bytes(self.data[self.offset..self.offset + 4].try_into().unwrap());
+            let val =
+                i32::from_le_bytes(self.data[self.offset..self.offset + 4].try_into().unwrap());
             self.offset += 4;
             Some(val)
         } else {
@@ -467,7 +470,9 @@ impl DbusClient {
         }
 
         decoder.offset = header_total;
-        decoder.read_string().ok_or_else(|| "Failed to parse unique name from DBus.Hello".to_string())
+        decoder
+            .read_string()
+            .ok_or_else(|| "Failed to parse unique name from DBus.Hello".to_string())
     }
 
     /// Dispatches a method call and reads the method return reply.
@@ -592,7 +597,8 @@ pub fn show_desktop_notification(
     }
 
     if reply.len() >= header_total + 4 {
-        let notif_id = u32::from_le_bytes(reply[header_total..header_total + 4].try_into().unwrap());
+        let notif_id =
+            u32::from_le_bytes(reply[header_total..header_total + 4].try_into().unwrap());
         Ok(notif_id)
     } else {
         Ok(1)

@@ -5,21 +5,50 @@ use crate::tokenizer::{HtmlToken, HtmlTokenizer};
 
 /// Set of standard HTML void elements that must not have children or closing tags.
 const VOID_ELEMENTS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input",
-    "link", "meta", "param", "source", "track", "wbr",
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
 ];
 
 /// Tags whose text/markup is completely ignored from output.
-const STRIPPED_ELEMENTS: &[&str] = &[
-    "script", "noscript",
-];
+const STRIPPED_ELEMENTS: &[&str] = &["script", "noscript"];
 
 /// Block-level HTML elements that implicitly close an open `<p>` element in button scope.
 const BLOCK_TAGS_CLOSING_P: &[&str] = &[
-    "address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div",
-    "dl", "fieldset", "figcaption", "figure", "footer", "header", "hgroup", "main", "menu",
-    "nav", "ol", "p", "section", "summary", "ul", "h1", "h2", "h3", "h4", "h5", "h6",
-    "pre", "listing", "form", "hr", "table",
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "center",
+    "details",
+    "dialog",
+    "dir",
+    "div",
+    "dl",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "header",
+    "hgroup",
+    "main",
+    "menu",
+    "nav",
+    "ol",
+    "p",
+    "section",
+    "summary",
+    "ul",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "pre",
+    "listing",
+    "form",
+    "hr",
+    "table",
 ];
 
 /// SVG shape and graphic leaf tags treated as self-closing void elements.
@@ -227,7 +256,10 @@ impl TreeBuilder {
                 }
 
                 let in_table_structure = self.stack.last().is_some_and(|top| {
-                    matches!(top.tag.as_str(), "table" | "tbody" | "thead" | "tfoot" | "tr")
+                    matches!(
+                        top.tag.as_str(),
+                        "table" | "tbody" | "thead" | "tfoot" | "tr"
+                    )
                 });
 
                 if in_table_structure {
@@ -242,7 +274,18 @@ impl TreeBuilder {
                 let should_keep = if let Some(top) = self.stack.last() {
                     if matches!(
                         top.tag.as_str(),
-                        "table" | "tbody" | "thead" | "tfoot" | "tr" | "colgroup" | "select" | "html" | "head" | "svg" | "g" | "defs"
+                        "table"
+                            | "tbody"
+                            | "thead"
+                            | "tfoot"
+                            | "tr"
+                            | "colgroup"
+                            | "select"
+                            | "html"
+                            | "head"
+                            | "svg"
+                            | "g"
+                            | "defs"
                     ) {
                         !is_ws
                     } else {
@@ -302,7 +345,10 @@ impl TreeBuilder {
 
                 // Mode transitions for document structure
                 if name_lower == "html" {
-                    if matches!(self.mode, InsertionMode::Initial | InsertionMode::BeforeHtml) {
+                    if matches!(
+                        self.mode,
+                        InsertionMode::Initial | InsertionMode::BeforeHtml
+                    ) {
                         self.push_element(name_lower, attributes);
                         self.mode = InsertionMode::BeforeHead;
                         return;
@@ -394,9 +440,11 @@ impl TreeBuilder {
                     if self.stack.last().is_some_and(|f| f.tag == "caption") {
                         self.close_element_named("caption");
                     }
-                    if let Some(pos) = self.stack.iter().rposition(|f| {
-                        matches!(f.tag.as_str(), "tbody" | "thead" | "tfoot")
-                    }) {
+                    if let Some(pos) = self
+                        .stack
+                        .iter()
+                        .rposition(|f| matches!(f.tag.as_str(), "tbody" | "thead" | "tfoot"))
+                    {
                         while self.stack.len() > pos {
                             self.pop_element();
                         }
@@ -439,13 +487,26 @@ impl TreeBuilder {
 
                 // Foster parenting for non-table elements inside table
                 let in_table_structure = self.stack.last().is_some_and(|top| {
-                    matches!(top.tag.as_str(), "table" | "tbody" | "thead" | "tfoot" | "tr")
+                    matches!(
+                        top.tag.as_str(),
+                        "table" | "tbody" | "thead" | "tfoot" | "tr"
+                    )
                 });
 
                 if in_table_structure
                     && !matches!(
                         name_lower.as_str(),
-                        "caption" | "colgroup" | "col" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th" | "style" | "script"
+                        "caption"
+                            | "colgroup"
+                            | "col"
+                            | "thead"
+                            | "tbody"
+                            | "tfoot"
+                            | "tr"
+                            | "td"
+                            | "th"
+                            | "style"
+                            | "script"
                     )
                 {
                     let node = SemanticNode::Element {
@@ -473,9 +534,11 @@ impl TreeBuilder {
                     if self.stack.last().is_some_and(|f| f.tag == "tr") {
                         self.pop_element();
                     }
-                    if self.stack.last().is_some_and(|f| {
-                        matches!(f.tag.as_str(), "tbody" | "thead" | "tfoot")
-                    }) {
+                    if self
+                        .stack
+                        .last()
+                        .is_some_and(|f| matches!(f.tag.as_str(), "tbody" | "thead" | "tfoot"))
+                    {
                         self.pop_element();
                     }
                     self.close_element_named("table");
@@ -607,7 +670,16 @@ pub enum ScriptDescriptor {
 }
 
 /// Helper to parse attribute key-values from `<script ...>` tag text.
-fn parse_script_attributes(attrs_str: &str) -> (Option<String>, Option<String>, Option<String>, Option<String>, bool, bool) {
+fn parse_script_attributes(
+    attrs_str: &str,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    bool,
+    bool,
+) {
     let mut src = None;
     let mut nonce = None;
     let mut integrity = None;
@@ -626,7 +698,12 @@ fn parse_script_attributes(attrs_str: &str) -> (Option<String>, Option<String>, 
         }
 
         let key_start = i;
-        while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'=' && bytes[i] != b'>' && bytes[i] != b'/' {
+        while i < bytes.len()
+            && !bytes[i].is_ascii_whitespace()
+            && bytes[i] != b'='
+            && bytes[i] != b'>'
+            && bytes[i] != b'/'
+        {
             i += 1;
         }
         let key = &attrs_str[key_start..i].to_ascii_lowercase();
@@ -702,7 +779,8 @@ pub fn extract_script_descriptors(html: &str) -> Vec<ScriptDescriptor> {
         };
 
         let attrs_str = &html[after_script..tag_end];
-        let (src, nonce, integrity, script_type, is_async, is_defer) = parse_script_attributes(attrs_str);
+        let (src, nonce, integrity, script_type, is_async, is_defer) =
+            parse_script_attributes(attrs_str);
 
         // Filter out non-JavaScript script blocks (e.g. application/ld+json, text/template)
         let is_executable_js = match script_type.as_deref() {
@@ -775,7 +853,9 @@ pub fn extract_scripts(html: &str) -> Vec<String> {
 pub fn from_dom_node(node: &strata_js::DomNode) -> SemanticNode {
     let inner = node.inner.borrow();
     match &inner.node_type {
-        strata_js::DomNodeType::Element { tag, attributes, .. } => {
+        strata_js::DomNodeType::Element {
+            tag, attributes, ..
+        } => {
             let mut attrs: Vec<(String, String)> = attributes
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
@@ -784,11 +864,7 @@ pub fn from_dom_node(node: &strata_js::DomNode) -> SemanticNode {
             if !attrs.iter().any(|(k, _)| k == "data-strata-node-uid") {
                 attrs.push(("data-strata-node-uid".to_string(), uid.to_string()));
             }
-            let children: Vec<SemanticNode> = inner
-                .children
-                .iter()
-                .map(from_dom_node)
-                .collect();
+            let children: Vec<SemanticNode> = inner.children.iter().map(from_dom_node).collect();
             SemanticNode::element(tag.clone(), attrs, children)
         }
         strata_js::DomNodeType::Text(text) => SemanticNode::text(text.clone()),
@@ -801,18 +877,18 @@ pub fn document_to_semantic_nodes(doc: &strata_js::Document) -> Vec<SemanticNode
     if !doc.head.children().is_empty() {
         vec![from_dom_node(&doc.html)]
     } else {
-        doc.body
-            .children()
-            .iter()
-            .map(from_dom_node)
-            .collect()
+        doc.body.children().iter().map(from_dom_node).collect()
     }
 }
 
 /// Converts a `SemanticNode` into a `strata_js::DomNode`.
 pub fn semantic_node_to_dom_node(node: &SemanticNode) -> strata_js::DomNode {
     match node {
-        SemanticNode::Element { tag, attributes, children } => {
+        SemanticNode::Element {
+            tag,
+            attributes,
+            children,
+        } => {
             let mut map = std::collections::HashMap::new();
             for (k, v) in attributes {
                 map.insert(k.to_ascii_lowercase(), v.clone());
@@ -836,7 +912,12 @@ pub fn semantic_nodes_to_document(nodes: &[SemanticNode]) -> strata_js::Document
             SemanticNode::Element { tag, children, .. } => {
                 if tag.eq_ignore_ascii_case("html") {
                     for c in children {
-                        if let SemanticNode::Element { tag: c_tag, children: c_children, .. } = c {
+                        if let SemanticNode::Element {
+                            tag: c_tag,
+                            children: c_children,
+                            ..
+                        } = c
+                        {
                             if c_tag.eq_ignore_ascii_case("head") {
                                 for h_child in c_children {
                                     doc.head.append_child(semantic_node_to_dom_node(h_child));
@@ -872,4 +953,3 @@ pub fn semantic_nodes_to_document(nodes: &[SemanticNode]) -> strata_js::Document
     doc.clear_mutated();
     doc
 }
-

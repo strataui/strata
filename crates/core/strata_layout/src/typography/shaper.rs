@@ -502,10 +502,9 @@ impl TextShaper {
         let metrics = font.font_metrics(font_size);
 
         // Complex script pass: Contextual Arabic cursive joining & multi-glyph ligatures
-        if text
-            .chars()
-            .any(|c| ('\u{0600}'..='\u{06FF}').contains(&c) || ('\u{0750}'..='\u{077F}').contains(&c))
-        {
+        if text.chars().any(|c| {
+            ('\u{0600}'..='\u{06FF}').contains(&c) || ('\u{0750}'..='\u{077F}').contains(&c)
+        }) {
             let mut arabic_glyphs = self.shape_arabic_run(text, &metrics);
             for g in &mut arabic_glyphs {
                 if let Some(ch) = char::from_u32(g.glyph_id) {
@@ -674,9 +673,9 @@ impl TextShaper {
 
         // Complex script pass: Contextual Arabic cursive shaping & multi-glyph ligatures
         if !is_monospace
-            && text
-                .chars()
-                .any(|c| ('\u{0600}'..='\u{06FF}').contains(&c) || ('\u{0750}'..='\u{077F}').contains(&c))
+            && text.chars().any(|c| {
+                ('\u{0600}'..='\u{06FF}').contains(&c) || ('\u{0750}'..='\u{077F}').contains(&c)
+            })
         {
             return self.shape_arabic_run(text, metrics);
         }
@@ -1116,7 +1115,10 @@ impl TextShaper {
                 let mut pre_base_idx = None;
                 if i + 1 < n && is_indic_pre_base_vowel(chars[i + 1].1) {
                     pre_base_idx = Some(i + 1);
-                } else if i + 2 < n && is_indic_virama(chars[i + 1].1) && is_indic_consonant(chars[i + 2].1) {
+                } else if i + 2 < n
+                    && is_indic_virama(chars[i + 1].1)
+                    && is_indic_consonant(chars[i + 2].1)
+                {
                     // Consonant + Virama + Consonant (half form + base)
                     if i + 3 < n && is_indic_pre_base_vowel(chars[i + 3].1) {
                         pre_base_idx = Some(i + 3);
@@ -1539,10 +1541,16 @@ fn arabic_joining_type(c: char) -> ArabicJoiningType {
     }
     match c {
         '\u{0621}' => ArabicJoiningType::NonJoining,
-        '\u{0622}' | '\u{0623}' | '\u{0624}' | '\u{0625}' | '\u{0627}'
+        '\u{0622}'
+        | '\u{0623}'
+        | '\u{0624}'
+        | '\u{0625}'
+        | '\u{0627}'
         | '\u{0629}'
-        | '\u{062F}' | '\u{0630}'
-        | '\u{0631}' | '\u{0632}'
+        | '\u{062F}'
+        | '\u{0630}'
+        | '\u{0631}'
+        | '\u{0632}'
         | '\u{0648}'
         | '\u{0649}'
         | '\u{0671}'..='\u{0673}'
@@ -1552,15 +1560,26 @@ fn arabic_joining_type(c: char) -> ArabicJoiningType {
         | '\u{06CD}'..='\u{06CF}' => ArabicJoiningType::Right,
         '\u{0640}' => ArabicJoiningType::Dual,
         '\u{0626}'
-        | '\u{0628}' | '\u{062A}' | '\u{062B}'
-        | '\u{062C}' | '\u{062D}' | '\u{062E}'
-        | '\u{0633}' | '\u{0634}'
-        | '\u{0635}' | '\u{0636}'
-        | '\u{0637}' | '\u{0638}'
-        | '\u{0639}' | '\u{063A}'
-        | '\u{0641}' | '\u{0642}'
-        | '\u{0643}' | '\u{0644}'
-        | '\u{0645}' | '\u{0646}'
+        | '\u{0628}'
+        | '\u{062A}'
+        | '\u{062B}'
+        | '\u{062C}'
+        | '\u{062D}'
+        | '\u{062E}'
+        | '\u{0633}'
+        | '\u{0634}'
+        | '\u{0635}'
+        | '\u{0636}'
+        | '\u{0637}'
+        | '\u{0638}'
+        | '\u{0639}'
+        | '\u{063A}'
+        | '\u{0641}'
+        | '\u{0642}'
+        | '\u{0643}'
+        | '\u{0644}'
+        | '\u{0645}'
+        | '\u{0646}'
         | '\u{0647}'
         | '\u{064A}'
         | '\u{0678}'..='\u{0687}'

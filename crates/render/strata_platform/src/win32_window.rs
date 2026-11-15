@@ -18,21 +18,23 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
-use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetModuleHandleW, GetProcAddress};
+use windows_sys::Win32::System::LibraryLoader::{
+    GetModuleHandleA, GetModuleHandleW, GetProcAddress,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, SetFocus, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_MENU,
     VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    LoadCursorW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostQuitMessage,
-    RegisterClassExW, SetCursor, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage,
-    WaitMessage, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP,
-    IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT,
-    MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_SHOW,
-    WM_CHAR, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
+    LoadCursorW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostQuitMessage, RegisterClassExW,
+    SetCursor, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WaitMessage, CS_DBLCLKS,
+    CS_HREDRAW, CS_VREDRAW, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO,
+    IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, MWMO_INPUTAVAILABLE,
+    PM_REMOVE, QS_ALLINPUT, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_SHOW, WM_CHAR, WM_CLOSE,
+    WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCHITTEST, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
     WM_SIZE, WNDCLASSEXW, WS_EX_ACCEPTFILES, WS_EX_APPWINDOW, WS_EX_NOREDIRECTIONBITMAP,
     WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
 };
@@ -106,9 +108,8 @@ impl Win32Window {
 
             let style = match config.decoration {
                 WindowDecoration::NativeOs => WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-                WindowDecoration::ClientSideDecorations | WindowDecoration::FramelessTransparent => {
-                    WS_POPUP | WS_VISIBLE
-                }
+                WindowDecoration::ClientSideDecorations
+                | WindowDecoration::FramelessTransparent => WS_POPUP | WS_VISIBLE,
             };
 
             let ex_style = if config.transparent {
@@ -127,7 +128,11 @@ impl Win32Window {
             let window_w = rect.right - rect.left;
             let window_h = rect.bottom - rect.top;
 
-            let wide_title: Vec<u16> = config.title.encode_utf16().chain(std::iter::once(0)).collect();
+            let wide_title: Vec<u16> = config
+                .title
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
 
             let hwnd = CreateWindowExW(
                 ex_style,
@@ -159,11 +164,7 @@ impl Win32Window {
             } else {
                 96
             };
-            let scale_factor = if dpi > 0 {
-                dpi as f32 / 96.0
-            } else {
-                1.0
-            };
+            let scale_factor = if dpi > 0 { dpi as f32 / 96.0 } else { 1.0 };
 
             let state = Arc::new(Mutex::new(Win32WindowState {
                 config: config.clone(),
@@ -175,7 +176,10 @@ impl Win32Window {
             }));
 
             // Register window in thread-safe registry for static wnd_proc routing
-            get_registry().lock().unwrap().insert(hwnd as isize, state.clone());
+            get_registry()
+                .lock()
+                .unwrap()
+                .insert(hwnd as isize, state.clone());
 
             // Apply backdrop vibrancy if configured
             if config.vibrancy != crate::vibrancy::VibrancyEffect::None {
@@ -201,12 +205,15 @@ impl Win32Window {
         unsafe {
             let hdc = windows_sys::Win32::Graphics::Gdi::GetDC(self.hwnd);
             if hdc == 0 {
-                return Err("Failed to acquire window device context (GetDC returned 0)".to_string());
+                return Err(
+                    "Failed to acquire window device context (GetDC returned 0)".to_string()
+                );
             }
 
             let bmi = windows_sys::Win32::Graphics::Gdi::BITMAPINFO {
                 bmiHeader: windows_sys::Win32::Graphics::Gdi::BITMAPINFOHEADER {
-                    biSize: std::mem::size_of::<windows_sys::Win32::Graphics::Gdi::BITMAPINFOHEADER>() as u32,
+                    biSize: std::mem::size_of::<windows_sys::Win32::Graphics::Gdi::BITMAPINFOHEADER>(
+                    ) as u32,
                     biWidth: width as i32,
                     biHeight: -(height as i32), // top-down DIB
                     biPlanes: 1,
@@ -218,7 +225,12 @@ impl Win32Window {
                     biClrUsed: 0,
                     biClrImportant: 0,
                 },
-                bmiColors: [windows_sys::Win32::Graphics::Gdi::RGBQUAD { rgbBlue: 0, rgbGreen: 0, rgbRed: 0, rgbReserved: 0 }],
+                bmiColors: [windows_sys::Win32::Graphics::Gdi::RGBQUAD {
+                    rgbBlue: 0,
+                    rgbGreen: 0,
+                    rgbRed: 0,
+                    rgbReserved: 0,
+                }],
             };
 
             windows_sys::Win32::Graphics::Gdi::SetDIBitsToDevice(
@@ -339,14 +351,12 @@ impl PlatformWindow for Win32Window {
                     self.push_event(PlatformEvent::WindowMaximized(true));
                 }
             }
-            WindowMode::Minimized => {
-                unsafe {
-                    windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
-                        self.hwnd,
-                        windows_sys::Win32::UI::WindowsAndMessaging::SW_MINIMIZE,
-                    );
-                }
-            }
+            WindowMode::Minimized => unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
+                    self.hwnd,
+                    windows_sys::Win32::UI::WindowsAndMessaging::SW_MINIMIZE,
+                );
+            },
             WindowMode::Windowed => {
                 unsafe {
                     windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
@@ -495,10 +505,7 @@ impl EventLoop for Win32EventLoop {
             // 3. Dispatch redraw frame if requested
             if self.window.is_redraw_requested() {
                 self.window.state.lock().unwrap().redraw_requested = false;
-                handler(
-                    PlatformEvent::RedrawRequested,
-                    &mut self.control,
-                );
+                handler(PlatformEvent::RedrawRequested, &mut self.control);
             }
 
             // 4. Control flow and frame pacing
@@ -506,11 +513,9 @@ impl EventLoop for Win32EventLoop {
                 EventLoopControl::Poll => {
                     std::thread::yield_now();
                 }
-                EventLoopControl::Wait => {
-                    unsafe {
-                        WaitMessage();
-                    }
-                }
+                EventLoopControl::Wait => unsafe {
+                    WaitMessage();
+                },
                 EventLoopControl::WaitUntil(instant) => {
                     let now = Instant::now();
                     if let Some(dur) = instant.checked_duration_since(now) {
@@ -605,7 +610,10 @@ unsafe extern "system" fn win32_wnd_proc(
                 if lock.config.decoration == WindowDecoration::ClientSideDecorations {
                     let screen_x = (lparam & 0xFFFF) as i16 as i32;
                     let screen_y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
-                    let mut pt = windows_sys::Win32::Foundation::POINT { x: screen_x, y: screen_y };
+                    let mut pt = windows_sys::Win32::Foundation::POINT {
+                        x: screen_x,
+                        y: screen_y,
+                    };
                     unsafe {
                         windows_sys::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
                     }
@@ -646,61 +654,85 @@ unsafe extern "system" fn win32_wnd_proc(
             WM_LBUTTONDOWN => {
                 let x = (lparam & 0xFFFF) as i16 as f32;
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
-                state.lock().unwrap().event_queue.push_back(PlatformEvent::MouseDown {
-                    button: MouseButton::Left,
-                    x,
-                    y,
-                });
+                state
+                    .lock()
+                    .unwrap()
+                    .event_queue
+                    .push_back(PlatformEvent::MouseDown {
+                        button: MouseButton::Left,
+                        x,
+                        y,
+                    });
                 return 0;
             }
             WM_LBUTTONUP => {
                 let x = (lparam & 0xFFFF) as i16 as f32;
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
-                state.lock().unwrap().event_queue.push_back(PlatformEvent::MouseUp {
-                    button: MouseButton::Left,
-                    x,
-                    y,
-                });
+                state
+                    .lock()
+                    .unwrap()
+                    .event_queue
+                    .push_back(PlatformEvent::MouseUp {
+                        button: MouseButton::Left,
+                        x,
+                        y,
+                    });
                 return 0;
             }
             WM_RBUTTONDOWN => {
                 let x = (lparam & 0xFFFF) as i16 as f32;
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
-                state.lock().unwrap().event_queue.push_back(PlatformEvent::MouseDown {
-                    button: MouseButton::Right,
-                    x,
-                    y,
-                });
+                state
+                    .lock()
+                    .unwrap()
+                    .event_queue
+                    .push_back(PlatformEvent::MouseDown {
+                        button: MouseButton::Right,
+                        x,
+                        y,
+                    });
                 return 0;
             }
             WM_RBUTTONUP => {
                 let x = (lparam & 0xFFFF) as i16 as f32;
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
-                state.lock().unwrap().event_queue.push_back(PlatformEvent::MouseUp {
-                    button: MouseButton::Right,
-                    x,
-                    y,
-                });
+                state
+                    .lock()
+                    .unwrap()
+                    .event_queue
+                    .push_back(PlatformEvent::MouseUp {
+                        button: MouseButton::Right,
+                        x,
+                        y,
+                    });
                 return 0;
             }
             WM_MBUTTONDOWN => {
                 let x = (lparam & 0xFFFF) as i16 as f32;
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
-                state.lock().unwrap().event_queue.push_back(PlatformEvent::MouseDown {
-                    button: MouseButton::Middle,
-                    x,
-                    y,
-                });
+                state
+                    .lock()
+                    .unwrap()
+                    .event_queue
+                    .push_back(PlatformEvent::MouseDown {
+                        button: MouseButton::Middle,
+                        x,
+                        y,
+                    });
                 return 0;
             }
             WM_MBUTTONUP => {
                 let x = (lparam & 0xFFFF) as i16 as f32;
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
-                state.lock().unwrap().event_queue.push_back(PlatformEvent::MouseUp {
-                    button: MouseButton::Middle,
-                    x,
-                    y,
-                });
+                state
+                    .lock()
+                    .unwrap()
+                    .event_queue
+                    .push_back(PlatformEvent::MouseUp {
+                        button: MouseButton::Middle,
+                        x,
+                        y,
+                    });
                 return 0;
             }
             WM_MOUSEWHEEL => {

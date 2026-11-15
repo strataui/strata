@@ -1,9 +1,9 @@
 //! Root Application Layout for Strata Cloud SaaS Dashboard.
 
-use strata::prelude::*;
-use crate::components::*;
 use crate::components::Sidebar;
+use crate::components::*;
 use crate::state::DashboardState;
+use strata::prelude::*;
 
 #[component]
 pub fn App() -> View {

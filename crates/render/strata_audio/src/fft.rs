@@ -91,7 +91,10 @@ pub fn fft_radix2(buffer: &mut [Complex]) {
 
 /// Computes the magnitude spectrum of an audio sample buffer (first N/2 bins).
 pub fn compute_magnitude_spectrum(samples: &[f32], fft_size: usize) -> Vec<f32> {
-    assert!(fft_size.is_power_of_two(), "FFT size must be a power of two");
+    assert!(
+        fft_size.is_power_of_two(),
+        "FFT size must be a power of two"
+    );
     let mut complex_buf: Vec<Complex> = Vec::with_capacity(fft_size);
 
     // Apply Hann window and pad or truncate to fft_size

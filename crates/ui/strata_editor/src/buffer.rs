@@ -150,9 +150,7 @@ impl RopeNode {
     pub fn height(&self) -> usize {
         match self {
             RopeNode::Leaf(_) => 1,
-            RopeNode::Internal(internal) => {
-                1 + internal.children.first().map_or(0, |c| c.height())
-            }
+            RopeNode::Internal(internal) => 1 + internal.children.first().map_or(0, |c| c.height()),
         }
     }
 
@@ -263,7 +261,8 @@ impl RopeNode {
                     if line_idx < c_lines {
                         if let Some(byte_len) = child.delete_char_at(line_idx, col) {
                             internal.metrics.chars = internal.metrics.chars.saturating_sub(1);
-                            internal.metrics.bytes = internal.metrics.bytes.saturating_sub(byte_len);
+                            internal.metrics.bytes =
+                                internal.metrics.bytes.saturating_sub(byte_len);
                             return Some(byte_len);
                         }
                         return None;
@@ -615,10 +614,8 @@ impl TextRope {
     /// Inserts a new line into the B-Tree at index `line_idx`, maintaining B-Tree balance.
     pub fn insert_line(&mut self, line_idx: usize, text: String) {
         if let SplitResult::Split(sibling) = self.root.insert_line(line_idx, text) {
-            let old_root = std::mem::replace(
-                &mut self.root,
-                RopeNode::Leaf(RopeLeaf::new(Vec::new())),
-            );
+            let old_root =
+                std::mem::replace(&mut self.root, RopeNode::Leaf(RopeLeaf::new(Vec::new())));
             self.root = RopeNode::Internal(RopeInternal::new(vec![old_root, sibling]));
         }
     }
@@ -705,10 +702,8 @@ impl TextRope {
     /// Splits a line into two lines at the given character column index.
     pub fn split_line(&mut self, line: usize, col: usize) {
         if let SplitResult::Split(sibling) = self.root.split_line(line, col) {
-            let old_root = std::mem::replace(
-                &mut self.root,
-                RopeNode::Leaf(RopeLeaf::new(Vec::new())),
-            );
+            let old_root =
+                std::mem::replace(&mut self.root, RopeNode::Leaf(RopeLeaf::new(Vec::new())));
             self.root = RopeNode::Internal(RopeInternal::new(vec![old_root, sibling]));
         }
     }
@@ -930,7 +925,8 @@ impl LineBuffer {
         end_line: usize,
         end_col: usize,
     ) -> String {
-        self.rope.delete_range(start_line, start_col, end_line, end_col)
+        self.rope
+            .delete_range(start_line, start_col, end_line, end_col)
     }
 
     /// Returns a slice of lines for virtual viewport rendering in logarithmic time.

@@ -17,7 +17,11 @@ pub enum SemanticNode {
 
 impl SemanticNode {
     /// Constructs an element node.
-    pub fn element(tag: impl Into<String>, attributes: Vec<(String, String)>, children: Vec<SemanticNode>) -> Self {
+    pub fn element(
+        tag: impl Into<String>,
+        attributes: Vec<(String, String)>,
+        children: Vec<SemanticNode>,
+    ) -> Self {
         Self::Element {
             tag: tag.into(),
             attributes,

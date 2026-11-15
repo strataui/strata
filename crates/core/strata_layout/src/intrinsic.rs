@@ -274,7 +274,8 @@ fn compute_min_max_sizes_uncached(
                     };
 
                     for child in in_flow_children {
-                        let child_sizes = compute_min_max_sizes_guarded(child, parent_size, depth + 1);
+                        let child_sizes =
+                            compute_min_max_sizes_guarded(child, parent_size, depth + 1);
                         let child_margin = child.style.margin.left + child.style.margin.right;
                         sum_min += child_sizes.min_content + child_margin;
                         sum_max += child_sizes.max_content + child_margin;
@@ -291,7 +292,8 @@ fn compute_min_max_sizes_uncached(
                         {
                             continue;
                         }
-                        let child_sizes = compute_min_max_sizes_guarded(child, parent_size, depth + 1);
+                        let child_sizes =
+                            compute_min_max_sizes_guarded(child, parent_size, depth + 1);
                         let child_margin = child.style.margin.left + child.style.margin.right;
                         result.min_content = result
                             .min_content

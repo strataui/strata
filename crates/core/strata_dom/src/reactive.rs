@@ -94,28 +94,34 @@ impl ReactiveRuntime {
     }
 
     pub fn is_subscriber_alive(sub_id: SubscriberId) -> bool {
-        RUNTIME.try_with(|rt| {
-            if let Ok(gens) = rt.subscriber_generations.try_borrow() {
-                if let Some(&gen) = gens.get(sub_id.index as usize) {
-                    return gen == sub_id.generation;
+        RUNTIME
+            .try_with(|rt| {
+                if let Ok(gens) = rt.subscriber_generations.try_borrow() {
+                    if let Some(&gen) = gens.get(sub_id.index as usize) {
+                        return gen == sub_id.generation;
+                    }
                 }
-            }
-            false
-        }).unwrap_or(false)
+                false
+            })
+            .unwrap_or(false)
     }
 
     pub fn active_subscriber_count() -> usize {
-        RUNTIME.try_with(|rt| {
-            rt.subscribers.try_borrow().map(|s| s.len()).unwrap_or(0)
-        }).unwrap_or(0)
+        RUNTIME
+            .try_with(|rt| rt.subscribers.try_borrow().map(|s| s.len()).unwrap_or(0))
+            .unwrap_or(0)
     }
 
     pub fn signal_subscription_count(signal_id: SignalId) -> usize {
-        RUNTIME.try_with(|rt| {
-            rt.signal_subscribers.try_borrow().ok()
-                .and_then(|ss| ss.get(&signal_id).map(|s| s.len()))
-                .unwrap_or(0)
-        }).unwrap_or(0)
+        RUNTIME
+            .try_with(|rt| {
+                rt.signal_subscribers
+                    .try_borrow()
+                    .ok()
+                    .and_then(|ss| ss.get(&signal_id).map(|s| s.len()))
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0)
     }
 
     pub fn alloc_scope_id() -> ScopeId {
@@ -127,11 +133,15 @@ impl ReactiveRuntime {
     }
 
     pub fn has_dirty_signals() -> bool {
-        RUNTIME.try_with(|rt| rt.dirty_signals.get()).unwrap_or(false)
+        RUNTIME
+            .try_with(|rt| rt.dirty_signals.get())
+            .unwrap_or(false)
     }
 
     pub fn take_dirty_signals() -> bool {
-        RUNTIME.try_with(|rt| rt.dirty_signals.replace(false)).unwrap_or(false)
+        RUNTIME
+            .try_with(|rt| rt.dirty_signals.replace(false))
+            .unwrap_or(false)
     }
 
     pub fn mark_dirty() {
@@ -164,13 +174,14 @@ impl ReactiveRuntime {
     }
 
     pub fn is_evaluating(sub_id: SubscriberId) -> bool {
-        RUNTIME.try_with(|rt| {
-            rt.evaluating_subscribers
-                .try_borrow()
-                .map(|stack| stack.contains(&sub_id))
-                .unwrap_or(false)
-        })
-        .unwrap_or(false)
+        RUNTIME
+            .try_with(|rt| {
+                rt.evaluating_subscribers
+                    .try_borrow()
+                    .map(|stack| stack.contains(&sub_id))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
     }
 
     pub fn register_signal_producer(signal_id: SignalId, sub_id: SubscriberId) {
@@ -185,16 +196,10 @@ impl ReactiveRuntime {
         RUNTIME.with(|rt| {
             if let Some(sub_id) = rt.current_subscriber.get() {
                 if let Ok(mut sig_subs) = rt.signal_subscribers.try_borrow_mut() {
-                    sig_subs
-                        .entry(signal_id)
-                        .or_default()
-                        .insert(sub_id);
+                    sig_subs.entry(signal_id).or_default().insert(sub_id);
                 }
                 if let Ok(mut sub_sigs) = rt.subscriber_signals.try_borrow_mut() {
-                    sub_sigs
-                        .entry(sub_id)
-                        .or_default()
-                        .insert(signal_id);
+                    sub_sigs.entry(sub_id).or_default().insert(signal_id);
                 }
 
                 // If this signal is produced by an upstream subscriber, update current subscriber's topological rank
@@ -265,17 +270,19 @@ impl ReactiveRuntime {
     }
 
     pub fn unregister_subscriber(sub_id: SubscriberId) {
-        let was_valid = RUNTIME.try_with(|rt| {
-            if let Ok(gens) = rt.subscriber_generations.try_borrow() {
-                if let Some(&gen) = gens.get(sub_id.index as usize) {
-                    gen == sub_id.generation
+        let was_valid = RUNTIME
+            .try_with(|rt| {
+                if let Ok(gens) = rt.subscriber_generations.try_borrow() {
+                    if let Some(&gen) = gens.get(sub_id.index as usize) {
+                        gen == sub_id.generation
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }
-            } else {
-                false
-            }
-        }).unwrap_or(false);
+            })
+            .unwrap_or(false);
 
         if !was_valid {
             return;
@@ -283,34 +290,37 @@ impl ReactiveRuntime {
 
         Self::clear_subscriber_dependencies(sub_id);
 
-        let removed = RUNTIME.try_with(|rt| {
-            if let Ok(mut ranks) = rt.subscriber_ranks.try_borrow_mut() {
-                if let Some(rank) = ranks.remove(&sub_id) {
-                    if let Ok(mut pending) = rt.pending_subscribers.try_borrow_mut() {
-                        pending.remove(&(rank, sub_id));
+        let removed = RUNTIME
+            .try_with(|rt| {
+                if let Ok(mut ranks) = rt.subscriber_ranks.try_borrow_mut() {
+                    if let Some(rank) = ranks.remove(&sub_id) {
+                        if let Ok(mut pending) = rt.pending_subscribers.try_borrow_mut() {
+                            pending.remove(&(rank, sub_id));
+                        }
                     }
                 }
-            }
-            if let Ok(mut producers) = rt.signal_producer.try_borrow_mut() {
-                producers.retain(|_, &mut prod_sub| prod_sub != sub_id);
-            }
-            if let Ok(mut gens) = rt.subscriber_generations.try_borrow_mut() {
-                if let Some(gen) = gens.get_mut(sub_id.index as usize) {
-                    *gen = gen.wrapping_add(1);
+                if let Ok(mut producers) = rt.signal_producer.try_borrow_mut() {
+                    producers.retain(|_, &mut prod_sub| prod_sub != sub_id);
                 }
-            }
-            if let Ok(mut free) = rt.free_subscriber_indices.try_borrow_mut() {
-                free.push(sub_id.index);
-            }
-            if let Ok(mut evaluating) = rt.evaluating_subscribers.try_borrow_mut() {
-                evaluating.retain(|&id| id != sub_id);
-            }
-            if let Ok(mut subs) = rt.subscribers.try_borrow_mut() {
-                subs.remove(&sub_id)
-            } else {
-                None
-            }
-        }).ok().flatten();
+                if let Ok(mut gens) = rt.subscriber_generations.try_borrow_mut() {
+                    if let Some(gen) = gens.get_mut(sub_id.index as usize) {
+                        *gen = gen.wrapping_add(1);
+                    }
+                }
+                if let Ok(mut free) = rt.free_subscriber_indices.try_borrow_mut() {
+                    free.push(sub_id.index);
+                }
+                if let Ok(mut evaluating) = rt.evaluating_subscribers.try_borrow_mut() {
+                    evaluating.retain(|&id| id != sub_id);
+                }
+                if let Ok(mut subs) = rt.subscribers.try_borrow_mut() {
+                    subs.remove(&sub_id)
+                } else {
+                    None
+                }
+            })
+            .ok()
+            .flatten();
         drop(removed);
     }
 
@@ -334,7 +344,10 @@ impl ReactiveRuntime {
                                 true
                             };
                             if is_alive {
-                                let rank = ranks.as_ref().and_then(|r| r.get(&sub).copied()).unwrap_or(0);
+                                let rank = ranks
+                                    .as_ref()
+                                    .and_then(|r| r.get(&sub).copied())
+                                    .unwrap_or(0);
                                 pending.insert((rank, sub));
                             } else {
                                 stale_subs.get_or_insert_with(Vec::new).push(sub);
@@ -579,9 +592,7 @@ impl<T: Clone + 'static> WriteSignal<T> {
 
 impl<T: std::fmt::Debug> std::fmt::Debug for WriteSignal<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WriteSignal")
-            .field("id", &self.id)
-            .finish()
+        f.debug_struct("WriteSignal").field("id", &self.id).finish()
     }
 }
 
@@ -743,9 +754,9 @@ impl<T: Clone + PartialEq + 'static> Memo<T> {
     pub fn untracked_get(&self) -> T {
         match self.value.borrow().as_ref() {
             Some(v) => v.clone(),
-            None => panic!(
-                "Strata Reactive Guard: Memo read before initial value could be computed."
-            ),
+            None => {
+                panic!("Strata Reactive Guard: Memo read before initial value could be computed.")
+            }
         }
     }
 }

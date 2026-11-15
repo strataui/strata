@@ -98,7 +98,11 @@ impl AppRuntime {
                         InputHitTarget {
                             input_index: this_idx,
                             input_id,
-                            entity_id: if layout.entity_id.is_valid() { Some(layout.entity_id) } else { None },
+                            entity_id: if layout.entity_id.is_valid() {
+                                Some(layout.entity_id)
+                            } else {
+                                None
+                            },
                             current_value,
                             font_size: layout.style.font_size,
                             line_height: layout.style.line_height,
@@ -124,7 +128,13 @@ impl AppRuntime {
                 }
 
                 for (&child_bp, child_layout) in flat.iter().zip(layout.children.iter()) {
-                    Self::collect_input_candidates_guarded(child_bp, child_layout, counter, out, depth + 1);
+                    Self::collect_input_candidates_guarded(
+                        child_bp,
+                        child_layout,
+                        counter,
+                        out,
+                        depth + 1,
+                    );
                 }
 
                 // If this is a container with cursor-text or wrapping an input, register a fallback candidate
@@ -145,7 +155,13 @@ impl AppRuntime {
                     let mut flat = Vec::new();
                     Self::flatten_blueprints(c, &mut flat);
                     for (&child_bp, child_layout) in flat.iter().zip(layout.children.iter()) {
-                        Self::collect_input_candidates_guarded(child_bp, child_layout, counter, out, depth + 1);
+                        Self::collect_input_candidates_guarded(
+                            child_bp,
+                            child_layout,
+                            counter,
+                            out,
+                            depth + 1,
+                        );
                     }
                 }
             }
@@ -414,9 +430,13 @@ impl AppRuntime {
                 }
 
                 for child_bp in flat {
-                    if let Some(found) =
-                        Self::find_input_blueprint_guarded(child_bp, target_index, target_id, counter, depth + 1)
-                    {
+                    if let Some(found) = Self::find_input_blueprint_guarded(
+                        child_bp,
+                        target_index,
+                        target_id,
+                        counter,
+                        depth + 1,
+                    ) {
                         return Some(found);
                     }
                 }
@@ -428,9 +448,13 @@ impl AppRuntime {
                     let mut flat = Vec::new();
                     Self::flatten_blueprints(c, &mut flat);
                     for child_bp in flat {
-                        if let Some(found) =
-                            Self::find_input_blueprint_guarded(child_bp, target_index, target_id, counter, depth + 1)
-                        {
+                        if let Some(found) = Self::find_input_blueprint_guarded(
+                            child_bp,
+                            target_index,
+                            target_id,
+                            counter,
+                            depth + 1,
+                        ) {
                             return Some(found);
                         }
                     }
@@ -440,5 +464,4 @@ impl AppRuntime {
             _ => None,
         }
     }
-
 }

@@ -152,7 +152,11 @@ mod tests {
 
     #[test]
     fn test_roving_tabindex_horizontal() {
-        let items = vec!["tab-0".to_string(), "tab-1".to_string(), "tab-2".to_string()];
+        let items = vec![
+            "tab-0".to_string(),
+            "tab-1".to_string(),
+            "tab-2".to_string(),
+        ];
         let mut roving = RovingTabIndex::new(items, Orientation::Horizontal);
         roving.set_disabled(vec![1]); // Disable middle tab
 

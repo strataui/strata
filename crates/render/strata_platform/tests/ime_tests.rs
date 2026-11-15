@@ -1,8 +1,8 @@
 //! Integration tests for Operating System IME (Input Method Editor) and CJK text composition.
 
 use strata_platform::{
-    gtk_reset_ime, gtk_set_ime_cursor_location, gtk_set_ime_surrounding_text,
-    MockPlatformWindow, PlatformEvent, PlatformWindow, WindowConfig,
+    gtk_reset_ime, gtk_set_ime_cursor_location, gtk_set_ime_surrounding_text, MockPlatformWindow,
+    PlatformEvent, PlatformWindow, WindowConfig,
 };
 
 #[test]

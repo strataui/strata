@@ -32,19 +32,52 @@ fn test_border_junction_resolution_and_box_drawing() {
     use strata_tui::borders::cardinal::*;
 
     // Rounded Corners
-    assert_eq!(resolve_border_junction(SOUTH | EAST, BorderJunctionStyle::Rounded), '╭');
-    assert_eq!(resolve_border_junction(SOUTH | WEST, BorderJunctionStyle::Rounded), '╮');
-    assert_eq!(resolve_border_junction(NORTH | EAST, BorderJunctionStyle::Rounded), '╰');
-    assert_eq!(resolve_border_junction(NORTH | WEST, BorderJunctionStyle::Rounded), '╯');
-    assert_eq!(resolve_border_junction(EAST | WEST, BorderJunctionStyle::Rounded), '─');
-    assert_eq!(resolve_border_junction(NORTH | SOUTH, BorderJunctionStyle::Rounded), '│');
-    assert_eq!(resolve_border_junction(NORTH | SOUTH | EAST | WEST, BorderJunctionStyle::Rounded), '┼');
+    assert_eq!(
+        resolve_border_junction(SOUTH | EAST, BorderJunctionStyle::Rounded),
+        '╭'
+    );
+    assert_eq!(
+        resolve_border_junction(SOUTH | WEST, BorderJunctionStyle::Rounded),
+        '╮'
+    );
+    assert_eq!(
+        resolve_border_junction(NORTH | EAST, BorderJunctionStyle::Rounded),
+        '╰'
+    );
+    assert_eq!(
+        resolve_border_junction(NORTH | WEST, BorderJunctionStyle::Rounded),
+        '╯'
+    );
+    assert_eq!(
+        resolve_border_junction(EAST | WEST, BorderJunctionStyle::Rounded),
+        '─'
+    );
+    assert_eq!(
+        resolve_border_junction(NORTH | SOUTH, BorderJunctionStyle::Rounded),
+        '│'
+    );
+    assert_eq!(
+        resolve_border_junction(NORTH | SOUTH | EAST | WEST, BorderJunctionStyle::Rounded),
+        '┼'
+    );
 
     // Double Border Corners
-    assert_eq!(resolve_border_junction(SOUTH | EAST, BorderJunctionStyle::Double), '╔');
-    assert_eq!(resolve_border_junction(SOUTH | WEST, BorderJunctionStyle::Double), '╗');
-    assert_eq!(resolve_border_junction(NORTH | EAST, BorderJunctionStyle::Double), '╚');
-    assert_eq!(resolve_border_junction(NORTH | WEST, BorderJunctionStyle::Double), '╝');
+    assert_eq!(
+        resolve_border_junction(SOUTH | EAST, BorderJunctionStyle::Double),
+        '╔'
+    );
+    assert_eq!(
+        resolve_border_junction(SOUTH | WEST, BorderJunctionStyle::Double),
+        '╗'
+    );
+    assert_eq!(
+        resolve_border_junction(NORTH | EAST, BorderJunctionStyle::Double),
+        '╚'
+    );
+    assert_eq!(
+        resolve_border_junction(NORTH | WEST, BorderJunctionStyle::Double),
+        '╝'
+    );
 
     // Box drawing test on screen
     let mut screen = TerminalScreen::new(10, 6);
@@ -205,8 +238,8 @@ fn test_conditional_tui_components() {
 fn test_grid_and_flexbox_tui_quantization_exact_sums() {
     let _guard = TUI_MUTEX.lock().unwrap();
     use strata_layout::LayoutNode;
-    use strata_style::ComputedStyle;
     use strata_style::types::{Dimension, Display, FlexDirection, GridTrack};
+    use strata_style::ComputedStyle;
 
     // 1. Grid layout in TUI mode: 3 tracks of 1fr in an 80-wide container
     set_tui_target_active(true);
@@ -214,11 +247,8 @@ fn test_grid_and_flexbox_tui_quantization_exact_sums() {
     let mut grid_node = LayoutNode::new(ComputedStyle::default());
     grid_node.style.display = Display::Grid;
     grid_node.style.width = Dimension::Px(80.0);
-    grid_node.style.grid_template_columns = vec![
-        GridTrack::Fr(1.0),
-        GridTrack::Fr(1.0),
-        GridTrack::Fr(1.0),
-    ];
+    grid_node.style.grid_template_columns =
+        vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0), GridTrack::Fr(1.0)];
     grid_node.children = vec![
         LayoutNode::new(ComputedStyle::default()),
         LayoutNode::new(ComputedStyle::default()),
@@ -367,5 +397,3 @@ fn test_tui_compositor_render_rsx_view() {
     assert!(ansi.contains("Title"));
     assert!(ansi.contains("Paragraph"));
 }
-
-

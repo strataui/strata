@@ -169,16 +169,19 @@ fn test_custom_depth_guard_exhaustion() {
     assert_eq!(g3.current_depth(), 3);
     assert!(g3.is_exhausted());
 
-    assert!(g3.enter().is_none(), "Depth 3 must exhaust guard with max_depth 3");
+    assert!(
+        g3.enter().is_none(),
+        "Depth 3 must exhaust guard with max_depth 3"
+    );
 }
 
 #[test]
 fn test_layout_overflow_callback_and_diagnostic_reporting() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use strata_layout::tree::{
         clear_layout_overflow, last_layout_overflow, set_on_layout_overflow, LayoutDepthGuard,
     };
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
 
     clear_layout_overflow();
     assert_eq!(last_layout_overflow(), None);
@@ -210,4 +213,3 @@ fn test_layout_overflow_callback_and_diagnostic_reporting() {
     assert_eq!(last_layout_overflow(), None);
     set_on_layout_overflow::<fn(usize, usize)>(None);
 }
-

@@ -13,14 +13,20 @@ pub struct LocaleId {
 
 impl LocaleId {
     /// Create a new `LocaleId` with language, optional script, and optional region.
-    pub fn new(language: impl Into<String>, script: Option<String>, region: Option<String>) -> Self {
+    pub fn new(
+        language: impl Into<String>,
+        script: Option<String>,
+        region: Option<String>,
+    ) -> Self {
         Self {
             language: language.into().to_ascii_lowercase(),
             script: script.map(|s| {
                 let mut c = s.chars();
                 match c.next() {
                     None => String::new(),
-                    Some(f) => f.to_uppercase().collect::<String>() + &c.as_str().to_ascii_lowercase(),
+                    Some(f) => {
+                        f.to_uppercase().collect::<String>() + &c.as_str().to_ascii_lowercase()
+                    }
                 }
             }),
             region: region.map(|r| r.to_ascii_uppercase()),

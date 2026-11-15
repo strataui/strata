@@ -57,5 +57,8 @@ fn test_official_w3c_compliance_percentage_helper() {
 fn test_core_baseline_fourteen_vectors_remain_backward_compatible() {
     let baseline = InternalLayoutRegressionSuite::run_all();
     assert_eq!(baseline.len(), 14);
-    assert_eq!(InternalLayoutRegressionSuite::compliance_percentage(), 100.0);
+    assert_eq!(
+        InternalLayoutRegressionSuite::compliance_percentage(),
+        100.0
+    );
 }

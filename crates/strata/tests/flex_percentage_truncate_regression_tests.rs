@@ -61,7 +61,8 @@ fn test_e2e_nested_percentage_splits_and_column_flex1_without_h_full() {
     let sidebar_tree = &left_pane.children[1];
     assert!((left_pane.geometry.border_box.width - 345.0).abs() <= 2.0);
     assert!(
-        (sidebar_header.geometry.border_box.width - left_pane.geometry.border_box.width).abs() <= 1.0,
+        (sidebar_header.geometry.border_box.width - left_pane.geometry.border_box.width).abs()
+            <= 1.0,
         "sidebar header width {} != left pane width {}",
         sidebar_header.geometry.border_box.width,
         left_pane.geometry.border_box.width

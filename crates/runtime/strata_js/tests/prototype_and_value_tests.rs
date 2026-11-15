@@ -28,14 +28,38 @@ fn test_first_class_functions_and_symbols_typeof() {
 
     engine.eval(script).expect("Execution failed");
 
-    assert_eq!(engine.globals.get("t_reg"), Some(&JsValue::String("function".to_string())));
-    assert_eq!(engine.globals.get("t_arr"), Some(&JsValue::String("function".to_string())));
-    assert_eq!(engine.globals.get("t_sym"), Some(&JsValue::String("symbol".to_string())));
-    assert_eq!(engine.globals.get("t_num"), Some(&JsValue::String("number".to_string())));
-    assert_eq!(engine.globals.get("t_str"), Some(&JsValue::String("string".to_string())));
-    assert_eq!(engine.globals.get("t_obj"), Some(&JsValue::String("object".to_string())));
-    assert_eq!(engine.globals.get("t_arr_obj"), Some(&JsValue::String("object".to_string())));
-    assert_eq!(engine.globals.get("t_und"), Some(&JsValue::String("undefined".to_string())));
+    assert_eq!(
+        engine.globals.get("t_reg"),
+        Some(&JsValue::String("function".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("t_arr"),
+        Some(&JsValue::String("function".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("t_sym"),
+        Some(&JsValue::String("symbol".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("t_num"),
+        Some(&JsValue::String("number".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("t_str"),
+        Some(&JsValue::String("string".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("t_obj"),
+        Some(&JsValue::String("object".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("t_arr_obj"),
+        Some(&JsValue::String("object".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("t_und"),
+        Some(&JsValue::String("undefined".to_string()))
+    );
 }
 
 #[test]
@@ -67,10 +91,22 @@ fn test_symbol_uniqueness_and_global_registry() {
     engine.eval(script).expect("Execution failed");
 
     assert_eq!(engine.globals.get("are_unique"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("s1_desc"), Some(&JsValue::String("my_symbol".to_string())));
-    assert_eq!(engine.globals.get("are_same_global"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("g_key"), Some(&JsValue::String("app.state".to_string())));
-    assert_eq!(engine.globals.get("t_iter"), Some(&JsValue::String("symbol".to_string())));
+    assert_eq!(
+        engine.globals.get("s1_desc"),
+        Some(&JsValue::String("my_symbol".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("are_same_global"),
+        Some(&JsValue::Bool(true))
+    );
+    assert_eq!(
+        engine.globals.get("g_key"),
+        Some(&JsValue::String("app.state".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("t_iter"),
+        Some(&JsValue::String("symbol".to_string()))
+    );
     assert_eq!(
         engine.globals.get("symbol_ctor_error"),
         Some(&JsValue::String("Symbol is not a constructor".to_string()))
@@ -107,14 +143,35 @@ fn test_prototype_inheritance_chain_and_delegation() {
 
     engine.eval(script).expect("Execution failed");
 
-    assert_eq!(engine.globals.get("child_name"), Some(&JsValue::String("leaf".to_string())));
-    assert_eq!(engine.globals.get("child_tier"), Some(&JsValue::String("core".to_string())));
-    assert_eq!(engine.globals.get("child_realm"), Some(&JsValue::String("strata".to_string())));
+    assert_eq!(
+        engine.globals.get("child_name"),
+        Some(&JsValue::String("leaf".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("child_tier"),
+        Some(&JsValue::String("core".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("child_realm"),
+        Some(&JsValue::String("strata".to_string()))
+    );
 
-    assert_eq!(engine.globals.get("has_own_name"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("has_own_tier"), Some(&JsValue::Bool(false)));
-    assert_eq!(engine.globals.get("has_own_realm"), Some(&JsValue::Bool(false)));
-    assert_eq!(engine.globals.get("is_parent_proto"), Some(&JsValue::Bool(true)));
+    assert_eq!(
+        engine.globals.get("has_own_name"),
+        Some(&JsValue::Bool(true))
+    );
+    assert_eq!(
+        engine.globals.get("has_own_tier"),
+        Some(&JsValue::Bool(false))
+    );
+    assert_eq!(
+        engine.globals.get("has_own_realm"),
+        Some(&JsValue::Bool(false))
+    );
+    assert_eq!(
+        engine.globals.get("is_parent_proto"),
+        Some(&JsValue::Bool(true))
+    );
 }
 
 #[test]
@@ -191,19 +248,44 @@ fn test_standard_error_hierarchy_and_runtime_traps() {
 
     engine.eval(script).expect("Execution failed");
 
-    assert_eq!(engine.globals.get("is_type_err"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("is_generic_err"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("err_name"), Some(&JsValue::String("TypeError".to_string())));
+    assert_eq!(
+        engine.globals.get("is_type_err"),
+        Some(&JsValue::Bool(true))
+    );
+    assert_eq!(
+        engine.globals.get("is_generic_err"),
+        Some(&JsValue::Bool(true))
+    );
+    assert_eq!(
+        engine.globals.get("err_name"),
+        Some(&JsValue::String("TypeError".to_string()))
+    );
     assert_eq!(
         engine.globals.get("err_msg"),
         Some(&JsValue::String("invalid widget reference".to_string()))
     );
 
-    assert_eq!(engine.globals.get("nullTrapName"), Some(&JsValue::String("TypeError".to_string())));
-    assert!(engine.globals.get("nullTrapMsg").unwrap().to_string().contains("Cannot read properties"));
+    assert_eq!(
+        engine.globals.get("nullTrapName"),
+        Some(&JsValue::String("TypeError".to_string()))
+    );
+    assert!(engine
+        .globals
+        .get("nullTrapMsg")
+        .unwrap()
+        .to_string()
+        .contains("Cannot read properties"));
 
-    assert_eq!(engine.globals.get("refTrapName"), Some(&JsValue::String("ReferenceError".to_string())));
-    assert!(engine.globals.get("refTrapMsg").unwrap().to_string().contains("not defined"));
+    assert_eq!(
+        engine.globals.get("refTrapName"),
+        Some(&JsValue::String("ReferenceError".to_string()))
+    );
+    assert!(engine
+        .globals
+        .get("refTrapMsg")
+        .unwrap()
+        .to_string()
+        .contains("not defined"));
 }
 
 #[test]
@@ -215,4 +297,3 @@ fn test_sealed_prototype_pollution_rejection_all_builtins() {
     assert!(engine.eval("String.prototype.polluted = 1;").is_err());
     assert!(engine.eval("Error.prototype.polluted = 1;").is_err());
 }
-

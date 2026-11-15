@@ -72,7 +72,10 @@ impl AnimatePresenceState {
 
     /// Checks if a key is currently playing its exit animation.
     pub fn is_exiting(&self, key: &str) -> bool {
-        self.items.get().iter().any(|it| it.key == key && !it.is_present)
+        self.items
+            .get()
+            .iter()
+            .any(|it| it.key == key && !it.is_present)
     }
 }
 

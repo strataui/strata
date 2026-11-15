@@ -18,7 +18,9 @@ impl JsEngine {
             StatementFlow::Normal(v) | StatementFlow::Return(v) | StatementFlow::Yield(v) => Ok(v),
             StatementFlow::Throw(err) => Err(format!("Uncaught exception: {err}")),
             StatementFlow::Break(_) => Err("SyntaxError: Illegal break statement".to_string()),
-            StatementFlow::Continue(_) => Err("SyntaxError: Illegal continue statement".to_string()),
+            StatementFlow::Continue(_) => {
+                Err("SyntaxError: Illegal continue statement".to_string())
+            }
         }
     }
 
@@ -66,7 +68,11 @@ impl JsEngine {
                         for prop in properties {
                             matched_keys.insert(prop.source_key.clone());
                             let mut prop_val = match &val {
-                                JsValue::Object(cell) => cell.borrow().get(&prop.source_key).cloned().unwrap_or(JsValue::Undefined),
+                                JsValue::Object(cell) => cell
+                                    .borrow()
+                                    .get(&prop.source_key)
+                                    .cloned()
+                                    .unwrap_or(JsValue::Undefined),
                                 _ => JsValue::Undefined,
                             };
                             if matches!(prop_val, JsValue::Undefined) {
@@ -74,7 +80,9 @@ impl JsEngine {
                                     prop_val = self.eval_expr(def_expr)?;
                                 }
                             }
-                            self.current_scope.borrow_mut().declare(&prop.target_name, prop_val.clone());
+                            self.current_scope
+                                .borrow_mut()
+                                .declare(&prop.target_name, prop_val.clone());
                             if self.current_scope.borrow().parent.is_none() {
                                 self.globals.insert(prop.target_name.clone(), prop_val);
                             }
@@ -89,7 +97,9 @@ impl JsEngine {
                                 }
                             }
                             let rest_val = JsValue::new_object(rest_map);
-                            self.current_scope.borrow_mut().declare(rest_name, rest_val.clone());
+                            self.current_scope
+                                .borrow_mut()
+                                .declare(rest_name, rest_val.clone());
                             if self.current_scope.borrow().parent.is_none() {
                                 self.globals.insert(rest_name.clone(), rest_val);
                             }
@@ -100,8 +110,16 @@ impl JsEngine {
                         for elem_opt in elements {
                             if let Some(elem) = elem_opt {
                                 let mut elem_val = match &val {
-                                    JsValue::Array(cell) => cell.borrow().get(idx).cloned().unwrap_or(JsValue::Undefined),
-                                    JsValue::String(s) => s.chars().nth(idx).map(|c| JsValue::String(c.to_string())).unwrap_or(JsValue::Undefined),
+                                    JsValue::Array(cell) => cell
+                                        .borrow()
+                                        .get(idx)
+                                        .cloned()
+                                        .unwrap_or(JsValue::Undefined),
+                                    JsValue::String(s) => s
+                                        .chars()
+                                        .nth(idx)
+                                        .map(|c| JsValue::String(c.to_string()))
+                                        .unwrap_or(JsValue::Undefined),
                                     _ => JsValue::Undefined,
                                 };
                                 if matches!(elem_val, JsValue::Undefined) {
@@ -109,7 +127,9 @@ impl JsEngine {
                                         elem_val = self.eval_expr(def_expr)?;
                                     }
                                 }
-                                self.current_scope.borrow_mut().declare(&elem.target_name, elem_val.clone());
+                                self.current_scope
+                                    .borrow_mut()
+                                    .declare(&elem.target_name, elem_val.clone());
                                 if self.current_scope.borrow().parent.is_none() {
                                     self.globals.insert(elem.target_name.clone(), elem_val);
                                 }
@@ -129,7 +149,9 @@ impl JsEngine {
                                 _ => Vec::new(),
                             };
                             let rest_val = JsValue::new_array(rest_items);
-                            self.current_scope.borrow_mut().declare(rest_name, rest_val.clone());
+                            self.current_scope
+                                .borrow_mut()
+                                .declare(rest_name, rest_val.clone());
                             if self.current_scope.borrow().parent.is_none() {
                                 self.globals.insert(rest_name.clone(), rest_val);
                             }
@@ -247,7 +269,9 @@ impl JsEngine {
                 };
                 let fn_val = JsValue::Function(ClosureHandle::new(closure_id, Some(name.clone())));
                 self.closures.insert(closure_id, closure.clone());
-                self.current_scope.borrow_mut().declare(name, fn_val.clone());
+                self.current_scope
+                    .borrow_mut()
+                    .declare(name, fn_val.clone());
                 if self.current_scope.borrow().parent.is_none() {
                     self.globals.insert(name.clone(), fn_val);
                     self.user_functions.insert(name.clone(), closure);
@@ -264,17 +288,22 @@ impl JsEngine {
                 for (m_name, params, body) in methods {
                     methods_map.insert(m_name.clone(), (params.clone(), body.clone()));
                 }
-                self.classes.insert(name.clone(), ClassDef {
-                    name: name.clone(),
-                    super_class: super_class.clone(),
-                    constructor: constructor.clone(),
-                    methods: methods_map,
-                });
+                self.classes.insert(
+                    name.clone(),
+                    ClassDef {
+                        name: name.clone(),
+                        super_class: super_class.clone(),
+                        constructor: constructor.clone(),
+                        methods: methods_map,
+                    },
+                );
                 let mut class_meta = BTreeMap::new();
                 class_meta.insert("__class_name__".to_string(), JsValue::String(name.clone()));
                 class_meta.insert("__is_class__".to_string(), JsValue::Bool(true));
                 let class_val = JsValue::new_object(class_meta);
-                self.current_scope.borrow_mut().declare(name, class_val.clone());
+                self.current_scope
+                    .borrow_mut()
+                    .declare(name, class_val.clone());
                 if self.current_scope.borrow().parent.is_none() {
                     self.globals.insert(name.clone(), class_val);
                 }
@@ -331,7 +360,10 @@ impl JsEngine {
             }
             Stmt::Break(label) => Ok(StatementFlow::Break(label.clone())),
             Stmt::Continue(label) => Ok(StatementFlow::Continue(label.clone())),
-            Stmt::Switch { discriminant, cases } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
                 let disc_val = self.eval_expr(discriminant)?;
                 let mut matched_index = None;
                 let mut default_index = None;
@@ -357,7 +389,9 @@ impl JsEngine {
                             match self.execute_stmt_flow(stmt)? {
                                 StatementFlow::Normal(v) => res = v,
                                 StatementFlow::Break(_) => return Ok(StatementFlow::Normal(res)),
-                                StatementFlow::Continue(lbl) => return Ok(StatementFlow::Continue(lbl)),
+                                StatementFlow::Continue(lbl) => {
+                                    return Ok(StatementFlow::Continue(lbl))
+                                }
                                 StatementFlow::Return(v) => return Ok(StatementFlow::Return(v)),
                                 StatementFlow::Throw(v) => return Ok(StatementFlow::Throw(v)),
                                 StatementFlow::Yield(v) => return Ok(StatementFlow::Yield(v)),
@@ -403,14 +437,28 @@ impl JsEngine {
                 };
 
                 // Check built-in prototype mutation guard
-                if let Expr::Member { object: ref base, property: ref base_prop, .. } = &**object {
+                if let Expr::Member {
+                    object: ref base,
+                    property: ref base_prop,
+                    ..
+                } = &**object
+                {
                     if let Expr::Identifier(ref ctor_id) = &**base {
                         if base_prop == "prototype" {
                             if self.freeze_prototypes {
-                                return Err(format!("TypeError: Cannot modify frozen prototype {ctor_id}.prototype"));
+                                return Err(format!(
+                                    "TypeError: Cannot modify frozen prototype {ctor_id}.prototype"
+                                ));
                             }
-                            if !self.allow_prototype_mutation && matches!(ctor_id.as_str(), "Object" | "Array" | "Function" | "String" | "Error") {
-                                return Err(format!("TypeError: Cannot modify sealed prototype {ctor_id}.prototype"));
+                            if !self.allow_prototype_mutation
+                                && matches!(
+                                    ctor_id.as_str(),
+                                    "Object" | "Array" | "Function" | "String" | "Error"
+                                )
+                            {
+                                return Err(format!(
+                                    "TypeError: Cannot modify sealed prototype {ctor_id}.prototype"
+                                ));
                             }
                             match ctor_id.as_str() {
                                 "Array" => {
@@ -444,7 +492,12 @@ impl JsEngine {
                         return Ok(());
                     }
                 }
-                if let Expr::Member { object: parent_obj, property: parent_prop, .. } = &**object {
+                if let Expr::Member {
+                    object: parent_obj,
+                    property: parent_prop,
+                    ..
+                } = &**object
+                {
                     if let Expr::Identifier(id) = &**parent_obj {
                         if id == "document" && parent_prop == "body" {
                             if key == "innerHTML" {
@@ -507,7 +560,8 @@ impl JsEngine {
                     }
                 }
 
-                if key == "__proto__" && (self.freeze_prototypes || !self.allow_prototype_mutation) {
+                if key == "__proto__" && (self.freeze_prototypes || !self.allow_prototype_mutation)
+                {
                     return Err("TypeError: Cannot modify prototype in sealed mode".to_string());
                 }
 
@@ -527,8 +581,10 @@ impl JsEngine {
                         if let Some(set_trap) = handler.get_prop("set") {
                             if set_trap.is_function() {
                                 let receiver = obj.clone();
-                                let trap_args = vec![target.clone(), JsValue::String(key), val, receiver];
-                                let _ = self.call_value_with_this(&set_trap, trap_args, Some(handler))?;
+                                let trap_args =
+                                    vec![target.clone(), JsValue::String(key), val, receiver];
+                                let _ =
+                                    self.call_value_with_this(&set_trap, trap_args, Some(handler))?;
                                 return Ok(());
                             }
                         }
@@ -564,7 +620,11 @@ impl JsEngine {
                 }
 
                 if matches!(obj, JsValue::Null | JsValue::Undefined) {
-                    return Err(format!("TypeError: Cannot set properties of {} (setting '{}')", obj.js_typeof(), key));
+                    return Err(format!(
+                        "TypeError: Cannot set properties of {} (setting '{}')",
+                        obj.js_typeof(),
+                        key
+                    ));
                 }
 
                 Ok(())
@@ -592,7 +652,11 @@ impl JsEngine {
                         break;
                     } else {
                         let item_val = match &val {
-                            JsValue::Array(cell) => cell.borrow().get(idx).cloned().unwrap_or(JsValue::Undefined),
+                            JsValue::Array(cell) => cell
+                                .borrow()
+                                .get(idx)
+                                .cloned()
+                                .unwrap_or(JsValue::Undefined),
                             _ => JsValue::Undefined,
                         };
                         self.assign_target(item, item_val)?;
@@ -617,7 +681,9 @@ impl JsEngine {
                     } else {
                         matched_keys.insert(k.clone());
                         let item_val = match &val {
-                            JsValue::Object(cell) => cell.borrow().get(k).cloned().unwrap_or(JsValue::Undefined),
+                            JsValue::Object(cell) => {
+                                cell.borrow().get(k).cloned().unwrap_or(JsValue::Undefined)
+                            }
                             _ => JsValue::Undefined,
                         };
                         self.assign_target(target_expr, item_val)?;
@@ -650,14 +716,23 @@ impl JsEngine {
                     }
                     return self.call_function(name, args);
                 }
-                Err(format!("TypeError: Function #{} is not callable", handle.id))
+                Err(format!(
+                    "TypeError: Function #{} is not callable",
+                    handle.id
+                ))
             }
             JsValue::String(name) => self.call_function(name, args),
             JsValue::Object(map) => {
                 let (cid, fn_name) = {
                     let b = map.borrow();
-                    let cid = b.get("__closure_id__").and_then(|v| v.as_f64()).map(|n| n as u64);
-                    let fn_name = b.get("__fn__").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let cid = b
+                        .get("__closure_id__")
+                        .and_then(|v| v.as_f64())
+                        .map(|n| n as u64);
+                    let fn_name = b
+                        .get("__fn__")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     (cid, fn_name)
                 };
                 if let Some(id) = cid {
@@ -677,7 +752,9 @@ impl JsEngine {
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<JsValue, String> {
         if self.eval_depth >= MAX_EVAL_DEPTH {
-            return Err("RangeError: Maximum call stack size exceeded (eval recursion limit)".to_string());
+            return Err(
+                "RangeError: Maximum call stack size exceeded (eval recursion limit)".to_string(),
+            );
         }
         self.eval_depth += 1;
         let res = self.eval_expr_inner(expr);
@@ -723,55 +800,54 @@ impl JsEngine {
                     _ => Err(format!("ReferenceError: {name} is not defined")),
                 }
             }
-            Expr::Binary { op, left, right } => {
-                match op {
-                    BinaryOp::Or => {
-                        let l_val = self.eval_expr(left)?;
-                        if l_val.is_truthy() {
-                            return Ok(l_val);
-                        }
-                        self.eval_expr(right)
+            Expr::Binary { op, left, right } => match op {
+                BinaryOp::Or => {
+                    let l_val = self.eval_expr(left)?;
+                    if l_val.is_truthy() {
+                        return Ok(l_val);
                     }
-                    BinaryOp::And => {
-                        let l_val = self.eval_expr(left)?;
-                        if !l_val.is_truthy() {
-                            return Ok(l_val);
-                        }
-                        self.eval_expr(right)
-                    }
-                    BinaryOp::NullishCoalescing => {
-                        let l_val = self.eval_expr(left)?;
-                        if !matches!(l_val, JsValue::Null | JsValue::Undefined) {
-                            return Ok(l_val);
-                        }
-                        self.eval_expr(right)
-                    }
-                    BinaryOp::InstanceOf => {
-                        let l_val = self.eval_expr(left)?;
-                        let class_name = match &**right {
-                            Expr::Identifier(ref id) => id.clone(),
-                            Expr::Literal(JsValue::String(ref s)) => s.clone(),
-                            other => {
-                                let rv = self.eval_expr(other)?;
-                                if let JsValue::Object(map) = rv {
-                                    map.borrow().get("__class_name__")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string()
-                                } else {
-                                    String::new()
-                                }
-                            }
-                        };
-                        Ok(JsValue::Bool(self.is_instance_of(&l_val, &class_name)))
-                    }
-                    _ => {
-                        let l_val = self.eval_expr(left)?;
-                        let r_val = self.eval_expr(right)?;
-                        self.eval_binary(op, &l_val, &r_val)
-                    }
+                    self.eval_expr(right)
                 }
-            }
+                BinaryOp::And => {
+                    let l_val = self.eval_expr(left)?;
+                    if !l_val.is_truthy() {
+                        return Ok(l_val);
+                    }
+                    self.eval_expr(right)
+                }
+                BinaryOp::NullishCoalescing => {
+                    let l_val = self.eval_expr(left)?;
+                    if !matches!(l_val, JsValue::Null | JsValue::Undefined) {
+                        return Ok(l_val);
+                    }
+                    self.eval_expr(right)
+                }
+                BinaryOp::InstanceOf => {
+                    let l_val = self.eval_expr(left)?;
+                    let class_name = match &**right {
+                        Expr::Identifier(ref id) => id.clone(),
+                        Expr::Literal(JsValue::String(ref s)) => s.clone(),
+                        other => {
+                            let rv = self.eval_expr(other)?;
+                            if let JsValue::Object(map) = rv {
+                                map.borrow()
+                                    .get("__class_name__")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string()
+                            } else {
+                                String::new()
+                            }
+                        }
+                    };
+                    Ok(JsValue::Bool(self.is_instance_of(&l_val, &class_name)))
+                }
+                _ => {
+                    let l_val = self.eval_expr(left)?;
+                    let r_val = self.eval_expr(right)?;
+                    self.eval_binary(op, &l_val, &r_val)
+                }
+            },
             Expr::Unary { op, expr } => {
                 if *op == UnaryOp::Typeof {
                     if let Expr::Identifier(ref name) = &**expr {
@@ -787,33 +863,29 @@ impl JsEngine {
                 let val = self.eval_expr(expr)?;
                 match op {
                     UnaryOp::Not => Ok(JsValue::Bool(!val.is_truthy())),
-                    UnaryOp::Neg => {
-                        match val {
-                            JsValue::BigInt(bi) => Ok(JsValue::BigInt(bi.neg())),
-                            _ => {
-                                let n = val.as_f64().unwrap_or(0.0);
-                                Ok(JsValue::Number(-n))
-                            }
+                    UnaryOp::Neg => match val {
+                        JsValue::BigInt(bi) => Ok(JsValue::BigInt(bi.neg())),
+                        _ => {
+                            let n = val.as_f64().unwrap_or(0.0);
+                            Ok(JsValue::Number(-n))
                         }
-                    }
-                    UnaryOp::Pos => {
-                        match val {
-                            JsValue::BigInt(_) => Err("TypeError: Cannot convert a BigInt value to a number".to_string()),
-                            _ => {
-                                let n = val.as_f64().unwrap_or(0.0);
-                                Ok(JsValue::Number(n))
-                            }
+                    },
+                    UnaryOp::Pos => match val {
+                        JsValue::BigInt(_) => {
+                            Err("TypeError: Cannot convert a BigInt value to a number".to_string())
                         }
-                    }
-                    UnaryOp::BitNot => {
-                        match val {
-                            JsValue::BigInt(bi) => Ok(JsValue::BigInt(bi.bit_not())),
-                            _ => {
-                                let n = val.as_f64().unwrap_or(0.0) as i64 as i32;
-                                Ok(JsValue::Number((!n) as f64))
-                            }
+                        _ => {
+                            let n = val.as_f64().unwrap_or(0.0);
+                            Ok(JsValue::Number(n))
                         }
-                    }
+                    },
+                    UnaryOp::BitNot => match val {
+                        JsValue::BigInt(bi) => Ok(JsValue::BigInt(bi.bit_not())),
+                        _ => {
+                            let n = val.as_f64().unwrap_or(0.0) as i64 as i32;
+                            Ok(JsValue::Number((!n) as f64))
+                        }
+                    },
                     UnaryOp::Typeof => Ok(JsValue::String(val.js_typeof().to_string())),
                 }
             }
@@ -831,7 +903,10 @@ impl JsEngine {
                                 JsValue::Bool(b) => out.push_str(&format!("{b}")),
                                 JsValue::Null => out.push_str("null"),
                                 JsValue::Undefined => out.push_str("undefined"),
-                                other => out.push_str(&stringify_json(&other).unwrap_or_else(|_| "[object Object]".to_string())),
+                                other => out.push_str(
+                                    &stringify_json(&other)
+                                        .unwrap_or_else(|_| "[object Object]".to_string()),
+                                ),
                             }
                         }
                     }
@@ -861,7 +936,10 @@ impl JsEngine {
                     is_generator: false,
                 };
                 self.closures.insert(closure_id, closure);
-                Ok(JsValue::Function(ClosureHandle::new(closure_id, Some(fn_name))))
+                Ok(JsValue::Function(ClosureHandle::new(
+                    closure_id,
+                    Some(fn_name),
+                )))
             }
             Expr::Await(inner) => {
                 let val = self.eval_expr(inner)?;
@@ -893,7 +971,8 @@ impl JsEngine {
                                     if start.elapsed() > max_wait {
                                         break;
                                     }
-                                    let sleep_chunk = wait_dur.min(std::time::Duration::from_millis(5));
+                                    let sleep_chunk =
+                                        wait_dur.min(std::time::Duration::from_millis(5));
                                     if sleep_chunk > std::time::Duration::ZERO {
                                         std::thread::sleep(sleep_chunk);
                                     } else {
@@ -974,13 +1053,21 @@ impl JsEngine {
                         if let Some(JsValue::String(super_name)) = super_class_opt {
                             let super_ctor = self.resolve_constructor(&super_name);
                             if let Some((params, body, next_super)) = super_ctor {
-                                let current_this = self.current_scope.borrow().get("this").unwrap_or(JsValue::Undefined);
+                                let current_this = self
+                                    .current_scope
+                                    .borrow()
+                                    .get("this")
+                                    .unwrap_or(JsValue::Undefined);
                                 let super_scope = Scope::new_child(self.current_scope.clone());
                                 super_scope.borrow_mut().declare("this", current_this);
                                 if let Some(ns) = next_super {
-                                    super_scope.borrow_mut().declare("__super_class__", JsValue::String(ns));
+                                    super_scope
+                                        .borrow_mut()
+                                        .declare("__super_class__", JsValue::String(ns));
                                 }
-                                super_scope.borrow_mut().declare("__current_class__", JsValue::String(super_name));
+                                super_scope
+                                    .borrow_mut()
+                                    .declare("__current_class__", JsValue::String(super_name));
 
                                 bind_parameters(&params, evaluated_args, &super_scope);
 
@@ -988,7 +1075,7 @@ impl JsEngine {
                                 self.current_scope = super_scope.clone();
 
                                 let mut err = None;
-                                 for stmt in &body {
+                                for stmt in &body {
                                     match self.execute_stmt_flow(stmt) {
                                         Ok(StatementFlow::Normal(_)) => {}
                                         Ok(StatementFlow::Return(_)) => break,
@@ -997,11 +1084,16 @@ impl JsEngine {
                                             break;
                                         }
                                         Ok(StatementFlow::Break(_)) => {
-                                            err = Some("SyntaxError: Illegal break statement".to_string());
+                                            err = Some(
+                                                "SyntaxError: Illegal break statement".to_string(),
+                                            );
                                             break;
                                         }
                                         Ok(StatementFlow::Continue(_)) => {
-                                            err = Some("SyntaxError: Illegal continue statement".to_string());
+                                            err = Some(
+                                                "SyntaxError: Illegal continue statement"
+                                                    .to_string(),
+                                            );
                                             break;
                                         }
                                         Ok(StatementFlow::Yield(_)) => break,
@@ -1026,19 +1118,43 @@ impl JsEngine {
                     }
                 }
 
-                if let Expr::Member { object, property, computed } | Expr::OptionalMember { object, property, computed } = &**callee {
+                if let Expr::Member {
+                    object,
+                    property,
+                    computed,
+                }
+                | Expr::OptionalMember {
+                    object,
+                    property,
+                    computed,
+                } = &**callee
+                {
                     if computed.is_none() {
                         if let Expr::Identifier(id) = &**object {
                             if id == "super" {
-                                let current_class_opt = self.current_scope.borrow().get("__current_class__");
+                                let current_class_opt =
+                                    self.current_scope.borrow().get("__current_class__");
                                 if let Some(JsValue::String(curr_cls)) = current_class_opt {
-                                    let super_class_opt = self.classes.get(&curr_cls).and_then(|c| c.super_class.clone());
+                                    let super_class_opt = self
+                                        .classes
+                                        .get(&curr_cls)
+                                        .and_then(|c| c.super_class.clone());
                                     if let Some(super_name) = super_class_opt {
-                                        if let Some((params, body, _)) = self.resolve_method(&super_name, property) {
-                                            let current_this = self.current_scope.borrow().get("this").unwrap_or(JsValue::Undefined);
-                                            let super_scope = Scope::new_child(self.current_scope.clone());
+                                        if let Some((params, body, _)) =
+                                            self.resolve_method(&super_name, property)
+                                        {
+                                            let current_this = self
+                                                .current_scope
+                                                .borrow()
+                                                .get("this")
+                                                .unwrap_or(JsValue::Undefined);
+                                            let super_scope =
+                                                Scope::new_child(self.current_scope.clone());
                                             super_scope.borrow_mut().declare("this", current_this);
-                                            super_scope.borrow_mut().declare("__current_class__", JsValue::String(super_name));
+                                            super_scope.borrow_mut().declare(
+                                                "__current_class__",
+                                                JsValue::String(super_name),
+                                            );
 
                                             bind_parameters(&params, evaluated_args, &super_scope);
 
@@ -1055,11 +1171,16 @@ impl JsEngine {
                                                         break;
                                                     }
                                                     Ok(StatementFlow::Throw(v)) => {
-                                                        err = Some(format!("Uncaught exception: {v}"));
+                                                        err = Some(format!(
+                                                            "Uncaught exception: {v}"
+                                                        ));
                                                         break;
                                                     }
                                                     Ok(StatementFlow::Break(_)) => {
-                                                        err = Some("SyntaxError: Illegal break statement".to_string());
+                                                        err = Some(
+                                                            "SyntaxError: Illegal break statement"
+                                                                .to_string(),
+                                                        );
                                                         break;
                                                     }
                                                     Ok(StatementFlow::Continue(_)) => {
@@ -1082,8 +1203,12 @@ impl JsEngine {
                                                 return Err(e);
                                             }
 
-                                            if let Some(updated_this) = super_scope.borrow().get("this") {
-                                                self.current_scope.borrow_mut().set("this", updated_this);
+                                            if let Some(updated_this) =
+                                                super_scope.borrow().get("this")
+                                            {
+                                                self.current_scope
+                                                    .borrow_mut()
+                                                    .set("this", updated_this);
                                             }
                                             return Ok(ret);
                                         }
@@ -1097,15 +1222,21 @@ impl JsEngine {
                         if id == "document" {
                             match property.as_str() {
                                 "getElementById" => {
-                                    if let Some(target_id) = evaluated_args.first().and_then(|v| v.as_str()) {
-                                        if let Some(elem) = self.document.get_element_by_id(target_id) {
+                                    if let Some(target_id) =
+                                        evaluated_args.first().and_then(|v| v.as_str())
+                                    {
+                                        if let Some(elem) =
+                                            self.document.get_element_by_id(target_id)
+                                        {
                                             return Ok(self.dom_node_to_js(&elem));
                                         }
                                     }
                                     return Ok(JsValue::Null);
                                 }
                                 "querySelector" => {
-                                    if let Some(sel) = evaluated_args.first().and_then(|v| v.as_str()) {
+                                    if let Some(sel) =
+                                        evaluated_args.first().and_then(|v| v.as_str())
+                                    {
                                         if let Some(elem) = self.document.query_selector(sel) {
                                             return Ok(self.dom_node_to_js(&elem));
                                         }
@@ -1113,29 +1244,38 @@ impl JsEngine {
                                     return Ok(JsValue::Null);
                                 }
                                 "querySelectorAll" => {
-                                    if let Some(sel) = evaluated_args.first().and_then(|v| v.as_str()) {
+                                    if let Some(sel) =
+                                        evaluated_args.first().and_then(|v| v.as_str())
+                                    {
                                         let all = self.document.query_selector_all(sel);
-                                        let list: Vec<JsValue> = all.iter().map(|n| self.dom_node_to_js(n)).collect();
+                                        let list: Vec<JsValue> =
+                                            all.iter().map(|n| self.dom_node_to_js(n)).collect();
                                         return Ok(JsValue::new_array(list));
                                     }
                                     return Ok(JsValue::empty_array());
                                 }
                                 "createElement" => {
-                                    if let Some(tag) = evaluated_args.first().and_then(|v| v.as_str()) {
+                                    if let Some(tag) =
+                                        evaluated_args.first().and_then(|v| v.as_str())
+                                    {
                                         let elem = self.document.create_element(tag);
                                         return Ok(self.dom_node_to_js(&elem));
                                     }
                                     return Ok(JsValue::Null);
                                 }
                                 "createTextNode" => {
-                                    if let Some(text) = evaluated_args.first().and_then(|v| v.as_str()) {
+                                    if let Some(text) =
+                                        evaluated_args.first().and_then(|v| v.as_str())
+                                    {
                                         let elem = self.document.create_text_node(text);
                                         return Ok(self.dom_node_to_js(&elem));
                                     }
                                     return Ok(JsValue::Null);
                                 }
                                 "createComment" => {
-                                    if let Some(text) = evaluated_args.first().and_then(|v| v.as_str()) {
+                                    if let Some(text) =
+                                        evaluated_args.first().and_then(|v| v.as_str())
+                                    {
                                         let elem = self.document.create_comment(text);
                                         return Ok(self.dom_node_to_js(&elem));
                                     }
@@ -1152,7 +1292,8 @@ impl JsEngine {
                                     JsValue::Bool(b) => b.to_string(),
                                     JsValue::Null => "null".to_string(),
                                     JsValue::Undefined => "undefined".to_string(),
-                                    other => stringify_json(other).unwrap_or_else(|_| "[object Object]".to_string()),
+                                    other => stringify_json(other)
+                                        .unwrap_or_else(|_| "[object Object]".to_string()),
                                 })
                                 .collect::<Vec<_>>()
                                 .join(" ");
@@ -1164,33 +1305,48 @@ impl JsEngine {
                                     return stringify_json(first).map(JsValue::String);
                                 }
                             } else if property == "parse" {
-                                if let Some(first) = evaluated_args.first().and_then(|v| v.as_str()) {
+                                if let Some(first) = evaluated_args.first().and_then(|v| v.as_str())
+                                {
                                     return parse_json(first);
                                 }
                             }
                         } else if id == "Math" {
                             match property.as_str() {
                                 "floor" => {
-                                    let n = evaluated_args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                    let n = evaluated_args
+                                        .first()
+                                        .and_then(|v| v.as_f64())
+                                        .unwrap_or(0.0);
                                     return Ok(JsValue::Number(n.floor()));
                                 }
                                 "ceil" => {
-                                    let n = evaluated_args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                    let n = evaluated_args
+                                        .first()
+                                        .and_then(|v| v.as_f64())
+                                        .unwrap_or(0.0);
                                     return Ok(JsValue::Number(n.ceil()));
                                 }
                                 "round" => {
-                                    let n = evaluated_args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                    let n = evaluated_args
+                                        .first()
+                                        .and_then(|v| v.as_f64())
+                                        .unwrap_or(0.0);
                                     return Ok(JsValue::Number(n.round()));
                                 }
                                 "abs" => {
-                                    let n = evaluated_args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                    let n = evaluated_args
+                                        .first()
+                                        .and_then(|v| v.as_f64())
+                                        .unwrap_or(0.0);
                                     return Ok(JsValue::Number(n.abs()));
                                 }
                                 "min" => {
                                     let mut m = f64::INFINITY;
                                     for a in &evaluated_args {
                                         if let Some(n) = a.as_f64() {
-                                            if n < m { m = n; }
+                                            if n < m {
+                                                m = n;
+                                            }
                                         }
                                     }
                                     return Ok(JsValue::Number(m));
@@ -1199,13 +1355,18 @@ impl JsEngine {
                                     let mut m = f64::NEG_INFINITY;
                                     for a in &evaluated_args {
                                         if let Some(n) = a.as_f64() {
-                                            if n > m { m = n; }
+                                            if n > m {
+                                                m = n;
+                                            }
                                         }
                                     }
                                     return Ok(JsValue::Number(m));
                                 }
                                 "sqrt" => {
-                                    let n = evaluated_args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                    let n = evaluated_args
+                                        .first()
+                                        .and_then(|v| v.as_f64())
+                                        .unwrap_or(0.0);
                                     return Ok(JsValue::Number(n.sqrt()));
                                 }
                                 _ => {}
@@ -1213,17 +1374,26 @@ impl JsEngine {
                         } else if id == "Promise" {
                             match property.as_str() {
                                 "resolve" => {
-                                    let v = evaluated_args.first().cloned().unwrap_or(JsValue::Undefined);
+                                    let v = evaluated_args
+                                        .first()
+                                        .cloned()
+                                        .unwrap_or(JsValue::Undefined);
                                     let p = JsPromise::resolve(v);
                                     return Ok(self.create_promise_value(p));
                                 }
                                 "reject" => {
-                                    let v = evaluated_args.first().cloned().unwrap_or(JsValue::Undefined);
+                                    let v = evaluated_args
+                                        .first()
+                                        .cloned()
+                                        .unwrap_or(JsValue::Undefined);
                                     let p = JsPromise::reject(v);
                                     return Ok(self.create_promise_value(p));
                                 }
                                 "all" => {
-                                    let first = evaluated_args.first().cloned().unwrap_or_else(JsValue::empty_array);
+                                    let first = evaluated_args
+                                        .first()
+                                        .cloned()
+                                        .unwrap_or_else(JsValue::empty_array);
                                     if let JsValue::Array(items) = first {
                                         let mut promise_list = Vec::new();
                                         for item in items.borrow().iter() {
@@ -1232,7 +1402,8 @@ impl JsEngine {
                                                     promise_list.push(p.clone());
                                                 }
                                                 _ => {
-                                                    promise_list.push(JsPromise::resolve(item.clone()));
+                                                    promise_list
+                                                        .push(JsPromise::resolve(item.clone()));
                                                 }
                                             }
                                         }
@@ -1250,7 +1421,8 @@ impl JsEngine {
                         } else if id == "Object" {
                             match property.as_str() {
                                 "create" => {
-                                    let proto = evaluated_args.first().cloned().unwrap_or(JsValue::Null);
+                                    let proto =
+                                        evaluated_args.first().cloned().unwrap_or(JsValue::Null);
                                     let mut new_obj = BTreeMap::new();
                                     if !matches!(proto, JsValue::Null) {
                                         new_obj.insert("__proto__".to_string(), proto);
@@ -1262,15 +1434,21 @@ impl JsEngine {
                                         if let Some(p) = m.borrow().get("__proto__") {
                                             return Ok(p.clone());
                                         }
-                                        return Ok(JsValue::new_object(self.object_prototype.clone()));
+                                        return Ok(JsValue::new_object(
+                                            self.object_prototype.clone(),
+                                        ));
                                     }
                                     return Ok(JsValue::Null);
                                 }
                                 "setPrototypeOf" => {
                                     if self.freeze_prototypes || !self.allow_prototype_mutation {
-                                        return Err("TypeError: Cannot modify prototype in sealed mode".to_string());
+                                        return Err(
+                                            "TypeError: Cannot modify prototype in sealed mode"
+                                                .to_string(),
+                                        );
                                     }
-                                    let proto = evaluated_args.get(1).cloned().unwrap_or(JsValue::Null);
+                                    let proto =
+                                        evaluated_args.get(1).cloned().unwrap_or(JsValue::Null);
                                     if let Some(JsValue::Object(m)) = evaluated_args.first() {
                                         m.borrow_mut().insert("__proto__".to_string(), proto);
                                         return Ok(JsValue::Object(m.clone()));
@@ -1279,7 +1457,9 @@ impl JsEngine {
                                 }
                                 "keys" => {
                                     if let Some(JsValue::Object(m)) = evaluated_args.first() {
-                                        let keys: Vec<JsValue> = m.borrow().keys()
+                                        let keys: Vec<JsValue> = m
+                                            .borrow()
+                                            .keys()
                                             .filter(|k| !k.starts_with("__"))
                                             .map(|k| JsValue::String(k.clone()))
                                             .collect();
@@ -1289,7 +1469,9 @@ impl JsEngine {
                                 }
                                 "values" => {
                                     if let Some(JsValue::Object(m)) = evaluated_args.first() {
-                                        let vals: Vec<JsValue> = m.borrow().iter()
+                                        let vals: Vec<JsValue> = m
+                                            .borrow()
+                                            .iter()
                                             .filter(|(k, _)| !k.starts_with("__"))
                                             .map(|(_, v)| v.clone())
                                             .collect();
@@ -1299,9 +1481,16 @@ impl JsEngine {
                                 }
                                 "entries" => {
                                     if let Some(JsValue::Object(m)) = evaluated_args.first() {
-                                        let entries: Vec<JsValue> = m.borrow().iter()
+                                        let entries: Vec<JsValue> = m
+                                            .borrow()
+                                            .iter()
                                             .filter(|(k, _)| !k.starts_with("__"))
-                                            .map(|(k, v)| JsValue::new_array(vec![JsValue::String(k.clone()), v.clone()]))
+                                            .map(|(k, v)| {
+                                                JsValue::new_array(vec![
+                                                    JsValue::String(k.clone()),
+                                                    v.clone(),
+                                                ])
+                                            })
                                             .collect();
                                         return Ok(JsValue::new_array(entries));
                                     }
@@ -1312,10 +1501,16 @@ impl JsEngine {
                                         for src in evaluated_args.iter().skip(1) {
                                             if let JsValue::Object(s_map) = src {
                                                 for (k, v) in s_map.borrow().iter() {
-                                                    if (k == "__proto__" || k == "constructor" || k == "prototype") && !self.allow_prototype_mutation {
+                                                    if (k == "__proto__"
+                                                        || k == "constructor"
+                                                        || k == "prototype")
+                                                        && !self.allow_prototype_mutation
+                                                    {
                                                         continue;
                                                     }
-                                                    target.borrow_mut().insert(k.clone(), v.clone());
+                                                    target
+                                                        .borrow_mut()
+                                                        .insert(k.clone(), v.clone());
                                                 }
                                             }
                                         }
@@ -1342,9 +1537,17 @@ impl JsEngine {
                         } else if id == "Reflect" {
                             match property.as_str() {
                                 "get" => {
-                                    let target = evaluated_args.first().cloned().unwrap_or(JsValue::Undefined);
-                                    let prop_key = evaluated_args.get(1).map(|v| v.to_string()).unwrap_or_default();
-                                    return Ok(target.get_prop(&prop_key).unwrap_or(JsValue::Undefined));
+                                    let target = evaluated_args
+                                        .first()
+                                        .cloned()
+                                        .unwrap_or(JsValue::Undefined);
+                                    let prop_key = evaluated_args
+                                        .get(1)
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_default();
+                                    return Ok(target
+                                        .get_prop(&prop_key)
+                                        .unwrap_or(JsValue::Undefined));
                                 }
                                 "set" => {
                                     if evaluated_args.len() >= 3 {
@@ -1357,20 +1560,36 @@ impl JsEngine {
                                     return Ok(JsValue::Bool(false));
                                 }
                                 "has" => {
-                                    let target = evaluated_args.first().cloned().unwrap_or(JsValue::Undefined);
-                                    let prop_key = evaluated_args.get(1).map(|v| v.to_string()).unwrap_or_default();
+                                    let target = evaluated_args
+                                        .first()
+                                        .cloned()
+                                        .unwrap_or(JsValue::Undefined);
+                                    let prop_key = evaluated_args
+                                        .get(1)
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_default();
                                     return Ok(JsValue::Bool(target.has_prop(&prop_key)));
                                 }
                                 "deleteProperty" => {
                                     if let Some(JsValue::Object(c)) = evaluated_args.first() {
-                                        let prop_key = evaluated_args.get(1).map(|v| v.to_string()).unwrap_or_default();
-                                        return Ok(JsValue::Bool(c.borrow_mut().remove(&prop_key).is_some()));
+                                        let prop_key = evaluated_args
+                                            .get(1)
+                                            .map(|v| v.to_string())
+                                            .unwrap_or_default();
+                                        return Ok(JsValue::Bool(
+                                            c.borrow_mut().remove(&prop_key).is_some(),
+                                        ));
                                     }
                                     return Ok(JsValue::Bool(false));
                                 }
                                 "ownKeys" => {
                                     if let Some(JsValue::Object(c)) = evaluated_args.first() {
-                                        let keys: Vec<JsValue> = c.borrow().keys().filter(|k| !k.starts_with("__")).map(|k| JsValue::String(k.clone())).collect();
+                                        let keys: Vec<JsValue> = c
+                                            .borrow()
+                                            .keys()
+                                            .filter(|k| !k.starts_with("__"))
+                                            .map(|k| JsValue::String(k.clone()))
+                                            .collect();
                                         return Ok(JsValue::new_array(keys));
                                     }
                                     return Ok(JsValue::empty_array());
@@ -1387,7 +1606,9 @@ impl JsEngine {
                                     return Ok(JsValue::Number(now));
                                 }
                                 "parse" => {
-                                    if let Some(date_str) = evaluated_args.first().and_then(|v| v.as_str()) {
+                                    if let Some(date_str) =
+                                        evaluated_args.first().and_then(|v| v.as_str())
+                                    {
                                         if let Ok(ts) = date_str.parse::<f64>() {
                                             return Ok(JsValue::Number(ts));
                                         }
@@ -1400,11 +1621,16 @@ impl JsEngine {
                             if let Some(val) = evaluated_args.first() {
                                 return self.to_bigint(val);
                             }
-                            return Err("TypeError: Cannot convert undefined to a BigInt".to_string());
+                            return Err(
+                                "TypeError: Cannot convert undefined to a BigInt".to_string()
+                            );
                         } else if id == "Symbol" {
                             match property.as_str() {
                                 "for" => {
-                                    let key = evaluated_args.first().map(|v| v.to_string()).unwrap_or_default();
+                                    let key = evaluated_args
+                                        .first()
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_default();
                                     if let Some(sym_id) = self.symbol_registry.get(&key) {
                                         return Ok(JsValue::Symbol(sym_id.clone()));
                                     }
@@ -1454,7 +1680,14 @@ impl JsEngine {
                                     let mut out = Vec::new();
                                     let b = arr.borrow();
                                     for (i, item) in b.iter().enumerate() {
-                                        let res = self.call_value(&cb, vec![item.clone(), JsValue::Number(i as f64), obj_val.clone()])?;
+                                        let res = self.call_value(
+                                            &cb,
+                                            vec![
+                                                item.clone(),
+                                                JsValue::Number(i as f64),
+                                                obj_val.clone(),
+                                            ],
+                                        )?;
                                         out.push(res);
                                     }
                                     return Ok(JsValue::new_array(out));
@@ -1466,7 +1699,14 @@ impl JsEngine {
                                     let mut out = Vec::new();
                                     let b = arr.borrow();
                                     for (i, item) in b.iter().enumerate() {
-                                        let res = self.call_value(&cb, vec![item.clone(), JsValue::Number(i as f64), obj_val.clone()])?;
+                                        let res = self.call_value(
+                                            &cb,
+                                            vec![
+                                                item.clone(),
+                                                JsValue::Number(i as f64),
+                                                obj_val.clone(),
+                                            ],
+                                        )?;
                                         if res.is_truthy() {
                                             out.push(item.clone());
                                         }
@@ -1479,7 +1719,14 @@ impl JsEngine {
                                 if let Some(cb) = evaluated_args.first().cloned() {
                                     let b = arr.borrow();
                                     for (i, item) in b.iter().enumerate() {
-                                        let res = self.call_value(&cb, vec![item.clone(), JsValue::Number(i as f64), obj_val.clone()])?;
+                                        let res = self.call_value(
+                                            &cb,
+                                            vec![
+                                                item.clone(),
+                                                JsValue::Number(i as f64),
+                                                obj_val.clone(),
+                                            ],
+                                        )?;
                                         if res.is_truthy() {
                                             return Ok(item.clone());
                                         }
@@ -1491,7 +1738,14 @@ impl JsEngine {
                                 if let Some(cb) = evaluated_args.first().cloned() {
                                     let b = arr.borrow();
                                     for (i, item) in b.iter().enumerate() {
-                                        let res = self.call_value(&cb, vec![item.clone(), JsValue::Number(i as f64), obj_val.clone()])?;
+                                        let res = self.call_value(
+                                            &cb,
+                                            vec![
+                                                item.clone(),
+                                                JsValue::Number(i as f64),
+                                                obj_val.clone(),
+                                            ],
+                                        )?;
                                         if res.is_truthy() {
                                             return Ok(JsValue::Number(i as f64));
                                         }
@@ -1502,7 +1756,14 @@ impl JsEngine {
                             "some" => {
                                 if let Some(cb) = evaluated_args.first().cloned() {
                                     for (i, item) in arr.borrow().iter().enumerate() {
-                                        let res = self.call_value(&cb, vec![item.clone(), JsValue::Number(i as f64), obj_val.clone()])?;
+                                        let res = self.call_value(
+                                            &cb,
+                                            vec![
+                                                item.clone(),
+                                                JsValue::Number(i as f64),
+                                                obj_val.clone(),
+                                            ],
+                                        )?;
                                         if res.is_truthy() {
                                             return Ok(JsValue::Bool(true));
                                         }
@@ -1513,7 +1774,14 @@ impl JsEngine {
                             "every" => {
                                 if let Some(cb) = evaluated_args.first().cloned() {
                                     for (i, item) in arr.borrow().iter().enumerate() {
-                                        let res = self.call_value(&cb, vec![item.clone(), JsValue::Number(i as f64), obj_val.clone()])?;
+                                        let res = self.call_value(
+                                            &cb,
+                                            vec![
+                                                item.clone(),
+                                                JsValue::Number(i as f64),
+                                                obj_val.clone(),
+                                            ],
+                                        )?;
                                         if !res.is_truthy() {
                                             return Ok(JsValue::Bool(false));
                                         }
@@ -1534,7 +1802,15 @@ impl JsEngine {
                                         return Err("TypeError: Reduce of empty array with no initial value".to_string());
                                     };
                                     for (i, item) in iter.enumerate() {
-                                        accum = self.call_value(&cb, vec![accum, item.clone(), JsValue::Number(i as f64), obj_val.clone()])?;
+                                        accum = self.call_value(
+                                            &cb,
+                                            vec![
+                                                accum,
+                                                item.clone(),
+                                                JsValue::Number(i as f64),
+                                                obj_val.clone(),
+                                            ],
+                                        )?;
                                     }
                                     return Ok(accum);
                                 }
@@ -1554,26 +1830,46 @@ impl JsEngine {
                                     let len = b.len();
                                     for (i, item) in iter.enumerate() {
                                         let actual_idx = len - 1 - (i + 1);
-                                        accum = self.call_value(&cb, vec![accum, item.clone(), JsValue::Number(actual_idx as f64), obj_val.clone()])?;
+                                        accum = self.call_value(
+                                            &cb,
+                                            vec![
+                                                accum,
+                                                item.clone(),
+                                                JsValue::Number(actual_idx as f64),
+                                                obj_val.clone(),
+                                            ],
+                                        )?;
                                     }
                                     return Ok(accum);
                                 }
                                 return Ok(JsValue::Undefined);
                             }
                             "join" => {
-                                let sep = evaluated_args.first().and_then(|v| v.as_str()).unwrap_or(",");
+                                let sep = evaluated_args
+                                    .first()
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or(",");
                                 return Ok(JsValue::String(obj_val.join(sep)));
                             }
                             "slice" => {
-                                let start = evaluated_args.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as isize;
-                                let end = evaluated_args.get(1).and_then(|v| v.as_f64()).map(|n| n as isize);
+                                let start = evaluated_args
+                                    .first()
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0)
+                                    as isize;
+                                let end = evaluated_args
+                                    .get(1)
+                                    .and_then(|v| v.as_f64())
+                                    .map(|n| n as isize);
                                 return Ok(obj_val.slice(start, end));
                             }
                             "concat" => {
                                 let mut result = arr.borrow().clone();
                                 for arg in evaluated_args {
                                     match arg {
-                                        JsValue::Array(items) => result.extend(items.borrow().clone()),
+                                        JsValue::Array(items) => {
+                                            result.extend(items.borrow().clone())
+                                        }
                                         other => result.push(other),
                                     }
                                 }
@@ -1600,7 +1896,11 @@ impl JsEngine {
                                 return Ok(obj_val.clone());
                             }
                             "flat" => {
-                                let depth = evaluated_args.first().and_then(|v| v.as_f64()).unwrap_or(1.0) as usize;
+                                let depth = evaluated_args
+                                    .first()
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(1.0)
+                                    as usize;
                                 return Ok(obj_val.flat(depth));
                             }
                             "flatMap" => {
@@ -1608,7 +1908,14 @@ impl JsEngine {
                                     let mut out = Vec::new();
                                     let b = arr.borrow();
                                     for (i, item) in b.iter().enumerate() {
-                                        let res = self.call_value(&cb, vec![item.clone(), JsValue::Number(i as f64), obj_val.clone()])?;
+                                        let res = self.call_value(
+                                            &cb,
+                                            vec![
+                                                item.clone(),
+                                                JsValue::Number(i as f64),
+                                                obj_val.clone(),
+                                            ],
+                                        )?;
                                         if let JsValue::Array(inner) = res {
                                             out.extend(inner.borrow().clone());
                                         } else {
@@ -1621,7 +1928,10 @@ impl JsEngine {
                             }
                             "at" => {
                                 let b = arr.borrow();
-                                let idx_f = evaluated_args.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                let idx_f = evaluated_args
+                                    .first()
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0);
                                 let idx = if idx_f < 0.0 {
                                     (b.len() as f64 + idx_f) as isize
                                 } else {
@@ -1679,36 +1989,54 @@ impl JsEngine {
                         if is_re {
                             let (source, flags) = {
                                 let b = map.borrow();
-                                let s = b.get("source").and_then(|s| s.as_str()).unwrap_or("").to_string();
-                                let f = b.get("flags").and_then(|s| s.as_str()).unwrap_or("").to_string();
+                                let s = b
+                                    .get("source")
+                                    .and_then(|s| s.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let f = b
+                                    .get("flags")
+                                    .and_then(|s| s.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
                                 (s, f)
                             };
                             let re = self.compile_regex(&source, &flags)?;
 
                             match property.as_str() {
                                 "test" => {
-                                    let input = evaluated_args.first().map(|v| match v {
-                                        JsValue::String(s) => s.clone(),
-                                        other => self.to_display_string(other),
-                                    }).unwrap_or_default();
+                                    let input = evaluated_args
+                                        .first()
+                                        .map(|v| match v {
+                                            JsValue::String(s) => s.clone(),
+                                            other => self.to_display_string(other),
+                                        })
+                                        .unwrap_or_default();
                                     return Ok(JsValue::Bool(re.is_match(&input)));
                                 }
                                 "exec" => {
-                                    let input = evaluated_args.first().map(|v| match v {
-                                        JsValue::String(s) => s.clone(),
-                                        other => self.to_display_string(other),
-                                    }).unwrap_or_default();
+                                    let input = evaluated_args
+                                        .first()
+                                        .map(|v| match v {
+                                            JsValue::String(s) => s.clone(),
+                                            other => self.to_display_string(other),
+                                        })
+                                        .unwrap_or_default();
                                     if let Some(caps) = re.captures(&input) {
                                         let mut elems = Vec::new();
                                         for cap_opt in caps.iter() {
                                             match cap_opt {
-                                                Some(m) => elems.push(JsValue::String(m.as_str().to_string())),
+                                                Some(m) => elems
+                                                    .push(JsValue::String(m.as_str().to_string())),
                                                 None => elems.push(JsValue::Undefined),
                                             }
                                         }
                                         if let Some(m0) = caps.get(0) {
                                             let last_idx = (m0.start() + m0.as_str().len()) as f64;
-                                            map.borrow_mut().insert("lastIndex".to_string(), JsValue::Number(last_idx));
+                                            map.borrow_mut().insert(
+                                                "lastIndex".to_string(),
+                                                JsValue::Number(last_idx),
+                                            );
                                         }
                                         return Ok(JsValue::new_array(elems));
                                     } else {
@@ -1732,8 +2060,16 @@ impl JsEngine {
                                         JsValue::Object(m) => {
                                             let b = m.borrow();
                                             if b.get("__is_regex__") == Some(&JsValue::Bool(true)) {
-                                                let p = b.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                                let f = b.get("flags").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                let p = b
+                                                    .get("source")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let f = b
+                                                    .get("flags")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
                                                 (p, f)
                                             } else {
                                                 (regex::escape(&arg.to_string()), String::new())
@@ -1743,7 +2079,8 @@ impl JsEngine {
                                     };
                                     let re = self.compile_regex(&pat, &flags)?;
                                     if flags.contains('g') {
-                                        let matches: Vec<JsValue> = re.find_iter(s)
+                                        let matches: Vec<JsValue> = re
+                                            .find_iter(s)
                                             .map(|m| JsValue::String(m.as_str().to_string()))
                                             .collect();
                                         if matches.is_empty() {
@@ -1754,7 +2091,8 @@ impl JsEngine {
                                         let mut elems = Vec::new();
                                         for cap_opt in caps.iter() {
                                             match cap_opt {
-                                                Some(m) => elems.push(JsValue::String(m.as_str().to_string())),
+                                                Some(m) => elems
+                                                    .push(JsValue::String(m.as_str().to_string())),
                                                 None => elems.push(JsValue::Undefined),
                                             }
                                         }
@@ -1771,8 +2109,16 @@ impl JsEngine {
                                         JsValue::Object(m) => {
                                             let b = m.borrow();
                                             if b.get("__is_regex__") == Some(&JsValue::Bool(true)) {
-                                                let p = b.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                                let f = b.get("flags").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                let p = b
+                                                    .get("source")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let f = b
+                                                    .get("flags")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
                                                 (p, f)
                                             } else {
                                                 (regex::escape(&arg.to_string()), String::new())
@@ -1799,8 +2145,16 @@ impl JsEngine {
                                         JsValue::Object(m) => {
                                             let b = m.borrow();
                                             if b.get("__is_regex__") == Some(&JsValue::Bool(true)) {
-                                                let p = b.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                                let f = b.get("flags").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                let p = b
+                                                    .get("source")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let f = b
+                                                    .get("flags")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
                                                 Some((p, f))
                                             } else {
                                                 None
@@ -1837,8 +2191,16 @@ impl JsEngine {
                                         JsValue::Object(m) => {
                                             let b = m.borrow();
                                             if b.get("__is_regex__") == Some(&JsValue::Bool(true)) {
-                                                let p = b.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                                let f = b.get("flags").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                let p = b
+                                                    .get("source")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let f = b
+                                                    .get("flags")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
                                                 Some((p, f))
                                             } else {
                                                 None
@@ -1864,8 +2226,16 @@ impl JsEngine {
                                     Some(JsValue::Object(m)) => {
                                         let b = m.borrow();
                                         if b.get("__is_regex__") == Some(&JsValue::Bool(true)) {
-                                            let p = b.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                            let f = b.get("flags").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                            let p = b
+                                                .get("source")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            let f = b
+                                                .get("flags")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
                                             Some((p, f))
                                         } else {
                                             None
@@ -1875,18 +2245,29 @@ impl JsEngine {
                                 };
                                 if let Some((p, f)) = re_info {
                                     let re = self.compile_regex(&p, &f)?;
-                                    let parts: Vec<JsValue> = re.split(s).map(|p| JsValue::String(p.to_string())).collect();
+                                    let parts: Vec<JsValue> = re
+                                        .split(s)
+                                        .map(|p| JsValue::String(p.to_string()))
+                                        .collect();
                                     return Ok(JsValue::new_array(parts));
                                 } else if let Some(other) = sep_arg {
                                     let sep = other.to_string();
                                     if sep.is_empty() {
-                                        let chars: Vec<JsValue> = s.chars().map(|c| JsValue::String(c.to_string())).collect();
+                                        let chars: Vec<JsValue> = s
+                                            .chars()
+                                            .map(|c| JsValue::String(c.to_string()))
+                                            .collect();
                                         return Ok(JsValue::new_array(chars));
                                     }
-                                    let parts: Vec<JsValue> = s.split(&sep).map(|p| JsValue::String(p.to_string())).collect();
+                                    let parts: Vec<JsValue> = s
+                                        .split(&sep)
+                                        .map(|p| JsValue::String(p.to_string()))
+                                        .collect();
                                     return Ok(JsValue::new_array(parts));
                                 } else {
-                                    return Ok(JsValue::new_array(vec![JsValue::String(s.clone())]));
+                                    return Ok(JsValue::new_array(vec![JsValue::String(
+                                        s.clone(),
+                                    )]));
                                 }
                             }
                             "toLowerCase" => {
@@ -1905,49 +2286,91 @@ impl JsEngine {
                                 return Ok(JsValue::String(s.trim_end().to_string()));
                             }
                             "includes" => {
-                                let search = evaluated_args.first().map(|v| v.to_string()).unwrap_or_default();
+                                let search = evaluated_args
+                                    .first()
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_default();
                                 return Ok(JsValue::Bool(s.contains(&search)));
                             }
                             "indexOf" => {
-                                let search = evaluated_args.first().map(|v| v.to_string()).unwrap_or_default();
+                                let search = evaluated_args
+                                    .first()
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_default();
                                 if let Some(idx) = s.find(&search) {
                                     return Ok(JsValue::Number(idx as f64));
                                 }
                                 return Ok(JsValue::Number(-1.0));
                             }
                             "startsWith" => {
-                                let prefix = evaluated_args.first().map(|v| v.to_string()).unwrap_or_default();
+                                let prefix = evaluated_args
+                                    .first()
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_default();
                                 return Ok(JsValue::Bool(s.starts_with(&prefix)));
                             }
                             "endsWith" => {
-                                let suffix = evaluated_args.first().map(|v| v.to_string()).unwrap_or_default();
+                                let suffix = evaluated_args
+                                    .first()
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_default();
                                 return Ok(JsValue::Bool(s.ends_with(&suffix)));
                             }
                             "charAt" => {
-                                let idx = evaluated_args.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
-                                let ch = s.chars().nth(idx).map(|c| c.to_string()).unwrap_or_default();
+                                let idx = evaluated_args
+                                    .first()
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0)
+                                    as usize;
+                                let ch = s
+                                    .chars()
+                                    .nth(idx)
+                                    .map(|c| c.to_string())
+                                    .unwrap_or_default();
                                 return Ok(JsValue::String(ch));
                             }
                             "charCodeAt" => {
-                                let idx = evaluated_args.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
+                                let idx = evaluated_args
+                                    .first()
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0)
+                                    as usize;
                                 if let Some(c) = s.chars().nth(idx) {
                                     return Ok(JsValue::Number(c as u32 as f64));
                                 }
                                 return Ok(JsValue::Number(f64::NAN));
                             }
                             "slice" | "substring" => {
-                                let start = evaluated_args.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as isize;
-                                let end = evaluated_args.get(1).and_then(|v| v.as_f64()).map(|n| n as isize);
+                                let start = evaluated_args
+                                    .first()
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0)
+                                    as isize;
+                                let end = evaluated_args
+                                    .get(1)
+                                    .and_then(|v| v.as_f64())
+                                    .map(|n| n as isize);
                                 let len = s.chars().count() as isize;
-                                let s_idx = if start < 0 { (len + start).max(0) as usize } else { start.min(len) as usize };
+                                let s_idx = if start < 0 {
+                                    (len + start).max(0) as usize
+                                } else {
+                                    start.min(len) as usize
+                                };
                                 let e_idx = match end {
-                                    Some(e) => if e < 0 { (len + e).max(0) as usize } else { e.min(len) as usize },
+                                    Some(e) => {
+                                        if e < 0 {
+                                            (len + e).max(0) as usize
+                                        } else {
+                                            e.min(len) as usize
+                                        }
+                                    }
                                     None => len as usize,
                                 };
                                 if s_idx >= e_idx {
                                     return Ok(JsValue::String(String::new()));
                                 }
-                                let sub: String = s.chars().skip(s_idx).take(e_idx - s_idx).collect();
+                                let sub: String =
+                                    s.chars().skip(s_idx).take(e_idx - s_idx).collect();
                                 return Ok(JsValue::String(sub));
                             }
                             _ => {}
@@ -1960,10 +2383,9 @@ impl JsEngine {
                             match property.as_str() {
                                 "setAttribute" => {
                                     if evaluated_args.len() >= 2 {
-                                        if let (Some(k), Some(v)) = (
-                                            evaluated_args[0].as_str(),
-                                            evaluated_args[1].as_str(),
-                                        ) {
+                                        if let (Some(k), Some(v)) =
+                                            (evaluated_args[0].as_str(), evaluated_args[1].as_str())
+                                        {
                                             node.set_attribute(k, v);
                                             self.document.mark_mutated();
                                         }
@@ -1971,7 +2393,8 @@ impl JsEngine {
                                     return Ok(JsValue::Undefined);
                                 }
                                 "getAttribute" => {
-                                    if let Some(k) = evaluated_args.first().and_then(|v| v.as_str()) {
+                                    if let Some(k) = evaluated_args.first().and_then(|v| v.as_str())
+                                    {
                                         if let Some(v) = node.get_attribute(k) {
                                             return Ok(JsValue::String(v));
                                         }
@@ -1979,21 +2402,26 @@ impl JsEngine {
                                     return Ok(JsValue::Null);
                                 }
                                 "removeAttribute" => {
-                                    if let Some(k) = evaluated_args.first().and_then(|v| v.as_str()) {
+                                    if let Some(k) = evaluated_args.first().and_then(|v| v.as_str())
+                                    {
                                         node.remove_attribute(k);
                                         self.document.mark_mutated();
                                     }
                                     return Ok(JsValue::Undefined);
                                 }
                                 "hasAttribute" => {
-                                    if let Some(k) = evaluated_args.first().and_then(|v| v.as_str()) {
+                                    if let Some(k) = evaluated_args.first().and_then(|v| v.as_str())
+                                    {
                                         return Ok(JsValue::Bool(node.has_attribute(k)));
                                     }
                                     return Ok(JsValue::Bool(false));
                                 }
                                 "appendChild" => {
-                                    if let Some(JsValue::Object(child_map)) = evaluated_args.first() {
-                                        if let Some(child_node) = self.resolve_dom_node(&child_map.borrow()) {
+                                    if let Some(JsValue::Object(child_map)) = evaluated_args.first()
+                                    {
+                                        if let Some(child_node) =
+                                            self.resolve_dom_node(&child_map.borrow())
+                                        {
                                             node.append_child(child_node.clone());
                                             self.document.mark_mutated();
                                             return Ok(self.dom_node_to_js(&child_node));
@@ -2002,8 +2430,11 @@ impl JsEngine {
                                     return Ok(JsValue::Null);
                                 }
                                 "prepend" => {
-                                    if let Some(JsValue::Object(child_map)) = evaluated_args.first() {
-                                        if let Some(child_node) = self.resolve_dom_node(&child_map.borrow()) {
+                                    if let Some(JsValue::Object(child_map)) = evaluated_args.first()
+                                    {
+                                        if let Some(child_node) =
+                                            self.resolve_dom_node(&child_map.borrow())
+                                        {
                                             node.prepend_child(child_node.clone());
                                             self.document.mark_mutated();
                                             return Ok(self.dom_node_to_js(&child_node));
@@ -2013,9 +2444,13 @@ impl JsEngine {
                                 }
                                 "insertBefore" => {
                                     if let Some(JsValue::Object(new_map)) = evaluated_args.first() {
-                                        if let Some(new_node) = self.resolve_dom_node(&new_map.borrow()) {
+                                        if let Some(new_node) =
+                                            self.resolve_dom_node(&new_map.borrow())
+                                        {
                                             let ref_node = if evaluated_args.len() >= 2 {
-                                                if let Some(JsValue::Object(ref_map)) = evaluated_args.get(1) {
+                                                if let Some(JsValue::Object(ref_map)) =
+                                                    evaluated_args.get(1)
+                                                {
                                                     self.resolve_dom_node(&ref_map.borrow())
                                                 } else {
                                                     None
@@ -2023,7 +2458,10 @@ impl JsEngine {
                                             } else {
                                                 None
                                             };
-                                            let inserted = node.insert_before(new_node.clone(), ref_node.as_ref())?;
+                                            let inserted = node.insert_before(
+                                                new_node.clone(),
+                                                ref_node.as_ref(),
+                                            )?;
                                             self.document.mark_mutated();
                                             return Ok(self.dom_node_to_js(&inserted));
                                         }
@@ -2032,15 +2470,17 @@ impl JsEngine {
                                 }
                                 "replaceChild" => {
                                     if evaluated_args.len() >= 2 {
-                                        if let (Some(JsValue::Object(new_map)), Some(JsValue::Object(old_map))) = (
-                                            evaluated_args.first(),
-                                            evaluated_args.get(1),
-                                        ) {
+                                        if let (
+                                            Some(JsValue::Object(new_map)),
+                                            Some(JsValue::Object(old_map)),
+                                        ) = (evaluated_args.first(), evaluated_args.get(1))
+                                        {
                                             if let (Some(new_node), Some(old_node)) = (
                                                 self.resolve_dom_node(&new_map.borrow()),
                                                 self.resolve_dom_node(&old_map.borrow()),
                                             ) {
-                                                let replaced = node.replace_child(new_node, &old_node)?;
+                                                let replaced =
+                                                    node.replace_child(new_node, &old_node)?;
                                                 self.document.mark_mutated();
                                                 return Ok(self.dom_node_to_js(&replaced));
                                             }
@@ -2049,8 +2489,11 @@ impl JsEngine {
                                     return Ok(JsValue::Null);
                                 }
                                 "removeChild" => {
-                                    if let Some(JsValue::Object(child_map)) = evaluated_args.first() {
-                                        if let Some(child_node) = self.resolve_dom_node(&child_map.borrow()) {
+                                    if let Some(JsValue::Object(child_map)) = evaluated_args.first()
+                                    {
+                                        if let Some(child_node) =
+                                            self.resolve_dom_node(&child_map.borrow())
+                                        {
                                             let removed = node.remove_child(&child_node);
                                             if removed {
                                                 self.document.mark_mutated();
@@ -2066,20 +2509,28 @@ impl JsEngine {
                                     return Ok(JsValue::Undefined);
                                 }
                                 "cloneNode" => {
-                                    let deep = evaluated_args.first().map(|v| v.is_truthy()).unwrap_or(false);
+                                    let deep = evaluated_args
+                                        .first()
+                                        .map(|v| v.is_truthy())
+                                        .unwrap_or(false);
                                     let cloned = node.clone_node(deep);
                                     return Ok(self.dom_node_to_js(&cloned));
                                 }
                                 "contains" => {
-                                    if let Some(JsValue::Object(other_map)) = evaluated_args.first() {
-                                        if let Some(other_node) = self.resolve_dom_node(&other_map.borrow()) {
+                                    if let Some(JsValue::Object(other_map)) = evaluated_args.first()
+                                    {
+                                        if let Some(other_node) =
+                                            self.resolve_dom_node(&other_map.borrow())
+                                        {
                                             return Ok(JsValue::Bool(node.contains(&other_node)));
                                         }
                                     }
                                     return Ok(JsValue::Bool(false));
                                 }
                                 "querySelector" => {
-                                    if let Some(sel) = evaluated_args.first().and_then(|v| v.as_str()) {
+                                    if let Some(sel) =
+                                        evaluated_args.first().and_then(|v| v.as_str())
+                                    {
                                         if let Some(found) = node.query_selector(sel) {
                                             return Ok(self.dom_node_to_js(&found));
                                         }
@@ -2087,9 +2538,12 @@ impl JsEngine {
                                     return Ok(JsValue::Null);
                                 }
                                 "querySelectorAll" => {
-                                    if let Some(sel) = evaluated_args.first().and_then(|v| v.as_str()) {
+                                    if let Some(sel) =
+                                        evaluated_args.first().and_then(|v| v.as_str())
+                                    {
                                         let found = node.query_selector_all(sel);
-                                        let list: Vec<JsValue> = found.iter().map(|n| self.dom_node_to_js(n)).collect();
+                                        let list: Vec<JsValue> =
+                                            found.iter().map(|n| self.dom_node_to_js(n)).collect();
                                         return Ok(JsValue::new_array(list));
                                     }
                                     return Ok(JsValue::empty_array());
@@ -2097,7 +2551,10 @@ impl JsEngine {
                                 "addEventListener" => {
                                     if evaluated_args.len() >= 2 {
                                         if let Some(event) = evaluated_args[0].as_str() {
-                                            node.add_event_listener(event, evaluated_args[1].clone());
+                                            node.add_event_listener(
+                                                event,
+                                                evaluated_args[1].clone(),
+                                            );
                                         }
                                     }
                                     return Ok(JsValue::Undefined);
@@ -2108,7 +2565,17 @@ impl JsEngine {
                     }
                 }
 
-                if let Expr::Member { object, property, computed: None } | Expr::OptionalMember { object, property, computed: None } = &**callee {
+                if let Expr::Member {
+                    object,
+                    property,
+                    computed: None,
+                }
+                | Expr::OptionalMember {
+                    object,
+                    property,
+                    computed: None,
+                } = &**callee
+                {
                     let obj_val = self.eval_expr(object)?;
 
                     // Promise .then / .catch / .finally with authentic JsValue::Promise support
@@ -2120,7 +2587,8 @@ impl JsEngine {
                         match property.as_str() {
                             "then" => {
                                 let cb = evaluated_args.first().cloned();
-                                let (next_promise, resolve, reject) = JsPromise::<JsValue>::new_pending();
+                                let (next_promise, resolve, reject) =
+                                    JsPromise::<JsValue>::new_pending();
                                 let mut next_val = JsValue::Undefined;
                                 let mut had_err = None;
 
@@ -2160,7 +2628,8 @@ impl JsEngine {
                             }
                             "catch" => {
                                 let cb = evaluated_args.first().cloned();
-                                let (next_promise, resolve, reject) = JsPromise::<JsValue>::new_pending();
+                                let (next_promise, resolve, reject) =
+                                    JsPromise::<JsValue>::new_pending();
 
                                 match promise.state() {
                                     PromiseState::Rejected(err) => {
@@ -2198,7 +2667,9 @@ impl JsEngine {
                         let gen_id_opt = {
                             let b = map.borrow();
                             if b.get("__is_generator__") == Some(&JsValue::Bool(true)) {
-                                b.get("__gen_id__").and_then(|v| v.as_f64()).map(|n| n as u64)
+                                b.get("__gen_id__")
+                                    .and_then(|v| v.as_f64())
+                                    .map(|n| n as u64)
                             } else {
                                 None
                             }
@@ -2226,7 +2697,9 @@ impl JsEngine {
                         let weak_map_id_opt = {
                             let b = map.borrow();
                             if b.get("__is_weak_map__") == Some(&JsValue::Bool(true)) {
-                                b.get("__weak_id__").and_then(|v| v.as_f64()).map(|n| n as u64)
+                                b.get("__weak_id__")
+                                    .and_then(|v| v.as_f64())
+                                    .map(|n| n as u64)
                             } else {
                                 None
                             }
@@ -2239,7 +2712,9 @@ impl JsEngine {
                         let weak_set_id_opt = {
                             let b = map.borrow();
                             if b.get("__is_weak_set__") == Some(&JsValue::Bool(true)) {
-                                b.get("__weak_id__").and_then(|v| v.as_f64()).map(|n| n as u64)
+                                b.get("__weak_id__")
+                                    .and_then(|v| v.as_f64())
+                                    .map(|n| n as u64)
                             } else {
                                 None
                             }
@@ -2252,26 +2727,39 @@ impl JsEngine {
                         let weak_ref_id_opt = {
                             let b = map.borrow();
                             if b.get("__is_weak_ref__") == Some(&JsValue::Bool(true)) {
-                                b.get("__weak_id__").and_then(|v| v.as_f64()).map(|n| n as u64)
+                                b.get("__weak_id__")
+                                    .and_then(|v| v.as_f64())
+                                    .map(|n| n as u64)
                             } else {
                                 None
                             }
                         };
                         if let Some(wid) = weak_ref_id_opt {
                             if property == "deref" {
-                                let target_opt = self.weak_refs.borrow().get(&wid).and_then(|w| w.upgrade()).map(JsValue::Object);
+                                let target_opt = self
+                                    .weak_refs
+                                    .borrow()
+                                    .get(&wid)
+                                    .and_then(|w| w.upgrade())
+                                    .map(JsValue::Object);
                                 return Ok(target_opt.unwrap_or(JsValue::Undefined));
                             }
                         }
 
-
                         // Response methods
-                        let is_resp = map.borrow().get("__is_response__") == Some(&JsValue::Bool(true));
+                        let is_resp =
+                            map.borrow().get("__is_response__") == Some(&JsValue::Bool(true));
                         if is_resp {
-                            let body_str = map.borrow().get("__body__").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let body_str = map
+                                .borrow()
+                                .get("__body__")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             match property.as_str() {
                                 "json" => {
-                                    let parsed = crate::json::parse_json(&body_str).unwrap_or(JsValue::Null);
+                                    let parsed =
+                                        crate::json::parse_json(&body_str).unwrap_or(JsValue::Null);
                                     let p = JsPromise::resolve(parsed);
                                     return Ok(self.create_promise_value(p));
                                 }
@@ -2313,12 +2801,19 @@ impl JsEngine {
                             _ => None,
                         });
                         if let Some(cls_name) = cls_opt {
-                            if let Some((params, body, super_class_opt)) = self.resolve_method(&cls_name, property) {
+                            if let Some((params, body, super_class_opt)) =
+                                self.resolve_method(&cls_name, property)
+                            {
                                 let method_scope = Scope::new_child(self.current_scope.clone());
                                 method_scope.borrow_mut().declare("this", obj_val.clone());
-                                method_scope.borrow_mut().declare("__current_class__", JsValue::String(cls_name.clone()));
+                                method_scope.borrow_mut().declare(
+                                    "__current_class__",
+                                    JsValue::String(cls_name.clone()),
+                                );
                                 if let Some(s_name) = super_class_opt {
-                                    method_scope.borrow_mut().declare("__super_class__", JsValue::String(s_name));
+                                    method_scope
+                                        .borrow_mut()
+                                        .declare("__super_class__", JsValue::String(s_name));
                                 }
 
                                 bind_parameters(&params, evaluated_args, &method_scope);
@@ -2340,11 +2835,16 @@ impl JsEngine {
                                             break;
                                         }
                                         Ok(StatementFlow::Break(_)) => {
-                                            err = Some("SyntaxError: Illegal break statement".to_string());
+                                            err = Some(
+                                                "SyntaxError: Illegal break statement".to_string(),
+                                            );
                                             break;
                                         }
                                         Ok(StatementFlow::Continue(_)) => {
-                                            err = Some("SyntaxError: Illegal continue statement".to_string());
+                                            err = Some(
+                                                "SyntaxError: Illegal continue statement"
+                                                    .to_string(),
+                                            );
                                             break;
                                         }
                                         Ok(StatementFlow::Yield(v)) => {
@@ -2393,7 +2893,8 @@ impl JsEngine {
                 self.call_value_with_this(&callee_val, evaluated_args, this_val)
             }
             Expr::OptionalCall { callee, args } => {
-                if let Expr::OptionalMember { object, .. } | Expr::Member { object, .. } = &**callee {
+                if let Expr::OptionalMember { object, .. } | Expr::Member { object, .. } = &**callee
+                {
                     let base = self.eval_expr(object)?;
                     if matches!(base, JsValue::Null | JsValue::Undefined) {
                         return Ok(JsValue::Undefined);
@@ -2432,17 +2933,25 @@ impl JsEngine {
                         if name == "Promise" {
                             let pid = self.next_promise_id;
                             self.next_promise_id += 1;
-                            let (promise, resolve_fn, reject_fn) = JsPromise::<JsValue>::new_pending();
+                            let (promise, resolve_fn, reject_fn) =
+                                JsPromise::<JsValue>::new_pending();
                             self.promises.insert(pid, promise.clone());
-                            self.promise_controllers.insert(pid, (resolve_fn, reject_fn));
+                            self.promise_controllers
+                                .insert(pid, (resolve_fn, reject_fn));
 
                             if let Some(executor) = evaluated_args.first().cloned() {
                                 let mut res_map = BTreeMap::new();
-                                res_map.insert("__fn__".to_string(), JsValue::String(format!("__promise_res_{pid}")));
+                                res_map.insert(
+                                    "__fn__".to_string(),
+                                    JsValue::String(format!("__promise_res_{pid}")),
+                                );
                                 let res_val = JsValue::new_object(res_map);
 
                                 let mut rej_map = BTreeMap::new();
-                                rej_map.insert("__fn__".to_string(), JsValue::String(format!("__promise_rej_{pid}")));
+                                rej_map.insert(
+                                    "__fn__".to_string(),
+                                    JsValue::String(format!("__promise_rej_{pid}")),
+                                );
                                 let rej_val = JsValue::new_object(rej_map);
 
                                 self.call_value(&executor, vec![res_val, rej_val])?;
@@ -2450,26 +2959,50 @@ impl JsEngine {
                             drain_microtasks();
 
                             Ok(JsValue::Promise(promise))
-                        } else if matches!(name.as_str(), "Error" | "TypeError" | "ReferenceError" | "SyntaxError" | "RangeError") {
-                            let msg = evaluated_args.first().map(|v| v.to_string()).unwrap_or_default();
+                        } else if matches!(
+                            name.as_str(),
+                            "Error" | "TypeError" | "ReferenceError" | "SyntaxError" | "RangeError"
+                        ) {
+                            let msg = evaluated_args
+                                .first()
+                                .map(|v| v.to_string())
+                                .unwrap_or_default();
                             let mut map = BTreeMap::new();
                             map.insert("__is_error__".to_string(), JsValue::Bool(true));
                             map.insert("name".to_string(), JsValue::String(name.clone()));
                             map.insert("message".to_string(), JsValue::String(msg.clone()));
-                            map.insert("stack".to_string(), JsValue::String(format!("{name}: {msg}\n    at strata_js")));
-                            map.insert("__proto__".to_string(), JsValue::new_object(self.error_prototype.clone()));
+                            map.insert(
+                                "stack".to_string(),
+                                JsValue::String(format!("{name}: {msg}\n    at strata_js")),
+                            );
+                            map.insert(
+                                "__proto__".to_string(),
+                                JsValue::new_object(self.error_prototype.clone()),
+                            );
                             Ok(JsValue::new_object(map))
                         } else if name == "Proxy" {
                             if evaluated_args.len() < 2 {
-                                return Err("TypeError: Cannot create Proxy with fewer than 2 arguments".to_string());
+                                return Err(
+                                    "TypeError: Cannot create Proxy with fewer than 2 arguments"
+                                        .to_string(),
+                                );
                             }
                             let target = evaluated_args[0].clone();
                             let handler = evaluated_args[1].clone();
-                            if !matches!(target, JsValue::Object(_) | JsValue::Array(_) | JsValue::Function(_)) {
-                                return Err("TypeError: Cannot create proxy with a non-object as target".to_string());
+                            if !matches!(
+                                target,
+                                JsValue::Object(_) | JsValue::Array(_) | JsValue::Function(_)
+                            ) {
+                                return Err(
+                                    "TypeError: Cannot create proxy with a non-object as target"
+                                        .to_string(),
+                                );
                             }
                             if !matches!(handler, JsValue::Object(_)) {
-                                return Err("TypeError: Cannot create proxy with a non-object as handler".to_string());
+                                return Err(
+                                    "TypeError: Cannot create proxy with a non-object as handler"
+                                        .to_string(),
+                                );
                             }
                             let mut p_map = BTreeMap::new();
                             p_map.insert("__is_proxy__".to_string(), JsValue::Bool(true));
@@ -2490,44 +3023,84 @@ impl JsEngine {
                                 }
                             } else {
                                 let year = evaluated_args[0].as_f64().unwrap_or(0.0);
-                                let month = evaluated_args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                                let day = evaluated_args.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0);
-                                let hours = evaluated_args.get(3).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                                let minutes = evaluated_args.get(4).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                                let seconds = evaluated_args.get(5).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                                let ms = evaluated_args.get(6).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                                crate::engine::date_to_ms(year, month, day, hours, minutes, seconds, ms)
+                                let month = evaluated_args
+                                    .get(1)
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0);
+                                let day = evaluated_args
+                                    .get(2)
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(1.0);
+                                let hours = evaluated_args
+                                    .get(3)
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0);
+                                let minutes = evaluated_args
+                                    .get(4)
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0);
+                                let seconds = evaluated_args
+                                    .get(5)
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0);
+                                let ms = evaluated_args
+                                    .get(6)
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0);
+                                crate::engine::date_to_ms(
+                                    year, month, day, hours, minutes, seconds, ms,
+                                )
                             };
                             let mut d_map = BTreeMap::new();
                             d_map.insert("__is_date__".to_string(), JsValue::Bool(true));
                             d_map.insert("__date_ms__".to_string(), JsValue::Number(ms));
-                            d_map.insert("__proto__".to_string(), JsValue::new_object(self.object_prototype.clone()));
+                            d_map.insert(
+                                "__proto__".to_string(),
+                                JsValue::new_object(self.object_prototype.clone()),
+                            );
                             Ok(JsValue::new_object(d_map))
                         } else if name == "BigInt" {
                             Err("TypeError: BigInt is not a constructor".to_string())
                         } else if name == "WeakMap" {
                             let wid = self.next_weak_id;
                             self.next_weak_id += 1;
-                            self.weak_maps.borrow_mut().insert(wid, std::collections::HashMap::new());
+                            self.weak_maps
+                                .borrow_mut()
+                                .insert(wid, std::collections::HashMap::new());
                             let mut w_map = BTreeMap::new();
                             w_map.insert("__is_weak_map__".to_string(), JsValue::Bool(true));
                             w_map.insert("__weak_id__".to_string(), JsValue::Number(wid as f64));
-                            w_map.insert("__proto__".to_string(), JsValue::new_object(self.object_prototype.clone()));
+                            w_map.insert(
+                                "__proto__".to_string(),
+                                JsValue::new_object(self.object_prototype.clone()),
+                            );
                             Ok(JsValue::new_object(w_map))
                         } else if name == "WeakSet" {
                             let wid = self.next_weak_id;
                             self.next_weak_id += 1;
-                            self.weak_sets.borrow_mut().insert(wid, std::collections::HashSet::new());
+                            self.weak_sets
+                                .borrow_mut()
+                                .insert(wid, std::collections::HashSet::new());
                             let mut w_map = BTreeMap::new();
                             w_map.insert("__is_weak_set__".to_string(), JsValue::Bool(true));
                             w_map.insert("__weak_id__".to_string(), JsValue::Number(wid as f64));
-                            w_map.insert("__proto__".to_string(), JsValue::new_object(self.object_prototype.clone()));
+                            w_map.insert(
+                                "__proto__".to_string(),
+                                JsValue::new_object(self.object_prototype.clone()),
+                            );
                             Ok(JsValue::new_object(w_map))
                         } else if name == "WeakRef" {
-                            let target = evaluated_args.first().cloned().unwrap_or(JsValue::Undefined);
+                            let target = evaluated_args
+                                .first()
+                                .cloned()
+                                .unwrap_or(JsValue::Undefined);
                             let target_obj = match target {
                                 JsValue::Object(ref o) => std::rc::Rc::downgrade(o),
-                                _ => return Err("TypeError: \"target\" must be an object".to_string()),
+                                _ => {
+                                    return Err(
+                                        "TypeError: \"target\" must be an object".to_string()
+                                    )
+                                }
                             };
                             let wid = self.next_weak_id;
                             self.next_weak_id += 1;
@@ -2535,17 +3108,30 @@ impl JsEngine {
                             let mut w_map = BTreeMap::new();
                             w_map.insert("__is_weak_ref__".to_string(), JsValue::Bool(true));
                             w_map.insert("__weak_id__".to_string(), JsValue::Number(wid as f64));
-                            w_map.insert("__proto__".to_string(), JsValue::new_object(self.object_prototype.clone()));
+                            w_map.insert(
+                                "__proto__".to_string(),
+                                JsValue::new_object(self.object_prototype.clone()),
+                            );
                             Ok(JsValue::new_object(w_map))
                         } else if name == "Symbol" {
                             Err("TypeError: Symbol is not a constructor".to_string())
                         } else if name == "RegExp" {
-                            let pat = evaluated_args.first().map(|v| match v {
-                                JsValue::Object(m) if m.borrow().get("__is_regex__") == Some(&JsValue::Bool(true)) => {
-                                    m.borrow().get("source").and_then(|s| s.as_str()).unwrap_or("").to_string()
-                                }
-                                _ => v.to_string(),
-                            }).unwrap_or_default();
+                            let pat = evaluated_args
+                                .first()
+                                .map(|v| match v {
+                                    JsValue::Object(m)
+                                        if m.borrow().get("__is_regex__")
+                                            == Some(&JsValue::Bool(true)) =>
+                                    {
+                                        m.borrow()
+                                            .get("source")
+                                            .and_then(|s| s.as_str())
+                                            .unwrap_or("")
+                                            .to_string()
+                                    }
+                                    _ => v.to_string(),
+                                })
+                                .unwrap_or_default();
                             let flg = if evaluated_args.len() > 1 {
                                 evaluated_args[1].to_string()
                             } else {
@@ -2582,25 +3168,34 @@ impl JsEngine {
                     other => {
                         let callee_val = self.eval_expr(other)?;
                         if let JsValue::Object(ref map) = callee_val {
-                            let cls_opt = map.borrow().get("__class_name__").and_then(|v| match v {
-                                JsValue::String(s) => Some(s.clone()),
-                                _ => None,
-                            });
+                            let cls_opt =
+                                map.borrow().get("__class_name__").and_then(|v| match v {
+                                    JsValue::String(s) => Some(s.clone()),
+                                    _ => None,
+                                });
                             if let Some(cls_name) = cls_opt {
                                 if cls_name == "Promise" {
                                     let pid = self.next_promise_id;
                                     self.next_promise_id += 1;
-                                    let (promise, resolve_fn, reject_fn) = JsPromise::<JsValue>::new_pending();
+                                    let (promise, resolve_fn, reject_fn) =
+                                        JsPromise::<JsValue>::new_pending();
                                     self.promises.insert(pid, promise.clone());
-                                    self.promise_controllers.insert(pid, (resolve_fn, reject_fn));
+                                    self.promise_controllers
+                                        .insert(pid, (resolve_fn, reject_fn));
 
                                     if let Some(executor) = evaluated_args.first().cloned() {
                                         let mut res_map = BTreeMap::new();
-                                        res_map.insert("__fn__".to_string(), JsValue::String(format!("__promise_res_{pid}")));
+                                        res_map.insert(
+                                            "__fn__".to_string(),
+                                            JsValue::String(format!("__promise_res_{pid}")),
+                                        );
                                         let res_val = JsValue::new_object(res_map);
 
                                         let mut rej_map = BTreeMap::new();
-                                        rej_map.insert("__fn__".to_string(), JsValue::String(format!("__promise_rej_{pid}")));
+                                        rej_map.insert(
+                                            "__fn__".to_string(),
+                                            JsValue::String(format!("__promise_rej_{pid}")),
+                                        );
                                         let rej_val = JsValue::new_object(rej_map);
 
                                         self.call_value(&executor, vec![res_val, rej_val])?;
@@ -2625,7 +3220,9 @@ impl JsEngine {
                     if let Expr::Spread(inner) = item {
                         let spread_val = self.eval_expr(inner)?;
                         match spread_val {
-                            JsValue::Array(inner_items) => vals.extend(inner_items.borrow().clone()),
+                            JsValue::Array(inner_items) => {
+                                vals.extend(inner_items.borrow().clone())
+                            }
                             JsValue::String(s) => {
                                 for ch in s.chars() {
                                     vals.push(JsValue::String(ch.to_string()));
@@ -2655,9 +3252,7 @@ impl JsEngine {
                 }
                 Ok(JsValue::new_object(map))
             }
-            Expr::RegExpLiteral { pattern, flags } => {
-                self.create_regex_value(pattern, flags)
-            }
+            Expr::RegExpLiteral { pattern, flags } => self.create_regex_value(pattern, flags),
             Expr::Yield(inner) => {
                 let val = if let Some(expr) = inner {
                     self.eval_expr(expr)?
@@ -2678,7 +3273,11 @@ impl JsEngine {
         computed: Option<&Expr>,
     ) -> Result<JsValue, String> {
         if matches!(obj_val, JsValue::Null | JsValue::Undefined) {
-            return Err(format!("TypeError: Cannot read properties of {} (reading '{}')", obj_val.js_typeof(), property));
+            return Err(format!(
+                "TypeError: Cannot read properties of {} (reading '{}')",
+                obj_val.js_typeof(),
+                property
+            ));
         }
 
         // Check Proxy get trap
@@ -2691,8 +3290,12 @@ impl JsEngine {
                 let (target, handler) = {
                     let b = map.borrow();
                     (
-                        b.get("__proxy_target__").cloned().unwrap_or(JsValue::Undefined),
-                        b.get("__proxy_handler__").cloned().unwrap_or(JsValue::Undefined),
+                        b.get("__proxy_target__")
+                            .cloned()
+                            .unwrap_or(JsValue::Undefined),
+                        b.get("__proxy_handler__")
+                            .cloned()
+                            .unwrap_or(JsValue::Undefined),
                     )
                 };
                 if let JsValue::Object(ref h_cell) = handler {
@@ -2719,7 +3322,10 @@ impl JsEngine {
             };
             if matches!(key.as_str(), "then" | "catch" | "finally") {
                 let mut fn_map = BTreeMap::new();
-                fn_map.insert("__fn__".to_string(), JsValue::String(format!("__promise_method_{key}")));
+                fn_map.insert(
+                    "__fn__".to_string(),
+                    JsValue::String(format!("__promise_method_{key}")),
+                );
                 return Ok(JsValue::new_object(fn_map));
             }
             if key == "Symbol(Symbol.toStringTag)" || key == "toStringTag" {
@@ -2741,7 +3347,11 @@ impl JsEngine {
             };
             if let JsValue::Array(ref arr) = obj_val {
                 if let Some(idx) = prop_val.as_f64() {
-                    return Ok(arr.borrow().get(idx as usize).cloned().unwrap_or(JsValue::Undefined));
+                    return Ok(arr
+                        .borrow()
+                        .get(idx as usize)
+                        .cloned()
+                        .unwrap_or(JsValue::Undefined));
                 }
                 if let Some(proto_val) = self.array_prototype.get(&key) {
                     return Ok(proto_val.clone());
@@ -2759,7 +3369,9 @@ impl JsEngine {
                 let mut depth = 0;
                 while let Some(JsValue::Object(p_map)) = cur_proto {
                     depth += 1;
-                    if depth > 64 { break; }
+                    if depth > 64 {
+                        break;
+                    }
                     let pb = p_map.borrow();
                     if let Some(v) = pb.get(&key) {
                         return Ok(v.clone());
@@ -2773,7 +3385,11 @@ impl JsEngine {
             }
             if let JsValue::String(ref s) = obj_val {
                 if let Some(idx) = prop_val.as_f64() {
-                    return Ok(s.chars().nth(idx as usize).map(|c| JsValue::String(c.to_string())).unwrap_or(JsValue::Undefined));
+                    return Ok(s
+                        .chars()
+                        .nth(idx as usize)
+                        .map(|c| JsValue::String(c.to_string()))
+                        .unwrap_or(JsValue::Undefined));
                 }
                 if let Some(proto_val) = self.string_prototype.get(&key) {
                     return Ok(proto_val.clone());
@@ -2837,7 +3453,11 @@ impl JsEngine {
 
         if let JsValue::Symbol(ref sym) = obj_val {
             if property == "description" {
-                return Ok(sym.description.as_ref().map(|s| JsValue::String(s.clone())).unwrap_or(JsValue::Undefined));
+                return Ok(sym
+                    .description
+                    .as_ref()
+                    .map(|s| JsValue::String(s.clone()))
+                    .unwrap_or(JsValue::Undefined));
             }
             return Ok(JsValue::Undefined);
         }
@@ -2877,44 +3497,80 @@ impl JsEngine {
             if let Some(node) = self.resolve_dom_node(&b) {
                 match property {
                     "parentNode" => {
-                        return Ok(node.parent_node().map(|p| self.dom_node_to_js(&p)).unwrap_or(JsValue::Null));
+                        return Ok(node
+                            .parent_node()
+                            .map(|p| self.dom_node_to_js(&p))
+                            .unwrap_or(JsValue::Null));
                     }
                     "parentElement" => {
-                        return Ok(node.parent_element().map(|p| self.dom_node_to_js(&p)).unwrap_or(JsValue::Null));
+                        return Ok(node
+                            .parent_element()
+                            .map(|p| self.dom_node_to_js(&p))
+                            .unwrap_or(JsValue::Null));
                     }
                     "firstChild" => {
-                        return Ok(node.first_child().map(|c| self.dom_node_to_js(&c)).unwrap_or(JsValue::Null));
+                        return Ok(node
+                            .first_child()
+                            .map(|c| self.dom_node_to_js(&c))
+                            .unwrap_or(JsValue::Null));
                     }
                     "lastChild" => {
-                        return Ok(node.last_child().map(|c| self.dom_node_to_js(&c)).unwrap_or(JsValue::Null));
+                        return Ok(node
+                            .last_child()
+                            .map(|c| self.dom_node_to_js(&c))
+                            .unwrap_or(JsValue::Null));
                     }
                     "firstElementChild" => {
-                        return Ok(node.first_element_child().map(|c| self.dom_node_to_js(&c)).unwrap_or(JsValue::Null));
+                        return Ok(node
+                            .first_element_child()
+                            .map(|c| self.dom_node_to_js(&c))
+                            .unwrap_or(JsValue::Null));
                     }
                     "lastElementChild" => {
-                        return Ok(node.last_element_child().map(|c| self.dom_node_to_js(&c)).unwrap_or(JsValue::Null));
+                        return Ok(node
+                            .last_element_child()
+                            .map(|c| self.dom_node_to_js(&c))
+                            .unwrap_or(JsValue::Null));
                     }
                     "previousSibling" => {
-                        return Ok(node.previous_sibling().map(|s| self.dom_node_to_js(&s)).unwrap_or(JsValue::Null));
+                        return Ok(node
+                            .previous_sibling()
+                            .map(|s| self.dom_node_to_js(&s))
+                            .unwrap_or(JsValue::Null));
                     }
                     "nextSibling" => {
-                        return Ok(node.next_sibling().map(|s| self.dom_node_to_js(&s)).unwrap_or(JsValue::Null));
+                        return Ok(node
+                            .next_sibling()
+                            .map(|s| self.dom_node_to_js(&s))
+                            .unwrap_or(JsValue::Null));
                     }
                     "previousElementSibling" => {
-                        return Ok(node.previous_element_sibling().map(|s| self.dom_node_to_js(&s)).unwrap_or(JsValue::Null));
+                        return Ok(node
+                            .previous_element_sibling()
+                            .map(|s| self.dom_node_to_js(&s))
+                            .unwrap_or(JsValue::Null));
                     }
                     "nextElementSibling" => {
-                        return Ok(node.next_element_sibling().map(|s| self.dom_node_to_js(&s)).unwrap_or(JsValue::Null));
+                        return Ok(node
+                            .next_element_sibling()
+                            .map(|s| self.dom_node_to_js(&s))
+                            .unwrap_or(JsValue::Null));
                     }
                     "childNodes" => {
-                        let children_js = node.children().iter().map(|c| self.dom_node_to_js(c)).collect();
+                        let children_js = node
+                            .children()
+                            .iter()
+                            .map(|c| self.dom_node_to_js(c))
+                            .collect();
                         return Ok(JsValue::new_array(children_js));
                     }
                     "children" => {
                         let children_js = node
                             .children()
                             .iter()
-                            .filter(|c| matches!(c.inner.borrow().node_type, DomNodeType::Element { .. }))
+                            .filter(|c| {
+                                matches!(c.inner.borrow().node_type, DomNodeType::Element { .. })
+                            })
                             .map(|c| self.dom_node_to_js(c))
                             .collect();
                         return Ok(JsValue::new_array(children_js));
@@ -2941,7 +3597,9 @@ impl JsEngine {
                         return Ok(JsValue::String(node.id().unwrap_or_default()));
                     }
                     "value" => {
-                        return Ok(JsValue::String(node.get_attribute("value").unwrap_or_default()));
+                        return Ok(JsValue::String(
+                            node.get_attribute("value").unwrap_or_default(),
+                        ));
                     }
                     _ => {}
                 }
@@ -2989,15 +3647,20 @@ impl JsEngine {
         }
         if let Some(JsValue::String(id)) = map.get("__dom_id__") {
             if let Some(found) = self.document.get_element_by_id(id) {
-                self.live_nodes.borrow_mut().insert(found.uid(), found.clone());
+                self.live_nodes
+                    .borrow_mut()
+                    .insert(found.uid(), found.clone());
                 return Some(found);
             }
         }
         None
     }
 
-
-    pub fn call_closure(&mut self, closure: &JsClosure, args: Vec<JsValue>) -> Result<JsValue, String> {
+    pub fn call_closure(
+        &mut self,
+        closure: &JsClosure,
+        args: Vec<JsValue>,
+    ) -> Result<JsValue, String> {
         self.call_closure_with_this(closure, args, None)
     }
 
@@ -3042,7 +3705,10 @@ impl JsEngine {
             let mut gen_map = BTreeMap::new();
             gen_map.insert("__is_generator__".to_string(), JsValue::Bool(true));
             gen_map.insert("__gen_id__".to_string(), JsValue::Number(gen_id as f64));
-            gen_map.insert("__proto__".to_string(), JsValue::new_object(self.object_prototype.clone()));
+            gen_map.insert(
+                "__proto__".to_string(),
+                JsValue::new_object(self.object_prototype.clone()),
+            );
             return Ok(JsValue::new_object(gen_map));
         }
 
@@ -3112,7 +3778,11 @@ impl JsEngine {
         Ok(ret)
     }
 
-    pub fn step_generator(&mut self, gen_id: u64, _next_arg: Option<JsValue>) -> Result<JsValue, String> {
+    pub fn step_generator(
+        &mut self,
+        gen_id: u64,
+        _next_arg: Option<JsValue>,
+    ) -> Result<JsValue, String> {
         let (closure, scope, mut pc, done) = match self.generators.borrow().get(&gen_id) {
             Some(inst) => (inst.closure.clone(), inst.scope.clone(), inst.pc, inst.done),
             None => return Err("TypeError: Invalid generator".to_string()),
@@ -3163,12 +3833,16 @@ impl JsEngine {
                     break;
                 }
                 Ok(StatementFlow::Break(_)) => {
-                    thrown = Some(JsValue::String("SyntaxError: Illegal break statement".to_string()));
+                    thrown = Some(JsValue::String(
+                        "SyntaxError: Illegal break statement".to_string(),
+                    ));
                     is_done = true;
                     break;
                 }
                 Ok(StatementFlow::Continue(_)) => {
-                    thrown = Some(JsValue::String("SyntaxError: Illegal continue statement".to_string()));
+                    thrown = Some(JsValue::String(
+                        "SyntaxError: Illegal continue statement".to_string(),
+                    ));
                     is_done = true;
                     break;
                 }
@@ -3238,7 +3912,12 @@ impl JsEngine {
         }
     }
 
-    fn eval_date_method(&self, property: &str, ms: f64, _args: &[JsValue]) -> Result<JsValue, String> {
+    fn eval_date_method(
+        &self,
+        property: &str,
+        ms: f64,
+        _args: &[JsValue],
+    ) -> Result<JsValue, String> {
         let (y, m, d, h, min, s, milli) = crate::engine::ms_to_date(ms);
         match property {
             "getTime" | "valueOf" => Ok(JsValue::Number(ms)),
@@ -3249,14 +3928,44 @@ impl JsEngine {
             "getMinutes" => Ok(JsValue::Number(min as f64)),
             "getSeconds" => Ok(JsValue::Number(s as f64)),
             "getMilliseconds" => Ok(JsValue::Number(milli as f64)),
-            "toISOString" => Ok(JsValue::String(format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", y, m + 1, d, h, min, s, milli))),
-            "toUTCString" => Ok(JsValue::String(format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02} GMT", y, m + 1, d, h, min, s))),
-            "toString" => Ok(JsValue::String(format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, m + 1, d, h, min, s))),
+            "toISOString" => Ok(JsValue::String(format!(
+                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                y,
+                m + 1,
+                d,
+                h,
+                min,
+                s,
+                milli
+            ))),
+            "toUTCString" => Ok(JsValue::String(format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02} GMT",
+                y,
+                m + 1,
+                d,
+                h,
+                min,
+                s
+            ))),
+            "toString" => Ok(JsValue::String(format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                y,
+                m + 1,
+                d,
+                h,
+                min,
+                s
+            ))),
             _ => Ok(JsValue::Undefined),
         }
     }
 
-    fn eval_weak_map_method(&mut self, id: u64, property: &str, args: &[JsValue]) -> Result<JsValue, String> {
+    fn eval_weak_map_method(
+        &mut self,
+        id: u64,
+        property: &str,
+        args: &[JsValue],
+    ) -> Result<JsValue, String> {
         let key_opt = args.first().and_then(|v| match v {
             JsValue::Object(o) => Some(std::rc::Rc::as_ptr(o) as usize),
             JsValue::Array(a) => Some(std::rc::Rc::as_ptr(a) as usize),
@@ -3276,7 +3985,11 @@ impl JsEngine {
             "set" => {
                 if let Some(k) = key_opt {
                     let val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    self.weak_maps.borrow_mut().entry(id).or_default().insert(k, val);
+                    self.weak_maps
+                        .borrow_mut()
+                        .entry(id)
+                        .or_default()
+                        .insert(k, val);
                     if let Some(this_obj) = self.current_scope.borrow().get("this") {
                         return Ok(this_obj);
                     }
@@ -3287,7 +4000,12 @@ impl JsEngine {
             }
             "has" => {
                 if let Some(k) = key_opt {
-                    let has = self.weak_maps.borrow().get(&id).map(|m| m.contains_key(&k)).unwrap_or(false);
+                    let has = self
+                        .weak_maps
+                        .borrow()
+                        .get(&id)
+                        .map(|m| m.contains_key(&k))
+                        .unwrap_or(false);
                     Ok(JsValue::Bool(has))
                 } else {
                     Ok(JsValue::Bool(false))
@@ -3295,7 +4013,12 @@ impl JsEngine {
             }
             "delete" => {
                 if let Some(k) = key_opt {
-                    let removed = self.weak_maps.borrow_mut().get_mut(&id).map(|m| m.remove(&k).is_some()).unwrap_or(false);
+                    let removed = self
+                        .weak_maps
+                        .borrow_mut()
+                        .get_mut(&id)
+                        .map(|m| m.remove(&k).is_some())
+                        .unwrap_or(false);
                     Ok(JsValue::Bool(removed))
                 } else {
                     Ok(JsValue::Bool(false))
@@ -3305,7 +4028,12 @@ impl JsEngine {
         }
     }
 
-    fn eval_weak_set_method(&mut self, id: u64, property: &str, args: &[JsValue]) -> Result<JsValue, String> {
+    fn eval_weak_set_method(
+        &mut self,
+        id: u64,
+        property: &str,
+        args: &[JsValue],
+    ) -> Result<JsValue, String> {
         let key_opt = args.first().and_then(|v| match v {
             JsValue::Object(o) => Some(std::rc::Rc::as_ptr(o) as usize),
             JsValue::Array(a) => Some(std::rc::Rc::as_ptr(a) as usize),
@@ -3326,7 +4054,12 @@ impl JsEngine {
             }
             "has" => {
                 if let Some(k) = key_opt {
-                    let has = self.weak_sets.borrow().get(&id).map(|s| s.contains(&k)).unwrap_or(false);
+                    let has = self
+                        .weak_sets
+                        .borrow()
+                        .get(&id)
+                        .map(|s| s.contains(&k))
+                        .unwrap_or(false);
                     Ok(JsValue::Bool(has))
                 } else {
                     Ok(JsValue::Bool(false))
@@ -3334,7 +4067,12 @@ impl JsEngine {
             }
             "delete" => {
                 if let Some(k) = key_opt {
-                    let removed = self.weak_sets.borrow_mut().get_mut(&id).map(|s| s.remove(&k)).unwrap_or(false);
+                    let removed = self
+                        .weak_sets
+                        .borrow_mut()
+                        .get_mut(&id)
+                        .map(|s| s.remove(&k))
+                        .unwrap_or(false);
                     Ok(JsValue::Bool(removed))
                 } else {
                     Ok(JsValue::Bool(false))
@@ -3374,12 +4112,21 @@ impl JsEngine {
         }
 
         if name == "RegExp" {
-            let pat = args.first().map(|v| match v {
-                JsValue::Object(m) if m.borrow().get("__is_regex__") == Some(&JsValue::Bool(true)) => {
-                    m.borrow().get("source").and_then(|s| s.as_str()).unwrap_or("").to_string()
-                }
-                _ => v.to_string(),
-            }).unwrap_or_default();
+            let pat = args
+                .first()
+                .map(|v| match v {
+                    JsValue::Object(m)
+                        if m.borrow().get("__is_regex__") == Some(&JsValue::Bool(true)) =>
+                    {
+                        m.borrow()
+                            .get("source")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("")
+                            .to_string()
+                    }
+                    _ => v.to_string(),
+                })
+                .unwrap_or_default();
             let flg = if args.len() > 1 {
                 args[1].to_string()
             } else {
@@ -3390,13 +4137,24 @@ impl JsEngine {
 
         if name == "setTimeout" {
             let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-            let delay_ms = args.get(1).and_then(|v| v.as_f64()).map(|n| n.max(0.0) as u64).unwrap_or(0);
-            let extra_args = if args.len() > 2 { args[2..].to_vec() } else { Vec::new() };
-            let timer_id = crate::web::set_timeout(move || {
-                crate::engine::ENGINE_TIMER_CALLBACKS.with(|q| {
-                    q.borrow_mut().push_back((callback, extra_args));
-                });
-            }, delay_ms);
+            let delay_ms = args
+                .get(1)
+                .and_then(|v| v.as_f64())
+                .map(|n| n.max(0.0) as u64)
+                .unwrap_or(0);
+            let extra_args = if args.len() > 2 {
+                args[2..].to_vec()
+            } else {
+                Vec::new()
+            };
+            let timer_id = crate::web::set_timeout(
+                move || {
+                    crate::engine::ENGINE_TIMER_CALLBACKS.with(|q| {
+                        q.borrow_mut().push_back((callback, extra_args));
+                    });
+                },
+                delay_ms,
+            );
             return Ok(JsValue::Number(timer_id as f64));
         }
 
@@ -3409,13 +4167,25 @@ impl JsEngine {
 
         if name == "setInterval" {
             let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-            let interval_ms = args.get(1).and_then(|v| v.as_f64()).map(|n| n.max(0.0) as u64).unwrap_or(0);
-            let extra_args = if args.len() > 2 { args[2..].to_vec() } else { Vec::new() };
-            let timer_id = crate::web::set_interval(move || {
-                crate::engine::ENGINE_TIMER_CALLBACKS.with(|q| {
-                    q.borrow_mut().push_back((callback.clone(), extra_args.clone()));
-                });
-            }, interval_ms);
+            let interval_ms = args
+                .get(1)
+                .and_then(|v| v.as_f64())
+                .map(|n| n.max(0.0) as u64)
+                .unwrap_or(0);
+            let extra_args = if args.len() > 2 {
+                args[2..].to_vec()
+            } else {
+                Vec::new()
+            };
+            let timer_id = crate::web::set_interval(
+                move || {
+                    crate::engine::ENGINE_TIMER_CALLBACKS.with(|q| {
+                        q.borrow_mut()
+                            .push_back((callback.clone(), extra_args.clone()));
+                    });
+                },
+                interval_ms,
+            );
             return Ok(JsValue::Number(timer_id as f64));
         }
 
@@ -3431,18 +4201,24 @@ impl JsEngine {
             let (method, headers_vec, body_bytes) = if args.len() > 1 {
                 if let JsValue::Object(ref init_map) = args[1] {
                     let ib = init_map.borrow();
-                    let m = ib.get("method").map(|v| match v {
-                        JsValue::String(s) => s.clone(),
-                        other => other.to_string(),
-                    }).unwrap_or_else(|| "GET".to_string());
+                    let m = ib
+                        .get("method")
+                        .map(|v| match v {
+                            JsValue::String(s) => s.clone(),
+                            other => other.to_string(),
+                        })
+                        .unwrap_or_else(|| "GET".to_string());
 
                     let mut hdrs = Vec::new();
                     if let Some(JsValue::Object(ref h_map)) = ib.get("headers") {
                         for (k, v) in h_map.borrow().iter() {
-                            hdrs.push((k.clone(), match v {
-                                JsValue::String(s) => s.clone(),
-                                other => other.to_string(),
-                            }));
+                            hdrs.push((
+                                k.clone(),
+                                match v {
+                                    JsValue::String(s) => s.clone(),
+                                    other => other.to_string(),
+                                },
+                            ));
                         }
                     }
 
@@ -3469,10 +4245,15 @@ impl JsEngine {
                 resp_map.insert("statusText".to_string(), JsValue::String("OK".to_string()));
                 resp_map.insert("ok".to_string(), JsValue::Bool(true));
                 resp_map.insert("url".to_string(), JsValue::String(url));
-                let body_str = body_bytes.and_then(|b| String::from_utf8(b).ok()).unwrap_or_else(|| "{\"status\":\"ok\"}".to_string());
+                let body_str = body_bytes
+                    .and_then(|b| String::from_utf8(b).ok())
+                    .unwrap_or_else(|| "{\"status\":\"ok\"}".to_string());
                 resp_map.insert("__body__".to_string(), JsValue::String(body_str));
                 let mut headers_map = BTreeMap::new();
-                headers_map.insert("content-type".to_string(), JsValue::String("application/json".to_string()));
+                headers_map.insert(
+                    "content-type".to_string(),
+                    JsValue::String("application/json".to_string()),
+                );
                 resp_map.insert("headers".to_string(), JsValue::new_object(headers_map));
                 resolve(JsValue::new_object(resp_map));
                 return Ok(self.create_promise_value(promise));
@@ -3495,7 +4276,10 @@ impl JsEngine {
                     let mut resp_map = BTreeMap::new();
                     resp_map.insert("__is_response__".to_string(), JsValue::Bool(true));
                     resp_map.insert("status".to_string(), JsValue::Number(resp.status as f64));
-                    resp_map.insert("statusText".to_string(), JsValue::String(resp.status_text.clone()));
+                    resp_map.insert(
+                        "statusText".to_string(),
+                        JsValue::String(resp.status_text.clone()),
+                    );
                     resp_map.insert("ok".to_string(), JsValue::Bool(resp.ok()));
                     resp_map.insert("url".to_string(), JsValue::String(url));
                     let body_str = String::from_utf8_lossy(resp.bytes()).to_string();
@@ -3510,7 +4294,10 @@ impl JsEngine {
                     resolve(JsValue::new_object(resp_map));
                 }
                 Err(err) => {
-                    reject(JsValue::String(format!("TypeError: Failed to fetch: {}", err)));
+                    reject(JsValue::String(format!(
+                        "TypeError: Failed to fetch: {}",
+                        err
+                    )));
                 }
             }
 
@@ -3528,14 +4315,23 @@ impl JsEngine {
             return Ok(JsValue::Symbol(SymbolId::new(id, desc)));
         }
 
-        if matches!(name, "Error" | "TypeError" | "ReferenceError" | "SyntaxError" | "RangeError") {
+        if matches!(
+            name,
+            "Error" | "TypeError" | "ReferenceError" | "SyntaxError" | "RangeError"
+        ) {
             let msg = args.first().map(|v| v.to_string()).unwrap_or_default();
             let mut map = BTreeMap::new();
             map.insert("__is_error__".to_string(), JsValue::Bool(true));
             map.insert("name".to_string(), JsValue::String(name.to_string()));
             map.insert("message".to_string(), JsValue::String(msg.clone()));
-            map.insert("stack".to_string(), JsValue::String(format!("{name}: {msg}\n    at strata_js")));
-            map.insert("__proto__".to_string(), JsValue::new_object(self.error_prototype.clone()));
+            map.insert(
+                "stack".to_string(),
+                JsValue::String(format!("{name}: {msg}\n    at strata_js")),
+            );
+            map.insert(
+                "__proto__".to_string(),
+                JsValue::new_object(self.error_prototype.clone()),
+            );
             return Ok(JsValue::new_object(map));
         }
 
@@ -3567,30 +4363,50 @@ impl JsEngine {
         Err(format!("Undefined function: '{name}'"))
     }
 
-    fn eval_binary(&self, op: &BinaryOp, left: &JsValue, right: &JsValue) -> Result<JsValue, String> {
+    fn eval_binary(
+        &self,
+        op: &BinaryOp,
+        left: &JsValue,
+        right: &JsValue,
+    ) -> Result<JsValue, String> {
         match op {
             BinaryOp::Add => match (left, right) {
                 (JsValue::BigInt(a), JsValue::BigInt(b)) => Ok(JsValue::BigInt(a.add(b))),
                 (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => {
                     if let JsValue::String(_) = left {
-                        Ok(JsValue::String(format!("{}{}", self.to_display_string(left), self.to_display_string(right))))
+                        Ok(JsValue::String(format!(
+                            "{}{}",
+                            self.to_display_string(left),
+                            self.to_display_string(right)
+                        )))
                     } else if let JsValue::String(_) = right {
-                        Ok(JsValue::String(format!("{}{}", self.to_display_string(left), self.to_display_string(right))))
+                        Ok(JsValue::String(format!(
+                            "{}{}",
+                            self.to_display_string(left),
+                            self.to_display_string(right)
+                        )))
                     } else {
                         Err("TypeError: Cannot mix BigInt and other types, use explicit conversions".to_string())
                     }
                 }
                 (JsValue::String(a), JsValue::String(b)) => Ok(JsValue::String(format!("{a}{b}"))),
-                (JsValue::String(a), b) => Ok(JsValue::String(format!("{a}{}", self.to_display_string(b)))),
-                (a, JsValue::String(b)) => Ok(JsValue::String(format!("{}{b}", self.to_display_string(a)))),
+                (JsValue::String(a), b) => {
+                    Ok(JsValue::String(format!("{a}{}", self.to_display_string(b))))
+                }
+                (a, JsValue::String(b)) => {
+                    Ok(JsValue::String(format!("{}{b}", self.to_display_string(a))))
+                }
                 (JsValue::Number(a), JsValue::Number(b)) => Ok(JsValue::Number(a + b)),
-                _ => Ok(JsValue::Number(left.as_f64().unwrap_or(0.0) + right.as_f64().unwrap_or(0.0))),
+                _ => Ok(JsValue::Number(
+                    left.as_f64().unwrap_or(0.0) + right.as_f64().unwrap_or(0.0),
+                )),
             },
             BinaryOp::Sub => match (left, right) {
                 (JsValue::BigInt(a), JsValue::BigInt(b)) => Ok(JsValue::BigInt(a.sub(b))),
-                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => {
-                    Err("TypeError: Cannot mix BigInt and other types, use explicit conversions".to_string())
-                }
+                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => Err(
+                    "TypeError: Cannot mix BigInt and other types, use explicit conversions"
+                        .to_string(),
+                ),
                 _ => {
                     let a = left.as_f64().unwrap_or(0.0);
                     let b = right.as_f64().unwrap_or(0.0);
@@ -3599,9 +4415,10 @@ impl JsEngine {
             },
             BinaryOp::Mul => match (left, right) {
                 (JsValue::BigInt(a), JsValue::BigInt(b)) => Ok(JsValue::BigInt(a.mul(b))),
-                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => {
-                    Err("TypeError: Cannot mix BigInt and other types, use explicit conversions".to_string())
-                }
+                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => Err(
+                    "TypeError: Cannot mix BigInt and other types, use explicit conversions"
+                        .to_string(),
+                ),
                 _ => {
                     let a = left.as_f64().unwrap_or(0.0);
                     let b = right.as_f64().unwrap_or(0.0);
@@ -3615,9 +4432,10 @@ impl JsEngine {
                     }
                     Ok(JsValue::BigInt(a.div(b)?))
                 }
-                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => {
-                    Err("TypeError: Cannot mix BigInt and other types, use explicit conversions".to_string())
-                }
+                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => Err(
+                    "TypeError: Cannot mix BigInt and other types, use explicit conversions"
+                        .to_string(),
+                ),
                 _ => {
                     let a = left.as_f64().unwrap_or(0.0);
                     let b = right.as_f64().unwrap_or(0.0);
@@ -3631,9 +4449,10 @@ impl JsEngine {
                     }
                     Ok(JsValue::BigInt(a.rem(b)?))
                 }
-                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => {
-                    Err("TypeError: Cannot mix BigInt and other types, use explicit conversions".to_string())
-                }
+                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => Err(
+                    "TypeError: Cannot mix BigInt and other types, use explicit conversions"
+                        .to_string(),
+                ),
                 _ => {
                     let a = left.as_f64().unwrap_or(0.0);
                     let b = right.as_f64().unwrap_or(0.0);
@@ -3642,9 +4461,10 @@ impl JsEngine {
             },
             BinaryOp::Power => match (left, right) {
                 (JsValue::BigInt(a), JsValue::BigInt(b)) => Ok(JsValue::BigInt(a.pow(b)?)),
-                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => {
-                    Err("TypeError: Cannot mix BigInt and other types, use explicit conversions".to_string())
-                }
+                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => Err(
+                    "TypeError: Cannot mix BigInt and other types, use explicit conversions"
+                        .to_string(),
+                ),
                 _ => {
                     let a = left.as_f64().unwrap_or(0.0);
                     let b = right.as_f64().unwrap_or(0.0);
@@ -3653,9 +4473,10 @@ impl JsEngine {
             },
             BinaryOp::BitAnd => match (left, right) {
                 (JsValue::BigInt(a), JsValue::BigInt(b)) => Ok(JsValue::BigInt(a.bit_and(b))),
-                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => {
-                    Err("TypeError: Cannot mix BigInt and other types, use explicit conversions".to_string())
-                }
+                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => Err(
+                    "TypeError: Cannot mix BigInt and other types, use explicit conversions"
+                        .to_string(),
+                ),
                 _ => {
                     let a = left.as_f64().unwrap_or(0.0) as i64;
                     let b = right.as_f64().unwrap_or(0.0) as i64;
@@ -3664,9 +4485,10 @@ impl JsEngine {
             },
             BinaryOp::BitOr => match (left, right) {
                 (JsValue::BigInt(a), JsValue::BigInt(b)) => Ok(JsValue::BigInt(a.bit_or(b))),
-                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => {
-                    Err("TypeError: Cannot mix BigInt and other types, use explicit conversions".to_string())
-                }
+                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => Err(
+                    "TypeError: Cannot mix BigInt and other types, use explicit conversions"
+                        .to_string(),
+                ),
                 _ => {
                     let a = left.as_f64().unwrap_or(0.0) as i64;
                     let b = right.as_f64().unwrap_or(0.0) as i64;
@@ -3675,9 +4497,10 @@ impl JsEngine {
             },
             BinaryOp::BitXor => match (left, right) {
                 (JsValue::BigInt(a), JsValue::BigInt(b)) => Ok(JsValue::BigInt(a.bit_xor(b))),
-                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => {
-                    Err("TypeError: Cannot mix BigInt and other types, use explicit conversions".to_string())
-                }
+                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => Err(
+                    "TypeError: Cannot mix BigInt and other types, use explicit conversions"
+                        .to_string(),
+                ),
                 _ => {
                     let a = left.as_f64().unwrap_or(0.0) as i64;
                     let b = right.as_f64().unwrap_or(0.0) as i64;
@@ -3686,12 +4509,16 @@ impl JsEngine {
             },
             BinaryOp::Shl => match (left, right) {
                 (JsValue::BigInt(a), JsValue::BigInt(b)) => {
-                    let shift = b.to_u64().ok_or_else(|| "RangeError: Invalid shift amount".to_string())? as usize;
+                    let shift = b
+                        .to_u64()
+                        .ok_or_else(|| "RangeError: Invalid shift amount".to_string())?
+                        as usize;
                     Ok(JsValue::BigInt(a.shl(shift)))
                 }
-                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => {
-                    Err("TypeError: Cannot mix BigInt and other types, use explicit conversions".to_string())
-                }
+                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => Err(
+                    "TypeError: Cannot mix BigInt and other types, use explicit conversions"
+                        .to_string(),
+                ),
                 _ => {
                     let a = left.as_f64().unwrap_or(0.0) as i32;
                     let b = (right.as_f64().unwrap_or(0.0) as u32) & 31;
@@ -3700,12 +4527,16 @@ impl JsEngine {
             },
             BinaryOp::Shr => match (left, right) {
                 (JsValue::BigInt(a), JsValue::BigInt(b)) => {
-                    let shift = b.to_u64().ok_or_else(|| "RangeError: Invalid shift amount".to_string())? as usize;
+                    let shift = b
+                        .to_u64()
+                        .ok_or_else(|| "RangeError: Invalid shift amount".to_string())?
+                        as usize;
                     Ok(JsValue::BigInt(a.shr(shift)))
                 }
-                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => {
-                    Err("TypeError: Cannot mix BigInt and other types, use explicit conversions".to_string())
-                }
+                (JsValue::BigInt(_), _) | (_, JsValue::BigInt(_)) => Err(
+                    "TypeError: Cannot mix BigInt and other types, use explicit conversions"
+                        .to_string(),
+                ),
                 _ => {
                     let a = left.as_f64().unwrap_or(0.0) as i32;
                     let b = (right.as_f64().unwrap_or(0.0) as u32) & 31;
@@ -3717,7 +4548,9 @@ impl JsEngine {
             BinaryOp::Eq => Ok(JsValue::Bool(left.loose_eq(right))),
             BinaryOp::NotEq => Ok(JsValue::Bool(!left.loose_eq(right))),
             BinaryOp::Lt => match (left, right) {
-                (JsValue::BigInt(a), JsValue::BigInt(b)) => Ok(JsValue::Bool(a.cmp(b) == std::cmp::Ordering::Less)),
+                (JsValue::BigInt(a), JsValue::BigInt(b)) => {
+                    Ok(JsValue::Bool(a.cmp(b) == std::cmp::Ordering::Less))
+                }
                 _ => {
                     let a = left.as_f64().unwrap_or(0.0);
                     let b = right.as_f64().unwrap_or(0.0);
@@ -3725,7 +4558,9 @@ impl JsEngine {
                 }
             },
             BinaryOp::Lte => match (left, right) {
-                (JsValue::BigInt(a), JsValue::BigInt(b)) => Ok(JsValue::Bool(a.cmp(b) != std::cmp::Ordering::Greater)),
+                (JsValue::BigInt(a), JsValue::BigInt(b)) => {
+                    Ok(JsValue::Bool(a.cmp(b) != std::cmp::Ordering::Greater))
+                }
                 _ => {
                     let a = left.as_f64().unwrap_or(0.0);
                     let b = right.as_f64().unwrap_or(0.0);
@@ -3733,7 +4568,9 @@ impl JsEngine {
                 }
             },
             BinaryOp::Gt => match (left, right) {
-                (JsValue::BigInt(a), JsValue::BigInt(b)) => Ok(JsValue::Bool(a.cmp(b) == std::cmp::Ordering::Greater)),
+                (JsValue::BigInt(a), JsValue::BigInt(b)) => {
+                    Ok(JsValue::Bool(a.cmp(b) == std::cmp::Ordering::Greater))
+                }
                 _ => {
                     let a = left.as_f64().unwrap_or(0.0);
                     let b = right.as_f64().unwrap_or(0.0);
@@ -3741,7 +4578,9 @@ impl JsEngine {
                 }
             },
             BinaryOp::Gte => match (left, right) {
-                (JsValue::BigInt(a), JsValue::BigInt(b)) => Ok(JsValue::Bool(a.cmp(b) != std::cmp::Ordering::Less)),
+                (JsValue::BigInt(a), JsValue::BigInt(b)) => {
+                    Ok(JsValue::Bool(a.cmp(b) != std::cmp::Ordering::Less))
+                }
                 _ => {
                     let a = left.as_f64().unwrap_or(0.0);
                     let b = right.as_f64().unwrap_or(0.0);
@@ -3772,12 +4611,12 @@ impl JsEngine {
             BinaryOp::InstanceOf => {
                 let class_name = match right {
                     JsValue::String(s) => s.clone(),
-                    JsValue::Object(map) => {
-                        map.borrow().get("__class_name__")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string()
-                    }
+                    JsValue::Object(map) => map
+                        .borrow()
+                        .get("__class_name__")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     _ => String::new(),
                 };
                 Ok(JsValue::Bool(self.is_instance_of(left, &class_name)))
@@ -3793,7 +4632,9 @@ impl JsEngine {
             JsValue::BigInt(b) => format!("{b}n"),
             JsValue::Null => "null".to_string(),
             JsValue::Undefined => "undefined".to_string(),
-            JsValue::Object(map) if map.borrow().get("__is_regex__") == Some(&JsValue::Bool(true)) => {
+            JsValue::Object(map)
+                if map.borrow().get("__is_regex__") == Some(&JsValue::Bool(true)) =>
+            {
                 let b = map.borrow();
                 let src = b.get("source").and_then(|v| v.as_str()).unwrap_or("");
                 let flg = b.get("flags").and_then(|v| v.as_str()).unwrap_or("");

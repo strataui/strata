@@ -1,7 +1,7 @@
 //! Slide-Over Shopping Cart Drawer for Apex Athletics Storefront.
 
-use strata::prelude::*;
 use crate::state::StoreState;
+use strata::prelude::*;
 
 #[component]
 pub fn CartDrawer(state: StoreState) -> View {

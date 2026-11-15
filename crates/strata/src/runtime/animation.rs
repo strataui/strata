@@ -479,5 +479,4 @@ impl AppRuntime {
     pub fn register_keyframe_rule(&mut self, rule: &strata_style::KeyframeRule) {
         self.animation_manager.registry_mut().register_rule(rule);
     }
-
 }

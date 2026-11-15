@@ -33,7 +33,10 @@ fn test_tailwind_arbitrary_var_classes_and_hover() {
     let mut runtime = AppRuntime::new(TailwindArbitraryVarApp(), 400.0, 300.0, 1.0);
 
     let card = &runtime.layout_root.children[0];
-    assert_eq!(card.style.background_color, Some(Color::new(30, 41, 59, 255)));
+    assert_eq!(
+        card.style.background_color,
+        Some(Color::new(30, 41, 59, 255))
+    );
     assert_eq!(card.style.color, Color::new(248, 250, 252, 255));
     assert_eq!(card.style.border_color, Some(Color::new(71, 85, 105, 255)));
     assert_eq!(card.style.box_shadow.len(), 1);
@@ -224,7 +227,10 @@ fn test_mounted_style_element_cascade_and_ancestor_hover_descendant_selector() {
 
     // Child 1: .btn-primary resolved :root --theme-accent (#06b6d4)
     let btn = &runtime.layout_root.children[1];
-    assert_eq!(btn.style.background_color, Some(Color::new(6, 182, 212, 255)));
+    assert_eq!(
+        btn.style.background_color,
+        Some(Color::new(6, 182, 212, 255))
+    );
     assert_eq!(btn.style.color, Color::new(255, 255, 255, 255));
     assert!((btn.style.border_radius.top_left - 10.0).abs() < 0.01);
 
@@ -259,20 +265,26 @@ fn test_mounted_style_element_cascade_and_ancestor_hover_descendant_selector() {
     let resizer_box = runtime.layout_root.children[4].geometry.border_box;
     runtime.clear_hover();
     assert_eq!(
-        runtime.layout_root.children[4].children[0].style.background_color,
+        runtime.layout_root.children[4].children[0]
+            .style
+            .background_color,
         Some(Color::new(71, 85, 105, 255))
     );
     // Hover at x = resizer_box.x + 12.0 (inside 16px .resizer, outside 2px .resizer-line)
     assert!(runtime.update_hover(resizer_box.x + 12.0, resizer_box.y + 20.0));
     assert_eq!(
-        runtime.layout_root.children[4].children[0].style.background_color,
+        runtime.layout_root.children[4].children[0]
+            .style
+            .background_color,
         Some(Color::new(34, 211, 238, 255)),
         ".resizer:hover .resizer-line must restyle descendant when ancestor .resizer is hovered"
     );
 
     runtime.clear_hover();
     assert_eq!(
-        runtime.layout_root.children[4].children[0].style.background_color,
+        runtime.layout_root.children[4].children[0]
+            .style
+            .background_color,
         Some(Color::new(71, 85, 105, 255))
     );
 }
@@ -297,7 +309,10 @@ fn test_stationary_hover_transition_tick_loop_advances_to_completion() {
 
     assert!(!runtime.has_active_transitions());
     assert!(!runtime.layout_root.has_active_transitions());
-    assert_eq!(runtime.layout_root.children[0].style.background_color, Some(start_c));
+    assert_eq!(
+        runtime.layout_root.children[0].style.background_color,
+        Some(start_c)
+    );
 
     // Pointer enters button once and stops moving
     assert!(runtime.update_hover(50.0, 22.0));
@@ -366,7 +381,9 @@ fn SvgCurrentColorButtonApp() -> View {
     }
 }
 
-fn extract_svg_stroke_and_fill(list: &strata_render::DisplayList) -> (Option<Color>, Option<Color>) {
+fn extract_svg_stroke_and_fill(
+    list: &strata_render::DisplayList,
+) -> (Option<Color>, Option<Color>) {
     let mut found_stroke = None;
     let mut found_fill = None;
     for cmd in list.commands() {
@@ -399,8 +416,16 @@ fn test_svg_current_color_inherits_and_interpolates_with_parent_transition() {
 
     runtime.compile_display_list();
     let (s0, f0) = extract_svg_stroke_and_fill(&runtime.display_list);
-    assert_eq!(s0, Some(base_c), "Initial SVG stroke='currentColor' must match button text color");
-    assert_eq!(f0, Some(base_c), "Initial SVG fill='currentColor' must match button text color");
+    assert_eq!(
+        s0,
+        Some(base_c),
+        "Initial SVG stroke='currentColor' must match button text color"
+    );
+    assert_eq!(
+        f0,
+        Some(base_c),
+        "Initial SVG fill='currentColor' must match button text color"
+    );
 
     // Hover button and check mid-transition SVG colors
     assert!(runtime.update_hover(40.0, 24.0));
@@ -462,9 +487,12 @@ fn test_cairo_backdrop_blur_and_non_clipped_rounded_box_shadow() {
     let mut runtime = AppRuntime::new(CairoBackdropShadowGlassApp(), 200.0, 180.0, 1.0);
     runtime.compile_display_list();
 
-    let mut surface =
-        strata_platform::cairo::ImageSurface::create(strata_platform::cairo::Format::ARgb32, 200, 180)
-            .expect("create ImageSurface");
+    let mut surface = strata_platform::cairo::ImageSurface::create(
+        strata_platform::cairo::Format::ARgb32,
+        200,
+        180,
+    )
+    .expect("create ImageSurface");
     {
         let cr = strata_platform::cairo::Context::new(&surface).expect("create Context");
         strata_platform::render_display_list_to_cairo(&cr, &runtime.display_list);
@@ -538,9 +566,12 @@ fn test_cairo_multi_stop_linear_and_radial_rgba_gradients() {
     let mut runtime = AppRuntime::new(CairoMultiStopGradientApp(), 240.0, 220.0, 1.0);
     runtime.compile_display_list();
 
-    let mut surface =
-        strata_platform::cairo::ImageSurface::create(strata_platform::cairo::Format::ARgb32, 240, 220)
-            .expect("create ImageSurface");
+    let mut surface = strata_platform::cairo::ImageSurface::create(
+        strata_platform::cairo::Format::ARgb32,
+        240,
+        220,
+    )
+    .expect("create ImageSurface");
     {
         let cr = strata_platform::cairo::Context::new(&surface).expect("create Context");
         strata_platform::render_display_list_to_cairo(&cr, &runtime.display_list);
@@ -558,13 +589,25 @@ fn test_cairo_multi_stop_linear_and_radial_rgba_gradients() {
     );
 
     let (rl, gl, bl, _) = read_argb32_rgba(&data, stride, 8, 40);
-    assert!(rl > 220 && gl < 40 && bl < 40, "Start stop must be red: {:?}", (rl, gl, bl));
+    assert!(
+        rl > 220 && gl < 40 && bl < 40,
+        "Start stop must be red: {:?}",
+        (rl, gl, bl)
+    );
 
     let (rm, gm, bm, _) = read_argb32_rgba(&data, stride, 100, 40);
-    assert!(gm > 220 && rm < 40 && bm < 40, "50% stop must be green: {:?}", (rm, gm, bm));
+    assert!(
+        gm > 220 && rm < 40 && bm < 40,
+        "50% stop must be green: {:?}",
+        (rm, gm, bm)
+    );
 
     let (rr, gr, br, _) = read_argb32_rgba(&data, stride, 192, 40);
-    assert!(br > 220 && rr < 40 && gr < 40, "100% stop must be blue: {:?}", (rr, gr, br));
+    assert!(
+        br > 220 && rr < 40 && gr < 40,
+        "100% stop must be blue: {:?}",
+        (rr, gr, br)
+    );
 
     // Radial gradient at (0, 80, 100, 100): center (50, 130) = yellow, outer (95, 130) = blue
     let (rc, gc, bc, _) = read_argb32_rgba(&data, stride, 50, 130);

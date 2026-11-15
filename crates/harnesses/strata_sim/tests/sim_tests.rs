@@ -168,13 +168,19 @@ fn test_multi_app_sandbox_lifecycle_and_recents() {
     // Launch SaaS app
     let ok = sandbox.launch_app("com.strata.saas");
     assert!(ok);
-    assert_eq!(sandbox.active_app().unwrap().metadata.bundle_id, "com.strata.saas");
+    assert_eq!(
+        sandbox.active_app().unwrap().metadata.bundle_id,
+        "com.strata.saas"
+    );
     recents.push_task(sandbox.active_app().unwrap().metadata.clone());
 
     // Switch to Storefront app
     let ok2 = sandbox.launch_app("com.strata.storefront");
     assert!(ok2);
-    assert_eq!(sandbox.active_app().unwrap().metadata.bundle_id, "com.strata.storefront");
+    assert_eq!(
+        sandbox.active_app().unwrap().metadata.bundle_id,
+        "com.strata.storefront"
+    );
     recents.push_task(sandbox.active_app().unwrap().metadata.clone());
 
     // Previous app is suspended in background
@@ -238,9 +244,16 @@ fn test_foldable_to_media_context_integration() {
             .dual-pane { display: block; }
         }
     "#;
-    let sheet_book = strata_style::StyleSheet::parse_with_context(css, &ctx_book).expect("Parse book");
-    assert!(sheet_book.rules.iter().any(|r| r.declarations.iter().any(|d| d.value.contains("flex"))));
-    assert!(!sheet_book.rules.iter().any(|r| r.declarations.iter().any(|d| d.value.contains("block"))));
+    let sheet_book =
+        strata_style::StyleSheet::parse_with_context(css, &ctx_book).expect("Parse book");
+    assert!(sheet_book
+        .rules
+        .iter()
+        .any(|r| r.declarations.iter().any(|d| d.value.contains("flex"))));
+    assert!(!sheet_book
+        .rules
+        .iter()
+        .any(|r| r.declarations.iter().any(|d| d.value.contains("block"))));
 }
 
 #[test]
@@ -318,14 +331,23 @@ fn test_virtual_hal_to_strata_device_reactive_routing() {
 
     // 5. Radio mode mutation (Cellular 5G metered)
     hal.set_radio_mode(NetworkRadioMode::Cellular5G);
-    assert_eq!(network.get().connection_type, strata_device::ConnectionType::Cellular);
-    assert_eq!(network.get().cellular_generation, Some(strata_device::CellularGen::FiveG));
+    assert_eq!(
+        network.get().connection_type,
+        strata_device::ConnectionType::Cellular
+    );
+    assert_eq!(
+        network.get().cellular_generation,
+        Some(strata_device::CellularGen::FiveG)
+    );
     assert!(network.get().is_metered);
 
     // 6. Airplane mode disconnect
     hal.set_airplane_mode(true);
     assert!(!network.get().is_online);
-    assert_eq!(network.get().connection_type, strata_device::ConnectionType::None);
+    assert_eq!(
+        network.get().connection_type,
+        strata_device::ConnectionType::None
+    );
 }
 
 #[test]
@@ -370,10 +392,8 @@ fn test_bytecode_sandbox_engine_isolation_and_quotas() {
 
     // 5. Stack underflow protection
     let mut underflow_engine = BytecodeSandboxEngine::default();
-    let err_underflow = underflow_engine.execute(&[GuestInstruction::Pop]).unwrap_err();
+    let err_underflow = underflow_engine
+        .execute(&[GuestInstruction::Pop])
+        .unwrap_err();
     assert_eq!(err_underflow, SandboxExecutionError::StackUnderflow);
 }
-
-
-
-

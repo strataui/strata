@@ -24,72 +24,138 @@ fn test_ansi_arrow_and_navigation_key_parsing() {
     // Up arrow
     let (ev, len) = parse_next_event(b"\x1b[A").expect("Parse Up");
     assert_eq!(len, 3);
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::Up, Modifiers::NONE)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Up, Modifiers::NONE))
+    );
 
     // Down arrow
     let (ev, len) = parse_next_event(b"\x1b[B").expect("Parse Down");
     assert_eq!(len, 3);
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::Down, Modifiers::NONE)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Down, Modifiers::NONE))
+    );
 
     // Ctrl + Up: \x1b[1;5A
     let (ev, len) = parse_next_event(b"\x1b[1;5A").expect("Parse Ctrl+Up");
     assert_eq!(len, 6);
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::Up, Modifiers::CTRL)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Up, Modifiers::CTRL))
+    );
 
     // Shift + Right: \x1b[1;2C
     let (ev, len) = parse_next_event(b"\x1b[1;2C").expect("Parse Shift+Right");
     assert_eq!(len, 6);
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::Right, Modifiers::SHIFT)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Right, Modifiers::SHIFT))
+    );
 
     // Alt + Down: \x1b[1;3B
     let (ev, len) = parse_next_event(b"\x1b[1;3B").expect("Parse Alt+Down");
     assert_eq!(len, 6);
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::Down, Modifiers::ALT)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Down, Modifiers::ALT))
+    );
 
     // Home / End
     let (ev, _) = parse_next_event(b"\x1b[H").unwrap();
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::Home, Modifiers::NONE)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Home, Modifiers::NONE))
+    );
     let (ev, _) = parse_next_event(b"\x1b[F").unwrap();
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::End, Modifiers::NONE)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::End, Modifiers::NONE))
+    );
 
     // PageUp / PageDown
     let (ev, _) = parse_next_event(b"\x1b[5~").unwrap();
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::PageUp, Modifiers::NONE)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::PageUp, Modifiers::NONE))
+    );
     let (ev, _) = parse_next_event(b"\x1b[6~").unwrap();
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::PageDown, Modifiers::NONE)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::PageDown, Modifiers::NONE))
+    );
 
     // Delete / Insert
     let (ev, _) = parse_next_event(b"\x1b[3~").unwrap();
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::Delete, Modifiers::NONE)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Delete, Modifiers::NONE))
+    );
     let (ev, _) = parse_next_event(b"\x1b[2~").unwrap();
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::Insert, Modifiers::NONE)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Insert, Modifiers::NONE))
+    );
 }
 
 #[test]
 fn test_function_keys_and_control_characters() {
     // F1 through F4 via SS3
     let (ev, _) = parse_next_event(b"\x1bOP").unwrap();
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::F(1), Modifiers::NONE)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::F(1), Modifiers::NONE))
+    );
     let (ev, _) = parse_next_event(b"\x1bOQ").unwrap();
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::F(2), Modifiers::NONE)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::F(2), Modifiers::NONE))
+    );
 
     // F5 and F12 via CSI
     let (ev, _) = parse_next_event(b"\x1b[15~").unwrap();
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::F(5), Modifiers::NONE)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::F(5), Modifiers::NONE))
+    );
     let (ev, _) = parse_next_event(b"\x1b[24~").unwrap();
-    assert_eq!(ev, TuiEvent::Key(KeyEvent::new(KeyCode::F(12), Modifiers::NONE)));
+    assert_eq!(
+        ev,
+        TuiEvent::Key(KeyEvent::new(KeyCode::F(12), Modifiers::NONE))
+    );
 
     // Control characters
-    assert_eq!(parse_next_event(b"\t").unwrap().0, TuiEvent::Key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE)));
-    assert_eq!(parse_next_event(b"\n").unwrap().0, TuiEvent::Key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE)));
-    assert_eq!(parse_next_event(b"\r").unwrap().0, TuiEvent::Key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE)));
-    assert_eq!(parse_next_event(b"\x7f").unwrap().0, TuiEvent::Key(KeyEvent::new(KeyCode::Backspace, Modifiers::NONE)));
-    assert_eq!(parse_next_event(b"\x08").unwrap().0, TuiEvent::Key(KeyEvent::new(KeyCode::Backspace, Modifiers::NONE)));
+    assert_eq!(
+        parse_next_event(b"\t").unwrap().0,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE))
+    );
+    assert_eq!(
+        parse_next_event(b"\n").unwrap().0,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+    );
+    assert_eq!(
+        parse_next_event(b"\r").unwrap().0,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+    );
+    assert_eq!(
+        parse_next_event(b"\x7f").unwrap().0,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Backspace, Modifiers::NONE))
+    );
+    assert_eq!(
+        parse_next_event(b"\x08").unwrap().0,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Backspace, Modifiers::NONE))
+    );
 
     // Ctrl+C (byte 3)
-    assert_eq!(parse_next_event(b"\x03").unwrap().0, TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CTRL)));
+    assert_eq!(
+        parse_next_event(b"\x03").unwrap().0,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CTRL))
+    );
     // Ctrl+Z (byte 26)
-    assert_eq!(parse_next_event(b"\x1a").unwrap().0, TuiEvent::Key(KeyEvent::new(KeyCode::Char('z'), Modifiers::CTRL)));
+    assert_eq!(
+        parse_next_event(b"\x1a").unwrap().0,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('z'), Modifiers::CTRL))
+    );
 }
 
 #[test]

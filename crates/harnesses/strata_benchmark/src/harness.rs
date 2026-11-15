@@ -1,5 +1,6 @@
 //! Benchmark execution harness running high-precision multi-iteration benchmarks.
 
+use crate::metrics::{BenchmarkResult, BenchmarkSample};
 use std::time::Instant;
 use strata_dom::ir::{IrTag, UiIrGraph};
 use strata_dom::reactive::{use_effect, use_memo, Signal};
@@ -9,10 +10,13 @@ use strata_primitives::geom::EdgeInsets;
 use strata_primitives::Rgba;
 use strata_render::compositor::{DisplayList, DrawCommand};
 use strata_style::types::{ComputedStyle, Dimension, Display, FlexDirection, FlexWrap, GridTrack};
-use crate::metrics::{BenchmarkResult, BenchmarkSample};
 
 /// Runs a benchmark function over `iterations` with warm-up and statistical sampling.
-pub fn benchmark_task<F: FnMut()>(name: impl Into<String>, iterations: usize, mut task: F) -> BenchmarkResult {
+pub fn benchmark_task<F: FnMut()>(
+    name: impl Into<String>,
+    iterations: usize,
+    mut task: F,
+) -> BenchmarkResult {
     // Warm-up iteration
     task();
 
@@ -35,70 +39,105 @@ pub fn benchmark_task<F: FnMut()>(name: impl Into<String>, iterations: usize, mu
 /// Initializes WindowConfig, creates the root App component, compiles the DOM/IR graph,
 /// executes initial cascading style resolution and layout, and rasterizes/presents the first frame to an in-memory framebuffer.
 pub fn bench_cold_start(iterations: usize) -> BenchmarkResult {
-    benchmark_task("In-Memory Headless Framebuffer Render Pass", iterations, || {
-        let mut config = strata_platform::WindowConfig::default();
-        config.title = "Strata Benchmark Live Surface".to_string();
-        config.width = 1280;
-        config.height = 720;
+    benchmark_task(
+        "In-Memory Headless Framebuffer Render Pass",
+        iterations,
+        || {
+            let mut config = strata_platform::WindowConfig::default();
+            config.title = "Strata Benchmark Live Surface".to_string();
+            config.width = 1280;
+            config.height = 720;
 
-        let app_component = || {
-            strata_dom::View::new(strata_dom::NodeBlueprint::Element {
-                tag: strata_dom::Tag::Div,
-                classes: strata_dom::ClassList::Static(&["flex", "flex-col", "w-full", "h-full", "bg-neutral-900"]),
-                attributes: vec![],
-                children: vec![
-                    strata_dom::NodeBlueprint::Element {
-                        tag: strata_dom::Tag::Header,
-                        classes: strata_dom::ClassList::Static(&["flex", "h-16", "bg-neutral-800", "px-4", "items-center"]),
-                        attributes: vec![],
-                        children: vec![
-                            strata_dom::NodeBlueprint::Element {
+            let app_component = || {
+                strata_dom::View::new(strata_dom::NodeBlueprint::Element {
+                    tag: strata_dom::Tag::Div,
+                    classes: strata_dom::ClassList::Static(&[
+                        "flex",
+                        "flex-col",
+                        "w-full",
+                        "h-full",
+                        "bg-neutral-900",
+                    ]),
+                    attributes: vec![],
+                    children: vec![
+                        strata_dom::NodeBlueprint::Element {
+                            tag: strata_dom::Tag::Header,
+                            classes: strata_dom::ClassList::Static(&[
+                                "flex",
+                                "h-16",
+                                "bg-neutral-800",
+                                "px-4",
+                                "items-center",
+                            ]),
+                            attributes: vec![],
+                            children: vec![strata_dom::NodeBlueprint::Element {
                                 tag: strata_dom::Tag::H1,
-                                classes: strata_dom::ClassList::Static(&["text-xl", "text-white", "font-bold"]),
+                                classes: strata_dom::ClassList::Static(&[
+                                    "text-xl",
+                                    "text-white",
+                                    "font-bold",
+                                ]),
                                 attributes: vec![],
-                                children: vec![strata_dom::NodeBlueprint::Text("Strata Application".into())],
-                            },
-                        ],
-                    },
-                    strata_dom::NodeBlueprint::Element {
-                        tag: strata_dom::Tag::Main,
-                        classes: strata_dom::ClassList::Static(&["flex", "flex-1", "p-6", "gap-4"]),
-                        attributes: vec![],
-                        children: vec![
-                            strata_dom::NodeBlueprint::Element {
-                                tag: strata_dom::Tag::Aside,
-                                classes: strata_dom::ClassList::Static(&["flex", "w-64", "bg-neutral-850", "p-4"]),
-                                attributes: vec![],
-                                children: vec![strata_dom::NodeBlueprint::Text("Navigation Sidebar".into())],
-                            },
-                            strata_dom::NodeBlueprint::Element {
-                                tag: strata_dom::Tag::Section,
-                                classes: strata_dom::ClassList::Static(&["flex", "flex-1", "flex-col", "gap-2"]),
-                                attributes: vec![],
-                                children: (0..20)
-                                    .map(|i| strata_dom::NodeBlueprint::Element {
-                                        tag: strata_dom::Tag::Div,
-                                        classes: strata_dom::ClassList::Static(&[
-                                            "flex", "h-12", "bg-neutral-800", "p-2", "rounded",
-                                        ]),
-                                        attributes: vec![],
-                                        children: vec![strata_dom::NodeBlueprint::Text(format!(
-                                            "Card Item {i}"
-                                        ))],
-                                    })
-                                    .collect(),
-                            },
-                        ],
-                    },
-                ],
-            })
-        };
+                                children: vec![strata_dom::NodeBlueprint::Text(
+                                    "Strata Application".into(),
+                                )],
+                            }],
+                        },
+                        strata_dom::NodeBlueprint::Element {
+                            tag: strata_dom::Tag::Main,
+                            classes: strata_dom::ClassList::Static(&[
+                                "flex", "flex-1", "p-6", "gap-4",
+                            ]),
+                            attributes: vec![],
+                            children: vec![
+                                strata_dom::NodeBlueprint::Element {
+                                    tag: strata_dom::Tag::Aside,
+                                    classes: strata_dom::ClassList::Static(&[
+                                        "flex",
+                                        "w-64",
+                                        "bg-neutral-850",
+                                        "p-4",
+                                    ]),
+                                    attributes: vec![],
+                                    children: vec![strata_dom::NodeBlueprint::Text(
+                                        "Navigation Sidebar".into(),
+                                    )],
+                                },
+                                strata_dom::NodeBlueprint::Element {
+                                    tag: strata_dom::Tag::Section,
+                                    classes: strata_dom::ClassList::Static(&[
+                                        "flex", "flex-1", "flex-col", "gap-2",
+                                    ]),
+                                    attributes: vec![],
+                                    children: (0..20)
+                                        .map(|i| strata_dom::NodeBlueprint::Element {
+                                            tag: strata_dom::Tag::Div,
+                                            classes: strata_dom::ClassList::Static(&[
+                                                "flex",
+                                                "h-12",
+                                                "bg-neutral-800",
+                                                "p-2",
+                                                "rounded",
+                                            ]),
+                                            attributes: vec![],
+                                            children: vec![strata_dom::NodeBlueprint::Text(
+                                                format!("Card Item {i}"),
+                                            )],
+                                        })
+                                        .collect(),
+                                },
+                            ],
+                        },
+                    ],
+                })
+            };
 
-        let (_runtime, _window, presenter) = strata::launch_window(app_component, config);
-        assert_eq!(presenter.presented_frames, 1);
-        assert_eq!(presenter.width, 1280);
-        assert_eq!(presenter.height, 720);
-    })
+            let (_runtime, _window, presenter) = strata::launch_window(app_component, config);
+            assert_eq!(presenter.presented_frames, 1);
+            assert_eq!(presenter.width, 1280);
+            assert_eq!(presenter.height, 720);
+        },
+    )
 }
 
 /// Measures real W3C Flexbox Level 1 layout calculation across 1,000 styled flex items.
@@ -177,17 +216,21 @@ pub fn bench_w3c_grid_layout_1k(iterations: usize) -> BenchmarkResult {
 
 /// Measures end-to-end DisplayList compilation across 1,000 rendered elements.
 pub fn bench_display_list_compilation_1k(iterations: usize) -> BenchmarkResult {
-    benchmark_task("DisplayList Compilation (1,000 Elements)", iterations, || {
-        let mut dl = DisplayList::new();
-        for i in 0..1_000 {
-            let x = (i % 20) as f32 * 60.0;
-            let y = (i / 20) as f32 * 40.0;
-            dl.push(DrawCommand::DrawRect {
-                bounds: Rect::new(x, y, 50.0, 30.0),
-                color: Rgba::new(50, 100, 200, 255),
-            });
-        }
-    })
+    benchmark_task(
+        "DisplayList Compilation (1,000 Elements)",
+        iterations,
+        || {
+            let mut dl = DisplayList::new();
+            for i in 0..1_000 {
+                let x = (i % 20) as f32 * 60.0;
+                let y = (i / 20) as f32 * 40.0;
+                dl.push(DrawCommand::DrawRect {
+                    bounds: Rect::new(x, y, 50.0, 30.0),
+                    color: Rgba::new(50, 100, 200, 255),
+                });
+            }
+        },
+    )
 }
 
 /// Measures genuine reactive signal DAG propagation across a multi-stage diamond dependency graph.
@@ -199,45 +242,53 @@ pub fn bench_display_list_compilation_1k(iterations: usize) -> BenchmarkResult {
 ///   Active Observer Effect tracking D
 /// Evaluates true topological sorting, memo equality short-circuiting, and subscriber notifications.
 pub fn bench_signal_propagation_100k(iterations: usize) -> BenchmarkResult {
-    benchmark_task("Reactive Signal Diamond DAG (10,000 Cascade Updates)", iterations, || {
-        let a = Signal::new(0);
+    benchmark_task(
+        "Reactive Signal Diamond DAG (10,000 Cascade Updates)",
+        iterations,
+        || {
+            let a = Signal::new(0);
 
-        let a_for_b = a.clone();
-        let b = use_memo(move || a_for_b.get() + 1);
+            let a_for_b = a.clone();
+            let b = use_memo(move || a_for_b.get() + 1);
 
-        let a_for_c = a.clone();
-        let c = use_memo(move || a_for_c.get() * 2);
+            let a_for_c = a.clone();
+            let c = use_memo(move || a_for_c.get() * 2);
 
-        let b_for_d = b.clone();
-        let c_for_d = c.clone();
-        let d = use_memo(move || b_for_d.get() + c_for_d.get());
+            let b_for_d = b.clone();
+            let c_for_d = c.clone();
+            let d = use_memo(move || b_for_d.get() + c_for_d.get());
 
-        let d_for_eff = d.clone();
-        let counter = std::rc::Rc::new(std::cell::Cell::new(0));
-        let counter_eff = counter.clone();
-        let _effect = use_effect(move || {
-            let val = d_for_eff.get();
-            counter_eff.set(val);
-            None
-        });
+            let d_for_eff = d.clone();
+            let counter = std::rc::Rc::new(std::cell::Cell::new(0));
+            let counter_eff = counter.clone();
+            let _effect = use_effect(move || {
+                let val = d_for_eff.get();
+                counter_eff.set(val);
+                None
+            });
 
-        for i in 1..=10_000 {
-            a.set(i);
-        }
-        assert_eq!(counter.get(), (10_000 + 1) + (10_000 * 2));
-    })
+            for i in 1..=10_000 {
+                a.set(i);
+            }
+            assert_eq!(counter.get(), (10_000 + 1) + (10_000 * 2));
+        },
+    )
 }
 
 /// Measures 64-byte UiIrNode allocation and traversal across 100,000 nodes.
 pub fn bench_ui_ir_throughput_100k(iterations: usize) -> BenchmarkResult {
-    benchmark_task("UI IR Graph Construction (100,000 Nodes)", iterations, || {
-        let mut graph = UiIrGraph::new();
-        let root = graph.alloc_node(IrTag::Div);
-        for _ in 0..100_000 {
-            let n = graph.alloc_node(IrTag::Button);
-            graph.append_child(root, n);
-        }
-    })
+    benchmark_task(
+        "UI IR Graph Construction (100,000 Nodes)",
+        iterations,
+        || {
+            let mut graph = UiIrGraph::new();
+            let root = graph.alloc_node(IrTag::Div);
+            for _ in 0..100_000 {
+                let n = graph.alloc_node(IrTag::Button);
+                graph.append_child(root, n);
+            }
+        },
+    )
 }
 
 pub const SAMPLE_HTML_PAGE: &str = r#"
@@ -388,9 +439,13 @@ pub const FULL_WIKIPEDIA_RUST_ARTICLE: &str = r##"<!DOCTYPE html>
 
 /// Measures semantic HTML5 tokenizer and tree parser throughput on the full Wikipedia Rust article.
 pub fn bench_html_parsing(iterations: usize) -> BenchmarkResult {
-    benchmark_task("HTML Semantic Parsing (Wikipedia Article)", iterations, || {
-        let _nodes = strata_web_reader::HtmlParser::parse(FULL_WIKIPEDIA_RUST_ARTICLE);
-    })
+    benchmark_task(
+        "HTML Semantic Parsing (Wikipedia Article)",
+        iterations,
+        || {
+            let _nodes = strata_web_reader::HtmlParser::parse(FULL_WIKIPEDIA_RUST_ARTICLE);
+        },
+    )
 }
 
 /// Measures WebTranspiler Blueprint AST generation from parsed full Wikipedia HTML nodes.
@@ -398,9 +453,14 @@ pub fn bench_web_transpiler(iterations: usize) -> BenchmarkResult {
     let theme = strata_web_reader::ReaderTheme::dark();
     let transpiler = strata_web_reader::WebTranspiler::new(&theme);
     let nodes = strata_web_reader::HtmlParser::parse(FULL_WIKIPEDIA_RUST_ARTICLE);
-    benchmark_task("WebTranspiler Blueprint Gen (Wikipedia Article)", iterations, || {
-        let _blueprint = transpiler.transpile_document(&nodes, Some("Rust (programming language)"));
-    })
+    benchmark_task(
+        "WebTranspiler Blueprint Gen (Wikipedia Article)",
+        iterations,
+        || {
+            let _blueprint =
+                transpiler.transpile_document(&nodes, Some("Rust (programming language)"));
+        },
+    )
 }
 
 /// Reads current process Resident Set Size (RSS) in megabytes from /proc/self/statm.

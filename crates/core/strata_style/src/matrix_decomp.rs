@@ -37,11 +37,7 @@ impl Decomposed2d {
 
         let translate = (e, f);
         let scale_x = (a * a + b * b).sqrt();
-        let angle = if scale_x > 1e-9 {
-            b.atan2(a)
-        } else {
-            0.0
-        };
+        let angle = if scale_x > 1e-9 { b.atan2(a) } else { 0.0 };
 
         // Normalize first column
         let (a_norm, b_norm) = if scale_x > 1e-9 {

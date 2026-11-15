@@ -420,7 +420,9 @@ fn parse_dimension_token(raw: &str) -> Option<Dimension> {
 // Precedence Level 1: Add (+) and Sub (-)
 fn parse_add_sub(cursor: &mut TokenCursor, depth: usize) -> Result<CalcExpr, String> {
     if depth > MAX_CALC_DEPTH {
-        return Err(format!("Maximum calc() expression nesting depth ({MAX_CALC_DEPTH}) exceeded"));
+        return Err(format!(
+            "Maximum calc() expression nesting depth ({MAX_CALC_DEPTH}) exceeded"
+        ));
     }
     let mut left = parse_mul_div(cursor, depth)?;
 
@@ -446,7 +448,9 @@ fn parse_add_sub(cursor: &mut TokenCursor, depth: usize) -> Result<CalcExpr, Str
 // Precedence Level 2: Mul (*) and Div (/)
 fn parse_mul_div(cursor: &mut TokenCursor, depth: usize) -> Result<CalcExpr, String> {
     if depth > MAX_CALC_DEPTH {
-        return Err(format!("Maximum calc() expression nesting depth ({MAX_CALC_DEPTH}) exceeded"));
+        return Err(format!(
+            "Maximum calc() expression nesting depth ({MAX_CALC_DEPTH}) exceeded"
+        ));
     }
     let mut left = parse_factor(cursor, depth)?;
 
@@ -457,7 +461,9 @@ fn parse_mul_div(cursor: &mut TokenCursor, depth: usize) -> Result<CalcExpr, Str
                 match cursor.next() {
                     Some(Token::Number(scalar)) => {
                         if !scalar.is_finite() {
-                            return Err(format!("Non-finite scalar multiplier in calc(): {scalar}"));
+                            return Err(format!(
+                                "Non-finite scalar multiplier in calc(): {scalar}"
+                            ));
                         }
                         left = CalcExpr::Mul(Box::new(left), scalar);
                     }
@@ -474,7 +480,9 @@ fn parse_mul_div(cursor: &mut TokenCursor, depth: usize) -> Result<CalcExpr, Str
                 match cursor.next() {
                     Some(Token::Number(scalar)) => {
                         if !scalar.is_finite() || scalar == 0.0 {
-                            return Err(format!("Division by zero or non-finite scalar in calc(): {scalar}"));
+                            return Err(format!(
+                                "Division by zero or non-finite scalar in calc(): {scalar}"
+                            ));
                         }
                         left = CalcExpr::Div(Box::new(left), scalar);
                     }
@@ -496,7 +504,9 @@ fn parse_mul_div(cursor: &mut TokenCursor, depth: usize) -> Result<CalcExpr, Str
 // Precedence Level 3: Atoms, Parentheses, Values
 fn parse_factor(cursor: &mut TokenCursor, depth: usize) -> Result<CalcExpr, String> {
     if depth > MAX_CALC_DEPTH {
-        return Err(format!("Maximum calc() expression nesting depth ({MAX_CALC_DEPTH}) exceeded"));
+        return Err(format!(
+            "Maximum calc() expression nesting depth ({MAX_CALC_DEPTH}) exceeded"
+        ));
     }
     match cursor.next() {
         Some(Token::Dim(dim)) => Ok(CalcExpr::Value(dim)),

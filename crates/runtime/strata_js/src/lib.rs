@@ -155,7 +155,6 @@ impl JsValue {
         json::stringify_json(self)
     }
 
-
     /// Returns JavaScript `typeof` string for this value.
     pub fn js_typeof(&self) -> &'static str {
         match self {
@@ -312,7 +311,11 @@ impl JsValue {
             Self::Number(n) => *n != 0.0 && !n.is_nan(),
             Self::String(s) => !s.is_empty(),
             Self::BigInt(bi) => !bi.is_zero(),
-            Self::Array(_) | Self::Object(_) | Self::Function(_) | Self::Symbol(_) | Self::Promise(_) => true,
+            Self::Array(_)
+            | Self::Object(_)
+            | Self::Function(_)
+            | Self::Symbol(_)
+            | Self::Promise(_) => true,
         }
     }
 
@@ -519,7 +522,13 @@ impl JsValue {
         F: FnMut(&JsValue) -> bool,
     {
         match self {
-            Self::Array(cell) => Self::new_array(cell.borrow().iter().filter(|item| f(item)).cloned().collect()),
+            Self::Array(cell) => Self::new_array(
+                cell.borrow()
+                    .iter()
+                    .filter(|item| f(item))
+                    .cloned()
+                    .collect(),
+            ),
             _ => Self::empty_array(),
         }
     }
@@ -624,7 +633,8 @@ impl JsValue {
                     JsValue::Bool(b) => format!("{}", b),
                     JsValue::BigInt(bi) => bi.to_decimal_string(),
                     JsValue::Null | JsValue::Undefined => String::new(),
-                    other => json::stringify_json(other).unwrap_or_else(|_| "[object Object]".to_string()),
+                    other => json::stringify_json(other)
+                        .unwrap_or_else(|_| "[object Object]".to_string()),
                 })
                 .collect::<Vec<_>>()
                 .join(separator),
@@ -723,7 +733,11 @@ impl JsObject {
 
     pub fn entries(val: &JsValue) -> Vec<(String, JsValue)> {
         match val {
-            JsValue::Object(cell) => cell.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            JsValue::Object(cell) => cell
+                .borrow()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             JsValue::Array(cell) => cell
                 .borrow()
                 .iter()
@@ -934,7 +948,9 @@ pub mod prelude {
     pub use super::bigint::JsBigInt;
     pub use super::engine::{Document, DomNode, DomNodeType, JsEngine};
     pub use super::json::{parse_json, stringify_json};
-    pub use super::promise::{drain_microtasks, pending_microtasks_count, queue_microtask, JsPromise, PromiseState};
+    pub use super::promise::{
+        drain_microtasks, pending_microtasks_count, queue_microtask, JsPromise, PromiseState,
+    };
     pub use super::web::*;
     pub use super::{ClosureHandle, JsObject, JsValue, SymbolId};
 }

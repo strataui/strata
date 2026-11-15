@@ -322,7 +322,11 @@ impl CompoundSelector {
                         spec += Specificity::TYPE;
                     } else if ident.starts_with("where(") && ident.ends_with(')') {
                         // W3C Selectors Level 4: :where() always has zero specificity
-                    } else if (ident.starts_with("is(") || ident.starts_with("not(") || ident.starts_with("has(")) && ident.ends_with(')') {
+                    } else if (ident.starts_with("is(")
+                        || ident.starts_with("not(")
+                        || ident.starts_with("has("))
+                        && ident.ends_with(')')
+                    {
                         // W3C Selectors Level 4: :is(), :not(), :has() take max specificity of their selector list
                         let start = if ident.starts_with("is(") { 3 } else { 4 };
                         let inner = &ident[start..ident.len() - 1];
@@ -505,7 +509,8 @@ impl CompoundSelector {
                         }
                     } else if p.starts_with("not(") && p.ends_with(')') {
                         let inner = &p[4..p.len() - 1];
-                        let el_classes: Vec<String> = classes.iter().map(|c| c.as_ref().to_string()).collect();
+                        let el_classes: Vec<String> =
+                            classes.iter().map(|c| c.as_ref().to_string()).collect();
                         let el = ElementRef {
                             tag,
                             classes: &el_classes,
@@ -543,10 +548,12 @@ impl CompoundSelector {
                                 return false;
                             }
                         }
-                    } else if (p.starts_with("is(") || p.starts_with("where(")) && p.ends_with(')') {
+                    } else if (p.starts_with("is(") || p.starts_with("where(")) && p.ends_with(')')
+                    {
                         let start = if p.starts_with("is(") { 3 } else { 6 };
                         let inner = &p[start..p.len() - 1];
-                        let el_classes: Vec<String> = classes.iter().map(|c| c.as_ref().to_string()).collect();
+                        let el_classes: Vec<String> =
+                            classes.iter().map(|c| c.as_ref().to_string()).collect();
                         let el = ElementRef {
                             tag,
                             classes: &el_classes,
@@ -598,7 +605,14 @@ impl CompoundSelector {
                                 let child_sel_str = child_sel_str.trim();
                                 if let Ok(child_sel) = Selector::parse(child_sel_str) {
                                     for child in children {
-                                        if child_sel.matches_hierarchy_full(child, &[], &[], None, None, state) {
+                                        if child_sel.matches_hierarchy_full(
+                                            child,
+                                            &[],
+                                            &[],
+                                            None,
+                                            None,
+                                            state,
+                                        ) {
                                             any_matched = true;
                                             break;
                                         }
@@ -624,8 +638,19 @@ impl CompoundSelector {
                             } else {
                                 // Descendant match across entire subtree
                                 if let Ok(desc_sel) = Selector::parse(sub_trimmed) {
-                                    fn check_desc(node: &ElementRef, sel: &Selector, st: &PseudoState) -> bool {
-                                        if sel.matches_hierarchy_full(node, &[], &[], None, None, st) {
+                                    fn check_desc(
+                                        node: &ElementRef,
+                                        sel: &Selector,
+                                        st: &PseudoState,
+                                    ) -> bool {
+                                        if sel.matches_hierarchy_full(
+                                            node,
+                                            &[],
+                                            &[],
+                                            None,
+                                            None,
+                                            st,
+                                        ) {
                                             return true;
                                         }
                                         for ch in node.children {
@@ -948,7 +973,10 @@ impl Selector {
     /// depends on `:hover`, `:active`, or `:focus`.
     pub fn has_any_interactive_pseudo(&self) -> bool {
         self.target.has_interactive_pseudo()
-            || self.steps.iter().any(|(_, comp)| comp.has_interactive_pseudo())
+            || self
+                .steps
+                .iter()
+                .any(|(_, comp)| comp.has_interactive_pseudo())
     }
 
     /// Returns true if this selector (either on target or any ancestor/sibling step) uses `:hover`.

@@ -40,6 +40,8 @@ pub mod prelude {
     pub use crate::ime::{ImeComposition, ImeState};
     pub use crate::markdown::{from_markdown, to_markdown};
     pub use crate::model::{BlockKind, BlockNode, Document, InlineMark, InlineSpan};
-    pub use crate::soft_wrap::{logical_to_visual, visual_to_logical, wrap_logical_line, VisualLine};
+    pub use crate::soft_wrap::{
+        logical_to_visual, visual_to_logical, wrap_logical_line, VisualLine,
+    };
     pub use crate::syntax::{FoldRange, Language, SyntaxHighlighter, SyntaxToken, TokenType};
 }

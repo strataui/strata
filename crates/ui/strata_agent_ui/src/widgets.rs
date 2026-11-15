@@ -60,7 +60,9 @@ impl ApprovalWidget {
         // Title and badge header
         let badge_class = match self.status {
             ApprovalStatus::Pending => "bg-amber-950/80 text-amber-400 border border-amber-800/60",
-            ApprovalStatus::Approved => "bg-emerald-950/80 text-emerald-400 border border-emerald-800/60",
+            ApprovalStatus::Approved => {
+                "bg-emerald-950/80 text-emerald-400 border border-emerald-800/60"
+            }
             ApprovalStatus::Rejected => "bg-rose-950/80 text-rose-400 border border-rose-800/60",
         };
         let status_label = match self.status {
@@ -82,7 +84,10 @@ impl ApprovalWidget {
                 ),
                 NodeBlueprint::element(
                     Tag::Span,
-                    vec![format!("text-xs px-2.5 py-0.5 rounded-full font-mono {}", badge_class)],
+                    vec![format!(
+                        "text-xs px-2.5 py-0.5 rounded-full font-mono {}",
+                        badge_class
+                    )],
                     Vec::new(),
                     vec![NodeBlueprint::text(status_label.to_string())],
                 ),
@@ -171,7 +176,10 @@ impl ApprovalWidget {
 
         NodeBlueprint::element(
             Tag::Div,
-            vec!["bg-slate-900 border border-slate-800 rounded-lg p-4 shadow-lg max-w-md w-full".to_string()],
+            vec![
+                "bg-slate-900 border border-slate-800 rounded-lg p-4 shadow-lg max-w-md w-full"
+                    .to_string(),
+            ],
             Vec::new(),
             children,
         )
@@ -198,7 +206,11 @@ pub struct FormField {
 }
 
 impl FormField {
-    pub fn new(name: impl Into<String>, label: impl Into<String>, field_type: FormFieldType) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        label: impl Into<String>,
+        field_type: FormFieldType,
+    ) -> Self {
         Self {
             name: name.into(),
             label: label.into(),
@@ -380,14 +392,12 @@ impl TelemetryCard {
             MetricStatus::Critical => "text-rose-400",
         };
 
-        let mut value_row = vec![
-            NodeBlueprint::element(
-                Tag::Span,
-                vec![format!("text-2xl font-bold font-mono {}", status_color)],
-                Vec::new(),
-                vec![NodeBlueprint::text(self.value.clone())],
-            ),
-        ];
+        let mut value_row = vec![NodeBlueprint::element(
+            Tag::Span,
+            vec![format!("text-2xl font-bold font-mono {}", status_color)],
+            Vec::new(),
+            vec![NodeBlueprint::text(self.value.clone())],
+        )];
 
         if let Some(ref u) = self.unit {
             value_row.push(NodeBlueprint::element(
@@ -497,19 +507,20 @@ impl StepProgressWidget {
     }
 
     pub fn render_blueprint(&self) -> NodeBlueprint {
-        let mut children = vec![
-            NodeBlueprint::element(
-                Tag::H3,
-                vec!["text-sm font-semibold text-slate-100 mb-3".to_string()],
-                Vec::new(),
-                vec![NodeBlueprint::text(self.title.clone())],
-            ),
-        ];
+        let mut children = vec![NodeBlueprint::element(
+            Tag::H3,
+            vec!["text-sm font-semibold text-slate-100 mb-3".to_string()],
+            Vec::new(),
+            vec![NodeBlueprint::text(self.title.clone())],
+        )];
 
         for step in &self.steps {
             let (indicator_class, text_class) = match step.status {
                 StepStatus::Pending => ("bg-slate-800 text-slate-500", "text-slate-500"),
-                StepStatus::Running => ("bg-indigo-600 text-white animate-pulse", "text-indigo-300 font-medium"),
+                StepStatus::Running => (
+                    "bg-indigo-600 text-white animate-pulse",
+                    "text-indigo-300 font-medium",
+                ),
                 StepStatus::Completed => ("bg-emerald-600 text-white", "text-slate-200"),
                 StepStatus::Failed => ("bg-rose-600 text-white", "text-rose-300 font-medium"),
             };
@@ -539,7 +550,10 @@ impl StepProgressWidget {
 
         NodeBlueprint::element(
             Tag::Div,
-            vec!["bg-slate-900 border border-slate-800 rounded-lg p-4 max-w-md w-full shadow-md".to_string()],
+            vec![
+                "bg-slate-900 border border-slate-800 rounded-lg p-4 max-w-md w-full shadow-md"
+                    .to_string(),
+            ],
             Vec::new(),
             children,
         )

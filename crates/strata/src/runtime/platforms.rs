@@ -26,7 +26,10 @@ where
         strata_platform::PlatformEvent::WindowCloseRequested => {
             should_exit = true;
         }
-        strata_platform::PlatformEvent::WindowResized { width: w, height: h } => {
+        strata_platform::PlatformEvent::WindowResized {
+            width: w,
+            height: h,
+        } => {
             compositor.resize(*w, *h, runtime.dpr);
             let _ = presenter.resize(*w, *h);
             runtime.viewport_width = *w as f32;
@@ -34,11 +37,17 @@ where
             needs_redraw = true;
         }
         strata_platform::PlatformEvent::ScaleFactorChanged { scale_factor } => {
-            compositor.resize(runtime.viewport_width as u32, runtime.viewport_height as u32, *scale_factor);
+            compositor.resize(
+                runtime.viewport_width as u32,
+                runtime.viewport_height as u32,
+                *scale_factor,
+            );
             runtime.dpr = *scale_factor;
             needs_redraw = true;
         }
-        strata_platform::PlatformEvent::Scroll { delta_x, delta_y, .. } => {
+        strata_platform::PlatformEvent::Scroll {
+            delta_x, delta_y, ..
+        } => {
             let (px, py) = runtime.last_mouse_pos;
             if runtime.dispatch_smooth_scroll(px, py, *delta_x, *delta_y) {
                 needs_redraw = true;
@@ -173,7 +182,12 @@ where
                 let cur = if is_over_scrollbar {
                     strata_platform::window::CursorIcon::Default
                 } else {
-                    AppRuntime::hit_test_cursor(&runtime.root_blueprint, &runtime.layout_root, *x, *y)
+                    AppRuntime::hit_test_cursor(
+                        &runtime.root_blueprint,
+                        &runtime.layout_root,
+                        *x,
+                        *y,
+                    )
                 };
                 runtime.current_cursor = cur;
             }
@@ -253,11 +267,7 @@ where
 {
     // Initial frame presentation
     let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-    let _ = window.present_surface(
-        &presenter.backing_buffer,
-        presenter.width,
-        presenter.height,
-    );
+    let _ = window.present_surface(&presenter.backing_buffer, presenter.width, presenter.height);
 
     if let Some(ref mut h) = hooks {
         if let Some(ref mut on_start) = h.on_start {
@@ -327,8 +337,12 @@ where
                         "data-app-region",
                     );
                     let is_drag = region.as_deref() == Some("drag")
-                        || runtime.csd_controller.hit_test(runtime.viewport_width, runtime.viewport_height, x, y)
-                            == strata_platform::CsdHitZone::Titlebar;
+                        || runtime.csd_controller.hit_test(
+                            runtime.viewport_width,
+                            runtime.viewport_height,
+                            x,
+                            y,
+                        ) == strata_platform::CsdHitZone::Titlebar;
                     if is_drag {
                         let is_max = window.toggle_maximize();
                         window.push_event(strata_platform::PlatformEvent::WindowMaximized(is_max));
@@ -614,7 +628,11 @@ where
 
 #[cfg(target_os = "android")]
 /// Launches an interactive native Android application window via Android NDK NativeActivity.
-pub fn launch_android<F>(native_window: *mut std::ffi::c_void, root_fn: F, config: WindowConfig) -> Result<(), String>
+pub fn launch_android<F>(
+    native_window: *mut std::ffi::c_void,
+    root_fn: F,
+    config: WindowConfig,
+) -> Result<(), String>
 where
     F: FnMut() -> View + 'static,
 {
@@ -694,5 +712,3 @@ where
         None,
     )
 }
-
-

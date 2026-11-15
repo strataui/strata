@@ -77,7 +77,11 @@ impl StrataMobileTestRunner {
         if self.config.test_foldable {
             tests_run += 1;
             let profile = FoldableProfile::book_foldable();
-            let postures = [FoldPosture::Closed, FoldPosture::HalfOpened, FoldPosture::Flat];
+            let postures = [
+                FoldPosture::Closed,
+                FoldPosture::HalfOpened,
+                FoldPosture::Flat,
+            ];
             let mut fold_ok = true;
 
             for p in &postures {

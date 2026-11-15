@@ -139,16 +139,25 @@ impl CacheStorage {
 
     /// Returns whether a cache with the given name exists.
     pub fn has(&self, name: &str) -> bool {
-        self.caches.read().map(|l| l.contains_key(name)).unwrap_or(false)
+        self.caches
+            .read()
+            .map(|l| l.contains_key(name))
+            .unwrap_or(false)
     }
 
     /// Deletes a named cache. Returns true if it was present.
     pub fn delete(&self, name: &str) -> bool {
-        self.caches.write().map(|mut l| l.remove(name).is_some()).unwrap_or(false)
+        self.caches
+            .write()
+            .map(|mut l| l.remove(name).is_some())
+            .unwrap_or(false)
     }
 
     /// Returns the names of all open caches.
     pub fn keys(&self) -> Vec<String> {
-        self.caches.read().map(|l| l.keys().cloned().collect()).unwrap_or_default()
+        self.caches
+            .read()
+            .map(|l| l.keys().cloned().collect())
+            .unwrap_or_default()
     }
 }

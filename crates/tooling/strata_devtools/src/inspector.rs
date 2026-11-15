@@ -93,7 +93,12 @@ impl BoxModelMetrics {
 
     /// Content box rectangle.
     pub fn content_box(&self) -> FixedRect {
-        FixedRect::from_f32(self.content_x, self.content_y, self.content_w, self.content_h)
+        FixedRect::from_f32(
+            self.content_x,
+            self.content_y,
+            self.content_w,
+            self.content_h,
+        )
     }
 
     /// Padding box rectangle (content + padding).
@@ -109,8 +114,16 @@ impl BoxModelMetrics {
     pub fn border_box(&self) -> FixedRect {
         let x = self.content_x - self.padding.left - self.border.left;
         let y = self.content_y - self.padding.top - self.border.top;
-        let w = self.content_w + self.padding.left + self.padding.right + self.border.left + self.border.right;
-        let h = self.content_h + self.padding.top + self.padding.bottom + self.border.top + self.border.bottom;
+        let w = self.content_w
+            + self.padding.left
+            + self.padding.right
+            + self.border.left
+            + self.border.right;
+        let h = self.content_h
+            + self.padding.top
+            + self.padding.bottom
+            + self.border.top
+            + self.border.bottom;
         FixedRect::from_f32(x, y, w, h)
     }
 

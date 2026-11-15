@@ -7,8 +7,8 @@ use strata_style::parser::{parse_declarations, parse_transform_list, parse_trans
 use strata_style::tailwind::TailwindEngine;
 use strata_style::transition::{interpolate_transform_ops, ActiveTransition, AnimatableValue};
 use strata_style::types::{
-    BackfaceVisibility, ComputedStyle, Dimension, TransformOp, TransformOrigin,
-    TransformStyle, TransitionBehavior, TransitionEasing, TransitionProperty, TransitionSpec,
+    BackfaceVisibility, ComputedStyle, Dimension, TransformOp, TransformOrigin, TransformStyle,
+    TransitionBehavior, TransitionEasing, TransitionProperty, TransitionSpec,
 };
 
 #[test]
@@ -16,18 +16,31 @@ fn test_parse_transform_2d_and_3d() {
     // 1. Translations
     let ops = parse_transform_list("translate(10px, 20px)");
     assert_eq!(ops.len(), 1);
-    assert_eq!(ops[0], TransformOp::Translate(Dimension::Px(10.0), Dimension::Px(20.0)));
+    assert_eq!(
+        ops[0],
+        TransformOp::Translate(Dimension::Px(10.0), Dimension::Px(20.0))
+    );
 
     let ops = parse_transform_list("translateX(50%) translateY(2rem)");
     assert_eq!(ops.len(), 2);
-    assert_eq!(ops[0], TransformOp::Translate(Dimension::Percent(50.0), Dimension::Px(0.0)));
-    assert_eq!(ops[1], TransformOp::Translate(Dimension::Px(0.0), Dimension::Rem(2.0)));
+    assert_eq!(
+        ops[0],
+        TransformOp::Translate(Dimension::Percent(50.0), Dimension::Px(0.0))
+    );
+    assert_eq!(
+        ops[1],
+        TransformOp::Translate(Dimension::Px(0.0), Dimension::Rem(2.0))
+    );
 
     let ops = parse_transform_list("translate3d(10px, 20px, 30px)");
     assert_eq!(ops.len(), 1);
     assert_eq!(
         ops[0],
-        TransformOp::Translate3d(Dimension::Px(10.0), Dimension::Px(20.0), Dimension::Px(30.0))
+        TransformOp::Translate3d(
+            Dimension::Px(10.0),
+            Dimension::Px(20.0),
+            Dimension::Px(30.0)
+        )
     );
 
     // 2. Scales
@@ -78,7 +91,10 @@ fn test_parse_transform_2d_and_3d() {
 
     // 5. Matrix & Matrix3d
     let ops = parse_transform_list("matrix(1, 0, 0, 1, 50, 100)");
-    assert_eq!(ops[0], TransformOp::Matrix([1.0, 0.0, 0.0, 1.0, 50.0, 100.0]));
+    assert_eq!(
+        ops[0],
+        TransformOp::Matrix([1.0, 0.0, 0.0, 1.0, 50.0, 100.0])
+    );
 
     // 6. none keyword
     let ops = parse_transform_list("none");
@@ -142,7 +158,9 @@ fn test_cascade_transforms_and_standalone_properties() {
 
 #[test]
 fn test_tailwind_transform_utilities() {
-    let style = TailwindEngine::resolve_classes("scale-150 rotate-45 translate-x-4 -translate-y-8 origin-top-left");
+    let style = TailwindEngine::resolve_classes(
+        "scale-150 rotate-45 translate-x-4 -translate-y-8 origin-top-left",
+    );
 
     assert_eq!(style.transform.len(), 4);
     assert_eq!(style.transform[0], TransformOp::Scale(1.5, 1.5));
@@ -151,8 +169,14 @@ fn test_tailwind_transform_utilities() {
     } else {
         panic!("Expected rotate");
     }
-    assert_eq!(style.transform[2], TransformOp::Translate(Dimension::Px(16.0), Dimension::Px(0.0)));
-    assert_eq!(style.transform[3], TransformOp::Translate(Dimension::Px(0.0), Dimension::Px(-32.0)));
+    assert_eq!(
+        style.transform[2],
+        TransformOp::Translate(Dimension::Px(16.0), Dimension::Px(0.0))
+    );
+    assert_eq!(
+        style.transform[3],
+        TransformOp::Translate(Dimension::Px(0.0), Dimension::Px(-32.0))
+    );
     assert_eq!(style.transform_origin.x, Dimension::Percent(0.0));
     assert_eq!(style.transform_origin.y, Dimension::Percent(0.0));
 }
@@ -191,8 +215,14 @@ fn test_matrix_composition_and_point_transformation() {
 
 #[test]
 fn test_transform_transition_interpolation() {
-    let from_ops = vec![TransformOp::Translate(Dimension::Px(0.0), Dimension::Px(0.0))];
-    let to_ops = vec![TransformOp::Translate(Dimension::Px(100.0), Dimension::Px(200.0))];
+    let from_ops = vec![TransformOp::Translate(
+        Dimension::Px(0.0),
+        Dimension::Px(0.0),
+    )];
+    let to_ops = vec![TransformOp::Translate(
+        Dimension::Px(100.0),
+        Dimension::Px(200.0),
+    )];
 
     // Midpoint t = 0.5
     let mid_ops = interpolate_transform_ops(&from_ops, &to_ops, 0.5);

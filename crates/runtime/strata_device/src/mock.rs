@@ -1,12 +1,11 @@
 //! DeviceMockController: Thread-safe hardware simulation controller for tests, CI, and emulators.
 
-use std::sync::{Arc, Mutex, OnceLock};
 use crate::signals::{notify_memory_pressure, sync_signals_from_mock};
 use crate::types::*;
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Snapshot of simulated hardware telemetry.
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct DeviceTelemetrySnapshot {
     pub battery: BatteryInfo,
     pub thermal: ThermalState,
@@ -15,7 +14,6 @@ pub struct DeviceTelemetrySnapshot {
     pub display_refresh: DisplayRefreshInfo,
     pub gpu: GpuInfo,
 }
-
 
 static GLOBAL_MOCK: OnceLock<Arc<Mutex<DeviceTelemetrySnapshot>>> = OnceLock::new();
 

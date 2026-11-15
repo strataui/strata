@@ -47,7 +47,10 @@ fn test_js_engine_dom_get_element_by_id_and_mutation() {
 
     let counter = engine.document.get_element_by_id("counter").unwrap();
     assert_eq!(counter.text_content(), "42");
-    assert_eq!(counter.get_attribute("data-status"), Some("active".to_string()));
+    assert_eq!(
+        counter.get_attribute("data-status"),
+        Some("active".to_string())
+    );
 
     let btn = engine.document.get_element_by_id("btn").unwrap();
     assert_eq!(btn.class_name(), "updated-btn");
@@ -132,7 +135,10 @@ fn test_js_engine_try_catch_finally_and_throw() {
         }
     "#;
     engine.eval(script1).expect("Script 1 failed");
-    assert_eq!(engine.globals.get("caught"), Some(&JsValue::String("critical failure".to_string())));
+    assert_eq!(
+        engine.globals.get("caught"),
+        Some(&JsValue::String("critical failure".to_string()))
+    );
 
     // 2. Try-catch-finally ordering
     let script2 = r#"
@@ -197,11 +203,15 @@ fn test_js_engine_template_literals() {
     engine.eval(script).expect("Template literal script failed");
     assert_eq!(
         engine.globals.get("greeting"),
-        Some(&JsValue::String("Hello, Alice! You have 6 pending notifications.".to_string()))
+        Some(&JsValue::String(
+            "Hello, Alice! You have 6 pending notifications.".to_string()
+        ))
     );
     assert_eq!(
         engine.globals.get("simple"),
-        Some(&JsValue::String("Plain literal string without interpolation".to_string()))
+        Some(&JsValue::String(
+            "Plain literal string without interpolation".to_string()
+        ))
     );
 }
 
@@ -235,7 +245,9 @@ fn test_js_engine_arrow_functions_and_array_methods() {
         var idxThree = list.indexOf(3);
     "#;
 
-    engine.eval(script).expect("Arrow & array methods script failed");
+    engine
+        .eval(script)
+        .expect("Arrow & array methods script failed");
 
     assert_eq!(engine.globals.get("d_res"), Some(&JsValue::Number(42.0)));
     assert_eq!(engine.globals.get("a_res"), Some(&JsValue::Number(42.0)));
@@ -262,7 +274,10 @@ fn test_js_engine_arrow_functions_and_array_methods() {
     assert_eq!(engine.globals.get("found"), Some(&JsValue::Number(2.0)));
     assert_eq!(engine.globals.get("foundIdx"), Some(&JsValue::Number(3.0)));
     assert_eq!(engine.globals.get("hasEven"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("allPositive"), Some(&JsValue::Bool(true)));
+    assert_eq!(
+        engine.globals.get("allPositive"),
+        Some(&JsValue::Bool(true))
+    );
     assert_eq!(engine.globals.get("sum"), Some(&JsValue::Number(15.0)));
     assert_eq!(
         engine.globals.get("sliced"),
@@ -272,7 +287,10 @@ fn test_js_engine_arrow_functions_and_array_methods() {
             JsValue::Number(4.0),
         ]))
     );
-    assert_eq!(engine.globals.get("joined"), Some(&JsValue::String("1-2-3-4-5".to_string())));
+    assert_eq!(
+        engine.globals.get("joined"),
+        Some(&JsValue::String("1-2-3-4-5".to_string()))
+    );
     assert_eq!(engine.globals.get("hasThree"), Some(&JsValue::Bool(true)));
     assert_eq!(engine.globals.get("idxThree"), Some(&JsValue::Number(2.0)));
 }
@@ -295,12 +313,21 @@ fn test_w3c_dom_hierarchy_and_mutation_apis() {
     let item2 = engine.document.get_element_by_id("item2").unwrap();
     let item3 = engine.document.get_element_by_id("item3").unwrap();
 
-    assert_eq!(item2.parent_element().unwrap().id(), Some("container".to_string()));
+    assert_eq!(
+        item2.parent_element().unwrap().id(),
+        Some("container".to_string())
+    );
     assert!(container.contains(&item1));
     assert!(container.contains(&item2));
     assert!(container.contains(&item3));
-    assert_eq!(item2.previous_element_sibling().unwrap().id(), Some("item1".to_string()));
-    assert_eq!(item2.next_element_sibling().unwrap().id(), Some("item3".to_string()));
+    assert_eq!(
+        item2.previous_element_sibling().unwrap().id(),
+        Some("item1".to_string())
+    );
+    assert_eq!(
+        item2.next_element_sibling().unwrap().id(),
+        Some("item3".to_string())
+    );
 
     // 2. JS eval DOM traversal and mutation
     let script = r#"
@@ -331,21 +358,44 @@ fn test_w3c_dom_hierarchy_and_mutation_apis() {
         var elemCount = container.childElementCount;
     "#;
 
-    engine.eval(script).expect("DOM hierarchy JS evaluation failed");
+    engine
+        .eval(script)
+        .expect("DOM hierarchy JS evaluation failed");
 
-    assert_eq!(engine.globals.get("pId"), Some(&JsValue::String("container".to_string())));
+    assert_eq!(
+        engine.globals.get("pId"),
+        Some(&JsValue::String("container".to_string()))
+    );
     assert_eq!(engine.globals.get("hasItem"), Some(&JsValue::Bool(true)));
     assert_eq!(engine.globals.get("elemCount"), Some(&JsValue::Number(3.0)));
 
     // Verify mutations in the document tree
-    assert!(engine.document.get_element_by_id("item1").is_none(), "item1 should have been removed");
-    assert!(engine.document.get_element_by_id("inserted-item").is_some(), "inserted-item should exist");
-    assert!(engine.document.get_element_by_id("replacement-item").is_some(), "replacement-item should exist");
-    assert!(engine.document.get_element_by_id("item3").is_none(), "item3 should have been replaced");
+    assert!(
+        engine.document.get_element_by_id("item1").is_none(),
+        "item1 should have been removed"
+    );
+    assert!(
+        engine.document.get_element_by_id("inserted-item").is_some(),
+        "inserted-item should exist"
+    );
+    assert!(
+        engine
+            .document
+            .get_element_by_id("replacement-item")
+            .is_some(),
+        "replacement-item should exist"
+    );
+    assert!(
+        engine.document.get_element_by_id("item3").is_none(),
+        "item3 should have been replaced"
+    );
 
     let inserted = engine.document.get_element_by_id("inserted-item").unwrap();
     assert_eq!(inserted.text_content(), "Inserted Paragraph");
-    assert_eq!(inserted.next_element_sibling().unwrap().id(), Some("item2".to_string()));
+    assert_eq!(
+        inserted.next_element_sibling().unwrap().id(),
+        Some("item2".to_string())
+    );
 }
 
 #[test]
@@ -472,25 +522,57 @@ fn test_es6_classes_constructors_and_inheritance() {
 
     engine.eval(script).expect("eval ES6 class script");
 
-    assert_eq!(engine.globals.get("dogSpeak"), Some(&JsValue::String("Rex makes a sound".to_string())));
-    assert_eq!(engine.globals.get("dogBark"), Some(&JsValue::String("Rex barks".to_string())));
-    assert_eq!(engine.globals.get("dogBreed"), Some(&JsValue::String("German Shepherd".to_string())));
-    assert_eq!(engine.globals.get("dogName"), Some(&JsValue::String("Rex".to_string())));
+    assert_eq!(
+        engine.globals.get("dogSpeak"),
+        Some(&JsValue::String("Rex makes a sound".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("dogBark"),
+        Some(&JsValue::String("Rex barks".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("dogBreed"),
+        Some(&JsValue::String("German Shepherd".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("dogName"),
+        Some(&JsValue::String("Rex".to_string()))
+    );
 
-    assert_eq!(engine.globals.get("dogNewBark"), Some(&JsValue::String("Max barks".to_string())));
+    assert_eq!(
+        engine.globals.get("dogNewBark"),
+        Some(&JsValue::String("Max barks".to_string()))
+    );
 
-    assert_eq!(engine.globals.get("catSpeak"), Some(&JsValue::String("Whiskers makes a sound loudly".to_string())));
+    assert_eq!(
+        engine.globals.get("catSpeak"),
+        Some(&JsValue::String(
+            "Whiskers makes a sound loudly".to_string()
+        ))
+    );
 
     assert_eq!(engine.globals.get("isDog"), Some(&JsValue::Bool(true)));
     assert_eq!(engine.globals.get("isAnimal"), Some(&JsValue::Bool(true)));
     assert_eq!(engine.globals.get("isObject"), Some(&JsValue::Bool(true)));
     assert_eq!(engine.globals.get("isCat"), Some(&JsValue::Bool(false)));
 
-    assert_eq!(engine.globals.get("typeofDog"), Some(&JsValue::String("function".to_string())));
-    assert_eq!(engine.globals.get("typeofInstance"), Some(&JsValue::String("object".to_string())));
+    assert_eq!(
+        engine.globals.get("typeofDog"),
+        Some(&JsValue::String("function".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("typeofInstance"),
+        Some(&JsValue::String("object".to_string()))
+    );
 
-    assert_eq!(engine.globals.get("errMsg"), Some(&JsValue::String("Custom fatal error".to_string())));
-    assert_eq!(engine.globals.get("errName"), Some(&JsValue::String("Error".to_string())));
+    assert_eq!(
+        engine.globals.get("errMsg"),
+        Some(&JsValue::String("Custom fatal error".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("errName"),
+        Some(&JsValue::String("Error".to_string()))
+    );
 }
 
 #[test]
@@ -562,11 +644,26 @@ fn test_es6_async_await_and_promise_microtasks() {
 
     engine.eval(script).expect("eval async / await script");
 
-    assert_eq!(engine.globals.get("sumResult"), Some(&JsValue::Number(42.0)));
-    assert_eq!(engine.globals.get("doubleResult"), Some(&JsValue::Number(42.0)));
-    assert_eq!(engine.globals.get("literalAwait"), Some(&JsValue::Number(999.0)));
-    assert_eq!(engine.globals.get("resolvedVal"), Some(&JsValue::String("resolved data".to_string())));
-    assert_eq!(engine.globals.get("customRes"), Some(&JsValue::String("custom resolution".to_string())));
+    assert_eq!(
+        engine.globals.get("sumResult"),
+        Some(&JsValue::Number(42.0))
+    );
+    assert_eq!(
+        engine.globals.get("doubleResult"),
+        Some(&JsValue::Number(42.0))
+    );
+    assert_eq!(
+        engine.globals.get("literalAwait"),
+        Some(&JsValue::Number(999.0))
+    );
+    assert_eq!(
+        engine.globals.get("resolvedVal"),
+        Some(&JsValue::String("resolved data".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("customRes"),
+        Some(&JsValue::String("custom resolution".to_string()))
+    );
 
     assert_eq!(
         engine.globals.get("allResults"),
@@ -577,11 +674,23 @@ fn test_es6_async_await_and_promise_microtasks() {
         ]))
     );
 
-    assert_eq!(engine.globals.get("caughtAsyncErr"), Some(&JsValue::String("async computation failed".to_string())));
-    assert_eq!(engine.globals.get("caughtRejectErr"), Some(&JsValue::String("explicit rejection".to_string())));
+    assert_eq!(
+        engine.globals.get("caughtAsyncErr"),
+        Some(&JsValue::String("async computation failed".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("caughtRejectErr"),
+        Some(&JsValue::String("explicit rejection".to_string()))
+    );
 
-    assert_eq!(engine.globals.get("chainResult"), Some(&JsValue::Number(75.0)));
-    assert_eq!(engine.globals.get("handledErr"), Some(&JsValue::String("fatal error".to_string())));
+    assert_eq!(
+        engine.globals.get("chainResult"),
+        Some(&JsValue::Number(75.0))
+    );
+    assert_eq!(
+        engine.globals.get("handledErr"),
+        Some(&JsValue::String("fatal error".to_string()))
+    );
 }
 
 #[test]
@@ -650,43 +759,96 @@ fn test_optional_chaining_and_nullish_coalescing() {
         var fallbackFound = user?.profile?.name ?? "Anonymous";
     "#;
 
-    engine.eval(script).expect("eval optional chaining and nullish coalescing script");
+    engine
+        .eval(script)
+        .expect("eval optional chaining and nullish coalescing script");
 
     // Nullish coalescing assertions
-    assert_eq!(engine.globals.get("nullResult"), Some(&JsValue::String("fallback_null".to_string())));
-    assert_eq!(engine.globals.get("undefResult"), Some(&JsValue::String("fallback_undef".to_string())));
-    assert_eq!(engine.globals.get("zeroResult"), Some(&JsValue::Number(0.0)));
-    assert_eq!(engine.globals.get("falseResult"), Some(&JsValue::Bool(false)));
-    assert_eq!(engine.globals.get("emptyStrResult"), Some(&JsValue::String("".to_string())));
-    assert_eq!(engine.globals.get("chainCoalesce"), Some(&JsValue::String("final_val".to_string())));
+    assert_eq!(
+        engine.globals.get("nullResult"),
+        Some(&JsValue::String("fallback_null".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("undefResult"),
+        Some(&JsValue::String("fallback_undef".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("zeroResult"),
+        Some(&JsValue::Number(0.0))
+    );
+    assert_eq!(
+        engine.globals.get("falseResult"),
+        Some(&JsValue::Bool(false))
+    );
+    assert_eq!(
+        engine.globals.get("emptyStrResult"),
+        Some(&JsValue::String("".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("chainCoalesce"),
+        Some(&JsValue::String("final_val".to_string()))
+    );
 
     // Side-effects should NOT have fired for 'existing' ?? inc()
-    assert_eq!(engine.globals.get("shortCircuitVal"), Some(&JsValue::String("existing".to_string())));
-    assert_eq!(engine.globals.get("sideEffectCount"), Some(&JsValue::Number(0.0)));
+    assert_eq!(
+        engine.globals.get("shortCircuitVal"),
+        Some(&JsValue::String("existing".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("sideEffectCount"),
+        Some(&JsValue::Number(0.0))
+    );
 
     // Optional chaining property access assertions
-    assert_eq!(engine.globals.get("validName"), Some(&JsValue::String("Ada Lovelace".to_string())));
-    assert_eq!(engine.globals.get("validYear"), Some(&JsValue::Number(1815.0)));
+    assert_eq!(
+        engine.globals.get("validName"),
+        Some(&JsValue::String("Ada Lovelace".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("validYear"),
+        Some(&JsValue::Number(1815.0))
+    );
     assert_eq!(engine.globals.get("missingDeep"), Some(&JsValue::Undefined));
     assert_eq!(engine.globals.get("nullAccess"), Some(&JsValue::Undefined));
     assert_eq!(engine.globals.get("undefAccess"), Some(&JsValue::Undefined));
 
     // Computed property assertions
-    assert_eq!(engine.globals.get("computedValid"), Some(&JsValue::String("Ada Lovelace".to_string())));
-    assert_eq!(engine.globals.get("computedMissing"), Some(&JsValue::Undefined));
+    assert_eq!(
+        engine.globals.get("computedValid"),
+        Some(&JsValue::String("Ada Lovelace".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("computedMissing"),
+        Some(&JsValue::Undefined)
+    );
 
     // Method and call assertions
-    assert_eq!(engine.globals.get("methodCall"), Some(&JsValue::Number(42.0)));
-    assert_eq!(engine.globals.get("missingMethodCall"), Some(&JsValue::Undefined));
+    assert_eq!(
+        engine.globals.get("methodCall"),
+        Some(&JsValue::Number(42.0))
+    );
+    assert_eq!(
+        engine.globals.get("missingMethodCall"),
+        Some(&JsValue::Undefined)
+    );
     assert_eq!(engine.globals.get("calledFn"), Some(&JsValue::Number(42.0)));
     assert_eq!(engine.globals.get("skippedCall"), Some(&JsValue::Undefined));
 
     // Verify sideEffectCount remained 0 across all short-circuited optional calls
-    assert_eq!(engine.globals.get("sideEffectCount"), Some(&JsValue::Number(0.0)));
+    assert_eq!(
+        engine.globals.get("sideEffectCount"),
+        Some(&JsValue::Number(0.0))
+    );
 
     // Combined assertions
-    assert_eq!(engine.globals.get("fallbackName"), Some(&JsValue::String("Anonymous".to_string())));
-    assert_eq!(engine.globals.get("fallbackFound"), Some(&JsValue::String("Ada Lovelace".to_string())));
+    assert_eq!(
+        engine.globals.get("fallbackName"),
+        Some(&JsValue::String("Anonymous".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("fallbackFound"),
+        Some(&JsValue::String("Ada Lovelace".to_string()))
+    );
 }
 
 #[test]
@@ -774,14 +936,28 @@ fn test_switch_case_break_continue() {
         }
     "#;
 
-    engine.eval(script).expect("eval switch case break continue");
+    engine
+        .eval(script)
+        .expect("eval switch case break continue");
 
-    assert_eq!(engine.globals.get("status200"), Some(&JsValue::String("OK".to_string())));
-    assert_eq!(engine.globals.get("status404"), Some(&JsValue::String("Not Found".to_string())));
-    assert_eq!(engine.globals.get("statusDefault"), Some(&JsValue::String("Unhandled".to_string())));
+    assert_eq!(
+        engine.globals.get("status200"),
+        Some(&JsValue::String("OK".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("status404"),
+        Some(&JsValue::String("Not Found".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("statusDefault"),
+        Some(&JsValue::String("Unhandled".to_string()))
+    );
 
     // Fallthrough: case 1 (+100) falls through into case 2 (+50) then breaks -> 150
-    assert_eq!(engine.globals.get("cumulativePoints"), Some(&JsValue::Number(150.0)));
+    assert_eq!(
+        engine.globals.get("cumulativePoints"),
+        Some(&JsValue::Number(150.0))
+    );
 
     // While loop: 1 + 3 + 5 + 7 + 9 = 25 (10 was even, skipped; at 11 > 9 breaks)
     assert_eq!(engine.globals.get("whileSum"), Some(&JsValue::Number(25.0)));
@@ -797,7 +973,10 @@ fn test_switch_case_break_continue() {
     // k = 2: continue loop
     // k = 3: default hits +10 -> 12
     // k = 4: default hits +10 -> 22
-    assert_eq!(engine.globals.get("loopSwitchHits"), Some(&JsValue::Number(22.0)));
+    assert_eq!(
+        engine.globals.get("loopSwitchHits"),
+        Some(&JsValue::Number(22.0))
+    );
 
     // Illegal break outside loop/switch should error
     let bad_break = engine.eval("break;");
@@ -805,7 +984,10 @@ fn test_switch_case_break_continue() {
 
     // Illegal continue outside loop should error
     let bad_continue = engine.eval("continue;");
-    assert!(bad_continue.is_err(), "Illegal top-level continue must error");
+    assert!(
+        bad_continue.is_err(),
+        "Illegal top-level continue must error"
+    );
 }
 
 #[test]
@@ -878,7 +1060,9 @@ fn test_destructuring_and_spread_rest() {
         const expandedItems = col.append("cherry", "date");
     "#;
 
-    engine.eval(script).expect("eval destructuring and spread/rest");
+    engine
+        .eval(script)
+        .expect("eval destructuring and spread/rest");
 
     // 1. Object Destructuring assertions
     assert_eq!(engine.globals.get("a"), Some(&JsValue::Number(10.0)));
@@ -898,7 +1082,10 @@ fn test_destructuring_and_spread_rest() {
     // 2. Array Destructuring assertions
     assert_eq!(engine.globals.get("first"), Some(&JsValue::Number(1.0)));
     assert_eq!(engine.globals.get("third"), Some(&JsValue::Number(3.0)));
-    assert_eq!(engine.globals.get("missingWithDefault"), Some(&JsValue::Number(4.0)));
+    assert_eq!(
+        engine.globals.get("missingWithDefault"),
+        Some(&JsValue::Number(4.0))
+    );
     if let Some(JsValue::Array(tail)) = engine.globals.get("tailArr") {
         assert_eq!(*tail.borrow(), vec![JsValue::Number(5.0)]);
     } else {
@@ -939,7 +1126,10 @@ fn test_destructuring_and_spread_rest() {
     // 6. Object Spread Literals with Shorthand & Overrides
     if let Some(JsValue::Object(settings)) = engine.globals.get("userSettings") {
         let b = settings.borrow();
-        assert_eq!(b.get("theme"), Some(&JsValue::String("solarized".to_string())));
+        assert_eq!(
+            b.get("theme"),
+            Some(&JsValue::String("solarized".to_string()))
+        );
         assert_eq!(b.get("fontSize"), Some(&JsValue::Number(14.0)));
         assert_eq!(b.get("logging"), Some(&JsValue::Bool(true)));
     } else {
@@ -948,7 +1138,10 @@ fn test_destructuring_and_spread_rest() {
 
     // 7. Function Rest Parameters and Call Spread
     // (5 + 10 + 15) * 2 = 60
-    assert_eq!(engine.globals.get("multResult"), Some(&JsValue::Number(60.0)));
+    assert_eq!(
+        engine.globals.get("multResult"),
+        Some(&JsValue::Number(60.0))
+    );
 
     // 8. Arrow Function Rest Parameters
     if let Some(JsValue::Array(tags)) = engine.globals.get("formatted") {
@@ -1040,15 +1233,26 @@ fn test_regular_expression_literals_and_regex_methods() {
         const startsWithAnti = "Antigravity".startsWith("Anti");
     "#;
 
-    engine.eval(script).expect("eval regular expressions and string methods");
+    engine
+        .eval(script)
+        .expect("eval regular expressions and string methods");
 
     // 1. Division vs Regex
     assert_eq!(engine.globals.get("quotient"), Some(&JsValue::Number(10.0)));
 
     // 2. Regex properties
-    assert_eq!(engine.globals.get("patternSource"), Some(&JsValue::String("[a-z]+".to_string())));
-    assert_eq!(engine.globals.get("patternFlags"), Some(&JsValue::String("i".to_string())));
-    assert_eq!(engine.globals.get("isIgnoreCase"), Some(&JsValue::Bool(true)));
+    assert_eq!(
+        engine.globals.get("patternSource"),
+        Some(&JsValue::String("[a-z]+".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("patternFlags"),
+        Some(&JsValue::String("i".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("isIgnoreCase"),
+        Some(&JsValue::Bool(true))
+    );
     assert_eq!(engine.globals.get("isGlobal"), Some(&JsValue::Bool(false)));
 
     // 3. re.test()
@@ -1069,15 +1273,27 @@ fn test_regular_expression_literals_and_regex_methods() {
     assert_eq!(engine.globals.get("execFail"), Some(&JsValue::Null));
 
     // 5. re.toString()
-    assert_eq!(engine.globals.get("reStr"), Some(&JsValue::String("/[a-z]+/i".to_string())));
+    assert_eq!(
+        engine.globals.get("reStr"),
+        Some(&JsValue::String("/[a-z]+/i".to_string()))
+    );
 
     // 6. new RegExp() & RegExp()
-    assert_eq!(engine.globals.get("dynamicMatch"), Some(&JsValue::Bool(true)));
+    assert_eq!(
+        engine.globals.get("dynamicMatch"),
+        Some(&JsValue::Bool(true))
+    );
     assert_eq!(engine.globals.get("funcMatch"), Some(&JsValue::Bool(true)));
 
     // 7. str.match()
     if let Some(JsValue::Array(ref matches)) = engine.globals.get("matchDigitsGlobal") {
-        assert_eq!(*matches.borrow(), vec![JsValue::String("10".to_string()), JsValue::String("42".to_string())]);
+        assert_eq!(
+            *matches.borrow(),
+            vec![
+                JsValue::String("10".to_string()),
+                JsValue::String("42".to_string())
+            ]
+        );
     } else {
         panic!("matchDigitsGlobal must be an array");
     }
@@ -1089,13 +1305,28 @@ fn test_regular_expression_literals_and_regex_methods() {
     }
 
     // 8. str.search()
-    assert_eq!(engine.globals.get("searchIdx"), Some(&JsValue::Number(16.0)));
-    assert_eq!(engine.globals.get("searchNotFound"), Some(&JsValue::Number(-1.0)));
+    assert_eq!(
+        engine.globals.get("searchIdx"),
+        Some(&JsValue::Number(16.0))
+    );
+    assert_eq!(
+        engine.globals.get("searchNotFound"),
+        Some(&JsValue::Number(-1.0))
+    );
 
     // 9. str.replace() and str.replaceAll()
-    assert_eq!(engine.globals.get("replacedFirst"), Some(&JsValue::String("qux bar foo bar".to_string())));
-    assert_eq!(engine.globals.get("replacedGlobal"), Some(&JsValue::String("qux bar qux bar".to_string())));
-    assert_eq!(engine.globals.get("replacedAllStr"), Some(&JsValue::String("dog and dog".to_string())));
+    assert_eq!(
+        engine.globals.get("replacedFirst"),
+        Some(&JsValue::String("qux bar foo bar".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("replacedGlobal"),
+        Some(&JsValue::String("qux bar qux bar".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("replacedAllStr"),
+        Some(&JsValue::String("dog and dog".to_string()))
+    );
 
     // 10. str.split()
     if let Some(JsValue::Array(ref parts)) = engine.globals.get("splitTokens") {
@@ -1113,12 +1344,27 @@ fn test_regular_expression_literals_and_regex_methods() {
     }
 
     // 11. String helpers
-    assert_eq!(engine.globals.get("trimmed"), Some(&JsValue::String("strata engine".to_string())));
-    assert_eq!(engine.globals.get("upper"), Some(&JsValue::String("STRATA".to_string())));
-    assert_eq!(engine.globals.get("lower"), Some(&JsValue::String("strata".to_string())));
-    assert_eq!(engine.globals.get("sliced"), Some(&JsValue::String("Hello".to_string())));
+    assert_eq!(
+        engine.globals.get("trimmed"),
+        Some(&JsValue::String("strata engine".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("upper"),
+        Some(&JsValue::String("STRATA".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("lower"),
+        Some(&JsValue::String("strata".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("sliced"),
+        Some(&JsValue::String("Hello".to_string()))
+    );
     assert_eq!(engine.globals.get("hasSub"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("startsWithAnti"), Some(&JsValue::Bool(true)));
+    assert_eq!(
+        engine.globals.get("startsWithAnti"),
+        Some(&JsValue::Bool(true))
+    );
 }
 
 #[test]
@@ -1144,17 +1390,35 @@ fn test_utf8_cursor_parser_zero_allocation_overhead() {
     "#;
 
     let mut parser = JsParser::new(script);
-    let stmts = parser.parse_program().expect("JsParser must parse multibyte UTF-8 program");
-    assert!(stmts.len() >= 5, "Must parse all declarations and statements");
+    let stmts = parser
+        .parse_program()
+        .expect("JsParser must parse multibyte UTF-8 program");
+    assert!(
+        stmts.len() >= 5,
+        "Must parse all declarations and statements"
+    );
 
     let mut engine = JsEngine::new();
     let res = engine.eval(script);
-    assert!(res.is_ok(), "Evaluation of multibyte UTF-8 script must succeed: {:?}", res);
+    assert!(
+        res.is_ok(),
+        "Evaluation of multibyte UTF-8 script must succeed: {:?}",
+        res
+    );
 
     assert_eq!(engine.globals.get("变量_x"), Some(&JsValue::Number(123.0)));
-    assert_eq!(engine.globals.get("greeting"), Some(&JsValue::String("你好，世界！".to_string())));
-    assert_eq!(engine.globals.get("cyrillic"), Some(&JsValue::String("Привет, мир!".to_string())));
-    assert_eq!(engine.globals.get("accented"), Some(&JsValue::String("Café résumé naïve".to_string())));
+    assert_eq!(
+        engine.globals.get("greeting"),
+        Some(&JsValue::String("你好，世界！".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("cyrillic"),
+        Some(&JsValue::String("Привет, мир!".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("accented"),
+        Some(&JsValue::String("Café résumé naïve".to_string()))
+    );
     assert_eq!(engine.globals.get("结果"), Some(&JsValue::Number(579.0)));
 }
 
@@ -1213,8 +1477,14 @@ fn test_function_shadowing_and_scope_isolation() {
     let res = engine.eval(script);
     assert!(res.is_ok(), "Evaluation must succeed: {:?}", res);
 
-    assert_eq!(engine.globals.get("localRes"), Some(&JsValue::String("local".to_string())));
-    assert_eq!(engine.globals.get("globalRes"), Some(&JsValue::String("global".to_string())));
+    assert_eq!(
+        engine.globals.get("localRes"),
+        Some(&JsValue::String("local".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("globalRes"),
+        Some(&JsValue::String("global".to_string()))
+    );
 }
 
 #[test]
@@ -1305,8 +1575,15 @@ fn test_live_closure_preservation_after_pruning() {
         var val5_repeat = mults[4](10);
     "#;
     let res2 = engine.eval(script2);
-    assert!(res2.is_ok(), "Post-pruning evaluation must succeed: {:?}", res2);
-    assert_eq!(engine.globals.get("val5_repeat"), Some(&JsValue::Number(50.0)));
+    assert!(
+        res2.is_ok(),
+        "Post-pruning evaluation must succeed: {:?}",
+        res2
+    );
+    assert_eq!(
+        engine.globals.get("val5_repeat"),
+        Some(&JsValue::Number(50.0))
+    );
 }
 
 #[test]
@@ -1320,7 +1597,10 @@ fn test_call_stack_recursion_limit_guard() {
     "#;
 
     let res = engine.eval(script);
-    assert!(res.is_err(), "Infinite recursion must be caught by call stack guard");
+    assert!(
+        res.is_err(),
+        "Infinite recursion must be caught by call stack guard"
+    );
     let err_msg = res.unwrap_err();
     assert!(
         err_msg.contains("Maximum call stack size exceeded"),
@@ -1354,12 +1634,25 @@ fn test_async_await_fetch_and_json_unpacking() {
     "#;
 
     let res = engine.eval(script);
-    assert!(res.is_ok(), "Evaluation of fetch and json await must succeed: {:?}", res);
+    assert!(
+        res.is_ok(),
+        "Evaluation of fetch and json await must succeed: {:?}",
+        res
+    );
 
-    assert_eq!(engine.globals.get("resStatus"), Some(&JsValue::Number(200.0)));
+    assert_eq!(
+        engine.globals.get("resStatus"),
+        Some(&JsValue::Number(200.0))
+    );
     assert_eq!(engine.globals.get("resOk"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("resContentType"), Some(&JsValue::String("application/json".to_string())));
-    assert_eq!(engine.globals.get("resPayloadStatus"), Some(&JsValue::String("ok".to_string())));
+    assert_eq!(
+        engine.globals.get("resContentType"),
+        Some(&JsValue::String("application/json".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("resPayloadStatus"),
+        Some(&JsValue::String("ok".to_string()))
+    );
 }
 
 #[test]
@@ -1389,9 +1682,16 @@ fn test_async_await_sequential_chained_promises() {
     "#;
 
     let res = engine.eval(script);
-    assert!(res.is_ok(), "Sequential async await pipeline must succeed: {:?}", res);
+    assert!(
+        res.is_ok(),
+        "Sequential async await pipeline must succeed: {:?}",
+        res
+    );
     // (5 + 10) * 2 - 4 = 30 - 4 = 26
-    assert_eq!(engine.globals.get("finalResult"), Some(&JsValue::Number(26.0)));
+    assert_eq!(
+        engine.globals.get("finalResult"),
+        Some(&JsValue::Number(26.0))
+    );
 }
 
 #[test]
@@ -1406,8 +1706,15 @@ fn test_async_await_deferred_promise_resolution() {
     "#;
 
     let res = engine.eval(script);
-    assert!(res.is_ok(), "Evaluation of deferred promise resolution must succeed: {:?}", res);
-    assert_eq!(engine.globals.get("unpacked"), Some(&JsValue::Number(777.0)));
+    assert!(
+        res.is_ok(),
+        "Evaluation of deferred promise resolution must succeed: {:?}",
+        res
+    );
+    assert_eq!(
+        engine.globals.get("unpacked"),
+        Some(&JsValue::Number(777.0))
+    );
 }
 
 #[test]
@@ -1416,7 +1723,10 @@ fn test_infinite_while_loop_timeout_guard() {
     let res = engine.eval("while (true) {}");
     assert!(res.is_err(), "Infinite while loop must return RangeError");
     let err_msg = res.unwrap_err();
-    assert!(err_msg.contains("Maximum loop iteration limit exceeded"), "Expected timeout error, got: {err_msg}");
+    assert!(
+        err_msg.contains("Maximum loop iteration limit exceeded"),
+        "Expected timeout error, got: {err_msg}"
+    );
 }
 
 #[test]
@@ -1425,7 +1735,10 @@ fn test_infinite_for_loop_timeout_guard() {
     let res = engine.eval("for (;;) {}");
     assert!(res.is_err(), "Infinite for loop must return RangeError");
     let err_msg = res.unwrap_err();
-    assert!(err_msg.contains("Maximum loop iteration limit exceeded"), "Expected timeout error, got: {err_msg}");
+    assert!(
+        err_msg.contains("Maximum loop iteration limit exceeded"),
+        "Expected timeout error, got: {err_msg}"
+    );
 }
 
 #[test]
@@ -1445,8 +1758,15 @@ fn test_nested_object_property_assignment() {
         var fontSize = user.profile.settings.fontSize;
     "#;
     let res = engine.eval(script);
-    assert!(res.is_ok(), "Nested property assignment must succeed: {:?}", res);
-    assert_eq!(engine.globals.get("theme"), Some(&JsValue::String("light".to_string())));
+    assert!(
+        res.is_ok(),
+        "Nested property assignment must succeed: {:?}",
+        res
+    );
+    assert_eq!(
+        engine.globals.get("theme"),
+        Some(&JsValue::String("light".to_string()))
+    );
     assert_eq!(engine.globals.get("fontSize"), Some(&JsValue::Number(16.0)));
 }
 
@@ -1456,7 +1776,10 @@ fn test_prototype_pollution_guard_in_frozen_mode() {
     engine.set_freeze_prototypes(true);
 
     let res = engine.eval("Object.prototype.isAdmin = true;");
-    assert!(res.is_err(), "Mutating Object.prototype in frozen mode must return TypeError");
+    assert!(
+        res.is_err(),
+        "Mutating Object.prototype in frozen mode must return TypeError"
+    );
     let err_msg = res.unwrap_err();
     assert!(
         err_msg.contains("TypeError: Cannot modify frozen prototype Object.prototype"),
@@ -1464,7 +1787,10 @@ fn test_prototype_pollution_guard_in_frozen_mode() {
     );
 
     let res_proto = engine.eval("var x = {}; x.__proto__ = null;");
-    assert!(res_proto.is_err(), "Mutating __proto__ in frozen mode must fail");
+    assert!(
+        res_proto.is_err(),
+        "Mutating __proto__ in frozen mode must fail"
+    );
 }
 
 #[test]

@@ -8,7 +8,11 @@ fn test_strata_engine_performance_benchmarks() {
     println!("{}", report.summary());
 
     // Cold start < 8ms in release, < 300ms in unoptimized debug build under heavy test load
-    let max_cold_start = if cfg!(debug_assertions) { 300_000 } else { 8_000 };
+    let max_cold_start = if cfg!(debug_assertions) {
+        300_000
+    } else {
+        8_000
+    };
     assert!(
         report.cold_start_duration_us < max_cold_start,
         "Cold start took {} µs, exceeding threshold",

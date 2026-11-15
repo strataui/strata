@@ -71,7 +71,9 @@ pub fn wrap_logical_line(
     while current_start < total_chars {
         let is_continuation = subline_idx > 0;
         let effective_indent = if is_continuation { &indent_str } else { "" };
-        let available_cols = max_columns.saturating_sub(effective_indent.chars().count()).max(1);
+        let available_cols = max_columns
+            .saturating_sub(effective_indent.chars().count())
+            .max(1);
 
         let remaining = total_chars - current_start;
         if remaining <= available_cols {
@@ -122,15 +124,26 @@ pub fn wrap_logical_line(
 }
 
 /// Translates a logical document position `(line, col)` to visual coordinates `(visual_line_idx, visual_col)`.
-pub fn logical_to_visual(
-    pos: Position,
-    all_visual_lines: &[VisualLine],
-) -> Option<(usize, usize)> {
+pub fn logical_to_visual(pos: Position, all_visual_lines: &[VisualLine]) -> Option<(usize, usize)> {
     for (v_idx, vl) in all_visual_lines.iter().enumerate() {
-        if vl.logical_line == pos.line && pos.col >= vl.char_start && (pos.col < vl.char_end || (pos.col == vl.char_end && vl.visual_subline == all_visual_lines.iter().filter(|l| l.logical_line == pos.line).count().saturating_sub(1))) {
+        if vl.logical_line == pos.line
+            && pos.col >= vl.char_start
+            && (pos.col < vl.char_end
+                || (pos.col == vl.char_end
+                    && vl.visual_subline
+                        == all_visual_lines
+                            .iter()
+                            .filter(|l| l.logical_line == pos.line)
+                            .count()
+                            .saturating_sub(1)))
+        {
             let col_in_segment = pos.col.saturating_sub(vl.char_start);
             let visual_col = if vl.is_continuation {
-                vl.text.chars().count().saturating_sub(vl.char_end - vl.char_start) + col_in_segment
+                vl.text
+                    .chars()
+                    .count()
+                    .saturating_sub(vl.char_end - vl.char_start)
+                    + col_in_segment
             } else {
                 col_in_segment
             };
@@ -148,7 +161,10 @@ pub fn visual_to_logical(
 ) -> Option<Position> {
     let vl = all_visual_lines.get(visual_line_idx)?;
     let indent_chars = if vl.is_continuation {
-        vl.text.chars().count().saturating_sub(vl.char_end - vl.char_start)
+        vl.text
+            .chars()
+            .count()
+            .saturating_sub(vl.char_end - vl.char_start)
     } else {
         0
     };

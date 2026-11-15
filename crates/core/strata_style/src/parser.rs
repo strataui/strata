@@ -512,7 +512,10 @@ pub fn parse_dimension(val: &str) -> Option<Dimension> {
     if s == "fit-content" {
         return Some(Dimension::FitContent(0.0));
     }
-    if let Some(arg) = s.strip_prefix("fit-content(").and_then(|r| r.strip_suffix(')')) {
+    if let Some(arg) = s
+        .strip_prefix("fit-content(")
+        .and_then(|r| r.strip_suffix(')'))
+    {
         let arg_trimmed = arg.trim();
         if let Some(arg_dim) = parse_dimension(arg_trimmed) {
             match arg_dim {
@@ -761,7 +764,11 @@ fn parse_grid_breadth(token: &str) -> Option<GridTrackBreadth> {
         return px.trim().parse::<f32>().ok().map(GridTrackBreadth::Px);
     }
     if let Some(pct) = lower.strip_suffix('%') {
-        return pct.trim().parse::<f32>().ok().map(GridTrackBreadth::Percent);
+        return pct
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(GridTrackBreadth::Percent);
     }
     if let Some(fr) = lower.strip_suffix("fr") {
         return fr.trim().parse::<f32>().ok().map(GridTrackBreadth::Fr);
@@ -812,10 +819,7 @@ pub fn parse_grid_template_areas(input: &str) -> Vec<Vec<String>> {
         }
     } else {
         for line in trimmed.lines() {
-            let cells: Vec<String> = line
-                .split_whitespace()
-                .map(|s| s.to_string())
-                .collect();
+            let cells: Vec<String> = line.split_whitespace().map(|s| s.to_string()).collect();
             if !cells.is_empty() {
                 rows.push(cells);
             }
@@ -1010,8 +1014,18 @@ pub fn parse_color(val: &str) -> Option<Color> {
         } else {
             h_raw.parse::<f32>().ok()?
         };
-        let sat = hsl_tokens[1].strip_suffix('%')?.trim().parse::<f32>().ok()? / 100.0;
-        let lig = hsl_tokens[2].strip_suffix('%')?.trim().parse::<f32>().ok()? / 100.0;
+        let sat = hsl_tokens[1]
+            .strip_suffix('%')?
+            .trim()
+            .parse::<f32>()
+            .ok()?
+            / 100.0;
+        let lig = hsl_tokens[2]
+            .strip_suffix('%')?
+            .trim()
+            .parse::<f32>()
+            .ok()?
+            / 100.0;
         let a = match alpha_str {
             Some(a_s) => parse_alpha_value(a_s)?,
             None => 255,
@@ -2185,11 +2199,10 @@ pub fn parse_single_animation(item: &str) -> Option<AnimationSpec> {
         }
 
         // 3. Fill mode: forwards | backwards | both
-        if (lower == "forwards" || lower == "backwards" || lower == "both")
-            && fill_mode.is_none() {
-                fill_mode = Some(AnimationFillMode::parse(&tok).unwrap());
-                continue;
-            }
+        if (lower == "forwards" || lower == "backwards" || lower == "both") && fill_mode.is_none() {
+            fill_mode = Some(AnimationFillMode::parse(&tok).unwrap());
+            continue;
+        }
 
         // 4. Timing function
         if let Some(easing) = TransitionEasing::parse(&tok) {

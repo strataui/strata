@@ -10,10 +10,7 @@ pub enum PathCommand {
     /// Draw straight line from current point to destination.
     LineTo(f32, f32),
     /// Draw quadratic Bézier curve with single control point.
-    QuadCurveTo {
-        cp: (f32, f32),
-        to: (f32, f32),
-    },
+    QuadCurveTo { cp: (f32, f32), to: (f32, f32) },
     /// Draw cubic Bézier curve with two control points.
     CubicCurveTo {
         cp1: (f32, f32),
@@ -126,10 +123,18 @@ impl VectorPath {
         let mut max_y = f32::NEG_INFINITY;
 
         let mut update = |x: f32, y: f32| {
-            if x < min_x { min_x = x; }
-            if x > max_x { max_x = x; }
-            if y < min_y { min_y = y; }
-            if y > max_y { max_y = y; }
+            if x < min_x {
+                min_x = x;
+            }
+            if x > max_x {
+                max_x = x;
+            }
+            if y < min_y {
+                min_y = y;
+            }
+            if y > max_y {
+                max_y = y;
+            }
         };
 
         for cmd in &self.commands {
@@ -176,13 +181,24 @@ impl VectorPath {
                 PathCommand::QuadCurveTo { cp, to } => {
                     out.push_str(&format!("Q {} {} {} {}", cp.0, cp.1, to.0, to.1))
                 }
-                PathCommand::CubicCurveTo { cp1, cp2, to } => {
-                    out.push_str(&format!("C {} {} {} {} {} {}", cp1.0, cp1.1, cp2.0, cp2.1, to.0, to.1))
-                }
-                PathCommand::ArcTo { rx, ry, x_axis_rotation, large_arc, sweep, to } => {
+                PathCommand::CubicCurveTo { cp1, cp2, to } => out.push_str(&format!(
+                    "C {} {} {} {} {} {}",
+                    cp1.0, cp1.1, cp2.0, cp2.1, to.0, to.1
+                )),
+                PathCommand::ArcTo {
+                    rx,
+                    ry,
+                    x_axis_rotation,
+                    large_arc,
+                    sweep,
+                    to,
+                } => {
                     let large = if *large_arc { 1 } else { 0 };
                     let swp = if *sweep { 1 } else { 0 };
-                    out.push_str(&format!("A {rx} {ry} {x_axis_rotation} {large} {swp} {} {}", to.0, to.1))
+                    out.push_str(&format!(
+                        "A {rx} {ry} {x_axis_rotation} {large} {swp} {} {}",
+                        to.0, to.1
+                    ))
                 }
                 PathCommand::Close => out.push('Z'),
             }
@@ -267,8 +283,18 @@ impl VectorPath {
                     if idx + 8 > bytes.len() {
                         return Err("Truncated MoveTo");
                     }
-                    let x = f32::from_le_bytes([bytes[idx], bytes[idx + 1], bytes[idx + 2], bytes[idx + 3]]);
-                    let y = f32::from_le_bytes([bytes[idx + 4], bytes[idx + 5], bytes[idx + 6], bytes[idx + 7]]);
+                    let x = f32::from_le_bytes([
+                        bytes[idx],
+                        bytes[idx + 1],
+                        bytes[idx + 2],
+                        bytes[idx + 3],
+                    ]);
+                    let y = f32::from_le_bytes([
+                        bytes[idx + 4],
+                        bytes[idx + 5],
+                        bytes[idx + 6],
+                        bytes[idx + 7],
+                    ]);
                     idx += 8;
                     commands.push(PathCommand::MoveTo(x, y));
                 }
@@ -276,8 +302,18 @@ impl VectorPath {
                     if idx + 8 > bytes.len() {
                         return Err("Truncated LineTo");
                     }
-                    let x = f32::from_le_bytes([bytes[idx], bytes[idx + 1], bytes[idx + 2], bytes[idx + 3]]);
-                    let y = f32::from_le_bytes([bytes[idx + 4], bytes[idx + 5], bytes[idx + 6], bytes[idx + 7]]);
+                    let x = f32::from_le_bytes([
+                        bytes[idx],
+                        bytes[idx + 1],
+                        bytes[idx + 2],
+                        bytes[idx + 3],
+                    ]);
+                    let y = f32::from_le_bytes([
+                        bytes[idx + 4],
+                        bytes[idx + 5],
+                        bytes[idx + 6],
+                        bytes[idx + 7],
+                    ]);
                     idx += 8;
                     commands.push(PathCommand::LineTo(x, y));
                 }
@@ -285,10 +321,30 @@ impl VectorPath {
                     if idx + 16 > bytes.len() {
                         return Err("Truncated QuadCurveTo");
                     }
-                    let cpx = f32::from_le_bytes([bytes[idx], bytes[idx + 1], bytes[idx + 2], bytes[idx + 3]]);
-                    let cpy = f32::from_le_bytes([bytes[idx + 4], bytes[idx + 5], bytes[idx + 6], bytes[idx + 7]]);
-                    let tox = f32::from_le_bytes([bytes[idx + 8], bytes[idx + 9], bytes[idx + 10], bytes[idx + 11]]);
-                    let toy = f32::from_le_bytes([bytes[idx + 12], bytes[idx + 13], bytes[idx + 14], bytes[idx + 15]]);
+                    let cpx = f32::from_le_bytes([
+                        bytes[idx],
+                        bytes[idx + 1],
+                        bytes[idx + 2],
+                        bytes[idx + 3],
+                    ]);
+                    let cpy = f32::from_le_bytes([
+                        bytes[idx + 4],
+                        bytes[idx + 5],
+                        bytes[idx + 6],
+                        bytes[idx + 7],
+                    ]);
+                    let tox = f32::from_le_bytes([
+                        bytes[idx + 8],
+                        bytes[idx + 9],
+                        bytes[idx + 10],
+                        bytes[idx + 11],
+                    ]);
+                    let toy = f32::from_le_bytes([
+                        bytes[idx + 12],
+                        bytes[idx + 13],
+                        bytes[idx + 14],
+                        bytes[idx + 15],
+                    ]);
                     idx += 16;
                     commands.push(PathCommand::QuadCurveTo {
                         cp: (cpx, cpy),
@@ -299,12 +355,42 @@ impl VectorPath {
                     if idx + 24 > bytes.len() {
                         return Err("Truncated CubicCurveTo");
                     }
-                    let cp1x = f32::from_le_bytes([bytes[idx], bytes[idx + 1], bytes[idx + 2], bytes[idx + 3]]);
-                    let cp1y = f32::from_le_bytes([bytes[idx + 4], bytes[idx + 5], bytes[idx + 6], bytes[idx + 7]]);
-                    let cp2x = f32::from_le_bytes([bytes[idx + 8], bytes[idx + 9], bytes[idx + 10], bytes[idx + 11]]);
-                    let cp2y = f32::from_le_bytes([bytes[idx + 12], bytes[idx + 13], bytes[idx + 14], bytes[idx + 15]]);
-                    let tox = f32::from_le_bytes([bytes[idx + 16], bytes[idx + 17], bytes[idx + 18], bytes[idx + 19]]);
-                    let toy = f32::from_le_bytes([bytes[idx + 20], bytes[idx + 21], bytes[idx + 22], bytes[idx + 23]]);
+                    let cp1x = f32::from_le_bytes([
+                        bytes[idx],
+                        bytes[idx + 1],
+                        bytes[idx + 2],
+                        bytes[idx + 3],
+                    ]);
+                    let cp1y = f32::from_le_bytes([
+                        bytes[idx + 4],
+                        bytes[idx + 5],
+                        bytes[idx + 6],
+                        bytes[idx + 7],
+                    ]);
+                    let cp2x = f32::from_le_bytes([
+                        bytes[idx + 8],
+                        bytes[idx + 9],
+                        bytes[idx + 10],
+                        bytes[idx + 11],
+                    ]);
+                    let cp2y = f32::from_le_bytes([
+                        bytes[idx + 12],
+                        bytes[idx + 13],
+                        bytes[idx + 14],
+                        bytes[idx + 15],
+                    ]);
+                    let tox = f32::from_le_bytes([
+                        bytes[idx + 16],
+                        bytes[idx + 17],
+                        bytes[idx + 18],
+                        bytes[idx + 19],
+                    ]);
+                    let toy = f32::from_le_bytes([
+                        bytes[idx + 20],
+                        bytes[idx + 21],
+                        bytes[idx + 22],
+                        bytes[idx + 23],
+                    ]);
                     idx += 24;
                     commands.push(PathCommand::CubicCurveTo {
                         cp1: (cp1x, cp1y),
@@ -316,12 +402,37 @@ impl VectorPath {
                     if idx + 21 > bytes.len() {
                         return Err("Truncated ArcTo");
                     }
-                    let rx = f32::from_le_bytes([bytes[idx], bytes[idx + 1], bytes[idx + 2], bytes[idx + 3]]);
-                    let ry = f32::from_le_bytes([bytes[idx + 4], bytes[idx + 5], bytes[idx + 6], bytes[idx + 7]]);
-                    let rot = f32::from_le_bytes([bytes[idx + 8], bytes[idx + 9], bytes[idx + 10], bytes[idx + 11]]);
+                    let rx = f32::from_le_bytes([
+                        bytes[idx],
+                        bytes[idx + 1],
+                        bytes[idx + 2],
+                        bytes[idx + 3],
+                    ]);
+                    let ry = f32::from_le_bytes([
+                        bytes[idx + 4],
+                        bytes[idx + 5],
+                        bytes[idx + 6],
+                        bytes[idx + 7],
+                    ]);
+                    let rot = f32::from_le_bytes([
+                        bytes[idx + 8],
+                        bytes[idx + 9],
+                        bytes[idx + 10],
+                        bytes[idx + 11],
+                    ]);
                     let flags = bytes[idx + 12];
-                    let tox = f32::from_le_bytes([bytes[idx + 13], bytes[idx + 14], bytes[idx + 15], bytes[idx + 16]]);
-                    let toy = f32::from_le_bytes([bytes[idx + 17], bytes[idx + 18], bytes[idx + 19], bytes[idx + 20]]);
+                    let tox = f32::from_le_bytes([
+                        bytes[idx + 13],
+                        bytes[idx + 14],
+                        bytes[idx + 15],
+                        bytes[idx + 16],
+                    ]);
+                    let toy = f32::from_le_bytes([
+                        bytes[idx + 17],
+                        bytes[idx + 18],
+                        bytes[idx + 19],
+                        bytes[idx + 20],
+                    ]);
                     idx += 21;
                     commands.push(PathCommand::ArcTo {
                         rx,

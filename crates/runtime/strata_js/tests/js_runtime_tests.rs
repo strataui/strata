@@ -52,7 +52,10 @@ fn test_json_parsing_and_serialization() {
     // Escape character testing
     let escaped_json = r#"{"msg": "Hello\nWorld\t\"Escaped\"\u0041"}"#;
     let escaped_val = parse_json(escaped_json).expect("Escape parse failed");
-    assert_eq!(escaped_val["msg"].as_str(), Some("Hello\nWorld\t\"Escaped\"A"));
+    assert_eq!(
+        escaped_val["msg"].as_str(),
+        Some("Hello\nWorld\t\"Escaped\"A")
+    );
 }
 
 #[test]
@@ -132,7 +135,10 @@ fn test_array_prototype_methods() {
     assert_eq!(sum.as_f64(), Some(15.0));
 
     // find & find_index
-    assert_eq!(arr.find(|x| x.as_f64() == Some(3.0)), Some(JsValue::Number(3.0)));
+    assert_eq!(
+        arr.find(|x| x.as_f64() == Some(3.0)),
+        Some(JsValue::Number(3.0))
+    );
     assert_eq!(arr.find_index(|x| x.as_f64() == Some(4.0)), Some(3));
 
     // some & every
@@ -169,13 +175,21 @@ fn test_array_prototype_methods() {
     mut_arr.reverse();
     assert_eq!(mut_arr[0], JsValue::Number(5.0));
 
-    mut_arr.sort_by(|a, b| a.as_f64().unwrap().partial_cmp(&b.as_f64().unwrap()).unwrap());
+    mut_arr.sort_by(|a, b| {
+        a.as_f64()
+            .unwrap()
+            .partial_cmp(&b.as_f64().unwrap())
+            .unwrap()
+    });
     assert_eq!(mut_arr[0], JsValue::Number(1.0));
 
     // flat
     let nested = JsValue::new_array(vec![
         JsValue::Number(1.0),
-        JsValue::new_array(vec![JsValue::Number(2.0), JsValue::new_array(vec![JsValue::Number(3.0)])]),
+        JsValue::new_array(vec![
+            JsValue::Number(2.0),
+            JsValue::new_array(vec![JsValue::Number(3.0)]),
+        ]),
     ]);
     let flat_1 = nested.flat(1);
     assert_eq!(flat_1.len(), 3);
@@ -289,12 +303,18 @@ fn test_headers_and_response() {
 
     // Case-insensitivity
     assert!(headers.has("content-type"));
-    assert_eq!(headers.get("CONTENT-TYPE"), Some("application/json".to_string()));
+    assert_eq!(
+        headers.get("CONTENT-TYPE"),
+        Some("application/json".to_string())
+    );
     assert_eq!(
         headers.get("accept"),
         Some("text/html, application/xhtml+xml".to_string())
     );
-    assert_eq!(headers.get_all("accept"), vec!["text/html", "application/xhtml+xml"]);
+    assert_eq!(
+        headers.get_all("accept"),
+        vec!["text/html", "application/xhtml+xml"]
+    );
 
     headers.delete("content-type");
     assert!(!headers.has("content-type"));
@@ -387,7 +407,10 @@ fn test_prototype_pollution_guard() {
 
     // 1. Direct mutation of Object.prototype in default sealed mode must fail
     let res = engine.eval("Object.prototype.isAdmin = true;");
-    assert!(res.is_err(), "Mutating Object.prototype must return error in sealed mode");
+    assert!(
+        res.is_err(),
+        "Mutating Object.prototype must return error in sealed mode"
+    );
     let err_msg = res.unwrap_err();
     assert!(
         err_msg.contains("TypeError: Cannot modify sealed prototype Object.prototype"),
@@ -396,7 +419,10 @@ fn test_prototype_pollution_guard() {
 
     // 2. Direct mutation of __proto__ must fail
     let res_proto = engine.eval("var x = {}; x.__proto__ = { polluted: true };");
-    assert!(res_proto.is_err(), "Mutating __proto__ must fail in sealed mode");
+    assert!(
+        res_proto.is_err(),
+        "Mutating __proto__ must fail in sealed mode"
+    );
 
     // 3. Object.assign with JSON payload containing __proto__ must NOT pollute global objects
     let assign_script = r#"
@@ -407,9 +433,17 @@ fn test_prototype_pollution_guard() {
         var is_polluted = (probe.injected !== undefined);
         var target_valid = target.valid;
     "#;
-    engine.eval(assign_script).expect("Execution should succeed safely");
-    assert_eq!(engine.globals.get("is_polluted"), Some(&JsValue::Bool(false)));
-    assert_eq!(engine.globals.get("target_valid"), Some(&JsValue::Number(42.0)));
+    engine
+        .eval(assign_script)
+        .expect("Execution should succeed safely");
+    assert_eq!(
+        engine.globals.get("is_polluted"),
+        Some(&JsValue::Bool(false))
+    );
+    assert_eq!(
+        engine.globals.get("target_valid"),
+        Some(&JsValue::Number(42.0))
+    );
 }
 
 #[test]
@@ -427,11 +461,13 @@ fn test_deeply_nested_expression_recursion_guard() {
     }
 
     let res = engine.eval(&nested);
-    assert!(res.is_err(), "Deeply nested expression must trigger recursion guard");
+    assert!(
+        res.is_err(),
+        "Deeply nested expression must trigger recursion guard"
+    );
     let err = res.unwrap_err();
     assert!(
         err.contains("Maximum call stack size exceeded"),
         "Expected call stack exceeded error, got: {err}"
     );
 }
-

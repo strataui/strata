@@ -47,7 +47,10 @@ impl<T: Clone + PartialEq + 'static> Store<T> {
 
     /// Slice selector: derives a fine-grained sub-signal that only emits updates
     /// when the selected property value changes.
-    pub fn select<R: Clone + PartialEq + 'static, F: Fn(&T) -> R + 'static>(&self, selector: F) -> Signal<R> {
+    pub fn select<R: Clone + PartialEq + 'static, F: Fn(&T) -> R + 'static>(
+        &self,
+        selector: F,
+    ) -> Signal<R> {
         let initial_slice = selector(&self.state.get());
         let slice_signal = Signal::new(initial_slice);
 
@@ -64,7 +67,9 @@ impl<T: Clone + PartialEq + 'static> Store<T> {
 
     /// Subscribes an imperative callback invoked whenever store state changes.
     pub fn subscribe<F: Fn(&T) + 'static>(&self, listener: F) {
-        self.listeners.borrow_mut().push(Rc::new(Box::new(listener)));
+        self.listeners
+            .borrow_mut()
+            .push(Rc::new(Box::new(listener)));
     }
 }
 

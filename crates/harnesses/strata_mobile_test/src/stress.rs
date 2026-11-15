@@ -3,10 +3,20 @@
 /// Simulated user interaction event generated during monkey fuzzing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonkeyEvent {
-    Touch { x: f32, y: f32 },
-    Motion { from_x: f32, from_y: f32, to_x: f32, to_y: f32 },
+    Touch {
+        x: f32,
+        y: f32,
+    },
+    Motion {
+        from_x: f32,
+        from_y: f32,
+        to_x: f32,
+        to_y: f32,
+    },
     NavBack,
-    SysKey { key_code: u32 },
+    SysKey {
+        key_code: u32,
+    },
     AppSwitch,
 }
 
@@ -19,7 +29,11 @@ pub struct FuzzRng {
 impl FuzzRng {
     pub fn new(seed: u64) -> Self {
         Self {
-            state: if seed == 0 { 0x5EED_CAFE_DEAD_BEEF } else { seed },
+            state: if seed == 0 {
+                0x5EED_CAFE_DEAD_BEEF
+            } else {
+                seed
+            },
         }
     }
 
@@ -65,7 +79,12 @@ impl MonkeyFuzzer {
             let from_y = self.rng.next_f32() * viewport_h;
             let to_x = self.rng.next_f32() * viewport_w;
             let to_y = self.rng.next_f32() * viewport_h;
-            MonkeyEvent::Motion { from_x, from_y, to_x, to_y }
+            MonkeyEvent::Motion {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            }
         } else if roll < 0.95 {
             // 10% Back Navigation
             MonkeyEvent::NavBack
@@ -76,7 +95,12 @@ impl MonkeyFuzzer {
     }
 
     /// Generates a batch of N consecutive fuzzing events.
-    pub fn generate_sequence(&mut self, count: usize, viewport_w: f32, viewport_h: f32) -> Vec<MonkeyEvent> {
+    pub fn generate_sequence(
+        &mut self,
+        count: usize,
+        viewport_w: f32,
+        viewport_h: f32,
+    ) -> Vec<MonkeyEvent> {
         (0..count)
             .map(|_| self.generate_event(viewport_w, viewport_h))
             .collect()
@@ -86,8 +110,16 @@ impl MonkeyFuzzer {
     pub fn to_adb_input_cmd(event: &MonkeyEvent) -> String {
         match event {
             MonkeyEvent::Touch { x, y } => format!("input tap {:.0} {:.0}", x, y),
-            MonkeyEvent::Motion { from_x, from_y, to_x, to_y } => {
-                format!("input swipe {:.0} {:.0} {:.0} {:.0} 250", from_x, from_y, to_x, to_y)
+            MonkeyEvent::Motion {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            } => {
+                format!(
+                    "input swipe {:.0} {:.0} {:.0} {:.0} 250",
+                    from_x, from_y, to_x, to_y
+                )
             }
             MonkeyEvent::NavBack => "input keyevent 4".to_string(), // KEYCODE_BACK
             MonkeyEvent::SysKey { key_code } => format!("input keyevent {}", key_code),

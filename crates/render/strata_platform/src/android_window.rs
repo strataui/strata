@@ -143,8 +143,10 @@ impl AndroidWindow {
                 if w > 0 && h > 0 {
                     self.config.width = w;
                     self.config.height = h;
-                    self.event_queue
-                        .push_back(PlatformEvent::WindowResized { width: w, height: h });
+                    self.event_queue.push_back(PlatformEvent::WindowResized {
+                        width: w,
+                        height: h,
+                    });
                 }
             }
         }
@@ -191,11 +193,13 @@ impl AndroidWindow {
         match cmd {
             APP_CMD_GAINED_FOCUS => {
                 self.is_focused = true;
-                self.event_queue.push_back(PlatformEvent::WindowFocused(true));
+                self.event_queue
+                    .push_back(PlatformEvent::WindowFocused(true));
             }
             APP_CMD_LOST_FOCUS => {
                 self.is_focused = false;
-                self.event_queue.push_back(PlatformEvent::WindowFocused(false));
+                self.event_queue
+                    .push_back(PlatformEvent::WindowFocused(false));
             }
             APP_CMD_WINDOW_REDRAW_NEEDED => {
                 self.redraw_requested = true;
@@ -209,14 +213,17 @@ impl AndroidWindow {
                         if w > 0 && h > 0 {
                             self.config.width = w;
                             self.config.height = h;
-                            self.event_queue
-                                .push_back(PlatformEvent::WindowResized { width: w, height: h });
+                            self.event_queue.push_back(PlatformEvent::WindowResized {
+                                width: w,
+                                height: h,
+                            });
                         }
                     }
                 }
             }
             APP_CMD_DESTROY => {
-                self.event_queue.push_back(PlatformEvent::WindowCloseRequested);
+                self.event_queue
+                    .push_back(PlatformEvent::WindowCloseRequested);
             }
             _ => {}
         }
@@ -234,7 +241,8 @@ impl AndroidWindow {
                 });
             }
             AMOTION_EVENT_ACTION_MOVE => {
-                self.event_queue.push_back(PlatformEvent::MouseMove { x, y });
+                self.event_queue
+                    .push_back(PlatformEvent::MouseMove { x, y });
             }
             AMOTION_EVENT_ACTION_UP | AMOTION_EVENT_ACTION_POINTER_UP => {
                 self.event_queue.push_back(PlatformEvent::MouseUp {

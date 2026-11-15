@@ -8,10 +8,7 @@ use strata_macro::{component, rsx};
 /// Window drag handle component that automatically initiates native OS window dragging on pointer down
 /// and toggles maximize on double click.
 #[component]
-pub fn WindowDragHandle(
-    class: Option<&'static str>,
-    children: Option<Vec<NodeBlueprint>>,
-) -> View {
+pub fn WindowDragHandle(class: Option<&'static str>, children: Option<Vec<NodeBlueprint>>) -> View {
     let custom = class.unwrap_or("");
     rsx! {
         <div data-app-region="drag" class={format!("flex items-center select-none cursor-default {}", custom)}>

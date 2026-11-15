@@ -27,17 +27,37 @@ impl BenchmarkReport {
         for r in &self.results {
             out.push_str(&format!(
                 "| **{}** | {} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.0} |\n",
-                r.name, r.iterations, r.mean_us, r.min_us, r.max_us, r.p95_us, r.p99_us, r.throughput_per_sec
+                r.name,
+                r.iterations,
+                r.mean_us,
+                r.min_us,
+                r.max_us,
+                r.p95_us,
+                r.p99_us,
+                r.throughput_per_sec
             ));
         }
 
         out.push_str("\n## Empirical Runtime Summary\n\n");
-        out.push_str(&format!("- **Host Operating System:** {}\n", std::env::consts::OS));
+        out.push_str(&format!(
+            "- **Host Operating System:** {}\n",
+            std::env::consts::OS
+        ));
         out.push_str(&format!("- **Architecture:** {}\n", std::env::consts::ARCH));
         let total_benchmarks = self.results.len();
-        let max_rss = self.results.iter().map(|r| r.memory_rss_mb).fold(0.0f64, f64::max);
-        out.push_str(&format!("- **Total Benchmark Tasks:** {}\n", total_benchmarks));
-        out.push_str(&format!("- **Peak Measured RSS Memory:** {:.2} MB\n", max_rss));
+        let max_rss = self
+            .results
+            .iter()
+            .map(|r| r.memory_rss_mb)
+            .fold(0.0f64, f64::max);
+        out.push_str(&format!(
+            "- **Total Benchmark Tasks:** {}\n",
+            total_benchmarks
+        ));
+        out.push_str(&format!(
+            "- **Peak Measured RSS Memory:** {:.2} MB\n",
+            max_rss
+        ));
         out.push_str("- **Measurement Integrity:** 100% empirically measured via high-resolution hardware timers (`std::time::Instant`). Zero simulated figures.\n");
 
         out

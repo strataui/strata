@@ -138,7 +138,11 @@ fn parse_block(
             }
 
             if let Some(colon_pos) = content.find(':') {
-                let key = content[..colon_pos].trim().trim_matches('"').trim_matches('\'').to_string();
+                let key = content[..colon_pos]
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .to_string();
                 let rest = content[colon_pos + 1..].trim();
                 *cursor += 1;
 
@@ -163,7 +167,10 @@ fn parse_block(
                     map.insert(key, parse_scalar(rest));
                 }
             } else {
-                return Err(format!("Malformed YAML key-value at line {}: {}", line_num, content));
+                return Err(format!(
+                    "Malformed YAML key-value at line {}: {}",
+                    line_num, content
+                ));
             }
         }
         Ok(YamlValue::Map(map))

@@ -41,7 +41,11 @@ impl AppRuntime {
     pub fn build_ir_graph(blueprint: &NodeBlueprint) -> strata_dom::UiIrGraph {
         let mut graph = strata_dom::UiIrGraph::new();
         let root_id = blueprint.compile_to_ir(&mut graph);
-        graph.root_id = if root_id.is_null() { None } else { Some(root_id) };
+        graph.root_id = if root_id.is_null() {
+            None
+        } else {
+            Some(root_id)
+        };
         graph.recompute_subtree_spans();
         graph
     }
@@ -204,7 +208,9 @@ impl AppRuntime {
     }
 
     /// Parses and caches a CSS stylesheet string so hover/focus restyles avoid re-parsing unchanged `<style>` blocks.
-    pub(crate) fn parse_cached_stylesheet(css: &str) -> Option<std::sync::Arc<strata_style::StyleSheet>> {
+    pub(crate) fn parse_cached_stylesheet(
+        css: &str,
+    ) -> Option<std::sync::Arc<strata_style::StyleSheet>> {
         thread_local! {
             static STYLE_SHEET_CACHE: std::cell::RefCell<
                 std::collections::HashMap<String, std::sync::Arc<strata_style::StyleSheet>>
@@ -427,7 +433,12 @@ impl AppRuntime {
     ) -> LayoutNode {
         let mut path_buf = Vec::new();
         let ctx = InteractionContext::default();
-        Self::build_layout_tree_with_interaction_context(blueprint, parent_style, &mut path_buf, &ctx)
+        Self::build_layout_tree_with_interaction_context(
+            blueprint,
+            parent_style,
+            &mut path_buf,
+            &ctx,
+        )
     }
 
     /// Internal recursive tree builder passing parent style, node path, and active hover state.
@@ -441,7 +452,12 @@ impl AppRuntime {
             hovered_path,
             ..Default::default()
         };
-        Self::build_layout_tree_with_interaction_context(blueprint, parent_style, current_path, &ctx)
+        Self::build_layout_tree_with_interaction_context(
+            blueprint,
+            parent_style,
+            current_path,
+            &ctx,
+        )
     }
 
     /// Internal recursive tree builder passing parent style, node path, and full interaction context.
@@ -564,8 +580,7 @@ impl AppRuntime {
                     if let Some(scene_arc) =
                         strata_render::scene3d::extract_scene3d_arc_from_blueprint(blueprint)
                     {
-                        canvas_node.scene_3d =
-                            Some(strata_layout::ViewportSceneHandle(scene_arc));
+                        canvas_node.scene_3d = Some(strata_layout::ViewportSceneHandle(scene_arc));
                     }
                     Self::apply_portal_and_anchor_metadata(&mut canvas_node, tag, attributes);
                     return canvas_node;
@@ -597,15 +612,18 @@ impl AppRuntime {
                     LayoutNode::with_children(*style, child_nodes).with_entity_id(entity_id);
                 for attr in attributes {
                     if let strata_dom::Attribute::ScenePayload(payload) = attr {
-                        node.scene_3d =
-                            Some(strata_layout::ViewportSceneHandle(std::sync::Arc::clone(payload)));
+                        node.scene_3d = Some(strata_layout::ViewportSceneHandle(
+                            std::sync::Arc::clone(payload),
+                        ));
                         break;
                     }
                 }
                 Self::apply_portal_and_anchor_metadata(&mut node, tag, attributes);
                 node
             }
-            NodeBlueprint::Text(text) => Self::build_text_leaf_layout_node(text.clone(), parent_style),
+            NodeBlueprint::Text(text) => {
+                Self::build_text_leaf_layout_node(text.clone(), parent_style)
+            }
             NodeBlueprint::DynamicText(dyn_fn) => {
                 Self::build_text_leaf_layout_node(dyn_fn(), parent_style)
             }
@@ -682,9 +700,9 @@ impl AppRuntime {
         }
 
         let last_elem_flat_idx = if !stylesheets.is_empty() {
-            flat.iter().rposition(|bp| {
-                matches!(bp, NodeBlueprint::Element { tag, .. } if !Self::is_style_tag(tag))
-            })
+            flat.iter().rposition(
+                |bp| matches!(bp, NodeBlueprint::Element { tag, .. } if !Self::is_style_tag(tag)),
+            )
         } else {
             None
         };
@@ -1038,10 +1056,7 @@ impl AppRuntime {
             self.register_keyframes_stylesheet(sheet);
         }
         let ctx = self.interaction_context();
-        self.layout_root = Self::build_layout_tree_with_interaction(
-            &self.root_blueprint,
-            &ctx,
-        );
+        self.layout_root = Self::build_layout_tree_with_interaction(&self.root_blueprint, &ctx);
         self.sync_active_input_layout();
         let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
         self.sync_tree_animations(now_ms);
@@ -1169,8 +1184,12 @@ impl AppRuntime {
         preceding_siblings: &[CascadeElementMeta],
         is_last_element_child: bool,
     ) -> (Box<ComputedStyle>, Option<CascadeElementMeta>) {
-        let is_hovered = ctx.hovered_path.is_some_and(|h| h.starts_with(current_path));
-        let is_focused = ctx.focused_path.is_some_and(|f| f.starts_with(current_path));
+        let is_hovered = ctx
+            .hovered_path
+            .is_some_and(|h| h.starts_with(current_path));
+        let is_focused = ctx
+            .focused_path
+            .is_some_and(|f| f.starts_with(current_path));
         let is_active = is_hovered && ctx.is_mouse_down;
         let is_disabled = attributes.iter().any(|attr| match attr {
             strata_dom::Attribute::Property { key, value } => {
@@ -1373,10 +1392,14 @@ impl AppRuntime {
             .iter()
             .any(|d| d.property.eq_ignore_ascii_case("display"))
             || matched_base_rules.iter().any(|(_, _, _, decls)| {
-                decls.iter().any(|d| d.property.eq_ignore_ascii_case("display"))
+                decls
+                    .iter()
+                    .any(|d| d.property.eq_ignore_ascii_case("display"))
             })
             || matched_interactive_rules.iter().any(|(_, _, _, decls)| {
-                decls.iter().any(|d| d.property.eq_ignore_ascii_case("display"))
+                decls
+                    .iter()
+                    .any(|d| d.property.eq_ignore_ascii_case("display"))
             });
 
         if !has_display_class && !has_explicit_display_decl {

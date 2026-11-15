@@ -91,7 +91,12 @@ pub struct AtomTableInspector {
 }
 
 impl AtomTableInspector {
-    pub fn new(atom_count: usize, total_bytes: usize, lookup_hits: u64, lookup_misses: u64) -> Self {
+    pub fn new(
+        atom_count: usize,
+        total_bytes: usize,
+        lookup_hits: u64,
+        lookup_misses: u64,
+    ) -> Self {
         Self {
             atom_count,
             total_bytes,
@@ -130,8 +135,8 @@ pub struct HeapAllocationTracker {
 impl Default for HeapAllocationTracker {
     fn default() -> Self {
         Self {
-            warning_threshold_bytes: 15 * 1024 * 1024,   // 15 MB
-            critical_threshold_bytes: 30 * 1024 * 1024,  // 30 MB
+            warning_threshold_bytes: 15 * 1024 * 1024,  // 15 MB
+            critical_threshold_bytes: 30 * 1024 * 1024, // 30 MB
             history: Vec::new(),
         }
     }

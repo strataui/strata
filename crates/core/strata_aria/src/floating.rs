@@ -11,7 +11,12 @@ pub struct FloatRect {
 
 impl FloatRect {
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }
 
@@ -61,8 +66,13 @@ impl Placement {
 
     pub fn alignment(&self) -> Alignment {
         match self {
-            Placement::TopStart | Placement::BottomStart | Placement::LeftStart | Placement::RightStart => Alignment::Start,
-            Placement::TopEnd | Placement::BottomEnd | Placement::LeftEnd | Placement::RightEnd => Alignment::End,
+            Placement::TopStart
+            | Placement::BottomStart
+            | Placement::LeftStart
+            | Placement::RightStart => Alignment::Start,
+            Placement::TopEnd | Placement::BottomEnd | Placement::LeftEnd | Placement::RightEnd => {
+                Alignment::End
+            }
             _ => Alignment::Center,
         }
     }
@@ -221,7 +231,7 @@ mod tests {
 
         let res = compute_position(anchor, floating, options);
         assert_eq!(res.y, 150.0); // 100 + 40 + 10
-        assert_eq!(res.x, 90.0);  // 100 + (80 - 100) / 2 = 90
+        assert_eq!(res.x, 90.0); // 100 + (80 - 100) / 2 = 90
         assert_eq!(res.actual_placement, Placement::Bottom);
     }
 

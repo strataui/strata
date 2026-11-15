@@ -109,7 +109,9 @@ impl WebTargetBuilder {
         let mut html = String::new();
         html.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
         html.push_str("  <meta charset=\"UTF-8\">\n");
-        html.push_str("  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n");
+        html.push_str(
+            "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n",
+        );
         html.push_str(&format!("  <title>{}</title>\n", config.app_title));
 
         if css.is_some() {
@@ -120,7 +122,10 @@ impl WebTargetBuilder {
         }
 
         html.push_str("</head>\n<body>\n");
-        html.push_str(&format!("  <div id=\"{}\"></div>\n", config.root_element_id));
+        html.push_str(&format!(
+            "  <div id=\"{}\"></div>\n",
+            config.root_element_id
+        ));
 
         if config.inline_runtime {
             html.push_str("  <script type=\"module\">\n");

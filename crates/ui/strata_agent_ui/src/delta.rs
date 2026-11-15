@@ -30,9 +30,20 @@ impl AgentPatch {
     /// Formats patch as a compact JSON string suitable for LLM streaming.
     pub fn to_json(&self) -> String {
         match self {
-            AgentPatch::InsertNode { node_id, parent_id, tag, props, text } => {
-                let parent_str = parent_id.map(|p| p.to_string()).unwrap_or_else(|| "null".to_string());
-                let text_str = text.as_ref().map(|t| format!("\"{}\"", t)).unwrap_or_else(|| "null".to_string());
+            AgentPatch::InsertNode {
+                node_id,
+                parent_id,
+                tag,
+                props,
+                text,
+            } => {
+                let parent_str = parent_id
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "null".to_string());
+                let text_str = text
+                    .as_ref()
+                    .map(|t| format!("\"{}\"", t))
+                    .unwrap_or_else(|| "null".to_string());
                 let mut props_arr = Vec::new();
                 for (k, v) in props {
                     props_arr.push(format!("\"{}\":\"{}\"", k, v));
@@ -42,14 +53,21 @@ impl AgentPatch {
                     node_id, parent_str, tag, props_arr.join(","), text_str
                 )
             }
-            AgentPatch::MutateProps { node_id, key, value } => {
+            AgentPatch::MutateProps {
+                node_id,
+                key,
+                value,
+            } => {
                 format!(
                     "{{\"op\":\"mutate\",\"id\":{},\"key\":\"{}\",\"val\":\"{}\"}}",
                     node_id, key, value
                 )
             }
             AgentPatch::UpdateText { node_id, text } => {
-                format!("{{\"op\":\"text\",\"id\":{},\"text\":\"{}\"}}", node_id, text)
+                format!(
+                    "{{\"op\":\"text\",\"id\":{},\"text\":\"{}\"}}",
+                    node_id, text
+                )
             }
             AgentPatch::RemoveNode { node_id } => {
                 format!("{{\"op\":\"remove\",\"id\":{}}}", node_id)
@@ -81,8 +99,12 @@ impl AgentPatch {
                         for pair in props_body.split(',') {
                             let parts: Vec<&str> = pair.split(':').collect();
                             if parts.len() == 2 {
-                                let k = parts[0].trim().trim_matches(|c| c == '"' || c == '{' || c == '}');
-                                let v = parts[1].trim().trim_matches(|c| c == '"' || c == '{' || c == '}');
+                                let k = parts[0]
+                                    .trim()
+                                    .trim_matches(|c| c == '"' || c == '{' || c == '}');
+                                let v = parts[1]
+                                    .trim()
+                                    .trim_matches(|c| c == '"' || c == '{' || c == '}');
                                 if !k.is_empty() {
                                     props.insert(k.to_string(), v.to_string());
                                 }

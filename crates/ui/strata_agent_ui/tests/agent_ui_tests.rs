@@ -17,13 +17,19 @@ fn test_schema_tag_and_attribute_security() {
     assert!(is_attribute_safe("class", "p-4 bg-[#08090a]"));
     assert!(is_attribute_safe("action", "fetch_metrics"));
     assert!(!is_attribute_safe("href", "javascript:alert(1)"));
-    assert!(!is_attribute_safe("src", "data:text/html;base64,PHNjcmlwdD4="));
+    assert!(!is_attribute_safe(
+        "src",
+        "data:text/html;base64,PHNjcmlwdD4="
+    ));
     // Evasion vectors that must be rejected
     assert!(!is_attribute_safe("href", " javascript:alert(1)"));
     assert!(!is_attribute_safe("href", "\tjavascript:alert(1)"));
     assert!(!is_attribute_safe("href", "\njavascript:evil()"));
     assert!(!is_attribute_safe("href", "vbscript:msgbox(1)"));
-    assert!(!is_attribute_safe("src", "data:image/svg+xml,<svg onload=alert(1)>"));
+    assert!(!is_attribute_safe(
+        "src",
+        "data:image/svg+xml,<svg onload=alert(1)>"
+    ));
     assert!(!is_attribute_safe("onclick", "alert(1)"));
     assert!(!is_attribute_safe("oninput", "eval(1)"));
     assert!(!is_attribute_safe("onchange", "evil()"));
@@ -38,16 +44,31 @@ fn test_schema_tag_and_attribute_security() {
 
     // Arbitrary data: URIs must be blocked except safe images
     assert!(!is_attribute_safe("src", "data:text/javascript,alert(1)"));
-    assert!(!is_attribute_safe("src", "data:application/xhtml+xml,<script>alert(1)</script>"));
+    assert!(!is_attribute_safe(
+        "src",
+        "data:application/xhtml+xml,<script>alert(1)</script>"
+    ));
     assert!(!is_attribute_safe("src", "data:;base64,alert(1)"));
-    assert!(!is_attribute_safe("src", "data:image/png;base64,<script>alert(1)</script>"));
+    assert!(!is_attribute_safe(
+        "src",
+        "data:image/png;base64,<script>alert(1)</script>"
+    ));
     assert!(is_attribute_safe("src", "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="));
-    assert!(is_attribute_safe("src", "data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA="));
+    assert!(is_attribute_safe(
+        "src",
+        "data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA="
+    ));
 
     // Style attribute script injection
     assert!(!is_attribute_safe("style", "width: expression(alert(1))"));
-    assert!(!is_attribute_safe("style", "background: url('javascript:alert(1)')"));
-    assert!(is_attribute_safe("style", "color: #ffffff; padding: 12px; margin-top: 4px;"));
+    assert!(!is_attribute_safe(
+        "style",
+        "background: url('javascript:alert(1)')"
+    ));
+    assert!(is_attribute_safe(
+        "style",
+        "color: #ffffff; padding: 12px; margin-top: 4px;"
+    ));
 
     let validator = AgentSchemaValidator::new();
     assert!(validator.validate_tag("button").is_ok());
@@ -71,12 +92,22 @@ fn test_agent_patch_json_roundtrip() {
     let json = patch.to_json();
     let parsed = AgentPatch::parse_json(&json).expect("Failed to parse json patch");
 
-    if let AgentPatch::InsertNode { node_id, parent_id, tag, props: parsed_props, text } = parsed {
+    if let AgentPatch::InsertNode {
+        node_id,
+        parent_id,
+        tag,
+        props: parsed_props,
+        text,
+    } = parsed
+    {
         assert_eq!(node_id, 101);
         assert_eq!(parent_id, Some(1));
         assert_eq!(tag, "button");
         assert_eq!(text.as_deref(), Some("Deploy Cluster"));
-        assert_eq!(parsed_props.get("action").map(|s| s.as_str()), Some("scale_cluster"));
+        assert_eq!(
+            parsed_props.get("action").map(|s| s.as_str()),
+            Some("scale_cluster")
+        );
     } else {
         panic!("Parsed wrong patch variant");
     }
@@ -140,7 +171,10 @@ fn test_agent_action_bus() {
     let mut bus = AgentActionBus::new();
 
     bus.register("scale_cluster", |_action, params| {
-        let nodes = params.get("nodes").cloned().unwrap_or_else(|| "0".to_string());
+        let nodes = params
+            .get("nodes")
+            .cloned()
+            .unwrap_or_else(|| "0".to_string());
         Ok(format!("Cluster scaled to {} nodes", nodes))
     });
 
@@ -157,23 +191,27 @@ fn test_agent_action_bus() {
 #[test]
 fn test_time_travel_history() {
     let mut initial_sandbox = AgentUiSandbox::new();
-    initial_sandbox.apply_patch(AgentPatch::InsertNode {
-        node_id: 1,
-        parent_id: None,
-        tag: "div".to_string(),
-        props: HashMap::new(),
-        text: Some("Version 1".to_string()),
-    }).unwrap();
+    initial_sandbox
+        .apply_patch(AgentPatch::InsertNode {
+            node_id: 1,
+            parent_id: None,
+            tag: "div".to_string(),
+            props: HashMap::new(),
+            text: Some("Version 1".to_string()),
+        })
+        .unwrap();
 
     let mut history = TimeTravelHistory::new(initial_sandbox);
     assert_eq!(history.total_revisions(), 1);
 
     // Push revision 2
     let mut v2_sandbox = history.current().clone();
-    v2_sandbox.apply_patch(AgentPatch::UpdateText {
-        node_id: 1,
-        text: "Version 2".to_string(),
-    }).unwrap();
+    v2_sandbox
+        .apply_patch(AgentPatch::UpdateText {
+            node_id: 1,
+            text: "Version 2".to_string(),
+        })
+        .unwrap();
     history.push_revision("Update to V2", v2_sandbox);
     assert_eq!(history.total_revisions(), 2);
     assert!(history.current().render_to_html().contains("Version 2"));
@@ -209,8 +247,11 @@ fn test_streaming_ui_parser_chunked_sse() {
     }
 
     // Chunk 3: SSE with keep-alive comments and [DONE]
-    let chunk3 = ": keep-alive\ndata: {\"op\":\"text\",\"id\":2,\"text\":\"Deploying...\"}\ndata: [DONE]\n";
-    let applied = parser.feed_chunk_and_apply(chunk3, &mut sandbox).expect("Apply should succeed");
+    let chunk3 =
+        ": keep-alive\ndata: {\"op\":\"text\",\"id\":2,\"text\":\"Deploying...\"}\ndata: [DONE]\n";
+    let applied = parser
+        .feed_chunk_and_apply(chunk3, &mut sandbox)
+        .expect("Apply should succeed");
     assert_eq!(applied, 1);
     assert_eq!(parser.total_patches(), 3);
 
@@ -226,8 +267,9 @@ fn test_conversational_widgets_render_and_state() {
         "Rollout Production Canary",
         "Approves rolling out canary release to 10% of cluster traffic.",
         "execute_canary_rollout",
-    ).with_param("traffic_pct", "10%")
-     .with_param("region", "us-east-1");
+    )
+    .with_param("traffic_pct", "10%")
+    .with_param("region", "us-east-1");
 
     assert_eq!(approval.status, ApprovalStatus::Pending);
     let bp_pending = approval.render_blueprint();
@@ -242,8 +284,16 @@ fn test_conversational_widgets_render_and_state() {
     // 2. Form Widget
     let mut form = FormWidget::new("form_1", "Cluster Provisioning Parameters");
     form.add_field(FormField::new("cluster_name", "Cluster Name", FormFieldType::Text).required());
-    form.add_field(FormField::new("node_count", "Initial Node Count", FormFieldType::Number));
-    form.add_field(FormField::new("region", "Cloud Region", FormFieldType::Select(vec!["us-east-1".into(), "eu-central-1".into()])));
+    form.add_field(FormField::new(
+        "node_count",
+        "Initial Node Count",
+        FormFieldType::Number,
+    ));
+    form.add_field(FormField::new(
+        "region",
+        "Cloud Region",
+        FormFieldType::Select(vec!["us-east-1".into(), "eu-central-1".into()]),
+    ));
     form.set_value("cluster_name", "prod-telemetry-01");
     let bp_form = form.render_blueprint();
     if let strata_dom::NodeBlueprint::Element { tag, .. } = bp_form {

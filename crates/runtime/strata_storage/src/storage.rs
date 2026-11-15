@@ -1,9 +1,9 @@
 //! Concurrent In-Memory Cache with Bitcask WAL Persistence.
 
+use crate::bitcask::StrataKV;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
-use crate::bitcask::StrataKV;
 
 /// Persistent LocalStorage with instant in-memory reads and background WAL durability.
 #[derive(Clone)]
@@ -35,10 +35,9 @@ impl LocalStorage {
 
     /// Default global LocalStorage instance anchored to `app_data/storage.wal`.
     pub fn default_instance() -> Self {
-        let wal_path = strata_vfs::driver::to_physical_path(&strata_vfs::app_data().join("storage.wal"))
-            .unwrap_or_else(|_| {
-                std::env::temp_dir().join("strata_default_storage.wal")
-            });
+        let wal_path =
+            strata_vfs::driver::to_physical_path(&strata_vfs::app_data().join("storage.wal"))
+                .unwrap_or_else(|_| std::env::temp_dir().join("strata_default_storage.wal"));
         Self::open(wal_path).unwrap_or_else(|_| {
             let tmp_path = std::env::temp_dir().join("strata_default_storage.wal");
             Self::open(tmp_path).expect("Failed to open fallback storage WAL")

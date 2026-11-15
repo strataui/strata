@@ -312,11 +312,7 @@ fn lower_component(comp: &RsxComponent, errors: &mut Vec<String>) -> String {
     )
 }
 
-fn lower_positional_call(
-    full_path: &str,
-    comp: &RsxComponent,
-    errors: &mut Vec<String>,
-) -> String {
+fn lower_positional_call(full_path: &str, comp: &RsxComponent, errors: &mut Vec<String>) -> String {
     let mut arg_exprs = Vec::new();
     for prop in &comp.props {
         match &prop.value {

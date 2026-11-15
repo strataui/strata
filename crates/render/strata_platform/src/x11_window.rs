@@ -312,8 +312,7 @@ impl PureX11Client {
             .map_err(|e| format!("Failed to read X11 setup reply header: {}", e))?;
 
         let status = reply_header[0];
-        let extra_length =
-            u16::from_ne_bytes(reply_header[6..8].try_into().unwrap()) as usize * 4;
+        let extra_length = u16::from_ne_bytes(reply_header[6..8].try_into().unwrap()) as usize * 4;
 
         let mut extra_data = vec![0u8; extra_length];
         stream
@@ -424,8 +423,7 @@ impl PureX11Client {
 
     /// Queries the server for an extension by name.
     pub fn query_extension(&mut self, name: &str) -> Result<Option<u8>, String> {
-        self.encoder
-            .begin_request(X11_OPCODE_QUERY_EXTENSION, 0);
+        self.encoder.begin_request(X11_OPCODE_QUERY_EXTENSION, 0);
         self.encoder.push_u16(name.len() as u16);
         self.encoder.push_u16(0); // Pad
         self.encoder.push_padded_string(name);
@@ -531,8 +529,7 @@ impl PureX11Client {
         shmseg_id: u32,
         shmid: libc::c_int,
     ) -> Result<(), String> {
-        self.encoder
-            .begin_request(shm_major, X11_SHM_OPCODE_ATTACH);
+        self.encoder.begin_request(shm_major, X11_SHM_OPCODE_ATTACH);
         self.encoder.push_u32(shmseg_id);
         self.encoder.push_u32(shmid as u32);
         self.encoder.push_u32(0); // read_only = false
@@ -729,11 +726,7 @@ impl PureX11Window {
         };
         let root = self.client.info.root_window;
         let data = [
-            x as u32,
-            y as u32,
-            direction,
-            button,
-            1, // source indication: normal application
+            x as u32, y as u32, direction, button, 1, // source indication: normal application
         ];
         self.client
             .send_client_message(root, 0x0018_0000, self.window_id, atom, data)
@@ -742,8 +735,12 @@ impl PureX11Window {
     /// Dispatches an EWMH `_NET_WM_STATE` client message for window maximize or restore.
     pub fn set_wm_state_maximized(&mut self, maximized: bool) -> Result<(), String> {
         let wm_state = self.client.intern_atom("_NET_WM_STATE", false)?;
-        let max_vert = self.client.intern_atom("_NET_WM_STATE_MAXIMIZED_VERT", false)?;
-        let max_horz = self.client.intern_atom("_NET_WM_STATE_MAXIMIZED_HORZ", false)?;
+        let max_vert = self
+            .client
+            .intern_atom("_NET_WM_STATE_MAXIMIZED_VERT", false)?;
+        let max_horz = self
+            .client
+            .intern_atom("_NET_WM_STATE_MAXIMIZED_HORZ", false)?;
         let root = self.client.info.root_window;
         let action = if maximized { 1u32 } else { 0u32 };
         let data = [action, max_vert, max_horz, 1, 0];
@@ -776,7 +773,8 @@ impl PureX11Window {
             }
         }
 
-        if let (Some(shm_opcode), Some(ref mut shm)) = (self.client.mit_shm_opcode, self.shm.as_mut())
+        if let (Some(shm_opcode), Some(ref mut shm)) =
+            (self.client.mit_shm_opcode, self.shm.as_mut())
         {
             shm.write_pixels(pixels);
             self.client
@@ -849,8 +847,10 @@ impl PureX11Window {
                         self.config.width = w;
                         self.config.height = h;
                         self.redraw_requested = true;
-                        self.event_queue
-                            .push_back(PlatformEvent::WindowResized { width: w, height: h });
+                        self.event_queue.push_back(PlatformEvent::WindowResized {
+                            width: w,
+                            height: h,
+                        });
                     }
                 }
             }
@@ -1586,9 +1586,11 @@ impl PlatformWindow for X11Window {
                 w.config.mode = mode;
                 w.redraw_requested = true;
                 if mode == WindowMode::Maximized && prev != WindowMode::Maximized {
-                    w.event_queue.push_back(PlatformEvent::WindowMaximized(true));
+                    w.event_queue
+                        .push_back(PlatformEvent::WindowMaximized(true));
                 } else if mode != WindowMode::Maximized && prev == WindowMode::Maximized {
-                    w.event_queue.push_back(PlatformEvent::WindowMaximized(false));
+                    w.event_queue
+                        .push_back(PlatformEvent::WindowMaximized(false));
                 }
             }
         }

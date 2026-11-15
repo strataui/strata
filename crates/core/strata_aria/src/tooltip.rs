@@ -50,7 +50,14 @@ impl TooltipState {
     pub fn trigger_attrs(&self) -> [(&'static str, String); 2] {
         [
             ("aria-describedby", self.id.clone()),
-            ("data-state", if self.is_open.get() { "open".to_string() } else { "closed".to_string() }),
+            (
+                "data-state",
+                if self.is_open.get() {
+                    "open".to_string()
+                } else {
+                    "closed".to_string()
+                },
+            ),
         ]
     }
 

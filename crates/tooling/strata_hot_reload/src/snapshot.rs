@@ -155,7 +155,8 @@ impl GenerationalFieldValue {
                 if bytes.len() < *offset + 4 {
                     return None;
                 }
-                let count = u32::from_le_bytes(bytes[*offset..*offset + 4].try_into().ok()?) as usize;
+                let count =
+                    u32::from_le_bytes(bytes[*offset..*offset + 4].try_into().ok()?) as usize;
                 *offset += 4;
                 let mut list = Vec::with_capacity(count);
                 for _ in 0..count {
@@ -167,14 +168,16 @@ impl GenerationalFieldValue {
                 if bytes.len() < *offset + 4 {
                     return None;
                 }
-                let count = u32::from_le_bytes(bytes[*offset..*offset + 4].try_into().ok()?) as usize;
+                let count =
+                    u32::from_le_bytes(bytes[*offset..*offset + 4].try_into().ok()?) as usize;
                 *offset += 4;
                 let mut record = HashMap::with_capacity(count);
                 for _ in 0..count {
                     if bytes.len() < *offset + 2 {
                         return None;
                     }
-                    let klen = u16::from_le_bytes(bytes[*offset..*offset + 2].try_into().ok()?) as usize;
+                    let klen =
+                        u16::from_le_bytes(bytes[*offset..*offset + 2].try_into().ok()?) as usize;
                     *offset += 2;
                     if bytes.len() < *offset + klen {
                         return None;
@@ -207,10 +210,14 @@ pub enum FieldAction {
 impl std::fmt::Debug for FieldAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Rename { new_name } => f.debug_struct("Rename").field("new_name", new_name).finish(),
-            Self::AddDefault { default_value } => {
-                f.debug_struct("AddDefault").field("default_value", default_value).finish()
-            }
+            Self::Rename { new_name } => f
+                .debug_struct("Rename")
+                .field("new_name", new_name)
+                .finish(),
+            Self::AddDefault { default_value } => f
+                .debug_struct("AddDefault")
+                .field("default_value", default_value)
+                .finish(),
             Self::Remove => write!(f, "Remove"),
             Self::Convert(_) => write!(f, "Convert(<closure>)"),
         }
@@ -626,16 +633,14 @@ impl HotReloadSnapshot {
                 if bytes.len() < offset + 2 {
                     return None;
                 }
-                let k_len =
-                    u16::from_le_bytes(bytes[offset..offset + 2].try_into().ok()?) as usize;
+                let k_len = u16::from_le_bytes(bytes[offset..offset + 2].try_into().ok()?) as usize;
                 offset += 2;
                 if bytes.len() < offset + k_len + 2 {
                     return None;
                 }
                 let k = String::from_utf8(bytes[offset..offset + k_len].to_vec()).ok()?;
                 offset += k_len;
-                let v_len =
-                    u16::from_le_bytes(bytes[offset..offset + 2].try_into().ok()?) as usize;
+                let v_len = u16::from_le_bytes(bytes[offset..offset + 2].try_into().ok()?) as usize;
                 offset += 2;
                 if bytes.len() < offset + v_len {
                     return None;

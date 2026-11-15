@@ -1,7 +1,7 @@
 //! Distributed Positive-Negative (PN) Counter.
 
-use std::collections::HashMap;
 use crate::clock::PeerId;
+use std::collections::HashMap;
 
 /// Conflict-free counter supporting distributed increments and decrements.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

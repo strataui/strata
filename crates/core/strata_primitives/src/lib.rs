@@ -13,30 +13,32 @@
 //! assert_eq!(white.a, 255);
 //! ```
 
-pub mod geom;
-pub mod color;
 pub mod arena;
 pub mod atom;
-pub mod target;
-pub mod quantization;
+pub mod color;
 pub mod entity;
+pub mod geom;
+pub mod quantization;
+pub mod target;
 
-pub use geom::{Point, Size, Rect, EdgeInsets, Transform2D, LayoutUnit, FixedRect, Matrix4x4};
-pub use color::{Rgba, Hsla, Oklch};
 pub use arena::{BumpArena, FrameArenaManager, ThreadLocalArena, DEFAULT_ARENA_CAPACITY};
-pub use atom::{AtomId, AtomTable, intern, resolve};
-pub use target::{is_tui_target, set_tui_target_active};
-pub use quantization::largest_remainder_quantization;
+pub use atom::{intern, resolve, AtomId, AtomTable};
+pub use color::{Hsla, Oklch, Rgba};
 pub use entity::EntityId;
+pub use geom::{EdgeInsets, FixedRect, LayoutUnit, Matrix4x4, Point, Rect, Size, Transform2D};
+pub use quantization::largest_remainder_quantization;
+pub use target::{is_tui_target, set_tui_target_active};
 
 pub mod prelude {
-    pub use crate::geom::{Point, Size, Rect, EdgeInsets, Transform2D, LayoutUnit, FixedRect, Matrix4x4};
-    pub use crate::color::{Rgba, Hsla, Oklch};
     pub use crate::arena::{BumpArena, FrameArenaManager, ThreadLocalArena};
-    pub use crate::atom::{AtomId, AtomTable, intern, resolve};
-    pub use crate::target::{is_tui_target, set_tui_target_active};
-    pub use crate::quantization::largest_remainder_quantization;
+    pub use crate::atom::{intern, resolve, AtomId, AtomTable};
+    pub use crate::color::{Hsla, Oklch, Rgba};
     pub use crate::entity::EntityId;
+    pub use crate::geom::{
+        EdgeInsets, FixedRect, LayoutUnit, Matrix4x4, Point, Rect, Size, Transform2D,
+    };
+    pub use crate::quantization::largest_remainder_quantization;
+    pub use crate::target::{is_tui_target, set_tui_target_active};
 }
 
 #[cfg(test)]
@@ -123,7 +125,10 @@ mod tests {
         assert_eq!(Rgba::parse_hex("#ff0000"), Some(Rgba::RED));
         assert_eq!(Rgba::parse_hex("#00ff00"), Some(Rgba::GREEN));
         assert_eq!(Rgba::parse_hex("#0000ff"), Some(Rgba::BLUE));
-        assert_eq!(Rgba::parse_hex("#12345678"), Some(Rgba::new(0x12, 0x34, 0x56, 0x78)));
+        assert_eq!(
+            Rgba::parse_hex("#12345678"),
+            Some(Rgba::new(0x12, 0x34, 0x56, 0x78))
+        );
 
         // WCAG Black vs White contrast is maximum (21:1)
         let contrast = Rgba::BLACK.contrast_ratio(Rgba::WHITE);
@@ -260,7 +265,10 @@ mod tests {
             alloc_duration, reset_duration
         );
         assert_eq!(arena.allocated_bytes(), 0);
-        assert!(reset_duration.as_micros() < 10, "Reset must complete in <10 microseconds!");
+        assert!(
+            reset_duration.as_micros() < 10,
+            "Reset must complete in <10 microseconds!"
+        );
     }
 
     #[test]

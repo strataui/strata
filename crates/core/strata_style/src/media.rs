@@ -120,8 +120,12 @@ impl MediaFeature {
                 Orientation::Landscape => ctx.viewport_width > ctx.viewport_height,
             },
             MediaFeature::HorizontalViewportSegments(n) => ctx.horizontal_viewport_segments == *n,
-            MediaFeature::MinHorizontalViewportSegments(n) => ctx.horizontal_viewport_segments >= *n,
-            MediaFeature::MaxHorizontalViewportSegments(n) => ctx.horizontal_viewport_segments <= *n,
+            MediaFeature::MinHorizontalViewportSegments(n) => {
+                ctx.horizontal_viewport_segments >= *n
+            }
+            MediaFeature::MaxHorizontalViewportSegments(n) => {
+                ctx.horizontal_viewport_segments <= *n
+            }
             MediaFeature::VerticalViewportSegments(n) => ctx.vertical_viewport_segments == *n,
             MediaFeature::MinVerticalViewportSegments(n) => ctx.vertical_viewport_segments >= *n,
             MediaFeature::MaxVerticalViewportSegments(n) => ctx.vertical_viewport_segments <= *n,
@@ -331,7 +335,10 @@ fn parse_range_feature(input: &str) -> Result<MediaFeature, String> {
     let is_width = lower.contains("width");
     let is_height = lower.contains("height");
     if !is_width && !is_height {
-        return Err(format!("Range query only supported for width and height: '{}'", input));
+        return Err(format!(
+            "Range query only supported for width and height: '{}'",
+            input
+        ));
     }
 
     // Tokenize into operands and operators
@@ -383,7 +390,10 @@ fn parse_range_feature(input: &str) -> Result<MediaFeature, String> {
         let val2 = parse_px_dimension(&tokens[4])?;
 
         if prop != "width" && prop != "height" {
-            return Err(format!("Expected width or height in range query, got '{}'", prop));
+            return Err(format!(
+                "Expected width or height in range query, got '{}'",
+                prop
+            ));
         }
 
         let (min, min_inclusive) = match op1.as_str() {
@@ -403,9 +413,19 @@ fn parse_range_feature(input: &str) -> Result<MediaFeature, String> {
         };
 
         if prop == "width" {
-            Ok(MediaFeature::WidthRange { min, min_inclusive, max, max_inclusive })
+            Ok(MediaFeature::WidthRange {
+                min,
+                min_inclusive,
+                max,
+                max_inclusive,
+            })
         } else {
-            Ok(MediaFeature::HeightRange { min, min_inclusive, max, max_inclusive })
+            Ok(MediaFeature::HeightRange {
+                min,
+                min_inclusive,
+                max,
+                max_inclusive,
+            })
         }
     } else if tokens.len() == 3 {
         let t0_lower = tokens[0].to_ascii_lowercase();
@@ -426,9 +446,19 @@ fn parse_range_feature(input: &str) -> Result<MediaFeature, String> {
             };
 
             if prop == "width" {
-                Ok(MediaFeature::WidthRange { min, min_inclusive, max, max_inclusive })
+                Ok(MediaFeature::WidthRange {
+                    min,
+                    min_inclusive,
+                    max,
+                    max_inclusive,
+                })
             } else {
-                Ok(MediaFeature::HeightRange { min, min_inclusive, max, max_inclusive })
+                Ok(MediaFeature::HeightRange {
+                    min,
+                    min_inclusive,
+                    max,
+                    max_inclusive,
+                })
             }
         } else if t2_lower == "width" || t2_lower == "height" {
             let val = parse_px_dimension(&tokens[0])?;
@@ -445,12 +475,25 @@ fn parse_range_feature(input: &str) -> Result<MediaFeature, String> {
             };
 
             if prop == "width" {
-                Ok(MediaFeature::WidthRange { min, min_inclusive, max, max_inclusive })
+                Ok(MediaFeature::WidthRange {
+                    min,
+                    min_inclusive,
+                    max,
+                    max_inclusive,
+                })
             } else {
-                Ok(MediaFeature::HeightRange { min, min_inclusive, max, max_inclusive })
+                Ok(MediaFeature::HeightRange {
+                    min,
+                    min_inclusive,
+                    max,
+                    max_inclusive,
+                })
             }
         } else {
-            Err(format!("Neither side of comparison is width/height in '{}'", input))
+            Err(format!(
+                "Neither side of comparison is width/height in '{}'",
+                input
+            ))
         }
     } else {
         Err(format!("Invalid range media query syntax: '{}'", input))

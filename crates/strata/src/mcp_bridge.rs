@@ -4,13 +4,13 @@
 //! to active Strata runtime windows, emulating mouse movements with authentic Yaru
 //! cursor overlays, taking high-resolution screenshots, and safely batching UI actions.
 
+use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Mutex;
 use std::time::Duration;
-use serde_json::{json, Value};
 
 use crate::runtime::AppRuntime;
 use strata_platform::{KeyCode, Modifiers, MouseButton};
@@ -80,7 +80,10 @@ fn verify_peer_credentials(stream: &UnixStream) -> Result<(), std::io::Error> {
     if ucred.uid != my_uid {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            format!("Peer UID {} does not match process UID {}", ucred.uid, my_uid),
+            format!(
+                "Peer UID {} does not match process UID {}",
+                ucred.uid, my_uid
+            ),
         ));
     }
 
@@ -92,7 +95,11 @@ fn verify_peer_credentials(stream: &UnixStream) -> Result<(), std::io::Error> {
     use std::os::unix::io::AsRawFd;
 
     extern "C" {
-        fn getpeereid(s: std::os::raw::c_int, euid: *mut u32, egid: *mut u32) -> std::os::raw::c_int;
+        fn getpeereid(
+            s: std::os::raw::c_int,
+            euid: *mut u32,
+            egid: *mut u32,
+        ) -> std::os::raw::c_int;
     }
 
     let fd = stream.as_raw_fd();
@@ -320,7 +327,10 @@ pub fn execute_mcp_command_core(
         "mouse_move" => {
             let x = params.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
             let y = params.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-            let smooth = params.get("smooth").and_then(|v| v.as_bool()).unwrap_or(true);
+            let smooth = params
+                .get("smooth")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
 
             let dirty = runtime.mcp_move_pointer(x, y, smooth);
             let cur_icon = runtime
@@ -342,7 +352,10 @@ pub fn execute_mcp_command_core(
         "mouse_click" => {
             let x = params.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
             let y = params.get("y").and_then(|v| v.as_f64()).map(|f| f as f32);
-            let btn_str = params.get("button").and_then(|b| b.as_str()).unwrap_or("left");
+            let btn_str = params
+                .get("button")
+                .and_then(|b| b.as_str())
+                .unwrap_or("left");
             let count = params.get("count").and_then(|c| c.as_u64()).unwrap_or(1) as usize;
             let button = parse_mouse_button(btn_str);
 
@@ -352,7 +365,10 @@ pub fn execute_mcp_command_core(
         "mouse_down" => {
             let x = params.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
             let y = params.get("y").and_then(|v| v.as_f64()).map(|f| f as f32);
-            let btn_str = params.get("button").and_then(|b| b.as_str()).unwrap_or("left");
+            let btn_str = params
+                .get("button")
+                .and_then(|b| b.as_str())
+                .unwrap_or("left");
             let button = parse_mouse_button(btn_str);
 
             let dirty = runtime.mcp_mouse_down(button, x, y);
@@ -361,15 +377,24 @@ pub fn execute_mcp_command_core(
         "mouse_up" => {
             let x = params.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
             let y = params.get("y").and_then(|v| v.as_f64()).map(|f| f as f32);
-            let btn_str = params.get("button").and_then(|b| b.as_str()).unwrap_or("left");
+            let btn_str = params
+                .get("button")
+                .and_then(|b| b.as_str())
+                .unwrap_or("left");
             let button = parse_mouse_button(btn_str);
 
             let dirty = runtime.mcp_mouse_up(button, x, y);
             (Ok(json!({ "up": true })), dirty || true)
         }
         "mouse_scroll" => {
-            let delta_x = params.get("delta_x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-            let delta_y = params.get("delta_y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let delta_x = params
+                .get("delta_x")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as f32;
+            let delta_y = params
+                .get("delta_y")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as f32;
             let x = params.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
             let y = params.get("y").and_then(|v| v.as_f64()).map(|f| f as f32);
 
@@ -443,19 +468,25 @@ pub fn execute_mcp_command_core(
                         executed += 1;
                     }
                     "down" => {
-                        let btn = parse_mouse_button(act.get("button").and_then(|b| b.as_str()).unwrap_or("left"));
+                        let btn = parse_mouse_button(
+                            act.get("button").and_then(|b| b.as_str()).unwrap_or("left"),
+                        );
                         runtime.mcp_mouse_down(btn, None, None);
                         executed += 1;
                     }
                     "up" => {
-                        let btn = parse_mouse_button(act.get("button").and_then(|b| b.as_str()).unwrap_or("left"));
+                        let btn = parse_mouse_button(
+                            act.get("button").and_then(|b| b.as_str()).unwrap_or("left"),
+                        );
                         runtime.mcp_mouse_up(btn, None, None);
                         executed += 1;
                     }
                     "click" => {
                         let x = act.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
                         let y = act.get("y").and_then(|v| v.as_f64()).map(|f| f as f32);
-                        let btn = parse_mouse_button(act.get("button").and_then(|b| b.as_str()).unwrap_or("left"));
+                        let btn = parse_mouse_button(
+                            act.get("button").and_then(|b| b.as_str()).unwrap_or("left"),
+                        );
                         let count = act.get("count").and_then(|c| c.as_u64()).unwrap_or(1) as usize;
                         runtime.mcp_mouse_click(btn, x, y, count);
                         executed += 1;
@@ -466,7 +497,8 @@ pub fn execute_mcp_command_core(
                         executed += 1;
                     }
                     "key" => {
-                        let key = parse_key_code(act.get("key").and_then(|k| k.as_str()).unwrap_or(""));
+                        let key =
+                            parse_key_code(act.get("key").and_then(|k| k.as_str()).unwrap_or(""));
                         let mods = parse_modifiers(act.get("modifiers"));
                         runtime.mcp_keyboard_key(key, mods);
                         executed += 1;
@@ -480,7 +512,11 @@ pub fn execute_mcp_command_core(
                         executed += 1;
                     }
                     "wait" => {
-                        let ms = act.get("ms").and_then(|m| m.as_u64()).unwrap_or(50).min(5000);
+                        let ms = act
+                            .get("ms")
+                            .and_then(|m| m.as_u64())
+                            .unwrap_or(50)
+                            .min(5000);
                         std::thread::sleep(Duration::from_millis(ms));
                         executed += 1;
                     }

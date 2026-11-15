@@ -23,8 +23,8 @@ impl ThreadLocalArena {
     /// Allocates an additional 32 bytes for SIMD over-read sentry padding.
     pub fn new(capacity: usize) -> Self {
         let total_size = capacity + 32; // 32-byte zero-tail sentry padding
-        let layout = Layout::from_size_align(total_size, 64)
-            .expect("Invalid layout for ThreadLocalArena");
+        let layout =
+            Layout::from_size_align(total_size, 64).expect("Invalid layout for ThreadLocalArena");
 
         let raw = unsafe { alloc_zeroed(layout) };
         let start = NonNull::new(raw).expect("ThreadLocalArena allocation failed");
@@ -167,7 +167,8 @@ impl ThreadLocalArena {
                     std::ptr::drop_in_place(ptr as *mut T);
                 }
                 for i in 0..slice.len() {
-                    self.drop_chain.push((target.add(i) as *mut u8, drop_glue::<T>));
+                    self.drop_chain
+                        .push((target.add(i) as *mut u8, drop_glue::<T>));
                 }
             }
 
@@ -209,7 +210,6 @@ impl Drop for ThreadLocalArena {
         }
     }
 }
-
 
 thread_local! {
     static PER_THREAD_ARENA: std::cell::RefCell<ThreadLocalArena> = std::cell::RefCell::new(ThreadLocalArena::new(1024 * 512));
@@ -268,10 +268,26 @@ mod tests {
         let panic_drops = Arc::new(AtomicUsize::new(0));
 
         let slice = vec![
-            PanicOnClone { id: 0, panic_id: 2, drops: Arc::clone(&panic_drops) },
-            PanicOnClone { id: 1, panic_id: 2, drops: Arc::clone(&panic_drops) },
-            PanicOnClone { id: 2, panic_id: 2, drops: Arc::clone(&panic_drops) },
-            PanicOnClone { id: 3, panic_id: 2, drops: Arc::clone(&panic_drops) },
+            PanicOnClone {
+                id: 0,
+                panic_id: 2,
+                drops: Arc::clone(&panic_drops),
+            },
+            PanicOnClone {
+                id: 1,
+                panic_id: 2,
+                drops: Arc::clone(&panic_drops),
+            },
+            PanicOnClone {
+                id: 2,
+                panic_id: 2,
+                drops: Arc::clone(&panic_drops),
+            },
+            PanicOnClone {
+                id: 3,
+                panic_id: 2,
+                drops: Arc::clone(&panic_drops),
+            },
         ];
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -282,11 +298,16 @@ mod tests {
 
         // Elements 0 and 1 were successfully cloned into arena before panic.
         // RAII guard must have dropped those 2 elements during stack unwind!
-        assert_eq!(panic_drops.load(Ordering::SeqCst), 2, "Initialized elements must be cleaned up on panic");
+        assert_eq!(
+            panic_drops.load(Ordering::SeqCst),
+            2,
+            "Initialized elements must be cleaned up on panic"
+        );
 
         // The arena bump pointer must be rolled back to its pre-allocation state
-        assert_eq!(arena.ptr, initial_bump, "Bump pointer must roll back on panic");
+        assert_eq!(
+            arena.ptr, initial_bump,
+            "Bump pointer must roll back on panic"
+        );
     }
 }
-
-

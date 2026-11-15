@@ -31,7 +31,11 @@ impl TimeTravelHistory {
     }
 
     /// Pushes a new revision snapshot onto the stack, truncating any redo history.
-    pub fn push_revision(&mut self, description: impl Into<String>, sandbox: AgentUiSandbox) -> usize {
+    pub fn push_revision(
+        &mut self,
+        description: impl Into<String>,
+        sandbox: AgentUiSandbox,
+    ) -> usize {
         self.revisions.truncate(self.current_index + 1);
         let revision_id = self.revisions.len();
         self.revisions.push(RevisionSnapshot {

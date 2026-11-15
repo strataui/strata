@@ -38,7 +38,8 @@ fn test_box_shadow_parsing_outer_and_inset() {
 #[test]
 fn test_gradient_parsing_linear_radial_conic() {
     // 1. Linear gradient to right: linear-gradient(to right, #ff0000, #00ff00)
-    let g1 = parse_gradient("linear-gradient(to right, #ff0000, #00ff00)").expect("Linear gradient must parse");
+    let g1 = parse_gradient("linear-gradient(to right, #ff0000, #00ff00)")
+        .expect("Linear gradient must parse");
     match g1 {
         Gradient::Linear { angle_deg, stops } => {
             assert_eq!(angle_deg, 90.0);
@@ -50,7 +51,10 @@ fn test_gradient_parsing_linear_radial_conic() {
     }
 
     // 2. Linear gradient with degrees: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 100%)
-    let g2 = parse_gradient("linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 100%)").expect("Angle linear gradient must parse");
+    let g2 = parse_gradient(
+        "linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 100%)",
+    )
+    .expect("Angle linear gradient must parse");
     match g2 {
         Gradient::Linear { angle_deg, stops } => {
             assert_eq!(angle_deg, 135.0);
@@ -62,7 +66,8 @@ fn test_gradient_parsing_linear_radial_conic() {
     }
 
     // 3. Radial gradient: radial-gradient(circle at center, #ffffff, #000000)
-    let g3 = parse_gradient("radial-gradient(circle at center, #ffffff, #000000)").expect("Radial gradient must parse");
+    let g3 = parse_gradient("radial-gradient(circle at center, #ffffff, #000000)")
+        .expect("Radial gradient must parse");
     match g3 {
         Gradient::Radial { center, stops } => {
             assert_eq!(center, (0.5, 0.5));
@@ -81,7 +86,8 @@ fn test_filter_list_parsing() {
     assert_eq!(f1.operations[1], FilterOp::Brightness(1.2));
 
     // 2. Grayscale and contrast: grayscale(100%) contrast(150%)
-    let f2 = parse_filter_list("grayscale(100%) contrast(150%)").expect("Percentage filters must parse");
+    let f2 =
+        parse_filter_list("grayscale(100%) contrast(150%)").expect("Percentage filters must parse");
     assert_eq!(f2.operations.len(), 2);
     assert_eq!(f2.operations[0], FilterOp::Grayscale(1.0));
     assert_eq!(f2.operations[1], FilterOp::Contrast(1.5));

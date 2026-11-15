@@ -300,7 +300,11 @@ impl KineticScrollController {
     }
 
     /// Computes the vertical scrollbar track and thumb bounding boxes.
-    pub fn vertical_scrollbar_geometry(&self, track_width: f32, margin: f32) -> Option<(Rect, Rect)> {
+    pub fn vertical_scrollbar_geometry(
+        &self,
+        track_width: f32,
+        margin: f32,
+    ) -> Option<(Rect, Rect)> {
         if !self.y.can_scroll() {
             return None;
         }
@@ -309,9 +313,16 @@ impl KineticScrollController {
         let vh = self.y.viewport_size;
         let ch = self.y.content_size;
 
-        let track_rect = Rect::new(vw - track_width - margin, margin, track_width, vh - margin * 2.0);
+        let track_rect = Rect::new(
+            vw - track_width - margin,
+            margin,
+            track_width,
+            vh - margin * 2.0,
+        );
         let min_thumb_len = 24.0f32;
-        let thumb_height = ((vh / ch) * track_rect.height).max(min_thumb_len).min(track_rect.height);
+        let thumb_height = ((vh / ch) * track_rect.height)
+            .max(min_thumb_len)
+            .min(track_rect.height);
         let available_travel = track_rect.height - thumb_height;
         let thumb_y = track_rect.y + self.y.scroll_ratio() * available_travel;
 
@@ -320,7 +331,11 @@ impl KineticScrollController {
     }
 
     /// Computes the horizontal scrollbar track and thumb bounding boxes.
-    pub fn horizontal_scrollbar_geometry(&self, track_height: f32, margin: f32) -> Option<(Rect, Rect)> {
+    pub fn horizontal_scrollbar_geometry(
+        &self,
+        track_height: f32,
+        margin: f32,
+    ) -> Option<(Rect, Rect)> {
         if !self.x.can_scroll() {
             return None;
         }
@@ -329,9 +344,16 @@ impl KineticScrollController {
         let vh = self.y.viewport_size;
         let cw = self.x.content_size;
 
-        let track_rect = Rect::new(margin, vh - track_height - margin, vw - margin * 2.0, track_height);
+        let track_rect = Rect::new(
+            margin,
+            vh - track_height - margin,
+            vw - margin * 2.0,
+            track_height,
+        );
         let min_thumb_len = 24.0f32;
-        let thumb_width = ((vw / cw) * track_rect.width).max(min_thumb_len).min(track_rect.width);
+        let thumb_width = ((vw / cw) * track_rect.width)
+            .max(min_thumb_len)
+            .min(track_rect.width);
         let available_travel = track_rect.width - thumb_width;
         let thumb_x = track_rect.x + self.x.scroll_ratio() * available_travel;
 
@@ -358,7 +380,11 @@ mod tests {
         // Drag past top boundary -> rubber-band resistance
         axis.handle_drag_delta(-300.0);
         assert!(axis.offset < 0.0);
-        assert!(axis.offset > -100.0, "Rubber banding must resist: {}", axis.offset);
+        assert!(
+            axis.offset > -100.0,
+            "Rubber banding must resist: {}",
+            axis.offset
+        );
     }
 
     #[test]

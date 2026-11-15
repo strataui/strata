@@ -38,13 +38,13 @@ pub use bezier::cubic_bezier_solve;
 pub use calc::{get_calc, intern_calc, parse_calc, CalcContext, CalcExpr, CalcId};
 pub use cascade::{CascadeOrigin, CascadeSolver, OriginStyleSheet};
 pub use effects::{interpolate_clip_path, BackdropFilter, ClipPath, FilterList, FilterOp};
-pub use matrix_decomp::{slerp_quaternion, Decomposed2d};
-pub use oklab::{interpolate_color_oklab, oklab_to_rgba, rgba_to_oklab};
 pub use keyframes::{CubicBezier, Keyframe, KeyframeAnimation, KeyframeProperty};
+pub use matrix_decomp::{slerp_quaternion, Decomposed2d};
 pub use media::{
     ColorScheme, DevicePostureQuery, MediaContext, MediaFeature, MediaQuery, MediaQueryList,
     MediaType, Orientation,
 };
+pub use oklab::{interpolate_color_oklab, oklab_to_rgba, rgba_to_oklab};
 pub use palette::lookup_tailwind_color;
 pub use parser::{
     parse_animation_delays, parse_animation_directions, parse_animation_durations,

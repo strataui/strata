@@ -28,4 +28,3 @@ pub fn run_stdio_server_with_socket(socket_path: Option<std::path::PathBuf>) -> 
     let server = McpServer::new(client);
     server.run_stdio()
 }
-

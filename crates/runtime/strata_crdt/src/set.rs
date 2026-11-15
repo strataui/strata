@@ -1,8 +1,8 @@
 //! Observed-Remove Set (OR-Set) with add-tag tracking.
 
+use crate::clock::LamportClock;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use crate::clock::LamportClock;
 
 /// Conflict-free set where elements are tagged with unique add timestamps.
 /// An element is present if its add-tags have not all been observed as removed.

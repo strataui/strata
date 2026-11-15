@@ -1,18 +1,29 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use strata_a11y::{
-    audit_tree, calculate_contrast_ratio, evaluate_normal_text_contrast,
-    relative_luminance, A11yAction, A11yBridge, A11yNode, A11yNodeId, A11yRect, A11yRole,
-    A11yTree, WcagCompliance,
+    audit_tree, calculate_contrast_ratio, evaluate_normal_text_contrast, relative_luminance,
+    A11yAction, A11yBridge, A11yNode, A11yNodeId, A11yRect, A11yRole, A11yTree, WcagCompliance,
 };
 
 #[test]
 fn test_role_resolution() {
     assert_eq!(A11yRole::from_tag_or_role("button", None), A11yRole::Button);
-    assert_eq!(A11yRole::from_tag_or_role("input", None), A11yRole::TextInput);
-    assert_eq!(A11yRole::from_tag_or_role("div", Some("button")), A11yRole::Button);
-    assert_eq!(A11yRole::from_tag_or_role("span", Some("slider")), A11yRole::Slider);
-    assert_eq!(A11yRole::from_tag_or_role("div", Some("dialog")), A11yRole::Dialog);
+    assert_eq!(
+        A11yRole::from_tag_or_role("input", None),
+        A11yRole::TextInput
+    );
+    assert_eq!(
+        A11yRole::from_tag_or_role("div", Some("button")),
+        A11yRole::Button
+    );
+    assert_eq!(
+        A11yRole::from_tag_or_role("span", Some("slider")),
+        A11yRole::Slider
+    );
+    assert_eq!(
+        A11yRole::from_tag_or_role("div", Some("dialog")),
+        A11yRole::Dialog
+    );
 }
 
 #[test]
@@ -28,17 +39,26 @@ fn test_wcag_aaa_contrast_calculations() {
     // Pure white on pure black gives maximum 21:1 contrast ratio
     let max_contrast = calculate_contrast_ratio((255, 255, 255), (0, 0, 0));
     assert!((max_contrast - 21.0).abs() < 0.1);
-    assert_eq!(evaluate_normal_text_contrast(max_contrast), WcagCompliance::Aaa);
+    assert_eq!(
+        evaluate_normal_text_contrast(max_contrast),
+        WcagCompliance::Aaa
+    );
 
     // Low contrast grey (#777777 on #888888) fails WCAG
     let low_contrast = calculate_contrast_ratio((119, 119, 119), (136, 136, 136));
     assert!(low_contrast < 2.0);
-    assert_eq!(evaluate_normal_text_contrast(low_contrast), WcagCompliance::Fail);
+    assert_eq!(
+        evaluate_normal_text_contrast(low_contrast),
+        WcagCompliance::Fail
+    );
 
     // Typical high contrast dark mode (#38bdf8 cyan on #08090a void)
     let strata_theme_contrast = calculate_contrast_ratio((56, 189, 248), (8, 9, 10));
     assert!(strata_theme_contrast >= 7.0);
-    assert_eq!(evaluate_normal_text_contrast(strata_theme_contrast), WcagCompliance::Aaa);
+    assert_eq!(
+        evaluate_normal_text_contrast(strata_theme_contrast),
+        WcagCompliance::Aaa
+    );
 }
 
 #[test]
@@ -52,7 +72,10 @@ fn test_differential_a11y_tree_updates() {
 
     let mut tree1 = A11yTree::new(A11yNodeId(1), root);
     tree1.insert_node(btn);
-    tree1.get_node_mut(A11yNodeId(1)).unwrap().add_child(A11yNodeId(2));
+    tree1
+        .get_node_mut(A11yNodeId(1))
+        .unwrap()
+        .add_child(A11yNodeId(2));
 
     let update1 = bridge.update(tree1);
     assert_eq!(update1.nodes.len(), 2, "Initial push must send all nodes");
@@ -72,8 +95,14 @@ fn test_differential_a11y_tree_updates() {
     let update2 = bridge.update(tree2);
     // Button mutated and Checkbox added, Root node unchanged so not resent
     assert_eq!(update2.nodes.len(), 2);
-    assert!(update2.nodes.iter().any(|(id, n)| id.0 == 2 && n.name.as_deref() == Some("Confirmed!")));
-    assert!(update2.nodes.iter().any(|(id, n)| id.0 == 3 && n.name.as_deref() == Some("Remember me")));
+    assert!(update2
+        .nodes
+        .iter()
+        .any(|(id, n)| id.0 == 2 && n.name.as_deref() == Some("Confirmed!")));
+    assert!(update2
+        .nodes
+        .iter()
+        .any(|(id, n)| id.0 == 3 && n.name.as_deref() == Some("Remember me")));
 }
 
 #[test]
@@ -93,9 +122,15 @@ fn test_automated_accessibility_auditor() {
 
     let violations = audit_tree(&tree);
     assert_eq!(violations.len(), 3);
-    assert!(violations.iter().any(|v| v.rule == "A11Y_RULE_001_MISSING_ACCESSIBLE_NAME" && v.node_id == 2));
-    assert!(violations.iter().any(|v| v.rule == "A11Y_RULE_002_IMAGE_MISSING_ALT" && v.node_id == 3));
-    assert!(violations.iter().any(|v| v.rule == "A11Y_RULE_004_SLIDER_MISSING_BOUNDS" && v.node_id == 4));
+    assert!(violations
+        .iter()
+        .any(|v| v.rule == "A11Y_RULE_001_MISSING_ACCESSIBLE_NAME" && v.node_id == 2));
+    assert!(violations
+        .iter()
+        .any(|v| v.rule == "A11Y_RULE_002_IMAGE_MISSING_ALT" && v.node_id == 3));
+    assert!(violations
+        .iter()
+        .any(|v| v.rule == "A11Y_RULE_004_SLIDER_MISSING_BOUNDS" && v.node_id == 4));
 }
 
 #[test]
@@ -116,9 +151,7 @@ fn test_screen_reader_action_dispatch() {
 
 #[test]
 fn test_accesskit_protocol_serialization_and_adapter() {
-    use strata_a11y::{
-        AccessKitActionRequest, AccessKitAdapter, A11yLivePoliteness,
-    };
+    use strata_a11y::{A11yLivePoliteness, AccessKitActionRequest, AccessKitAdapter};
 
     let mut bridge = A11yBridge::new();
     let clicked = Arc::new(AtomicBool::new(false));
@@ -146,8 +179,12 @@ fn test_accesskit_protocol_serialization_and_adapter() {
     let mut tree = A11yTree::new(A11yNodeId(1), root);
     tree.insert_node(btn);
     tree.insert_node(live_status);
-    tree.get_node_mut(A11yNodeId(1)).unwrap().add_child(A11yNodeId(10));
-    tree.get_node_mut(A11yNodeId(1)).unwrap().add_child(A11yNodeId(20));
+    tree.get_node_mut(A11yNodeId(1))
+        .unwrap()
+        .add_child(A11yNodeId(10));
+    tree.get_node_mut(A11yNodeId(1))
+        .unwrap()
+        .add_child(A11yNodeId(20));
 
     let diff = bridge.update(tree);
     let ak_update = adapter.process_update(&diff, Some(A11yNodeId(1)));
@@ -155,7 +192,10 @@ fn test_accesskit_protocol_serialization_and_adapter() {
     assert_eq!(ak_update.nodes.len(), 3);
     assert_eq!(ak_update.focus, Some(10));
     assert!(ak_update.tree.is_some());
-    assert_eq!(ak_update.tree.as_ref().unwrap().app_name, "Strata EDA Studio");
+    assert_eq!(
+        ak_update.tree.as_ref().unwrap().app_name,
+        "Strata EDA Studio"
+    );
 
     let json = ak_update.to_json();
     assert!(json.contains("\"type\":\"accesskit_tree_update\""));
@@ -172,7 +212,10 @@ fn test_accesskit_protocol_serialization_and_adapter() {
         data: None,
     };
     adapter.handle_action_request(&req, &bridge);
-    assert!(clicked.load(Ordering::SeqCst), "AccessKit action request must trigger bridge callback");
+    assert!(
+        clicked.load(Ordering::SeqCst),
+        "AccessKit action request must trigger bridge callback"
+    );
 }
 
 #[test]
@@ -184,22 +227,18 @@ fn test_dom_blueprint_to_a11y_tree_builder() {
     let blueprint = NodeBlueprint::Element {
         tag: Tag::Div,
         classes: strata_dom::ClassList::empty(),
-        attributes: vec![
-            Attribute::Property {
-                key: "role".to_string(),
-                value: "main".to_string(),
-            },
-        ],
+        attributes: vec![Attribute::Property {
+            key: "role".to_string(),
+            value: "main".to_string(),
+        }],
         children: vec![
             NodeBlueprint::Element {
                 tag: Tag::Button,
                 classes: strata_dom::ClassList::empty(),
-                attributes: vec![
-                    Attribute::Property {
-                        key: "aria-label".to_string(),
-                        value: "Execute Synthesis".to_string(),
-                    },
-                ],
+                attributes: vec![Attribute::Property {
+                    key: "aria-label".to_string(),
+                    value: "Execute Synthesis".to_string(),
+                }],
                 children: vec![NodeBlueprint::Text("Run".to_string())],
             },
             NodeBlueprint::Element {
@@ -234,7 +273,9 @@ fn test_dom_blueprint_to_a11y_tree_builder() {
                         value: "true".to_string(),
                     },
                 ],
-                children: vec![NodeBlueprint::Text("Timing constraint violation: Slack -1.2ns".to_string())],
+                children: vec![NodeBlueprint::Text(
+                    "Timing constraint violation: Slack -1.2ns".to_string(),
+                )],
             },
         ],
     };
@@ -247,22 +288,39 @@ fn test_dom_blueprint_to_a11y_tree_builder() {
     assert!(main_node.is_some());
 
     // Verify button
-    let btn_node = tree.nodes.values().find(|n| n.role == A11yRole::Button).expect("Button node missing");
+    let btn_node = tree
+        .nodes
+        .values()
+        .find(|n| n.role == A11yRole::Button)
+        .expect("Button node missing");
     assert_eq!(btn_node.name.as_deref(), Some("Execute Synthesis"));
     assert!(btn_node.focusable);
     assert!(btn_node.supported_actions.contains(&A11yAction::Click));
 
     // Verify input
-    let input_node = tree.nodes.values().find(|n| n.role == A11yRole::TextInput).expect("TextInput node missing");
+    let input_node = tree
+        .nodes
+        .values()
+        .find(|n| n.role == A11yRole::TextInput)
+        .expect("TextInput node missing");
     assert_eq!(input_node.name.as_deref(), Some("Source File"));
     assert_eq!(input_node.value.as_deref(), Some("top_module.v"));
-    assert!(input_node.supported_actions.contains(&A11yAction::SetValue(String::new())));
+    assert!(input_node
+        .supported_actions
+        .contains(&A11yAction::SetValue(String::new())));
 
     // Verify live alert region
-    let alert_node = tree.nodes.values().find(|n| n.role == A11yRole::Alert).expect("Alert node missing");
+    let alert_node = tree
+        .nodes
+        .values()
+        .find(|n| n.role == A11yRole::Alert)
+        .expect("Alert node missing");
     assert_eq!(alert_node.live, Some(A11yLivePoliteness::Assertive));
     assert!(alert_node.live_atomic);
-    assert_eq!(alert_node.name.as_deref(), Some("Timing constraint violation: Slack -1.2ns"));
+    assert_eq!(
+        alert_node.name.as_deref(),
+        Some("Timing constraint violation: Slack -1.2ns")
+    );
 }
 
 #[test]
@@ -273,23 +331,18 @@ fn test_a11y_tree_layout_bounds_binding() {
     use strata_layout::tree::LayoutNode;
 
     let blueprint = NodeBlueprint::Element {
-
         tag: Tag::Div,
         classes: strata_dom::ClassList::empty(),
         attributes: vec![],
-        children: vec![
-            NodeBlueprint::Element {
-                tag: Tag::Button,
-                classes: strata_dom::ClassList::empty(),
-                attributes: vec![
-                    Attribute::Property {
-                        key: "aria-label".to_string(),
-                        value: "Launch Probe".to_string(),
-                    },
-                ],
-                children: vec![],
-            },
-        ],
+        children: vec![NodeBlueprint::Element {
+            tag: Tag::Button,
+            classes: strata_dom::ClassList::empty(),
+            attributes: vec![Attribute::Property {
+                key: "aria-label".to_string(),
+                value: "Launch Probe".to_string(),
+            }],
+            children: vec![],
+        }],
     };
 
     let mut layout_btn = LayoutNode::new(Default::default());
@@ -300,9 +353,16 @@ fn test_a11y_tree_layout_bounds_binding() {
 
     let tree = build_a11y_tree_with_layout(&blueprint, &layout_root, None);
 
-    let btn_node = tree.nodes.values().find(|n| n.role == A11yRole::Button).expect("Button node missing");
+    let btn_node = tree
+        .nodes
+        .values()
+        .find(|n| n.role == A11yRole::Button)
+        .expect("Button node missing");
 
-    assert!(btn_node.bounds.is_some(), "Button node must have bound layout geometry");
+    assert!(
+        btn_node.bounds.is_some(),
+        "Button node must have bound layout geometry"
+    );
     let bounds = btn_node.bounds.unwrap();
     assert_eq!(bounds.x, 15.0);
     assert_eq!(bounds.y, 25.0);
@@ -326,7 +386,9 @@ fn test_accesskit_native_tree_update_generation() {
 
     let mut tree = A11yTree::new(A11yNodeId(1), root);
     tree.insert_node(btn);
-    tree.get_node_mut(A11yNodeId(1)).unwrap().add_child(A11yNodeId(2));
+    tree.get_node_mut(A11yNodeId(1))
+        .unwrap()
+        .add_child(A11yNodeId(2));
 
     let native_ak_update = adapter.to_accesskit_tree(&tree);
 
@@ -347,11 +409,14 @@ fn test_accesskit_native_tree_update_generation() {
     let e_stop_triggered = Arc::new(AtomicBool::new(false));
     let flag_clone = Arc::clone(&e_stop_triggered);
 
-    bridge.lock().unwrap().set_action_handler(move |id, action| {
-        if id.0 == 2 && action == A11yAction::Click {
-            flag_clone.store(true, Ordering::SeqCst);
-        }
-    });
+    bridge
+        .lock()
+        .unwrap()
+        .set_action_handler(move |id, action| {
+            if id.0 == 2 && action == A11yAction::Click {
+                flag_clone.store(true, Ordering::SeqCst);
+            }
+        });
 
     let mut handler = adapter.create_action_handler(Arc::clone(&bridge));
     let request = accesskit::ActionRequest {
@@ -362,7 +427,10 @@ fn test_accesskit_native_tree_update_generation() {
     };
 
     handler.do_action(request);
-    assert!(e_stop_triggered.load(Ordering::SeqCst), "ActionHandler must execute registered action callback");
+    assert!(
+        e_stop_triggered.load(Ordering::SeqCst),
+        "ActionHandler must execute registered action callback"
+    );
 }
 
 #[test]
@@ -372,24 +440,51 @@ fn test_accesskit_role_and_action_roundtrip_mapping() {
     };
 
     // Role mapping verification
-    assert_eq!(a11y_role_to_accesskit(A11yRole::Button), accesskit::Role::Button);
-    assert_eq!(a11y_role_to_accesskit(A11yRole::Checkbox), accesskit::Role::CheckBox);
-    assert_eq!(a11y_role_to_accesskit(A11yRole::Slider), accesskit::Role::Slider);
-    assert_eq!(a11y_role_to_accesskit(A11yRole::Heading), accesskit::Role::Heading);
-    assert_eq!(a11y_role_to_accesskit(A11yRole::Dialog), accesskit::Role::Dialog);
-    assert_eq!(a11y_role_to_accesskit(A11yRole::TextInput), accesskit::Role::TextInput);
-    assert_eq!(a11y_role_to_accesskit(A11yRole::ProgressBar), accesskit::Role::ProgressIndicator);
+    assert_eq!(
+        a11y_role_to_accesskit(A11yRole::Button),
+        accesskit::Role::Button
+    );
+    assert_eq!(
+        a11y_role_to_accesskit(A11yRole::Checkbox),
+        accesskit::Role::CheckBox
+    );
+    assert_eq!(
+        a11y_role_to_accesskit(A11yRole::Slider),
+        accesskit::Role::Slider
+    );
+    assert_eq!(
+        a11y_role_to_accesskit(A11yRole::Heading),
+        accesskit::Role::Heading
+    );
+    assert_eq!(
+        a11y_role_to_accesskit(A11yRole::Dialog),
+        accesskit::Role::Dialog
+    );
+    assert_eq!(
+        a11y_role_to_accesskit(A11yRole::TextInput),
+        accesskit::Role::TextInput
+    );
+    assert_eq!(
+        a11y_role_to_accesskit(A11yRole::ProgressBar),
+        accesskit::Role::ProgressIndicator
+    );
 
     // Action round-trip verification
     let click = A11yAction::Click;
     let ak_click = a11y_action_to_accesskit(&click);
     assert_eq!(ak_click, accesskit::Action::Click);
-    assert_eq!(accesskit_action_to_a11y(ak_click, None), Some(A11yAction::Click));
+    assert_eq!(
+        accesskit_action_to_a11y(ak_click, None),
+        Some(A11yAction::Click)
+    );
 
     let focus = A11yAction::Focus;
     let ak_focus = a11y_action_to_accesskit(&focus);
     assert_eq!(ak_focus, accesskit::Action::Focus);
-    assert_eq!(accesskit_action_to_a11y(ak_focus, None), Some(A11yAction::Focus));
+    assert_eq!(
+        accesskit_action_to_a11y(ak_focus, None),
+        Some(A11yAction::Focus)
+    );
 
     let val_data = accesskit::ActionData::Value("new text".into());
     assert_eq!(
@@ -397,6 +492,3 @@ fn test_accesskit_role_and_action_roundtrip_mapping() {
         Some(A11yAction::SetValue("new text".to_string()))
     );
 }
-
-
-

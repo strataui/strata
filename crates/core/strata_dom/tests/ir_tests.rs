@@ -80,7 +80,10 @@ fn test_generational_memo_cache() {
 
     let entry = MemoEntry {
         memo_hash: hash_v1,
-        display_chunk: DisplayChunkRange { start: 0, count: 12 },
+        display_chunk: DisplayChunkRange {
+            start: 0,
+            count: 12,
+        },
         layout_rect: FixedRect::from_f32(0.0, 0.0, 300.0, 200.0),
     };
 

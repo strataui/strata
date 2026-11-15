@@ -170,7 +170,12 @@ pub struct GpuPathUniforms {
 impl GpuPathUniforms {
     pub const BYTE_SIZE: usize = std::mem::size_of::<Self>();
 
-    pub fn new(viewport_width: f32, viewport_height: f32, tolerance: f32, curve_count: u32) -> Self {
+    pub fn new(
+        viewport_width: f32,
+        viewport_height: f32,
+        tolerance: f32,
+        curve_count: u32,
+    ) -> Self {
         Self {
             viewport_size: [viewport_width, viewport_height],
             tolerance,

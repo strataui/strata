@@ -23,8 +23,7 @@ fn sample_view() -> View {
 fn test_dispatch_native_platform_window_resize_and_scale() {
     let mut runtime = AppRuntime::new(sample_view(), 800.0, 600.0, 1.0);
     let mut compositor = SwapchainCompositor::new(800, 600, 1.0);
-    let mut presenter =
-        SoftwareSurfacePresenter::new(800, 600, SwapchainFormat::Bgra8Unorm);
+    let mut presenter = SoftwareSurfacePresenter::new(800, 600, SwapchainFormat::Bgra8Unorm);
     let mut hook = |_: &PlatformEvent, _: &mut AppRuntime| false;
 
     let resize_event = PlatformEvent::WindowResized {
@@ -71,8 +70,7 @@ fn test_dispatch_native_platform_scroll_events() {
     };
     let mut runtime = AppRuntime::new(scroll_view, 800.0, 600.0, 1.0);
     let mut compositor = SwapchainCompositor::new(800, 600, 1.0);
-    let mut presenter =
-        SoftwareSurfacePresenter::new(800, 600, SwapchainFormat::Bgra8Unorm);
+    let mut presenter = SoftwareSurfacePresenter::new(800, 600, SwapchainFormat::Bgra8Unorm);
     let mut hook = |_: &PlatformEvent, _: &mut AppRuntime| false;
 
     runtime.last_mouse_pos = (50.0, 50.0);
@@ -97,8 +95,7 @@ fn test_dispatch_native_platform_scroll_events() {
 fn test_dispatch_native_platform_mouse_and_double_click() {
     let mut runtime = AppRuntime::new(sample_view(), 800.0, 600.0, 1.0);
     let mut compositor = SwapchainCompositor::new(800, 600, 1.0);
-    let mut presenter =
-        SoftwareSurfacePresenter::new(800, 600, SwapchainFormat::Bgra8Unorm);
+    let mut presenter = SoftwareSurfacePresenter::new(800, 600, SwapchainFormat::Bgra8Unorm);
     let mut hook = |_: &PlatformEvent, _: &mut AppRuntime| false;
 
     let move_event = PlatformEvent::MouseMove { x: 50.0, y: 50.0 };
@@ -159,8 +156,7 @@ fn test_dispatch_native_platform_mouse_and_double_click() {
 fn test_dispatch_native_platform_keyboard_events() {
     let mut runtime = AppRuntime::new(sample_view(), 800.0, 600.0, 1.0);
     let mut compositor = SwapchainCompositor::new(800, 600, 1.0);
-    let mut presenter =
-        SoftwareSurfacePresenter::new(800, 600, SwapchainFormat::Bgra8Unorm);
+    let mut presenter = SoftwareSurfacePresenter::new(800, 600, SwapchainFormat::Bgra8Unorm);
     let mut hook = |_: &PlatformEvent, _: &mut AppRuntime| false;
 
     let key_down = PlatformEvent::KeyDown {
@@ -204,8 +200,7 @@ fn test_dispatch_native_platform_keyboard_events() {
 fn test_dispatch_native_platform_window_close() {
     let mut runtime = AppRuntime::new(sample_view(), 800.0, 600.0, 1.0);
     let mut compositor = SwapchainCompositor::new(800, 600, 1.0);
-    let mut presenter =
-        SoftwareSurfacePresenter::new(800, 600, SwapchainFormat::Bgra8Unorm);
+    let mut presenter = SoftwareSurfacePresenter::new(800, 600, SwapchainFormat::Bgra8Unorm);
     let mut hook = |_: &PlatformEvent, _: &mut AppRuntime| false;
 
     let close_event = PlatformEvent::WindowCloseRequested;
@@ -294,4 +289,3 @@ fn test_compute_idle_sleep_pacing_states() {
     assert_eq!(dirty_sleep, std::time::Duration::from_millis(16));
     let _ = strata_dom::reactive::take_dirty_signals();
 }
-

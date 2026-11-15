@@ -134,11 +134,9 @@ impl HotReloader {
             }
             let bytes = snapshot.encode();
             unsafe {
-                if let Ok(hydrate_sym) =
-                    lib.get::<unsafe extern "C" fn(*const u8, usize) -> i32>(
-                        b"strata_hot_reload_hydrate\0",
-                    )
-                {
+                if let Ok(hydrate_sym) = lib.get::<unsafe extern "C" fn(*const u8, usize) -> i32>(
+                    b"strata_hot_reload_hydrate\0",
+                ) {
                     let res = hydrate_sym(bytes.as_ptr(), bytes.len());
                     if res != 0 {
                         return HotReloadMessage::PatchFailed {
@@ -208,7 +206,9 @@ impl HotReloader {
                         if res == 0 {
                             Ok(())
                         } else {
-                            Err(format!("strata_hot_reload_hydrate returned error code {res}"))
+                            Err(format!(
+                                "strata_hot_reload_hydrate returned error code {res}"
+                            ))
                         }
                     }
                     Err(err) => Err(format!("Symbol strata_hot_reload_hydrate not found: {err}")),

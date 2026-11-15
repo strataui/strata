@@ -253,7 +253,8 @@ pub fn cairo_draw_shadow(
 
     // CSS Backgrounds and Borders Level 3: clip out the element's own rounded border-box
     // via Even-Odd fill rule so outer drop shadows never darken translucent glass interiors.
-    let max_expand = (shadow.spread_radius.max(0.0) + shadow.blur_radius.max(0.0) * 1.5 + 8.0) as f64;
+    let max_expand =
+        (shadow.spread_radius.max(0.0) + shadow.blur_radius.max(0.0) * 1.5 + 8.0) as f64;
     let bx1 = bounds.x as f64;
     let by1 = bounds.y as f64;
     let bx2 = (bounds.x + bounds.width) as f64;
@@ -391,7 +392,8 @@ fn resolve_gradient_stop_positions(stops: &[strata_style::types::ColorStop]) -> 
     if n == 0 {
         return Vec::new();
     }
-    let mut positions: Vec<Option<f64>> = stops.iter().map(|s| s.position.map(|p| p as f64)).collect();
+    let mut positions: Vec<Option<f64>> =
+        stops.iter().map(|s| s.position.map(|p| p as f64)).collect();
     if positions[0].is_none() {
         positions[0] = Some(0.0);
     }
@@ -643,9 +645,15 @@ fn apply_color_filter_op_premul(buf: &mut [u8], op: strata_style::effects::Filte
             let t = amount.clamp(0.0, 1.0);
             for px in buf.chunks_exact_mut(4) {
                 let a = px[3] as f32;
-                px[0] = (px[0] as f32 + (a - 2.0 * px[0] as f32) * t).round().clamp(0.0, a) as u8;
-                px[1] = (px[1] as f32 + (a - 2.0 * px[1] as f32) * t).round().clamp(0.0, a) as u8;
-                px[2] = (px[2] as f32 + (a - 2.0 * px[2] as f32) * t).round().clamp(0.0, a) as u8;
+                px[0] = (px[0] as f32 + (a - 2.0 * px[0] as f32) * t)
+                    .round()
+                    .clamp(0.0, a) as u8;
+                px[1] = (px[1] as f32 + (a - 2.0 * px[1] as f32) * t)
+                    .round()
+                    .clamp(0.0, a) as u8;
+                px[2] = (px[2] as f32 + (a - 2.0 * px[2] as f32) * t)
+                    .round()
+                    .clamp(0.0, a) as u8;
             }
         }
         FilterOp::Sepia(amount) => {
@@ -722,13 +730,10 @@ pub fn cairo_apply_backdrop_filter(
     let by2 = d0y.max(d1y);
 
     let dev_scale = ((bx2 - bx1) / bounds.width as f64).abs().max(1.0);
-    let max_blur = filter
-        .operations
-        .iter()
-        .fold(0.0_f64, |acc, op| match op {
-            strata_style::effects::FilterOp::Blur(r) => acc.max(*r as f64),
-            _ => acc,
-        });
+    let max_blur = filter.operations.iter().fold(0.0_f64, |acc, op| match op {
+        strata_style::effects::FilterOp::Blur(r) => acc.max(*r as f64),
+        _ => acc,
+    });
     let pad = ((max_blur * dev_scale).ceil() as i32).clamp(0, 128);
 
     let (cx1, cy1, cx2, cy2) = if let Ok((ux1, uy1, ux2, uy2)) = cr.clip_extents() {
@@ -1988,34 +1993,35 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                 let _ = cr.restore();
             }
             DrawCommand::DrawImage { bounds, image }
-                if bounds.width > 0.0 && bounds.height > 0.0 => {
-                    let decoded = cairo::ImageSurface::create_from_png(&mut std::io::Cursor::new(
-                        &image.data[..],
-                    ));
-                    if let Ok(surface) = decoded {
-                        let surface_w = surface.width() as f64;
-                        let surface_h = surface.height() as f64;
-                        if surface_w > 0.0 && surface_h > 0.0 {
-                            let _ = cr.save();
-                            cr.rectangle(
-                                bounds.x as f64,
-                                bounds.y as f64,
-                                bounds.width as f64,
-                                bounds.height as f64,
-                            );
-                            cr.clip();
-                            cr.translate(bounds.x as f64, bounds.y as f64);
-                            cr.scale(
-                                bounds.width as f64 / surface_w,
-                                bounds.height as f64 / surface_h,
-                            );
-                            let _ = cr.set_source_surface(&surface, 0.0, 0.0);
-                            cr.source().set_filter(cairo::Filter::Good);
-                            let _ = cr.paint();
-                            let _ = cr.restore();
-                        }
+                if bounds.width > 0.0 && bounds.height > 0.0 =>
+            {
+                let decoded = cairo::ImageSurface::create_from_png(&mut std::io::Cursor::new(
+                    &image.data[..],
+                ));
+                if let Ok(surface) = decoded {
+                    let surface_w = surface.width() as f64;
+                    let surface_h = surface.height() as f64;
+                    if surface_w > 0.0 && surface_h > 0.0 {
+                        let _ = cr.save();
+                        cr.rectangle(
+                            bounds.x as f64,
+                            bounds.y as f64,
+                            bounds.width as f64,
+                            bounds.height as f64,
+                        );
+                        cr.clip();
+                        cr.translate(bounds.x as f64, bounds.y as f64);
+                        cr.scale(
+                            bounds.width as f64 / surface_w,
+                            bounds.height as f64 / surface_h,
+                        );
+                        let _ = cr.set_source_surface(&surface, 0.0, 0.0);
+                        cr.source().set_filter(cairo::Filter::Good);
+                        let _ = cr.paint();
+                        let _ = cr.restore();
                     }
                 }
+            }
             DrawCommand::DrawViewport3D { bounds, scene }
                 if bounds.width > 0.0 && bounds.height > 0.0 =>
             {
@@ -2030,7 +2036,9 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                     scene.textures_deref(),
                 );
 
-                if let Ok(mut surface) = cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32) {
+                if let Ok(mut surface) =
+                    cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32)
+                {
                     if let Ok(mut data) = surface.data() {
                         for (src, dst) in fb.pixels.chunks_exact(4).zip(data.chunks_exact_mut(4)) {
                             let r = src[0] as u32;
@@ -2122,7 +2130,10 @@ pub fn render_to_png_bytes(
     display_list: &DisplayList,
     width: i32,
     height: i32,
-    cursor_overlay: Option<(&crate::mcp_cursor::McpCursorState, &crate::cursor_theme::CursorTheme)>,
+    cursor_overlay: Option<(
+        &crate::mcp_cursor::McpCursorState,
+        &crate::cursor_theme::CursorTheme,
+    )>,
 ) -> Result<Vec<u8>, String> {
     let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, width, height)
         .map_err(|e| format!("Failed to create Cairo image surface: {:?}", e))?;

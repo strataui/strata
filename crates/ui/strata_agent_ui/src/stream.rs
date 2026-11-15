@@ -27,7 +27,9 @@ impl StreamingUiParser {
 
         // Process all complete lines
         while let Some(newline_pos) = self.buffer.find('\n') {
-            let line = self.buffer[..newline_pos].trim_end_matches('\r').to_string();
+            let line = self.buffer[..newline_pos]
+                .trim_end_matches('\r')
+                .to_string();
             self.buffer.drain(..=newline_pos);
 
             let trimmed = line.trim();

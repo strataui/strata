@@ -5,11 +5,11 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixListener;
+use strata_platform::window::WindowConfig;
 use strata_platform::x11_window::{
     default_x11_socket_path, map_x11_pure_keycode, PureX11Window, X11ShmSegment, X11WireDecoder,
     X11WireEncoder, X11_OPCODE_CREATE_WINDOW, X11_OPCODE_QUERY_EXTENSION,
 };
-use strata_platform::window::WindowConfig;
 use strata_platform::{KeyCode, MouseButton, PlatformEvent};
 
 #[test]
@@ -265,7 +265,8 @@ fn test_x11_32_byte_event_packet_decoding() {
     });
 
     let config = WindowConfig::default();
-    let mut win = PureX11Window::connect_to_socket(&socket_path_str, config).expect("Connect window");
+    let mut win =
+        PureX11Window::connect_to_socket(&socket_path_str, config).expect("Connect window");
 
     // Sleep briefly to allow server events to flush into socket
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -277,12 +278,33 @@ fn test_x11_32_byte_event_packet_decoding() {
     let has_motion = events.iter().any(|e| {
         matches!(e, PlatformEvent::MouseMove { x, y } if (*x - 250.0).abs() < 1.0 && (*y - 350.0).abs() < 1.0)
     });
-    let has_key = events.iter().any(|e| matches!(e, PlatformEvent::KeyDown { key: KeyCode::KeyA, .. }));
-    let has_char = events.iter().any(|e| matches!(e, PlatformEvent::ReceivedCharacter('a')));
-    let has_click = events.iter().any(|e| matches!(e, PlatformEvent::MouseDown { button: MouseButton::Left, .. }));
+    let has_key = events.iter().any(|e| {
+        matches!(
+            e,
+            PlatformEvent::KeyDown {
+                key: KeyCode::KeyA,
+                ..
+            }
+        )
+    });
+    let has_char = events
+        .iter()
+        .any(|e| matches!(e, PlatformEvent::ReceivedCharacter('a')));
+    let has_click = events.iter().any(|e| {
+        matches!(
+            e,
+            PlatformEvent::MouseDown {
+                button: MouseButton::Left,
+                ..
+            }
+        )
+    });
 
     assert!(has_motion, "Expected MouseMove event from X11 wire");
     assert!(has_key, "Expected KeyDown(KeyA) event from X11 wire");
-    assert!(has_char, "Expected ReceivedCharacter('a') event from X11 wire");
+    assert!(
+        has_char,
+        "Expected ReceivedCharacter('a') event from X11 wire"
+    );
     assert!(has_click, "Expected MouseDown(Left) event from X11 wire");
 }

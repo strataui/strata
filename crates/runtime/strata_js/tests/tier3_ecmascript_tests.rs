@@ -34,7 +34,10 @@ fn test_shared_object_reference_semantics() {
 
     let origin = engine.globals.get("origin").expect("origin object");
     assert_eq!(origin.get_property("count"), Some(JsValue::Number(42.0)));
-    assert_eq!(origin.get_property("name"), Some(JsValue::String("strata".to_string())));
+    assert_eq!(
+        origin.get_property("name"),
+        Some(JsValue::String("strata".to_string()))
+    );
 
     let items = origin.get_property("items").expect("items array");
     if let JsValue::Array(ref arr) = items {
@@ -51,7 +54,10 @@ fn test_shared_object_reference_semantics() {
         panic!("items must be an array");
     }
 
-    assert_eq!(engine.globals.get("isIdentical"), Some(&JsValue::Bool(true)));
+    assert_eq!(
+        engine.globals.get("isIdentical"),
+        Some(&JsValue::Bool(true))
+    );
 }
 
 #[test]
@@ -64,7 +70,10 @@ fn test_strict_mode_enforcement() {
         undeclaredVar = 100;
     "#;
     let res = engine.eval(strict_err_script);
-    assert!(res.is_err(), "Strict mode should reject undeclared variable assignments");
+    assert!(
+        res.is_err(),
+        "Strict mode should reject undeclared variable assignments"
+    );
     assert!(
         res.unwrap_err().contains("ReferenceError"),
         "Error message should mention ReferenceError"
@@ -76,7 +85,10 @@ fn test_strict_mode_enforcement() {
         declaredLater = 200;
     "#;
     let ok_res = non_strict_engine.eval(non_strict_script);
-    assert!(ok_res.is_ok(), "Non-strict mode allows global property creation");
+    assert!(
+        ok_res.is_ok(),
+        "Non-strict mode allows global property creation"
+    );
     assert_eq!(
         non_strict_engine.globals.get("declaredLater"),
         Some(&JsValue::Number(200.0))
@@ -118,10 +130,19 @@ fn test_proxy_traps_and_reflect_api() {
     engine.eval(script).expect("eval proxy and reflect");
 
     assert_eq!(engine.globals.get("readX"), Some(&JsValue::Number(10.0)));
-    assert_eq!(engine.globals.get("readVirtual"), Some(&JsValue::Number(999.0)));
+    assert_eq!(
+        engine.globals.get("readVirtual"),
+        Some(&JsValue::Number(999.0))
+    );
     assert_eq!(engine.globals.get("hasX"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("hasMissing"), Some(&JsValue::Bool(false)));
-    assert_eq!(engine.globals.get("hasYAfterDelete"), Some(&JsValue::Bool(false)));
+    assert_eq!(
+        engine.globals.get("hasMissing"),
+        Some(&JsValue::Bool(false))
+    );
+    assert_eq!(
+        engine.globals.get("hasYAfterDelete"),
+        Some(&JsValue::Bool(false))
+    );
 
     let target_val = engine.globals.get("target").expect("target");
     assert_eq!(target_val.get_property("z"), Some(JsValue::Number(30.0)));
@@ -156,14 +177,26 @@ fn test_weak_collections_and_weak_ref() {
     "#;
     engine.eval(script).expect("eval weak collections");
 
-    assert_eq!(engine.globals.get("getVal1"), Some(&JsValue::String("val1".to_string())));
+    assert_eq!(
+        engine.globals.get("getVal1"),
+        Some(&JsValue::String("val1".to_string()))
+    );
     assert_eq!(engine.globals.get("hasKey1"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("hasKey1AfterDel"), Some(&JsValue::Bool(false)));
+    assert_eq!(
+        engine.globals.get("hasKey1AfterDel"),
+        Some(&JsValue::Bool(false))
+    );
 
     assert_eq!(engine.globals.get("wsHasKey2"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("wsHasKey2AfterDel"), Some(&JsValue::Bool(false)));
+    assert_eq!(
+        engine.globals.get("wsHasKey2AfterDel"),
+        Some(&JsValue::Bool(false))
+    );
 
-    assert_eq!(engine.globals.get("derefVal"), Some(&JsValue::String("active".to_string())));
+    assert_eq!(
+        engine.globals.get("derefVal"),
+        Some(&JsValue::String("active".to_string()))
+    );
 }
 
 #[test]
@@ -248,8 +281,14 @@ fn test_bigint_arithmetic_bitwise_and_coercion() {
 
     assert_eq!(engine.globals.get("isLess"), Some(&JsValue::Bool(true)));
     assert_eq!(engine.globals.get("isEq"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("isNotStrictEqNumber"), Some(&JsValue::Bool(false)));
-    assert_eq!(engine.globals.get("isLooseEqNumber"), Some(&JsValue::Bool(true)));
+    assert_eq!(
+        engine.globals.get("isNotStrictEqNumber"),
+        Some(&JsValue::Bool(false))
+    );
+    assert_eq!(
+        engine.globals.get("isLooseEqNumber"),
+        Some(&JsValue::Bool(true))
+    );
     assert_eq!(
         engine.globals.get("parsedBigInt"),
         Some(&JsValue::BigInt("9007199254740993".parse().unwrap()))
@@ -329,8 +368,14 @@ fn test_date_api_methods() {
     "#;
     engine.eval(script).expect("eval date methods");
 
-    assert_eq!(engine.globals.get("timeVal"), Some(&JsValue::Number(1700000000000.0)));
-    assert_eq!(engine.globals.get("yearVal"), Some(&JsValue::Number(2023.0)));
+    assert_eq!(
+        engine.globals.get("timeVal"),
+        Some(&JsValue::Number(1700000000000.0))
+    );
+    assert_eq!(
+        engine.globals.get("yearVal"),
+        Some(&JsValue::Number(2023.0))
+    );
 
     if let Some(JsValue::String(ref iso)) = engine.globals.get("isoStr") {
         assert!(iso.starts_with("2023-11-14T"));
@@ -358,7 +403,9 @@ fn test_bitwise_and_exponentiation_operators() {
         var exp1 = 2 ** 8;
         var exp2 = 3 ** 3;
     "#;
-    engine.eval(script).expect("eval bitwise and exponentiation");
+    engine
+        .eval(script)
+        .expect("eval bitwise and exponentiation");
 
     assert_eq!(engine.globals.get("bit_and"), Some(&JsValue::Number(8.0)));
     assert_eq!(engine.globals.get("bit_or"), Some(&JsValue::Number(14.0)));
@@ -381,12 +428,20 @@ fn test_promise_first_class_reference_semantics() {
         var p2 = Promise.resolve(200);
         var p2NotP1 = (p1 !== p2);
     "#;
-    engine.eval(script).expect("eval promise reference semantics");
+    engine
+        .eval(script)
+        .expect("eval promise reference semantics");
 
     let p1 = engine.globals.get("p1").expect("p1 promise");
     assert!(p1.is_promise(), "p1 must be a first-class JsValue::Promise");
-    assert_eq!(engine.globals.get("typeOfP1"), Some(&JsValue::String("object".to_string())));
-    assert_eq!(engine.globals.get("p1IsSelfIdentical"), Some(&JsValue::Bool(true)));
+    assert_eq!(
+        engine.globals.get("typeOfP1"),
+        Some(&JsValue::String("object".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("p1IsSelfIdentical"),
+        Some(&JsValue::Bool(true))
+    );
     assert_eq!(engine.globals.get("p2NotP1"), Some(&JsValue::Bool(true)));
     assert!(p1.is_truthy());
     assert_eq!(p1.to_json_string(), "{}");
@@ -408,7 +463,9 @@ fn test_async_await_cooperative_settlement() {
         }
         main();
     "#;
-    engine.eval(script).expect("eval async await cooperative settlement");
+    engine
+        .eval(script)
+        .expect("eval async await cooperative settlement");
     strata_js::promise::drain_microtasks();
 
     assert_eq!(engine.globals.get("result"), Some(&JsValue::Number(42.0)));
@@ -431,9 +488,14 @@ fn test_async_await_timer_progression() {
         }
         main();
     "#;
-    engine.eval(script).expect("eval async await timer progression");
+    engine
+        .eval(script)
+        .expect("eval async await timer progression");
     assert_eq!(engine.globals.get("finished"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("message"), Some(&JsValue::String("success".to_string())));
+    assert_eq!(
+        engine.globals.get("message"),
+        Some(&JsValue::String("success".to_string()))
+    );
 }
 
 #[test]
@@ -447,7 +509,12 @@ fn test_no_promise_dictionary_tagging() {
         var hasPromiseId = (p.__promise_id__ !== undefined);
     "#;
     engine.eval(script).expect("eval promise tagging check");
-    assert_eq!(engine.globals.get("isPromiseTagged"), Some(&JsValue::Bool(false)));
-    assert_eq!(engine.globals.get("hasPromiseId"), Some(&JsValue::Bool(false)));
+    assert_eq!(
+        engine.globals.get("isPromiseTagged"),
+        Some(&JsValue::Bool(false))
+    );
+    assert_eq!(
+        engine.globals.get("hasPromiseId"),
+        Some(&JsValue::Bool(false))
+    );
 }
-

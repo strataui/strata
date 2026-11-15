@@ -5,11 +5,7 @@ pub struct WasmHarnessGenerator;
 
 impl WasmHarnessGenerator {
     /// Generates the HTML5 host page mounting the Web-WASM canvas surface.
-    pub fn generate_index_html(
-        app_title: &str,
-        canvas_id: &str,
-        loader_js_path: &str,
-    ) -> String {
+    pub fn generate_index_html(app_title: &str, canvas_id: &str, loader_js_path: &str) -> String {
         format!(
             r#"<!DOCTYPE html>
 <html lang="en">
@@ -52,10 +48,7 @@ impl WasmHarnessGenerator {
     }
 
     /// Generates the JavaScript loader script handling WASM instantiating, HiDPI DPR scaling, and event pumps.
-    pub fn generate_wasm_loader_js(
-        canvas_id: &str,
-        wasm_binary_path: &str,
-    ) -> String {
+    pub fn generate_wasm_loader_js(canvas_id: &str, wasm_binary_path: &str) -> String {
         format!(
             r#"// Strata Web-WASM Host Harness & Event Pump
 const canvas = document.getElementById('{canvas_id}');

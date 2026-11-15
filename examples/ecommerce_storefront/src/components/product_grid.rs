@@ -1,7 +1,7 @@
 //! Product Grid Catalog for Apex Athletics Storefront.
 
-use strata::prelude::*;
 use crate::state::StoreState;
+use strata::prelude::*;
 
 #[component]
 pub fn ProductGrid(state: StoreState) -> View {

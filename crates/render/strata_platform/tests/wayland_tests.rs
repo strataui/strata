@@ -3,12 +3,12 @@
 
 #![cfg(target_os = "linux")]
 
+use std::io::{Read, Write};
+use std::os::unix::net::UnixListener;
 use strata_platform::raw_abi::wayland::{WaylandHeader, WL_DISPLAY_ID, WL_DISPLAY_SYNC};
 use strata_platform::wayland_window::{ShmBuffer, WaylandDecoder, WaylandEncoder, WaylandWindow};
 use strata_platform::window::WindowConfig;
 use strata_platform::PlatformEvent;
-use std::io::{Read, Write};
-use std::os::unix::net::UnixListener;
 
 #[test]
 fn test_wayland_header_roundtrip() {
@@ -73,7 +73,8 @@ fn test_wayland_encoder_alignment() {
 fn test_wayland_shm_buffer_allocation_and_write() {
     let width = 64;
     let height = 64;
-    let mut shm = ShmBuffer::new(10, 11, width, height).expect("ShmBuffer allocation should succeed");
+    let mut shm =
+        ShmBuffer::new(10, 11, width, height).expect("ShmBuffer allocation should succeed");
     assert_eq!(shm.size, (64 * 64 * 4));
     assert!(!shm.ptr.is_null());
 
@@ -234,7 +235,9 @@ fn test_wayland_pointer_motion_and_keyboard_events() {
 
     let mut win = WaylandWindow::new(WindowConfig::default())
         .expect("WaylandWindow handshake should succeed");
-    let mut client_sock = server_thread.join().expect("Join mock Wayland server thread");
+    let mut client_sock = server_thread
+        .join()
+        .expect("Join mock Wayland server thread");
     let _ = std::fs::remove_file(&socket_path);
 
     let _ = client_sock.set_nonblocking(true);
@@ -270,8 +273,12 @@ fn test_wayland_pointer_motion_and_keyboard_events() {
     let has_move = events.iter().any(|e| {
         matches!(e, PlatformEvent::MouseMove { x, y } if (*x - 150.0).abs() < 1.0 && (*y - 200.0).abs() < 1.0)
     });
-    let has_char = events.iter().any(|e| matches!(e, PlatformEvent::ReceivedCharacter('a')));
+    let has_char = events
+        .iter()
+        .any(|e| matches!(e, PlatformEvent::ReceivedCharacter('a')));
     assert!(has_move, "Expected MouseMove event from Wayland wire");
-    assert!(has_char, "Expected ReceivedCharacter('a') from Wayland wire");
+    assert!(
+        has_char,
+        "Expected ReceivedCharacter('a') from Wayland wire"
+    );
 }
-

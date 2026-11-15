@@ -251,8 +251,8 @@ impl AppRuntime {
             strata_layout::Rect::new(0.0, 0.0, self.viewport_width, self.viewport_height);
 
         for portal_path in portal_paths {
-            let Some((spec, cur_box)) =
-                Self::get_layout_node(&self.layout_root, &portal_path).and_then(|n| {
+            let Some((spec, cur_box)) = Self::get_layout_node(&self.layout_root, &portal_path)
+                .and_then(|n| {
                     n.portal_anchor
                         .as_deref()
                         .cloned()
@@ -263,10 +263,9 @@ impl AppRuntime {
             };
 
             let key = spec.anchor_id.trim();
-            let anchor_path_opt = anchor_paths.get(key).or_else(|| {
-                key.strip_prefix("--")
-                    .and_then(|s| anchor_paths.get(s))
-            });
+            let anchor_path_opt = anchor_paths
+                .get(key)
+                .or_else(|| key.strip_prefix("--").and_then(|s| anchor_paths.get(s)));
             let Some(anchor_rect) = anchor_path_opt
                 .and_then(|ap| Self::get_layout_node(&self.layout_root, ap))
                 .map(|n| n.geometry.border_box)
@@ -408,8 +407,7 @@ impl AppRuntime {
 
             if clamped_x > 0.0 || clamped_y > 0.0 {
                 let target_fixed_cb = layout.style.establishes_fixed_containing_block();
-                let target_abs_cb = layout.style.position
-                    != strata_style::types::Position::Static
+                let target_abs_cb = layout.style.position != strata_style::types::Position::Static
                     || target_fixed_cb;
                 for child in &mut layout.children {
                     child.translate_scrolled(
@@ -549,8 +547,8 @@ impl AppRuntime {
 
         if let Some(target) = Self::get_layout_node_mut(&mut self.layout_root, path) {
             let target_fixed_cb = target.style.establishes_fixed_containing_block();
-            let target_abs_cb = target.style.position != strata_style::types::Position::Static
-                || target_fixed_cb;
+            let target_abs_cb =
+                target.style.position != strata_style::types::Position::Static || target_fixed_cb;
             for child in &mut target.children {
                 child.translate_scrolled(0.0, -dy, target_abs_cb, target_fixed_cb);
             }
@@ -595,7 +593,13 @@ impl AppRuntime {
         }
     }
 
-    fn dispatch_dom_wheel_event(&mut self, px: f32, py: f32, delta_x: f32, delta_y: f32) -> (bool, bool) {
+    fn dispatch_dom_wheel_event(
+        &mut self,
+        px: f32,
+        py: f32,
+        delta_x: f32,
+        delta_y: f32,
+    ) -> (bool, bool) {
         if !Self::blueprint_has_wheel_listener(&self.root_blueprint) {
             return (false, false);
         }
@@ -698,13 +702,7 @@ impl AppRuntime {
     /// Dispatches a smooth kinetic scroll impulse to the innermost scrollable container under (px, py).
     /// Accumulates velocity for rapid consecutive wheel events and initiates a critically damped
     /// kinetic transition curve with Chromium Blink parity.
-    pub fn dispatch_smooth_scroll(
-        &mut self,
-        px: f32,
-        py: f32,
-        delta_x: f32,
-        delta_y: f32,
-    ) -> bool {
+    pub fn dispatch_smooth_scroll(&mut self, px: f32, py: f32, delta_x: f32, delta_y: f32) -> bool {
         self.last_mouse_pos = (px, py);
         if delta_y.abs() < 0.01 && delta_x.abs() < 0.01 {
             return false;
@@ -985,5 +983,4 @@ impl AppRuntime {
         }
         false
     }
-
 }

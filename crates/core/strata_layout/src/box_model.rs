@@ -12,8 +12,16 @@ use strata_style::types::{BoxSizing, Dimension, Position};
 /// - If one is positive and one is negative, add the most negative to the most positive:
 ///   $\max(m_1, m_2, 0) + \min(m_1, m_2, 0)$.
 pub fn collapse_margins(m1: f32, m2: f32) -> f32 {
-    let m1 = if m1.is_finite() { m1.clamp(-1e7, 1e7) } else { 0.0 };
-    let m2 = if m2.is_finite() { m2.clamp(-1e7, 1e7) } else { 0.0 };
+    let m1 = if m1.is_finite() {
+        m1.clamp(-1e7, 1e7)
+    } else {
+        0.0
+    };
+    let m2 = if m2.is_finite() {
+        m2.clamp(-1e7, 1e7)
+    } else {
+        0.0
+    };
     if m1 >= 0.0 && m2 >= 0.0 {
         m1.max(m2)
     } else if m1 < 0.0 && m2 < 0.0 {
@@ -424,7 +432,8 @@ fn collect_inline_items_from_children_guarded(
                 depth + 1,
             );
         } else {
-            let mut w = resolve_dimension_with_node(child.style.width, content_width, child).unwrap_or(0.0);
+            let mut w =
+                resolve_dimension_with_node(child.style.width, content_width, child).unwrap_or(0.0);
             let mut h = resolve_dimension(child.style.height, available_height).unwrap_or(0.0);
             if w == 0.0 && child.geometry.border_box.width > 0.0 {
                 w = child.geometry.border_box.width;
@@ -1049,8 +1058,10 @@ pub fn solve_block_children_with_exclusions_guarded(
                 pending_margin = Some(combined);
             }
 
-            child.geometry.border_box.x = node.geometry.border_box.x + border.left + padding.left + child_margin.left;
-            child.geometry.border_box.y = node.geometry.border_box.y + current_y + pending_margin.unwrap_or(0.0);
+            child.geometry.border_box.x =
+                node.geometry.border_box.x + border.left + padding.left + child_margin.left;
+            child.geometry.border_box.y =
+                node.geometry.border_box.y + current_y + pending_margin.unwrap_or(0.0);
             child.geometry.border_box.width = content_width;
             child.geometry.border_box.height = 0.0;
             continue;
@@ -1082,11 +1093,14 @@ pub fn solve_block_children_with_exclusions_guarded(
             let mut opp = exclusion_space.line_opportunity(child_bfc_y, 0.0, content_width);
 
             if opp.available_width < content_width || opp.left_float_edge > 0.0 {
-                let child_desired_w = resolve_dimension_with_node(child.style.width, content_width, child);
+                let child_desired_w =
+                    resolve_dimension_with_node(child.style.width, content_width, child);
                 if let Some(w) = child_desired_w {
                     if w + child_margin.left + child_margin.right > opp.available_width {
                         // Element does not fit beside the float; clear by placing it below preceding floats
-                        while let Some(next_y) = exclusion_space.next_float_bottom_after(child_bfc_y) {
+                        while let Some(next_y) =
+                            exclusion_space.next_float_bottom_after(child_bfc_y)
+                        {
                             child_bfc_y = next_y;
                             opp = exclusion_space.line_opportunity(child_bfc_y, 0.0, content_width);
                             if opp.available_width >= w + child_margin.left + child_margin.right {
@@ -1097,7 +1111,8 @@ pub fn solve_block_children_with_exclusions_guarded(
                     }
                 }
 
-                child_available_width = (opp.available_width - child_margin.left - child_margin.right).max(0.0);
+                child_available_width =
+                    (opp.available_width - child_margin.left - child_margin.right).max(0.0);
                 child_x = border.left + padding.left + opp.left_float_edge + child_margin.left;
             }
         }
@@ -1107,7 +1122,8 @@ pub fn solve_block_children_with_exclusions_guarded(
 
         // Pass the active BFC exclusion space down to in-flow block children so floats can overhang across sections,
         // EXCEPT when child establishes its own BFC or exclusion space is currently empty.
-        let passed_exclusions = if child_establishes_bfc || exclusion_space.exclusions().is_empty() {
+        let passed_exclusions = if child_establishes_bfc || exclusion_space.exclusions().is_empty()
+        {
             None
         } else {
             Some(&mut *exclusion_space)
@@ -1142,7 +1158,8 @@ pub fn solve_block_children_with_exclusions_guarded(
                 translate_node_and_descendants(child, dx, 0.0);
             }
         } else if child.style.margin_auto_left {
-            let free_space = child_available_width - child.geometry.border_box.width - child_margin.right;
+            let free_space =
+                child_available_width - child.geometry.border_box.width - child_margin.right;
             let target_x =
                 node.geometry.border_box.x + child_x - child_margin.left + free_space.max(0.0);
             let dx = target_x - child.geometry.border_box.x;
@@ -1184,7 +1201,9 @@ pub fn solve_block_children_with_exclusions_guarded(
     }
 
     // CSS 2.1 §10.6.7 BFC float containment: BFC roots or layout tree root expand auto height to enclose floats
-    if (establishes_bfc || is_root_exclusion_context) && exclusion_space.exclusions().len() > initial_exclusions_count {
+    if (establishes_bfc || is_root_exclusion_context)
+        && exclusion_space.exclusions().len() > initial_exclusions_count
+    {
         let max_float_bottom = exclusion_space.max_float_bottom();
         if max_float_bottom > current_y {
             current_y = max_float_bottom;
@@ -1241,16 +1260,17 @@ pub fn solve_block_with_exclusions_guarded(
 
     if guard.is_exhausted() {
         crate::tree::record_layout_overflow(guard.current_depth(), guard.max_depth());
-        let border_box_width = match resolve_dimension_with_node(node.style.width, available_width, node) {
-            Some(w) => clamp_dimension_with_node(
-                w,
-                node.style.min_width,
-                node.style.max_width,
-                available_width,
-                node,
-            ),
-            None => (available_width - margin.left - margin.right).max(0.0),
-        };
+        let border_box_width =
+            match resolve_dimension_with_node(node.style.width, available_width, node) {
+                Some(w) => clamp_dimension_with_node(
+                    w,
+                    node.style.min_width,
+                    node.style.max_width,
+                    available_width,
+                    node,
+                ),
+                None => (available_width - margin.left - margin.right).max(0.0),
+            };
         let border_box_height = match resolve_dimension(node.style.height, available_height) {
             Some(h) => clamp_dimension(
                 h,
@@ -1283,7 +1303,9 @@ pub fn solve_block_with_exclusions_guarded(
             .and_then(|dim| resolve_dimension(dim, available_height))
             .unwrap_or(0.0);
         let border_box_width =
-            match resolve_dimension_with_node(node.style.width, available_width, node).or(intrinsic_w) {
+            match resolve_dimension_with_node(node.style.width, available_width, node)
+                .or(intrinsic_w)
+            {
                 Some(w) => clamp_dimension_with_node(
                     w,
                     node.style.min_width,
@@ -1361,7 +1383,8 @@ pub fn solve_block_with_exclusions_guarded(
     };
 
     // 1. Resolve element width
-    let resolved_width = match resolve_dimension_with_node(node.style.width, available_width, node) {
+    let resolved_width = match resolve_dimension_with_node(node.style.width, available_width, node)
+    {
         Some(w) => clamp_dimension_with_node(
             w,
             node.style.min_width,
@@ -1494,53 +1517,53 @@ pub fn solve_block_with_exclusions_guarded(
         if let Some(ref text) = node.text {
             let inline_style = inline_style_from_computed_style(&node.style);
             let item = crate::typography::InlineItem::text(text.clone(), inline_style);
-        let ifc = crate::typography::InlineFormattingContext::new();
-        let opt = crate::typography::InlineLayoutOptions {
-            font_size: node.style.font_size,
-            line_height: Some(node.style.font_size * node.style.line_height),
-            max_width: Some(content_width),
-            white_space: match node.style.white_space {
-                strata_style::types::WhiteSpace::Normal => {
-                    crate::typography::WhiteSpaceMode::Normal
-                }
-                strata_style::types::WhiteSpace::NoWrap => {
-                    crate::typography::WhiteSpaceMode::NoWrap
-                }
-                strata_style::types::WhiteSpace::Pre => crate::typography::WhiteSpaceMode::Pre,
-                strata_style::types::WhiteSpace::PreWrap => {
-                    crate::typography::WhiteSpaceMode::PreWrap
-                }
-                strata_style::types::WhiteSpace::PreLine => {
-                    crate::typography::WhiteSpaceMode::PreLine
-                }
-            },
-            vertical_align: crate::typography::VerticalAlignment::Baseline,
-            is_monospace: crate::text::is_monospace_family(node.style.font_family),
-            exclusion_space: None,
-            bfc_offset_y: 0.0,
-        };
-        let mut res = ifc.layout_inline_stream(&[item], &opt);
-        truncate_inline_overflow(node, &mut res, content_width);
-        let origin_x = node.geometry.content_box.x;
-        let origin_y = node.geometry.content_box.y;
-        for line in &mut res.lines {
-            let align_offset_x = match node.style.text_align {
-                strata_style::types::TextAlign::Center => {
-                    ((content_width - line.bounds.width) / 2.0).max(0.0)
-                }
-                strata_style::types::TextAlign::Right => {
-                    (content_width - line.bounds.width).max(0.0)
-                }
-                _ => 0.0,
+            let ifc = crate::typography::InlineFormattingContext::new();
+            let opt = crate::typography::InlineLayoutOptions {
+                font_size: node.style.font_size,
+                line_height: Some(node.style.font_size * node.style.line_height),
+                max_width: Some(content_width),
+                white_space: match node.style.white_space {
+                    strata_style::types::WhiteSpace::Normal => {
+                        crate::typography::WhiteSpaceMode::Normal
+                    }
+                    strata_style::types::WhiteSpace::NoWrap => {
+                        crate::typography::WhiteSpaceMode::NoWrap
+                    }
+                    strata_style::types::WhiteSpace::Pre => crate::typography::WhiteSpaceMode::Pre,
+                    strata_style::types::WhiteSpace::PreWrap => {
+                        crate::typography::WhiteSpaceMode::PreWrap
+                    }
+                    strata_style::types::WhiteSpace::PreLine => {
+                        crate::typography::WhiteSpaceMode::PreLine
+                    }
+                },
+                vertical_align: crate::typography::VerticalAlignment::Baseline,
+                is_monospace: crate::text::is_monospace_family(node.style.font_family),
+                exclusion_space: None,
+                bfc_offset_y: 0.0,
             };
-            line.bounds.x += origin_x + align_offset_x;
-            line.bounds.y += origin_y;
-            for frag in &mut line.text_fragments {
-                frag.bounds.x += origin_x + align_offset_x;
-                frag.bounds.y += origin_y;
-                frag.baseline_y += origin_y;
+            let mut res = ifc.layout_inline_stream(&[item], &opt);
+            truncate_inline_overflow(node, &mut res, content_width);
+            let origin_x = node.geometry.content_box.x;
+            let origin_y = node.geometry.content_box.y;
+            for line in &mut res.lines {
+                let align_offset_x = match node.style.text_align {
+                    strata_style::types::TextAlign::Center => {
+                        ((content_width - line.bounds.width) / 2.0).max(0.0)
+                    }
+                    strata_style::types::TextAlign::Right => {
+                        (content_width - line.bounds.width).max(0.0)
+                    }
+                    _ => 0.0,
+                };
+                line.bounds.x += origin_x + align_offset_x;
+                line.bounds.y += origin_y;
+                for frag in &mut line.text_fragments {
+                    frag.bounds.x += origin_x + align_offset_x;
+                    frag.bounds.y += origin_y;
+                    frag.baseline_y += origin_y;
+                }
             }
-        }
             node.line_boxes = res.lines;
         }
     }

@@ -3,8 +3,8 @@
 //! Manages position interpolation, automatic pointer/text/default cursor styling,
 //! click states, and the 2.5-second inactivity fade-out physics for AI agent interaction.
 
-use std::time::Instant;
 use crate::window::CursorIcon;
+use std::time::Instant;
 
 /// Emulated cursor driven by the Model Context Protocol (MCP) AI agent.
 #[derive(Debug, Clone)]

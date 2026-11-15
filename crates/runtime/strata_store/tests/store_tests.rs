@@ -80,4 +80,3 @@ fn test_reactive_store_derive_integration() {
     assert_eq!(snap.load_avg, 2.85);
     assert_eq!(snap.active_tasks, 16);
 }
-

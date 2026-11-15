@@ -10,11 +10,7 @@ use crate::matcher::match_path;
 
 /// Declarative Link component for client-side navigation.
 #[component]
-pub fn Link(
-    to: String,
-    class: Option<String>,
-    children: Option<Vec<NodeBlueprint>>,
-) -> View {
+pub fn Link(to: String, class: Option<String>, children: Option<Vec<NodeBlueprint>>) -> View {
     let to_path = to.clone();
     let class_str = class.unwrap_or_default();
     let nav = use_navigate();

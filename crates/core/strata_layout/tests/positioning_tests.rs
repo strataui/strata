@@ -254,7 +254,10 @@ fn test_sticky_element_clamped_to_static_parent_container() {
     // Child must be clamped to parent bottom (400) - child height (50) = 350.0,
     // NOT allowed to escape parent into the 3000px grandparent!
     let sticky_geom = &grandparent.children[0].children[0].geometry.border_box;
-    assert_eq!(sticky_geom.y, 350.0, "Sticky child must be clamped to static parent container bottom");
+    assert_eq!(
+        sticky_geom.y, 350.0,
+        "Sticky child must be clamped to static parent container bottom"
+    );
 }
 
 #[test]
@@ -263,7 +266,11 @@ fn test_absolute_auto_width_and_height_with_right_inset_in_block_and_flex_parent
 
     for is_flex in [false, true] {
         let mut parent_style = ComputedStyle {
-            display: if is_flex { Display::Flex } else { Display::Block },
+            display: if is_flex {
+                Display::Flex
+            } else {
+                Display::Block
+            },
             flex_direction: FlexDirection::Row,
             position: Position::Relative,
             width: Dimension::Px(360.0),
@@ -301,13 +308,34 @@ fn test_absolute_auto_width_and_height_with_right_inset_in_block_and_flex_parent
         let panel_box = parent.children[0].children[0].geometry.border_box;
 
         // Expected x = 360 - 8 - 192 = 160.0 (NOT 360 - 8 - 0 = 352.0)
-        assert_eq!(wrap_box.width, 192.0, "is_flex={is_flex}: auto width must shrink-to-fit w-48 child");
-        assert_eq!(wrap_box.height, 112.0, "is_flex={is_flex}: auto height must wrap laid-out child");
-        assert_eq!(wrap_box.x, 160.0, "is_flex={is_flex}: right inset must subtract intrinsic width");
-        assert_eq!(wrap_box.y, 36.0, "is_flex={is_flex}: top inset must anchor to 36px");
-        assert_eq!(panel_box.x, 160.0, "is_flex={is_flex}: child subtree must translate to item_x");
-        assert_eq!(panel_box.y, 36.0, "is_flex={is_flex}: child subtree must translate to item_y");
-        assert!(wrap_box.contains_point(220.0, 90.0), "border_box hit-test must cover dropdown");
+        assert_eq!(
+            wrap_box.width, 192.0,
+            "is_flex={is_flex}: auto width must shrink-to-fit w-48 child"
+        );
+        assert_eq!(
+            wrap_box.height, 112.0,
+            "is_flex={is_flex}: auto height must wrap laid-out child"
+        );
+        assert_eq!(
+            wrap_box.x, 160.0,
+            "is_flex={is_flex}: right inset must subtract intrinsic width"
+        );
+        assert_eq!(
+            wrap_box.y, 36.0,
+            "is_flex={is_flex}: top inset must anchor to 36px"
+        );
+        assert_eq!(
+            panel_box.x, 160.0,
+            "is_flex={is_flex}: child subtree must translate to item_x"
+        );
+        assert_eq!(
+            panel_box.y, 36.0,
+            "is_flex={is_flex}: child subtree must translate to item_y"
+        );
+        assert!(
+            wrap_box.contains_point(220.0, 90.0),
+            "border_box hit-test must cover dropdown"
+        );
     }
 }
 
@@ -362,5 +390,3 @@ fn test_absolute_auto_height_with_bottom_and_right_insets() {
     assert_eq!(root.children[0].children[0].geometry.border_box.y, 204.0);
     assert_eq!(root.children[0].children[1].geometry.border_box.y, 240.0);
 }
-
-

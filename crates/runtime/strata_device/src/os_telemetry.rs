@@ -3,10 +3,10 @@
 //! Provides real hardware battery, thermal zone, and network introspection
 //! without heavy external dependencies.
 
-use std::fs;
-use std::path::Path;
 use crate::mock::{DeviceMockController, DeviceTelemetrySnapshot};
 use crate::types::*;
+use std::fs;
+use std::path::Path;
 
 /// Probes active hardware telemetry from the host operating system.
 /// Returns `Some(snapshot)` if real sensors were detected, or `None` on headless/virtual systems.
@@ -175,7 +175,8 @@ fn probe_linux_battery() -> Option<BatteryInfo> {
                     } else if state == BatteryState::Charging {
                         if let Some(full) = energy_full {
                             if full > now {
-                                time_to_full = Some((((full - now) as f64 / power as f64) * 3600.0) as u32);
+                                time_to_full =
+                                    Some((((full - now) as f64 / power as f64) * 3600.0) as u32);
                             }
                         }
                     }
@@ -314,7 +315,9 @@ pub struct Win32SystemPowerStatus {
 /// Decodes Win32 `SYSTEM_POWER_STATUS` into `BatteryInfo`.
 pub fn decode_win32_power_status(status: &Win32SystemPowerStatus) -> Option<BatteryInfo> {
     // If no system battery (flag bit 7 = 128) or unknown flag and unknown percent
-    if (status.battery_flag & 128) != 0 || (status.battery_flag == 255 && status.battery_life_percent == 255) {
+    if (status.battery_flag & 128) != 0
+        || (status.battery_flag == 255 && status.battery_life_percent == 255)
+    {
         return None;
     }
 
@@ -338,17 +341,19 @@ pub fn decode_win32_power_status(status: &Win32SystemPowerStatus) -> Option<Batt
         BatteryState::Unknown
     };
 
-    let time_to_empty_secs = if status.battery_life_time != 0xFFFF_FFFF && status.battery_life_time > 0 {
-        Some(status.battery_life_time)
-    } else {
-        None
-    };
+    let time_to_empty_secs =
+        if status.battery_life_time != 0xFFFF_FFFF && status.battery_life_time > 0 {
+            Some(status.battery_life_time)
+        } else {
+            None
+        };
 
-    let time_to_full_secs = if status.battery_full_life_time != 0xFFFF_FFFF && status.battery_full_life_time > 0 {
-        Some(status.battery_full_life_time)
-    } else {
-        None
-    };
+    let time_to_full_secs =
+        if status.battery_full_life_time != 0xFFFF_FFFF && status.battery_full_life_time > 0 {
+            Some(status.battery_full_life_time)
+        } else {
+            None
+        };
 
     let is_low_power_mode = status.system_status_flag == 1;
 
@@ -436,10 +441,19 @@ fn probe_macos_battery() -> Option<BatteryInfo> {
         fn CFArrayGetValueAtIndex(theArray: CFArrayRef, idx: isize) -> CFTypeRef;
         fn CFDictionaryGetValue(theDict: CFDictionaryRef, key: CFStringRef) -> CFTypeRef;
         fn CFRelease(cf: CFTypeRef);
-        fn CFStringCreateWithCString(alloc: CFTypeRef, c_str: *const std::os::raw::c_char, encoding: u32) -> CFStringRef;
+        fn CFStringCreateWithCString(
+            alloc: CFTypeRef,
+            c_str: *const std::os::raw::c_char,
+            encoding: u32,
+        ) -> CFStringRef;
         fn CFNumberGetValue(number: CFTypeRef, theType: isize, valuePtr: *mut c_void) -> bool;
         fn CFBooleanGetValue(boolean: CFTypeRef) -> bool;
-        fn CFStringGetCString(theString: CFStringRef, buffer: *mut std::os::raw::c_char, bufferSize: isize, encoding: u32) -> bool;
+        fn CFStringGetCString(
+            theString: CFStringRef,
+            buffer: *mut std::os::raw::c_char,
+            bufferSize: isize,
+            encoding: u32,
+        ) -> bool;
     }
 
     unsafe {
@@ -471,7 +485,11 @@ fn probe_macos_battery() -> Option<BatteryInfo> {
 
         const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
         let make_cf_str = |s: &'static [u8]| -> CFStringRef {
-            CFStringCreateWithCString(std::ptr::null(), s.as_ptr() as *const _, K_CF_STRING_ENCODING_UTF8)
+            CFStringCreateWithCString(
+                std::ptr::null(),
+                s.as_ptr() as *const _,
+                K_CF_STRING_ENCODING_UTF8,
+            )
         };
 
         let key_cur = make_cf_str(b"Current Capacity\0");
@@ -489,7 +507,11 @@ fn probe_macos_battery() -> Option<BatteryInfo> {
 
         let cur_val = CFDictionaryGetValue(dict, key_cur);
         if !cur_val.is_null() {
-            CFNumberGetValue(cur_val, 3 /* kCFNumberSInt32Type */, &mut current_capacity as *mut _ as *mut c_void);
+            CFNumberGetValue(
+                cur_val,
+                3, /* kCFNumberSInt32Type */
+                &mut current_capacity as *mut _ as *mut c_void,
+            );
         }
 
         let max_val = CFDictionaryGetValue(dict, key_max);
@@ -517,7 +539,12 @@ fn probe_macos_battery() -> Option<BatteryInfo> {
         let state_val = CFDictionaryGetValue(dict, key_state);
         if !state_val.is_null() {
             let mut buf = [0u8; 64];
-            if CFStringGetCString(state_val, buf.as_mut_ptr() as *mut _, 64, K_CF_STRING_ENCODING_UTF8) {
+            if CFStringGetCString(
+                state_val,
+                buf.as_mut_ptr() as *mut _,
+                64,
+                K_CF_STRING_ENCODING_UTF8,
+            ) {
                 if let Ok(s) = std::ffi::CStr::from_ptr(buf.as_ptr() as *const _).to_str() {
                     power_source_state = s.to_string();
                 }
@@ -542,8 +569,16 @@ fn probe_macos_battery() -> Option<BatteryInfo> {
             is_charging,
             is_charged,
             is_low_power_mode,
-            time_to_empty_min: if time_to_empty >= 0 { Some(time_to_empty) } else { None },
-            time_to_full_min: if time_to_full >= 0 { Some(time_to_full) } else { None },
+            time_to_empty_min: if time_to_empty >= 0 {
+                Some(time_to_empty)
+            } else {
+                None
+            },
+            time_to_full_min: if time_to_full >= 0 {
+                Some(time_to_full)
+            } else {
+                None
+            },
             power_source_state,
         };
 
@@ -563,13 +598,23 @@ fn probe_macos_low_power_mode() -> bool {
 
     unsafe {
         let cls = objc_getClass(b"NSProcessInfo\0".as_ptr() as *const _);
-        if cls.is_null() { return false; }
+        if cls.is_null() {
+            return false;
+        }
         let sel_proc_info = sel_registerName(b"processInfo\0".as_ptr() as *const _);
-        let msg_send: MsgSend = std::mem::transmute(libc::dlsym(libc::RTLD_DEFAULT, b"objc_msgSend\0".as_ptr() as *const _));
+        let msg_send: MsgSend = std::mem::transmute(libc::dlsym(
+            libc::RTLD_DEFAULT,
+            b"objc_msgSend\0".as_ptr() as *const _,
+        ));
         let proc_info = msg_send(cls, sel_proc_info);
-        if proc_info.is_null() { return false; }
+        if proc_info.is_null() {
+            return false;
+        }
         let sel_low_power = sel_registerName(b"isLowPowerModeEnabled\0".as_ptr() as *const _);
-        let msg_send_bool: MsgSendBool = std::mem::transmute(libc::dlsym(libc::RTLD_DEFAULT, b"objc_msgSend\0".as_ptr() as *const _));
+        let msg_send_bool: MsgSendBool = std::mem::transmute(libc::dlsym(
+            libc::RTLD_DEFAULT,
+            b"objc_msgSend\0".as_ptr() as *const _,
+        ));
         msg_send_bool(proc_info, sel_low_power)
     }
 }
@@ -586,13 +631,23 @@ fn probe_macos_thermal() -> Option<ThermalState> {
 
     unsafe {
         let cls = objc_getClass(b"NSProcessInfo\0".as_ptr() as *const _);
-        if cls.is_null() { return None; }
+        if cls.is_null() {
+            return None;
+        }
         let sel_proc_info = sel_registerName(b"processInfo\0".as_ptr() as *const _);
-        let msg_send: MsgSend = std::mem::transmute(libc::dlsym(libc::RTLD_DEFAULT, b"objc_msgSend\0".as_ptr() as *const _));
+        let msg_send: MsgSend = std::mem::transmute(libc::dlsym(
+            libc::RTLD_DEFAULT,
+            b"objc_msgSend\0".as_ptr() as *const _,
+        ));
         let proc_info = msg_send(cls, sel_proc_info);
-        if proc_info.is_null() { return None; }
+        if proc_info.is_null() {
+            return None;
+        }
         let sel_thermal = sel_registerName(b"thermalState\0".as_ptr() as *const _);
-        let msg_send_state: MsgSendState = std::mem::transmute(libc::dlsym(libc::RTLD_DEFAULT, b"objc_msgSend\0".as_ptr() as *const _));
+        let msg_send_state: MsgSendState = std::mem::transmute(libc::dlsym(
+            libc::RTLD_DEFAULT,
+            b"objc_msgSend\0".as_ptr() as *const _,
+        ));
         let state = msg_send_state(proc_info, sel_thermal);
         match state {
             0 => Some(ThermalState::Nominal),
@@ -611,8 +666,12 @@ fn probe_macos_network() -> Option<NetworkStatus> {
 
     #[link(name = "SystemConfiguration", kind = "framework")]
     extern "C" {
-        fn SCNetworkReachabilityCreateWithName(allocator: *const c_void, nodename: *const std::os::raw::c_char) -> SCNetworkReachabilityRef;
-        fn SCNetworkReachabilityGetFlags(target: SCNetworkReachabilityRef, flags: *mut u32) -> bool;
+        fn SCNetworkReachabilityCreateWithName(
+            allocator: *const c_void,
+            nodename: *const std::os::raw::c_char,
+        ) -> SCNetworkReachabilityRef;
+        fn SCNetworkReachabilityGetFlags(target: SCNetworkReachabilityRef, flags: *mut u32)
+            -> bool;
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -621,7 +680,10 @@ fn probe_macos_network() -> Option<NetworkStatus> {
     }
 
     unsafe {
-        let target = SCNetworkReachabilityCreateWithName(std::ptr::null(), b"apple.com\0".as_ptr() as *const _);
+        let target = SCNetworkReachabilityCreateWithName(
+            std::ptr::null(),
+            b"apple.com\0".as_ptr() as *const _,
+        );
         if target.is_null() {
             return None;
         }

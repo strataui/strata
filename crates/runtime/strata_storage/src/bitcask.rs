@@ -1,11 +1,11 @@
 //! Pure-Rust Bitcask Append-Only WAL Storage Engine (Zero External Dependencies).
 
+use crate::crc32::crc32;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::crc32::crc32;
 
 pub const TOMBSTONE_VAL_LEN: u32 = 0xFFFF_FFFF;
 pub const MAX_KEY_SIZE: usize = 65535;
@@ -195,7 +195,11 @@ impl StrataKV {
             let val_len_raw = u32::from_le_bytes(header_buf[14..18].try_into().unwrap());
 
             let is_tombstone = val_len_raw == TOMBSTONE_VAL_LEN;
-            let val_len = if is_tombstone { 0 } else { val_len_raw as usize };
+            let val_len = if is_tombstone {
+                0
+            } else {
+                val_len_raw as usize
+            };
 
             // Reject pre-allocation OOM bomb: validate bounds against max record size and remaining file size
             if val_len > MAX_RECORD_SIZE {
@@ -255,12 +259,18 @@ impl StrataKV {
         };
 
         if entry.value_size as usize > MAX_RECORD_SIZE {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Record exceeds MAX_RECORD_SIZE"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Record exceeds MAX_RECORD_SIZE",
+            ));
         }
 
         let file_len = self.wal_file.metadata()?.len();
         if entry.value_pos.saturating_add(entry.value_size as u64) > file_len {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Record exceeds WAL file length"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Record exceeds WAL file length",
+            ));
         }
 
         self.wal_file.seek(SeekFrom::Start(entry.value_pos))?;
@@ -272,7 +282,10 @@ impl StrataKV {
     /// Stores a key-value pair, appending to the WAL and updating the in-memory index.
     pub fn put(&mut self, key: &str, val: &[u8]) -> io::Result<()> {
         if val.len() > MAX_RECORD_SIZE {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Value exceeds MAX_RECORD_SIZE"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Value exceeds MAX_RECORD_SIZE",
+            ));
         }
 
         let ts = SystemTime::now()

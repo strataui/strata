@@ -56,13 +56,21 @@ impl Rgba {
     }
 
     #[inline(always)]
-    pub fn r(self) -> f32 { self.r as f32 / 255.0 }
+    pub fn r(self) -> f32 {
+        self.r as f32 / 255.0
+    }
     #[inline(always)]
-    pub fn g(self) -> f32 { self.g as f32 / 255.0 }
+    pub fn g(self) -> f32 {
+        self.g as f32 / 255.0
+    }
     #[inline(always)]
-    pub fn b(self) -> f32 { self.b as f32 / 255.0 }
+    pub fn b(self) -> f32 {
+        self.b as f32 / 255.0
+    }
     #[inline(always)]
-    pub fn a(self) -> f32 { self.a as f32 / 255.0 }
+    pub fn a(self) -> f32 {
+        self.a as f32 / 255.0
+    }
 
     #[inline(always)]
     pub fn to_rgba8(self) -> (u8, u8, u8, u8) {
@@ -251,11 +259,21 @@ impl Hsla {
 }
 
 fn hue_to_rgb(p: f32, q: f32, mut t: f32) -> f32 {
-    if t < 0.0 { t += 1.0; }
-    if t > 1.0 { t -= 1.0; }
-    if t < 1.0 / 6.0 { return p + (q - p) * 6.0 * t; }
-    if t < 1.0 / 2.0 { return q; }
-    if t < 2.0 / 3.0 { return p + (q - p) * (2.0 / 3.0 - t) * 6.0; }
+    if t < 0.0 {
+        t += 1.0;
+    }
+    if t > 1.0 {
+        t -= 1.0;
+    }
+    if t < 1.0 / 6.0 {
+        return p + (q - p) * 6.0 * t;
+    }
+    if t < 1.0 / 2.0 {
+        return q;
+    }
+    if t < 2.0 / 3.0 {
+        return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+    }
     p
 }
 
@@ -296,7 +314,12 @@ impl Oklch {
         let g_lin = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
         let b_lin = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
 
-        Rgba::from_f32(from_linear_srgb(r_lin), from_linear_srgb(g_lin), from_linear_srgb(b_lin), self.a)
+        Rgba::from_f32(
+            from_linear_srgb(r_lin),
+            from_linear_srgb(g_lin),
+            from_linear_srgb(b_lin),
+            self.a,
+        )
     }
 }
 

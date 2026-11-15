@@ -109,14 +109,14 @@ fn test_goal_21_pure_rust_x11_mit_shm_presentation_and_event_decoding() {
         encoder.begin_request(X11_OPCODE_CREATE_WINDOW, 24); // depth 24
         encoder.push_u32(0x00400001); // window id
         encoder.push_u32(0x00000100); // parent
-        encoder.push_i16(100);        // x
-        encoder.push_i16(200);        // y
-        encoder.push_u16(800);        // width
-        encoder.push_u16(600);        // height
-        encoder.push_u16(0);          // border width
-        encoder.push_u16(1);          // class (InputOutput)
-        encoder.push_u32(0);          // visual
-        encoder.push_u32(0);          // value mask
+        encoder.push_i16(100); // x
+        encoder.push_i16(200); // y
+        encoder.push_u16(800); // width
+        encoder.push_u16(600); // height
+        encoder.push_u16(0); // border width
+        encoder.push_u16(1); // class (InputOutput)
+        encoder.push_u32(0); // visual
+        encoder.push_u32(0); // value mask
         encoder.finish_request();
 
         let req_bytes = encoder.as_bytes();
@@ -153,8 +153,8 @@ fn test_goal_21_pure_rust_x11_mit_shm_presentation_and_event_decoding() {
         assert_eq!((width, height), (1024, 768));
 
         // 3. Verify MIT-SHM SysV shared memory segment allocation
-        let mut shm_segment = X11ShmSegment::new(0x00400002, 128 * 128 * 4)
-            .expect("MIT-SHM segment allocation");
+        let mut shm_segment =
+            X11ShmSegment::new(0x00400002, 128 * 128 * 4).expect("MIT-SHM segment allocation");
         assert_eq!(shm_segment.size, 128 * 128 * 4);
 
         let fill_pixels = vec![0x33; 128 * 128 * 4];
@@ -443,10 +443,7 @@ fn test_goal_26_csd_multi_zone_hit_testing_and_native_drag_passthrough() {
         CsdHitZone::ResizeBorderLeft.to_x11_moveresize_direction(),
         Some(7)
     );
-    assert_eq!(
-        CsdHitZone::Titlebar.to_x11_moveresize_direction(),
-        Some(8)
-    );
+    assert_eq!(CsdHitZone::Titlebar.to_x11_moveresize_direction(), Some(8));
 
     // Verify Wayland xdg_toplevel resize edge bitmasks
     assert_eq!(
@@ -487,7 +484,7 @@ fn test_goal_26_csd_multi_zone_hit_testing_and_native_drag_passthrough() {
     let zone = controller.on_pointer_down(width, height, 500.0, 16.0);
     assert_eq!(zone, CsdHitZone::Titlebar);
     assert!(!controller.should_start_drag(502.0, 17.0)); // <= 4.0 threshold
-    assert!(controller.should_start_drag(510.0, 25.0));  // > 4.0 threshold
+    assert!(controller.should_start_drag(510.0, 25.0)); // > 4.0 threshold
     assert!(controller.is_dragging);
 
     controller.on_pointer_up();
@@ -550,10 +547,7 @@ fn test_goal_27_cross_platform_system_tray_and_desktop_notifications() {
     channel.dispatch(TrayEvent::MenuItemTriggered(101));
 
     assert_eq!(receiver.try_recv(), Some(TrayEvent::LeftClick));
-    assert_eq!(
-        receiver.try_recv(),
-        Some(TrayEvent::MenuItemTriggered(101))
-    );
+    assert_eq!(receiver.try_recv(), Some(TrayEvent::MenuItemTriggered(101)));
     assert_eq!(receiver.try_recv(), None);
 }
 
@@ -627,7 +621,12 @@ fn test_goal_20_win32_raw_abi_and_event_loop_soundness() {
     assert_eq!(prim_pt.x, 100.0);
     assert_eq!(prim_pt.y, 200.0);
 
-    let rect = Rect { left: 10, top: 20, right: 110, bottom: 220 };
+    let rect = Rect {
+        left: 10,
+        top: 20,
+        right: 110,
+        bottom: 220,
+    };
     let prim_rect: strata_primitives::geom::Rect<f32> = rect.into();
     assert_eq!(prim_rect.x(), 10.0);
     assert_eq!(prim_rect.y(), 20.0);
@@ -710,8 +709,8 @@ fn test_transparent_cairo_clear_preserves_rounded_corner_alpha() {
     use strata_render::{DisplayList, DrawCommand};
     use strata_style::types::{BorderRadius, Color};
 
-    let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 64, 64)
-        .expect("create ARgb32 surface");
+    let mut surface =
+        cairo::ImageSurface::create(cairo::Format::ARgb32, 64, 64).expect("create ARgb32 surface");
     {
         let cr = cairo::Context::new(&surface).expect("create cairo context");
         // Paint non-zero garbage first to verify Source operator truly clears alpha to 0
@@ -754,4 +753,3 @@ fn test_transparent_cairo_clear_preserves_rounded_corner_alpha() {
     assert_eq!(alpha_bottom_left, 255);
     assert_eq!(alpha_center, 255);
 }
-

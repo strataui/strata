@@ -40,14 +40,20 @@ fn test_adversarial_layout_nan_and_infinity_resilience() {
     let box_h = root.geometry.border_box.height;
     println!("[ADVERSARIAL] NaN/Inf layout completed: width={box_w}, height={box_h}");
 
-    assert!(root.geometry.is_finite(), "Root layout geometry must be strictly finite");
+    assert!(
+        root.geometry.is_finite(),
+        "Root layout geometry must be strictly finite"
+    );
     assert!(box_w.is_finite(), "Root border_box width must be finite");
     assert!(box_h.is_finite(), "Root border_box height must be finite");
     assert!(box_w >= 0.0, "Root width must be non-negative");
     assert!(box_h >= 0.0, "Root height must be non-negative");
 
     for child in &root.children {
-        assert!(child.geometry.is_finite(), "Child layout geometry must be strictly finite");
+        assert!(
+            child.geometry.is_finite(),
+            "Child layout geometry must be strictly finite"
+        );
         assert!(child.geometry.border_box.width.is_finite());
         assert!(child.geometry.border_box.height.is_finite());
         assert!(child.geometry.border_box.width >= 0.0);
@@ -69,7 +75,10 @@ fn test_adversarial_calc_recursion_and_division_by_zero() {
         nested = format!("calc({nested} + 1px)");
     }
     let res = parse_calc(&nested);
-    println!("[ADVERSARIAL] calc(300 levels deep) result: {:?}", res.is_ok());
+    println!(
+        "[ADVERSARIAL] calc(300 levels deep) result: {:?}",
+        res.is_ok()
+    );
 
     // 3. Malformed syntax
     assert!(parse_calc("calc(100px +)").is_err());
@@ -114,8 +123,8 @@ fn test_adversarial_vfs_path_traversal() {
 
 #[test]
 fn test_adversarial_bitcask_wal_corruption_recovery() {
-    use strata_storage::bitcask::StrataKV;
     use std::fs;
+    use strata_storage::bitcask::StrataKV;
 
     let temp_dir = std::env::temp_dir().join(format!("strata_wal_test_{}", std::process::id()));
     let _ = fs::remove_dir_all(&temp_dir);
@@ -124,9 +133,13 @@ fn test_adversarial_bitcask_wal_corruption_recovery() {
 
     {
         let mut kv = StrataKV::open(&wal_file).expect("Must open WAL");
-        kv.put("session_token", b"secret_value_12345").expect("Must write");
+        kv.put("session_token", b"secret_value_12345")
+            .expect("Must write");
         kv.put("user_id", b"user_999").expect("Must write");
-        assert_eq!(kv.get("session_token").unwrap(), Some(b"secret_value_12345".to_vec()));
+        assert_eq!(
+            kv.get("session_token").unwrap(),
+            Some(b"secret_value_12345".to_vec())
+        );
     }
 
     // 1. Corrupt the WAL file by modifying bytes in the first record
@@ -140,7 +153,10 @@ fn test_adversarial_bitcask_wal_corruption_recovery() {
     let reopen = StrataKV::open(&wal_file);
     match reopen {
         Ok(kv) => {
-            println!("[SECURITY] StrataKV reopened after corruption: indexed {} keys", kv.keys().len());
+            println!(
+                "[SECURITY] StrataKV reopened after corruption: indexed {} keys",
+                kv.keys().len()
+            );
         }
         Err(e) => {
             println!("[SECURITY] StrataKV returned error on corrupted WAL: {e}");
@@ -172,7 +188,7 @@ fn test_adversarial_http_chunked_decoder_edge_cases() {
 
 #[test]
 fn test_adversarial_http2_frame_size_and_padding_limits() {
-    use strata_web_api::http2::{Http2Frame, FRAME_DATA, FLAG_PADDED};
+    use strata_web_api::http2::{Http2Frame, FLAG_PADDED, FRAME_DATA};
 
     // Frame with PADDED flag where pad_len exceeds total payload
     let malicious_payload = vec![50u8, 1, 2, 3]; // pad_len is 50, but payload is only 4 bytes
@@ -213,7 +229,10 @@ fn test_adversarial_reactive_diamond_dag_stress() {
 fn test_adversarial_js_infinite_loop_dos_guard() {
     let mut engine = strata_js::JsEngine::new();
     let res = engine.eval("var x = 0; while (true) { x = x + 1; }");
-    assert!(res.is_err(), "Unbounded while loop must be trapped by timeout guard");
+    assert!(
+        res.is_err(),
+        "Unbounded while loop must be trapped by timeout guard"
+    );
     let err = res.unwrap_err();
     assert!(
         err.contains("Maximum loop iteration limit exceeded"),
@@ -239,9 +258,19 @@ fn test_adversarial_js_nested_property_mutation() {
         var port = config.server.tls.port;
     "#;
     let res = engine.eval(script);
-    assert!(res.is_ok(), "Nested property mutation must succeed: {:?}", res);
-    assert_eq!(engine.globals.get("enabled"), Some(&strata_js::JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("port"), Some(&strata_js::JsValue::Number(8443.0)));
+    assert!(
+        res.is_ok(),
+        "Nested property mutation must succeed: {:?}",
+        res
+    );
+    assert_eq!(
+        engine.globals.get("enabled"),
+        Some(&strata_js::JsValue::Bool(true))
+    );
+    assert_eq!(
+        engine.globals.get("port"),
+        Some(&strata_js::JsValue::Number(8443.0))
+    );
 }
 
 #[test]

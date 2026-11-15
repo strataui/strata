@@ -149,7 +149,9 @@ fn portal_escapes_overflow_hidden_transform_and_higher_sibling_z_index() {
         .unwrap()
         .entity_id;
     assert_eq!(
-        runtime.spatial_index.query_entity_at_point(probe_x, probe_y),
+        runtime
+            .spatial_index
+            .query_entity_at_point(probe_x, probe_y),
         Some(menu_entity),
         "SpatialIndex must rank top-layer portal above z-50 sibling stacking contexts"
     );

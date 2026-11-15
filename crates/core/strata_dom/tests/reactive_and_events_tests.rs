@@ -312,7 +312,11 @@ fn test_memoization_halts_propagation_on_equal_value() {
     a.set(12);
     assert_eq!(b.get(), 0);
     assert_eq!(c.get(), 100);
-    assert_eq!(c_runs.get(), 1, "C must not re-evaluate when upstream memo output is unchanged");
+    assert_eq!(
+        c_runs.get(),
+        1,
+        "C must not re-evaluate when upstream memo output is unchanged"
+    );
 
     // Mutate A from 12 to 13 (now odd)
     // B evaluates to 13 % 2 = 1 (changed)
@@ -320,7 +324,11 @@ fn test_memoization_halts_propagation_on_equal_value() {
     a.set(13);
     assert_eq!(b.get(), 1);
     assert_eq!(c.get(), 101);
-    assert_eq!(c_runs.get(), 2, "C must re-evaluate when upstream memo output changes");
+    assert_eq!(
+        c_runs.get(),
+        2,
+        "C must re-evaluate when upstream memo output changes"
+    );
 }
 
 #[test]
@@ -346,8 +354,14 @@ fn test_generational_subscriber_disposal_and_leak_elimination() {
         effects.push(eff);
     }
 
-    assert_eq!(ReactiveRuntime::active_subscriber_count(), initial_active + 10);
-    assert_eq!(ReactiveRuntime::signal_subscription_count(sig_id), initial_sig_subs + 10);
+    assert_eq!(
+        ReactiveRuntime::active_subscriber_count(),
+        initial_active + 10
+    );
+    assert_eq!(
+        ReactiveRuntime::signal_subscription_count(sig_id),
+        initial_sig_subs + 10
+    );
 
     // Mutate signal, verify all 10 effects fire
     sig.set(200);
@@ -358,8 +372,14 @@ fn test_generational_subscriber_disposal_and_leak_elimination() {
         eff.dispose();
     }
 
-    assert_eq!(ReactiveRuntime::active_subscriber_count(), initial_active + 5);
-    assert_eq!(ReactiveRuntime::signal_subscription_count(sig_id), initial_sig_subs + 5);
+    assert_eq!(
+        ReactiveRuntime::active_subscriber_count(),
+        initial_active + 5
+    );
+    assert_eq!(
+        ReactiveRuntime::signal_subscription_count(sig_id),
+        initial_sig_subs + 5
+    );
 
     // Dispose remaining 5 effects
     for eff in effects.drain(..) {
@@ -372,10 +392,16 @@ fn test_generational_subscriber_disposal_and_leak_elimination() {
     // Allocate a new subscriber - must recycle index from freed pool with bumped generation
     let sub1 = ReactiveRuntime::alloc_subscriber_id();
     assert!(ReactiveRuntime::is_subscriber_alive(sub1));
-    assert_eq!(sub1.generation, 2, "Recycled subscriber slot must increment generation to 2");
+    assert_eq!(
+        sub1.generation, 2,
+        "Recycled subscriber slot must increment generation to 2"
+    );
 
     // Old generation (index, 1) is dead
-    let dead_sub = SubscriberId { index: sub1.index, generation: 1 };
+    let dead_sub = SubscriberId {
+        index: sub1.index,
+        generation: 1,
+    };
     assert!(!ReactiveRuntime::is_subscriber_alive(dead_sub));
 
     // Unregistering sub1 frees it and increments generation again
@@ -384,7 +410,10 @@ fn test_generational_subscriber_disposal_and_leak_elimination() {
 
     let sub2 = ReactiveRuntime::alloc_subscriber_id();
     assert_eq!(sub2.index, sub1.index);
-    assert_eq!(sub2.generation, 3, "Second recycled slot must increment generation to 3");
+    assert_eq!(
+        sub2.generation, 3,
+        "Second recycled slot must increment generation to 3"
+    );
     ReactiveRuntime::unregister_subscriber(sub2);
 }
 
@@ -454,4 +483,3 @@ fn test_self_referential_memo_cycle_resilience() {
     let val = memo.get();
     assert_eq!(val, 300); // 200 + cached 100
 }
-

@@ -43,7 +43,9 @@ impl ScaleLinear {
     pub fn ticks(&self, count: usize) -> Vec<f32> {
         let count = count.max(2);
         let step = (self.domain_max - self.domain_min) / (count - 1) as f32;
-        (0..count).map(|i| self.domain_min + i as f32 * step).collect()
+        (0..count)
+            .map(|i| self.domain_min + i as f32 * step)
+            .collect()
     }
 }
 

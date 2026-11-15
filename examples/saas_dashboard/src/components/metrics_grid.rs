@@ -1,7 +1,7 @@
 //! Real-time KPI Metrics Cards for Strata Cloud SaaS Dashboard.
 
-use strata::prelude::*;
 use crate::state::DashboardState;
+use strata::prelude::*;
 
 #[component]
 pub fn MetricsGrid(state: DashboardState) -> View {

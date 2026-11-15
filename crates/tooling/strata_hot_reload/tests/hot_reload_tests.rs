@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use strata_hot_reload::{
-    FileChangeTracker, HotReloadMessage, HotReloadSnapshot, HotReloader,
-};
+use strata_hot_reload::{FileChangeTracker, HotReloadMessage, HotReloadSnapshot, HotReloader};
 
 fn compile_test_dylib(name: &str, version: u32, entry_ret: i32) -> PathBuf {
     let temp_dir = std::env::temp_dir();
@@ -87,11 +85,17 @@ fn test_hot_reload_snapshot_encoding_roundtrip() {
 
     let sig1 = decoded.signals.get(&1).unwrap();
     assert_eq!(sig1.type_name, "Signal<i32>");
-    assert_eq!(i32::from_le_bytes(sig1.value_bytes.clone().try_into().unwrap()), 100);
+    assert_eq!(
+        i32::from_le_bytes(sig1.value_bytes.clone().try_into().unwrap()),
+        100
+    );
 
     let comp = decoded.components.get("TelemetryPanel#1").unwrap();
     assert_eq!(comp.memo_index, 3);
-    assert_eq!(comp.state_data.get("slider_val").map(|s| s.as_str()), Some("75.5"));
+    assert_eq!(
+        comp.state_data.get("slider_val").map(|s| s.as_str()),
+        Some("75.5")
+    );
 }
 
 #[test]
@@ -131,7 +135,10 @@ fn test_hot_reloader_lifecycle_with_real_dylib() {
 
     if let HotReloadMessage::PatchSuccess { latency_us } = msg {
         // Acceptance criteria: editing a component updates in < 50ms (50,000 us)
-        assert!(latency_us < 50_000, "Hot reload latency must be sub-50ms, was {latency_us} us");
+        assert!(
+            latency_us < 50_000,
+            "Hot reload latency must be sub-50ms, was {latency_us} us"
+        );
     } else {
         panic!("Expected PatchSuccess");
     }
@@ -143,10 +150,14 @@ fn test_hot_reloader_lifecycle_with_real_dylib() {
     // Verify dylib hydrated the snapshot's epoch 42
     let lib = reloader.active_library().expect("Library should be active");
     let get_epoch_fn: libloading::Symbol<unsafe extern "C" fn() -> u64> = unsafe {
-        lib.get(b"test_get_hydrated_epoch\0").expect("get_hydrated_epoch symbol")
+        lib.get(b"test_get_hydrated_epoch\0")
+            .expect("get_hydrated_epoch symbol")
     };
     let hydrated_epoch = unsafe { get_epoch_fn() };
-    assert_eq!(hydrated_epoch, 42, "Dylib state was preserved and hydrated into new epoch");
+    assert_eq!(
+        hydrated_epoch, 42,
+        "Dylib state was preserved and hydrated into new epoch"
+    );
 }
 
 #[test]
@@ -192,10 +203,7 @@ fn test_generational_signal_serialization_and_migration() {
 
     // Create a generation 1 signal with structured fields
     let mut fields_gen1 = HashMap::new();
-    fields_gen1.insert(
-        "counter".to_string(),
-        GenerationalFieldValue::Int(42),
-    );
+    fields_gen1.insert("counter".to_string(), GenerationalFieldValue::Int(42));
     fields_gen1.insert(
         "username".to_string(),
         GenerationalFieldValue::Text("alice".to_string()),
@@ -205,20 +213,19 @@ fn test_generational_signal_serialization_and_migration() {
         GenerationalFieldValue::Bytes(vec![0xAA, 0xBB]),
     );
 
-    snapshot.insert_generational_signal(
-        1001,
-        "UserState",
-        1,
-        fields_gen1,
-    );
+    snapshot.insert_generational_signal(1001, "UserState", 1, fields_gen1);
 
     // Verify roundtrip encoding & decoding of generational fields
     let encoded = snapshot.encode();
-    let mut decoded = HotReloadSnapshot::decode(&encoded).expect("Failed to decode generational snapshot");
+    let mut decoded =
+        HotReloadSnapshot::decode(&encoded).expect("Failed to decode generational snapshot");
     assert_eq!(decoded.epoch, 101);
     let sig = decoded.signals.get(&1001).unwrap();
     assert_eq!(sig.generation, 1);
-    assert_eq!(sig.get_field("counter"), Some(&GenerationalFieldValue::Int(42)));
+    assert_eq!(
+        sig.get_field("counter"),
+        Some(&GenerationalFieldValue::Int(42))
+    );
     assert_eq!(
         sig.get_field("username"),
         Some(&GenerationalFieldValue::Text("alice".to_string()))
@@ -246,7 +253,10 @@ fn test_generational_signal_serialization_and_migration() {
         .with_target_type("UserStateV3");
 
     let count = decoded.migrate_signals(&[mig_1_to_2, mig_2_to_3]);
-    assert_eq!(count, 2, "Both generational migrations applied sequentially");
+    assert_eq!(
+        count, 2,
+        "Both generational migrations applied sequentially"
+    );
 
     let migrated_sig = decoded.signals.get(&1001).unwrap();
     assert_eq!(migrated_sig.generation, 3);
@@ -304,4 +314,3 @@ fn test_hot_reloader_registered_migrations() {
         Some(&GenerationalFieldValue::Float(10.0))
     );
 }
-

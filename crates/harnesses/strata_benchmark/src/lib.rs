@@ -7,10 +7,10 @@ pub mod metrics;
 pub mod report;
 
 pub use harness::{
-    bench_cold_start, bench_flexbox_layout_10k, bench_signal_propagation_100k,
-    bench_ui_ir_throughput_100k, bench_html_parsing, bench_web_transpiler,
-    bench_w3c_flexbox_layout_1k, bench_w3c_grid_layout_1k, bench_display_list_compilation_1k,
-    benchmark_task, get_process_memory_rss_mb,
+    bench_cold_start, bench_display_list_compilation_1k, bench_flexbox_layout_10k,
+    bench_html_parsing, bench_signal_propagation_100k, bench_ui_ir_throughput_100k,
+    bench_w3c_flexbox_layout_1k, bench_w3c_grid_layout_1k, bench_web_transpiler, benchmark_task,
+    get_process_memory_rss_mb,
 };
 pub use metrics::{BenchmarkResult, BenchmarkSample};
 pub use report::BenchmarkReport;

@@ -94,19 +94,21 @@ pub enum SourceExpr {
 #[allow(clippy::chunks_exact_to_as_chunks)]
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     let mut h: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
     ];
 
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
 
     let bit_len = (data.len() as u64).wrapping_mul(8);
@@ -130,7 +132,10 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
         }
 
         let mut a = h[0];
@@ -188,8 +193,16 @@ pub fn base64_encode(data: &[u8]) -> String {
     let mut i = 0;
     while i < data.len() {
         let b0 = data[i] as usize;
-        let b1 = if i + 1 < data.len() { data[i + 1] as usize } else { 0 };
-        let b2 = if i + 2 < data.len() { data[i + 2] as usize } else { 0 };
+        let b1 = if i + 1 < data.len() {
+            data[i + 1] as usize
+        } else {
+            0
+        };
+        let b2 = if i + 2 < data.len() {
+            data[i + 2] as usize
+        } else {
+            0
+        };
 
         let triple = (b0 << 16) | (b1 << 8) | b2;
         out.push(TABLE[(triple >> 18) & 0x3f] as char);
@@ -287,7 +300,9 @@ impl ContentSecurityPolicy {
             return Some(SourceExpr::Nonce(nonce_val.to_string()));
         }
 
-        if (lower.starts_with("'sha256-") || lower.starts_with("'sha384-") || lower.starts_with("'sha512-"))
+        if (lower.starts_with("'sha256-")
+            || lower.starts_with("'sha384-")
+            || lower.starts_with("'sha512-"))
             && lower.ends_with('\'')
         {
             let dash_idx = trimmed.find('-')?;
@@ -363,17 +378,16 @@ impl ContentSecurityPolicy {
             DirectiveKind::StyleSrcElem | DirectiveKind::StyleSrcAttr => {
                 &[DirectiveKind::StyleSrc, DirectiveKind::DefaultSrc]
             }
-            DirectiveKind::WorkerSrc => {
-                &[DirectiveKind::ScriptSrc, DirectiveKind::DefaultSrc]
-            }
-            DirectiveKind::ScriptSrc | DirectiveKind::StyleSrc | DirectiveKind::ImgSrc
-            | DirectiveKind::ConnectSrc | DirectiveKind::FontSrc | DirectiveKind::ObjectSrc
-            | DirectiveKind::MediaSrc | DirectiveKind::FrameSrc => {
-                &[DirectiveKind::DefaultSrc]
-            }
-            DirectiveKind::DefaultSrc | DirectiveKind::BaseUri | DirectiveKind::FormAction => {
-                &[]
-            }
+            DirectiveKind::WorkerSrc => &[DirectiveKind::ScriptSrc, DirectiveKind::DefaultSrc],
+            DirectiveKind::ScriptSrc
+            | DirectiveKind::StyleSrc
+            | DirectiveKind::ImgSrc
+            | DirectiveKind::ConnectSrc
+            | DirectiveKind::FontSrc
+            | DirectiveKind::ObjectSrc
+            | DirectiveKind::MediaSrc
+            | DirectiveKind::FrameSrc => &[DirectiveKind::DefaultSrc],
+            DirectiveKind::DefaultSrc | DirectiveKind::BaseUri | DirectiveKind::FormAction => &[],
         };
 
         for &fallback in fallbacks {
@@ -417,10 +431,17 @@ impl ContentSecurityPolicy {
 
         // Check unsafe-inline (only if no nonce or hash is specified in policy)
         let has_nonce_or_hash = sources.iter().any(|s| {
-            matches!(s, SourceExpr::Nonce(_) | SourceExpr::Hash { .. } | SourceExpr::StrictDynamic)
+            matches!(
+                s,
+                SourceExpr::Nonce(_) | SourceExpr::Hash { .. } | SourceExpr::StrictDynamic
+            )
         });
 
-        if !has_nonce_or_hash && sources.iter().any(|s| matches!(s, SourceExpr::UnsafeInline)) {
+        if !has_nonce_or_hash
+            && sources
+                .iter()
+                .any(|s| matches!(s, SourceExpr::UnsafeInline))
+        {
             return true;
         }
 
@@ -428,7 +449,12 @@ impl ContentSecurityPolicy {
     }
 
     /// Evaluates whether an external script URL is permitted.
-    pub fn allows_script_url(&self, page_origin: &str, script_url: &str, nonce: Option<&str>) -> bool {
+    pub fn allows_script_url(
+        &self,
+        page_origin: &str,
+        script_url: &str,
+        nonce: Option<&str>,
+    ) -> bool {
         let sources = match self.effective_sources(DirectiveKind::ScriptSrcElem) {
             Some(s) => s,
             None => return true,
@@ -450,7 +476,9 @@ impl ContentSecurityPolicy {
         // W3C CSP Level 3 §strict-dynamic:
         // When 'strict-dynamic' is present in the policy, host and scheme sources
         // are ignored. Only scripts with valid nonces/hashes or dynamically created scripts are allowed.
-        let has_strict_dynamic = sources.iter().any(|s| matches!(s, SourceExpr::StrictDynamic));
+        let has_strict_dynamic = sources
+            .iter()
+            .any(|s| matches!(s, SourceExpr::StrictDynamic));
         if has_strict_dynamic {
             return false;
         }
@@ -472,7 +500,10 @@ impl ContentSecurityPolicy {
         };
 
         if sources.iter().any(|s| matches!(s, SourceExpr::None)) {
-            return Err(format!("Blocked by CSP: directive {:?} specifies 'none'", directive));
+            return Err(format!(
+                "Blocked by CSP: directive {:?} specifies 'none'",
+                directive
+            ));
         }
 
         if let Some(n) = nonce {
@@ -484,16 +515,25 @@ impl ContentSecurityPolicy {
             }
         }
 
-        if matches!(directive, DirectiveKind::ScriptSrc | DirectiveKind::ScriptSrcElem)
-            && sources.iter().any(|s| matches!(s, SourceExpr::StrictDynamic))
+        if matches!(
+            directive,
+            DirectiveKind::ScriptSrc | DirectiveKind::ScriptSrcElem
+        ) && sources
+            .iter()
+            .any(|s| matches!(s, SourceExpr::StrictDynamic))
         {
-            return Err("Blocked by CSP: 'strict-dynamic' active without matching nonce/hash".into());
+            return Err(
+                "Blocked by CSP: 'strict-dynamic' active without matching nonce/hash".into(),
+            );
         }
 
         if self.matches_source_list(sources, page_origin, target_url) {
             Ok(())
         } else {
-            Err(format!("Blocked by CSP: URL {} violates {:?}", target_url, directive))
+            Err(format!(
+                "Blocked by CSP: URL {} violates {:?}",
+                target_url, directive
+            ))
         }
     }
 
@@ -533,13 +573,17 @@ impl ContentSecurityPolicy {
 
         let style_hash = sha256_base64(style_css.as_bytes());
         if sources.iter().any(|s| match s {
-            SourceExpr::Hash { algorithm, digest } if algorithm == "sha256" => digest == &style_hash,
+            SourceExpr::Hash { algorithm, digest } if algorithm == "sha256" => {
+                digest == &style_hash
+            }
             _ => false,
         }) {
             return true;
         }
 
-        sources.iter().any(|s| matches!(s, SourceExpr::UnsafeInline))
+        sources
+            .iter()
+            .any(|s| matches!(s, SourceExpr::UnsafeInline))
     }
 
     /// Evaluates whether an external stylesheet URL is permitted.
@@ -598,7 +642,12 @@ impl ContentSecurityPolicy {
         self.matches_source_list(sources, page_origin, target_url)
     }
 
-    fn matches_source_list(&self, sources: &[SourceExpr], page_origin: &str, target_url: &str) -> bool {
+    fn matches_source_list(
+        &self,
+        sources: &[SourceExpr],
+        page_origin: &str,
+        target_url: &str,
+    ) -> bool {
         if sources.iter().any(|s| matches!(s, SourceExpr::Wildcard)) {
             return true;
         }
@@ -620,7 +669,10 @@ impl ContentSecurityPolicy {
             match expr {
                 SourceExpr::SelfSource => {
                     if let Some((ref p_sch, ref p_host, ref p_port)) = page_parts {
-                        if p_sch == &target_scheme && p_host == &target_host && p_port == &target_port {
+                        if p_sch == &target_scheme
+                            && p_host == &target_host
+                            && p_port == &target_port
+                        {
                             return true;
                         }
                     }

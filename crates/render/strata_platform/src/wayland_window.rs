@@ -79,7 +79,9 @@ pub struct WaylandEncoder {
 impl WaylandEncoder {
     /// Creates a new empty message encoder.
     pub fn new() -> Self {
-        Self { buffer: Vec::with_capacity(128) }
+        Self {
+            buffer: Vec::with_capacity(128),
+        }
     }
 
     /// Clears the encoder buffer.
@@ -132,7 +134,7 @@ impl WaylandEncoder {
         self.push_u32(len);
         self.buffer.extend_from_slice(bytes);
         self.buffer.push(0); // trailing null
-        // Align to 4 bytes
+                             // Align to 4 bytes
         while !self.buffer.len().is_multiple_of(4) {
             self.buffer.push(0);
         }
@@ -202,7 +204,11 @@ impl<'a> WaylandDecoder<'a> {
 }
 
 /// Helper to send bytes with an optional file descriptor via `sendmsg` (`SCM_RIGHTS`).
-fn sendmsg_with_fd(socket_fd: RawFd, data: &[u8], fd_to_send: Option<RawFd>) -> std::io::Result<()> {
+fn sendmsg_with_fd(
+    socket_fd: RawFd,
+    data: &[u8],
+    fd_to_send: Option<RawFd>,
+) -> std::io::Result<()> {
     unsafe {
         let mut iov = libc::iovec {
             iov_base: data.as_ptr() as *mut libc::c_void,
@@ -288,8 +294,7 @@ impl ShmBuffer {
     /// Allocates and mmaps a new shared memory pixel buffer.
     pub fn new(pool_id: u32, buffer_id: u32, width: u32, height: u32) -> Result<Self, String> {
         let size = (width * height * 4) as usize;
-        let fd = create_shm_fd(size)
-            .map_err(|e| format!("Failed to create shm fd: {}", e))?;
+        let fd = create_shm_fd(size).map_err(|e| format!("Failed to create shm fd: {}", e))?;
 
         let ptr = unsafe {
             let p = libc::mmap(
@@ -380,8 +385,12 @@ impl WaylandWindow {
     /// Attempts to connect to the active Wayland compositor and instantiate a native window.
     pub fn new(config: WindowConfig) -> Result<Self, String> {
         let socket_path = crate::raw_abi::wayland::default_socket_path();
-        let stream = UnixStream::connect(&socket_path)
-            .map_err(|e| format!("Cannot connect to Wayland socket \"{}\": {}", socket_path, e))?;
+        let stream = UnixStream::connect(&socket_path).map_err(|e| {
+            format!(
+                "Cannot connect to Wayland socket \"{}\": {}",
+                socket_path, e
+            )
+        })?;
         stream
             .set_nonblocking(true)
             .map_err(|e| format!("Failed to set nonblocking stream: {}", e))?;
@@ -445,7 +454,8 @@ impl WaylandWindow {
         self.registry_id = self.allocate_id();
         self.encoder.begin_message();
         self.encoder.push_u32(self.registry_id);
-        self.encoder.finish_message(WL_DISPLAY_ID, WL_DISPLAY_GET_REGISTRY);
+        self.encoder
+            .finish_message(WL_DISPLAY_ID, WL_DISPLAY_GET_REGISTRY);
         self.send_message(None)?;
 
         // 2. Sync to receive initial registry globals
@@ -466,7 +476,8 @@ impl WaylandWindow {
             self.encoder.push_string("wl_compositor");
             self.encoder.push_u32(4); // version 4
             self.encoder.push_u32(self.compositor_id);
-            self.encoder.finish_message(self.registry_id, WL_REGISTRY_BIND);
+            self.encoder
+                .finish_message(self.registry_id, WL_REGISTRY_BIND);
             self.send_message(None)?;
         } else {
             return Err("Wayland compositor does not export wl_compositor".to_string());
@@ -479,7 +490,8 @@ impl WaylandWindow {
             self.encoder.push_string("wl_shm");
             self.encoder.push_u32(1); // version 1
             self.encoder.push_u32(self.shm_id);
-            self.encoder.finish_message(self.registry_id, WL_REGISTRY_BIND);
+            self.encoder
+                .finish_message(self.registry_id, WL_REGISTRY_BIND);
             self.send_message(None)?;
         } else {
             return Err("Wayland compositor does not export wl_shm".to_string());
@@ -492,7 +504,8 @@ impl WaylandWindow {
             self.encoder.push_string("xdg_wm_base");
             self.encoder.push_u32(1); // version 1
             self.encoder.push_u32(self.xdg_wm_base_id);
-            self.encoder.finish_message(self.registry_id, WL_REGISTRY_BIND);
+            self.encoder
+                .finish_message(self.registry_id, WL_REGISTRY_BIND);
             self.send_message(None)?;
         } else {
             return Err("Wayland compositor does not export xdg_wm_base".to_string());
@@ -505,20 +518,23 @@ impl WaylandWindow {
             self.encoder.push_string("wl_seat");
             self.encoder.push_u32(5); // version 5
             self.encoder.push_u32(self.seat_id);
-            self.encoder.finish_message(self.registry_id, WL_REGISTRY_BIND);
+            self.encoder
+                .finish_message(self.registry_id, WL_REGISTRY_BIND);
             self.send_message(None)?;
 
             // Bind pointer and keyboard
             self.pointer_id = self.allocate_id();
             self.encoder.begin_message();
             self.encoder.push_u32(self.pointer_id);
-            self.encoder.finish_message(self.seat_id, WL_SEAT_GET_POINTER);
+            self.encoder
+                .finish_message(self.seat_id, WL_SEAT_GET_POINTER);
             self.send_message(None)?;
 
             self.keyboard_id = self.allocate_id();
             self.encoder.begin_message();
             self.encoder.push_u32(self.keyboard_id);
-            self.encoder.finish_message(self.seat_id, WL_SEAT_GET_KEYBOARD);
+            self.encoder
+                .finish_message(self.seat_id, WL_SEAT_GET_KEYBOARD);
             self.send_message(None)?;
         }
 
@@ -526,7 +542,8 @@ impl WaylandWindow {
         self.surface_id = self.allocate_id();
         self.encoder.begin_message();
         self.encoder.push_u32(self.surface_id);
-        self.encoder.finish_message(self.compositor_id, WL_COMPOSITOR_CREATE_SURFACE);
+        self.encoder
+            .finish_message(self.compositor_id, WL_COMPOSITOR_CREATE_SURFACE);
         self.send_message(None)?;
 
         // 5. Create xdg_surface
@@ -534,30 +551,35 @@ impl WaylandWindow {
         self.encoder.begin_message();
         self.encoder.push_u32(self.xdg_surface_id);
         self.encoder.push_u32(self.surface_id);
-        self.encoder.finish_message(self.xdg_wm_base_id, XDG_WM_BASE_GET_XDG_SURFACE);
+        self.encoder
+            .finish_message(self.xdg_wm_base_id, XDG_WM_BASE_GET_XDG_SURFACE);
         self.send_message(None)?;
 
         // 6. Create xdg_toplevel
         self.xdg_toplevel_id = self.allocate_id();
         self.encoder.begin_message();
         self.encoder.push_u32(self.xdg_toplevel_id);
-        self.encoder.finish_message(self.xdg_surface_id, XDG_SURFACE_GET_TOPLEVEL);
+        self.encoder
+            .finish_message(self.xdg_surface_id, XDG_SURFACE_GET_TOPLEVEL);
         self.send_message(None)?;
 
         // Set title and app_id
         self.encoder.begin_message();
         self.encoder.push_string(&self.config.title);
-        self.encoder.finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_SET_TITLE);
+        self.encoder
+            .finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_SET_TITLE);
         self.send_message(None)?;
 
         self.encoder.begin_message();
         self.encoder.push_string("strata");
-        self.encoder.finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_SET_APP_ID);
+        self.encoder
+            .finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_SET_APP_ID);
         self.send_message(None)?;
 
         // Initial commit to request configure event
         self.encoder.begin_message();
-        self.encoder.finish_message(self.surface_id, WL_SURFACE_COMMIT);
+        self.encoder
+            .finish_message(self.surface_id, WL_SURFACE_COMMIT);
         self.send_message(None)?;
 
         // Allocate initial SHM buffer
@@ -587,7 +609,8 @@ impl WaylandWindow {
         self.encoder.push_i32(height as i32);
         self.encoder.push_i32((width * 4) as i32); // stride
         self.encoder.push_u32(WL_SHM_FORMAT_ARGB8888);
-        self.encoder.finish_message(pool_id, WL_SHM_POOL_CREATE_BUFFER);
+        self.encoder
+            .finish_message(pool_id, WL_SHM_POOL_CREATE_BUFFER);
         self.send_message(None)?;
 
         self.shm_buffer = Some(buffer);
@@ -611,7 +634,11 @@ impl WaylandWindow {
     }
 
     /// Reads available bytes from socket and dispatches Wayland events.
-    fn read_and_dispatch(&mut self, sync_done: &mut bool, target_callback_id: u32) -> Result<(), String> {
+    fn read_and_dispatch(
+        &mut self,
+        sync_done: &mut bool,
+        target_callback_id: u32,
+    ) -> Result<(), String> {
         if let Some(ref mut stream) = self.stream {
             let mut chunk = [0u8; 4096];
             let mut peer_closed = false;
@@ -639,7 +666,13 @@ impl WaylandWindow {
 
                 let payload = self.read_buffer[8..msg_len].to_vec();
                 self.read_buffer.drain(..msg_len);
-                self.handle_event(header.object_id, header.opcode, &payload, sync_done, target_callback_id);
+                self.handle_event(
+                    header.object_id,
+                    header.opcode,
+                    &payload,
+                    sync_done,
+                    target_callback_id,
+                );
             }
 
             if peer_closed && !*sync_done {
@@ -690,7 +723,8 @@ impl WaylandWindow {
                 // Respond immediately with pong
                 self.encoder.begin_message();
                 self.encoder.push_u32(serial);
-                self.encoder.finish_message(self.xdg_wm_base_id, XDG_WM_BASE_PONG);
+                self.encoder
+                    .finish_message(self.xdg_wm_base_id, XDG_WM_BASE_PONG);
                 let _ = self.send_message(None);
             }
             return;
@@ -703,7 +737,8 @@ impl WaylandWindow {
                 // Ack configure
                 self.encoder.begin_message();
                 self.encoder.push_u32(serial);
-                self.encoder.finish_message(self.xdg_surface_id, XDG_SURFACE_ACK_CONFIGURE);
+                self.encoder
+                    .finish_message(self.xdg_surface_id, XDG_SURFACE_ACK_CONFIGURE);
                 let _ = self.send_message(None);
                 self.redraw_requested = true;
             }
@@ -714,12 +749,16 @@ impl WaylandWindow {
         if object_id == self.xdg_toplevel_id && opcode == 0 {
             let mut decoder = WaylandDecoder::new(payload);
             if let (Some(w), Some(h)) = (decoder.read_i32(), decoder.read_i32()) {
-                if w > 0 && h > 0 && (w as u32 != self.config.width || h as u32 != self.config.height) {
+                if w > 0
+                    && h > 0
+                    && (w as u32 != self.config.width || h as u32 != self.config.height)
+                {
                     let (width, height) = (w as u32, h as u32);
                     self.config.width = width;
                     self.config.height = height;
                     let _ = self.recreate_shm_buffer(width, height);
-                    self.event_queue.push_back(PlatformEvent::WindowResized { width, height });
+                    self.event_queue
+                        .push_back(PlatformEvent::WindowResized { width, height });
                 }
             }
             return;
@@ -727,7 +766,8 @@ impl WaylandWindow {
 
         // 6. xdg_toplevel close event (opcode 1)
         if object_id == self.xdg_toplevel_id && opcode == 1 {
-            self.event_queue.push_back(PlatformEvent::WindowCloseRequested);
+            self.event_queue
+                .push_back(PlatformEvent::WindowCloseRequested);
             return;
         }
 
@@ -743,10 +783,8 @@ impl WaylandWindow {
                         let px = x as f32;
                         let py = y as f32;
                         self.cursor_pos = (px, py);
-                        self.event_queue.push_back(PlatformEvent::MouseMove {
-                            x: px,
-                            y: py,
-                        });
+                        self.event_queue
+                            .push_back(PlatformEvent::MouseMove { x: px, y: py });
                     }
                 }
                 // leave(serial, surface)
@@ -761,10 +799,8 @@ impl WaylandWindow {
                         let px = x as f32;
                         let py = y as f32;
                         self.cursor_pos = (px, py);
-                        self.event_queue.push_back(PlatformEvent::MouseMove {
-                            x: px,
-                            y: py,
-                        });
+                        self.event_queue
+                            .push_back(PlatformEvent::MouseMove { x: px, y: py });
                     }
                 }
                 // button(serial, time, button, state)
@@ -804,9 +840,11 @@ impl WaylandWindow {
                                     self.last_click = Some((now, x, y));
                                 }
                             }
-                            self.event_queue.push_back(PlatformEvent::MouseDown { x, y, button });
+                            self.event_queue
+                                .push_back(PlatformEvent::MouseDown { x, y, button });
                         } else {
-                            self.event_queue.push_back(PlatformEvent::MouseUp { x, y, button });
+                            self.event_queue
+                                .push_back(PlatformEvent::MouseUp { x, y, button });
                         }
                     }
                 }
@@ -893,7 +931,8 @@ impl WaylandWindow {
                         modifiers: Modifiers::default(),
                     });
                     if let Some(c) = ch {
-                        self.event_queue.push_back(PlatformEvent::ReceivedCharacter(c));
+                        self.event_queue
+                            .push_back(PlatformEvent::ReceivedCharacter(c));
                     }
                 } else {
                     self.event_queue.push_back(PlatformEvent::KeyUp {
@@ -923,7 +962,8 @@ impl WaylandWindow {
             self.encoder.push_u32(shm.buffer_id);
             self.encoder.push_i32(0); // x
             self.encoder.push_i32(0); // y
-            self.encoder.finish_message(self.surface_id, WL_SURFACE_ATTACH);
+            self.encoder
+                .finish_message(self.surface_id, WL_SURFACE_ATTACH);
             self.send_message(None)?;
 
             // Damage surface
@@ -932,12 +972,14 @@ impl WaylandWindow {
             self.encoder.push_i32(0);
             self.encoder.push_i32(width as i32);
             self.encoder.push_i32(height as i32);
-            self.encoder.finish_message(self.surface_id, WL_SURFACE_DAMAGE);
+            self.encoder
+                .finish_message(self.surface_id, WL_SURFACE_DAMAGE);
             self.send_message(None)?;
 
             // Commit surface
             self.encoder.begin_message();
-            self.encoder.finish_message(self.surface_id, WL_SURFACE_COMMIT);
+            self.encoder
+                .finish_message(self.surface_id, WL_SURFACE_COMMIT);
             self.send_message(None)?;
         }
 
@@ -961,7 +1003,8 @@ impl PlatformWindow for WaylandWindow {
         self.config.title = title.to_string();
         self.encoder.begin_message();
         self.encoder.push_string(title);
-        self.encoder.finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_SET_TITLE);
+        self.encoder
+            .finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_SET_TITLE);
         let _ = self.send_message(None);
     }
 
@@ -995,7 +1038,8 @@ impl PlatformWindow for WaylandWindow {
         match mode {
             WindowMode::Maximized => {
                 self.encoder.begin_message();
-                self.encoder.finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_SET_MAXIMIZED);
+                self.encoder
+                    .finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_SET_MAXIMIZED);
                 let _ = self.send_message(None);
                 if prev != WindowMode::Maximized {
                     self.push_event(PlatformEvent::WindowMaximized(true));
@@ -1003,12 +1047,14 @@ impl PlatformWindow for WaylandWindow {
             }
             WindowMode::Minimized => {
                 self.encoder.begin_message();
-                self.encoder.finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_SET_MINIMIZED);
+                self.encoder
+                    .finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_SET_MINIMIZED);
                 let _ = self.send_message(None);
             }
             WindowMode::Windowed => {
                 self.encoder.begin_message();
-                self.encoder.finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_UNSET_MAXIMIZED);
+                self.encoder
+                    .finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_UNSET_MAXIMIZED);
                 let _ = self.send_message(None);
                 if prev == WindowMode::Maximized {
                     self.push_event(PlatformEvent::WindowMaximized(false));
@@ -1056,7 +1102,8 @@ impl PlatformWindow for WaylandWindow {
             self.encoder.begin_message();
             self.encoder.push_u32(self.seat_id);
             self.encoder.push_u32(self.last_serial);
-            self.encoder.finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_MOVE);
+            self.encoder
+                .finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_MOVE);
             let _ = self.send_message(None);
         }
     }
@@ -1068,7 +1115,8 @@ impl PlatformWindow for WaylandWindow {
                 self.encoder.push_u32(self.seat_id);
                 self.encoder.push_u32(self.last_serial);
                 self.encoder.push_u32(wayland_edge);
-                self.encoder.finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_RESIZE);
+                self.encoder
+                    .finish_message(self.xdg_toplevel_id, XDG_TOPLEVEL_RESIZE);
                 let _ = self.send_message(None);
             }
         }

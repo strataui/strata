@@ -25,8 +25,7 @@ fn test_mcp_bridge_socket_security_permissions_and_peercred() {
     let parent_meta = std::fs::metadata(&test_dir).expect("Directory metadata failed");
     let parent_mode = parent_meta.permissions().mode() & 0o777;
     assert_eq!(
-        parent_mode,
-        0o700,
+        parent_mode, 0o700,
         "Parent directory must have 0700 permissions, got: {parent_mode:o}"
     );
 
@@ -34,8 +33,7 @@ fn test_mcp_bridge_socket_security_permissions_and_peercred() {
     let sock_meta = std::fs::metadata(&socket_path).expect("Socket metadata failed");
     let sock_mode = sock_meta.permissions().mode() & 0o777;
     assert_eq!(
-        sock_mode,
-        0o600,
+        sock_mode, 0o600,
         "Socket file must have 0600 permissions, got: {sock_mode:o}"
     );
 

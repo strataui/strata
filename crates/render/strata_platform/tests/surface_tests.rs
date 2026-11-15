@@ -1,12 +1,14 @@
 #![allow(clippy::field_reassign_with_default)]
 
 use std::time::{Duration, Instant};
+use strata_platform::events::PlatformEvent;
+use strata_platform::raw_abi::cocoa::*;
 use strata_platform::raw_abi::wayland::WaylandHeader;
 use strata_platform::raw_abi::win32::*;
-use strata_platform::raw_abi::cocoa::*;
-use strata_platform::surface::{FramePacer, PresentMode, RefreshRate, SurfaceConfig, SurfaceHandle, SwapchainFormat};
+use strata_platform::surface::{
+    FramePacer, PresentMode, RefreshRate, SurfaceConfig, SurfaceHandle, SwapchainFormat,
+};
 use strata_platform::window::{LivePlatformWindow, PlatformWindow, WindowConfig, WindowMode};
-use strata_platform::events::PlatformEvent;
 
 #[test]
 fn test_surface_config_physical_sizing_and_byte_calculations() {
@@ -101,8 +103,17 @@ fn test_live_platform_window_lifecycle_and_events() {
     // Event polling
     let events = window.poll_events();
     assert_eq!(events.len(), 2);
-    assert_eq!(events[0], PlatformEvent::WindowResized { width: 1920, height: 1080 });
-    assert_eq!(events[1], PlatformEvent::ScaleFactorChanged { scale_factor: 2.0 });
+    assert_eq!(
+        events[0],
+        PlatformEvent::WindowResized {
+            width: 1920,
+            height: 1080
+        }
+    );
+    assert_eq!(
+        events[1],
+        PlatformEvent::ScaleFactorChanged { scale_factor: 2.0 }
+    );
 
     // Mode
     window.set_mode(WindowMode::BorderlessFullscreen);

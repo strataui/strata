@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 /// Exact 2D position in text buffer coordinates (0-indexed line and column).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 pub struct Position {
     pub line: usize,
     pub col: usize,
@@ -174,7 +176,8 @@ impl MultiCursor {
 
         self.selections.clear();
         for l in min_l..=max_l {
-            self.selections.push(Selection::point(Position::new(l, col)));
+            self.selections
+                .push(Selection::point(Position::new(l, col)));
         }
         self.primary_idx = 0;
         self.normalize();
@@ -224,22 +227,23 @@ pub fn shift_position_after_edit(
         return pos;
     }
 
-    let delta_lines = (inserted_lines.len() as isize - 1) - (edit_end.line as isize - edit_start.line as isize);
+    let delta_lines =
+        (inserted_lines.len() as isize - 1) - (edit_end.line as isize - edit_start.line as isize);
 
     if pos <= edit_end {
         if inserted_lines.len() == 1 {
             Position::new(edit_start.line, edit_start.col + inserted_lines[0].len())
         } else {
             let last_line_len = inserted_lines.last().map_or(0, |l| l.len());
-            Position::new(
-                edit_start.line + inserted_lines.len() - 1,
-                last_line_len,
-            )
+            Position::new(edit_start.line + inserted_lines.len() - 1, last_line_len)
         }
     } else if pos.line == edit_end.line {
         let col_offset = pos.col - edit_end.col;
         if inserted_lines.len() == 1 {
-            Position::new(edit_start.line, edit_start.col + inserted_lines[0].len() + col_offset)
+            Position::new(
+                edit_start.line,
+                edit_start.col + inserted_lines[0].len() + col_offset,
+            )
         } else {
             let last_line_len = inserted_lines.last().map_or(0, |l| l.len());
             let target_line = (pos.line as isize + delta_lines).max(0) as usize;

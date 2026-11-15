@@ -196,13 +196,23 @@ fn test_window_renders_complex_ui_pixels() {
         // Outer div with bg-red (239, 68, 68), inner child with bg-blue (59, 130, 246)
         let child = NodeBlueprint::Element {
             tag: Tag::Div,
-            classes: vec!["w-[50px]".to_string(), "h-[50px]".to_string(), "bg-blue-500".to_string()].into(),
+            classes: vec![
+                "w-[50px]".to_string(),
+                "h-[50px]".to_string(),
+                "bg-blue-500".to_string(),
+            ]
+            .into(),
             attributes: Vec::new(),
             children: Vec::new(),
         };
         let root = NodeBlueprint::Element {
             tag: Tag::Div,
-            classes: vec!["w-[100px]".to_string(), "h-[100px]".to_string(), "bg-red-500".to_string()].into(),
+            classes: vec![
+                "w-[100px]".to_string(),
+                "h-[100px]".to_string(),
+                "bg-red-500".to_string(),
+            ]
+            .into(),
             attributes: Vec::new(),
             children: vec![child],
         };
@@ -227,5 +237,3 @@ fn test_window_renders_complex_ui_pixels() {
         strata_app_destroy(app);
     }
 }
-
-

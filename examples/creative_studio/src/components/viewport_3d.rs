@@ -1,8 +1,8 @@
 //! Interactive 3D Viewport Component for Strata Creative Studio.
 //! Demonstrates the Unified 3D API: Three.js high-level PBR meshes and low-level custom GLSL/Vulkan shaders in the exact same scene.
 
-use strata::prelude::*;
 use crate::state::StudioState;
+use strata::prelude::*;
 
 #[component]
 pub fn Viewport3D(state: StudioState) -> View {

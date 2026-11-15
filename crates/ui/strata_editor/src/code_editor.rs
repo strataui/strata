@@ -1,11 +1,11 @@
 //! High-performance Code Editor controller with virtualized lines, syntax highlighting, and gutter.
 
-use strata_dom::{NodeBlueprint, Tag};
 use crate::buffer::LineBuffer;
 use crate::cursor::{MultiCursor, Position, Selection};
 use crate::history::HistoryStack;
 use crate::ime::ImeComposition;
 use crate::syntax::{Language, SyntaxHighlighter, TokenType};
+use strata_dom::{NodeBlueprint, Tag};
 
 /// High-level code editor managing buffer state, multi-cursors, and view rendering.
 #[derive(Debug, Clone)]
@@ -150,7 +150,9 @@ impl CodeEditor {
         for sel in descending {
             let (start, end) = sel.ordered_range();
             if start != end {
-                let deleted = self.buffer.delete_range(start.line, start.col, end.line, end.col);
+                let deleted = self
+                    .buffer
+                    .delete_range(start.line, start.col, end.line, end.col);
                 operations.push(crate::history::EditOperation::Delete {
                     start,
                     end,
@@ -158,7 +160,9 @@ impl CodeEditor {
                 });
             }
 
-            let indent_spaces = self.highlighter.compute_auto_indent(&self.buffer, start.line);
+            let indent_spaces = self
+                .highlighter
+                .compute_auto_indent(&self.buffer, start.line);
             self.buffer.split_line(start.line, start.col);
 
             let new_line = start.line + 1;
@@ -186,18 +190,17 @@ impl CodeEditor {
             processed_carets.push(my_new_pos);
         }
 
-        let new_cursors: Vec<Selection> = processed_carets
-            .into_iter()
-            .map(Selection::point)
-            .collect();
+        let new_cursors: Vec<Selection> =
+            processed_carets.into_iter().map(Selection::point).collect();
 
         self.cursors = MultiCursor::from_selections(new_cursors);
 
-        self.history.push_transaction(crate::history::EditorTransaction::new(
-            operations,
-            before_all,
-            self.cursors.all().to_vec(),
-        ));
+        self.history
+            .push_transaction(crate::history::EditorTransaction::new(
+                operations,
+                before_all,
+                self.cursors.all().to_vec(),
+            ));
 
         self.reparse();
     }
@@ -220,7 +223,9 @@ impl CodeEditor {
         for sel in descending {
             let (start, end) = sel.ordered_range();
             if start != end {
-                let deleted = self.buffer.delete_range(start.line, start.col, end.line, end.col);
+                let deleted = self
+                    .buffer
+                    .delete_range(start.line, start.col, end.line, end.col);
                 operations.push(crate::history::EditOperation::Delete {
                     start,
                     end,
@@ -250,18 +255,17 @@ impl CodeEditor {
             processed_carets.push(my_new_pos);
         }
 
-        let new_cursors: Vec<Selection> = processed_carets
-            .into_iter()
-            .map(Selection::point)
-            .collect();
+        let new_cursors: Vec<Selection> =
+            processed_carets.into_iter().map(Selection::point).collect();
 
         self.cursors = MultiCursor::from_selections(new_cursors);
 
-        self.history.push_transaction(crate::history::EditorTransaction::new(
-            operations,
-            before_all,
-            self.cursors.all().to_vec(),
-        ));
+        self.history
+            .push_transaction(crate::history::EditorTransaction::new(
+                operations,
+                before_all,
+                self.cursors.all().to_vec(),
+            ));
 
         self.reparse();
     }
@@ -278,7 +282,9 @@ impl CodeEditor {
         for sel in descending {
             let (start, end) = sel.ordered_range();
             if start != end {
-                let deleted = self.buffer.delete_range(start.line, start.col, end.line, end.col);
+                let deleted = self
+                    .buffer
+                    .delete_range(start.line, start.col, end.line, end.col);
                 operations.push(crate::history::EditOperation::Delete {
                     start,
                     end,
@@ -292,7 +298,9 @@ impl CodeEditor {
                 processed_carets.push(start);
             } else if start.col > 0 {
                 let del_start = Position::new(start.line, start.col - 1);
-                let deleted = self.buffer.delete_range(del_start.line, del_start.col, start.line, start.col);
+                let deleted =
+                    self.buffer
+                        .delete_range(del_start.line, del_start.col, start.line, start.col);
                 operations.push(crate::history::EditOperation::Delete {
                     start: del_start,
                     end: start,
@@ -300,7 +308,8 @@ impl CodeEditor {
                 });
 
                 for caret in &mut processed_carets {
-                    *caret = crate::cursor::shift_position_after_edit(*caret, del_start, start, &[""]);
+                    *caret =
+                        crate::cursor::shift_position_after_edit(*caret, del_start, start, &[""]);
                 }
 
                 processed_carets.push(del_start);
@@ -331,19 +340,18 @@ impl CodeEditor {
             }
         }
 
-        let new_cursors: Vec<Selection> = processed_carets
-            .into_iter()
-            .map(Selection::point)
-            .collect();
+        let new_cursors: Vec<Selection> =
+            processed_carets.into_iter().map(Selection::point).collect();
 
         self.cursors = MultiCursor::from_selections(new_cursors);
 
         if !operations.is_empty() {
-            self.history.push_transaction(crate::history::EditorTransaction::new(
-                operations,
-                before_all,
-                self.cursors.all().to_vec(),
-            ));
+            self.history
+                .push_transaction(crate::history::EditorTransaction::new(
+                    operations,
+                    before_all,
+                    self.cursors.all().to_vec(),
+                ));
         }
 
         self.reparse();
@@ -493,7 +501,8 @@ impl CodeEditor {
         let last_line = total_lines.saturating_sub(1);
         let last_col = self.buffer.line_len(last_line);
         self.cursors.set_single(Position::ZERO);
-        self.cursors.all_mut()[0] = Selection::range(Position::ZERO, Position::new(last_line, last_col));
+        self.cursors.all_mut()[0] =
+            Selection::range(Position::ZERO, Position::new(last_line, last_col));
     }
 
     /// Toggles code folding on the specified line.
@@ -557,7 +566,10 @@ impl CodeEditor {
 
                 let gutter_node = NodeBlueprint::element(
                     Tag::Span,
-                    vec!["w-12 text-right pr-4 select-none text-slate-500 font-mono text-xs".to_string()],
+                    vec![
+                        "w-12 text-right pr-4 select-none text-slate-500 font-mono text-xs"
+                            .to_string(),
+                    ],
                     Vec::new(),
                     vec![NodeBlueprint::text(gutter_text)],
                 );
@@ -571,7 +583,8 @@ impl CodeEditor {
                     let mut last_col = 0;
                     for token in tokens {
                         if token.start_col > last_col && token.start_col <= vline.text.len() {
-                            line_token_nodes.push(NodeBlueprint::text(&vline.text[last_col..token.start_col]));
+                            line_token_nodes
+                                .push(NodeBlueprint::text(&vline.text[last_col..token.start_col]));
                         }
 
                         let color_class = match token.token_type {
@@ -622,12 +635,7 @@ impl CodeEditor {
             class_style
         );
 
-        NodeBlueprint::element(
-            Tag::Div,
-            vec![container_class],
-            Vec::new(),
-            row_nodes,
-        )
+        NodeBlueprint::element(Tag::Div, vec![container_class], Vec::new(), row_nodes)
     }
 
     /// Renders a virtualized viewport slice of the code editor.
@@ -661,13 +669,18 @@ impl CodeEditor {
         if top_spacer_height > 0.0 {
             row_nodes.push(NodeBlueprint::element(
                 Tag::Div,
-                vec![format!("h-[{:.1}px] w-full pointer-events-none", top_spacer_height)],
+                vec![format!(
+                    "h-[{:.1}px] w-full pointer-events-none",
+                    top_spacer_height
+                )],
                 Vec::new(),
                 Vec::new(),
             ));
         }
 
-        let visible_lines = self.buffer.slice_lines(start_line, end_line.saturating_sub(start_line));
+        let visible_lines = self
+            .buffer
+            .slice_lines(start_line, end_line.saturating_sub(start_line));
         let active_line = self.cursors.primary().focus.line;
 
         for (l_idx, line_str) in visible_lines {
@@ -722,7 +735,8 @@ impl CodeEditor {
                     let mut last_col = 0;
                     for token in tokens {
                         if token.start_col > last_col && token.start_col <= vline.text.len() {
-                            line_token_nodes.push(NodeBlueprint::text(&vline.text[last_col..token.start_col]));
+                            line_token_nodes
+                                .push(NodeBlueprint::text(&vline.text[last_col..token.start_col]));
                         }
 
                         let color_class = match token.token_type {
@@ -772,7 +786,10 @@ impl CodeEditor {
         if bottom_spacer_height > 0.0 {
             row_nodes.push(NodeBlueprint::element(
                 Tag::Div,
-                vec![format!("h-[{:.1}px] w-full pointer-events-none", bottom_spacer_height)],
+                vec![format!(
+                    "h-[{:.1}px] w-full pointer-events-none",
+                    bottom_spacer_height
+                )],
                 Vec::new(),
                 Vec::new(),
             ));
@@ -783,11 +800,6 @@ impl CodeEditor {
             class_style
         );
 
-        NodeBlueprint::element(
-            Tag::Div,
-            vec![container_class],
-            Vec::new(),
-            row_nodes,
-        )
+        NodeBlueprint::element(Tag::Div, vec![container_class], Vec::new(), row_nodes)
     }
 }

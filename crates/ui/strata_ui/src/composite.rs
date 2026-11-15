@@ -89,7 +89,11 @@ pub struct TableColumnDef<T> {
 }
 
 impl<T> TableColumnDef<T> {
-    pub fn new(key: &'static str, title: &'static str, accessor: impl Fn(&T) -> String + 'static) -> Self {
+    pub fn new(
+        key: &'static str,
+        title: &'static str,
+        accessor: impl Fn(&T) -> String + 'static,
+    ) -> Self {
         Self {
             key,
             title,

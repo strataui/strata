@@ -1,8 +1,8 @@
 //! Time-Travel History and Undo/Redo Engine for Strata Store.
 
+use crate::store::Store;
 use std::cell::RefCell;
 use std::rc::Rc;
-use crate::store::Store;
 
 /// History store managing undo/redo snapshots with bounded buffer depth.
 #[derive(Clone)]

@@ -146,7 +146,9 @@ impl PathBuilder {
     }
 
     pub fn quad_to(mut self, cx: f32, cy: f32, x: f32, y: f32) -> Self {
-        self.path.verbs.push(PathVerb::QuadTo(Point2D::new(cx, cy), Point2D::new(x, y)));
+        self.path
+            .verbs
+            .push(PathVerb::QuadTo(Point2D::new(cx, cy), Point2D::new(x, y)));
         self
     }
 

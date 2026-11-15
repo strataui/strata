@@ -8,8 +8,12 @@
 //! 5. GOAL-59: Generalized readability scoring and Full DOM rendering on generic non-MediaWiki documents.
 
 use strata_style::MediaContext;
-use strata_web_reader::csp::{extract_meta_csp, sha256_base64, ContentSecurityPolicy, DirectiveKind, SourceExpr};
-use strata_web_reader::parser::{extract_script_descriptors, extract_scripts, HtmlParser, ScriptDescriptor};
+use strata_web_reader::csp::{
+    extract_meta_csp, sha256_base64, ContentSecurityPolicy, DirectiveKind, SourceExpr,
+};
+use strata_web_reader::parser::{
+    extract_script_descriptors, extract_scripts, HtmlParser, ScriptDescriptor,
+};
 use strata_web_reader::transpiler::{RenderMode, WebTranspiler};
 use strata_web_reader::ReaderTheme;
 
@@ -40,11 +44,21 @@ fn test_goal55_extract_script_descriptors_inline_and_external() {
     "#;
 
     let descriptors = extract_script_descriptors(html);
-    assert_eq!(descriptors.len(), 4, "Must extract 4 executable scripts (ignoring json-ld)");
+    assert_eq!(
+        descriptors.len(),
+        4,
+        "Must extract 4 executable scripts (ignoring json-ld)"
+    );
 
     // 1. External async bundle
     match &descriptors[0] {
-        ScriptDescriptor::External { src, is_async, is_defer, integrity, .. } => {
+        ScriptDescriptor::External {
+            src,
+            is_async,
+            is_defer,
+            integrity,
+            ..
+        } => {
             assert_eq!(src, "https://cdn.example.com/vendor/bundle.js");
             assert!(*is_async, "Should flag async");
             assert!(!*is_defer, "Should not flag defer");
@@ -55,7 +69,13 @@ fn test_goal55_extract_script_descriptors_inline_and_external() {
 
     // 2. External defer bundle with integrity
     match &descriptors[1] {
-        ScriptDescriptor::External { src, is_async, is_defer, integrity, .. } => {
+        ScriptDescriptor::External {
+            src,
+            is_async,
+            is_defer,
+            integrity,
+            ..
+        } => {
             assert_eq!(src, "/static/app.js");
             assert!(!*is_async, "Should not flag async");
             assert!(*is_defer, "Should flag defer");
@@ -125,7 +145,10 @@ fn test_goal61_csp_header_parser_directives_and_sources() {
     let script_sources = policy.directives.get(&DirectiveKind::ScriptSrc).unwrap();
     assert_eq!(script_sources.len(), 3);
     assert_eq!(script_sources[0], SourceExpr::SelfSource);
-    assert_eq!(script_sources[1], SourceExpr::Nonce("secret123".to_string()));
+    assert_eq!(
+        script_sources[1],
+        SourceExpr::Nonce("secret123".to_string())
+    );
     match &script_sources[2] {
         SourceExpr::Host { host, scheme, .. } => {
             assert_eq!(host, "scripts.org");
@@ -145,13 +168,25 @@ fn test_goal61_csp_header_parser_directives_and_sources() {
 fn test_goal61_csp_inline_script_blocking_and_nonce_hash_validation() {
     // 1. Strict CSP blocking inline scripts
     let strict_csp = ContentSecurityPolicy::parse("script-src 'self' https://cdn.example.com");
-    assert!(!strict_csp.allows_script_inline("console.log('pwned')", None), "Must block inline scripts without unsafe-inline or nonce");
+    assert!(
+        !strict_csp.allows_script_inline("console.log('pwned')", None),
+        "Must block inline scripts without unsafe-inline or nonce"
+    );
 
     // 2. CSP allowing nonce
     let nonce_csp = ContentSecurityPolicy::parse("script-src 'self' 'nonce-secureNonce99'");
-    assert!(nonce_csp.allows_script_inline("alert(1)", Some("secureNonce99")), "Must permit script matching nonce");
-    assert!(!nonce_csp.allows_script_inline("alert(1)", Some("wrongNonce")), "Must reject script with mismatched nonce");
-    assert!(!nonce_csp.allows_script_inline("alert(1)", None), "Must reject script missing nonce");
+    assert!(
+        nonce_csp.allows_script_inline("alert(1)", Some("secureNonce99")),
+        "Must permit script matching nonce"
+    );
+    assert!(
+        !nonce_csp.allows_script_inline("alert(1)", Some("wrongNonce")),
+        "Must reject script with mismatched nonce"
+    );
+    assert!(
+        !nonce_csp.allows_script_inline("alert(1)", None),
+        "Must reject script missing nonce"
+    );
 
     // 3. CSP allowing sha256 hash
     let code = "var count = 100;";
@@ -159,8 +194,14 @@ fn test_goal61_csp_inline_script_blocking_and_nonce_hash_validation() {
     let hash_header = format!("script-src 'self' 'sha256-{hash}'");
     let hash_csp = ContentSecurityPolicy::parse(&hash_header);
 
-    assert!(hash_csp.allows_script_inline(code, None), "Must permit inline script whose SHA-256 matches directive");
-    assert!(!hash_csp.allows_script_inline("var count = 101;", None), "Must block script whose hash differs");
+    assert!(
+        hash_csp.allows_script_inline(code, None),
+        "Must permit inline script whose SHA-256 matches directive"
+    );
+    assert!(
+        !hash_csp.allows_script_inline("var count = 101;", None),
+        "Must block script whose hash differs"
+    );
 
     // 4. Unsafe-inline permitted only when nonces/hashes are absent
     let unsafe_csp = ContentSecurityPolicy::parse("script-src 'unsafe-inline'");
@@ -170,13 +211,22 @@ fn test_goal61_csp_inline_script_blocking_and_nonce_hash_validation() {
 #[test]
 fn test_goal61_csp_eval_enforcement() {
     let no_eval_csp = ContentSecurityPolicy::parse("script-src 'self'");
-    assert!(!no_eval_csp.allows_eval(), "eval() must be forbidden without 'unsafe-eval'");
+    assert!(
+        !no_eval_csp.allows_eval(),
+        "eval() must be forbidden without 'unsafe-eval'"
+    );
 
     let eval_csp = ContentSecurityPolicy::parse("script-src 'self' 'unsafe-eval'");
-    assert!(eval_csp.allows_eval(), "eval() must be permitted when 'unsafe-eval' is present");
+    assert!(
+        eval_csp.allows_eval(),
+        "eval() must be permitted when 'unsafe-eval' is present"
+    );
 
     let default_no_eval = ContentSecurityPolicy::parse("default-src 'self'");
-    assert!(!default_no_eval.allows_eval(), "eval() must be forbidden by fallback default-src");
+    assert!(
+        !default_no_eval.allows_eval(),
+        "eval() must be forbidden by fallback default-src"
+    );
 }
 
 #[test]
@@ -186,15 +236,36 @@ fn test_goal61_csp_url_and_network_connect_restrictions() {
     let origin = "https://app.strataui.org";
 
     // Script URLs
-    assert!(csp.allows_script_url(origin, "https://app.strataui.org/app.js", None), "'self' match allowed");
-    assert!(csp.allows_script_url(origin, "/relative/script.js", None), "Relative URL matches 'self'");
-    assert!(csp.allows_script_url(origin, "https://cdn.strataui.org/lib.js", None), "Explicit host allowed");
-    assert!(csp.allows_script_url(origin, "https://sub.trusted.com/a.js", None), "Wildcard subdomain *.trusted.com allowed");
-    assert!(!csp.allows_script_url(origin, "https://malicious.evil.com/payload.js", None), "Unauthorized domain rejected");
+    assert!(
+        csp.allows_script_url(origin, "https://app.strataui.org/app.js", None),
+        "'self' match allowed"
+    );
+    assert!(
+        csp.allows_script_url(origin, "/relative/script.js", None),
+        "Relative URL matches 'self'"
+    );
+    assert!(
+        csp.allows_script_url(origin, "https://cdn.strataui.org/lib.js", None),
+        "Explicit host allowed"
+    );
+    assert!(
+        csp.allows_script_url(origin, "https://sub.trusted.com/a.js", None),
+        "Wildcard subdomain *.trusted.com allowed"
+    );
+    assert!(
+        !csp.allows_script_url(origin, "https://malicious.evil.com/payload.js", None),
+        "Unauthorized domain rejected"
+    );
 
     // Connect URLs (fetch / WebSocket)
-    assert!(csp.allows_connect_url(origin, "https://api.strataui.org/v1/data"), "Explicit connect-src allowed");
-    assert!(!csp.allows_connect_url(origin, "https://other.strataui.org/v1/data"), "Non-whitelisted connect host rejected");
+    assert!(
+        csp.allows_connect_url(origin, "https://api.strataui.org/v1/data"),
+        "Explicit connect-src allowed"
+    );
+    assert!(
+        !csp.allows_connect_url(origin, "https://other.strataui.org/v1/data"),
+        "Non-whitelisted connect host rejected"
+    );
 }
 
 #[test]
@@ -231,10 +302,22 @@ fn test_goal62_honest_user_agent_format() {
     assert!(!headers.has("User-Agent"));
 
     // Verify format
-    assert!(expected_ua.contains("Onyx/1.0"), "User-Agent must identify Onyx engine");
-    assert!(expected_ua.contains("strataui.org"), "User-Agent must link to Strata repository");
-    assert!(!expected_ua.contains("Chrome/120.0.0.0"), "Zero Chrome spoofing allowed");
-    assert!(!expected_ua.contains("Safari/537.36"), "Zero Safari spoofing allowed");
+    assert!(
+        expected_ua.contains("Onyx/1.0"),
+        "User-Agent must identify Onyx engine"
+    );
+    assert!(
+        expected_ua.contains("strataui.org"),
+        "User-Agent must link to Strata repository"
+    );
+    assert!(
+        !expected_ua.contains("Chrome/120.0.0.0"),
+        "Zero Chrome spoofing allowed"
+    );
+    assert!(
+        !expected_ua.contains("Safari/537.36"),
+        "Zero Safari spoofing allowed"
+    );
 }
 
 // =========================================================================
@@ -247,7 +330,11 @@ fn test_goal60_whatwg_insertion_modes_and_table_foster_parenting() {
     let html = "<table>Misplaced Text<input type=\"hidden\"><tr><td>Valid Cell</td></tr></table>";
     let nodes = HtmlParser::parse(html);
 
-    assert_eq!(nodes.len(), 3, "Misplaced text and input must be foster-parented outside table");
+    assert_eq!(
+        nodes.len(),
+        3,
+        "Misplaced text and input must be foster-parented outside table"
+    );
     assert_eq!(nodes[0].text_content(), "Misplaced Text");
     if let strata_web_reader::ast::SemanticNode::Element { tag, .. } = &nodes[1] {
         assert_eq!(tag, "input");
@@ -266,7 +353,11 @@ fn test_goal60_whatwg_paragraph_auto_closing_on_headings_and_blocks() {
     let html = "<p>First paragraph<h1>Heading</h1><p>Second paragraph<div>Division</div>";
     let nodes = HtmlParser::parse(html);
 
-    assert_eq!(nodes.len(), 4, "<p> must be closed before <h1> and before <div>");
+    assert_eq!(
+        nodes.len(),
+        4,
+        "<p> must be closed before <h1> and before <div>"
+    );
     if let strata_web_reader::ast::SemanticNode::Element { tag, children, .. } = &nodes[0] {
         assert_eq!(tag, "p");
         assert_eq!(children[0].text_content(), "First paragraph");
@@ -340,27 +431,41 @@ fn test_goal59_readability_heuristic_extracts_article_from_complex_site() {
     let reader_bp = transpiler.transpile(&nodes, None, &media);
     let reader_repr = format!("{reader_bp:?}");
     assert!(reader_repr.contains("Sovereign Web Engine Architecture"));
-    assert!(!reader_repr.contains("Ad banner promotion"), "Reader mode must strip ads and sidebars");
-    assert!(!reader_repr.contains("Copyright 2026"), "Reader mode must strip footer");
+    assert!(
+        !reader_repr.contains("Ad banner promotion"),
+        "Reader mode must strip ads and sidebars"
+    );
+    assert!(
+        !reader_repr.contains("Copyright 2026"),
+        "Reader mode must strip footer"
+    );
 
     // 2. FullDom mode preserves the entire document tree
     let full_transpiler = WebTranspiler::new(&theme).with_render_mode(RenderMode::FullDom);
     let full_bp = full_transpiler.transpile_full_document(&nodes, &media);
     let full_repr = format!("{full_bp:?}");
     assert!(full_repr.contains("Sovereign Web Engine Architecture"));
-    assert!(full_repr.contains("Ad banner promotion"), "FullDom mode must retain all elements");
+    assert!(
+        full_repr.contains("Ad banner promotion"),
+        "FullDom mode must retain all elements"
+    );
 }
 
 #[test]
 fn test_goal23_csp_directive_fallback_and_strict_dynamic() {
     // 1. Directive inheritance cascade: ScriptSrcElem -> ScriptSrc -> DefaultSrc
     let p1 = ContentSecurityPolicy::parse("default-src 'self'");
-    let s1 = p1.effective_sources(DirectiveKind::ScriptSrcElem).expect("Must inherit default-src");
+    let s1 = p1
+        .effective_sources(DirectiveKind::ScriptSrcElem)
+        .expect("Must inherit default-src");
     assert_eq!(s1.len(), 1);
     assert_eq!(s1[0], SourceExpr::SelfSource);
 
-    let p2 = ContentSecurityPolicy::parse("default-src 'self'; script-src https://scripts.strataui.org");
-    let s2 = p2.effective_sources(DirectiveKind::ScriptSrcElem).expect("Must inherit script-src");
+    let p2 =
+        ContentSecurityPolicy::parse("default-src 'self'; script-src https://scripts.strataui.org");
+    let s2 = p2
+        .effective_sources(DirectiveKind::ScriptSrcElem)
+        .expect("Must inherit script-src");
     assert_eq!(s2.len(), 1);
     match &s2[0] {
         SourceExpr::Host { host, .. } => assert_eq!(host, "scripts.strataui.org"),
@@ -368,7 +473,9 @@ fn test_goal23_csp_directive_fallback_and_strict_dynamic() {
     }
 
     let p3 = ContentSecurityPolicy::parse("default-src 'self'; script-src https://scripts.strataui.org; script-src-elem https://elem.strataui.org");
-    let s3 = p3.effective_sources(DirectiveKind::ScriptSrcElem).expect("Must have explicit script-src-elem");
+    let s3 = p3
+        .effective_sources(DirectiveKind::ScriptSrcElem)
+        .expect("Must have explicit script-src-elem");
     assert_eq!(s3.len(), 1);
     match &s3[0] {
         SourceExpr::Host { host, .. } => assert_eq!(host, "elem.strataui.org"),
@@ -376,17 +483,40 @@ fn test_goal23_csp_directive_fallback_and_strict_dynamic() {
     }
 
     // 2. strict-dynamic ignores host whitelists when nonce is absent, permits valid nonce
-    let p_strict = ContentSecurityPolicy::parse("script-src 'strict-dynamic' 'nonce-token99' https://trusted.org");
+    let p_strict = ContentSecurityPolicy::parse(
+        "script-src 'strict-dynamic' 'nonce-token99' https://trusted.org",
+    );
     let origin = "https://app.strataui.org";
 
     // Matching nonce is permitted anywhere under strict-dynamic
-    assert!(p_strict.allows_script_url(origin, "https://dynamic.cdn.com/bundle.js", Some("token99")));
+    assert!(p_strict.allows_script_url(
+        origin,
+        "https://dynamic.cdn.com/bundle.js",
+        Some("token99")
+    ));
     // Host whitelist alone without valid nonce is blocked under strict-dynamic
     assert!(!p_strict.allows_script_url(origin, "https://trusted.org/bundle.js", None));
-    assert!(!p_strict.allows_script_url(origin, "https://trusted.org/bundle.js", Some("invalidNonce")));
+    assert!(!p_strict.allows_script_url(
+        origin,
+        "https://trusted.org/bundle.js",
+        Some("invalidNonce")
+    ));
 
     // 3. enforce API
-    assert!(p_strict.enforce(DirectiveKind::ScriptSrc, origin, "https://dynamic.cdn.com/bundle.js", Some("token99")).is_ok());
-    assert!(p_strict.enforce(DirectiveKind::ScriptSrc, origin, "https://trusted.org/bundle.js", None).is_err());
+    assert!(p_strict
+        .enforce(
+            DirectiveKind::ScriptSrc,
+            origin,
+            "https://dynamic.cdn.com/bundle.js",
+            Some("token99")
+        )
+        .is_ok());
+    assert!(p_strict
+        .enforce(
+            DirectiveKind::ScriptSrc,
+            origin,
+            "https://trusted.org/bundle.js",
+            None
+        )
+        .is_err());
 }
-

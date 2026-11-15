@@ -124,8 +124,10 @@ impl BackdropFilterPipeline {
     pub fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        self.ping_texture = device.create_texture(width, height, SwapchainFormat::Bgra8Unorm, false);
-        self.pong_texture = device.create_texture(width, height, SwapchainFormat::Bgra8Unorm, false);
+        self.ping_texture =
+            device.create_texture(width, height, SwapchainFormat::Bgra8Unorm, false);
+        self.pong_texture =
+            device.create_texture(width, height, SwapchainFormat::Bgra8Unorm, false);
     }
 
     /// Software fallback Gaussian blur applied directly to a FrameBuffer region.
@@ -150,10 +152,18 @@ impl BackdropFilterPipeline {
             *w /= sum;
         }
 
-        let min_x = (region.x.floor() as isize).max(0).min(buffer.width as isize) as usize;
-        let max_x = (region.max_x().ceil() as isize).max(0).min(buffer.width as isize) as usize;
-        let min_y = (region.y.floor() as isize).max(0).min(buffer.height as isize) as usize;
-        let max_y = (region.max_y().ceil() as isize).max(0).min(buffer.height as isize) as usize;
+        let min_x = (region.x.floor() as isize)
+            .max(0)
+            .min(buffer.width as isize) as usize;
+        let max_x = (region.max_x().ceil() as isize)
+            .max(0)
+            .min(buffer.width as isize) as usize;
+        let min_y = (region.y.floor() as isize)
+            .max(0)
+            .min(buffer.height as isize) as usize;
+        let max_y = (region.max_y().ceil() as isize)
+            .max(0)
+            .min(buffer.height as isize) as usize;
 
         if min_x >= max_x || min_y >= max_y {
             return;
@@ -171,7 +181,8 @@ impl BackdropFilterPipeline {
 
                 for (k_idx, &weight) in kernel.iter().enumerate() {
                     let sample_x = (x as isize + (k_idx as isize - half_k))
-                        .clamp(min_x as isize, max_x.saturating_sub(1) as isize) as usize;
+                        .clamp(min_x as isize, max_x.saturating_sub(1) as isize)
+                        as usize;
                     let idx = (y * buffer.width + sample_x) * 4;
                     r += buffer.pixels[idx] as f32 * weight;
                     g += buffer.pixels[idx + 1] as f32 * weight;
@@ -197,7 +208,8 @@ impl BackdropFilterPipeline {
 
                 for (k_idx, &weight) in kernel.iter().enumerate() {
                     let sample_y = (y as isize + (k_idx as isize - half_k))
-                        .clamp(min_y as isize, max_y.saturating_sub(1) as isize) as usize;
+                        .clamp(min_y as isize, max_y.saturating_sub(1) as isize)
+                        as usize;
                     let idx = (sample_y * buffer.width + x) * 4;
                     r += temp_pixels[idx] as f32 * weight;
                     g += temp_pixels[idx + 1] as f32 * weight;

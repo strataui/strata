@@ -286,7 +286,13 @@ pub fn solve_positioning_children_guarded(
             }
             Position::Absolute => {
                 // Out-of-flow positioning relative to nearest non-static ancestor (cb.padding_box)
-                solve_out_of_flow_box_guarded(child, cb.padding_box, cb.viewport, false, child_guard);
+                solve_out_of_flow_box_guarded(
+                    child,
+                    cb.padding_box,
+                    cb.viewport,
+                    false,
+                    child_guard,
+                );
 
                 // Absolute elements establish a containing block for descendants
                 let child_vp = if child.style.establishes_fixed_containing_block() {

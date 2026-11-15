@@ -1,9 +1,11 @@
 //! Reactive `<WebView />` component, controller, and event forwarder.
 
-use strata_dom::{Attribute, NodeBlueprint, Tag};
-use crate::ipc::{ChromiumCommand, KeyAction, Modifiers, MouseAction, MouseButton, NavigationState};
+use crate::ipc::{
+    ChromiumCommand, KeyAction, Modifiers, MouseAction, MouseButton, NavigationState,
+};
 use crate::process::{ChromiumProcessManager, ProcessState};
 use crate::surface::ShmSurface;
+use strata_dom::{Attribute, NodeBlueprint, Tag};
 
 /// Configuration options for launching a `<WebView />` session.
 #[derive(Debug, Clone, PartialEq)]
@@ -70,9 +72,8 @@ impl WebViewController {
 
     /// Directs the browser to navigate to a new URL.
     pub fn navigate(&self, url: impl Into<String>) {
-        self.manager.send_command(ChromiumCommand::Navigate {
-            url: url.into(),
-        });
+        self.manager
+            .send_command(ChromiumCommand::Navigate { url: url.into() });
     }
 
     /// Reloads the current page.

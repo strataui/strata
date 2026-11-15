@@ -23,7 +23,11 @@ pub struct BenchmarkResult {
 
 impl BenchmarkResult {
     /// Computes summary statistics from raw timing samples.
-    pub fn from_samples(name: impl Into<String>, samples: &[BenchmarkSample], memory_rss_mb: f64) -> Self {
+    pub fn from_samples(
+        name: impl Into<String>,
+        samples: &[BenchmarkSample],
+        memory_rss_mb: f64,
+    ) -> Self {
         let n = samples.len().max(1);
         let mut nanos: Vec<u64> = samples.iter().map(|s| s.elapsed_nanos).collect();
         nanos.sort_unstable();
@@ -33,8 +37,12 @@ impl BenchmarkResult {
         let min_nanos = *nanos.first().unwrap_or(&0);
         let max_nanos = *nanos.last().unwrap_or(&0);
 
-        let p95_idx = ((n as f64 * 0.95).ceil() as usize).saturating_sub(1).min(n - 1);
-        let p99_idx = ((n as f64 * 0.99).ceil() as usize).saturating_sub(1).min(n - 1);
+        let p95_idx = ((n as f64 * 0.95).ceil() as usize)
+            .saturating_sub(1)
+            .min(n - 1);
+        let p99_idx = ((n as f64 * 0.99).ceil() as usize)
+            .saturating_sub(1)
+            .min(n - 1);
 
         let p95_nanos = nanos[p95_idx];
         let p99_nanos = nanos[p99_idx];

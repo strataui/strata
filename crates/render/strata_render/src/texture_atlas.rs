@@ -124,7 +124,14 @@ impl GpuTextureAtlas {
     }
 
     /// Registers and stores an allocated sub-region with normalized UV coordinates.
-    fn register_region(&mut self, x: u32, y: u32, w: u32, h: u32, current_frame: u64) -> AtlasRegion {
+    fn register_region(
+        &mut self,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        current_frame: u64,
+    ) -> AtlasRegion {
         let id = self.next_region_id;
         self.next_region_id += 1;
         self.total_allocations += 1;
@@ -171,7 +178,8 @@ impl GpuTextureAtlas {
 
         // If compaction needed, repack remaining regions preserving their IDs
         if self.allocated_regions.len() < 10 && !self.shelves.is_empty() {
-            let mut remaining: Vec<AtlasRegion> = self.allocated_regions.values().copied().collect();
+            let mut remaining: Vec<AtlasRegion> =
+                self.allocated_regions.values().copied().collect();
             self.shelves.clear();
             self.next_shelf_y = 0;
             for r in &mut remaining {

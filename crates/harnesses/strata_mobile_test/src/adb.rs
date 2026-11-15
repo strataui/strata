@@ -138,10 +138,9 @@ impl AdbClient {
 
     /// Connects to an ADB daemon at the specified socket address.
     pub fn connect<A: ToSocketAddrs>(addr: A) -> std::io::Result<Self> {
-        let socket_addr = addr
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "No valid address"))?;
+        let socket_addr = addr.to_socket_addrs()?.next().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "No valid address")
+        })?;
         let stream = TcpStream::connect_timeout(&socket_addr, Duration::from_millis(1500))?;
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
@@ -157,15 +156,21 @@ impl AdbClient {
     /// Reads 4-byte status from ADB ("OKAY" or "FAIL").
     fn read_status_okay(&mut self) -> Result<(), String> {
         let mut status = [0u8; 4];
-        self.stream.read_exact(&mut status).map_err(|e| e.to_string())?;
+        self.stream
+            .read_exact(&mut status)
+            .map_err(|e| e.to_string())?;
         if &status == b"OKAY" {
             Ok(())
         } else if &status == b"FAIL" {
             let mut len_buf = [0u8; 4];
-            self.stream.read_exact(&mut len_buf).map_err(|e| e.to_string())?;
+            self.stream
+                .read_exact(&mut len_buf)
+                .map_err(|e| e.to_string())?;
             let len = AdbPacketCodec::parse_hex_length(&len_buf)?;
             let mut err_buf = vec![0u8; len];
-            self.stream.read_exact(&mut err_buf).map_err(|e| e.to_string())?;
+            self.stream
+                .read_exact(&mut err_buf)
+                .map_err(|e| e.to_string())?;
             Err(String::from_utf8_lossy(&err_buf).to_string())
         } else {
             Err(format!("Unexpected ADB response status: {:?}", status))
@@ -176,10 +181,14 @@ impl AdbClient {
     fn read_length_prefixed_response(&mut self) -> Result<Vec<u8>, String> {
         self.read_status_okay()?;
         let mut len_buf = [0u8; 4];
-        self.stream.read_exact(&mut len_buf).map_err(|e| e.to_string())?;
+        self.stream
+            .read_exact(&mut len_buf)
+            .map_err(|e| e.to_string())?;
         let len = AdbPacketCodec::parse_hex_length(&len_buf)?;
         let mut data = vec![0u8; len];
-        self.stream.read_exact(&mut data).map_err(|e| e.to_string())?;
+        self.stream
+            .read_exact(&mut data)
+            .map_err(|e| e.to_string())?;
         Ok(data)
     }
 
@@ -236,13 +245,17 @@ impl AdbClient {
 
         self.send_command(&format!("shell:{command}"))?;
         let mut status = [0u8; 4];
-        self.stream.read_exact(&mut status).map_err(|e| e.to_string())?;
+        self.stream
+            .read_exact(&mut status)
+            .map_err(|e| e.to_string())?;
         if &status == b"OKAY" {
             let mut len_buf = [0u8; 4];
             if self.stream.read_exact(&mut len_buf).is_ok() {
                 if let Ok(len) = AdbPacketCodec::parse_hex_length(&len_buf) {
                     let mut data = vec![0u8; len];
-                    self.stream.read_exact(&mut data).map_err(|e| e.to_string())?;
+                    self.stream
+                        .read_exact(&mut data)
+                        .map_err(|e| e.to_string())?;
                     return String::from_utf8(data).map_err(|e| e.to_string());
                 }
             }
@@ -261,13 +274,17 @@ impl AdbClient {
 
         self.send_command("exec:screencap -p")?;
         let mut status = [0u8; 4];
-        self.stream.read_exact(&mut status).map_err(|e| e.to_string())?;
+        self.stream
+            .read_exact(&mut status)
+            .map_err(|e| e.to_string())?;
         if &status == b"OKAY" {
             let mut len_buf = [0u8; 4];
             if self.stream.read_exact(&mut len_buf).is_ok() {
                 if let Ok(len) = AdbPacketCodec::parse_hex_length(&len_buf) {
                     let mut data = vec![0u8; len];
-                    self.stream.read_exact(&mut data).map_err(|e| e.to_string())?;
+                    self.stream
+                        .read_exact(&mut data)
+                        .map_err(|e| e.to_string())?;
                     return Ok(data);
                 }
             }
@@ -289,8 +306,10 @@ pub struct EmulatorConsoleClient {
 impl EmulatorConsoleClient {
     /// Connects to emulator console port (e.g. 5554).
     pub fn connect(port: u16) -> std::io::Result<Self> {
-        let stream =
-            TcpStream::connect_timeout(&format!("127.0.0.1:{port}").parse().unwrap(), Duration::from_millis(1500))?;
+        let stream = TcpStream::connect_timeout(
+            &format!("127.0.0.1:{port}").parse().unwrap(),
+            Duration::from_millis(1500),
+        )?;
         stream.set_read_timeout(Some(Duration::from_secs(3)))?;
         stream.set_write_timeout(Some(Duration::from_secs(3)))?;
         Ok(Self { stream })
@@ -316,7 +335,9 @@ impl EmulatorConsoleClient {
 
         if !token.is_empty() {
             let cmd = format!("auth {token}\r\n");
-            self.stream.write_all(cmd.as_bytes()).map_err(|e| e.to_string())?;
+            self.stream
+                .write_all(cmd.as_bytes())
+                .map_err(|e| e.to_string())?;
             let mut reader = BufReader::new(self.stream.try_clone().map_err(|e| e.to_string())?);
             let mut resp = String::new();
             reader.read_line(&mut resp).map_err(|e| e.to_string())?;
@@ -330,7 +351,9 @@ impl EmulatorConsoleClient {
     /// Injects programmatic foldable/flip posture (e.g. "closed", "half-opened", "flat", "flipped").
     pub fn set_posture(&mut self, posture_str: &str) -> Result<(), String> {
         let cmd = format!("posture set {posture_str}\r\n");
-        self.stream.write_all(cmd.as_bytes()).map_err(|e| e.to_string())?;
+        self.stream
+            .write_all(cmd.as_bytes())
+            .map_err(|e| e.to_string())?;
         let mut reader = BufReader::new(self.stream.try_clone().map_err(|e| e.to_string())?);
         let mut resp = String::new();
         reader.read_line(&mut resp).map_err(|e| e.to_string())?;
@@ -344,7 +367,9 @@ impl EmulatorConsoleClient {
     /// Injects specific hinge sensor angle in degrees [0, 360].
     pub fn set_hinge_angle(&mut self, angle: u32) -> Result<(), String> {
         let cmd = format!("sensor set hinge_angle {angle}\r\n");
-        self.stream.write_all(cmd.as_bytes()).map_err(|e| e.to_string())?;
+        self.stream
+            .write_all(cmd.as_bytes())
+            .map_err(|e| e.to_string())?;
         let mut reader = BufReader::new(self.stream.try_clone().map_err(|e| e.to_string())?);
         let mut resp = String::new();
         reader.read_line(&mut resp).map_err(|e| e.to_string())?;
@@ -409,9 +434,7 @@ impl MockAdbServer {
     }
 
     /// Starts an in-memory MockAdbServer listening on a live TCP port.
-    pub fn start_tcp(
-        port: u16,
-    ) -> std::io::Result<(u16, Arc<AtomicBool>, thread::JoinHandle<()>)> {
+    pub fn start_tcp(port: u16) -> std::io::Result<(u16, Arc<AtomicBool>, thread::JoinHandle<()>)> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let bound_port = listener.local_addr()?.port();
         listener.set_nonblocking(true)?;
@@ -541,7 +564,8 @@ impl MockEmulatorConsoleServer {
                         let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
                         let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
 
-                        let _ = stream.write_all(b"Android Console: Authentication required\r\nOK\r\n");
+                        let _ =
+                            stream.write_all(b"Android Console: Authentication required\r\nOK\r\n");
 
                         let reader_stream = match stream.try_clone() {
                             Ok(s) => s,

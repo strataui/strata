@@ -117,9 +117,7 @@ mod tests {
         let en = LocaleId::en_us();
         let de = LocaleId::de_de();
 
-        catalog
-            .register(&en, "hello", "Hello, {name}!")
-            .unwrap();
+        catalog.register(&en, "hello", "Hello, {name}!").unwrap();
         catalog
             .register(&de, "hello", "Guten Tag, {name}!")
             .unwrap();

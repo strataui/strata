@@ -3,11 +3,11 @@
 //! Loads native cursor themes (defaulting to the host's active GNOME/Yaru cursor pack)
 //! and provides rasterization utilities for the emulated MCP cursor.
 
+use crate::window::CursorIcon;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use crate::window::CursorIcon;
 
 /// Decoded 32-bit ARGB/BGRA cursor bitmap with hotspot coordinates.
 #[derive(Debug, Clone)]
@@ -139,11 +139,17 @@ impl CursorTheme {
 
         let icon_mappings = [
             (CursorIcon::Default, &["default", "arrow", "left_ptr"][..]),
-            (CursorIcon::Pointer, &["pointer", "pointing_hand", "hand2", "hand"][..]),
+            (
+                CursorIcon::Pointer,
+                &["pointer", "pointing_hand", "hand2", "hand"][..],
+            ),
             (CursorIcon::Text, &["text", "xterm", "ibeam"][..]),
             (CursorIcon::Crosshair, &["crosshair", "cross"][..]),
             (CursorIcon::Move, &["move", "pointer-move", "size_all"][..]),
-            (CursorIcon::NotAllowed, &["not-allowed", "forbidden", "crossed_circle"][..]),
+            (
+                CursorIcon::NotAllowed,
+                &["not-allowed", "forbidden", "crossed_circle"][..],
+            ),
             (CursorIcon::Grab, &["grab", "openhand"][..]),
             (CursorIcon::Grabbing, &["grabbing", "closedhand"][..]),
             (CursorIcon::Wait, &["wait", "watch"][..]),
@@ -186,7 +192,9 @@ impl CursorTheme {
         if let Some(bmp) = self.cursors.get(&icon) {
             bmp
         } else {
-            self.cursors.get(&CursorIcon::Default).expect("Default cursor must exist")
+            self.cursors
+                .get(&CursorIcon::Default)
+                .expect("Default cursor must exist")
         }
     }
 
@@ -209,11 +217,9 @@ impl CursorTheme {
         let draw_x = (x - bmp.xhot as f32) as f64;
         let draw_y = (y - bmp.yhot as f32) as f64;
 
-        if let Ok(mut surface) = cairo::ImageSurface::create(
-            cairo::Format::ARgb32,
-            bmp.width as i32,
-            bmp.height as i32,
-        ) {
+        if let Ok(mut surface) =
+            cairo::ImageSurface::create(cairo::Format::ARgb32, bmp.width as i32, bmp.height as i32)
+        {
             if let Ok(mut data) = surface.data() {
                 if data.len() == bmp.pixels.len() {
                     data.copy_from_slice(&bmp.pixels);
@@ -280,7 +286,11 @@ impl CursorTheme {
                             let idx = (py as usize) * buf_width + (px as usize);
                             if let Some(target) = buffer.get_mut(idx) {
                                 // Blend translucent blue touch highlight
-                                let ring_alpha = if d > 25 { 0.8 * opacity } else { 0.45 * opacity };
+                                let ring_alpha = if d > 25 {
+                                    0.8 * opacity
+                                } else {
+                                    0.45 * opacity
+                                };
                                 *target = blend_pixel_bgra(*target, 0x3b82f6, ring_alpha);
                             }
                         }

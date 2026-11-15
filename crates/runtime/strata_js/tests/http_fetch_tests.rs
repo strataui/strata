@@ -27,7 +27,9 @@ fn start_test_http_server() -> (u16, Arc<AtomicBool>) {
                     let mut buffer = [0u8; 4096];
                     let mut total_read = 0;
                     // Read request
-                    stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+                    stream
+                        .set_read_timeout(Some(Duration::from_millis(500)))
+                        .ok();
                     if let Ok(n) = stream.read(&mut buffer) {
                         total_read = n;
                     }
@@ -44,9 +46,13 @@ fn start_test_http_server() -> (u16, Arc<AtomicBool>) {
                         )
                     } else if first_line.starts_with("POST /api/echo ") {
                         // Extract request body after double CRLF
-                        let body_start = req_str.find("\r\n\r\n").map(|idx| idx + 4).unwrap_or(total_read);
+                        let body_start = req_str
+                            .find("\r\n\r\n")
+                            .map(|idx| idx + 4)
+                            .unwrap_or(total_read);
                         let req_body = &req_str[body_start..];
-                        let resp_body = format!("{{\"echo\":{},\"status\":\"received\"}}", req_body.trim());
+                        let resp_body =
+                            format!("{{\"echo\":{},\"status\":\"received\"}}", req_body.trim());
                         format!(
                             "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                             resp_body.len(),
@@ -119,11 +125,21 @@ fn test_live_http_fetch_get_and_json_unpack() {
     let res = engine.eval(&script);
     stop_signal.store(true, Ordering::SeqCst);
 
-    assert!(res.is_ok(), "Evaluation of live HTTP GET fetch must succeed: {:?}", res);
+    assert!(
+        res.is_ok(),
+        "Evaluation of live HTTP GET fetch must succeed: {:?}",
+        res
+    );
     assert_eq!(engine.globals.get("status"), Some(&JsValue::Number(200.0)));
     assert_eq!(engine.globals.get("ok"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("headerVal"), Some(&JsValue::String("Passed".to_string())));
-    assert_eq!(engine.globals.get("greeting"), Some(&JsValue::String("Hello from live HTTP!".to_string())));
+    assert_eq!(
+        engine.globals.get("headerVal"),
+        Some(&JsValue::String("Passed".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("greeting"),
+        Some(&JsValue::String("Hello from live HTTP!".to_string()))
+    );
     assert_eq!(engine.globals.get("code"), Some(&JsValue::Number(100.0)));
 }
 
@@ -165,11 +181,21 @@ fn test_live_http_fetch_post_json_payload() {
     let res = engine.eval(&script);
     stop_signal.store(true, Ordering::SeqCst);
 
-    assert!(res.is_ok(), "Evaluation of live HTTP POST fetch must succeed: {:?}", res);
+    assert!(
+        res.is_ok(),
+        "Evaluation of live HTTP POST fetch must succeed: {:?}",
+        res
+    );
     assert_eq!(engine.globals.get("status"), Some(&JsValue::Number(201.0)));
     assert_eq!(engine.globals.get("ok"), Some(&JsValue::Bool(true)));
-    assert_eq!(engine.globals.get("echoMsg"), Some(&JsValue::String("test-payload".to_string())));
-    assert_eq!(engine.globals.get("echoStatus"), Some(&JsValue::String("received".to_string())));
+    assert_eq!(
+        engine.globals.get("echoMsg"),
+        Some(&JsValue::String("test-payload".to_string()))
+    );
+    assert_eq!(
+        engine.globals.get("echoStatus"),
+        Some(&JsValue::String("received".to_string()))
+    );
 }
 
 #[test]
@@ -202,7 +228,11 @@ fn test_live_http_fetch_delete_method() {
     let res = engine.eval(&script);
     stop_signal.store(true, Ordering::SeqCst);
 
-    assert!(res.is_ok(), "Evaluation of live HTTP DELETE fetch must succeed: {:?}", res);
+    assert!(
+        res.is_ok(),
+        "Evaluation of live HTTP DELETE fetch must succeed: {:?}",
+        res
+    );
     assert_eq!(engine.globals.get("status"), Some(&JsValue::Number(200.0)));
     assert_eq!(engine.globals.get("deleted"), Some(&JsValue::Bool(true)));
     assert_eq!(engine.globals.get("id"), Some(&JsValue::Number(99.0)));
@@ -219,11 +249,18 @@ fn test_rust_async_web_fetch_api() {
     let resp = futures_executor_poll(future);
     stop_signal.store(true, Ordering::SeqCst);
 
-    assert!(resp.is_ok(), "strata_js::web::fetch directly must succeed: {:?}", resp);
+    assert!(
+        resp.is_ok(),
+        "strata_js::web::fetch directly must succeed: {:?}",
+        resp
+    );
     let response = resp.unwrap();
     assert_eq!(response.status, 200);
     assert!(response.ok);
-    assert_eq!(response.headers.get("x-strata-test"), Some("Passed".to_string()));
+    assert_eq!(
+        response.headers.get("x-strata-test"),
+        Some("Passed".to_string())
+    );
 }
 
 fn futures_executor_poll<F: std::future::Future>(mut f: F) -> F::Output {

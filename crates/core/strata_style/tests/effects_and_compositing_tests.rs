@@ -31,7 +31,12 @@ fn test_w3c_blend_modes_parsing_and_cascade() {
     ];
 
     for (name, expected) in blend_mode_names {
-        assert_eq!(BlendMode::parse(name), Some(expected), "Failed parsing blend mode: {}", name);
+        assert_eq!(
+            BlendMode::parse(name),
+            Some(expected),
+            "Failed parsing blend mode: {}",
+            name
+        );
         assert_eq!(expected.as_str(), name);
 
         let mut style = ComputedStyle::default();
@@ -41,7 +46,11 @@ fn test_w3c_blend_modes_parsing_and_cascade() {
             important: false,
         };
         CascadeSolver::apply_declaration_with_parent(&mut style, &decl, None);
-        assert_eq!(style.mix_blend_mode, expected, "Cascade mismatch for mix-blend-mode: {}", name);
+        assert_eq!(
+            style.mix_blend_mode, expected,
+            "Cascade mismatch for mix-blend-mode: {}",
+            name
+        );
     }
 }
 
@@ -104,10 +113,16 @@ fn test_filter_functions_parsing() {
     assert_eq!(f_hue.operations[0], FilterOp::HueRotate(180.0));
 
     // 7. Drop-shadow filter
-    let f_shadow = parse_filter_list("drop-shadow(2px 4px 6px #333333)").expect("drop-shadow must parse");
+    let f_shadow =
+        parse_filter_list("drop-shadow(2px 4px 6px #333333)").expect("drop-shadow must parse");
     assert_eq!(f_shadow.operations.len(), 1);
     match f_shadow.operations[0] {
-        FilterOp::DropShadow { offset_x, offset_y, blur_radius, color } => {
+        FilterOp::DropShadow {
+            offset_x,
+            offset_y,
+            blur_radius,
+            color,
+        } => {
             assert_eq!(offset_x, 2.0);
             assert_eq!(offset_y, 4.0);
             assert_eq!(blur_radius, 6.0);
@@ -117,7 +132,8 @@ fn test_filter_functions_parsing() {
     }
 
     // 8. Chained multi-filter
-    let chained = parse_filter_list("blur(4px) brightness(1.2) contrast(1.1)").expect("chained filters must parse");
+    let chained = parse_filter_list("blur(4px) brightness(1.2) contrast(1.1)")
+        .expect("chained filters must parse");
     assert_eq!(chained.operations.len(), 3);
     assert_eq!(chained.operations[0], FilterOp::Blur(4.0));
     assert_eq!(chained.operations[1], FilterOp::Brightness(1.2));
@@ -127,9 +143,16 @@ fn test_filter_functions_parsing() {
 #[test]
 fn test_clip_path_basic_shapes_and_containment() {
     // 1. Inset rectangular clip path
-    let cp_inset = parse_clip_path("inset(10px 20px 30px 40px round 5px)").expect("inset must parse");
+    let cp_inset =
+        parse_clip_path("inset(10px 20px 30px 40px round 5px)").expect("inset must parse");
     match cp_inset {
-        ClipPath::Inset { top, right, bottom, left, border_radius } => {
+        ClipPath::Inset {
+            top,
+            right,
+            bottom,
+            left,
+            border_radius,
+        } => {
             assert_eq!(top, 10.0);
             assert_eq!(right, 20.0);
             assert_eq!(bottom, 30.0);
@@ -148,7 +171,11 @@ fn test_clip_path_basic_shapes_and_containment() {
     // 2. Circular clip path: circle(50px at 100px 100px)
     let cp_circle = parse_clip_path("circle(50px at 100px 100px)").expect("circle must parse");
     match cp_circle {
-        ClipPath::Circle { radius, center_x, center_y } => {
+        ClipPath::Circle {
+            radius,
+            center_x,
+            center_y,
+        } => {
             assert_eq!(radius, 50.0);
             assert_eq!(center_x, 100.0);
             assert_eq!(center_y, 100.0);
@@ -160,9 +187,15 @@ fn test_clip_path_basic_shapes_and_containment() {
     assert!(!cp_circle.contains_point(160.0, 100.0, 200.0, 200.0)); // dist = 60 > 50
 
     // 3. Elliptical clip path: ellipse(60px 30px at 100px 100px)
-    let cp_ellipse = parse_clip_path("ellipse(60px 30px at 100px 100px)").expect("ellipse must parse");
+    let cp_ellipse =
+        parse_clip_path("ellipse(60px 30px at 100px 100px)").expect("ellipse must parse");
     match cp_ellipse {
-        ClipPath::Ellipse { radius_x, radius_y, center_x, center_y } => {
+        ClipPath::Ellipse {
+            radius_x,
+            radius_y,
+            center_x,
+            center_y,
+        } => {
             assert_eq!(radius_x, 60.0);
             assert_eq!(radius_y, 30.0);
             assert_eq!(center_x, 100.0);
@@ -174,7 +207,8 @@ fn test_clip_path_basic_shapes_and_containment() {
     assert!(!cp_ellipse.contains_point(100.0, 140.0, 200.0, 200.0)); // dy=40 > 30
 
     // 4. Polygon: polygon(0px 0px, 100px 0px, 100px 100px, 0px 100px)
-    let cp_poly = parse_clip_path("polygon(0px 0px, 100px 0px, 100px 100px, 0px 100px)").expect("polygon must parse");
+    let cp_poly = parse_clip_path("polygon(0px 0px, 100px 0px, 100px 100px, 0px 100px)")
+        .expect("polygon must parse");
     match &cp_poly {
         ClipPath::Polygon(pts) => {
             assert_eq!(pts.len(), 4);
@@ -208,19 +242,44 @@ fn test_tailwind_visual_effects_utilities() {
     assert_eq!(style2.isolation, Isolation::Auto);
 
     // 2. Filter utilities
-    let style_filters = TailwindEngine::resolve_classes("filter blur-md brightness-125 contrast-150 grayscale invert sepia");
+    let style_filters = TailwindEngine::resolve_classes(
+        "filter blur-md brightness-125 contrast-150 grayscale invert sepia",
+    );
     let filter = style_filters.filter.expect("filter should be populated");
-    assert!(filter.operations.iter().any(|op| matches!(op, FilterOp::Blur(r) if (r - 12.0).abs() < 1e-4)));
-    assert!(filter.operations.iter().any(|op| matches!(op, FilterOp::Brightness(b) if (b - 1.25).abs() < 1e-4)));
-    assert!(filter.operations.iter().any(|op| matches!(op, FilterOp::Contrast(c) if (c - 1.5).abs() < 1e-4)));
-    assert!(filter.operations.iter().any(|op| matches!(op, FilterOp::Grayscale(g) if (g - 1.0).abs() < 1e-4)));
-    assert!(filter.operations.iter().any(|op| matches!(op, FilterOp::Invert(i) if (i - 1.0).abs() < 1e-4)));
-    assert!(filter.operations.iter().any(|op| matches!(op, FilterOp::Sepia(s) if (s - 1.0).abs() < 1e-4)));
+    assert!(filter
+        .operations
+        .iter()
+        .any(|op| matches!(op, FilterOp::Blur(r) if (r - 12.0).abs() < 1e-4)));
+    assert!(filter
+        .operations
+        .iter()
+        .any(|op| matches!(op, FilterOp::Brightness(b) if (b - 1.25).abs() < 1e-4)));
+    assert!(filter
+        .operations
+        .iter()
+        .any(|op| matches!(op, FilterOp::Contrast(c) if (c - 1.5).abs() < 1e-4)));
+    assert!(filter
+        .operations
+        .iter()
+        .any(|op| matches!(op, FilterOp::Grayscale(g) if (g - 1.0).abs() < 1e-4)));
+    assert!(filter
+        .operations
+        .iter()
+        .any(|op| matches!(op, FilterOp::Invert(i) if (i - 1.0).abs() < 1e-4)));
+    assert!(filter
+        .operations
+        .iter()
+        .any(|op| matches!(op, FilterOp::Sepia(s) if (s - 1.0).abs() < 1e-4)));
 
     // 3. Backdrop filter utilities
     let style_backdrop = TailwindEngine::resolve_classes("backdrop-filter backdrop-blur-lg");
-    let bf = style_backdrop.backdrop_filter.expect("backdrop_filter should be populated");
-    assert!(bf.operations.iter().any(|op| matches!(op, FilterOp::Blur(r) if (r - 16.0).abs() < 1e-4)));
+    let bf = style_backdrop
+        .backdrop_filter
+        .expect("backdrop_filter should be populated");
+    assert!(bf
+        .operations
+        .iter()
+        .any(|op| matches!(op, FilterOp::Blur(r) if (r - 16.0).abs() < 1e-4)));
 }
 
 #[test]

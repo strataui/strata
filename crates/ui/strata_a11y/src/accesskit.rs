@@ -109,8 +109,11 @@ pub fn a11y_node_to_accesskit(node: &A11yNode) -> accesskit::Node {
     }
 
     if !node.children.is_empty() {
-        let child_ids: Vec<accesskit::NodeId> =
-            node.children.iter().map(|c| accesskit::NodeId(c.0)).collect();
+        let child_ids: Vec<accesskit::NodeId> = node
+            .children
+            .iter()
+            .map(|c| accesskit::NodeId(c.0))
+            .collect();
         ak_node.set_children(child_ids);
     }
 

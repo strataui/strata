@@ -28,8 +28,16 @@ pub fn Input(
         "border-neutral-800 focus:border-indigo-500 focus:ring-indigo-500/20"
     };
 
-    let pl = if prefix_icon.is_some() { "pl-10" } else { "pl-3.5" };
-    let pr = if suffix_icon.is_some() { "pr-10" } else { "pr-3.5" };
+    let pl = if prefix_icon.is_some() {
+        "pl-10"
+    } else {
+        "pl-3.5"
+    };
+    let pr = if suffix_icon.is_some() {
+        "pr-10"
+    } else {
+        "pr-3.5"
+    };
 
     let input_classes = format!(
         "w-full h-10 bg-neutral-900 border rounded-lg text-sm text-white placeholder-neutral-500 focus:outline-none focus:ring-2 transition-all duration-150 disabled:opacity-50 disabled:pointer-events-none {border_color} {pl} {pr} {custom}"
@@ -94,7 +102,11 @@ pub fn PasswordInput(
 ) -> View {
     let show = show_password.as_ref().map(|s| s.get()).unwrap_or(false);
     let input_type = if show { "text" } else { "password" };
-    let icon = if show { IconName::EyeOff } else { IconName::Eye };
+    let icon = if show {
+        IconName::EyeOff
+    } else {
+        IconName::Eye
+    };
     let show_sig = show_password.clone();
 
     rsx! {
@@ -267,7 +279,10 @@ pub fn Checkbox(
     let (bg, border) = if is_checked {
         ("bg-indigo-600", "border-indigo-600")
     } else {
-        ("bg-neutral-900", "border-neutral-700 hover:border-neutral-500")
+        (
+            "bg-neutral-900",
+            "border-neutral-700 hover:border-neutral-500",
+        )
     };
 
     rsx! {
@@ -307,8 +322,16 @@ pub fn Switch(
     let is_dis = disabled.unwrap_or(false);
     let chk = checked.clone();
 
-    let bg_color = if is_active { "bg-indigo-600" } else { "bg-neutral-800" };
-    let knob_pos = if is_active { "translate-x-5" } else { "translate-x-0" };
+    let bg_color = if is_active {
+        "bg-indigo-600"
+    } else {
+        "bg-neutral-800"
+    };
+    let knob_pos = if is_active {
+        "translate-x-5"
+    } else {
+        "translate-x-0"
+    };
 
     rsx! {
         <div class={format!("flex items-center justify-between w-full py-1.5 {}", if is_dis { "opacity-50 pointer-events-none" } else { "" })}>
@@ -402,11 +425,7 @@ pub fn Slider(
 
 /// Multi-digit OTP / 2FA PinInput boxes.
 #[component]
-pub fn PinInput(
-    length: usize,
-    value: Signal<String>,
-    disabled: Option<bool>,
-) -> View {
+pub fn PinInput(length: usize, value: Signal<String>, disabled: Option<bool>) -> View {
     let len = length.max(1);
     let val = value.get();
 

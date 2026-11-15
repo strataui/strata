@@ -1,7 +1,7 @@
 //! Right Properties Inspector Panel for Strata Creative Studio.
 
-use strata::prelude::*;
 use crate::state::StudioState;
+use strata::prelude::*;
 
 #[component]
 pub fn PropertiesPanel(state: StudioState) -> View {

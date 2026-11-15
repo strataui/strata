@@ -41,7 +41,12 @@ pub struct Rect2D {
 
 impl Rect2D {
     pub fn new(min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> Self {
-        Self { min_x, min_y, max_x, max_y }
+        Self {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        }
     }
 
     pub fn contains(&self, p: Point2D) -> bool {
@@ -178,8 +183,10 @@ impl CubicBezier {
         let t2 = t * t;
         let t3 = t2 * t;
 
-        let x = u3 * self.p0.x + 3.0 * u2 * t * self.p1.x + 3.0 * u * t2 * self.p2.x + t3 * self.p3.x;
-        let y = u3 * self.p0.y + 3.0 * u2 * t * self.p1.y + 3.0 * u * t2 * self.p2.y + t3 * self.p3.y;
+        let x =
+            u3 * self.p0.x + 3.0 * u2 * t * self.p1.x + 3.0 * u * t2 * self.p2.x + t3 * self.p3.x;
+        let y =
+            u3 * self.p0.y + 3.0 * u2 * t * self.p1.y + 3.0 * u * t2 * self.p2.y + t3 * self.p3.y;
         Point2D::new(x, y)
     }
 

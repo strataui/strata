@@ -262,7 +262,8 @@ impl OpenTypeFont {
             }
             // Format 4 (Unicode 16-bit BMP)
             if format == 4
-                && (platform_id == 0 || (platform_id == 3 && (encoding_id == 1 || encoding_id == 0)))
+                && (platform_id == 0
+                    || (platform_id == 3 && (encoding_id == 1 || encoding_id == 0)))
                 && chosen_format != 12
             {
                 chosen_subtable = Some(sub_off);
@@ -351,7 +352,8 @@ impl OpenTypeFont {
         let cp = c as u32;
         if self.cmap_format == 12 {
             // Format 12: 32-bit sequential groups
-            let num_groups = read_u32_be(&self.data, self.cmap_subtable_offset + 12).unwrap_or(0) as usize;
+            let num_groups =
+                read_u32_be(&self.data, self.cmap_subtable_offset + 12).unwrap_or(0) as usize;
             let groups_start = self.cmap_subtable_offset + 16;
 
             let mut low = 0;
@@ -499,17 +501,24 @@ impl OpenTypeFont {
     /// Generates exact `FontMetrics` scaled to CSS pixels.
     pub fn font_metrics(&self, font_size: f32) -> FontMetrics {
         let scale = font_size / self.units_per_em.max(1) as f32;
-        let ascent = ((self.typo_ascender as f32 * scale).max(0.0) * LayoutUnit::SCALE).round() / LayoutUnit::SCALE;
-        let descent = (((-self.typo_descender).max(0) as f32 * scale) * LayoutUnit::SCALE).round() / LayoutUnit::SCALE;
-        let line_gap = ((self.typo_line_gap.max(0) as f32 * scale) * LayoutUnit::SCALE).round() / LayoutUnit::SCALE;
+        let ascent = ((self.typo_ascender as f32 * scale).max(0.0) * LayoutUnit::SCALE).round()
+            / LayoutUnit::SCALE;
+        let descent = (((-self.typo_descender).max(0) as f32 * scale) * LayoutUnit::SCALE).round()
+            / LayoutUnit::SCALE;
+        let line_gap = ((self.typo_line_gap.max(0) as f32 * scale) * LayoutUnit::SCALE).round()
+            / LayoutUnit::SCALE;
 
         let x_height = match self.x_height {
-            Some(xh) if xh > 0 => ((xh as f32 * scale) * LayoutUnit::SCALE).round() / LayoutUnit::SCALE,
+            Some(xh) if xh > 0 => {
+                ((xh as f32 * scale) * LayoutUnit::SCALE).round() / LayoutUnit::SCALE
+            }
             _ => (ascent * 0.52 * LayoutUnit::SCALE).round() / LayoutUnit::SCALE,
         };
 
         let cap_height = match self.cap_height {
-            Some(ch) if ch > 0 => ((ch as f32 * scale) * LayoutUnit::SCALE).round() / LayoutUnit::SCALE,
+            Some(ch) if ch > 0 => {
+                ((ch as f32 * scale) * LayoutUnit::SCALE).round() / LayoutUnit::SCALE
+            }
             _ => (ascent * 0.72 * LayoutUnit::SCALE).round() / LayoutUnit::SCALE,
         };
 
@@ -552,11 +561,7 @@ impl FontDatabase {
         data: &[u8],
     ) -> Result<Arc<OpenTypeFont>, OpenTypeParseError> {
         let font = Arc::new(OpenTypeFont::parse(data)?);
-        let key = (
-            family.to_lowercase(),
-            font.weight_class,
-            font.is_italic,
-        );
+        let key = (family.to_lowercase(), font.weight_class, font.is_italic);
         if let Ok(mut lock) = self.fonts.write() {
             lock.insert(key, font.clone());
         }
@@ -674,12 +679,30 @@ impl FontDatabase {
 
     fn load_standard_system_fonts(&self) {
         let system_fonts = [
-            ("dejavu sans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-            ("dejavu sans", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
-            ("dejavu sans mono", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"),
-            ("dejavu sans mono", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"),
-            ("dejavu serif", "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"),
-            ("dejavu serif", "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"),
+            (
+                "dejavu sans",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            ),
+            (
+                "dejavu sans",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            ),
+            (
+                "dejavu sans mono",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            ),
+            (
+                "dejavu sans mono",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+            ),
+            (
+                "dejavu serif",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+            ),
+            (
+                "dejavu serif",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+            ),
         ];
 
         for (family, path) in system_fonts {

@@ -4,9 +4,9 @@
 //! and hardware render pass lifecycle hooks (`GpuRenderContext`).
 
 use crate::math3d::Mat4;
-use strata_layout::Rect;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use strata_layout::Rect;
 
 /// Embedded Standard WGSL 3D Physically-Based Rendering Shader.
 pub const WGSL_PBR_3D_SHADER: &str = r#"
@@ -209,10 +209,16 @@ impl CustomShaderPipeline {
             }
         } else {
             if !self.shader.source.contains(&self.shader.vertex_entry) {
-                return Err(format!("Vertex entry point '{}' not found in shader", self.shader.vertex_entry));
+                return Err(format!(
+                    "Vertex entry point '{}' not found in shader",
+                    self.shader.vertex_entry
+                ));
             }
             if !self.shader.source.contains(&self.shader.fragment_entry) {
-                return Err(format!("Fragment entry point '{}' not found in shader", self.shader.fragment_entry));
+                return Err(format!(
+                    "Fragment entry point '{}' not found in shader",
+                    self.shader.fragment_entry
+                ));
             }
         }
         Ok(())
@@ -267,7 +273,13 @@ mod tests {
         pipeline.set_uniform_mat4("model", &Mat4::IDENTITY);
 
         assert_eq!(*pipeline.uniforms_f32.get("roughness").unwrap(), 0.35);
-        assert_eq!(*pipeline.uniforms_vec4.get("color").unwrap(), [0.2, 0.4, 0.8, 1.0]);
-        assert_eq!(*pipeline.uniforms_mat4.get("model").unwrap(), Mat4::IDENTITY.m);
+        assert_eq!(
+            *pipeline.uniforms_vec4.get("color").unwrap(),
+            [0.2, 0.4, 0.8, 1.0]
+        );
+        assert_eq!(
+            *pipeline.uniforms_mat4.get("model").unwrap(),
+            Mat4::IDENTITY.m
+        );
     }
 }

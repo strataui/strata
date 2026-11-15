@@ -20,12 +20,20 @@
     clippy::chunks_exact_to_as_chunks
 )]
 
+#[cfg(target_os = "android")]
+pub mod android_window;
 pub mod csd;
 pub mod cursor_theme;
+#[cfg(target_os = "linux")]
+pub mod dbus;
 pub mod dialog;
 pub mod events;
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 pub mod gtk_window;
+#[cfg(target_os = "ios")]
+pub mod ios_window;
+#[cfg(target_os = "macos")]
+pub mod macos_window;
 pub mod mcp_cursor;
 pub mod menu;
 pub mod raw_abi;
@@ -34,50 +42,41 @@ pub mod single_instance;
 pub mod surface;
 pub mod tray;
 pub mod vibrancy;
-pub mod window;
-pub mod window_manager;
-#[cfg(target_os = "linux")]
-pub mod dbus;
-#[cfg(target_os = "linux")]
-pub mod x11_window;
 #[cfg(target_os = "linux")]
 pub mod wayland_window;
 #[cfg(windows)]
 pub mod win32_window;
-#[cfg(target_os = "macos")]
-pub mod macos_window;
-#[cfg(target_os = "android")]
-pub mod android_window;
-#[cfg(target_os = "ios")]
-pub mod ios_window;
+pub mod window;
+pub mod window_manager;
+#[cfg(target_os = "linux")]
+pub mod x11_window;
 
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 pub use cairo;
 pub use csd::{ControlPlacement, CsdController, CsdGeometry, CsdHitZone};
 pub use cursor_theme::{CursorBitmap, CursorTheme};
-pub use dialog::{
-    open_file, open_multiple_files, pick_folder, save_file,
-    show_message_box, DialogFilter, DialogMockResponse, MessageBoxButtons, MessageBoxResult,
-    MessageBoxType, OpenFileOptions, PickFolderOptions, SaveFileOptions,
-};
 #[cfg(any(test, feature = "test-internals"))]
 pub use dialog::set_dialog_mock_response;
+pub use dialog::{
+    open_file, open_multiple_files, pick_folder, save_file, show_message_box, DialogFilter,
+    DialogMockResponse, MessageBoxButtons, MessageBoxResult, MessageBoxType, OpenFileOptions,
+    PickFolderOptions, SaveFileOptions,
+};
 pub use events::{KeyCode, Modifiers, MouseButton, PlatformEvent, TouchPhase};
-pub use mcp_cursor::McpCursorState;
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 pub use gtk;
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 pub use gtk_window::{
     cairo_rounded_rect, cairo_rounded_rect_radii, gtk_begin_window_drag, gtk_close,
-    gtk_current_modifiers, gtk_focus_window,
-    gtk_get_clipboard_text, gtk_is_closing, gtk_is_maximized, gtk_minimize, gtk_reset_ime,
-    gtk_set_clipboard_text, gtk_set_cursor, gtk_set_ime_cursor_location, gtk_set_ime_surrounding_text,
-    gtk_toggle_maximize, init_pango_text_measurement, launch_gtk_window,
-    launch_gtk_window_with_config, pango_font_metrics, pango_measure_styled_text,
-    pango_measure_styled_text_family, pango_measure_text, pango_measure_text_family,
-    post_platform_event, render_display_list_to_cairo, render_to_png, render_to_png_bytes,
-    resolved_font_family,
+    gtk_current_modifiers, gtk_focus_window, gtk_get_clipboard_text, gtk_is_closing,
+    gtk_is_maximized, gtk_minimize, gtk_reset_ime, gtk_set_clipboard_text, gtk_set_cursor,
+    gtk_set_ime_cursor_location, gtk_set_ime_surrounding_text, gtk_toggle_maximize,
+    init_pango_text_measurement, launch_gtk_window, launch_gtk_window_with_config,
+    pango_font_metrics, pango_measure_styled_text, pango_measure_styled_text_family,
+    pango_measure_text, pango_measure_text_family, post_platform_event,
+    render_display_list_to_cairo, render_to_png, render_to_png_bytes, resolved_font_family,
 };
+pub use mcp_cursor::McpCursorState;
 /// Pure-Rust headless software rasterization and PNG byte export.
 ///
 /// Completely decoupled from Cairo, GTK3, Pango, or X11/Wayland display servers.
@@ -117,7 +116,11 @@ pub fn render_to_png_bytes_pure(
                     let r = bitmap.pixels[idx + 2] as f32 / 255.0;
                     let a = (bitmap.pixels[idx + 3] as f32 / 255.0) * mcp_cursor.fade_opacity;
                     if a > 0.001 {
-                        fb.set_pixel(px as usize, py as usize, strata_style::types::Color::from_f32(r, g, b, a));
+                        fb.set_pixel(
+                            px as usize,
+                            py as usize,
+                            strata_style::types::Color::from_f32(r, g, b, a),
+                        );
                     }
                 }
             }
@@ -146,6 +149,14 @@ pub fn gtk_begin_window_drag(_x: f32, _y: f32) {}
 pub fn gtk_is_maximized() -> bool {
     false
 }
+#[cfg(target_os = "android")]
+pub use android_window::{AndroidEventLoop, AndroidWindow};
+#[cfg(target_os = "linux")]
+pub use dbus::{show_desktop_notification, DbusClient, DbusMessageDecoder, DbusMessageEncoder};
+#[cfg(target_os = "ios")]
+pub use ios_window::{IosEventLoop, IosWindow};
+#[cfg(target_os = "macos")]
+pub use macos_window::{MacOsEventLoop, MacOsWindow};
 pub use menu::{AcceleratorModifier, Menu, MenuAccelerator, MenuBar, MenuItem, MenuItemRole};
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 pub use pango;
@@ -155,16 +166,16 @@ pub use surface::{
     FramePacer, PresentError, PresentMode, RefreshRate, SoftwareSurfacePresenter, SurfaceConfig,
     SurfaceHandle, SurfacePresenter, SwapchainCompositor, SwapchainFormat,
 };
-#[cfg(target_os = "linux")]
-pub use dbus::{show_desktop_notification, DbusClient, DbusMessageDecoder, DbusMessageEncoder};
 pub use tray::{
     clear_delivered_notifications, get_delivered_notifications, DbusStatusNotifier,
     DesktopNotification, NativeTrayHandle, TrayEvent, TrayEventChannel, TrayEventReceiver,
     TrayEventSink, TrayIcon, TrayMenu, TrayMenuItem,
 };
-pub use vibrancy::{
-    apply_vibrancy, clear_vibrancy, VibrancyConfig, VibrancyEffect, VibrancyError,
-};
+pub use vibrancy::{apply_vibrancy, clear_vibrancy, VibrancyConfig, VibrancyEffect, VibrancyError};
+#[cfg(target_os = "linux")]
+pub use wayland_window::{WaylandDecoder, WaylandEncoder, WaylandEventLoop, WaylandWindow};
+#[cfg(windows)]
+pub use win32_window::{Win32EventLoop, Win32Window};
 pub use window::{
     CursorIcon, EventLoop, EventLoopControl, LivePlatformWindow, MockEventLoop, MockPlatformWindow,
     MonitorInfo, NativeSurfaceWindow, PlatformWindow, ThemeMode, WindowAnchor, WindowConfig,
@@ -176,16 +187,6 @@ pub use x11_window::{
     PureX11Client, PureX11Window, X11EventLoop, X11ShmSegment, X11Window, X11WireDecoder,
     X11WireEncoder,
 };
-#[cfg(target_os = "linux")]
-pub use wayland_window::{WaylandDecoder, WaylandEncoder, WaylandEventLoop, WaylandWindow};
-#[cfg(windows)]
-pub use win32_window::{Win32EventLoop, Win32Window};
-#[cfg(target_os = "macos")]
-pub use macos_window::{MacOsEventLoop, MacOsWindow};
-#[cfg(target_os = "android")]
-pub use android_window::{AndroidEventLoop, AndroidWindow};
-#[cfg(target_os = "ios")]
-pub use ios_window::{IosEventLoop, IosWindow};
 
 /// Target operating system or runtime platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -245,12 +246,22 @@ impl PlatformTarget {
 
 /// Platform prelude module.
 pub mod prelude {
+    #[cfg(target_os = "android")]
+    pub use super::android_window::{AndroidEventLoop, AndroidWindow};
     pub use super::csd::{ControlPlacement, CsdController, CsdGeometry, CsdHitZone};
     pub use super::events::{KeyCode, Modifiers, MouseButton, PlatformEvent, TouchPhase};
+    #[cfg(target_os = "ios")]
+    pub use super::ios_window::{IosEventLoop, IosWindow};
+    #[cfg(target_os = "macos")]
+    pub use super::macos_window::{MacOsEventLoop, MacOsWindow};
     pub use super::surface::{
         FramePacer, PresentMode, RefreshRate, SurfaceConfig, SurfaceHandle, SwapchainFormat,
     };
     pub use super::tray::{DesktopNotification, TrayIcon, TrayMenu, TrayMenuItem};
+    #[cfg(target_os = "linux")]
+    pub use super::wayland_window::{WaylandEventLoop, WaylandWindow};
+    #[cfg(windows)]
+    pub use super::win32_window::{Win32EventLoop, Win32Window};
     pub use super::window::{
         CursorIcon, EventLoop, EventLoopControl, LivePlatformWindow, MockEventLoop,
         MockPlatformWindow, MonitorInfo, NativeSurfaceWindow, PlatformWindow, ThemeMode,
@@ -258,15 +269,5 @@ pub mod prelude {
     };
     #[cfg(target_os = "linux")]
     pub use super::x11_window::{PureX11Window, X11EventLoop, X11Window};
-    #[cfg(target_os = "linux")]
-    pub use super::wayland_window::{WaylandEventLoop, WaylandWindow};
-    #[cfg(windows)]
-    pub use super::win32_window::{Win32EventLoop, Win32Window};
-    #[cfg(target_os = "macos")]
-    pub use super::macos_window::{MacOsEventLoop, MacOsWindow};
-    #[cfg(target_os = "android")]
-    pub use super::android_window::{AndroidEventLoop, AndroidWindow};
-    #[cfg(target_os = "ios")]
-    pub use super::ios_window::{IosEventLoop, IosWindow};
     pub use super::PlatformTarget;
 }

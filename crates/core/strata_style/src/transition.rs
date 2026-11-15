@@ -197,8 +197,12 @@ pub fn interpolate_transform_ops(
     for op in to {
         mat2 = mat2.multiply(&op.to_matrix(100.0, 100.0));
     }
-    let m1_2d = [mat1.m[0], mat1.m[1], mat1.m[4], mat1.m[5], mat1.m[12], mat1.m[13]];
-    let m2_2d = [mat2.m[0], mat2.m[1], mat2.m[4], mat2.m[5], mat2.m[12], mat2.m[13]];
+    let m1_2d = [
+        mat1.m[0], mat1.m[1], mat1.m[4], mat1.m[5], mat1.m[12], mat1.m[13],
+    ];
+    let m2_2d = [
+        mat2.m[0], mat2.m[1], mat2.m[4], mat2.m[5], mat2.m[12], mat2.m[13],
+    ];
     if let (Some(d1), Some(d2)) = (
         crate::matrix_decomp::Decomposed2d::from_matrix(m1_2d),
         crate::matrix_decomp::Decomposed2d::from_matrix(m2_2d),
@@ -293,8 +297,12 @@ pub fn interpolate_single_transform_op(
         _ => {
             let mat1 = from.to_matrix(100.0, 100.0);
             let mat2 = to.to_matrix(100.0, 100.0);
-            let m1_2d = [mat1.m[0], mat1.m[1], mat1.m[4], mat1.m[5], mat1.m[12], mat1.m[13]];
-            let m2_2d = [mat2.m[0], mat2.m[1], mat2.m[4], mat2.m[5], mat2.m[12], mat2.m[13]];
+            let m1_2d = [
+                mat1.m[0], mat1.m[1], mat1.m[4], mat1.m[5], mat1.m[12], mat1.m[13],
+            ];
+            let m2_2d = [
+                mat2.m[0], mat2.m[1], mat2.m[4], mat2.m[5], mat2.m[12], mat2.m[13],
+            ];
             if let (Some(d1), Some(d2)) = (
                 crate::matrix_decomp::Decomposed2d::from_matrix(m1_2d),
                 crate::matrix_decomp::Decomposed2d::from_matrix(m2_2d),

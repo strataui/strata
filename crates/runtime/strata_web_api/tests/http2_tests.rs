@@ -17,27 +17,39 @@ use strata_web_api::{FetchError, ParsedUrl, RequestInit};
 fn test_rfc7541_huffman_decoding_and_dynamic_table_c41_c42() {
     // RFC 7541 Appendix C.4.1 Huffman vector: "www.example.com"
     // Hex: f1e3c2e5f23a6ba0ab90f4ff
-    let c41_huffman = [0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90, 0xf4, 0xff];
-    let decoded_str = decode_huffman_string(&c41_huffman).expect("Failed to decode C.4.1 Huffman vector");
+    let c41_huffman = [
+        0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90, 0xf4, 0xff,
+    ];
+    let decoded_str =
+        decode_huffman_string(&c41_huffman).expect("Failed to decode C.4.1 Huffman vector");
     assert_eq!(decoded_str, "www.example.com");
 
     // RFC 7541 Appendix C.4.1 Full Header Block:
     // 82 86 84 41 8c f1 e3 c2 e5 f2 3a 6b a0 ab 90 f4 ff
     let c41_block = [
-        0x82, 0x86, 0x84, 0x41, 0x8c, 0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90, 0xf4, 0xff,
+        0x82, 0x86, 0x84, 0x41, 0x8c, 0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90,
+        0xf4, 0xff,
     ];
     let mut decoder = HpackDecoder::new();
-    let headers = decoder.decode_header_block(&c41_block).expect("Decode C.4.1 block");
+    let headers = decoder
+        .decode_header_block(&c41_block)
+        .expect("Decode C.4.1 block");
 
     assert_eq!(headers.len(), 4);
     assert_eq!(headers[0], (":method".to_string(), "GET".to_string()));
     assert_eq!(headers[1], (":scheme".to_string(), "http".to_string()));
     assert_eq!(headers[2], (":path".to_string(), "/".to_string()));
-    assert_eq!(headers[3], (":authority".to_string(), "www.example.com".to_string()));
+    assert_eq!(
+        headers[3],
+        (":authority".to_string(), "www.example.com".to_string())
+    );
 
     // Verify dynamic table has 1 entry: ":authority: www.example.com" at index 62
     assert_eq!(decoder.dynamic_table.len(), 1);
-    assert_eq!(decoder.dynamic_table[0], (":authority".to_string(), "www.example.com".to_string()));
+    assert_eq!(
+        decoder.dynamic_table[0],
+        (":authority".to_string(), "www.example.com".to_string())
+    );
     let (dyn_k, dyn_v) = decoder.get_header(62).expect("Header at index 62");
     assert_eq!(dyn_k, ":authority");
     assert_eq!(dyn_v, "www.example.com");
@@ -49,13 +61,21 @@ fn test_rfc7541_huffman_decoding_and_dynamic_table_c41_c42() {
     let c42_block = [
         0x82, 0x86, 0x84, 0xbe, 0x58, 0x86, 0xa8, 0xeb, 0x10, 0x64, 0x9c, 0xbf,
     ];
-    let headers2 = decoder.decode_header_block(&c42_block).expect("Decode C.4.2 block");
+    let headers2 = decoder
+        .decode_header_block(&c42_block)
+        .expect("Decode C.4.2 block");
     assert_eq!(headers2.len(), 5);
     assert_eq!(headers2[0], (":method".to_string(), "GET".to_string()));
     assert_eq!(headers2[1], (":scheme".to_string(), "http".to_string()));
     assert_eq!(headers2[2], (":path".to_string(), "/".to_string()));
-    assert_eq!(headers2[3], (":authority".to_string(), "www.example.com".to_string()));
-    assert_eq!(headers2[4], ("cache-control".to_string(), "no-cache".to_string()));
+    assert_eq!(
+        headers2[3],
+        (":authority".to_string(), "www.example.com".to_string())
+    );
+    assert_eq!(
+        headers2[4],
+        ("cache-control".to_string(), "no-cache".to_string())
+    );
 }
 
 #[test]
@@ -154,9 +174,18 @@ fn test_hpack_status_and_custom_headers_roundtrip() {
 
     let map: std::collections::HashMap<String, String> = decoded.into_iter().collect();
     assert_eq!(map.get(":status").map(|s| s.as_str()), Some("404"));
-    assert_eq!(map.get("content-encoding").map(|s| s.as_str()), Some("gzip"));
-    assert_eq!(map.get("cache-control").map(|s| s.as_str()), Some("no-cache, no-store"));
-    assert_eq!(map.get("server").map(|s| s.as_str()), Some("Strata-Rust-Engine"));
+    assert_eq!(
+        map.get("content-encoding").map(|s| s.as_str()),
+        Some("gzip")
+    );
+    assert_eq!(
+        map.get("cache-control").map(|s| s.as_str()),
+        Some("no-cache, no-store")
+    );
+    assert_eq!(
+        map.get("server").map(|s| s.as_str()),
+        Some("Strata-Rust-Engine")
+    );
 }
 
 #[test]
@@ -172,11 +201,14 @@ fn test_http2_client_server_exchange_with_gzip_decompression() {
 
         // 1. Read HTTP/2 Client Preface (24 bytes)
         let mut preface = [0u8; 24];
-        stream.read_exact(&mut preface).expect("Failed to read preface");
+        stream
+            .read_exact(&mut preface)
+            .expect("Failed to read preface");
         assert_eq!(&preface, HTTP2_PREFACE);
 
         // 2. Read Client SETTINGS frame
-        let client_settings = Http2Frame::read_from(&mut stream).expect("Failed to read client settings");
+        let client_settings =
+            Http2Frame::read_from(&mut stream).expect("Failed to read client settings");
         assert_eq!(client_settings.frame_type, FRAME_SETTINGS);
 
         // 3. Send Server SETTINGS frame & ACK client settings
@@ -199,9 +231,16 @@ fn test_http2_client_server_exchange_with_gzip_decompression() {
         }
         let headers_payload = headers_payload.expect("Headers frame must be received");
 
-        let decoded_headers = decode_hpack_headers(&headers_payload).expect("Decode client headers");
-        let client_method = decoded_headers.iter().find(|(k, _)| k == ":method").map(|(_, v)| v.as_str());
-        let client_path = decoded_headers.iter().find(|(k, _)| k == ":path").map(|(_, v)| v.as_str());
+        let decoded_headers =
+            decode_hpack_headers(&headers_payload).expect("Decode client headers");
+        let client_method = decoded_headers
+            .iter()
+            .find(|(k, _)| k == ":method")
+            .map(|(_, v)| v.as_str());
+        let client_path = decoded_headers
+            .iter()
+            .find(|(k, _)| k == ":path")
+            .map(|(_, v)| v.as_str());
         assert_eq!(client_method, Some("GET"));
         assert_eq!(client_path, Some("/api/status"));
 
@@ -253,11 +292,17 @@ fn test_http2_client_server_exchange_with_gzip_decompression() {
 
     assert_eq!(response.status, 200);
     assert_eq!(response.status_text, "OK");
-    assert_eq!(response.headers.get("content-type"), Some("application/json"));
+    assert_eq!(
+        response.headers.get("content-type"),
+        Some("application/json")
+    );
     assert_eq!(response.headers.get("content-encoding"), Some("gzip"));
 
     let body_text = response.text().expect("Failed to parse response body text");
-    assert_eq!(body_text, r#"{"status":"healthy","engine":"strata","version":2}"#);
+    assert_eq!(
+        body_text,
+        r#"{"status":"healthy","engine":"strata","version":2}"#
+    );
 
     drop(client_stream);
     server_handle.join().expect("Server thread panicked");
@@ -273,12 +318,18 @@ fn test_http2_frame_size_error_rejection_without_allocation() {
         (length & 0xFF) as u8,
         FRAME_DATA,
         0, // flags
-        0, 0, 0, 1, // stream id 1
+        0,
+        0,
+        0,
+        1, // stream id 1
     ];
     let mut cursor = Cursor::new(header);
     let result = Http2Frame::read_from_bounded(&mut cursor, DEFAULT_MAX_FRAME_SIZE);
 
-    assert!(result.is_err(), "Should reject frame exceeding max_frame_size");
+    assert!(
+        result.is_err(),
+        "Should reject frame exceeding max_frame_size"
+    );
     match result.unwrap_err() {
         FetchError::NetworkError(msg) => {
             assert!(
@@ -358,7 +409,9 @@ fn test_http2_settings_max_frame_size_negotiation() {
     payload.extend_from_slice(&SETTINGS_MAX_FRAME_SIZE.to_be_bytes());
     payload.extend_from_slice(&65_536u32.to_be_bytes());
 
-    settings.apply_settings(&payload).expect("Valid SETTINGS payload");
+    settings
+        .apply_settings(&payload)
+        .expect("Valid SETTINGS payload");
     assert_eq!(settings.max_frame_size, 65_536);
 
     // Rejects below 16,384
@@ -402,16 +455,22 @@ fn test_http2_flow_control_window_tracking() {
 
     // Zero increment must fail with PROTOCOL_ERROR
     let zero_update = win.update(0);
-    assert!(zero_update.is_err(), "Zero increment must return protocol error");
+    assert!(
+        zero_update.is_err(),
+        "Zero increment must return protocol error"
+    );
 
     // Overflow above 2^31 - 1 must fail with FLOW_CONTROL_ERROR
     let overflow_update = win.update(0x7FFF_FFFF);
-    assert!(overflow_update.is_err(), "Exceeding 2^31-1 must return flow control error");
+    assert!(
+        overflow_update.is_err(),
+        "Exceeding 2^31-1 must return flow control error"
+    );
 
     // Exceeding available window must fail
     let mut small_win = FlowControlWindow::new(100);
-    assert!(small_win.consume(200).is_err(), "Overconsuming must return flow control error");
+    assert!(
+        small_win.consume(200).is_err(),
+        "Overconsuming must return flow control error"
+    );
 }
-
-
-

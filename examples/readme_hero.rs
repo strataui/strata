@@ -34,7 +34,10 @@ fn main() {
     let blueprint = card.into_node_blueprint();
     match blueprint {
         NodeBlueprint::Element { tag, classes, .. } => {
-            println!("Hero Component successfully rendered: tag={:?}, classes={:?}", tag, classes);
+            println!(
+                "Hero Component successfully rendered: tag={:?}, classes={:?}",
+                tag, classes
+            );
         }
         _ => panic!("Expected Element blueprint"),
     }

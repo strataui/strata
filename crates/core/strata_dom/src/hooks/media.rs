@@ -1,7 +1,7 @@
 //! Media query and system preference hooks (responsive queries, color scheme, reduced motion, contrast).
 
-use std::cell::RefCell;
 use crate::reactive::Signal;
+use std::cell::RefCell;
 
 thread_local! {
     static VIEWPORT_DIMENSIONS: RefCell<Signal<(f32, f32)>> = RefCell::new(Signal::new((1920.0, 1080.0)));
@@ -102,7 +102,13 @@ enum MediaCondition {
 }
 
 impl MediaCondition {
-    fn evaluate(&self, width: f32, height: f32, color_scheme: ColorScheme, reduced_motion: bool) -> bool {
+    fn evaluate(
+        &self,
+        width: f32,
+        height: f32,
+        color_scheme: ColorScheme,
+        reduced_motion: bool,
+    ) -> bool {
         match self {
             Self::MinWidth(min) => width >= *min,
             Self::MaxWidth(max) => width <= *max,
@@ -119,7 +125,11 @@ impl MediaCondition {
 /// Parses a simple CSS media query string (e.g. `(min-width: 768px)`, `(max-width: 1024px)`).
 fn parse_media_query(query: &str) -> Vec<MediaCondition> {
     let mut conditions = Vec::new();
-    let cleaned = query.trim().trim_start_matches('@').trim_start_matches("media").trim();
+    let cleaned = query
+        .trim()
+        .trim_start_matches('@')
+        .trim_start_matches("media")
+        .trim();
 
     for part in cleaned.split("and") {
         let p = part.trim().trim_matches(|c| c == '(' || c == ')').trim();

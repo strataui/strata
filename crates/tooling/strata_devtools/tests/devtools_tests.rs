@@ -23,11 +23,17 @@ fn test_hud_toggle_and_event_interception() {
 
     // Mouse move outside HUD bounds should not be consumed
     let outside_mouse = PlatformEvent::MouseMove { x: 100.0, y: 100.0 };
-    assert!(!DevToolsEventInterceptor::intercept(&mut devtools.hud, &outside_mouse));
+    assert!(!DevToolsEventInterceptor::intercept(
+        &mut devtools.hud,
+        &outside_mouse
+    ));
 
     // Mouse move inside HUD bounds (bottom dock at y >= 468.0) should be consumed
     let inside_mouse = PlatformEvent::MouseMove { x: 100.0, y: 600.0 };
-    assert!(DevToolsEventInterceptor::intercept(&mut devtools.hud, &inside_mouse));
+    assert!(DevToolsEventInterceptor::intercept(
+        &mut devtools.hud,
+        &inside_mouse
+    ));
 
     // Inspect element toggle
     assert!(!devtools.hud.state.is_inspecting_element);
@@ -40,7 +46,10 @@ fn test_hud_toggle_and_event_interception() {
             meta: false,
         },
     };
-    assert!(DevToolsEventInterceptor::intercept(&mut devtools.hud, &ctrl_shift_c));
+    assert!(DevToolsEventInterceptor::intercept(
+        &mut devtools.hud,
+        &ctrl_shift_c
+    ));
     assert!(devtools.hud.state.is_inspecting_element);
 
     // Click in inspect mode selects and exits inspect mode
@@ -49,7 +58,10 @@ fn test_hud_toggle_and_event_interception() {
         y: 200.0,
         button: MouseButton::Left,
     };
-    assert!(DevToolsEventInterceptor::intercept(&mut devtools.hud, &click));
+    assert!(DevToolsEventInterceptor::intercept(
+        &mut devtools.hud,
+        &click
+    ));
     assert!(!devtools.hud.state.is_inspecting_element);
 }
 
@@ -83,7 +95,10 @@ fn test_box_model_metrics_and_tailwind_editor() {
 
     // Live Tailwind Editor mutation
     let mut classes = vec!["p-4".to_string(), "bg-blue-500".to_string()];
-    let mutated = LiveTailwindEditor::apply_class_mutation(&mut classes, "-bg-blue-500 bg-red-500 rounded-lg");
+    let mutated = LiveTailwindEditor::apply_class_mutation(
+        &mut classes,
+        "-bg-blue-500 bg-red-500 rounded-lg",
+    );
     assert!(mutated);
     assert!(classes.contains(&"p-4".to_string()));
     assert!(classes.contains(&"bg-red-500".to_string()));
@@ -106,10 +121,22 @@ fn test_reactive_graph_and_cycle_guard() {
     assert!(err.detected_cycle.len() >= 3);
 
     // Heatmap levels
-    assert_eq!(ReRenderHeatmapLevel::from_frequency(0), ReRenderHeatmapLevel::Optimal);
-    assert_eq!(ReRenderHeatmapLevel::from_frequency(5), ReRenderHeatmapLevel::Expected);
-    assert_eq!(ReRenderHeatmapLevel::from_frequency(30), ReRenderHeatmapLevel::High);
-    assert_eq!(ReRenderHeatmapLevel::from_frequency(80), ReRenderHeatmapLevel::Thrashing);
+    assert_eq!(
+        ReRenderHeatmapLevel::from_frequency(0),
+        ReRenderHeatmapLevel::Optimal
+    );
+    assert_eq!(
+        ReRenderHeatmapLevel::from_frequency(5),
+        ReRenderHeatmapLevel::Expected
+    );
+    assert_eq!(
+        ReRenderHeatmapLevel::from_frequency(30),
+        ReRenderHeatmapLevel::High
+    );
+    assert_eq!(
+        ReRenderHeatmapLevel::from_frequency(80),
+        ReRenderHeatmapLevel::Thrashing
+    );
 }
 
 #[test]
@@ -141,9 +168,7 @@ fn test_frame_profiler_cls_and_trace_export() {
 
     // CLS calculation test
     let cls = LayoutShiftDetector::calculate_shift_score(
-        0.0, 0.0, 100.0, 100.0,
-        0.0, 50.0, 100.0, 100.0,
-        1000.0, 1000.0,
+        0.0, 0.0, 100.0, 100.0, 0.0, 50.0, 100.0, 100.0, 1000.0, 1000.0,
     );
     assert!(cls > 0.0);
 
@@ -172,9 +197,18 @@ fn test_memory_arena_and_heap_tracker() {
 
     // Heap allocation tracker
     let mut heap_tracker = HeapAllocationTracker::new(10 * 1024 * 1024, 20 * 1024 * 1024);
-    assert_eq!(heap_tracker.record_allocation(5 * 1024 * 1024), HeapBudgetStatus::Normal);
-    assert_eq!(heap_tracker.record_allocation(15 * 1024 * 1024), HeapBudgetStatus::Warning(15 * 1024 * 1024));
-    assert_eq!(heap_tracker.record_allocation(25 * 1024 * 1024), HeapBudgetStatus::Critical(25 * 1024 * 1024));
+    assert_eq!(
+        heap_tracker.record_allocation(5 * 1024 * 1024),
+        HeapBudgetStatus::Normal
+    );
+    assert_eq!(
+        heap_tracker.record_allocation(15 * 1024 * 1024),
+        HeapBudgetStatus::Warning(15 * 1024 * 1024)
+    );
+    assert_eq!(
+        heap_tracker.record_allocation(25 * 1024 * 1024),
+        HeapBudgetStatus::Critical(25 * 1024 * 1024)
+    );
 
     // Monotonic growth leak detection
     assert!(heap_tracker.is_monotonically_growing(3));
@@ -184,9 +218,24 @@ fn test_memory_arena_and_heap_tracker() {
 fn test_time_travel_debugger_and_delta() {
     let mut tt = TimeTravelDebugger::new(10);
 
-    let id1 = tt.record_snapshot(1000, "Initial", vec![(1, "Alice".to_string()), (2, "10".to_string())], 0xAAA);
-    let id2 = tt.record_snapshot(2000, "Name change", vec![(1, "Bob".to_string()), (2, "10".to_string())], 0xBBB);
-    let id3 = tt.record_snapshot(3000, "Age change", vec![(1, "Bob".to_string()), (2, "20".to_string())], 0xCCC);
+    let id1 = tt.record_snapshot(
+        1000,
+        "Initial",
+        vec![(1, "Alice".to_string()), (2, "10".to_string())],
+        0xAAA,
+    );
+    let id2 = tt.record_snapshot(
+        2000,
+        "Name change",
+        vec![(1, "Bob".to_string()), (2, "10".to_string())],
+        0xBBB,
+    );
+    let id3 = tt.record_snapshot(
+        3000,
+        "Age change",
+        vec![(1, "Bob".to_string()), (2, "20".to_string())],
+        0xCCC,
+    );
 
     assert_eq!(tt.len(), 3);
     assert_eq!(tt.current_snapshot().unwrap().id, id3);
@@ -227,13 +276,16 @@ fn test_websocket_framing_and_cdp_dispatcher() {
     assert_eq!(decoded.payload, payload);
 
     let dispatcher = CdpDispatcher::new();
-    let resp_frame = dispatcher.handle_ws_frame(&decoded).expect("Expected response frame");
+    let resp_frame = dispatcher
+        .handle_ws_frame(&decoded)
+        .expect("Expected response frame");
     let resp_text = std::str::from_utf8(&resp_frame.payload).unwrap();
     assert!(resp_text.contains("\"id\":10"));
     assert!(resp_text.contains("\"nodeName\":\"#document\""));
 
     // Test CDP metrics
-    let metrics_req = CdpRequest::parse("{\"id\": 42, \"method\": \"Performance.getMetrics\"}").unwrap();
+    let metrics_req =
+        CdpRequest::parse("{\"id\": 42, \"method\": \"Performance.getMetrics\"}").unwrap();
     assert_eq!(metrics_req.id, 42);
     assert_eq!(metrics_req.method, "Performance.getMetrics");
 
@@ -295,9 +347,10 @@ fn test_cdp_live_dom_and_computed_styles_inspection() {
     assert!(doc_json.contains("\"data-rect\""));
 
     // 2. Verify CSS.getComputedStyleForNode returns real styles
-    let css_req =
-        CdpRequest::parse(r#"{"id":2,"method":"CSS.getComputedStyleForNode","params":{"nodeId":2}}"#)
-            .unwrap();
+    let css_req = CdpRequest::parse(
+        r#"{"id":2,"method":"CSS.getComputedStyleForNode","params":{"nodeId":2}}"#,
+    )
+    .unwrap();
     let css_resp = dispatcher.handle_request(&css_req);
     assert_eq!(css_resp.id, 2);
     let css_json = css_resp.to_json();
@@ -443,19 +496,28 @@ fn test_cdp_bidirectional_dom_and_css_live_mutation_and_runtime_signals() {
     dispatcher.update_from_ir(&graph, &styles, 1, 1);
 
     // 1. Query selector for "button"
-    let q_req = CdpRequest::parse(r#"{"id":10,"method":"DOM.querySelector","params":{"selector":"button"}}"#).unwrap();
+    let q_req = CdpRequest::parse(
+        r#"{"id":10,"method":"DOM.querySelector","params":{"selector":"button"}}"#,
+    )
+    .unwrap();
     let q_res = dispatcher.handle_request(&q_req);
     assert_eq!(q_res.id, 10);
     let q_json = q_res.to_json();
     assert!(q_json.contains("\"nodeId\":3")); // root is 2, button is 3
 
     // 2. Query selector all
-    let qa_req = CdpRequest::parse(r#"{"id":11,"method":"DOM.querySelectorAll","params":{"selector":"div"}}"#).unwrap();
+    let qa_req = CdpRequest::parse(
+        r#"{"id":11,"method":"DOM.querySelectorAll","params":{"selector":"div"}}"#,
+    )
+    .unwrap();
     let qa_res = dispatcher.handle_request(&qa_req);
     assert!(qa_res.to_json().contains("\"nodeIds\":[2]"));
 
     // 3. Live DOM mutation via DOM.setNodeValue
-    let set_val_req = CdpRequest::parse(r#"{"id":12,"method":"DOM.setNodeValue","params":{"nodeId":3,"value":"Click Me"}}"#).unwrap();
+    let set_val_req = CdpRequest::parse(
+        r#"{"id":12,"method":"DOM.setNodeValue","params":{"nodeId":3,"value":"Click Me"}}"#,
+    )
+    .unwrap();
     let set_val_res = dispatcher.handle_request(&set_val_req);
     assert_eq!(set_val_res.id, 12);
 
@@ -477,7 +539,10 @@ fn test_cdp_bidirectional_dom_and_css_live_mutation_and_runtime_signals() {
     assert_eq!(css_edit_res.id, 15);
     assert!(css_edit_res.to_json().contains("rgb(255, 0, 0)"));
 
-    let get_css = CdpRequest::parse(r#"{"id":16,"method":"CSS.getComputedStyleForNode","params":{"nodeId":2}}"#).unwrap();
+    let get_css = CdpRequest::parse(
+        r#"{"id":16,"method":"CSS.getComputedStyleForNode","params":{"nodeId":2}}"#,
+    )
+    .unwrap();
     let get_css_res = dispatcher.handle_request(&get_css);
     assert!(get_css_res.to_json().contains("rgb(255, 0, 0)"));
     assert!(get_css_res.to_json().contains("20px"));
@@ -486,7 +551,10 @@ fn test_cdp_bidirectional_dom_and_css_live_mutation_and_runtime_signals() {
     dispatcher.update_runtime_signal("activeSignalCount", "42");
     dispatcher.update_runtime_signal("theme", "dark");
 
-    let runtime_props_req = CdpRequest::parse(r#"{"id":17,"method":"Runtime.getProperties","params":{"objectId":"runtime"}}"#).unwrap();
+    let runtime_props_req = CdpRequest::parse(
+        r#"{"id":17,"method":"Runtime.getProperties","params":{"objectId":"runtime"}}"#,
+    )
+    .unwrap();
     let runtime_props_res = dispatcher.handle_request(&runtime_props_req);
     assert_eq!(runtime_props_res.id, 17);
     let runtime_json = runtime_props_res.to_json();
@@ -560,10 +628,22 @@ fn test_hud_overlay_rendering_with_9_stage_flamegraph_and_live_timings() {
         }
     }
 
-    assert!(has_summary, "HUD Performance tab must render CPU & Jank frame summary");
-    assert!(has_reconcile_legend, "HUD Performance tab must render Reconcile stage breakdown");
-    assert!(has_gpu_submit_legend, "HUD Performance tab must render GPU Submit timing");
-    assert!(has_gpu_raster_legend, "HUD Performance tab must render GPU Raster timing");
+    assert!(
+        has_summary,
+        "HUD Performance tab must render CPU & Jank frame summary"
+    );
+    assert!(
+        has_reconcile_legend,
+        "HUD Performance tab must render Reconcile stage breakdown"
+    );
+    assert!(
+        has_gpu_submit_legend,
+        "HUD Performance tab must render GPU Submit timing"
+    );
+    assert!(
+        has_gpu_raster_legend,
+        "HUD Performance tab must render GPU Raster timing"
+    );
 
     // 4. Inspect Element highlight overlay
     let mut dl = strata_render::compositor::DisplayList::new();
@@ -574,7 +654,9 @@ fn test_hud_overlay_rendering_with_9_stage_flamegraph_and_live_timings() {
         height: 80.0,
     };
     hud.render_inspect_highlight(inspect_bounds, &mut dl);
-    assert_eq!(dl.len(), 2, "Inspect highlight emits translucent overlay and border");
+    assert_eq!(
+        dl.len(),
+        2,
+        "Inspect highlight emits translucent overlay and border"
+    );
 }
-
-

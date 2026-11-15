@@ -13,7 +13,8 @@ fn test_software_surface_presenter_bgra_full_copy() {
     let mut fb = FrameBuffer::new(width, height);
     fb.clear(Color::rgba(255, 128, 64, 255)); // Red = 255, Green = 128, Blue = 64, Alpha = 255
 
-    let mut presenter = SoftwareSurfacePresenter::new(width as u32, height as u32, SwapchainFormat::Bgra8Unorm);
+    let mut presenter =
+        SoftwareSurfacePresenter::new(width as u32, height as u32, SwapchainFormat::Bgra8Unorm);
     assert_eq!(presenter.surface_size(), (100, 50));
     assert_eq!(presenter.backing_buffer.len(), 100 * 50 * 4);
 
@@ -36,9 +37,12 @@ fn test_software_surface_presenter_damage_scissoring() {
     let mut fb = FrameBuffer::new(width, height);
     fb.clear(Color::rgba(10, 20, 30, 255));
 
-    let mut presenter = SoftwareSurfacePresenter::new(width as u32, height as u32, SwapchainFormat::Rgba8Unorm);
+    let mut presenter =
+        SoftwareSurfacePresenter::new(width as u32, height as u32, SwapchainFormat::Rgba8Unorm);
     // Initial full present
-    presenter.present(&fb, None).expect("Initial present failed");
+    presenter
+        .present(&fb, None)
+        .expect("Initial present failed");
 
     // Modify a small region in fb (x: 20..30, y: 40..50)
     for y in 40..50 {
@@ -49,7 +53,9 @@ fn test_software_surface_presenter_damage_scissoring() {
 
     // Present only damage region
     let damage = Rect::new(20.0, 40.0, 10.0, 10.0);
-    presenter.present(&fb, Some(damage)).expect("Damage present failed");
+    presenter
+        .present(&fb, Some(damage))
+        .expect("Damage present failed");
     assert_eq!(presenter.presented_frames, 2);
     assert_eq!(presenter.damage_clipped_frames, 1);
 
@@ -79,17 +85,23 @@ fn test_swapchain_compositor_clean_frame_skip_and_force_redraw() {
     });
 
     // First render with default initial damage
-    let presented = compositor.render_and_present(&dl, &mut presenter, false).expect("First render failed");
+    let presented = compositor
+        .render_and_present(&dl, &mut presenter, false)
+        .expect("First render failed");
     assert!(presented);
     assert_eq!(compositor.frame_count, 1);
 
     // Second render with no new damage -> should cleanly skip!
-    let skipped = compositor.render_and_present(&dl, &mut presenter, false).expect("Second render failed");
+    let skipped = compositor
+        .render_and_present(&dl, &mut presenter, false)
+        .expect("Second render failed");
     assert!(!skipped);
     assert_eq!(compositor.frame_count, 1); // Frame count not incremented on skip
 
     // Third render with force_redraw -> should render!
-    let forced = compositor.render_and_present(&dl, &mut presenter, true).expect("Forced render failed");
+    let forced = compositor
+        .render_and_present(&dl, &mut presenter, true)
+        .expect("Forced render failed");
     assert!(forced);
     assert_eq!(compositor.frame_count, 2);
 
@@ -105,8 +117,8 @@ fn test_swapchain_compositor_clean_frame_skip_and_force_redraw() {
 
 #[test]
 fn test_hardware_swapchain_presenter_multibuffered_fences() {
-    use strata_render::swapchain::{HardwareBackend, HardwareSwapchainPresenter, PresentMode};
     use std::time::Duration;
+    use strata_render::swapchain::{HardwareBackend, HardwareSwapchainPresenter, PresentMode};
 
     let width = 320;
     let height = 240;
@@ -132,15 +144,18 @@ fn test_hardware_swapchain_presenter_multibuffered_fences() {
         presenter.present(&fb, None).expect("Present failed");
         assert_eq!(presenter.presented_frames, i);
         assert_eq!(presenter.last_submitted_fence(), i);
-        assert!(presenter.wait_for_fence(i, Duration::from_millis(50)).is_ok());
+        assert!(presenter
+            .wait_for_fence(i, Duration::from_millis(50))
+            .is_ok());
     }
 
     assert_eq!(presenter.damage_clipped_frames, 0);
 
     // Present damaged frame
     let damage = Rect::new(10.0, 10.0, 50.0, 50.0);
-    presenter.present(&fb, Some(damage)).expect("Damage present failed");
+    presenter
+        .present(&fb, Some(damage))
+        .expect("Damage present failed");
     assert_eq!(presenter.damage_clipped_frames, 1);
     assert_eq!(presenter.presented_frames, 6);
 }
-

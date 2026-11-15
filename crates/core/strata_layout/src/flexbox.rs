@@ -187,93 +187,94 @@ pub fn solve_flexbox_with_definite_cross_guarded(
     );
 
     // 1. Resolve container dimensions
-    let resolved_width = match resolve_dimension_with_node(container.style.width, available_width, container) {
-        Some(w) => clamp_dimension_with_node(
-            w,
-            container.style.min_width,
-            container.style.max_width,
-            available_width,
-            container,
-        ),
-        None => {
-            // Only inline-level flex containers shrink-to-fit. A block-level
-            // flex container with `width: auto` fills its containing block
-            // regardless of its own `flex-shrink`, which describes how the
-            // container behaves as an item of its parent, not how it sizes
-            // its content.
-            let is_inline_or_shrink = container.style.display
-                == strata_style::types::Display::InlineFlex
-                || container.style.display == strata_style::types::Display::Inline;
-            if is_inline_or_shrink {
-                let mut sum_children = 0.0f32;
-                for child in &mut container.children {
-                    if child.style.position == Position::Absolute
-                        || child.style.position == Position::Fixed
-                    {
-                        continue;
+    let resolved_width =
+        match resolve_dimension_with_node(container.style.width, available_width, container) {
+            Some(w) => clamp_dimension_with_node(
+                w,
+                container.style.min_width,
+                container.style.max_width,
+                available_width,
+                container,
+            ),
+            None => {
+                // Only inline-level flex containers shrink-to-fit. A block-level
+                // flex container with `width: auto` fills its containing block
+                // regardless of its own `flex-shrink`, which describes how the
+                // container behaves as an item of its parent, not how it sizes
+                // its content.
+                let is_inline_or_shrink = container.style.display
+                    == strata_style::types::Display::InlineFlex
+                    || container.style.display == strata_style::types::Display::Inline;
+                if is_inline_or_shrink {
+                    let mut sum_children = 0.0f32;
+                    for child in &mut container.children {
+                        if child.style.position == Position::Absolute
+                            || child.style.position == Position::Fixed
+                        {
+                            continue;
+                        }
+                        let cw =
+                            resolve_dimension_with_node(child.style.width, available_width, child)
+                                .unwrap_or_else(|| {
+                                    if child.geometry.border_box.width > 0.0 {
+                                        child.geometry.border_box.width
+                                    } else {
+                                        let min_max = crate::intrinsic::compute_min_max_sizes(
+                                            child,
+                                            Some(available_width),
+                                        );
+                                        min_max.max_content.min(available_width)
+                                    }
+                                });
+                        let mw = child.style.margin.left + child.style.margin.right;
+                        if is_row {
+                            sum_children += cw + mw;
+                        } else {
+                            sum_children = sum_children.max(cw + mw);
+                        }
                     }
-                    let cw = resolve_dimension_with_node(child.style.width, available_width, child).unwrap_or_else(
-                        || {
-                            if child.geometry.border_box.width > 0.0 {
-                                child.geometry.border_box.width
-                            } else {
-                                let min_max = crate::intrinsic::compute_min_max_sizes(
-                                    child,
-                                    Some(available_width),
-                                );
-                                min_max.max_content.min(available_width)
-                            }
-                        },
-                    );
-                    let mw = child.style.margin.left + child.style.margin.right;
-                    if is_row {
-                        sum_children += cw + mw;
+                    let in_flow_count = container
+                        .children
+                        .iter()
+                        .filter(|c| {
+                            c.style.position != Position::Absolute
+                                && c.style.position != Position::Fixed
+                        })
+                        .count();
+                    let gap_val = if is_row {
+                        container.style.gap_col.max(container.style.gap)
                     } else {
-                        sum_children = sum_children.max(cw + mw);
-                    }
+                        container.style.gap_row.max(container.style.gap)
+                    };
+                    let gaps = if is_row && in_flow_count > 1 {
+                        (in_flow_count - 1) as f32 * gap_val
+                    } else {
+                        0.0
+                    };
+                    let fit_w = (sum_children
+                        + gaps
+                        + padding.left
+                        + padding.right
+                        + border.left
+                        + border.right)
+                        .min(available_width);
+                    clamp_dimension(
+                        fit_w,
+                        container.style.min_width,
+                        container.style.max_width,
+                        available_width,
+                    )
+                } else {
+                    let auto_w = (available_width - margin.left - margin.right).max(0.0);
+                    clamp_dimension(
+                        auto_w,
+                        container.style.min_width,
+                        container.style.max_width,
+                        available_width,
+                    )
                 }
-                let in_flow_count = container
-                    .children
-                    .iter()
-                    .filter(|c| {
-                        c.style.position != Position::Absolute
-                            && c.style.position != Position::Fixed
-                    })
-                    .count();
-                let gap_val = if is_row {
-                    container.style.gap_col.max(container.style.gap)
-                } else {
-                    container.style.gap_row.max(container.style.gap)
-                };
-                let gaps = if is_row && in_flow_count > 1 {
-                    (in_flow_count - 1) as f32 * gap_val
-                } else {
-                    0.0
-                };
-                let fit_w = (sum_children
-                    + gaps
-                    + padding.left
-                    + padding.right
-                    + border.left
-                    + border.right)
-                    .min(available_width);
-                clamp_dimension(
-                    fit_w,
-                    container.style.min_width,
-                    container.style.max_width,
-                    available_width,
-                )
-            } else {
-                let auto_w = (available_width - margin.left - margin.right).max(0.0);
-                clamp_dimension(
-                    auto_w,
-                    container.style.min_width,
-                    container.style.max_width,
-                    available_width,
-                )
             }
-        }
-    };
+        };
 
     let inner_width =
         (resolved_width - padding.left - padding.right - border.left - border.right).max(0.0);
@@ -326,23 +327,25 @@ pub fn solve_flexbox_with_definite_cross_guarded(
             AlignSelf::Baseline => AlignItems::Baseline,
         };
 
-        let item_w_opt = resolve_dimension_with_node(child.style.width, inner_width, child).or_else(|| {
-            if is_row && child.style.flex_basis != Dimension::Auto {
-                let basis = resolve_dimension_with_node(child.style.flex_basis, inner_width, child)?;
-                if basis > 0.0 {
-                    Some(basis)
+        let item_w_opt = resolve_dimension_with_node(child.style.width, inner_width, child)
+            .or_else(|| {
+                if is_row && child.style.flex_basis != Dimension::Auto {
+                    let basis =
+                        resolve_dimension_with_node(child.style.flex_basis, inner_width, child)?;
+                    if basis > 0.0 {
+                        Some(basis)
+                    } else {
+                        // When flex-basis is 0 (e.g. flex: 1), the item will receive distributed space.
+                        // For measuring its cross size, give it the available inner_width so text doesn't wrap to 0px.
+                        None
+                    }
+                } else if is_row || effective_align != AlignItems::Stretch {
+                    let min_max = crate::intrinsic::compute_min_max_sizes(child, Some(inner_width));
+                    Some(min_max.max_content.min(inner_width))
                 } else {
-                    // When flex-basis is 0 (e.g. flex: 1), the item will receive distributed space.
-                    // For measuring its cross size, give it the available inner_width so text doesn't wrap to 0px.
                     None
                 }
-            } else if is_row || effective_align != AlignItems::Stretch {
-                let min_max = crate::intrinsic::compute_min_max_sizes(child, Some(inner_width));
-                Some(min_max.max_content.min(inner_width))
-            } else {
-                None
-            }
-        });
+            });
 
         // `text-overflow` is not inherited, but in flex layout the text is an
         // anonymous item of the flex container. Apply the container's clipping
@@ -659,11 +662,7 @@ pub fn solve_flexbox_with_definite_cross_guarded(
     }
 
     // 4. Resolve flexible lengths on main axis for each line
-    let is_main_definite = if is_row {
-        true
-    } else {
-        inner_height.is_some()
-    };
+    let is_main_definite = if is_row { true } else { inner_height.is_some() };
 
     for line in &mut lines {
         let count = line.items.len();
@@ -795,9 +794,11 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                                         _ => f32::INFINITY,
                                     };
                                     let mut auto_min = content_size.min(specified_size);
-                                    if let Some(max_w) =
-                                        resolve_dimension_with_node(ch.style.max_width, inner_width, ch)
-                                    {
+                                    if let Some(max_w) = resolve_dimension_with_node(
+                                        ch.style.max_width,
+                                        inner_width,
+                                        ch,
+                                    ) {
                                         auto_min = auto_min.min(max_w);
                                     }
                                     auto_min
@@ -944,12 +945,8 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                 }
             }
         }
-        let (recomputed_cross, max_baseline) = compute_line_cross_and_baseline(
-            &line.items,
-            container.style.align_items,
-            is_row,
-            true,
-        );
+        let (recomputed_cross, max_baseline) =
+            compute_line_cross_and_baseline(&line.items, container.style.align_items, is_row, true);
         line.max_baseline_ascent = max_baseline;
         line.cross_size = if is_row && inner_height.is_none() {
             recomputed_cross
@@ -1050,11 +1047,12 @@ pub fn solve_flexbox_with_definite_cross_guarded(
             .map(|it| (it.auto_margin_main_start as usize) + (it.auto_margin_main_end as usize))
             .sum();
 
-        let (effective_remaining_main, auto_margin_px) = if num_auto_main > 0 && remaining_main > 0.0 {
-            (0.0, remaining_main / num_auto_main as f32)
-        } else {
-            (remaining_main, 0.0)
-        };
+        let (effective_remaining_main, auto_margin_px) =
+            if num_auto_main > 0 && remaining_main > 0.0 {
+                (0.0, remaining_main / num_auto_main as f32)
+            } else {
+                (remaining_main, 0.0)
+            };
 
         if num_auto_main > 0 {
             for it in &mut line_items {
@@ -1074,7 +1072,10 @@ pub fn solve_flexbox_with_definite_cross_guarded(
             JustifyContent::Center => (effective_remaining_main / 2.0, main_gap),
             JustifyContent::SpaceBetween => {
                 if count > 1 {
-                    (0.0, main_gap + (effective_remaining_main / (count - 1) as f32))
+                    (
+                        0.0,
+                        main_gap + (effective_remaining_main / (count - 1) as f32),
+                    )
                 } else {
                     (0.0, main_gap)
                 }
@@ -1108,9 +1109,17 @@ pub fn solve_flexbox_with_definite_cross_guarded(
             let (cross_offset, final_cross_size, actual_m_cross_start) = if has_cross_auto {
                 let remaining_cross = (line.cross_size
                     - it.resolved_cross
-                    - (if it.auto_margin_cross_start { 0.0 } else { it.margin_cross_start })
-                    - (if it.auto_margin_cross_end { 0.0 } else { it.margin_cross_end }))
-                    .max(0.0);
+                    - (if it.auto_margin_cross_start {
+                        0.0
+                    } else {
+                        it.margin_cross_start
+                    })
+                    - (if it.auto_margin_cross_end {
+                        0.0
+                    } else {
+                        it.margin_cross_end
+                    }))
+                .max(0.0);
                 let (m_start, m_end) = if it.auto_margin_cross_start && it.auto_margin_cross_end {
                     (remaining_cross / 2.0, remaining_cross / 2.0)
                 } else if it.auto_margin_cross_start {
@@ -1150,10 +1159,9 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                                 || matches!(child.style.width, Dimension::Percent(_))
                         };
                         if has_auto_cross {
-                            let stretched = (line.cross_size
-                                - it.margin_cross_start
-                                - it.margin_cross_end)
-                                .max(0.0);
+                            let stretched =
+                                (line.cross_size - it.margin_cross_start - it.margin_cross_end)
+                                    .max(0.0);
                             size = if is_row {
                                 clamp_dimension(
                                     stretched,
@@ -1174,7 +1182,9 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                     }
                     AlignItems::Baseline => {
                         if is_row && line.max_baseline_ascent > 0.0 {
-                            (line.max_baseline_ascent - (it.margin_cross_start + it.baseline_offset)).max(0.0)
+                            (line.max_baseline_ascent
+                                - (it.margin_cross_start + it.baseline_offset))
+                                .max(0.0)
                         } else {
                             0.0
                         }

@@ -97,7 +97,11 @@ pub fn audit_tree(tree: &A11yTree) -> Vec<AuditViolation> {
 fn audit_node(node: &A11yNode, violations: &mut Vec<AuditViolation>) {
     // Rule 1: Interactive elements must have an accessible name (label)
     if node.role.is_interactive() {
-        let has_name = node.name.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+        let has_name = node
+            .name
+            .as_ref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
         if !has_name {
             violations.push(AuditViolation {
                 rule: "A11Y_RULE_001_MISSING_ACCESSIBLE_NAME",
@@ -113,7 +117,11 @@ fn audit_node(node: &A11yNode, violations: &mut Vec<AuditViolation>) {
 
     // Rule 2: Images must have an accessible name or explicit presentation role
     if node.role == A11yRole::Image {
-        let has_alt = node.name.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+        let has_alt = node
+            .name
+            .as_ref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
         if !has_alt {
             violations.push(AuditViolation {
                 rule: "A11Y_RULE_002_IMAGE_MISSING_ALT",
@@ -132,19 +140,23 @@ fn audit_node(node: &A11yNode, violations: &mut Vec<AuditViolation>) {
                 rule: "A11Y_RULE_003_INPUT_MISSING_LABEL",
                 severity: AuditSeverity::Warning,
                 node_id: node.id.0,
-                message: "TextInput element should have an associated label or description.".to_string(),
+                message: "TextInput element should have an associated label or description."
+                    .to_string(),
             });
         }
     }
 
     // Rule 4: Sliders must have min, max, and current numeric value defined
     if node.role == A11yRole::Slider
-        && (node.numeric_value.is_none() || node.min_numeric_value.is_none() || node.max_numeric_value.is_none()) {
-            violations.push(AuditViolation {
+        && (node.numeric_value.is_none()
+            || node.min_numeric_value.is_none()
+            || node.max_numeric_value.is_none())
+    {
+        violations.push(AuditViolation {
                 rule: "A11Y_RULE_004_SLIDER_MISSING_BOUNDS",
                 severity: AuditSeverity::Error,
                 node_id: node.id.0,
                 message: "Slider element must provide numeric_value, min_numeric_value, and max_numeric_value.".to_string(),
             });
-        }
+    }
 }

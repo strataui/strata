@@ -50,7 +50,12 @@ mod tests {
 
     #[test]
     fn test_easing_boundaries() {
-        for easing in [Easing::Linear, Easing::EaseIn, Easing::EaseOut, Easing::EaseInOut] {
+        for easing in [
+            Easing::Linear,
+            Easing::EaseIn,
+            Easing::EaseOut,
+            Easing::EaseInOut,
+        ] {
             assert_eq!(easing.evaluate(0.0), 0.0);
             assert_eq!(easing.evaluate(1.0), 1.0);
         }

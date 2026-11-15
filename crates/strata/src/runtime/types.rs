@@ -146,7 +146,10 @@ impl PointerDownAction {
 
     #[inline]
     pub fn needs_rebuild(self) -> bool {
-        matches!(self, PointerDownAction::FocusChanged | PointerDownAction::DomListenerInvoked)
+        matches!(
+            self,
+            PointerDownAction::FocusChanged | PointerDownAction::DomListenerInvoked
+        )
     }
 
     #[inline]
@@ -274,6 +277,3 @@ pub(crate) struct CascadeElementMeta {
     pub attributes: Vec<(String, String)>,
     pub pseudo_state: strata_style::selector::PseudoState,
 }
-
-
-

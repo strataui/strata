@@ -64,7 +64,11 @@ fn unix_single_instance_recovers_stale_socket_and_forwards_arguments() {
 
     use std::os::unix::fs::PermissionsExt;
     let meta = std::fs::metadata(&socket_path).expect("socket metadata");
-    assert_eq!(meta.permissions().mode() & 0o777, 0o600, "socket permissions must be 0600");
+    assert_eq!(
+        meta.permissions().mode() & 0o777,
+        0o600,
+        "socket permissions must be 0600"
+    );
 
     drop(lock);
     let _ = std::fs::remove_dir_all(&runtime_dir);
@@ -108,7 +112,10 @@ fn unix_single_instance_drop_cleans_up_socket_and_terminates_thread() {
         SingleInstanceStatus::SecondaryExited => panic!("first instance must be primary"),
     };
 
-    assert!(socket_path.exists(), "socket file must exist while lock is held");
+    assert!(
+        socket_path.exists(),
+        "socket file must exist while lock is held"
+    );
 
     let start = std::time::Instant::now();
     drop(lock);
@@ -141,7 +148,10 @@ fn test_binary_serialization_embedded_newlines_and_empty_args() {
     let encoded = encode_args(&original);
     let decoded = decode_args(&encoded);
 
-    assert_eq!(decoded, original, "Binary serialization must preserve arguments exactly");
+    assert_eq!(
+        decoded, original,
+        "Binary serialization must preserve arguments exactly"
+    );
     assert_eq!(decoded.len(), 6);
     assert_eq!(decoded[0], "--query=SELECT * FROM users\nWHERE active = 1;");
     assert_eq!(decoded[1], "");
@@ -559,7 +569,10 @@ fn unix_single_instance_symlink_attack_rejected() {
 
     // Adversary creates a symlink pointing to an arbitrary file
     std::os::unix::fs::symlink(&decoy_target, &socket_path).unwrap();
-    assert!(std::fs::symlink_metadata(&socket_path).unwrap().file_type().is_symlink());
+    assert!(std::fs::symlink_metadata(&socket_path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
 
     // SingleInstanceLock must securely neutralize the symlink and acquire primary without overwriting decoy
     let first = SingleInstanceLock::acquire_in_dir(app_id, &[], &runtime_dir, |_| {})
@@ -576,4 +589,3 @@ fn unix_single_instance_symlink_attack_rejected() {
     drop(lock);
     let _ = std::fs::remove_dir_all(&runtime_dir);
 }
-

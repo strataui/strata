@@ -84,12 +84,10 @@ impl AppRuntime {
                     Self::flatten_blueprints(c, &mut flat_children);
                 }
 
-                for (child_bp, child_layout) in flat_children.iter().zip(layout_node.children.iter()) {
-                    Self::collect_canvas_3d_recursive(
-                        child_bp,
-                        child_layout,
-                        commands,
-                    );
+                for (child_bp, child_layout) in
+                    flat_children.iter().zip(layout_node.children.iter())
+                {
+                    Self::collect_canvas_3d_recursive(child_bp, child_layout, commands);
                 }
             }
             NodeBlueprint::Fragment(children) => {
@@ -97,12 +95,10 @@ impl AppRuntime {
                 for c in children {
                     Self::flatten_blueprints(c, &mut flat_children);
                 }
-                for (child_bp, child_layout) in flat_children.iter().zip(layout_node.children.iter()) {
-                    Self::collect_canvas_3d_recursive(
-                        child_bp,
-                        child_layout,
-                        commands,
-                    );
+                for (child_bp, child_layout) in
+                    flat_children.iter().zip(layout_node.children.iter())
+                {
+                    Self::collect_canvas_3d_recursive(child_bp, child_layout, commands);
                 }
             }
             _ => {}

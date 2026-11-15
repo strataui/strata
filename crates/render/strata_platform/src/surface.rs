@@ -21,8 +21,7 @@ pub enum PresentMode {
 }
 
 /// Target display refresh rate for frame pacing and VSync synchronization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum RefreshRate {
     #[default]
     Hz60,
@@ -31,7 +30,6 @@ pub enum RefreshRate {
     Hz144,
     Custom(u32),
 }
-
 
 impl RefreshRate {
     /// Returns integer frequency in Hertz.

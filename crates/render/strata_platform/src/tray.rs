@@ -124,10 +124,7 @@ impl TrayMenu {
         None
     }
 
-    fn find_in_slice_mut(
-        items: &mut [TrayMenuItem],
-        id: u64,
-    ) -> Option<&mut TrayMenuItem> {
+    fn find_in_slice_mut(items: &mut [TrayMenuItem], id: u64) -> Option<&mut TrayMenuItem> {
         for item in items {
             if !item.is_separator && item.id == id {
                 return Some(item);
@@ -988,10 +985,10 @@ mod windows_backend {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-        DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, HICON, HMENU,
+        DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, PeekMessageW,
+        PostMessageW, RegisterClassExW, SetForegroundWindow, TrackPopupMenuEx, HICON, HMENU,
         ICONINFO, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
-        PeekMessageW, PM_REMOVE, PostMessageW, RegisterClassExW, SetForegroundWindow,
-        TrackPopupMenuEx, TPM_BOTTOMALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP,
+        PM_REMOVE, TPM_BOTTOMALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP,
         WM_CONTEXTMENU, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSEXW,
     };
 
@@ -1374,14 +1371,12 @@ mod macos_backend {
             unsafe {
                 if let Some(menu) = menu {
                     let ns_menu = build_ns_menu(&menu.items, self.shared.clone());
-                    let set_menu_sel =
-                        sel_registerName(b"setMenu:\0".as_ptr() as *const c_char);
+                    let set_menu_sel = sel_registerName(b"setMenu:\0".as_ptr() as *const c_char);
                     let msg_set_menu: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
                         std::mem::transmute(objc_msgSend as *const ());
                     msg_set_menu(self.status_item, set_menu_sel, ns_menu);
                 } else {
-                    let set_menu_sel =
-                        sel_registerName(b"setMenu:\0".as_ptr() as *const c_char);
+                    let set_menu_sel = sel_registerName(b"setMenu:\0".as_ptr() as *const c_char);
                     let msg_set_menu: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
                         std::mem::transmute(objc_msgSend as *const ());
                     msg_set_menu(self.status_item, set_menu_sel, std::ptr::null_mut());
@@ -1418,8 +1413,7 @@ mod macos_backend {
     impl Drop for LiveStatusItem {
         fn drop(&mut self) {
             unsafe {
-                let status_bar_cls =
-                    objc_getClass(b"NSStatusBar\0".as_ptr() as *const c_char);
+                let status_bar_cls = objc_getClass(b"NSStatusBar\0".as_ptr() as *const c_char);
                 if !status_bar_cls.is_null() {
                     let system_sb_sel =
                         sel_registerName(b"systemStatusBar\0".as_ptr() as *const c_char);
@@ -1451,10 +1445,7 @@ mod macos_backend {
         msg(cls, sel, cstr.as_ptr())
     }
 
-    unsafe fn build_ns_menu(
-        items: &[TrayMenuItem],
-        shared: Arc<SharedTrayState>,
-    ) -> *mut c_void {
+    unsafe fn build_ns_menu(items: &[TrayMenuItem], shared: Arc<SharedTrayState>) -> *mut c_void {
         let menu_cls = objc_getClass(b"NSMenu\0".as_ptr() as *const c_char);
         let alloc_sel = sel_registerName(b"alloc\0".as_ptr() as *const c_char);
         let init_sel = sel_registerName(b"initWithTitle:\0".as_ptr() as *const c_char);
@@ -1483,8 +1474,9 @@ mod macos_backend {
 
             let item_cls = objc_getClass(b"NSMenuItem\0".as_ptr() as *const c_char);
             let item_alloc = msg_alloc(item_cls, alloc_sel);
-            let item_init_sel =
-                sel_registerName(b"initWithTitle:action:keyEquivalent:\0".as_ptr() as *const c_char);
+            let item_init_sel = sel_registerName(
+                b"initWithTitle:action:keyEquivalent:\0".as_ptr() as *const c_char
+            );
             let msg_item_init: unsafe extern "C" fn(
                 *mut c_void,
                 *mut c_void,
@@ -1638,4 +1630,3 @@ impl DesktopNotification {
         }
     }
 }
-

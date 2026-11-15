@@ -18,8 +18,7 @@ impl NodeId {
 
 /// Abstract component/element tag in the Strata UI IR.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum IrTag {
     #[default]
     Div = 0,
@@ -35,7 +34,6 @@ pub enum IrTag {
     GridContainer = 10,
     ComponentRoot = 11,
 }
-
 
 /// Bit flags representing state, containment, and dirty status.
 pub struct IrNodeFlags;
@@ -63,7 +61,12 @@ pub struct FixedRect {
 
 impl FixedRect {
     pub const fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     /// Converts floating point pixels to 1/64th fixed-point subpixels.
@@ -104,21 +107,21 @@ pub struct UiIrNode {
     pub display_chunk: DisplayChunkRange, // 8 bytes (offset 8..16)
 
     // 4-byte aligned fields (44 bytes)
-    pub layout_rect: FixedRect,           // 16 bytes (offset 16..32)
-    pub id: NodeId,                       // 4 bytes (offset 32..36)
-    pub parent: NodeId,                   // 4 bytes (offset 36..40)
-    pub first_child: NodeId,              // 4 bytes (offset 40..44)
-    pub next_sibling: NodeId,             // 4 bytes (offset 44..48)
-    pub child_count: u32,                 // 4 bytes (offset 48..52)
-    pub style_id: u32,                    // 4 bytes (offset 52..56)
-    pub subtree_span: u32,                // 4 bytes (offset 56..60)
+    pub layout_rect: FixedRect, // 16 bytes (offset 16..32)
+    pub id: NodeId,             // 4 bytes (offset 32..36)
+    pub parent: NodeId,         // 4 bytes (offset 36..40)
+    pub first_child: NodeId,    // 4 bytes (offset 40..44)
+    pub next_sibling: NodeId,   // 4 bytes (offset 44..48)
+    pub child_count: u32,       // 4 bytes (offset 48..52)
+    pub style_id: u32,          // 4 bytes (offset 52..56)
+    pub subtree_span: u32,      // 4 bytes (offset 56..60)
 
     // 2-byte aligned fields (2 bytes)
-    pub flags: u16,                       // 2 bytes (offset 60..62)
+    pub flags: u16, // 2 bytes (offset 60..62)
 
     // 1-byte aligned fields (2 bytes)
-    pub tag: IrTag,                       // 1 byte (offset 62..63)
-    pub _reserved0: u8,                   // 1 byte (offset 63..64)
+    pub tag: IrTag,     // 1 byte (offset 62..63)
+    pub _reserved0: u8, // 1 byte (offset 63..64)
 }
 
 impl Default for UiIrNode {
@@ -240,7 +243,10 @@ impl UiIrGraph {
 
     /// Iterates through the direct children of a given parent node.
     pub fn children(&self, parent: NodeId) -> ChildIter<'_> {
-        let first = self.get(parent).map(|n| n.first_child).unwrap_or(NodeId::NULL);
+        let first = self
+            .get(parent)
+            .map(|n| n.first_child)
+            .unwrap_or(NodeId::NULL);
         ChildIter {
             graph: self,
             current: first,

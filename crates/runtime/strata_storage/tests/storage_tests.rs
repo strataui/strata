@@ -50,7 +50,8 @@ fn test_bitcask_compaction() {
     let mut kv = StrataKV::open(&test_wal).expect("Failed to open StrataKV");
 
     for i in 0..50 {
-        kv.put(&format!("key_{i}"), format!("val_{i}").as_bytes()).unwrap();
+        kv.put(&format!("key_{i}"), format!("val_{i}").as_bytes())
+            .unwrap();
     }
     // Overwrite half
     for i in 0..25 {
@@ -133,8 +134,14 @@ fn test_secure_keystore() {
         use std::os::unix::fs::PermissionsExt;
         let enc_mode = std::fs::metadata(&test_enc).unwrap().permissions().mode() & 0o777;
         let key_mode = std::fs::metadata(&test_key).unwrap().permissions().mode() & 0o777;
-        assert_eq!(enc_mode, 0o600, "Keystore file must be restricted to 0600 permissions");
-        assert_eq!(key_mode, 0o600, "Key file must be restricted to 0600 permissions");
+        assert_eq!(
+            enc_mode, 0o600,
+            "Keystore file must be restricted to 0600 permissions"
+        );
+        assert_eq!(
+            key_mode, 0o600,
+            "Key file must be restricted to 0600 permissions"
+        );
     }
 
     // Tampering test: AEAD authentication tag validation must reject forged/modified ciphertext
@@ -171,14 +178,18 @@ fn test_secure_keystore() {
 
 #[test]
 fn test_bitcask_cross_process_file_locking() {
-    let test_wal = std::env::temp_dir().join(format!("strata_test_lock_{}.wal", std::process::id()));
+    let test_wal =
+        std::env::temp_dir().join(format!("strata_test_lock_{}.wal", std::process::id()));
     let _ = std::fs::remove_file(&test_wal);
 
     let first = StrataKV::open(&test_wal).expect("first open must succeed");
 
     // Second open on the same WAL file must fail with WouldBlock
     let second_res = StrataKV::open(&test_wal);
-    assert!(second_res.is_err(), "Second concurrent open on WAL must fail");
+    assert!(
+        second_res.is_err(),
+        "Second concurrent open on WAL must fail"
+    );
     let err = second_res.err().unwrap();
     assert_eq!(
         err.kind(),
@@ -205,14 +216,18 @@ fn test_bitcask_corrupt_val_len_pre_allocation_oom_guard() {
     // Write a valid record first
     {
         let mut kv = StrataKV::open(&wal_path).expect("open should succeed");
-        kv.put("valid_key", b"valid_data").expect("put should succeed");
+        kv.put("valid_key", b"valid_data")
+            .expect("put should succeed");
     }
 
     // Artificially append a corrupted record header with a 4GB val_len
     {
         use std::fs::OpenOptions;
         use std::io::Write;
-        let mut file = OpenOptions::new().append(true).open(&wal_path).expect("open for append");
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&wal_path)
+            .expect("open for append");
         let fake_crc: u32 = 0xDEADBEEF;
         let fake_ts: u64 = 1700000000;
         let fake_klen: u16 = 4;

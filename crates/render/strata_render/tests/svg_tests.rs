@@ -1,6 +1,8 @@
 //! Comprehensive Tests for Complete & Optimized SVG Vector Graphics Engine.
 
-use strata_layout::{FillRule, LayoutGeometry, LayoutNode, Rect, StrokeLineCap, StrokeLineJoin, SvgItem};
+use strata_layout::{
+    FillRule, LayoutGeometry, LayoutNode, Rect, StrokeLineCap, StrokeLineJoin, SvgItem,
+};
 use strata_render::compositor::{Compositor, DrawCommand};
 use strata_style::types::{Color, ComputedStyle};
 
@@ -117,7 +119,11 @@ fn test_svg_multi_item_complex_group_compositing() {
         _ => panic!("Expected second path"),
     }
     match &display_list.commands[2] {
-        DrawCommand::DrawSvgPath { fill_color, fill_rule, .. } => {
+        DrawCommand::DrawSvgPath {
+            fill_color,
+            fill_rule,
+            ..
+        } => {
             assert_eq!(*fill_color, Some(Color::rgb(245, 158, 11)));
             assert_eq!(*fill_rule, FillRule::EvenOdd);
         }

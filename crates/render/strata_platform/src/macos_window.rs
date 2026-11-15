@@ -130,8 +130,11 @@ impl MacOsWindow {
             let view_cls = objc_getClass(b"NSView\0".as_ptr() as *const c_char);
             let view_inst = msg_alloc(view_cls, alloc_sel);
             let view_init_sel = sel_registerName(b"initWithFrame:\0".as_ptr() as *const c_char);
-            let msg_view_init: unsafe extern "C" fn(*mut c_void, *mut c_void, NSRect) -> *mut c_void =
-                std::mem::transmute(objc_msgSend as *const ());
+            let msg_view_init: unsafe extern "C" fn(
+                *mut c_void,
+                *mut c_void,
+                NSRect,
+            ) -> *mut c_void = std::mem::transmute(objc_msgSend as *const ());
             let nsview = msg_view_init(view_inst, view_init_sel, rect);
 
             let metal_layer_cls = objc_getClass(b"CAMetalLayer\0".as_ptr() as *const c_char);
@@ -145,8 +148,7 @@ impl MacOsWindow {
                     std::mem::transmute(objc_msgSend as *const ());
                 msg_set_layer(nsview, set_layer_sel, layer);
 
-                let set_wants_sel =
-                    sel_registerName(b"setWantsLayer:\0".as_ptr() as *const c_char);
+                let set_wants_sel = sel_registerName(b"setWantsLayer:\0".as_ptr() as *const c_char);
                 let msg_set_bool: unsafe extern "C" fn(*mut c_void, *mut c_void, bool) =
                     std::mem::transmute(objc_msgSend as *const ());
                 msg_set_bool(nsview, set_wants_sel, true);
@@ -155,8 +157,7 @@ impl MacOsWindow {
                 std::ptr::null_mut()
             };
 
-            let set_content_sel =
-                sel_registerName(b"setContentView:\0".as_ptr() as *const c_char);
+            let set_content_sel = sel_registerName(b"setContentView:\0".as_ptr() as *const c_char);
             let msg_set_content: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
                 std::mem::transmute(objc_msgSend as *const ());
             msg_set_content(nswindow, set_content_sel, nsview);
@@ -215,7 +216,11 @@ impl MacOsWindow {
                 nsview,
                 metal_layer,
                 config,
-                scale_factor: if scale_factor > 0.0 { scale_factor } else { 2.0 },
+                scale_factor: if scale_factor > 0.0 {
+                    scale_factor
+                } else {
+                    2.0
+                },
                 is_focused: true,
                 cursor: CursorIcon::Default,
                 redraw_requested: true,
@@ -313,14 +318,16 @@ impl MacOsWindow {
             }
 
             if !self.metal_layer.is_null() {
-                let set_contents_sel = sel_registerName(b"setContents:\0".as_ptr() as *const c_char);
+                let set_contents_sel =
+                    sel_registerName(b"setContents:\0".as_ptr() as *const c_char);
                 let msg_set_contents: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
                     std::mem::transmute(objc_msgSend as *const ());
                 msg_set_contents(self.metal_layer, set_contents_sel, image);
             }
 
             if !self.nsview.is_null() {
-                let set_needs_display_sel = sel_registerName(b"setNeedsDisplay:\0".as_ptr() as *const c_char);
+                let set_needs_display_sel =
+                    sel_registerName(b"setNeedsDisplay:\0".as_ptr() as *const c_char);
                 let msg_set_needs_display: unsafe extern "C" fn(*mut c_void, *mut c_void, bool) =
                     std::mem::transmute(objc_msgSend as *const ());
                 msg_set_needs_display(self.nsview, set_needs_display_sel, true);
@@ -344,10 +351,8 @@ impl MacOsWindow {
             let next_event_sel = sel_registerName(
                 b"nextEventMatchingMask:untilDate:inMode:dequeue:\0".as_ptr() as *const c_char,
             );
-            let send_event_sel =
-                sel_registerName(b"sendEvent:\0".as_ptr() as *const c_char);
-            let update_windows_sel =
-                sel_registerName(b"updateWindows\0".as_ptr() as *const c_char);
+            let send_event_sel = sel_registerName(b"sendEvent:\0".as_ptr() as *const c_char);
+            let update_windows_sel = sel_registerName(b"updateWindows\0".as_ptr() as *const c_char);
 
             let default_mode = create_ns_string("kCFRunLoopDefaultMode");
 
@@ -424,8 +429,7 @@ impl PlatformWindow for MacOsWindow {
         self.config.width = width;
         self.config.height = height;
         unsafe {
-            let set_frame_sel =
-                sel_registerName(b"setContentSize:\0".as_ptr() as *const c_char);
+            let set_frame_sel = sel_registerName(b"setContentSize:\0".as_ptr() as *const c_char);
             let msg_set_size: unsafe extern "C" fn(*mut c_void, *mut c_void, NSSize) =
                 std::mem::transmute(objc_msgSend as *const ());
             msg_set_size(
@@ -488,7 +492,9 @@ impl PlatformWindow for MacOsWindow {
                     CursorIcon::Crosshair => b"crosshairCursor\0".as_ptr(),
                     CursorIcon::Move => b"openHandCursor\0".as_ptr(),
                     CursorIcon::NotAllowed => b"operationNotAllowedCursor\0".as_ptr(),
-                    CursorIcon::ResizeE | CursorIcon::ResizeW => b"resizeLeftRightCursor\0".as_ptr(),
+                    CursorIcon::ResizeE | CursorIcon::ResizeW => {
+                        b"resizeLeftRightCursor\0".as_ptr()
+                    }
                     CursorIcon::ResizeN | CursorIcon::ResizeS => b"resizeUpDownCursor\0".as_ptr(),
                     _ => b"arrowCursor\0".as_ptr(),
                 };
@@ -536,7 +542,8 @@ impl PlatformWindow for MacOsWindow {
             let event = msg_get_event(app, current_event_sel);
 
             if !event.is_null() && !self.nswindow.is_null() {
-                let drag_sel = sel_registerName(b"performWindowDragWithEvent:\0".as_ptr() as *const c_char);
+                let drag_sel =
+                    sel_registerName(b"performWindowDragWithEvent:\0".as_ptr() as *const c_char);
                 let msg_drag: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
                     std::mem::transmute(objc_msgSend as *const ());
                 msg_drag(self.nswindow, drag_sel, event);
@@ -588,10 +595,8 @@ impl EventLoop for MacOsEventLoop {
             let next_event_sel = sel_registerName(
                 b"nextEventMatchingMask:untilDate:inMode:dequeue:\0".as_ptr() as *const c_char,
             );
-            let send_event_sel =
-                sel_registerName(b"sendEvent:\0".as_ptr() as *const c_char);
-            let update_windows_sel =
-                sel_registerName(b"updateWindows\0".as_ptr() as *const c_char);
+            let send_event_sel = sel_registerName(b"sendEvent:\0".as_ptr() as *const c_char);
+            let update_windows_sel = sel_registerName(b"updateWindows\0".as_ptr() as *const c_char);
 
             let default_mode = create_ns_string("kCFRunLoopDefaultMode");
 

@@ -919,7 +919,10 @@ impl<'a> WebTranspiler<'a> {
         }
 
         ArticleMetadata {
-            title: collector.og_title.or(collector.html_title).or(collector.h1_title),
+            title: collector
+                .og_title
+                .or(collector.html_title)
+                .or(collector.h1_title),
             author: collector.meta_author.or(collector.byline_author),
             date: collector.meta_date.or(collector.time_date),
             description: collector.description,
@@ -952,12 +955,12 @@ impl<'a> WebTranspiler<'a> {
                         .find(|(k, _)| k.eq_ignore_ascii_case("media"))
                         .map(|(_, v)| v.trim())
                         .filter(|v| !v.is_empty())
-                        .map(|media_query| {
-                            match strata_style::MediaQueryList::parse(media_query) {
+                        .map(
+                            |media_query| match strata_style::MediaQueryList::parse(media_query) {
                                 Ok(mql) => mql.matches(context),
                                 Err(_) => true,
-                            }
-                        })
+                            },
+                        )
                         .unwrap_or(true);
 
                     if !media_matches {
@@ -995,11 +998,12 @@ impl<'a> WebTranspiler<'a> {
     fn collect_resource_urls(nodes: &[SemanticNode], out: &mut Vec<String>) {
         for node in nodes {
             if let SemanticNode::Element {
-                    tag,
-                    attributes,
-                    children,
-                    ..
-                } = node {
+                tag,
+                attributes,
+                children,
+                ..
+            } = node
+            {
                 let tag_lower = tag.to_ascii_lowercase();
                 if tag_lower == "link" {
                     let is_stylesheet = attributes.iter().any(|(k, v)| {
@@ -1040,11 +1044,12 @@ impl<'a> WebTranspiler<'a> {
     fn collect_stylesheet_urls(nodes: &[SemanticNode], out: &mut Vec<String>) {
         for node in nodes {
             if let SemanticNode::Element {
-                    tag,
-                    attributes,
-                    children,
-                    ..
-                } = node {
+                tag,
+                attributes,
+                children,
+                ..
+            } = node
+            {
                 let tag_lower = tag.to_ascii_lowercase();
                 if tag_lower == "link" {
                     let is_stylesheet = attributes.iter().any(|(k, v)| {
@@ -1470,11 +1475,9 @@ impl<'a> WebTranspiler<'a> {
                         let is_inline_container = parent_style.is_some_and(|p| {
                             matches!(p.display, Display::Inline | Display::InlineBlock)
                         });
-                        let prev_is_inline =
-                            raw_blueprints.last().is_some_and(is_blueprint_inline);
-                        let prev_ends_space = raw_blueprints
-                            .last()
-                            .is_some_and(blueprint_ends_with_space);
+                        let prev_is_inline = raw_blueprints.last().is_some_and(is_blueprint_inline);
+                        let prev_ends_space =
+                            raw_blueprints.last().is_some_and(blueprint_ends_with_space);
                         let next_is_inline =
                             nodes.get(idx + 1).is_some_and(Self::is_inline_phrasing);
 
@@ -1560,9 +1563,10 @@ impl<'a> WebTranspiler<'a> {
                                         ", "
                                     };
                                     if let NodeBlueprint::Element {
-                                            children: bp_children,
-                                            ..
-                                        } = &mut bp {
+                                        children: bp_children,
+                                        ..
+                                    } = &mut bp
+                                    {
                                         bp_children.push(NodeBlueprint::text(sep));
                                     }
                                 }

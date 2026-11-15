@@ -75,8 +75,14 @@ fn test_spring_signal_physics_and_oscillation() {
     }
 
     assert!(spring.is_at_rest(), "Spring must settle at equilibrium");
-    assert!((spring.get() - 150.0).abs() < 1e-2, "Spring position must be at target 150.0");
-    assert!(tick_count.get() > 10, "Effect must have been reactively triggered on simulation ticks");
+    assert!(
+        (spring.get() - 150.0).abs() < 1e-2,
+        "Spring position must be at target 150.0"
+    );
+    assert!(
+        tick_count.get() > 10,
+        "Effect must have been reactively triggered on simulation ticks"
+    );
 
     // Snap to test instant teleport
     spring.snap_to(50.0);

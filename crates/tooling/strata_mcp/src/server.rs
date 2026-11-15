@@ -1,10 +1,10 @@
 //! Professional Model Context Protocol (MCP) Server implementation for Strata.
 
-use std::io::{BufRead, Write};
-use std::path::PathBuf;
-use serde_json::{json, Value};
 use crate::client::StrataDevClient;
 use crate::protocol::*;
+use serde_json::{json, Value};
+use std::io::{BufRead, Write};
+use std::path::PathBuf;
 
 /// Model Context Protocol server exposing Strata development session tools to AI agents.
 pub struct McpServer {
@@ -71,11 +71,8 @@ impl McpServer {
             let request: JsonRpcRequest = match serde_json::from_str(trimmed) {
                 Ok(req) => req,
                 Err(e) => {
-                    let err_resp = JsonRpcResponse::error(
-                        None,
-                        -32700,
-                        format!("Parse error: {}", e),
-                    );
+                    let err_resp =
+                        JsonRpcResponse::error(None, -32700, format!("Parse error: {}", e));
                     let _ = writeln!(stdout, "{}", serde_json::to_string(&err_resp).unwrap());
                     let _ = stdout.flush();
                     continue;
@@ -109,7 +106,10 @@ impl McpServer {
                         version: "0.1.0".to_string(),
                     },
                 };
-                Some(JsonRpcResponse::success(id, serde_json::to_value(res).unwrap()))
+                Some(JsonRpcResponse::success(
+                    id,
+                    serde_json::to_value(res).unwrap(),
+                ))
             }
             "notifications/initialized" => None,
             "ping" => Some(JsonRpcResponse::success(id, json!({}))),
@@ -123,7 +123,10 @@ impl McpServer {
                 let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
                 let result = self.call_tool(tool_name, arguments);
-                Some(JsonRpcResponse::success(id, serde_json::to_value(result).unwrap()))
+                Some(JsonRpcResponse::success(
+                    id,
+                    serde_json::to_value(result).unwrap(),
+                ))
             }
             unknown => Some(JsonRpcResponse::error(
                 id,
@@ -350,7 +353,9 @@ impl McpServer {
     pub fn call_tool(&self, name: &str, args: Value) -> ToolCallResult {
         match name {
             "strata_session_info" => match self.client.call("session_info", json!({})) {
-                Ok(info) => ToolCallResult::text(serde_json::to_string_pretty(&info).unwrap_or_default()),
+                Ok(info) => {
+                    ToolCallResult::text(serde_json::to_string_pretty(&info).unwrap_or_default())
+                }
                 Err(e) => ToolCallResult::error(e),
             },
             "strata_run_app" => {
@@ -364,7 +369,10 @@ impl McpServer {
 
                 let is_release = mode == "release";
                 let project_dir = args.get("project_dir").and_then(|p| p.as_str());
-                let force_build = args.get("force_build").and_then(|f| f.as_bool()).unwrap_or(false);
+                let force_build = args
+                    .get("force_build")
+                    .and_then(|f| f.as_bool())
+                    .unwrap_or(false);
 
                 // Enforce user rule: "Debug shouldn't be allowed to built but only ran. (They can force it to build I guess)."
                 let _ = force_build;
@@ -380,7 +388,10 @@ impl McpServer {
                         }
                     };
 
-                    let is_authorized = self.allowed_roots.iter().any(|root| canonical.starts_with(root));
+                    let is_authorized = self
+                        .allowed_roots
+                        .iter()
+                        .any(|root| canonical.starts_with(root));
                     if !is_authorized {
                         return ToolCallResult::error(format!(
                             "Security error: project_dir '{dir}' is outside the authorized workspace roots."
@@ -395,7 +406,11 @@ impl McpServer {
 
                     canonical
                 } else {
-                    let default_root = self.allowed_roots.first().cloned().unwrap_or_else(|| PathBuf::from("."));
+                    let default_root = self
+                        .allowed_roots
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| PathBuf::from("."));
                     if !default_root.join("Cargo.toml").is_file() {
                         return ToolCallResult::error(
                             "Security error: current workspace does not contain a Cargo.toml manifest.".to_string(),
@@ -453,34 +468,43 @@ impl McpServer {
                     Err(e) => ToolCallResult::error(format!("Failed to spawn Strata app: {}", e)),
                 }
             }
-            "strata_take_screenshot" => match self.client.call("take_screenshot", json!({})) {
-                Ok(val) => {
-                    let base64_str = val.get("png_base64").and_then(|b| b.as_str()).unwrap_or("");
-                    let width = val.get("width").and_then(|w| w.as_u64()).unwrap_or(0);
-                    let height = val.get("height").and_then(|h| h.as_u64()).unwrap_or(0);
+            "strata_take_screenshot" => {
+                match self.client.call("take_screenshot", json!({})) {
+                    Ok(val) => {
+                        let base64_str =
+                            val.get("png_base64").and_then(|b| b.as_str()).unwrap_or("");
+                        let width = val.get("width").and_then(|w| w.as_u64()).unwrap_or(0);
+                        let height = val.get("height").and_then(|h| h.as_u64()).unwrap_or(0);
 
-                    if let Some(save_path) = args.get("save_path").and_then(|p| p.as_str()) {
-                        use base64_light::base64_decode;
-                        if let Ok(bytes) = base64_decode(base64_str) {
-                            let _ = std::fs::write(save_path, bytes);
+                        if let Some(save_path) = args.get("save_path").and_then(|p| p.as_str()) {
+                            use base64_light::base64_decode;
+                            if let Ok(bytes) = base64_decode(base64_str) {
+                                let _ = std::fs::write(save_path, bytes);
+                            }
                         }
-                    }
 
-                    ToolCallResult::image_and_text(
+                        ToolCallResult::image_and_text(
                         base64_str.to_string(),
                         format!("Captured Strata surface screenshot ({}x{}) with emulated Yaru cursor.", width, height),
                     )
+                    }
+                    Err(e) => ToolCallResult::error(e),
                 }
-                Err(e) => ToolCallResult::error(e),
-            },
+            }
             "strata_mouse_move" => {
                 let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                 let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                 let smooth = args.get("smooth").and_then(|v| v.as_bool()).unwrap_or(true);
 
-                match self.client.call("mouse_move", json!({ "x": x, "y": y, "smooth": smooth })) {
+                match self
+                    .client
+                    .call("mouse_move", json!({ "x": x, "y": y, "smooth": smooth }))
+                {
                     Ok(res) => {
-                        let cur_icon = res.get("cursor_icon").and_then(|c| c.as_str()).unwrap_or("Default");
+                        let cur_icon = res
+                            .get("cursor_icon")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("Default");
                         ToolCallResult::text(format!(
                             "Moved cursor to ({:.1}, {:.1}) [smooth: {}]. Active cursor icon: {}",
                             x, y, smooth, cur_icon
@@ -492,13 +516,21 @@ impl McpServer {
             "strata_mouse_click" => {
                 let x = args.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
                 let y = args.get("y").and_then(|v| v.as_f64()).map(|f| f as f32);
-                let button = args.get("button").and_then(|b| b.as_str()).unwrap_or("left");
+                let button = args
+                    .get("button")
+                    .and_then(|b| b.as_str())
+                    .unwrap_or("left");
                 let count = args.get("count").and_then(|c| c.as_u64()).unwrap_or(1) as usize;
 
-                match self.client.call("mouse_click", json!({ "x": x, "y": y, "button": button, "count": count })) {
+                match self.client.call(
+                    "mouse_click",
+                    json!({ "x": x, "y": y, "button": button, "count": count }),
+                ) {
                     Ok(_) => ToolCallResult::text(format!(
                         "Clicked {} button (count: {}) at {:?}",
-                        button, count, x.zip(y)
+                        button,
+                        count,
+                        x.zip(y)
                     )),
                     Err(e) => ToolCallResult::error(e),
                 }
@@ -506,9 +538,15 @@ impl McpServer {
             "strata_mouse_down" => {
                 let x = args.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
                 let y = args.get("y").and_then(|v| v.as_f64()).map(|f| f as f32);
-                let button = args.get("button").and_then(|b| b.as_str()).unwrap_or("left");
+                let button = args
+                    .get("button")
+                    .and_then(|b| b.as_str())
+                    .unwrap_or("left");
 
-                match self.client.call("mouse_down", json!({ "x": x, "y": y, "button": button })) {
+                match self
+                    .client
+                    .call("mouse_down", json!({ "x": x, "y": y, "button": button }))
+                {
                     Ok(_) => ToolCallResult::text(format!("Pressed {} button down", button)),
                     Err(e) => ToolCallResult::error(e),
                 }
@@ -516,9 +554,15 @@ impl McpServer {
             "strata_mouse_up" => {
                 let x = args.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
                 let y = args.get("y").and_then(|v| v.as_f64()).map(|f| f as f32);
-                let button = args.get("button").and_then(|b| b.as_str()).unwrap_or("left");
+                let button = args
+                    .get("button")
+                    .and_then(|b| b.as_str())
+                    .unwrap_or("left");
 
-                match self.client.call("mouse_up", json!({ "x": x, "y": y, "button": button })) {
+                match self
+                    .client
+                    .call("mouse_up", json!({ "x": x, "y": y, "button": button }))
+                {
                     Ok(_) => ToolCallResult::text(format!("Released {} button up", button)),
                     Err(e) => ToolCallResult::error(e),
                 }
@@ -529,29 +573,47 @@ impl McpServer {
                 let x = args.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
                 let y = args.get("y").and_then(|v| v.as_f64()).map(|f| f as f32);
 
-                match self.client.call("mouse_scroll", json!({ "delta_x": delta_x, "delta_y": delta_y, "x": x, "y": y })) {
-                    Ok(_) => ToolCallResult::text(format!("Scrolled delta ({:.1}, {:.1})", delta_x, delta_y)),
+                match self.client.call(
+                    "mouse_scroll",
+                    json!({ "delta_x": delta_x, "delta_y": delta_y, "x": x, "y": y }),
+                ) {
+                    Ok(_) => ToolCallResult::text(format!(
+                        "Scrolled delta ({:.1}, {:.1})",
+                        delta_x, delta_y
+                    )),
                     Err(e) => ToolCallResult::error(e),
                 }
             }
             "strata_keyboard_type" => {
                 let text = args.get("text").and_then(|t| t.as_str()).unwrap_or("");
                 match self.client.call("keyboard_type", json!({ "text": text })) {
-                    Ok(_) => ToolCallResult::text(format!("Typed {} characters into focused input.", text.chars().count())),
+                    Ok(_) => ToolCallResult::text(format!(
+                        "Typed {} characters into focused input.",
+                        text.chars().count()
+                    )),
                     Err(e) => ToolCallResult::error(e),
                 }
             }
             "strata_keyboard_key" => {
                 let key = args.get("key").and_then(|k| k.as_str()).unwrap_or("");
                 let modifiers = args.get("modifiers").cloned().unwrap_or(json!({}));
-                match self.client.call("keyboard_key", json!({ "key": key, "modifiers": modifiers })) {
-                    Ok(_) => ToolCallResult::text(format!("Sent key '{}' with modifiers {:?}", key, modifiers)),
+                match self.client.call(
+                    "keyboard_key",
+                    json!({ "key": key, "modifiers": modifiers }),
+                ) {
+                    Ok(_) => ToolCallResult::text(format!(
+                        "Sent key '{}' with modifiers {:?}",
+                        key, modifiers
+                    )),
                     Err(e) => ToolCallResult::error(e),
                 }
             }
             "strata_execute_actions" => {
                 let actions = args.get("actions").cloned().unwrap_or(json!([]));
-                match self.client.call("execute_actions", json!({ "actions": actions })) {
+                match self
+                    .client
+                    .call("execute_actions", json!({ "actions": actions }))
+                {
                     Ok(val) => ToolCallResult::text(format!(
                         "Successfully executed batch actions: {}",
                         serde_json::to_string_pretty(&val).unwrap_or_default()
@@ -562,8 +624,13 @@ impl McpServer {
             "strata_inspect_element" => {
                 let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                 let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                match self.client.call("inspect_element", json!({ "x": x, "y": y })) {
-                    Ok(val) => ToolCallResult::text(serde_json::to_string_pretty(&val).unwrap_or_default()),
+                match self
+                    .client
+                    .call("inspect_element", json!({ "x": x, "y": y }))
+                {
+                    Ok(val) => {
+                        ToolCallResult::text(serde_json::to_string_pretty(&val).unwrap_or_default())
+                    }
                     Err(e) => ToolCallResult::error(e),
                 }
             }
@@ -575,7 +642,8 @@ impl McpServer {
 /// Minimal zero-dependency Base64 decoder for saving screenshots.
 mod base64_light {
     pub fn base64_decode(input: &str) -> Result<Vec<u8>, &'static str> {
-        const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut out = Vec::new();
         let mut buf = 0u32;
         let mut bits = 0;
@@ -584,7 +652,10 @@ mod base64_light {
             if byte == b'=' || byte.is_ascii_whitespace() {
                 continue;
             }
-            let val = TABLE.iter().position(|&b| b == byte).ok_or("Invalid base64 byte")? as u32;
+            let val = TABLE
+                .iter()
+                .position(|&b| b == byte)
+                .ok_or("Invalid base64 byte")? as u32;
             buf = (buf << 6) | val;
             bits += 6;
             if bits >= 8 {

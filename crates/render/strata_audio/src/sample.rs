@@ -56,7 +56,12 @@ impl AudioBuffer {
         if total_samples == 0 {
             return 0.0;
         }
-        let sum_sq: f32 = self.channels.iter().flat_map(|c| c.iter()).map(|&s| s * s).sum();
+        let sum_sq: f32 = self
+            .channels
+            .iter()
+            .flat_map(|c| c.iter())
+            .map(|&s| s * s)
+            .sum();
         (sum_sq / total_samples as f32).sqrt()
     }
 
@@ -111,7 +116,10 @@ impl AudioBuffer {
         target_sample_rate: u32,
         quality: crate::resample::ResampleQuality,
     ) -> AudioBuffer {
-        if self.sample_rate == target_sample_rate || self.sample_rate == 0 || target_sample_rate == 0 {
+        if self.sample_rate == target_sample_rate
+            || self.sample_rate == 0
+            || target_sample_rate == 0
+        {
             return self.clone();
         }
 

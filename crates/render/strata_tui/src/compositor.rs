@@ -23,10 +23,7 @@ fn tui_style() -> ComputedStyle {
 /// Lowers an RSX `NodeBlueprint` into a `LayoutNode` tree.
 pub fn blueprint_to_layout_node(bp: &NodeBlueprint) -> LayoutNode {
     match bp {
-        NodeBlueprint::Element {
-            children,
-            ..
-        } => {
+        NodeBlueprint::Element { children, .. } => {
             let style = tui_style();
             let child_nodes: Vec<LayoutNode> = children
                 .iter()
@@ -147,8 +144,16 @@ impl TuiCompositor {
         forced_h: u16,
     ) {
         let bbox = node.geometry.border_box;
-        let text_len = node.text.as_ref().map(|t| t.chars().count() as u16).unwrap_or(0);
-        let text_lines = node.text.as_ref().map(|t| t.lines().count().max(1) as u16).unwrap_or(0);
+        let text_len = node
+            .text
+            .as_ref()
+            .map(|t| t.chars().count() as u16)
+            .unwrap_or(0);
+        let text_lines = node
+            .text
+            .as_ref()
+            .map(|t| t.lines().count().max(1) as u16)
+            .unwrap_or(0);
 
         let col = if forced_w > 0 && forced_col > 0 {
             forced_col

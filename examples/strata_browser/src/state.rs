@@ -50,7 +50,9 @@ impl BrowserState {
             tabs: Signal::new(initial_tabs),
             active_index: Signal::new(0),
             url_input: Signal::new("strata://welcome".to_string()),
-            status_message: Signal::new("Strata Engine v0.1.0 | Pure-Rust Zero-Chromium Target".to_string()),
+            status_message: Signal::new(
+                "Strata Engine v0.1.0 | Pure-Rust Zero-Chromium Target".to_string(),
+            ),
             history: Signal::new(vec!["strata://welcome".to_string()]),
             history_index: Signal::new(0),
         }
@@ -69,14 +71,10 @@ impl BrowserState {
         self.url_input.set(trimmed.to_string());
 
         let (title, html) = match trimmed {
-            "strata://welcome" | "about:blank" | "" => (
-                "Welcome to Strata".to_string(),
-                Self::welcome_page_html(),
-            ),
-            "strata://about" => (
-                "Engine Architecture".to_string(),
-                Self::about_page_html(),
-            ),
+            "strata://welcome" | "about:blank" | "" => {
+                ("Welcome to Strata".to_string(), Self::welcome_page_html())
+            }
+            "strata://about" => ("Engine Architecture".to_string(), Self::about_page_html()),
             "strata://benchmarks" => (
                 "Empirical Benchmarks".to_string(),
                 Self::benchmarks_page_html(),
@@ -112,7 +110,8 @@ impl BrowserState {
         self.history_index.set(hist.len().saturating_sub(1));
         self.history.set(hist);
 
-        self.status_message.set(format!("Rendered document: {}", trimmed));
+        self.status_message
+            .set(format!("Rendered document: {}", trimmed));
     }
 
     /// Opens a new browser tab.
@@ -129,7 +128,8 @@ impl BrowserState {
         self.tabs.set(tabs);
         self.active_index.set(new_idx);
         self.url_input.set(url.to_string());
-        self.status_message.set(format!("Opened new tab: {}", title));
+        self.status_message
+            .set(format!("Opened new tab: {}", title));
     }
 
     /// Closes the tab at the given index.
@@ -160,7 +160,8 @@ impl BrowserState {
     pub fn reload(&self) {
         if let Some(tab) = self.active_tab() {
             self.navigate(&tab.url);
-            self.status_message.set("Reloaded active document".to_string());
+            self.status_message
+                .set("Reloaded active document".to_string());
         }
     }
 

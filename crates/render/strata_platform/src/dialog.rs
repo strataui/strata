@@ -534,15 +534,20 @@ mod windows_backend {
         unsafe {
             let mut buf = vec![0u16; 65536];
             let filter = build_filter_string(&options.filters);
-            let title = options
-                .title
-                .as_ref()
-                .map(|t| t.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>());
+            let title = options.title.as_ref().map(|t| {
+                t.encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect::<Vec<u16>>()
+            });
             let dir = options
                 .starting_directory
                 .as_ref()
                 .and_then(|d| d.to_str())
-                .map(|s| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>());
+                .map(|s| {
+                    s.encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect::<Vec<u16>>()
+                });
 
             let mut flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
             if multiple {
@@ -556,7 +561,10 @@ mod windows_backend {
             ofn.lpstrFile = buf.as_mut_ptr();
             ofn.nMaxFile = buf.len() as u32;
             ofn.lpstrInitialDir = dir.as_ref().map(|d| d.as_ptr()).unwrap_or(std::ptr::null());
-            ofn.lpstrTitle = title.as_ref().map(|t| t.as_ptr()).unwrap_or(std::ptr::null());
+            ofn.lpstrTitle = title
+                .as_ref()
+                .map(|t| t.as_ptr())
+                .unwrap_or(std::ptr::null());
             ofn.Flags = flags;
 
             if GetOpenFileNameW(&mut ofn) == 0 {
@@ -577,15 +585,20 @@ mod windows_backend {
             }
 
             let filter = build_filter_string(&options.filters);
-            let title = options
-                .title
-                .as_ref()
-                .map(|t| t.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>());
+            let title = options.title.as_ref().map(|t| {
+                t.encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect::<Vec<u16>>()
+            });
             let dir = options
                 .starting_directory
                 .as_ref()
                 .and_then(|d| d.to_str())
-                .map(|s| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>());
+                .map(|s| {
+                    s.encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect::<Vec<u16>>()
+                });
 
             let mut ofn: OPENFILENAMEW = std::mem::zeroed();
             ofn.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
@@ -594,7 +607,10 @@ mod windows_backend {
             ofn.lpstrFile = buf.as_mut_ptr();
             ofn.nMaxFile = buf.len() as u32;
             ofn.lpstrInitialDir = dir.as_ref().map(|d| d.as_ptr()).unwrap_or(std::ptr::null());
-            ofn.lpstrTitle = title.as_ref().map(|t| t.as_ptr()).unwrap_or(std::ptr::null());
+            ofn.lpstrTitle = title
+                .as_ref()
+                .map(|t| t.as_ptr())
+                .unwrap_or(std::ptr::null());
             ofn.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
 
             if GetSaveFileNameW(&mut ofn) == 0 {
@@ -904,13 +920,11 @@ mod macos_backend {
                 std::mem::transmute(objc_msgSend as *const ());
             msg_set_str(alert, set_msg_sel, ns_title);
 
-            let set_info_sel =
-                sel_registerName(b"setInformativeText:\0".as_ptr() as *const c_char);
+            let set_info_sel = sel_registerName(b"setInformativeText:\0".as_ptr() as *const c_char);
             let ns_msg = ns_string(message);
             msg_set_str(alert, set_info_sel, ns_msg);
 
-            let add_btn_sel =
-                sel_registerName(b"addButtonWithTitle:\0".as_ptr() as *const c_char);
+            let add_btn_sel = sel_registerName(b"addButtonWithTitle:\0".as_ptr() as *const c_char);
             match buttons {
                 MessageBoxButtons::Ok => {
                     msg_set_str(alert, add_btn_sel, ns_string("OK"));

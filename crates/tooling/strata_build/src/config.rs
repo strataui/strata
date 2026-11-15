@@ -1,7 +1,7 @@
 //! Multi-format configuration definitions and parsing for `strata.toml` and `strata.yaml`.
 
-use std::collections::HashMap;
 use crate::yaml_parser::parse_yaml;
+use std::collections::HashMap;
 
 /// Application section in Strata configuration.
 #[derive(Debug, Clone, PartialEq)]
@@ -215,7 +215,9 @@ impl ProjectConfig {
                             }
                         }
                         "resizable" => config.window.resizable = clean_val.parse().unwrap_or(true),
-                        "fullscreen" => config.window.fullscreen = clean_val.parse().unwrap_or(false),
+                        "fullscreen" => {
+                            config.window.fullscreen = clean_val.parse().unwrap_or(false)
+                        }
                         _ => {}
                     },
                     "web" => match key {

@@ -55,7 +55,10 @@ impl ClipboardBridge {
 
         let plain_text = lines.join("\n");
         let html = format!("<pre><code>{}</code></pre>", plain_text);
-        let rtf = format!(r"{{\rtf1\ansi\deff0 {{\fonttbl {{\f0 Courier;}}}} \f0 {} }}", plain_text);
+        let rtf = format!(
+            r"{{\rtf1\ansi\deff0 {{\fonttbl {{\f0 Courier;}}}} \f0 {} }}",
+            plain_text
+        );
 
         ClipboardPayload {
             plain_text: plain_text.clone(),
@@ -107,7 +110,9 @@ impl ClipboardBridge {
                     out.push_str("</blockquote>\n");
                 }
                 BlockKind::CodeBlock(ref lang) => {
-                    let lang_attr = lang.as_deref().map_or(String::new(), |l| format!(" class=\"language-{}\"", l));
+                    let lang_attr = lang
+                        .as_deref()
+                        .map_or(String::new(), |l| format!(" class=\"language-{}\"", l));
                     out.push_str(&format!("<pre><code{}>", lang_attr));
                     Self::append_spans_html(&b.spans, &mut out);
                     out.push_str("</code></pre>\n");
@@ -187,13 +192,21 @@ impl ClipboardBridge {
                 let is_bold = span.marks.contains(&InlineMark::Bold);
                 let is_italic = span.marks.contains(&InlineMark::Italic);
 
-                if is_bold { rtf.push_str(r"\b "); }
-                if is_italic { rtf.push_str(r"\i "); }
+                if is_bold {
+                    rtf.push_str(r"\b ");
+                }
+                if is_italic {
+                    rtf.push_str(r"\i ");
+                }
 
                 rtf.push_str(&span.text);
 
-                if is_italic { rtf.push_str(r"\i0 "); }
-                if is_bold { rtf.push_str(r"\b0 "); }
+                if is_italic {
+                    rtf.push_str(r"\i0 ");
+                }
+                if is_bold {
+                    rtf.push_str(r"\b0 ");
+                }
             }
 
             rtf.push_str(r"\par ");

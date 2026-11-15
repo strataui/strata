@@ -44,9 +44,7 @@ fn main() {
         let cmd_count = runtime.display_list.commands.len();
         println!(
             "[OK] Headless GUI render verified: viewport {}x{}, {} commands presented.",
-            runtime.viewport_width,
-            runtime.viewport_height,
-            cmd_count
+            runtime.viewport_width, runtime.viewport_height, cmd_count
         );
         assert!(cmd_count > 0, "Display list must contain rendered commands");
         return;
@@ -62,6 +60,9 @@ fn main() {
     #[cfg(not(target_os = "linux"))]
     {
         let render_state = state.clone();
-        strata::app().with_window(config).build(move || BrowserApp(render_state.clone())).run();
+        strata::app()
+            .with_window(config)
+            .build(move || BrowserApp(render_state.clone()))
+            .run();
     }
 }

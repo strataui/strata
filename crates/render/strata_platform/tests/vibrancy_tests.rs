@@ -32,8 +32,7 @@ fn test_vibrancy_config_builder() {
 
 #[test]
 fn test_window_config_with_vibrancy() {
-    let config = WindowConfig::default()
-        .with_vibrancy(VibrancyEffect::Acrylic);
+    let config = WindowConfig::default().with_vibrancy(VibrancyEffect::Acrylic);
     assert_eq!(config.vibrancy, VibrancyEffect::Acrylic);
 }
 

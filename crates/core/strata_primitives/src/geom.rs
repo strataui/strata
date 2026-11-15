@@ -1,6 +1,6 @@
 //! Zero-dependency 2D geometry, subpixel snapping, and affine transformations.
 
-use std::ops::{Add, Sub, Mul, Div, Neg};
+use std::ops::{Add, Div, Mul, Neg, Sub};
 
 /// 2D Cartesian Coordinate Point.
 #[repr(C)]
@@ -106,7 +106,11 @@ impl Size<f32> {
 
     #[inline(always)]
     pub fn aspect_ratio(self) -> f32 {
-        if self.height == 0.0 { 0.0 } else { self.width / self.height }
+        if self.height == 0.0 {
+            0.0
+        } else {
+            self.width / self.height
+        }
     }
 
     #[inline(always)]
@@ -145,22 +149,38 @@ impl Rect<f32> {
     }
 
     #[inline(always)]
-    pub fn x(self) -> f32 { self.origin.x }
+    pub fn x(self) -> f32 {
+        self.origin.x
+    }
     #[inline(always)]
-    pub fn y(self) -> f32 { self.origin.y }
+    pub fn y(self) -> f32 {
+        self.origin.y
+    }
     #[inline(always)]
-    pub fn width(self) -> f32 { self.size.width }
+    pub fn width(self) -> f32 {
+        self.size.width
+    }
     #[inline(always)]
-    pub fn height(self) -> f32 { self.size.height }
+    pub fn height(self) -> f32 {
+        self.size.height
+    }
 
     #[inline(always)]
-    pub fn min_x(self) -> f32 { self.origin.x }
+    pub fn min_x(self) -> f32 {
+        self.origin.x
+    }
     #[inline(always)]
-    pub fn max_x(self) -> f32 { self.origin.x + self.size.width }
+    pub fn max_x(self) -> f32 {
+        self.origin.x + self.size.width
+    }
     #[inline(always)]
-    pub fn min_y(self) -> f32 { self.origin.y }
+    pub fn min_y(self) -> f32 {
+        self.origin.y
+    }
     #[inline(always)]
-    pub fn max_y(self) -> f32 { self.origin.y + self.size.height }
+    pub fn max_y(self) -> f32 {
+        self.origin.y + self.size.height
+    }
 
     #[inline(always)]
     pub fn contains_point(self, p: Point<f32>) -> bool {
@@ -169,8 +189,10 @@ impl Rect<f32> {
 
     #[inline(always)]
     pub fn intersects(self, other: Self) -> bool {
-        self.min_x() < other.max_x() && self.max_x() > other.min_x() &&
-        self.min_y() < other.max_y() && self.max_y() > other.min_y()
+        self.min_x() < other.max_x()
+            && self.max_x() > other.min_x()
+            && self.min_y() < other.max_y()
+            && self.max_y() > other.min_y()
     }
 
     /// Computes intersection rect with another rectangle.
@@ -189,8 +211,12 @@ impl Rect<f32> {
 
     /// Computes minimal bounding rect containing both rectangles.
     pub fn union(self, other: Self) -> Self {
-        if self.size.is_empty() { return other; }
-        if other.size.is_empty() { return self; }
+        if self.size.is_empty() {
+            return other;
+        }
+        if other.size.is_empty() {
+            return self;
+        }
 
         let x0 = self.min_x().min(other.min_x());
         let y0 = self.min_y().min(other.min_y());
@@ -236,7 +262,12 @@ pub struct EdgeInsets<T = f32> {
 impl<T> EdgeInsets<T> {
     #[inline(always)]
     pub const fn new(top: T, right: T, bottom: T, left: T) -> Self {
-        Self { top, right, bottom, left }
+        Self {
+            top,
+            right,
+            bottom,
+            left,
+        }
     }
 }
 
@@ -266,9 +297,13 @@ impl EdgeInsets<f32> {
     pub const ZERO: Self = Self::new(0.0, 0.0, 0.0, 0.0);
 
     #[inline(always)]
-    pub fn horizontal(self) -> f32 { self.left + self.right }
+    pub fn horizontal(self) -> f32 {
+        self.left + self.right
+    }
     #[inline(always)]
-    pub fn vertical(self) -> f32 { self.top + self.bottom }
+    pub fn vertical(self) -> f32 {
+        self.top + self.bottom
+    }
 }
 
 /// 2x3 Affine Transformation Matrix.
@@ -296,26 +331,35 @@ impl Default for Transform2D {
 
 impl Transform2D {
     pub const IDENTITY: Self = Self {
-        a: 1.0, b: 0.0,
-        c: 0.0, d: 1.0,
-        tx: 0.0, ty: 0.0,
+        a: 1.0,
+        b: 0.0,
+        c: 0.0,
+        d: 1.0,
+        tx: 0.0,
+        ty: 0.0,
     };
 
     #[inline(always)]
     pub const fn translation(tx: f32, ty: f32) -> Self {
         Self {
-            a: 1.0, b: 0.0,
-            c: 0.0, d: 1.0,
-            tx, ty,
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            tx,
+            ty,
         }
     }
 
     #[inline(always)]
     pub const fn scale(sx: f32, sy: f32) -> Self {
         Self {
-            a: sx, b: 0.0,
-            c: 0.0, d: sy,
-            tx: 0.0, ty: 0.0,
+            a: sx,
+            b: 0.0,
+            c: 0.0,
+            d: sy,
+            tx: 0.0,
+            ty: 0.0,
         }
     }
 
@@ -323,9 +367,12 @@ impl Transform2D {
     pub fn rotation(radians: f32) -> Self {
         let (sin, cos) = radians.sin_cos();
         Self {
-            a: cos, b: sin,
-            c: -sin, d: cos,
-            tx: 0.0, ty: 0.0,
+            a: cos,
+            b: sin,
+            c: -sin,
+            d: cos,
+            tx: 0.0,
+            ty: 0.0,
         }
     }
 
@@ -341,7 +388,14 @@ impl Transform2D {
     /// `a` (scale x), `b` (shear y), `c` (shear x), `d` (scale y), `e` (translate x), `f` (translate y).
     #[inline(always)]
     pub const fn from_w3c(a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) -> Self {
-        Self { a, b, c, d, tx: e, ty: f }
+        Self {
+            a,
+            b,
+            c,
+            d,
+            tx: e,
+            ty: f,
+        }
     }
 
     #[inline(always)]
@@ -443,25 +497,33 @@ impl LayoutUnit {
 impl Add for LayoutUnit {
     type Output = Self;
     #[inline(always)]
-    fn add(self, rhs: Self) -> Self::Output { Self(self.0 + rhs.0) }
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
 }
 
 impl Sub for LayoutUnit {
     type Output = Self;
     #[inline(always)]
-    fn sub(self, rhs: Self) -> Self::Output { Self(self.0 - rhs.0) }
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self(self.0 - rhs.0)
+    }
 }
 
 impl Mul<i32> for LayoutUnit {
     type Output = Self;
     #[inline(always)]
-    fn mul(self, rhs: i32) -> Self::Output { Self(self.0 * rhs) }
+    fn mul(self, rhs: i32) -> Self::Output {
+        Self(self.0 * rhs)
+    }
 }
 
 impl Div<i32> for LayoutUnit {
     type Output = Self;
     #[inline(always)]
-    fn div(self, rhs: i32) -> Self::Output { Self(self.0 / rhs) }
+    fn div(self, rhs: i32) -> Self::Output {
+        Self(self.0 / rhs)
+    }
 }
 
 /// Cache-aligned 1/64th fixed-point integer layout rectangle.
@@ -475,7 +537,12 @@ pub struct FixedRect {
 }
 
 impl FixedRect {
-    pub const ZERO: Self = Self { x: 0, y: 0, width: 0, height: 0 };
+    pub const ZERO: Self = Self {
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+    };
 
     #[inline(always)]
     pub fn from_f32(x: f32, y: f32, width: f32, height: f32) -> Self {
@@ -555,10 +622,7 @@ impl Matrix4x4 {
     pub const fn from_2d(a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) -> Self {
         Self {
             m: [
-                a, b, 0.0, 0.0,
-                c, d, 0.0, 0.0,
-                0.0, 0.0, 1.0, 0.0,
-                e, f, 0.0, 1.0,
+                a, b, 0.0, 0.0, c, d, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, e, f, 0.0, 1.0,
             ],
         }
     }
@@ -568,10 +632,7 @@ impl Matrix4x4 {
     pub fn translation(tx: f32, ty: f32, tz: f32) -> Self {
         Self {
             m: [
-                1.0, 0.0, 0.0, 0.0,
-                0.0, 1.0, 0.0, 0.0,
-                0.0, 0.0, 1.0, 0.0,
-                tx, ty, tz, 1.0,
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, tx, ty, tz, 1.0,
             ],
         }
     }
@@ -581,10 +642,7 @@ impl Matrix4x4 {
     pub fn scaling(sx: f32, sy: f32, sz: f32) -> Self {
         Self {
             m: [
-                sx, 0.0, 0.0, 0.0,
-                0.0, sy, 0.0, 0.0,
-                0.0, 0.0, sz, 0.0,
-                0.0, 0.0, 0.0, 1.0,
+                sx, 0.0, 0.0, 0.0, 0.0, sy, 0.0, 0.0, 0.0, 0.0, sz, 0.0, 0.0, 0.0, 0.0, 1.0,
             ],
         }
     }
@@ -595,10 +653,7 @@ impl Matrix4x4 {
         let (sin, cos) = rad.sin_cos();
         Self {
             m: [
-                cos, sin, 0.0, 0.0,
-                -sin, cos, 0.0, 0.0,
-                0.0, 0.0, 1.0, 0.0,
-                0.0, 0.0, 0.0, 1.0,
+                cos, sin, 0.0, 0.0, -sin, cos, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
             ],
         }
     }
@@ -609,10 +664,7 @@ impl Matrix4x4 {
         let (sin, cos) = rad.sin_cos();
         Self {
             m: [
-                1.0, 0.0, 0.0, 0.0,
-                0.0, cos, sin, 0.0,
-                0.0, -sin, cos, 0.0,
-                0.0, 0.0, 0.0, 1.0,
+                1.0, 0.0, 0.0, 0.0, 0.0, cos, sin, 0.0, 0.0, -sin, cos, 0.0, 0.0, 0.0, 0.0, 1.0,
             ],
         }
     }
@@ -623,10 +675,7 @@ impl Matrix4x4 {
         let (sin, cos) = rad.sin_cos();
         Self {
             m: [
-                cos, 0.0, -sin, 0.0,
-                0.0, 1.0, 0.0, 0.0,
-                sin, 0.0, cos, 0.0,
-                0.0, 0.0, 0.0, 1.0,
+                cos, 0.0, -sin, 0.0, 0.0, 1.0, 0.0, 0.0, sin, 0.0, cos, 0.0, 0.0, 0.0, 0.0, 1.0,
             ],
         }
     }
@@ -647,18 +696,18 @@ impl Matrix4x4 {
                 y * x * one_minus_cos + z * sin,
                 z * x * one_minus_cos - y * sin,
                 0.0,
-
                 x * y * one_minus_cos - z * sin,
                 cos + y * y * one_minus_cos,
                 z * y * one_minus_cos + x * sin,
                 0.0,
-
                 x * z * one_minus_cos + y * sin,
                 y * z * one_minus_cos - x * sin,
                 cos + z * z * one_minus_cos,
                 0.0,
-
-                0.0, 0.0, 0.0, 1.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
             ],
         }
     }
@@ -668,10 +717,22 @@ impl Matrix4x4 {
     pub fn skew(ax_rad: f32, ay_rad: f32) -> Self {
         Self {
             m: [
-                1.0, ay_rad.tan(), 0.0, 0.0,
-                ax_rad.tan(), 1.0, 0.0, 0.0,
-                0.0, 0.0, 1.0, 0.0,
-                0.0, 0.0, 0.0, 1.0,
+                1.0,
+                ay_rad.tan(),
+                0.0,
+                0.0,
+                ax_rad.tan(),
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
             ],
         }
     }
@@ -682,10 +743,7 @@ impl Matrix4x4 {
         let p = if d > 0.0 { -1.0 / d } else { 0.0 };
         Self {
             m: [
-                1.0, 0.0, 0.0, 0.0,
-                0.0, 1.0, 0.0, 0.0,
-                0.0, 0.0, 1.0, p,
-                0.0, 0.0, 0.0, 1.0,
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, p, 0.0, 0.0, 0.0, 1.0,
             ],
         }
     }
@@ -698,8 +756,7 @@ impl Matrix4x4 {
 
         for col in 0..4 {
             for row in 0..4 {
-                r[col * 4 + row] =
-                    a[row] * b[col * 4]
+                r[col * 4 + row] = a[row] * b[col * 4]
                     + a[4 + row] * b[col * 4 + 1]
                     + a[8 + row] * b[col * 4 + 2]
                     + a[12 + row] * b[col * 4 + 3];
@@ -803,7 +860,10 @@ impl Matrix4x4 {
         let p1 = self.transform_point2d(Point::new(r.origin.x, r.origin.y));
         let p2 = self.transform_point2d(Point::new(r.origin.x + r.size.width, r.origin.y));
         let p3 = self.transform_point2d(Point::new(r.origin.x, r.origin.y + r.size.height));
-        let p4 = self.transform_point2d(Point::new(r.origin.x + r.size.width, r.origin.y + r.size.height));
+        let p4 = self.transform_point2d(Point::new(
+            r.origin.x + r.size.width,
+            r.origin.y + r.size.height,
+        ));
 
         let min_x = p1.x.min(p2.x).min(p3.x).min(p4.x);
         let max_x = p1.x.max(p2.x).max(p3.x).max(p4.x);
@@ -815,7 +875,13 @@ impl Matrix4x4 {
 
     /// Transforms an axis-aligned rectangle `(x, y, width, height)` returning the new bounding box `(min_x, min_y, w, h)`.
     #[inline]
-    pub fn transform_bounds(&self, x: f32, y: f32, width: f32, height: f32) -> (f32, f32, f32, f32) {
+    pub fn transform_bounds(
+        &self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> (f32, f32, f32, f32) {
         let r = self.transform_rect(Rect::from_xywh(x, y, width, height));
         (r.origin.x, r.origin.y, r.size.width, r.size.height)
     }
@@ -834,9 +900,15 @@ impl Matrix4x4 {
     /// Returns true if this matrix represents a pure 2D affine transformation (no Z or perspective).
     pub fn is_2d(&self) -> bool {
         let m = &self.m;
-        m[2].abs() < 1e-5 && m[3].abs() < 1e-5
-            && m[6].abs() < 1e-5 && m[7].abs() < 1e-5
-            && m[8].abs() < 1e-5 && m[9].abs() < 1e-5 && (m[10] - 1.0).abs() < 1e-5 && m[11].abs() < 1e-5
-            && m[14].abs() < 1e-5 && (m[15] - 1.0).abs() < 1e-5
+        m[2].abs() < 1e-5
+            && m[3].abs() < 1e-5
+            && m[6].abs() < 1e-5
+            && m[7].abs() < 1e-5
+            && m[8].abs() < 1e-5
+            && m[9].abs() < 1e-5
+            && (m[10] - 1.0).abs() < 1e-5
+            && m[11].abs() < 1e-5
+            && m[14].abs() < 1e-5
+            && (m[15] - 1.0).abs() < 1e-5
     }
 }

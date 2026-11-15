@@ -11,10 +11,18 @@ fn test_readme_documented_examples_exist_and_compile() {
         .and_then(|p| p.parent())
         .expect("Workspace root directory must exist");
 
-    let documented_examples = ["saas_dashboard", "creative_studio", "ecommerce_storefront", "strata_browser"];
+    let documented_examples = [
+        "saas_dashboard",
+        "creative_studio",
+        "ecommerce_storefront",
+        "strata_browser",
+    ];
 
     for example in &documented_examples {
-        let example_cargo_path = workspace_root.join("examples").join(example).join("Cargo.toml");
+        let example_cargo_path = workspace_root
+            .join("examples")
+            .join(example)
+            .join("Cargo.toml");
         assert!(
             example_cargo_path.exists(),
             "Documented quickstart example '{}' missing Cargo.toml at: {:?}",

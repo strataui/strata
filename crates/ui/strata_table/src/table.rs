@@ -1,7 +1,7 @@
 //! Headless Reactive Table State Machine.
 
-use strata_dom::Signal;
 use crate::column::{ColumnDef, SortDirection};
+use strata_dom::Signal;
 
 /// Headless table controller orchestrating sorting, filtering, pagination, and row selection.
 #[derive(Clone)]
@@ -40,7 +40,8 @@ impl<T: Clone + 'static> Table<T> {
         if next_direction == SortDirection::None {
             self.sorting.set(None);
         } else {
-            self.sorting.set(Some((column_id.to_string(), next_direction)));
+            self.sorting
+                .set(Some((column_id.to_string(), next_direction)));
         }
     }
 
@@ -182,10 +183,26 @@ mod tests {
     #[test]
     fn test_table_sorting_filtering_pagination() {
         let data = vec![
-            User { id: 1, name: "Charlie".to_string(), role: "Admin".to_string() },
-            User { id: 2, name: "Alice".to_string(), role: "Engineer".to_string() },
-            User { id: 3, name: "Bob".to_string(), role: "Engineer".to_string() },
-            User { id: 4, name: "David".to_string(), role: "Designer".to_string() },
+            User {
+                id: 1,
+                name: "Charlie".to_string(),
+                role: "Admin".to_string(),
+            },
+            User {
+                id: 2,
+                name: "Alice".to_string(),
+                role: "Engineer".to_string(),
+            },
+            User {
+                id: 3,
+                name: "Bob".to_string(),
+                role: "Engineer".to_string(),
+            },
+            User {
+                id: 4,
+                name: "David".to_string(),
+                role: "Designer".to_string(),
+            },
         ];
 
         let columns = vec![

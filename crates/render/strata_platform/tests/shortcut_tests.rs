@@ -1,6 +1,4 @@
-use strata_platform::{
-    KeyCode, Modifiers, PlatformEvent, ShortcutManager, ShortcutTrigger,
-};
+use strata_platform::{KeyCode, Modifiers, PlatformEvent, ShortcutManager, ShortcutTrigger};
 
 #[test]
 fn test_shortcut_trigger_parsing_and_matching() {

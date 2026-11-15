@@ -1,7 +1,7 @@
-use strata_query::prelude::*;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
+use strata_query::prelude::*;
 
 #[test]
 fn test_query_lifecycle_and_stale_revalidation() {

@@ -4,12 +4,10 @@
 //! with automatic role inference, accessible label derivation, live region detection,
 //! and spatial layout bounds binding.
 
-use std::collections::HashMap;
-use strata_dom::{Attribute, NodeBlueprint, Tag};
 use crate::node::{A11yAction, A11yLivePoliteness, A11yNode, A11yNodeId, A11yRect, A11yTree};
 use crate::role::A11yRole;
-
-
+use std::collections::HashMap;
+use strata_dom::{Attribute, NodeBlueprint, Tag};
 
 /// Maximum recursion depth guard for DOM tree crawling to prevent stack exhaustion on adversarial inputs.
 pub const MAX_A11Y_DEPTH: usize = 256;
@@ -433,10 +431,7 @@ pub fn bind_layout_tree_bounds(layout_root: &strata_layout::LayoutNode, a11y_tre
     }
 }
 
-fn collect_layout_boxes(
-    node: &strata_layout::LayoutNode,
-    out: &mut Vec<A11yRect>,
-) {
+fn collect_layout_boxes(node: &strata_layout::LayoutNode, out: &mut Vec<A11yRect>) {
     let bbox = A11yRect::new(
         node.geometry.border_box.x,
         node.geometry.border_box.y,
@@ -449,5 +444,3 @@ fn collect_layout_boxes(
         collect_layout_boxes(child, out);
     }
 }
-
-

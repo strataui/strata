@@ -1,8 +1,8 @@
 //! Analytical Bézier glyph cache for infinite-resolution font rendering.
 
-use std::collections::HashMap;
 use crate::curve::{Point2D, QuadraticBezier, Rect2D};
 use crate::path::Path;
+use std::collections::HashMap;
 
 /// Analytical vector glyph representation composed of quadratic Bézier contours.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,9 +33,17 @@ impl AnalyticGlyphCache {
     }
 
     /// Registers a vector glyph from a `Path`.
-    pub fn register_path_glyph(&mut self, char_code: char, advance_width: f32, path: &Path, tolerance: f32) {
+    pub fn register_path_glyph(
+        &mut self,
+        char_code: char,
+        advance_width: f32,
+        path: &Path,
+        tolerance: f32,
+    ) {
         let curves = path.to_quadratics(tolerance);
-        let bounds = path.bounding_box().unwrap_or(Rect2D::new(0.0, 0.0, advance_width, 1.0));
+        let bounds = path
+            .bounding_box()
+            .unwrap_or(Rect2D::new(0.0, 0.0, advance_width, 1.0));
 
         self.insert(AnalyticGlyph {
             char_code,
@@ -106,7 +114,11 @@ fn line_segment(x0: f32, y0: f32, x1: f32, y1: f32) -> QuadraticBezier {
 }
 
 fn quad_arc(x0: f32, y0: f32, cx: f32, cy: f32, x1: f32, y1: f32) -> QuadraticBezier {
-    QuadraticBezier::new(Point2D::new(x0, y0), Point2D::new(cx, cy), Point2D::new(x1, y1))
+    QuadraticBezier::new(
+        Point2D::new(x0, y0),
+        Point2D::new(cx, cy),
+        Point2D::new(x1, y1),
+    )
 }
 
 fn generate_ascii_glyph_curves(c: char) -> (f32, Vec<QuadraticBezier>) {

@@ -1,7 +1,7 @@
 //! Accessibility node and tree representation.
 
-use std::collections::HashMap;
 use crate::role::A11yRole;
+use std::collections::HashMap;
 
 /// Unique identifier for an accessibility tree node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -18,7 +18,12 @@ pub struct A11yRect {
 
 impl A11yRect {
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }
 

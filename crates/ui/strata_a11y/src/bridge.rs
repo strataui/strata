@@ -21,7 +21,6 @@ impl std::fmt::Debug for A11yBridge {
 }
 
 impl Default for A11yBridge {
-
     fn default() -> Self {
         Self::new()
     }

@@ -127,7 +127,8 @@ impl Http2ConnectionSettings {
                 SETTINGS_INITIAL_WINDOW_SIZE => {
                     if val > 0x7FFF_FFFF {
                         return Err(FetchError::NetworkError(
-                            "FLOW_CONTROL_ERROR: SETTINGS_INITIAL_WINDOW_SIZE exceeds 2^31-1".into(),
+                            "FLOW_CONTROL_ERROR: SETTINGS_INITIAL_WINDOW_SIZE exceeds 2^31-1"
+                                .into(),
                         ));
                     }
                     self.initial_window_size = val;
@@ -209,7 +210,8 @@ impl Http2Frame {
                 }
                 if !self.length.is_multiple_of(6) {
                     return Err(FetchError::NetworkError(
-                        "FRAME_SIZE_ERROR: SETTINGS frame payload length must be a multiple of 6".into(),
+                        "FRAME_SIZE_ERROR: SETTINGS frame payload length must be a multiple of 6"
+                            .into(),
                     ));
                 }
             }
@@ -271,7 +273,10 @@ impl Http2Frame {
     }
 
     /// Reads an individual frame from a synchronous byte stream, enforcing the active max frame size.
-    pub fn read_from_bounded<R: Read>(reader: &mut R, max_frame_size: u32) -> Result<Self, FetchError> {
+    pub fn read_from_bounded<R: Read>(
+        reader: &mut R,
+        max_frame_size: u32,
+    ) -> Result<Self, FetchError> {
         let mut header = [0u8; FRAME_HEADER_LEN];
         reader.read_exact(&mut header).map_err(|e| {
             FetchError::NetworkError(format!("Failed to read HTTP/2 frame header: {e}"))
@@ -554,7 +559,9 @@ pub fn decode_string_literal(slice: &[u8]) -> Result<(String, usize), FetchError
     let (length, consumed) = decode_integer(slice, 7)?;
 
     if slice.len() < consumed + length {
-        return Err(FetchError::NetworkError("Truncated HPACK string body".into()));
+        return Err(FetchError::NetworkError(
+            "Truncated HPACK string body".into(),
+        ));
     }
 
     let raw = &slice[consumed..consumed + length];
@@ -667,7 +674,9 @@ impl HpackDecoder {
                 let (new_size, consumed) = decode_integer(&block[cursor..], 5)?;
                 cursor += consumed;
                 self.max_table_size = new_size;
-                while self.current_table_size > self.max_table_size && !self.dynamic_table.is_empty() {
+                while self.current_table_size > self.max_table_size
+                    && !self.dynamic_table.is_empty()
+                {
                     if let Some((old_name, old_val)) = self.dynamic_table.pop() {
                         let old_size = old_name.len() + old_val.len() + 32;
                         self.current_table_size = self.current_table_size.saturating_sub(old_size);
@@ -868,7 +877,10 @@ pub fn execute_http2_request<T: Read + Write>(
 
     let mut owned_headers = Vec::new();
     if !req.headers.has("accept-encoding") {
-        owned_headers.push(("accept-encoding".to_string(), "gzip, deflate, br".to_string()));
+        owned_headers.push((
+            "accept-encoding".to_string(),
+            "gzip, deflate, br".to_string(),
+        ));
     }
     if !req.headers.has("user-agent") {
         owned_headers.push((
@@ -1003,12 +1015,16 @@ pub fn execute_http2_request<T: Read + Write>(
                 // Handle FLAG_PADDED (0x8)
                 if (frame.flags & FLAG_PADDED) != 0 {
                     if payload_slice.is_empty() {
-                        return Err(FetchError::NetworkError("Malformed padded HEADERS frame".into()));
+                        return Err(FetchError::NetworkError(
+                            "Malformed padded HEADERS frame".into(),
+                        ));
                     }
                     let pad_len = payload_slice[0] as usize;
                     payload_slice = &payload_slice[1..];
                     if payload_slice.len() < pad_len {
-                        return Err(FetchError::NetworkError("Padding exceeds HEADERS payload".into()));
+                        return Err(FetchError::NetworkError(
+                            "Padding exceeds HEADERS payload".into(),
+                        ));
                     }
                     payload_slice = &payload_slice[..payload_slice.len() - pad_len];
                 }
@@ -1016,7 +1032,9 @@ pub fn execute_http2_request<T: Read + Write>(
                 // Handle FLAG_PRIORITY (0x20)
                 if (frame.flags & FLAG_PRIORITY) != 0 {
                     if payload_slice.len() < 5 {
-                        return Err(FetchError::NetworkError("Malformed prioritized HEADERS frame".into()));
+                        return Err(FetchError::NetworkError(
+                            "Malformed prioritized HEADERS frame".into(),
+                        ));
                     }
                     payload_slice = &payload_slice[5..];
                 }
@@ -1110,9 +1128,11 @@ pub fn execute_http2_request<T: Read + Write>(
                 } else if !data_payload.is_empty() {
                     // Send WINDOW_UPDATE to maintain stream and connection flow control while stream is active
                     let delta = data_payload.len() as u32;
-                    let win_conn = Http2Frame::new(FRAME_WINDOW_UPDATE, 0, 0, delta.to_be_bytes().to_vec());
+                    let win_conn =
+                        Http2Frame::new(FRAME_WINDOW_UPDATE, 0, 0, delta.to_be_bytes().to_vec());
                     let _ = stream.write_all(&win_conn.encode());
-                    let win_stream = Http2Frame::new(FRAME_WINDOW_UPDATE, 0, 1, delta.to_be_bytes().to_vec());
+                    let win_stream =
+                        Http2Frame::new(FRAME_WINDOW_UPDATE, 0, 1, delta.to_be_bytes().to_vec());
                     let _ = stream.write_all(&win_stream.encode());
                     let _ = stream.flush();
                 }

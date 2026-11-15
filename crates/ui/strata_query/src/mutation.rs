@@ -5,7 +5,11 @@ use strata_dom::reactive::Signal;
 
 /// Reactive result handle returned by `use_mutation`.
 #[derive(Clone)]
-pub struct MutationResult<TData: Clone + 'static, TError: Clone + 'static, TVariables: Clone + 'static> {
+pub struct MutationResult<
+    TData: Clone + 'static,
+    TError: Clone + 'static,
+    TVariables: Clone + 'static,
+> {
     pub data: Signal<Option<TData>>,
     pub error: Signal<Option<TError>>,
     pub is_pending: Signal<bool>,

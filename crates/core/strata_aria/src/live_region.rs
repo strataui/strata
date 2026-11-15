@@ -114,7 +114,12 @@ impl LiveRegionAnnouncer {
     }
 
     /// Enqueue an announcement with explicit politeness and atomic presentation flags.
-    pub fn announce(&self, message: impl Into<String>, politeness: LiveRegionPoliteness, atomic: bool) -> u64 {
+    pub fn announce(
+        &self,
+        message: impl Into<String>,
+        politeness: LiveRegionPoliteness,
+        atomic: bool,
+    ) -> u64 {
         if politeness == LiveRegionPoliteness::Off {
             return 0;
         }
@@ -232,7 +237,11 @@ impl LiveRegionState {
         self.content.set(new_text.clone());
 
         if !self.busy.get() && self.politeness.get() != LiveRegionPoliteness::Off {
-            LiveRegionAnnouncer::global().announce(new_text, self.politeness.get(), self.atomic.get());
+            LiveRegionAnnouncer::global().announce(
+                new_text,
+                self.politeness.get(),
+                self.atomic.get(),
+            );
         }
     }
 
@@ -243,7 +252,11 @@ impl LiveRegionState {
         if !is_busy && self.politeness.get() != LiveRegionPoliteness::Off {
             let current = self.content.get();
             if !current.trim().is_empty() {
-                LiveRegionAnnouncer::global().announce(current, self.politeness.get(), self.atomic.get());
+                LiveRegionAnnouncer::global().announce(
+                    current,
+                    self.politeness.get(),
+                    self.atomic.get(),
+                );
             }
         }
     }

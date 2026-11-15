@@ -208,4 +208,3 @@ fn concentric_fillet_clip(
     return vec4<f32>(screen_coverage, chassis_coverage, bezel_mask, d_inner);
 }
 "#;
-

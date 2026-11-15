@@ -1,10 +1,10 @@
+use std::sync::{Arc, Mutex};
 use strata::prelude::*;
 use strata_dom::View;
 use strata_platform::{
     CursorIcon, KeyCode, Modifiers, MouseButton, PlatformEvent, SingleInstanceLock,
     SingleInstanceStatus,
 };
-use std::sync::{Arc, Mutex};
 
 #[component]
 fn UserSearchInputFixture() -> View {
@@ -62,7 +62,10 @@ fn test_search_input_container_click_and_caret_focus() {
     };
     let rebuild = runtime.step_event(&click_ev);
     assert!(rebuild);
-    assert!(runtime.active_focus.is_some(), "Clicking cursor-text container should focus child input");
+    assert!(
+        runtime.active_focus.is_some(),
+        "Clicking cursor-text container should focus child input"
+    );
 
     // Check display list includes caret draw rect when focused
     runtime.compile_display_list();
@@ -222,10 +225,7 @@ fn test_search_input_full_keyboard_editing_and_shortcuts() {
         },
     };
     runtime.step_event(&ctrl_backspace);
-    assert_eq!(
-        runtime.active_focus.as_ref().unwrap().state.text.get(),
-        ""
-    );
+    assert_eq!(runtime.active_focus.as_ref().unwrap().state.text.get(), "");
 }
 
 #[test]
@@ -237,16 +237,31 @@ fn test_automatic_mouse_cursor_switching() {
     assert_eq!(runtime.current_cursor, CursorIcon::Default);
 
     // Hover over action button (y=20)
-    let cur_btn = AppRuntime::hit_test_cursor(&runtime.root_blueprint, &runtime.layout_root, 30.0, 20.0);
-    assert_eq!(cur_btn, CursorIcon::Pointer, "Hovering button should resolve CursorIcon::Pointer");
+    let cur_btn =
+        AppRuntime::hit_test_cursor(&runtime.root_blueprint, &runtime.layout_root, 30.0, 20.0);
+    assert_eq!(
+        cur_btn,
+        CursorIcon::Pointer,
+        "Hovering button should resolve CursorIcon::Pointer"
+    );
 
     // Hover over input container (y=80)
-    let cur_input = AppRuntime::hit_test_cursor(&runtime.root_blueprint, &runtime.layout_root, 30.0, 80.0);
-    assert_eq!(cur_input, CursorIcon::Text, "Hovering cursor-text container should resolve CursorIcon::Text");
+    let cur_input =
+        AppRuntime::hit_test_cursor(&runtime.root_blueprint, &runtime.layout_root, 30.0, 80.0);
+    assert_eq!(
+        cur_input,
+        CursorIcon::Text,
+        "Hovering cursor-text container should resolve CursorIcon::Text"
+    );
 
     // Hover over normal text area (y=160)
-    let cur_normal = AppRuntime::hit_test_cursor(&runtime.root_blueprint, &runtime.layout_root, 30.0, 160.0);
-    assert_eq!(cur_normal, CursorIcon::Default, "Hovering standard container should resolve CursorIcon::Default");
+    let cur_normal =
+        AppRuntime::hit_test_cursor(&runtime.root_blueprint, &runtime.layout_root, 30.0, 160.0);
+    assert_eq!(
+        cur_normal,
+        CursorIcon::Default,
+        "Hovering standard container should resolve CursorIcon::Default"
+    );
 }
 
 #[test]
@@ -268,7 +283,11 @@ fn test_single_instance_lock_mutex_and_ipc_forwarding() {
     };
 
     // Secondary instance launches with new arguments
-    let secondary_args = vec!["--focus".to_string(), "--url".to_string(), "https://rust-lang.org".to_string()];
+    let secondary_args = vec![
+        "--focus".to_string(),
+        "--url".to_string(),
+        "https://rust-lang.org".to_string(),
+    ];
     let status2 = SingleInstanceLock::acquire(&test_app_id, &secondary_args, |_| {});
 
     assert!(status2.is_ok());
@@ -292,5 +311,8 @@ fn test_single_instance_lock_mutex_and_ipc_forwarding() {
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    assert_eq!(args, secondary_args, "Primary instance must receive forwarded arguments from secondary process");
+    assert_eq!(
+        args, secondary_args,
+        "Primary instance must receive forwarded arguments from secondary process"
+    );
 }

@@ -95,5 +95,4 @@ impl AppRuntime {
         self.a11y_bridge.dispatch_action(target_node, action);
         false
     }
-
 }

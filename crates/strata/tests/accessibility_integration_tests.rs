@@ -4,9 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use strata::prelude::*;
 use strata::{
-    a11y::{
-        A11yAction, A11yLivePoliteness, A11yRole, AccessKitActionRequest, AccessKitAdapter,
-    },
+    a11y::{A11yAction, A11yLivePoliteness, A11yRole, AccessKitActionRequest, AccessKitAdapter},
     launch_headless,
 };
 use strata_aria::prelude::*;
@@ -26,9 +24,15 @@ fn test_w3c_aria_live_regions_queue_and_announcer() {
     let announcements = announcer.drain_announcements();
     assert_eq!(announcements.len(), 2);
     assert_eq!(announcements[0].politeness, LiveRegionPoliteness::Polite);
-    assert_eq!(announcements[0].message, "File top_module.v saved successfully");
+    assert_eq!(
+        announcements[0].message,
+        "File top_module.v saved successfully"
+    );
     assert_eq!(announcements[1].politeness, LiveRegionPoliteness::Assertive);
-    assert_eq!(announcements[1].message, "CRITICAL: Timing closure failed at 250 MHz");
+    assert_eq!(
+        announcements[1].message,
+        "CRITICAL: Timing closure failed at 250 MHz"
+    );
     assert_eq!(announcer.pending_count(), 0);
 
     // 2. Reactive live region state & attributes
@@ -42,8 +46,12 @@ fn test_w3c_aria_live_regions_queue_and_announcer() {
 
     let attrs = telemetry_region.attrs();
     assert!(attrs.iter().any(|(k, v)| *k == "role" && v == "status"));
-    assert!(attrs.iter().any(|(k, v)| *k == "aria-live" && v == "polite"));
-    assert!(attrs.iter().any(|(k, v)| *k == "aria-atomic" && v == "true"));
+    assert!(attrs
+        .iter()
+        .any(|(k, v)| *k == "aria-live" && v == "polite"));
+    assert!(attrs
+        .iter()
+        .any(|(k, v)| *k == "aria-atomic" && v == "true"));
     assert!(attrs.iter().any(|(k, v)| *k == "aria-busy" && v == "false"));
 
     telemetry_region.set_content("Power draw: 14.2W");
@@ -95,8 +103,14 @@ fn test_runtime_layout_tick_accessibility_tree_synchronization() {
     );
 
     // 1. Accessibility tree must be built immediately on runtime creation
-    assert!(rt.a11y_tree.is_some(), "Accessibility tree must be constructed on launch");
-    assert!(rt.a11y_updates_count >= 1, "At least 1 accessibility update must have occurred");
+    assert!(
+        rt.a11y_tree.is_some(),
+        "Accessibility tree must be constructed on launch"
+    );
+    assert!(
+        rt.a11y_updates_count >= 1,
+        "At least 1 accessibility update must have occurred"
+    );
 
     let tree = rt.a11y_tree.as_ref().unwrap();
 
@@ -117,13 +131,20 @@ fn test_runtime_layout_tick_accessibility_tree_synchronization() {
     assert_eq!(btn_node.name.as_deref(), Some("Start Synthesis"));
     assert!(btn_node.focusable);
     assert!(btn_node.supported_actions.contains(&A11yAction::Click));
-    assert!(btn_node.bounds.is_some(), "Button must have bound spatial layout coordinates");
+    assert!(
+        btn_node.bounds.is_some(),
+        "Button must have bound spatial layout coordinates"
+    );
     let btn_bounds = btn_node.bounds.unwrap();
     eprintln!("btn_bounds: {:?}", btn_bounds);
-    assert!(btn_bounds.width > 100.0, "Button width must be computed by layout engine");
-    assert!(btn_bounds.height > 20.0, "Button height must be computed by layout engine");
-
-
+    assert!(
+        btn_bounds.width > 100.0,
+        "Button width must be computed by layout engine"
+    );
+    assert!(
+        btn_bounds.height > 20.0,
+        "Button height must be computed by layout engine"
+    );
 
     // Verify input node
     let input_node = tree
@@ -148,7 +169,10 @@ fn test_runtime_layout_tick_accessibility_tree_synchronization() {
     assert!(!clicked.load(Ordering::SeqCst));
     let handled = rt.dispatch_accessibility_action(btn_id, A11yAction::Click);
     assert!(handled, "Dispatching Click action on button must succeed");
-    assert!(clicked.load(Ordering::SeqCst), "Button click listener must be executed");
+    assert!(
+        clicked.load(Ordering::SeqCst),
+        "Button click listener must be executed"
+    );
 
     // 3. Test frame tick re-evaluation & update count increment
     let prior_updates = rt.a11y_updates_count;
@@ -160,7 +184,10 @@ fn test_runtime_layout_tick_accessibility_tree_synchronization() {
 
     // 4. AccessKit serialization protocol verification
     let mut adapter = AccessKitAdapter::new("Strata EDA Studio");
-    let initial_tree = rt.a11y_tree.as_ref().expect("Accessibility tree must exist");
+    let initial_tree = rt
+        .a11y_tree
+        .as_ref()
+        .expect("Accessibility tree must exist");
     let ak_update = adapter.process_tree(initial_tree);
 
     let json = ak_update.to_json();
@@ -173,7 +200,11 @@ fn test_runtime_layout_tick_accessibility_tree_synchronization() {
     // Differential update verification
     let diff = rt.update_accessibility_tree();
     let ak_diff = adapter.process_update(&diff, None);
-    assert_eq!(ak_diff.nodes.len(), 0, "No differential changes should be reported without DOM mutations");
+    assert_eq!(
+        ak_diff.nodes.len(),
+        0,
+        "No differential changes should be reported without DOM mutations"
+    );
 
     // 5. Test AccessKit action request handling
     let req = AccessKitActionRequest {

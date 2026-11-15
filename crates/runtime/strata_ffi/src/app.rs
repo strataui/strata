@@ -126,7 +126,9 @@ pub unsafe extern "C" fn strata_runtime_create(
         return std::ptr::null_mut();
     }
     let view_clone = (*view).clone();
-    let runtime = Box::new(strata::runtime::AppRuntime::new(view_clone, width, height, dpr));
+    let runtime = Box::new(strata::runtime::AppRuntime::new(
+        view_clone, width, height, dpr,
+    ));
     Box::into_raw(runtime)
 }
 
@@ -217,4 +219,3 @@ pub unsafe extern "C" fn strata_window_destroy(win: *mut StrataWindowHandle) {
         let _ = Box::from_raw(win);
     }
 }
-

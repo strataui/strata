@@ -22,9 +22,18 @@ fn test_aria_modal_dialog_focus_integration() {
     assert_eq!(trap.current_target(), Some("name-field".to_string()));
 
     // Tab moves focus within trap
-    assert_eq!(trap.handle_key("Tab", false), Some("save-button".to_string()));
-    assert_eq!(trap.handle_key("Tab", false), Some("close-button".to_string()));
-    assert_eq!(trap.handle_key("Tab", false), Some("name-field".to_string()));
+    assert_eq!(
+        trap.handle_key("Tab", false),
+        Some("save-button".to_string())
+    );
+    assert_eq!(
+        trap.handle_key("Tab", false),
+        Some("close-button".to_string())
+    );
+    assert_eq!(
+        trap.handle_key("Tab", false),
+        Some("name-field".to_string())
+    );
 
     // Escape closes dialog and restores focus
     assert!(dialog.handle_key("Escape"));
@@ -75,7 +84,10 @@ fn test_w3c_aria_live_regions_and_announcements() {
     assert_eq!(drained[0].politeness, LiveRegionPoliteness::Polite);
     assert_eq!(drained[0].message, "Build succeeded in 4.2s");
     assert_eq!(drained[1].politeness, LiveRegionPoliteness::Assertive);
-    assert_eq!(drained[1].message, "CRITICAL: Power supply disconnect detected");
+    assert_eq!(
+        drained[1].message,
+        "CRITICAL: Power supply disconnect detected"
+    );
     assert_eq!(announcer.pending_count(), 0);
 
     // 2. Reactive live region state & attributes
@@ -89,10 +101,16 @@ fn test_w3c_aria_live_regions_and_announcements() {
 
     let attrs = status_region.attrs();
     assert!(attrs.iter().any(|(k, v)| *k == "role" && v == "status"));
-    assert!(attrs.iter().any(|(k, v)| *k == "aria-live" && v == "polite"));
-    assert!(attrs.iter().any(|(k, v)| *k == "aria-atomic" && v == "true"));
+    assert!(attrs
+        .iter()
+        .any(|(k, v)| *k == "aria-live" && v == "polite"));
+    assert!(attrs
+        .iter()
+        .any(|(k, v)| *k == "aria-atomic" && v == "true"));
     assert!(attrs.iter().any(|(k, v)| *k == "aria-busy" && v == "false"));
-    assert!(attrs.iter().any(|(k, v)| *k == "aria-relevant" && v == "additions text"));
+    assert!(attrs
+        .iter()
+        .any(|(k, v)| *k == "aria-relevant" && v == "additions text"));
 
     // Setting content triggers announcement
     status_region.set_content("3 new notifications received");
@@ -113,4 +131,3 @@ fn test_w3c_aria_live_regions_and_announcements() {
     let drained3 = announcer.drain_announcements();
     assert_eq!(drained3[0].message, "Downloading update (45%)...");
 }
-

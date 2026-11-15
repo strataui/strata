@@ -1,8 +1,8 @@
 //! First-Principles Structural Similarity Index Measure (SSIM) and Perceptual Visual Regression Engine.
 
 /// Constants for 8-bit image dynamic range (L = 255)
-const C1: f32 = 6.5025;   // (0.01 * 255)^2
-const C2: f32 = 58.5225;  // (0.03 * 255)^2
+const C1: f32 = 6.5025; // (0.01 * 255)^2
+const C2: f32 = 58.5225; // (0.03 * 255)^2
 
 /// Result of a perceptual visual comparison between rendered and baseline framebuffers.
 #[derive(Debug, Clone, PartialEq)]
@@ -45,13 +45,17 @@ impl SsimEngine {
                 let idx = (y * width + x) * bytes_per_pixel;
                 // Luminance approximation if RGBA
                 let lum_a = if bytes_per_pixel >= 3 {
-                    0.2126 * buf_a[idx] as f32 + 0.7152 * buf_a[idx + 1] as f32 + 0.0722 * buf_a[idx + 2] as f32
+                    0.2126 * buf_a[idx] as f32
+                        + 0.7152 * buf_a[idx + 1] as f32
+                        + 0.0722 * buf_a[idx + 2] as f32
                 } else {
                     buf_a[idx] as f32
                 };
 
                 let lum_b = if bytes_per_pixel >= 3 {
-                    0.2126 * buf_b[idx] as f32 + 0.7152 * buf_b[idx + 1] as f32 + 0.0722 * buf_b[idx + 2] as f32
+                    0.2126 * buf_b[idx] as f32
+                        + 0.7152 * buf_b[idx + 1] as f32
+                        + 0.0722 * buf_b[idx + 2] as f32
                 } else {
                     buf_b[idx] as f32
                 };
@@ -67,7 +71,11 @@ impl SsimEngine {
         }
 
         // Block-based Mean SSIM (Wang et al. 2004 IEEE TIP standard)
-        let block_size = if width >= 16 && height >= 16 { 8 } else { width.min(height).max(1) };
+        let block_size = if width >= 16 && height >= 16 {
+            8
+        } else {
+            width.min(height).max(1)
+        };
         let mut total_block_ssim = 0.0f32;
         let mut block_count = 0usize;
 
@@ -84,12 +92,16 @@ impl SsimEngine {
                     for x in bx..bx + bw {
                         let idx = (y * width + x) * bytes_per_pixel;
                         let lum_a = if bytes_per_pixel >= 3 {
-                            0.2126 * buf_a[idx] as f32 + 0.7152 * buf_a[idx + 1] as f32 + 0.0722 * buf_a[idx + 2] as f32
+                            0.2126 * buf_a[idx] as f32
+                                + 0.7152 * buf_a[idx + 1] as f32
+                                + 0.0722 * buf_a[idx + 2] as f32
                         } else {
                             buf_a[idx] as f32
                         };
                         let lum_b = if bytes_per_pixel >= 3 {
-                            0.2126 * buf_b[idx] as f32 + 0.7152 * buf_b[idx + 1] as f32 + 0.0722 * buf_b[idx + 2] as f32
+                            0.2126 * buf_b[idx] as f32
+                                + 0.7152 * buf_b[idx + 1] as f32
+                                + 0.0722 * buf_b[idx + 2] as f32
                         } else {
                             buf_b[idx] as f32
                         };
@@ -109,12 +121,16 @@ impl SsimEngine {
                     for x in bx..bx + bw {
                         let idx = (y * width + x) * bytes_per_pixel;
                         let lum_a = if bytes_per_pixel >= 3 {
-                            0.2126 * buf_a[idx] as f32 + 0.7152 * buf_a[idx + 1] as f32 + 0.0722 * buf_a[idx + 2] as f32
+                            0.2126 * buf_a[idx] as f32
+                                + 0.7152 * buf_a[idx + 1] as f32
+                                + 0.0722 * buf_a[idx + 2] as f32
                         } else {
                             buf_a[idx] as f32
                         };
                         let lum_b = if bytes_per_pixel >= 3 {
-                            0.2126 * buf_b[idx] as f32 + 0.7152 * buf_b[idx + 1] as f32 + 0.0722 * buf_b[idx + 2] as f32
+                            0.2126 * buf_b[idx] as f32
+                                + 0.7152 * buf_b[idx + 1] as f32
+                                + 0.0722 * buf_b[idx + 2] as f32
                         } else {
                             buf_b[idx] as f32
                         };
@@ -131,8 +147,13 @@ impl SsimEngine {
                 b_cov_ab /= n_b;
 
                 let num = (2.0 * b_mean_a * b_mean_b + C1) * (2.0 * b_cov_ab + C2);
-                let den = (b_mean_a * b_mean_a + b_mean_b * b_mean_b + C1) * (b_var_a + b_var_b + C2);
-                let b_ssim = if den == 0.0 { 1.0 } else { (num / den).clamp(0.0, 1.0) };
+                let den =
+                    (b_mean_a * b_mean_a + b_mean_b * b_mean_b + C1) * (b_var_a + b_var_b + C2);
+                let b_ssim = if den == 0.0 {
+                    1.0
+                } else {
+                    (num / den).clamp(0.0, 1.0)
+                };
 
                 total_block_ssim += b_ssim;
                 block_count += 1;

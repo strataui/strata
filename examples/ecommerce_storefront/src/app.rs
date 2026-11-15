@@ -1,9 +1,9 @@
 //! Root Application for Apex Athletics E-Commerce Storefront.
 
-use strata::prelude::*;
-use crate::components::*;
 use crate::components::Navbar;
+use crate::components::*;
 use crate::state::StoreState;
+use strata::prelude::*;
 
 #[component]
 pub fn App() -> View {

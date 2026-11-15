@@ -874,8 +874,7 @@ impl Compositor {
         let should_clip =
             clips_overflow || (has_any_radius && (node.image.is_some() || node.scene_3d.is_some()));
 
-        let mut static_cull_empty =
-            base_cull.is_some_and(|c| c.width < 0.0 || c.height < 0.0);
+        let mut static_cull_empty = base_cull.is_some_and(|c| c.width < 0.0 || c.height < 0.0);
 
         let child_cull = if clips_overflow
             && bounds.width > 0.0
@@ -922,7 +921,11 @@ impl Compositor {
         let has_isolation = node.style.isolation == Isolation::Isolate;
         let has_blend_mode = node.style.mix_blend_mode != BlendMode::Normal;
         let has_filter_cfg = node.style.filter.as_ref().is_some_and(|f| !f.is_empty());
-        let has_clip_path_cfg = node.style.clip_path.as_ref().is_some_and(|cp| !cp.is_none());
+        let has_clip_path_cfg = node
+            .style
+            .clip_path
+            .as_ref()
+            .is_some_and(|cp| !cp.is_none());
         let transform_matrix = if node.style.has_transform() {
             Some(
                 node.style
@@ -1429,8 +1432,9 @@ impl Compositor {
                         bounds: vp_bounds,
                         scene: scene.clone(),
                     });
-                } else if let Some(scene_arc) =
-                    handle.0.downcast_ref::<std::sync::Arc<crate::scene3d::Scene3D>>()
+                } else if let Some(scene_arc) = handle
+                    .0
+                    .downcast_ref::<std::sync::Arc<crate::scene3d::Scene3D>>()
                 {
                     list.push(DrawCommand::DrawViewport3D {
                         bounds: vp_bounds,

@@ -49,7 +49,10 @@ fn test_cjk_ime_composition_and_candidate_caret_positioning() {
     let click_y = box_geom.y + box_geom.height / 2.0;
     let clicked = runtime.dispatch_pointer_down(click_x, click_y);
     assert!(clicked, "clicking on input element must succeed");
-    assert!(runtime.active_focus.is_some(), "input element must now be focused");
+    assert!(
+        runtime.active_focus.is_some(),
+        "input element must now be focused"
+    );
 
     // 3. Verify initial active caret rectangle calculation
     let initial_caret = runtime
@@ -126,7 +129,13 @@ fn test_cjk_ime_composition_and_candidate_caret_positioning() {
         "你好世界日本語한글"
     );
     assert_eq!(
-        runtime.active_focus.as_ref().unwrap().state.cursor_index.get(),
+        runtime
+            .active_focus
+            .as_ref()
+            .unwrap()
+            .state
+            .cursor_index
+            .get(),
         9 // 4 Hanzi + 3 Kanji + 2 Hangul
     );
 

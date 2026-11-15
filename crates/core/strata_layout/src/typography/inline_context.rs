@@ -143,7 +143,6 @@ fn metrics_for_style(
         }
     }
 
-
     let weight = strata_style::types::FontWeight::Normal;
     let style = strata_style::types::FontStyle::Normal;
     let effective_family = if is_monospace && font_family == strata_primitives::AtomId::NULL {
@@ -152,7 +151,9 @@ fn metrics_for_style(
         font_family
     };
 
-    if let Some(font) = crate::typography::opentype::lookup_font_for_style(effective_family, weight, style) {
+    if let Some(font) =
+        crate::typography::opentype::lookup_font_for_style(effective_family, weight, style)
+    {
         let metrics = font.font_metrics(font_size);
         FONT_METRICS_CACHE.with(|cache| {
             let mut map = cache.borrow_mut();
@@ -169,9 +170,7 @@ fn metrics_for_style(
     } else {
         FontMetrics::default_sans(font_size)
     }
-
 }
-
 
 /// CSS vertical-align property values for inline formatting context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -482,9 +481,11 @@ impl InlineFormattingContext {
         for run in bidi_runs {
             let run_slice = &text[run.start..run.end];
             let mut run_glyphs = if let Some(ref font) = opt_font {
-                self.shaper.shape_with_font(run_slice, font, style.font_size)
+                self.shaper
+                    .shape_with_font(run_slice, font, style.font_size)
             } else {
-                self.shaper.shape(run_slice, font_metrics, style.is_monospace)
+                self.shaper
+                    .shape(run_slice, font_metrics, style.is_monospace)
             };
             if run.is_rtl {
                 run_glyphs.reverse();
@@ -900,9 +901,9 @@ impl InlineFormattingContext {
                     && line_tokens
                         .last()
                         .is_none_or(|prev| can_break_between(prev, tok))
-                    {
-                        break;
-                    }
+                {
+                    break;
+                }
 
                 // If line is empty and unbreakable cluster exceeds available_width:
                 // Check if dropping past float gives more width
@@ -1233,4 +1234,3 @@ impl InlineFormattingContext {
         }
     }
 }
-

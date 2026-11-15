@@ -121,9 +121,17 @@ fn bug1_compositor_hoists_card1_z50_dropdown_above_card2_and_section2() {
         );
         // Left of dropdown at x=40 -> Card #2 blue and Section #2 green remain visible
         let p_card2_left = pixel_rgb(&pixels, 360, 40, 70);
-        assert!(p_card2_left.2 > 200, "Card #2 visible outside menu, got {:?}", p_card2_left);
+        assert!(
+            p_card2_left.2 > 200,
+            "Card #2 visible outside menu, got {:?}",
+            p_card2_left
+        );
         let p_sec2_left = pixel_rgb(&pixels, 360, 40, 120);
-        assert!(p_sec2_left.1 > 150, "Section #2 visible outside menu, got {:?}", p_sec2_left);
+        assert!(
+            p_sec2_left.1 > 150,
+            "Section #2 visible outside menu, got {:?}",
+            p_sec2_left
+        );
     }
 }
 
@@ -160,8 +168,14 @@ fn bug2_overflow_does_not_create_stacking_context_and_flex_grid_z_index_matches_
     let z10_flex_item = &root.children[1];
 
     // 1. overflow-y-auto alone must NOT establish a stacking context in either Compositor or AppRuntime
-    assert!(!Compositor::establishes_stacking_context(overflow_box, false));
-    assert!(!AppRuntime::establishes_stacking_context(overflow_box, false));
+    assert!(!Compositor::establishes_stacking_context(
+        overflow_box,
+        false
+    ));
+    assert!(!AppRuntime::establishes_stacking_context(
+        overflow_box,
+        false
+    ));
     assert!(!overflow_box.establishes_stacking_context_in(Some(Display::Flex), false));
 
     // 2. A Static flex item with `z-10` MUST establish a stacking context when parent is Display::Flex
@@ -270,13 +284,12 @@ fn bug3_position_fixed_inside_scroll_container_escapes_scroll_and_overflow_clip(
     assert_eq!(modal_btn_clicks.get(), 1);
 
     // Hover path at (60, 260) must also resolve to the modal button inside the fixed layer
-    let hover_path = AppRuntime::hit_test_node_path(
-        &runtime.root_blueprint,
-        &runtime.layout_root,
-        60.0,
-        260.0,
+    let hover_path =
+        AppRuntime::hit_test_node_path(&runtime.root_blueprint, &runtime.layout_root, 60.0, 260.0);
+    assert!(
+        hover_path.is_some(),
+        "Hover must hit button inside fixed modal outside <main> bounds"
     );
-    assert!(hover_path.is_some(), "Hover must hit button inside fixed modal outside <main> bounds");
 
     #[cfg(target_os = "linux")]
     {

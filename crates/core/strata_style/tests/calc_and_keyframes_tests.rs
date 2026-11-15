@@ -73,9 +73,10 @@ fn test_calc_recursion_limit_and_division_by_zero_safety() {
     let nested_attack = format!("{}10px{}", "(".repeat(40), ")".repeat(40));
     let attack_res = parse_calc(&nested_attack);
     assert!(attack_res.is_err());
-    assert!(attack_res.unwrap_err().contains("Maximum calc() expression nesting depth"));
+    assert!(attack_res
+        .unwrap_err()
+        .contains("Maximum calc() expression nesting depth"));
 }
-
 
 #[test]
 fn test_cubic_bezier_easing_curves() {
@@ -107,21 +108,30 @@ fn test_keyframes_animation_interpolation() {
         2.0, // 2 seconds
         CubicBezier::linear(),
         vec![
-            Keyframe::new(0.0, vec![
-                KeyframeProperty::Opacity(0.0),
-                KeyframeProperty::TranslateX(0.0),
-                KeyframeProperty::Scale(0.8),
-            ]),
-            Keyframe::new(0.5, vec![
-                KeyframeProperty::Opacity(1.0),
-                KeyframeProperty::TranslateX(100.0),
-                KeyframeProperty::Scale(1.0),
-            ]),
-            Keyframe::new(1.0, vec![
-                KeyframeProperty::Opacity(1.0),
-                KeyframeProperty::TranslateX(200.0),
-                KeyframeProperty::Scale(1.2),
-            ]),
+            Keyframe::new(
+                0.0,
+                vec![
+                    KeyframeProperty::Opacity(0.0),
+                    KeyframeProperty::TranslateX(0.0),
+                    KeyframeProperty::Scale(0.8),
+                ],
+            ),
+            Keyframe::new(
+                0.5,
+                vec![
+                    KeyframeProperty::Opacity(1.0),
+                    KeyframeProperty::TranslateX(100.0),
+                    KeyframeProperty::Scale(1.0),
+                ],
+            ),
+            Keyframe::new(
+                1.0,
+                vec![
+                    KeyframeProperty::Opacity(1.0),
+                    KeyframeProperty::TranslateX(200.0),
+                    KeyframeProperty::Scale(1.2),
+                ],
+            ),
         ],
     );
 
@@ -222,4 +232,3 @@ fn test_calc_interner_deduplication_and_bounded_memory() {
     // Hard bound MAX_CALC_ENTRIES prevents unbounded heap growth
     assert!(last_id.0 < 8192);
 }
-

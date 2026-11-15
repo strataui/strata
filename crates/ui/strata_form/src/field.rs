@@ -1,7 +1,7 @@
 //! Reactive Form Field State and Mutation.
 
-use strata_dom::reactive::Signal;
 use crate::validation::ValidationRule;
+use strata_dom::reactive::Signal;
 
 /// A single reactive field within a form.
 #[derive(Clone)]
@@ -16,7 +16,11 @@ pub struct FormField {
 }
 
 impl FormField {
-    pub fn new(name: impl Into<String>, initial: impl Into<String>, rules: Vec<ValidationRule<String>>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        initial: impl Into<String>,
+        rules: Vec<ValidationRule<String>>,
+    ) -> Self {
         let initial_str = initial.into();
         Self {
             name: name.into(),

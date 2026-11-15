@@ -602,7 +602,8 @@ impl InternalLayoutRegressionSuite {
             let mut container = LayoutNode::with_children(container_style, vec![item1, item2]);
             container.compute_layout(container_w, 100.0);
 
-            let total_w = container.children[0].geometry.border_box.width + container.children[1].geometry.border_box.width;
+            let total_w = container.children[0].geometry.border_box.width
+                + container.children[1].geometry.border_box.width;
             let dev = (total_w - container_w).abs();
 
             vectors.push(SpecificationConformanceVector {
@@ -667,11 +668,8 @@ impl InternalLayoutRegressionSuite {
             let mut grid_style = ComputedStyle::default();
             grid_style.display = Display::Grid;
             grid_style.width = Dimension::Px(total_w);
-            grid_style.grid_template_columns = vec![
-                GridTrack::Fr(fr1),
-                GridTrack::Fr(fr2),
-                GridTrack::Fr(fr3),
-            ];
+            grid_style.grid_template_columns =
+                vec![GridTrack::Fr(fr1), GridTrack::Fr(fr2), GridTrack::Fr(fr3)];
 
             let items = vec![
                 LayoutNode::new(ComputedStyle::default()),

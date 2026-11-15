@@ -65,8 +65,7 @@ fn test_empty_block_margin_collapsing_through() {
     // collapse together into a single margin: max(20, 30, 40, 10) = 40.0.
     // Child 3 must start at y = 50 + 40 = 90.0 (NOT 50 + max(20,30) + max(40,10) = 50 + 30 + 40 = 120.0).
     assert_eq!(
-        root.children[2].geometry.border_box.y,
-        90.0,
+        root.children[2].geometry.border_box.y, 90.0,
         "Child 3 must be positioned at 90.0 after single collapsed margin through empty block"
     );
     assert_eq!(root.children[2].geometry.border_box.height, 50.0);
@@ -121,8 +120,7 @@ fn test_multiple_consecutive_empty_blocks_collapsing_through() {
     assert_eq!(root.children[0].geometry.border_box.y, 0.0);
     assert_eq!(root.children[0].geometry.border_box.height, 40.0);
     assert_eq!(
-        root.children[3].geometry.border_box.y,
-        75.0,
+        root.children[3].geometry.border_box.y, 75.0,
         "Sibling 4 must be positioned at 75.0 across multiple empty blocks"
     );
 }
@@ -142,19 +140,18 @@ fn test_parent_first_child_top_margin_collapsing() {
     child_style.height = Dimension::Px(50.0);
     child_style.margin.top = 30.0;
 
-    let mut container = LayoutNode::with_children(container_style, vec![LayoutNode::new(child_style)]);
+    let mut container =
+        LayoutNode::with_children(container_style, vec![LayoutNode::new(child_style)]);
     container.compute_layout(300.0, 600.0);
 
     // Child top margin (30) collapses with parent top margin (10) -> parent effective margin.top = 30.
     // Child border box sits at y = 0 relative to parent!
     assert_eq!(
-        container.children[0].geometry.border_box.y,
-        0.0,
+        container.children[0].geometry.border_box.y, 0.0,
         "First child must sit at y = 0 relative to parent when top margins collapse"
     );
     assert_eq!(
-        container.style.margin.top,
-        30.0,
+        container.style.margin.top, 30.0,
         "Parent effective top margin must be collapsed to max(10, 30) = 30"
     );
 }
@@ -174,18 +171,17 @@ fn test_parent_last_child_bottom_margin_collapsing() {
     child_style.height = Dimension::Px(60.0);
     child_style.margin.bottom = 35.0;
 
-    let mut container = LayoutNode::with_children(container_style, vec![LayoutNode::new(child_style)]);
+    let mut container =
+        LayoutNode::with_children(container_style, vec![LayoutNode::new(child_style)]);
     container.compute_layout(300.0, 600.0);
 
     // Parent height wraps child tightly without expanding for the collapsed bottom margin
     assert_eq!(
-        container.geometry.border_box.height,
-        60.0,
+        container.geometry.border_box.height, 60.0,
         "Parent auto height must not include the bottom margin that collapsed with parent"
     );
     assert_eq!(
-        container.style.margin.bottom,
-        35.0,
+        container.style.margin.bottom, 35.0,
         "Parent effective bottom margin must be collapsed to max(15, 35) = 35"
     );
 }
@@ -206,19 +202,18 @@ fn test_bfc_boundary_prevents_parent_child_collapsing() {
     child_style.height = Dimension::Px(50.0);
     child_style.margin.top = 30.0;
 
-    let mut bfc_container = LayoutNode::with_children(bfc_style, vec![LayoutNode::new(child_style)]);
+    let mut bfc_container =
+        LayoutNode::with_children(bfc_style, vec![LayoutNode::new(child_style)]);
     bfc_container.compute_layout(300.0, 600.0);
 
     // BFC root prevents parent-child margin collapsing:
     // Child is offset by its own margin-top (30) inside the container
     assert_eq!(
-        bfc_container.children[0].geometry.border_box.y,
-        30.0,
+        bfc_container.children[0].geometry.border_box.y, 30.0,
         "BFC root container must prevent child margin from collapsing with parent"
     );
     assert_eq!(
-        bfc_container.style.margin.top,
-        10.0,
+        bfc_container.style.margin.top, 10.0,
         "BFC container top margin remains 10"
     );
 }
@@ -243,36 +238,29 @@ fn test_nested_bfc_child_prevents_margin_collapsing() {
     bfc_child_style.margin.top = 30.0;
     bfc_child_style.margin.bottom = 25.0;
 
-    let mut container = LayoutNode::with_children(
-        parent_style,
-        vec![LayoutNode::new(bfc_child_style)],
-    );
+    let mut container =
+        LayoutNode::with_children(parent_style, vec![LayoutNode::new(bfc_child_style)]);
     container.compute_layout(400.0, 600.0);
 
     // 1. Under W3C CSS 2.1 §8.3.1, child establishing BFC must NOT collapse its top margin with parent
     assert_eq!(
-        container.style.margin.top,
-        15.0,
+        container.style.margin.top, 15.0,
         "Parent top margin must remain uncollapsed (15.0) when child establishes BFC"
     );
     assert_eq!(
-        container.children[0].geometry.border_box.y,
-        30.0,
+        container.children[0].geometry.border_box.y, 30.0,
         "BFC child must sit at y = 30.0 inside parent due to its uncollapsed top margin"
     );
 
     // 2. Child establishing BFC must NOT collapse its bottom margin with parent
     assert_eq!(
-        container.style.margin.bottom,
-        20.0,
+        container.style.margin.bottom, 20.0,
         "Parent bottom margin must remain uncollapsed (20.0) when child establishes BFC"
     );
     // Parent height must enclose the child plus child's uncollapsed top and bottom margins:
     // current_y = child.top_margin(30) + child.height(50) + child.bottom_margin(25) = 105.0
     assert_eq!(
-        container.geometry.border_box.height,
-        105.0,
+        container.geometry.border_box.height, 105.0,
         "Parent auto height must enclose child plus uncollapsed top and bottom margins (105.0)"
     );
 }
-

@@ -1,9 +1,9 @@
 //! Hardware Swapchain Presentation Pipeline, Surface Presenter Trait, and Damage Scissoring.
 
-use std::time::{Duration, Instant};
-use strata_layout::Rect;
 use crate::compositor::{DamageTracker, DisplayList};
 use crate::rasterizer::FrameBuffer;
+use std::time::{Duration, Instant};
+use strata_layout::Rect;
 
 /// Color format for pixel data stored in the swapchain surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -84,17 +84,26 @@ impl SoftwareSurfacePresenter {
 
 impl SurfacePresenter for SoftwareSurfacePresenter {
     fn present(&mut self, buffer: &FrameBuffer, damage: Option<Rect>) -> Result<(), PresentError> {
-        let expected_size = (self.width as usize) * (self.height as usize) * self.format.bytes_per_pixel();
+        let expected_size =
+            (self.width as usize) * (self.height as usize) * self.format.bytes_per_pixel();
         if self.backing_buffer.len() < expected_size {
             return Err(PresentError::BufferTooSmall);
         }
 
         if let Some(damage_rect) = damage {
             self.damage_clipped_frames += 1;
-            let min_x = (damage_rect.x.floor() as isize).max(0).min(self.width as isize) as usize;
-            let max_x = (damage_rect.max_x().ceil() as isize).max(0).min(self.width as isize) as usize;
-            let min_y = (damage_rect.y.floor() as isize).max(0).min(self.height as isize) as usize;
-            let max_y = (damage_rect.max_y().ceil() as isize).max(0).min(self.height as isize) as usize;
+            let min_x = (damage_rect.x.floor() as isize)
+                .max(0)
+                .min(self.width as isize) as usize;
+            let max_x = (damage_rect.max_x().ceil() as isize)
+                .max(0)
+                .min(self.width as isize) as usize;
+            let min_y = (damage_rect.y.floor() as isize)
+                .max(0)
+                .min(self.height as isize) as usize;
+            let max_y = (damage_rect.max_y().ceil() as isize)
+                .max(0)
+                .min(self.height as isize) as usize;
 
             let bpp = self.format.bytes_per_pixel();
             let src_stride = buffer.width * 4;
@@ -108,7 +117,8 @@ impl SurfacePresenter for SoftwareSurfacePresenter {
                     let src_idx = src_row + x * 4;
                     let dst_idx = dst_row + x * bpp;
 
-                    if src_idx + 3 < buffer.pixels.len() && dst_idx + 3 < self.backing_buffer.len() {
+                    if src_idx + 3 < buffer.pixels.len() && dst_idx + 3 < self.backing_buffer.len()
+                    {
                         let r = buffer.pixels[src_idx];
                         let g = buffer.pixels[src_idx + 1];
                         let b = buffer.pixels[src_idx + 2];
@@ -135,7 +145,8 @@ impl SurfacePresenter for SoftwareSurfacePresenter {
                                 self.backing_buffer[dst_idx + 3] = a;
                             }
                             SwapchainFormat::Depth32Float => {
-                                let lum = (r as f32 * 0.299 + g as f32 * 0.587 + b as f32 * 0.114) / 255.0;
+                                let lum = (r as f32 * 0.299 + g as f32 * 0.587 + b as f32 * 0.114)
+                                    / 255.0;
                                 let bytes = lum.to_ne_bytes();
                                 self.backing_buffer[dst_idx..dst_idx + 4].copy_from_slice(&bytes);
                             }
@@ -149,7 +160,11 @@ impl SurfacePresenter for SoftwareSurfacePresenter {
                 let copy_len = self.backing_buffer.len().min(buffer.pixels.len());
                 self.backing_buffer[..copy_len].copy_from_slice(&buffer.pixels[..copy_len]);
             } else if self.format == SwapchainFormat::Bgra8Unorm {
-                for (dst, src) in self.backing_buffer.chunks_exact_mut(4).zip(buffer.pixels.chunks_exact(4)) {
+                for (dst, src) in self
+                    .backing_buffer
+                    .chunks_exact_mut(4)
+                    .zip(buffer.pixels.chunks_exact(4))
+                {
                     dst[0] = src[2]; // B
                     dst[1] = src[1]; // G
                     dst[2] = src[0]; // R
@@ -214,7 +229,8 @@ impl SwapchainCompositor {
         let pw = ((width as f32 * scale_factor) + 0.5) as usize;
         let ph = ((height as f32 * scale_factor) + 0.5) as usize;
         self.framebuffer = FrameBuffer::new(pw.max(1), ph.max(1));
-        self.damage_tracker.add_damage(Rect::new(0.0, 0.0, width as f32, height as f32));
+        self.damage_tracker
+            .add_damage(Rect::new(0.0, 0.0, width as f32, height as f32));
     }
 
     /// Renders display list and presents to target surface. Skips frame if clean and force_redraw is false.
@@ -240,7 +256,8 @@ impl SwapchainCompositor {
             if force_redraw {
                 self.framebuffer.execute_display_list(display_list);
             } else {
-                self.framebuffer.execute_display_list_damaged(display_list, damage_rect);
+                self.framebuffer
+                    .execute_display_list_damaged(display_list, damage_rect);
             }
         } else {
             self.framebuffer.execute_display_list(display_list);
@@ -345,7 +362,6 @@ impl HardwareSwapchainPresenter {
         }
     }
 
-
     /// Returns the last submitted hardware fence counter.
     pub fn last_submitted_fence(&self) -> u64 {
         self.current_fence
@@ -354,7 +370,8 @@ impl HardwareSwapchainPresenter {
 
 impl SurfacePresenter for HardwareSwapchainPresenter {
     fn present(&mut self, buffer: &FrameBuffer, damage: Option<Rect>) -> Result<(), PresentError> {
-        let expected_size = (self.width as usize) * (self.height as usize) * self.format.bytes_per_pixel();
+        let expected_size =
+            (self.width as usize) * (self.height as usize) * self.format.bytes_per_pixel();
         let idx = self.acquire_next_image()?;
         let target_buffer = &mut self.buffers[idx];
 
@@ -364,10 +381,18 @@ impl SurfacePresenter for HardwareSwapchainPresenter {
 
         if let Some(damage_rect) = damage {
             self.damage_clipped_frames += 1;
-            let min_x = (damage_rect.x.floor() as isize).max(0).min(self.width as isize) as usize;
-            let max_x = (damage_rect.max_x().ceil() as isize).max(0).min(self.width as isize) as usize;
-            let min_y = (damage_rect.y.floor() as isize).max(0).min(self.height as isize) as usize;
-            let max_y = (damage_rect.max_y().ceil() as isize).max(0).min(self.height as isize) as usize;
+            let min_x = (damage_rect.x.floor() as isize)
+                .max(0)
+                .min(self.width as isize) as usize;
+            let max_x = (damage_rect.max_x().ceil() as isize)
+                .max(0)
+                .min(self.width as isize) as usize;
+            let min_y = (damage_rect.y.floor() as isize)
+                .max(0)
+                .min(self.height as isize) as usize;
+            let max_y = (damage_rect.max_y().ceil() as isize)
+                .max(0)
+                .min(self.height as isize) as usize;
 
             let bpp = self.format.bytes_per_pixel();
             let src_stride = buffer.width * 4;
@@ -407,7 +432,8 @@ impl SurfacePresenter for HardwareSwapchainPresenter {
                                 target_buffer[dst_idx + 3] = a;
                             }
                             SwapchainFormat::Depth32Float => {
-                                let lum = (r as f32 * 0.299 + g as f32 * 0.587 + b as f32 * 0.114) / 255.0;
+                                let lum = (r as f32 * 0.299 + g as f32 * 0.587 + b as f32 * 0.114)
+                                    / 255.0;
                                 let bytes = lum.to_ne_bytes();
                                 target_buffer[dst_idx..dst_idx + 4].copy_from_slice(&bytes);
                             }
@@ -420,7 +446,10 @@ impl SurfacePresenter for HardwareSwapchainPresenter {
                 let copy_len = target_buffer.len().min(buffer.pixels.len());
                 target_buffer[..copy_len].copy_from_slice(&buffer.pixels[..copy_len]);
             } else if self.format == SwapchainFormat::Bgra8Unorm {
-                for (dst, src) in target_buffer.chunks_exact_mut(4).zip(buffer.pixels.chunks_exact(4)) {
+                for (dst, src) in target_buffer
+                    .chunks_exact_mut(4)
+                    .zip(buffer.pixels.chunks_exact(4))
+                {
                     dst[0] = src[2];
                     dst[1] = src[1];
                     dst[2] = src[0];
@@ -449,4 +478,3 @@ impl SurfacePresenter for HardwareSwapchainPresenter {
         (self.width, self.height)
     }
 }
-

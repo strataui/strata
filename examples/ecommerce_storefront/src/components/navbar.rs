@@ -1,7 +1,7 @@
 //! Top Navigation Bar for Apex Athletics Storefront.
 
-use strata::prelude::*;
 use crate::state::StoreState;
+use strata::prelude::*;
 
 #[component]
 pub fn Navbar(state: StoreState) -> View {

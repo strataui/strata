@@ -46,7 +46,12 @@ impl Form {
     }
 
     /// Register a field with an explicit initial value.
-    pub fn register_with_default(&self, name: &str, default_val: &str, rules: Vec<ValidationRule<String>>) -> FormField {
+    pub fn register_with_default(
+        &self,
+        name: &str,
+        default_val: &str,
+        rules: Vec<ValidationRule<String>>,
+    ) -> FormField {
         let mut fields = self.fields.borrow_mut();
         if let Some(f) = fields.get(name) {
             f.clone()
@@ -132,7 +137,10 @@ mod tests {
     fn test_form_lifecycle_and_submission() {
         let form = use_form();
         let email_field = form.register("email", vec![ValidationRule::email("Invalid email")]);
-        let pass_field = form.register("password", vec![ValidationRule::min_length(6, "Password too short")]);
+        let pass_field = form.register(
+            "password",
+            vec![ValidationRule::min_length(6, "Password too short")],
+        );
 
         // Attempt submit while empty
         let mut submitted = false;
@@ -154,7 +162,10 @@ mod tests {
             received_values = values;
         });
         assert!(success2);
-        assert_eq!(received_values.get("email").unwrap(), "developer@strata.dev");
+        assert_eq!(
+            received_values.get("email").unwrap(),
+            "developer@strata.dev"
+        );
         assert_eq!(received_values.get("password").unwrap(), "secure_pass_123");
     }
 }

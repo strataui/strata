@@ -102,7 +102,12 @@ impl WebSocketCodec {
             if buf.len() < offset + 4 {
                 return Err("Incomplete masking key");
             }
-            let key = [buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]];
+            let key = [
+                buf[offset],
+                buf[offset + 1],
+                buf[offset + 2],
+                buf[offset + 3],
+            ];
             offset += 4;
             Some(key)
         } else {
@@ -417,12 +422,12 @@ impl CdpDomNode {
                     .unwrap_or(false)
             })
         } else if let Some(id_name) = sel.strip_prefix('#') {
-            self.find_first_matching(&|n| {
-                n.get_attribute("id").as_deref() == Some(id_name)
-            })
+            self.find_first_matching(&|n| n.get_attribute("id").as_deref() == Some(id_name))
         } else {
             let tag_lower = sel.to_lowercase();
-            self.find_first_matching(&|n| n.local_name == tag_lower || n.node_name.to_lowercase() == tag_lower)
+            self.find_first_matching(&|n| {
+                n.local_name == tag_lower || n.node_name.to_lowercase() == tag_lower
+            })
         }
     }
 
@@ -690,9 +695,18 @@ fn build_cdp_node_from_blueprint_recursive(
 /// Serializes a `ComputedStyle` into standard CSS name/value pairs.
 pub fn format_computed_style(style: &strata_style::ComputedStyle) -> Vec<(String, String)> {
     let mut props = Vec::with_capacity(32);
-    props.push(("display".to_string(), format!("{:?}", style.display).to_lowercase()));
-    props.push(("position".to_string(), format!("{:?}", style.position).to_lowercase()));
-    props.push(("box-sizing".to_string(), format!("{:?}", style.box_sizing).to_lowercase()));
+    props.push((
+        "display".to_string(),
+        format!("{:?}", style.display).to_lowercase(),
+    ));
+    props.push((
+        "position".to_string(),
+        format!("{:?}", style.position).to_lowercase(),
+    ));
+    props.push((
+        "box-sizing".to_string(),
+        format!("{:?}", style.box_sizing).to_lowercase(),
+    ));
 
     // Dimensions
     props.push(("width".to_string(), format_dimension(style.width)));
@@ -703,16 +717,40 @@ pub fn format_computed_style(style: &strata_style::ComputedStyle) -> Vec<(String
     props.push(("max-height".to_string(), format_dimension(style.max_height)));
 
     // Margin
-    props.push(("margin-top".to_string(), format!("{:.1}px", style.margin.top)));
-    props.push(("margin-right".to_string(), format!("{:.1}px", style.margin.right)));
-    props.push(("margin-bottom".to_string(), format!("{:.1}px", style.margin.bottom)));
-    props.push(("margin-left".to_string(), format!("{:.1}px", style.margin.left)));
+    props.push((
+        "margin-top".to_string(),
+        format!("{:.1}px", style.margin.top),
+    ));
+    props.push((
+        "margin-right".to_string(),
+        format!("{:.1}px", style.margin.right),
+    ));
+    props.push((
+        "margin-bottom".to_string(),
+        format!("{:.1}px", style.margin.bottom),
+    ));
+    props.push((
+        "margin-left".to_string(),
+        format!("{:.1}px", style.margin.left),
+    ));
 
     // Padding
-    props.push(("padding-top".to_string(), format!("{:.1}px", style.padding.top)));
-    props.push(("padding-right".to_string(), format!("{:.1}px", style.padding.right)));
-    props.push(("padding-bottom".to_string(), format!("{:.1}px", style.padding.bottom)));
-    props.push(("padding-left".to_string(), format!("{:.1}px", style.padding.left)));
+    props.push((
+        "padding-top".to_string(),
+        format!("{:.1}px", style.padding.top),
+    ));
+    props.push((
+        "padding-right".to_string(),
+        format!("{:.1}px", style.padding.right),
+    ));
+    props.push((
+        "padding-bottom".to_string(),
+        format!("{:.1}px", style.padding.bottom),
+    ));
+    props.push((
+        "padding-left".to_string(),
+        format!("{:.1}px", style.padding.left),
+    ));
 
     // Insets
     props.push(("top".to_string(), format_dimension(style.insets.top)));
@@ -721,11 +759,23 @@ pub fn format_computed_style(style: &strata_style::ComputedStyle) -> Vec<(String
     props.push(("left".to_string(), format_dimension(style.insets.left)));
 
     // Flexbox
-    props.push(("flex-direction".to_string(), format!("{:?}", style.flex_direction).to_lowercase()));
+    props.push((
+        "flex-direction".to_string(),
+        format!("{:?}", style.flex_direction).to_lowercase(),
+    ));
     props.push(("flex-grow".to_string(), format!("{:.2}", style.flex_grow)));
-    props.push(("flex-shrink".to_string(), format!("{:.2}", style.flex_shrink)));
-    props.push(("justify-content".to_string(), format!("{:?}", style.justify_content).to_lowercase()));
-    props.push(("align-items".to_string(), format!("{:?}", style.align_items).to_lowercase()));
+    props.push((
+        "flex-shrink".to_string(),
+        format!("{:.2}", style.flex_shrink),
+    ));
+    props.push((
+        "justify-content".to_string(),
+        format!("{:?}", style.justify_content).to_lowercase(),
+    ));
+    props.push((
+        "align-items".to_string(),
+        format!("{:?}", style.align_items).to_lowercase(),
+    ));
     props.push(("gap".to_string(), format!("{:.1}px", style.gap)));
 
     // Color & Typography
@@ -968,15 +1018,17 @@ impl CdpDispatcher {
     /// Records a live reactive signal or component state property for DevTools inspection.
     pub fn update_runtime_signal(&self, name: &str, value: &str) {
         if let Ok(mut state) = self.state.write() {
-            state.runtime_signals.insert(name.to_string(), value.to_string());
+            state
+                .runtime_signals
+                .insert(name.to_string(), value.to_string());
         }
     }
 
     /// Dispatches incoming CDP requests to supported domains (`DOM`, `CSS`, `Performance`, `Page`, `Runtime`).
     pub fn handle_request(&self, request: &CdpRequest) -> CdpResponse {
         match request.method.as_str() {
-            "DOM.enable" | "CSS.enable" | "Page.enable" | "Network.enable" | "Performance.enable"
-            | "Runtime.enable" => CdpResponse::success(request.id, "{}"),
+            "DOM.enable" | "CSS.enable" | "Page.enable" | "Network.enable"
+            | "Performance.enable" | "Runtime.enable" => CdpResponse::success(request.id, "{}"),
             "DOM.getDocument" => {
                 let state = self.state.read().unwrap();
                 if let Some(tree) = &state.dom_tree {
@@ -1068,7 +1120,10 @@ impl CdpDispatcher {
                 };
                 CdpResponse::success(
                     request.id,
-                    format!(r#"{{"result":{{"type":"string","value":"{}"}}}}"#, result_val),
+                    format!(
+                        r#"{{"result":{{"type":"string","value":"{}"}}}}"#,
+                        result_val
+                    ),
                 )
             }
             "DOM.setNodeValue" => {
@@ -1105,24 +1160,32 @@ impl CdpDispatcher {
             "DOM.querySelector" => {
                 let selector = request.get_string_param("selector").unwrap_or_default();
                 let state = self.state.read().unwrap();
-                let found_id = state.dom_tree.as_ref().and_then(|t| t.query_selector(&selector)).unwrap_or(0);
+                let found_id = state
+                    .dom_tree
+                    .as_ref()
+                    .and_then(|t| t.query_selector(&selector))
+                    .unwrap_or(0);
                 CdpResponse::success(request.id, format!(r#"{{"nodeId":{}}}"#, found_id))
             }
             "DOM.querySelectorAll" => {
                 let selector = request.get_string_param("selector").unwrap_or_default();
                 let state = self.state.read().unwrap();
-                let found_ids = state.dom_tree.as_ref().map(|t| t.query_selector_all(&selector)).unwrap_or_default();
+                let found_ids = state
+                    .dom_tree
+                    .as_ref()
+                    .map(|t| t.query_selector_all(&selector))
+                    .unwrap_or_default();
                 let mut json = String::from(r#"{"nodeIds":["#);
                 for (i, id) in found_ids.iter().enumerate() {
-                    if i > 0 { json.push(','); }
+                    if i > 0 {
+                        json.push(',');
+                    }
                     json.push_str(&id.to_string());
                 }
                 json.push_str("]}");
                 CdpResponse::success(request.id, json)
             }
-            "DOM.requestChildNodes" => {
-                CdpResponse::success(request.id, "{}")
-            }
+            "DOM.requestChildNodes" => CdpResponse::success(request.id, "{}"),
             "CSS.setStyleTexts" => {
                 let node_id = request.get_u64_param("nodeId").unwrap_or(2);
                 let text = request.get_string_param("text").unwrap_or_default();
@@ -1151,21 +1214,30 @@ impl CdpDispatcher {
 
                 let mut json = String::from(r#"{"styles":[{"cssProperties":["#);
                 for (i, (name, val)) in updated_props.iter().enumerate() {
-                    if i > 0 { json.push(','); }
-                    json.push_str(&format!(r#"{{"name":"{}","value":"{}"}}"#, name, escape_json(val)));
+                    if i > 0 {
+                        json.push(',');
+                    }
+                    json.push_str(&format!(
+                        r#"{{"name":"{}","value":"{}"}}"#,
+                        name,
+                        escape_json(val)
+                    ));
                 }
                 json.push_str(r#"],"shorthandEntries":[]}]}"#);
                 CdpResponse::success(request.id, json)
             }
-            "CSS.getMatchedStylesForNode" => {
-                CdpResponse::success(request.id, r#"{"matchedCSSRules":[],"pseudoElements":[],"inherited":[],"cssKeyframesRules":[]}"#)
-            }
+            "CSS.getMatchedStylesForNode" => CdpResponse::success(
+                request.id,
+                r#"{"matchedCSSRules":[],"pseudoElements":[],"inherited":[],"cssKeyframesRules":[]}"#,
+            ),
             "Runtime.getProperties" => {
                 let state = self.state.read().unwrap();
                 let mut props_json = String::from(r#"{"result":["#);
                 let mut first = true;
                 for (key, val) in &state.runtime_signals {
-                    if !first { props_json.push(','); }
+                    if !first {
+                        props_json.push(',');
+                    }
                     first = false;
                     props_json.push_str(&format!(
                         r#"{{"name":"{}","value":{{"type":"string","value":"{}"}},"writable":true,"enumerable":true,"configurable":true}}"#,
@@ -1173,7 +1245,9 @@ impl CdpDispatcher {
                         escape_json(val)
                     ));
                 }
-                if !first { props_json.push(','); }
+                if !first {
+                    props_json.push(',');
+                }
                 props_json.push_str(&format!(
                     r#"{{"name":"frameCount","value":{{"type":"number","value":{}}},"writable":false,"enumerable":true,"configurable":true}},{{"name":"layoutCount","value":{{"type":"number","value":{}}},"writable":false,"enumerable":true,"configurable":true}}"#,
                     state.frame_count, state.layout_count

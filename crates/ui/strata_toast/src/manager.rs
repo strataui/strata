@@ -1,9 +1,9 @@
 //! Reactive Toast Manager & Global Imperative Dispatcher.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use strata_dom::Signal;
 use crate::stack::{compute_stack_layout, StackedToastVisual};
 use crate::toast::{ToastItem, ToastKind, ToastPosition};
+use std::sync::atomic::{AtomicU64, Ordering};
+use strata_dom::Signal;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 

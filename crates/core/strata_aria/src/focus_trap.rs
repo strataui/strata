@@ -86,7 +86,11 @@ mod tests {
 
     #[test]
     fn test_focus_trap_cycle() {
-        let items = vec!["input-name".to_string(), "input-email".to_string(), "btn-submit".to_string()];
+        let items = vec![
+            "input-name".to_string(),
+            "input-email".to_string(),
+            "btn-submit".to_string(),
+        ];
         let mut trap = FocusTrap::new(items);
 
         assert!(!trap.active.get());

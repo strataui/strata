@@ -1,5 +1,5 @@
-use strata_layout::prelude::*;
 use strata_layout::exclusions::{ExclusionKind, ExclusionSpace};
+use strata_layout::prelude::*;
 use strata_style::types::*;
 
 #[test]
@@ -7,10 +7,7 @@ fn test_exclusion_space_opportunity_query() {
     let mut es = ExclusionSpace::new();
 
     // Left float: [0, 0, 100, 100]
-    es.add_exclusion(
-        Rect::new(0.0, 0.0, 100.0, 100.0),
-        ExclusionKind::FloatLeft,
-    );
+    es.add_exclusion(Rect::new(0.0, 0.0, 100.0, 100.0), ExclusionKind::FloatLeft);
 
     // Right float: [350, 0, 150, 150] in 500px container
     es.add_exclusion(
@@ -44,10 +41,7 @@ fn test_clearance_calculation() {
     let mut es = ExclusionSpace::new();
 
     // Left float height 100
-    es.add_exclusion(
-        Rect::new(0.0, 0.0, 120.0, 100.0),
-        ExclusionKind::FloatLeft,
-    );
+    es.add_exclusion(Rect::new(0.0, 0.0, 120.0, 100.0), ExclusionKind::FloatLeft);
 
     // Right float height 160
     es.add_exclusion(
@@ -92,12 +86,23 @@ fn test_ifc_line_wrapping_around_float() {
     assert!(res.lines.len() >= 4, "Expected at least 4 wrapped lines");
 
     // Lines 1 and 2 (within y = 0..45) must be narrowed to fit beside the 150px right float (max available = 250px)
-    assert!(res.lines[0].bounds.width <= 250.0, "Line 0 width {} should be <= 250.0", res.lines[0].bounds.width);
-    assert!(res.lines[1].bounds.width <= 250.0, "Line 1 width {} should be <= 250.0", res.lines[1].bounds.width);
+    assert!(
+        res.lines[0].bounds.width <= 250.0,
+        "Line 0 width {} should be <= 250.0",
+        res.lines[0].bounds.width
+    );
+    assert!(
+        res.lines[1].bounds.width <= 250.0,
+        "Line 1 width {} should be <= 250.0",
+        res.lines[1].bounds.width
+    );
 
     // Lines from y >= 45 should have available width up to 400px and can exceed 250px
     let later_line_expanded = res.lines[2..].iter().any(|l| l.bounds.width > 250.0);
-    assert!(later_line_expanded, "Expected lines past the float bottom to expand beyond 250.0px");
+    assert!(
+        later_line_expanded,
+        "Expected lines past the float bottom to expand beyond 250.0px"
+    );
 }
 
 #[test]
@@ -295,7 +300,11 @@ fn test_infobox_table_float_and_nested_rows() {
     println!("Row 1 border_box: {:?}", r1.geometry.border_box);
     println!("Row 2 border_box: {:?}", r2.geometry.border_box);
     assert_eq!(r1.geometry.border_box.y, 0.0);
-    assert!(r2.geometry.border_box.y > 15.0, "Row 2 y {} must be > 15.0", r2.geometry.border_box.y);
+    assert!(
+        r2.geometry.border_box.y > 15.0,
+        "Row 2 y {} must be > 15.0",
+        r2.geometry.border_box.y
+    );
 }
 
 #[test]
@@ -434,4 +443,3 @@ fn test_bfc_internal_floats_contained_and_do_not_leak() {
     assert_eq!(container.children[1].geometry.border_box.x, 0.0);
     assert_eq!(container.children[1].geometry.border_box.y, 120.0);
 }
-

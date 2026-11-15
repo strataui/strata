@@ -12,16 +12,50 @@ static NEXT_DOM_UID: AtomicU64 = AtomicU64::new(1);
 /// Types of live client-side DOM mutations emitted during script evaluation or native DOM manipulation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DomMutationType {
-    ChildAppended { parent_uid: u64, child_uid: u64 },
-    ChildPrepended { parent_uid: u64, child_uid: u64 },
-    ChildInserted { parent_uid: u64, child_uid: u64, before_uid: Option<u64> },
-    ChildRemoved { parent_uid: u64, child_uid: u64 },
-    ChildReplaced { parent_uid: u64, new_child_uid: u64, old_child_uid: u64 },
-    AttributeSet { node_uid: u64, name: String, value: String },
-    AttributeRemoved { node_uid: u64, name: String },
-    TextContentChanged { node_uid: u64, new_text: String },
-    InnerHtmlChanged { node_uid: u64, html: String },
-    StyleChanged { node_uid: u64, property: String, value: String },
+    ChildAppended {
+        parent_uid: u64,
+        child_uid: u64,
+    },
+    ChildPrepended {
+        parent_uid: u64,
+        child_uid: u64,
+    },
+    ChildInserted {
+        parent_uid: u64,
+        child_uid: u64,
+        before_uid: Option<u64>,
+    },
+    ChildRemoved {
+        parent_uid: u64,
+        child_uid: u64,
+    },
+    ChildReplaced {
+        parent_uid: u64,
+        new_child_uid: u64,
+        old_child_uid: u64,
+    },
+    AttributeSet {
+        node_uid: u64,
+        name: String,
+        value: String,
+    },
+    AttributeRemoved {
+        node_uid: u64,
+        name: String,
+    },
+    TextContentChanged {
+        node_uid: u64,
+        new_text: String,
+    },
+    InnerHtmlChanged {
+        node_uid: u64,
+        html: String,
+    },
+    StyleChanged {
+        node_uid: u64,
+        property: String,
+        value: String,
+    },
 }
 
 /// A fine-grained record describing an individual DOM mutation.
@@ -194,7 +228,10 @@ impl DomNode {
     pub fn set_attribute(&self, name: &str, val: &str) {
         let mut inner = self.inner.borrow_mut();
         let uid = inner.uid;
-        if let DomNodeType::Element { ref mut attributes, .. } = inner.node_type {
+        if let DomNodeType::Element {
+            ref mut attributes, ..
+        } = inner.node_type
+        {
             attributes.insert(name.to_ascii_lowercase(), val.to_string());
         }
         drop(inner);
@@ -211,7 +248,10 @@ impl DomNode {
     pub fn remove_attribute(&self, name: &str) {
         let mut inner = self.inner.borrow_mut();
         let uid = inner.uid;
-        if let DomNodeType::Element { ref mut attributes, .. } = inner.node_type {
+        if let DomNodeType::Element {
+            ref mut attributes, ..
+        } = inner.node_type
+        {
             attributes.remove(&name.to_ascii_lowercase());
         }
         drop(inner);
@@ -329,7 +369,9 @@ impl DomNode {
         match &inner.node_type {
             DomNodeType::Text(s) => s.clone(),
             DomNodeType::Comment(c) => format!("<!--{c}-->"),
-            DomNodeType::Element { tag, attributes, .. } => {
+            DomNodeType::Element {
+                tag, attributes, ..
+            } => {
                 let mut out = format!("<{tag}");
                 for (k, v) in attributes {
                     out.push_str(&format!(" {k}=\"{v}\""));
@@ -395,7 +437,9 @@ impl DomNode {
     pub fn previous_sibling(&self) -> Option<DomNode> {
         let parent = self.parent_node()?;
         let siblings = parent.children();
-        let idx = siblings.iter().position(|c| Rc::ptr_eq(&c.inner, &self.inner))?;
+        let idx = siblings
+            .iter()
+            .position(|c| Rc::ptr_eq(&c.inner, &self.inner))?;
         if idx > 0 {
             Some(siblings[idx - 1].clone())
         } else {
@@ -406,7 +450,9 @@ impl DomNode {
     pub fn next_sibling(&self) -> Option<DomNode> {
         let parent = self.parent_node()?;
         let siblings = parent.children();
-        let idx = siblings.iter().position(|c| Rc::ptr_eq(&c.inner, &self.inner))?;
+        let idx = siblings
+            .iter()
+            .position(|c| Rc::ptr_eq(&c.inner, &self.inner))?;
         if idx + 1 < siblings.len() {
             Some(siblings[idx + 1].clone())
         } else {
@@ -574,7 +620,11 @@ impl DomNode {
         let child_uid = child.uid();
         let mut inner = self.inner.borrow_mut();
         let before_len = inner.children.len();
-        if let Some(pos) = inner.children.iter().position(|c| Rc::ptr_eq(&c.inner, &child.inner)) {
+        if let Some(pos) = inner
+            .children
+            .iter()
+            .position(|c| Rc::ptr_eq(&c.inner, &child.inner))
+        {
             inner.children.remove(pos);
             child.inner.borrow_mut().parent = None;
         }
@@ -693,10 +743,7 @@ impl DomNode {
             return self.id().map(|v| v == id).unwrap_or(false);
         }
         if let Some(class) = selector.strip_prefix('.') {
-            return self
-                .class_name()
-                .split_whitespace()
-                .any(|c| c == class);
+            return self.class_name().split_whitespace().any(|c| c == class);
         }
         if let Some(tag) = self.tag_name() {
             if tag.eq_ignore_ascii_case(selector) {
@@ -733,7 +780,10 @@ impl DomNode {
             let this_val = engine.dom_node_to_js(self);
             engine.current_scope.borrow_mut().declare("this", this_val);
             if let Some(ev_val) = args.first() {
-                engine.current_scope.borrow_mut().declare("event", ev_val.clone());
+                engine
+                    .current_scope
+                    .borrow_mut()
+                    .declare("event", ev_val.clone());
             }
             let _ = engine.eval(&code);
         }
@@ -752,12 +802,18 @@ impl DomNode {
         }
     }
 
-    pub fn dispatch_event_with_bubbling(&self, event: &str, event_obj: JsValue, engine: &mut JsEngine) {
+    pub fn dispatch_event_with_bubbling(
+        &self,
+        event: &str,
+        event_obj: JsValue,
+        engine: &mut JsEngine,
+    ) {
         let mut current = Some(self.clone());
         while let Some(node) = current {
             node.dispatch_event_with_args(event, vec![event_obj.clone()], engine);
 
-            let propagation_stopped = event_obj.get_prop("__propagation_stopped__") == Some(JsValue::Bool(true));
+            let propagation_stopped =
+                event_obj.get_prop("__propagation_stopped__") == Some(JsValue::Bool(true));
             if propagation_stopped {
                 break;
             }
@@ -770,7 +826,20 @@ impl DomNode {
 fn is_void_element(tag: &str) -> bool {
     matches!(
         tag.to_ascii_lowercase().as_str(),
-        "area" | "base" | "br" | "col" | "embed" | "hr" | "img" | "input" | "link" | "meta" | "param" | "source" | "track" | "wbr"
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
     )
 }
 
@@ -793,7 +862,10 @@ fn find_matching_close_pos(html: &str, tag_name: &str) -> Option<usize> {
                 continue;
             } else if rem.to_ascii_lowercase().starts_with(&open_prefix) {
                 let next_char = rem[open_prefix.len()..].chars().next();
-                if matches!(next_char, Some(' ') | Some('\t') | Some('\n') | Some('\r') | Some('>') | Some('/')) {
+                if matches!(
+                    next_char,
+                    Some(' ') | Some('\t') | Some('\n') | Some('\r') | Some('>') | Some('/')
+                ) {
                     if let Some(end_idx) = rem.find('>') {
                         let tag_str = &rem[..end_idx + 1];
                         if !tag_str.ends_with("/>") && !is_void_element(tag_name) {
@@ -1076,4 +1148,3 @@ impl Document {
         self.html.outer_html()
     }
 }
-

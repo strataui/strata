@@ -1,7 +1,7 @@
 //! Universal History and Location State Management.
 
-use std::collections::HashMap;
 use crate::matcher::{normalize_path, parse_query_string};
+use std::collections::HashMap;
 
 /// Action describing how a navigation event occurred.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

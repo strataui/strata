@@ -113,12 +113,16 @@ fn test_app_runtime_devtools_hud_f12_toggle_and_profiler_timing() {
     };
     let intercepted = runtime.step_event(&f12);
     assert!(intercepted, "F12 key event must be intercepted by DevTools");
-    assert!(runtime.devtools().unwrap().hud.state.is_visible, "HUD must become visible upon F12");
+    assert!(
+        runtime.devtools().unwrap().hud.state.is_visible,
+        "HUD must become visible upon F12"
+    );
 
     // Ticking frame with HUD visible appends HUD overlay to display list
     runtime.tick_frame();
     if let Some(ref mut dt) = runtime.devtools {
-        dt.hud.render_overlay(Some(&dt.profiler), &mut runtime.display_list);
+        dt.hud
+            .render_overlay(Some(&dt.profiler), &mut runtime.display_list);
     }
 
     // Verify display list contains HUD commands
@@ -127,4 +131,3 @@ fn test_app_runtime_devtools_hud_f12_toggle_and_profiler_timing() {
         "Display list must include HUD background, nav bar, and diagnostics"
     );
 }
-
