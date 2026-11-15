@@ -81,6 +81,7 @@ pub struct Event {
     pub detail: i32,
     pub pointer_id: i32,
     pub pointer_capture_requested: std::rc::Rc<Cell<Option<bool>>>,
+    pub cursor_warp_requested: std::rc::Rc<Cell<Option<(f64, f64)>>>,
 
     // Element Layout Measurement Properties (ResizeObserver / onresize)
     pub width: f64,
@@ -140,6 +141,7 @@ impl Default for Event {
             detail: 0,
             pointer_id: 1,
             pointer_capture_requested: std::rc::Rc::new(Cell::new(None)),
+            cursor_warp_requested: std::rc::Rc::new(Cell::new(None)),
             width: 0.0,
             height: 0.0,
             key: String::new(),
@@ -179,6 +181,17 @@ impl Event {
     /// Releases an active pointer capture on the current event target.
     pub fn release_pointer_capture(&self, _pointer_id: i32) {
         self.pointer_capture_requested.set(Some(false));
+    }
+
+    /// Requests warping the OS pointer to window-local coordinates `(x, y)` and
+    /// suppresses the resulting synthetic jump from `movement_x` / `movement_y`.
+    pub fn set_cursor_position(&self, x: f64, y: f64) {
+        self.cursor_warp_requested.set(Some((x, y)));
+    }
+
+    /// Alias for [`Event::set_cursor_position`].
+    pub fn warp_cursor(&self, x: f64, y: f64) {
+        self.set_cursor_position(x, y);
     }
 
     pub fn with_value(event_type: EventType, val: impl Into<String>) -> Self {

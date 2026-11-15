@@ -331,7 +331,31 @@ impl AppRuntime {
             }
         }
 
+        let (movement_x, movement_y) = if let Some((wx, wy)) = self.pending_cursor_warp {
+            if (px - wx).abs() <= 2.5 && (py - wy).abs() <= 2.5 {
+                self.pending_cursor_warp = None;
+                self.last_pointer_pos = Some((px, py));
+                (0.0, 0.0)
+            } else {
+                self.pending_cursor_warp = None;
+                let delta = self
+                    .last_pointer_pos
+                    .map(|(lx, ly)| ((px - lx) as f64, (py - ly) as f64))
+                    .unwrap_or((0.0, 0.0));
+                self.last_pointer_pos = Some((px, py));
+                delta
+            }
+        } else {
+            let delta = self
+                .last_pointer_pos
+                .map(|(lx, ly)| ((px - lx) as f64, (py - ly) as f64))
+                .unwrap_or((0.0, 0.0));
+            self.last_pointer_pos = Some((px, py));
+            delta
+        };
+
         let mut dom_handled = false;
+        let mut requested_warp: Option<(f64, f64)> = None;
         let capture = self.pointer_capture_target.clone();
         for ev_type in [
             strata_dom::EventType::PointerMove,
@@ -346,13 +370,19 @@ impl AppRuntime {
                         ev_type,
                     ) {
                         let target_box_copy = *target_box;
-                        let ev =
+                        let mut ev =
                             self.create_mouse_event(ev_type, px, py, 0, 0, Some(&target_box_copy));
+                        ev.movement_x = movement_x;
+                        ev.movement_y = movement_y;
                         let capture_req = ev.pointer_capture_requested.clone();
+                        let warp_req = ev.cursor_warp_requested.clone();
                         handler(ev);
                         dom_handled = true;
                         if capture_req.get() == Some(false) {
                             self.pointer_capture_target = None;
+                        }
+                        if let Some(pos) = warp_req.get() {
+                            requested_warp = Some(pos);
                         }
                     }
                 }
@@ -368,9 +398,16 @@ impl AppRuntime {
                         )
                     {
                         hit_eid = Some(eid);
-                        let ev = self.create_mouse_event(ev_type, px, py, 0, 0, Some(target_box));
+                        let mut ev =
+                            self.create_mouse_event(ev_type, px, py, 0, 0, Some(target_box));
+                        ev.movement_x = movement_x;
+                        ev.movement_y = movement_y;
+                        let warp_req = ev.cursor_warp_requested.clone();
                         handler(ev);
                         dom_handled = true;
+                        if let Some(pos) = warp_req.get() {
+                            requested_warp = Some(pos);
+                        }
                     }
                     if let Some((handler, target_box, cap_eid)) = Self::find_event_at_or_above_path(
                         &self.root_blueprint,
@@ -380,7 +417,7 @@ impl AppRuntime {
                     ) {
                         if hit_eid != Some(cap_eid) {
                             let target_box_copy = *target_box;
-                            let ev = self.create_mouse_event(
+                            let mut ev = self.create_mouse_event(
                                 ev_type,
                                 px,
                                 py,
@@ -388,8 +425,14 @@ impl AppRuntime {
                                 0,
                                 Some(&target_box_copy),
                             );
+                            ev.movement_x = movement_x;
+                            ev.movement_y = movement_y;
+                            let warp_req = ev.cursor_warp_requested.clone();
                             handler(ev);
                             dom_handled = true;
+                            if let Some(pos) = warp_req.get() {
+                                requested_warp = Some(pos);
+                            }
                         }
                     }
                 }
@@ -401,12 +444,22 @@ impl AppRuntime {
                         py,
                         ev_type,
                     ) {
-                        let ev = self.create_mouse_event(ev_type, px, py, 0, 0, Some(target_box));
+                        let mut ev =
+                            self.create_mouse_event(ev_type, px, py, 0, 0, Some(target_box));
+                        ev.movement_x = movement_x;
+                        ev.movement_y = movement_y;
+                        let warp_req = ev.cursor_warp_requested.clone();
                         handler(ev);
                         dom_handled = true;
+                        if let Some(pos) = warp_req.get() {
+                            requested_warp = Some(pos);
+                        }
                     }
                 }
             }
+        }
+        if let Some((wx, wy)) = requested_warp {
+            self.warp_cursor(wx as f32, wy as f32);
         }
 
         if dom_handled {

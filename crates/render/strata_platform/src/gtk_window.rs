@@ -1307,60 +1307,98 @@ pub fn blend_mode_to_cairo_operator(mode: strata_style::types::BlendMode) -> cai
     }
 }
 
-/// One rasterized 3D viewport frame, keyed by scene identity and pixel size.
+///// One rasterized 3D viewport frame, keyed by scene identity and pixel size.
 struct Viewport3DCacheEntry {
     /// Held so the allocation, and therefore the pointer identity, stays valid.
     scene: std::sync::Arc<strata_render::scene3d::Scene3D>,
     width: usize,
     height: usize,
+    is_half_res: bool,
     surface: cairo::ImageSurface,
+}
+
+struct Viewport3DSurfaceResult {
+    surface: cairo::ImageSurface,
+    src_width: usize,
+    src_height: usize,
+    needs_debounced_full_res: bool,
 }
 
 thread_local! {
     static VIEWPORT_3D_CACHE: std::cell::RefCell<Vec<Viewport3DCacheEntry>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    static VIEWPORT_3D_SCRATCH_FB: std::cell::RefCell<Option<strata_render::rasterizer::FrameBuffer>> =
+        const { std::cell::RefCell::new(None) };
+    static VIEWPORT_3D_LAST_RASTER_AT: std::cell::Cell<Option<std::time::Instant>> =
+        const { std::cell::Cell::new(None) };
+    static VIEWPORT_3D_RESIZE_DEBOUNCE: std::cell::Cell<Option<(usize, usize, std::time::Instant)>> =
+        const { std::cell::Cell::new(None) };
+    static VIEWPORT_3D_DEBOUNCE_SCHEDULED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+    static IN_LIVE_GTK_DRAW: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+    static CURRENT_DRAWING_AREA: std::cell::RefCell<Option<gtk::DrawingArea>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Maximum number of rasterized viewport frames kept alive.
 const VIEWPORT_3D_CACHE_CAPACITY: usize = 4;
+const VIEWPORT_3D_RESIZE_DEBOUNCE_MS: u64 = 80;
+const VIEWPORT_3D_INTERACTIVE_WINDOW_MS: u64 = 45;
 
-/// Returns the cairo surface for a 3D viewport, software-rasterizing it only
-/// when this exact `Arc<Scene3D>` has not been drawn at this size before.
-///
-/// Scenes are immutable behind the `Arc`, so pointer identity covers camera,
-/// meshes, overlay and texture changes: any change produces a new `Arc`.
-fn viewport_3d_surface(
+fn schedule_viewport_3d_debounced_redraw() {
+    let already = VIEWPORT_3D_DEBOUNCE_SCHEDULED.with(|s| {
+        if s.get() {
+            true
+        } else {
+            s.set(true);
+            false
+        }
+    });
+    if already {
+        return;
+    }
+    gtk::glib::timeout_add_local_once(
+        std::time::Duration::from_millis(VIEWPORT_3D_RESIZE_DEBOUNCE_MS + 5),
+        move || {
+            VIEWPORT_3D_DEBOUNCE_SCHEDULED.with(|s| s.set(false));
+            CURRENT_DRAWING_AREA.with(|da| {
+                if let Some(widget) = da.borrow().as_ref() {
+                    use gtk::prelude::WidgetExt;
+                    widget.queue_draw();
+                }
+            });
+        },
+    );
+}
+
+fn rasterize_scene_3d_to_cairo_surface(
     scene: &std::sync::Arc<strata_render::scene3d::Scene3D>,
     w: usize,
     h: usize,
 ) -> Option<cairo::ImageSurface> {
-    let hit = VIEWPORT_3D_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        let idx = cache.iter().position(|e| {
-            std::sync::Arc::ptr_eq(&e.scene, scene) && e.width == w && e.height == h
-        })?;
-        // Move to the back so the front is always least recently used.
-        let entry = cache.remove(idx);
-        let surface = entry.surface.clone();
-        cache.push(entry);
-        Some(surface)
-    });
-    if hit.is_some() {
-        return hit;
-    }
-
-    let mut fb = strata_render::rasterizer::FrameBuffer::new(w, h);
-    strata_render::rasterizer3d::render_scene_3d_with_textures(
-        &mut fb,
-        strata_layout::Rect::new(0.0, 0.0, w as f32, h as f32),
-        scene,
-        None,
-        scene.textures_deref(),
-    );
-
     let mut surface =
         cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32).ok()?;
-    {
+    VIEWPORT_3D_SCRATCH_FB.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        let fb = match scratch.as_mut() {
+            Some(fb) if fb.width == w && fb.height == h => {
+                fb.pixels.fill(0);
+                fb
+            }
+            _ => {
+                *scratch = Some(strata_render::rasterizer::FrameBuffer::new(w, h));
+                scratch.as_mut().expect("just initialized")
+            }
+        };
+        strata_render::rasterizer3d::render_scene_3d_with_textures(
+            fb,
+            strata_layout::Rect::new(0.0, 0.0, w as f32, h as f32),
+            scene,
+            None,
+            scene.textures_deref(),
+        );
+
         let mut data = surface.data().ok()?;
         for (src, dst) in fb.pixels.chunks_exact(4).zip(data.chunks_exact_mut(4)) {
             let r = src[0] as u32;
@@ -1384,7 +1422,111 @@ fn viewport_3d_surface(
                 dst[3] = a as u8;
             }
         }
+        Some(())
+    })?;
+    Some(surface)
+}
+
+/// Returns the cairo surface for a 3D viewport, software-rasterizing it only
+/// when this exact `Arc<Scene3D>` has not been drawn at this size before.
+///
+/// During interactive resize or rapid camera pan/zoom in live GTK windows, returns a fast
+/// scaled cached surface or half-res rasterization and schedules a debounced full-res redraw.
+fn viewport_3d_surface_with_fallback(
+    scene: &std::sync::Arc<strata_render::scene3d::Scene3D>,
+    w: usize,
+    h: usize,
+    allow_interactive_fallback: bool,
+) -> Option<Viewport3DSurfaceResult> {
+    let now = std::time::Instant::now();
+
+    // 1. Exact full-res cache hit.
+    let exact_hit = VIEWPORT_3D_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let idx = cache.iter().position(|e| {
+            std::sync::Arc::ptr_eq(&e.scene, scene)
+                && e.width == w
+                && e.height == h
+                && !e.is_half_res
+        })?;
+        let entry = cache.remove(idx);
+        let surface = entry.surface.clone();
+        cache.push(entry);
+        Some(Viewport3DSurfaceResult {
+            surface,
+            src_width: w,
+            src_height: h,
+            needs_debounced_full_res: false,
+        })
+    });
+    if exact_hit.is_some() {
+        VIEWPORT_3D_RESIZE_DEBOUNCE.with(|d| d.set(None));
+        return exact_hit;
     }
+
+    // 2. Interactive resize fallback: same Arc<Scene3D> at a different cached size.
+    if allow_interactive_fallback {
+        let debounce_elapsed = VIEWPORT_3D_RESIZE_DEBOUNCE.with(|d| {
+            let cur = d.get();
+            match cur {
+                Some((dw, dh, deadline)) if dw == w && dh == h => {
+                    if now >= deadline {
+                        d.set(None);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                _ => {
+                    d.set(Some((
+                        w,
+                        h,
+                        now + std::time::Duration::from_millis(VIEWPORT_3D_RESIZE_DEBOUNCE_MS),
+                    )));
+                    false
+                }
+            }
+        });
+        if !debounce_elapsed {
+            let resize_hit = VIEWPORT_3D_CACHE.with(|cache| {
+                let cache = cache.borrow();
+                cache
+                    .iter()
+                    .rev()
+                    .find(|e| std::sync::Arc::ptr_eq(&e.scene, scene))
+                    .map(|e| Viewport3DSurfaceResult {
+                        surface: e.surface.clone(),
+                        src_width: e.width,
+                        src_height: e.height,
+                        needs_debounced_full_res: true,
+                    })
+            });
+            if resize_hit.is_some() {
+                return resize_hit;
+            }
+        }
+    }
+
+    // 3. Interactive camera pan/zoom half-res fallback when rasterizing rapidly.
+    let use_half_res = allow_interactive_fallback
+        && w >= 128
+        && h >= 128
+        && VIEWPORT_3D_LAST_RASTER_AT.with(|last| {
+            last.get()
+                .map(|t| {
+                    now.duration_since(t).as_millis() < VIEWPORT_3D_INTERACTIVE_WINDOW_MS as u128
+                })
+                .unwrap_or(false)
+        });
+
+    let (raster_w, raster_h) = if use_half_res {
+        ((w / 2).max(1), (h / 2).max(1))
+    } else {
+        (w, h)
+    };
+
+    let surface = rasterize_scene_3d_to_cairo_surface(scene, raster_w, raster_h)?;
+    VIEWPORT_3D_LAST_RASTER_AT.with(|last| last.set(Some(now)));
 
     VIEWPORT_3D_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
@@ -1393,12 +1535,28 @@ fn viewport_3d_surface(
         }
         cache.push(Viewport3DCacheEntry {
             scene: std::sync::Arc::clone(scene),
-            width: w,
-            height: h,
+            width: raster_w,
+            height: raster_h,
+            is_half_res: use_half_res,
             surface: surface.clone(),
         });
     });
-    Some(surface)
+
+    Some(Viewport3DSurfaceResult {
+        surface,
+        src_width: raster_w,
+        src_height: raster_h,
+        needs_debounced_full_res: use_half_res,
+    })
+}
+
+#[allow(dead_code)]
+fn viewport_3d_surface(
+    scene: &std::sync::Arc<strata_render::scene3d::Scene3D>,
+    w: usize,
+    h: usize,
+) -> Option<cairo::ImageSurface> {
+    viewport_3d_surface_with_fallback(scene, w, h, false).map(|res| res.surface)
 }
 
 /// Executes a Strata DisplayList into a Cairo graphics context with full typography and vector support.
@@ -2121,11 +2279,22 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
             {
                 let w = bounds.width.max(1.0).round() as usize;
                 let h = bounds.height.max(1.0).round() as usize;
-                if let Some(surface) = viewport_3d_surface(scene, w, h) {
+                let interactive = IN_LIVE_GTK_DRAW.with(|live| live.get());
+                if let Some(res) = viewport_3d_surface_with_fallback(scene, w, h, interactive) {
                     let _ = cr.save();
-                    let _ = cr.set_source_surface(&surface, bounds.x as f64, bounds.y as f64);
+                    cr.translate(bounds.x as f64, bounds.y as f64);
+                    if res.src_width != w || res.src_height != h {
+                        cr.scale(
+                            bounds.width as f64 / res.src_width.max(1) as f64,
+                            bounds.height as f64 / res.src_height.max(1) as f64,
+                        );
+                    }
+                    let _ = cr.set_source_surface(&res.surface, 0.0, 0.0);
                     let _ = cr.paint();
                     let _ = cr.restore();
+                    if res.needs_debounced_full_res && interactive {
+                        schedule_viewport_3d_debounced_redraw();
+                    }
                 }
             }
             _ => {}
@@ -2471,6 +2640,43 @@ pub fn gtk_set_clipboard_text(text: &str) {
 
 thread_local! {
     static CURRENT_CURSOR: std::cell::Cell<Option<crate::window::CursorIcon>> = const { std::cell::Cell::new(None) };
+    static PENDING_CURSOR_WARP: std::cell::Cell<Option<(f64, f64)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Warps the OS pointer to window-local coordinates `(x, y)` on the active GTK window
+/// and marks the target position so the resulting synthetic motion event is filtered.
+pub fn gtk_warp_cursor(x: f64, y: f64) {
+    PENDING_CURSOR_WARP.with(|w| w.set(Some((x, y))));
+    if !gtk::is_initialized() || !gtk::is_initialized_main_thread() {
+        return;
+    }
+    CURRENT_GTK_WINDOW.with(|w| {
+        use gtk::prelude::*;
+        if let Some(win) = w.borrow().as_ref() {
+            if let Some(gdk_win) = win.window() {
+                let display = gdk_win.display();
+                if let Some(seat) = display.default_seat() {
+                    if let Some(pointer) = seat.pointer() {
+                        let screen = gdk_win.screen();
+                        let (_, origin_x, origin_y) = gdk_win.origin();
+                        let target_root_x = origin_x + x.round() as i32;
+                        let target_root_y = origin_y + y.round() as i32;
+                        pointer.warp(&screen, target_root_x, target_root_y);
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Alias for [`gtk_warp_cursor`].
+pub fn set_cursor_position(x: f64, y: f64) {
+    gtk_warp_cursor(x, y);
+}
+
+/// Alias for [`gtk_warp_cursor`].
+pub fn warp_cursor(x: f64, y: f64) {
+    gtk_warp_cursor(x, y);
 }
 
 /// Sets the current mouse cursor icon on the active native GTK window.
@@ -2961,7 +3167,10 @@ where
         let h = widget.allocated_height() as f32;
         // Live paint must use the same font options as measurement.
         cr.set_font_options(&parity_font_options());
+        CURRENT_DRAWING_AREA.with(|da| *da.borrow_mut() = Some(widget.clone()));
+        IN_LIVE_GTK_DRAW.with(|live| live.set(true));
         (on_draw_cb.borrow_mut())(w, h, cr);
+        IN_LIVE_GTK_DRAW.with(|live| live.set(false));
         gtk::glib::Propagation::Proceed
     });
 
@@ -3179,6 +3388,19 @@ where
         }
 
         if IS_CLOSING.with(|c| c.get()) {
+            return gtk::glib::Propagation::Proceed;
+        }
+
+        let is_synthetic_warp = PENDING_CURSOR_WARP.with(|w| {
+            if let Some((wx, wy)) = w.get() {
+                if (x - wx).abs() <= 2.5 && (y - wy).abs() <= 2.5 {
+                    w.set(None);
+                    return true;
+                }
+            }
+            false
+        });
+        if is_synthetic_warp {
             return gtk::glib::Propagation::Proceed;
         }
 
@@ -3885,5 +4107,26 @@ mod frameless_resize_tests {
             Some((gtk::gdk::WindowEdge::South, CursorIcon::ResizeS))
         );
         assert_eq!(frameless_resize_edge(400.0, 300.0, 800, 600), None);
+    }
+
+    #[test]
+    fn test_viewport_3d_resize_and_interactive_half_res_fallback() {
+        let scene = std::sync::Arc::new(strata_render::scene3d::Scene3D::new());
+        // 1. Cold render at 200x200 produces full-res surface.
+        let first = super::viewport_3d_surface_with_fallback(&scene, 200, 200, true).unwrap();
+        assert_eq!((first.src_width, first.src_height), (200, 200));
+        assert!(!first.needs_debounced_full_res);
+
+        // 2. Immediate resize of the same Arc<Scene3D> to 210x200 reuses cached 200x200 surface.
+        let resized = super::viewport_3d_surface_with_fallback(&scene, 210, 200, true).unwrap();
+        assert_eq!((resized.src_width, resized.src_height), (200, 200));
+        assert!(resized.needs_debounced_full_res);
+
+        // 3. Rapid camera pan (new Arc<Scene3D>) within interactive window uses half-res.
+        let scene_moved = std::sync::Arc::new(strata_render::scene3d::Scene3D::new());
+        let panned =
+            super::viewport_3d_surface_with_fallback(&scene_moved, 210, 200, true).unwrap();
+        assert_eq!((panned.src_width, panned.src_height), (105, 100));
+        assert!(panned.needs_debounced_full_res);
     }
 }
