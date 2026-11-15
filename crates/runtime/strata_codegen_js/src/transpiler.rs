@@ -233,6 +233,7 @@ impl JsTranspiler {
             EventType::AnimationIteration => "animationiteration",
             EventType::AnimationEnd => "animationend",
             EventType::AnimationCancel => "animationcancel",
+            EventType::Resize => "resize",
             EventType::Custom(_) => "custom",
         }
     }

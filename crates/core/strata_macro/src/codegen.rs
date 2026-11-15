@@ -168,6 +168,7 @@ fn lower_element(el: &RsxElement, errors: &mut Vec<String>) -> String {
                 "onanimationiteration" => "strata_dom::EventType::AnimationIteration".to_string(),
                 "onanimationend" => "strata_dom::EventType::AnimationEnd".to_string(),
                 "onanimationcancel" => "strata_dom::EventType::AnimationCancel".to_string(),
+                "onresize" => "strata_dom::EventType::Resize".to_string(),
                 _ => {
                     errors.push(format!(
                         "unsupported event attribute `{}`; expected a known DOM event such as `onclick` or `on_click`",
