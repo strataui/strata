@@ -107,6 +107,8 @@ pub struct AppRuntime {
     pub previous_node_styles: std::collections::HashMap<u64, ComputedStyle>,
     /// Mapping from deterministic node ID to its hierarchical tree path.
     pub node_paths: std::collections::HashMap<u64, Vec<usize>>,
+    /// Mapping from hierarchical tree path to its identity-aware animation node ID.
+    pub path_node_ids: std::collections::HashMap<Vec<usize>, u64>,
     /// Coordinator for CSS View Transitions Module snapshots and element morphing.
     pub view_transition_manager: crate::view_transition::ViewTransitionManager,
     /// Whether animations or transitions were active in the prior frame (to allow clean final state settlement).
@@ -275,6 +277,7 @@ impl AppRuntime {
             base_node_styles: std::collections::HashMap::new(),
             previous_node_styles: std::collections::HashMap::new(),
             node_paths: std::collections::HashMap::new(),
+            path_node_ids: std::collections::HashMap::new(),
             view_transition_manager: crate::view_transition::ViewTransitionManager::new(),
             had_active_animations: false,
             gpu_path_pipeline: strata_render::GpuPathPipeline::new(viewport_width, viewport_height),
