@@ -76,9 +76,9 @@ where
             }
         }
         strata_platform::PlatformEvent::MouseDown { button, x, y } => {
-            runtime.is_mouse_down = true;
             let btn_idx = button.to_button_index();
             if *button == strata_platform::MouseButton::Left {
+                runtime.is_mouse_down = true;
                 if runtime.check_scrollbar_thumb_press(*x, *y) {
                     needs_redraw = true;
                 } else {
@@ -94,6 +94,10 @@ where
                     }
                     if runtime.drain_edit_commands() {
                         needs_rebuild = true;
+                    }
+                    if !needs_rebuild {
+                        runtime.restyle_for_hover_paint();
+                        needs_redraw = true;
                     }
                 }
             } else if *button == strata_platform::MouseButton::Middle {
@@ -115,8 +119,11 @@ where
                 }
             }
         }
-        strata_platform::PlatformEvent::MouseUp { x, y, .. } => {
-            runtime.is_mouse_down = false;
+        strata_platform::PlatformEvent::MouseUp { button, x, y } => {
+            let was_mouse_down = runtime.is_mouse_down;
+            if *button == strata_platform::MouseButton::Left {
+                runtime.is_mouse_down = false;
+            }
             if runtime.scrollbar_drag.is_some() {
                 runtime.scrollbar_drag = None;
                 needs_redraw = true;
@@ -126,6 +133,10 @@ where
             if action.needs_rebuild() {
                 needs_rebuild = true;
             } else if action.needs_redraw() {
+                needs_redraw = true;
+            }
+            if was_mouse_down && !needs_rebuild {
+                runtime.restyle_for_hover_paint();
                 needs_redraw = true;
             }
         }

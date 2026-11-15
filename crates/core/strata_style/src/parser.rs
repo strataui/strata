@@ -825,6 +825,116 @@ pub fn parse_grid_template_areas(input: &str) -> Vec<Vec<String>> {
     rows
 }
 
+/// Splits whitespace-delimited tokens while keeping parenthesized expressions (such as `rgba(15, 23, 42, 0.8)`) intact.
+pub fn split_whitespace_outside_parens(input: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut paren_depth = 0usize;
+    let mut start: Option<usize> = None;
+
+    for (idx, ch) in input.char_indices() {
+        match ch {
+            '(' => {
+                if start.is_none() {
+                    start = Some(idx);
+                }
+                paren_depth += 1;
+            }
+            ')' => {
+                if start.is_none() {
+                    start = Some(idx);
+                }
+                paren_depth = paren_depth.saturating_sub(1);
+            }
+            c if c.is_whitespace() && paren_depth == 0 => {
+                if let Some(s) = start.take() {
+                    tokens.push(&input[s..idx]);
+                }
+            }
+            _ => {
+                if start.is_none() {
+                    start = Some(idx);
+                }
+            }
+        }
+    }
+
+    if let Some(s) = start {
+        tokens.push(&input[s..]);
+    }
+    tokens
+}
+
+fn parse_rgb_channel(s: &str) -> Option<u8> {
+    let t = s.trim();
+    if let Some(pct) = t.strip_suffix('%') {
+        let p = pct.trim().parse::<f32>().ok()?;
+        if !p.is_finite() {
+            return None;
+        }
+        Some(((p / 100.0).clamp(0.0, 1.0) * 255.0).round() as u8)
+    } else {
+        let v = t.parse::<f32>().ok()?;
+        if !v.is_finite() {
+            return None;
+        }
+        Some(v.clamp(0.0, 255.0).round() as u8)
+    }
+}
+
+fn parse_alpha_value(s: &str) -> Option<u8> {
+    let t = s.trim();
+    if let Some(pct) = t.strip_suffix('%') {
+        let p = pct.trim().parse::<f32>().ok()?;
+        if !p.is_finite() {
+            return None;
+        }
+        Some(((p / 100.0).clamp(0.0, 1.0) * 255.0).round() as u8)
+    } else {
+        let a = t.parse::<f32>().ok()?;
+        if !a.is_finite() {
+            return None;
+        }
+        Some((a.clamp(0.0, 1.0) * 255.0).round() as u8)
+    }
+}
+
+fn hsl_to_rgb_u8(h_deg: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let h = h_deg.rem_euclid(360.0) / 360.0;
+    let s = s.clamp(0.0, 1.0);
+    let l = l.clamp(0.0, 1.0);
+    if s <= 1e-6 {
+        let v = (l * 255.0).round() as u8;
+        return (v, v, v);
+    }
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
+    let p = 2.0 * l - q;
+    fn hue_to_rgb(p: f32, q: f32, mut t: f32) -> f32 {
+        if t < 0.0 {
+            t += 1.0;
+        }
+        if t > 1.0 {
+            t -= 1.0;
+        }
+        if t < 1.0 / 6.0 {
+            p + (q - p) * 6.0 * t
+        } else if t < 0.5 {
+            q
+        } else if t < 2.0 / 3.0 {
+            p + (q - p) * (2.0 / 3.0 - t) * 6.0
+        } else {
+            p
+        }
+    }
+    let r = (hue_to_rgb(p, q, h + 1.0 / 3.0) * 255.0).round() as u8;
+    let g = (hue_to_rgb(p, q, h) * 255.0).round() as u8;
+    let b = (hue_to_rgb(p, q, h - 1.0 / 3.0) * 255.0).round() as u8;
+    (r, g, b)
+}
+
 /// Decodes CSS colors: `#hex`, `rgb(...)`, `rgba(...)`, `hsl(...)`, `hsla(...)`, or named colors.
 pub fn parse_color(val: &str) -> Option<Color> {
     let s = val.trim();
@@ -834,27 +944,80 @@ pub fn parse_color(val: &str) -> Option<Color> {
 
     let lower = s.to_ascii_lowercase();
 
-    if lower.starts_with("rgb(") && lower.ends_with(')') {
-        let inner = &lower[4..lower.len() - 1];
-        let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
-        if parts.len() == 3 {
-            let r = parts[0].parse::<u8>().ok()?;
-            let g = parts[1].parse::<u8>().ok()?;
-            let b = parts[2].parse::<u8>().ok()?;
-            return Some(Color::new(r, g, b, 255));
+    if (lower.starts_with("rgb(") || lower.starts_with("rgba(")) && lower.ends_with(')') {
+        let start = if lower.starts_with("rgba(") { 5 } else { 4 };
+        let inner = lower[start..lower.len() - 1].trim();
+        if inner.contains(',') {
+            let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
+            if parts.len() == 3 {
+                let r = parse_rgb_channel(parts[0])?;
+                let g = parse_rgb_channel(parts[1])?;
+                let b = parse_rgb_channel(parts[2])?;
+                return Some(Color::new(r, g, b, 255));
+            } else if parts.len() == 4 {
+                let r = parse_rgb_channel(parts[0])?;
+                let g = parse_rgb_channel(parts[1])?;
+                let b = parse_rgb_channel(parts[2])?;
+                let a = parse_alpha_value(parts[3])?;
+                return Some(Color::new(r, g, b, a));
+            }
+        } else {
+            // Modern CSS Color Level 4 syntax: rgb(15 23 42 / 0.85) or rgb(15 23 42)
+            let (rgb_part, alpha_part) = match inner.split_once('/') {
+                Some((rgb, a)) => (rgb.trim(), Some(a.trim())),
+                None => (inner, None),
+            };
+            let chans: Vec<&str> = rgb_part.split_whitespace().collect();
+            if chans.len() == 3 {
+                let r = parse_rgb_channel(chans[0])?;
+                let g = parse_rgb_channel(chans[1])?;
+                let b = parse_rgb_channel(chans[2])?;
+                let a = match alpha_part {
+                    Some(a_str) => parse_alpha_value(a_str)?,
+                    None => 255,
+                };
+                return Some(Color::new(r, g, b, a));
+            }
         }
     }
 
-    if lower.starts_with("rgba(") && lower.ends_with(')') {
-        let inner = &lower[5..lower.len() - 1];
-        let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
-        if parts.len() == 4 {
-            let r = parts[0].parse::<u8>().ok()?;
-            let g = parts[1].parse::<u8>().ok()?;
-            let b = parts[2].parse::<u8>().ok()?;
-            let a = (parts[3].parse::<f32>().ok()?.clamp(0.0, 1.0) * 255.0).round() as u8;
-            return Some(Color::new(r, g, b, a));
-        }
+    if (lower.starts_with("hsl(") || lower.starts_with("hsla(")) && lower.ends_with(')') {
+        let start = if lower.starts_with("hsla(") { 5 } else { 4 };
+        let inner = lower[start..lower.len() - 1].trim();
+        let (hsl_tokens, alpha_str): (Vec<&str>, Option<&str>) = if inner.contains(',') {
+            let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
+            if parts.len() == 3 {
+                (parts, None)
+            } else if parts.len() == 4 {
+                (parts[..3].to_vec(), Some(parts[3]))
+            } else {
+                return None;
+            }
+        } else {
+            let (hsl_part, alpha_part) = match inner.split_once('/') {
+                Some((hsl, a)) => (hsl.trim(), Some(a.trim())),
+                None => (inner, None),
+            };
+            let parts: Vec<&str> = hsl_part.split_whitespace().collect();
+            if parts.len() != 3 {
+                return None;
+            }
+            (parts, alpha_part)
+        };
+        let h_raw = hsl_tokens[0];
+        let h_deg = if let Some(rad) = parse_angle_rad(h_raw) {
+            rad.to_degrees()
+        } else {
+            h_raw.parse::<f32>().ok()?
+        };
+        let sat = hsl_tokens[1].strip_suffix('%')?.trim().parse::<f32>().ok()? / 100.0;
+        let lig = hsl_tokens[2].strip_suffix('%')?.trim().parse::<f32>().ok()? / 100.0;
+        let a = match alpha_str {
+            Some(a_s) => parse_alpha_value(a_s)?,
+            None => 255,
+        };
+        let (r, g, b) = hsl_to_rgb_u8(h_deg, sat, lig);
+        return Some(Color::new(r, g, b, a));
     }
 
     // Common CSS color keywords
@@ -865,6 +1028,12 @@ pub fn parse_color(val: &str) -> Option<Color> {
         "red" => Some(Color::RED),
         "green" => Some(Color::GREEN),
         "blue" => Some(Color::BLUE),
+        "gray" | "grey" => Some(Color::new(128, 128, 128, 255)),
+        "silver" => Some(Color::new(192, 192, 192, 255)),
+        "yellow" => Some(Color::new(255, 255, 0, 255)),
+        "cyan" | "aqua" => Some(Color::new(0, 255, 255, 255)),
+        "magenta" | "fuchsia" => Some(Color::new(255, 0, 255, 255)),
+        "orange" => Some(Color::new(255, 165, 0, 255)),
         _ => None,
     }
 }
@@ -1227,7 +1396,13 @@ fn parse_radial_gradient_body(inner: &str) -> Option<Gradient> {
     let mut stop_start_idx = 0;
 
     let first = parts[0].trim();
-    if first.starts_with("circle") || first.starts_with("ellipse") || first.starts_with("at ") {
+    if first.starts_with("circle")
+        || first.starts_with("ellipse")
+        || first.starts_with("at ")
+        || first.contains(" at ")
+        || first.starts_with("closest-")
+        || first.starts_with("farthest-")
+    {
         if let Some(at_idx) = first.find("at ") {
             let pos_str = &first[at_idx + 3..].trim();
             center = parse_position_pair(pos_str);
@@ -1357,7 +1532,7 @@ fn parse_position_pair(s: &str) -> (f32, f32) {
 }
 
 fn parse_color_stop(part: &str) -> Option<ColorStop> {
-    let tokens: Vec<&str> = part.split_whitespace().collect();
+    let tokens = split_whitespace_outside_parens(part);
     if tokens.is_empty() {
         return None;
     }

@@ -545,6 +545,13 @@ impl TransitionManager {
         self.node_transitions.values().any(|v| !v.is_empty())
     }
 
+    /// Returns true if the specified `node_id` currently has one or more active transitions.
+    pub fn has_node_transitions(&self, node_id: u64) -> bool {
+        self.node_transitions
+            .get(&node_id)
+            .is_some_and(|v| !v.is_empty())
+    }
+
     /// Returns true when any running transition targets a property that participates in
     /// box layout, so the layout tree must be recomputed as the value changes.
     pub fn has_layout_affecting_transitions(&self) -> bool {

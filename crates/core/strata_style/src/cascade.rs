@@ -17,30 +17,53 @@ use crate::selector::PseudoState;
 use crate::specificity::Specificity;
 use crate::types::*;
 
-fn resolve_var<'a>(val: &'a str, style: &ComputedStyle) -> std::borrow::Cow<'a, str> {
+/// Resolves `var(--custom-prop)` and `var(--custom-prop, fallback)` expressions against `style.custom_properties`,
+/// supporting nested parentheses in fallbacks (e.g. `var(--bg, rgba(15, 23, 42, 0.85))`) and chained custom properties.
+pub fn resolve_var<'a>(val: &'a str, style: &ComputedStyle) -> std::borrow::Cow<'a, str> {
     if !val.contains("var(") {
         return std::borrow::Cow::Borrowed(val);
     }
     let mut resolved = val.to_string();
-    while let Some(start) = resolved.find("var(") {
-        if let Some(end_rel) = resolved[start..].find(')') {
-            let end = start + end_rel;
-            let (name, fallback) = {
-                let inner = resolved[start + 4..end].trim();
-                match inner.split_once(',') {
-                    Some((n, fb)) => (n.trim().to_string(), fb.trim().to_string()),
-                    None => (inner.to_string(), String::new()),
-                }
-            };
-            let key_atom = strata_primitives::atom::intern(&name);
-            let replacement_string = style
-                .get_custom_property(key_atom)
-                .and_then(strata_primitives::atom::resolve)
-                .unwrap_or(fallback);
-            resolved.replace_range(start..=end, &replacement_string);
-        } else {
+    for _ in 0..16 {
+        let Some(start) = resolved.find("var(") else {
             break;
+        };
+        let after_open = start + 4;
+        let mut depth = 1usize;
+        let mut end_idx = None;
+        let mut first_comma = None;
+        for (rel_i, ch) in resolved[after_open..].char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end_idx = Some(after_open + rel_i);
+                        break;
+                    }
+                }
+                ',' if depth == 1 && first_comma.is_none() => {
+                    first_comma = Some(after_open + rel_i);
+                }
+                _ => {}
+            }
         }
+        let Some(end) = end_idx else {
+            break;
+        };
+        let (name, fallback) = match first_comma {
+            Some(comma) => (
+                resolved[after_open..comma].trim().to_string(),
+                resolved[comma + 1..end].trim().to_string(),
+            ),
+            None => (resolved[after_open..end].trim().to_string(), String::new()),
+        };
+        let key_atom = strata_primitives::atom::intern(&name);
+        let replacement_string = style
+            .get_custom_property(key_atom)
+            .and_then(strata_primitives::atom::resolve)
+            .unwrap_or(fallback);
+        resolved.replace_range(start..=end, &replacement_string);
     }
     std::borrow::Cow::Owned(resolved)
 }
@@ -1168,13 +1191,16 @@ impl CascadeSolver {
             }
             "background" => {
                 let trimmed = val.trim();
-                if trimmed.contains("gradient") {
+                if trimmed.eq_ignore_ascii_case("none") {
+                    style.background_color = None;
+                    style.background_gradient = None;
+                } else if trimmed.contains("gradient") {
                     if let Some(grad) = crate::parser::parse_gradient(trimmed) {
                         style.background_gradient = Some(grad);
                     }
-                }
-                if let Some(c) = parse_color(trimmed) {
+                } else if let Some(c) = parse_color(trimmed) {
                     style.background_color = Some(c);
+                    style.background_gradient = None;
                 }
             }
             "background-image" => {
@@ -1191,17 +1217,46 @@ impl CascadeSolver {
                 }
             }
             "border" => {
-                if val == "none" || val == "0" {
+                if val.trim() == "none" || val.trim() == "0" {
                     style.border_width = EdgeInsets::ZERO;
                     style.border_style = BorderStyle::None;
                 } else {
-                    for part in val.split_whitespace() {
+                    for part in crate::parser::split_whitespace_outside_parens(val) {
                         if let Some(bs) = parse_border_style(part) {
                             style.border_style = bs;
                         } else if let Some(px) =
                             resolve_length_px(part, style.font_size, style.root_font_size)
                         {
                             style.border_width = EdgeInsets::all(px);
+                        } else if let Some(c) = parse_color(part) {
+                            style.border_color = Some(c);
+                        }
+                    }
+                }
+            }
+            "border-top" | "border-right" | "border-bottom" | "border-left" => {
+                if val.trim() == "none" || val.trim() == "0" {
+                    match prop {
+                        "border-top" => style.border_width.top = 0.0,
+                        "border-right" => style.border_width.right = 0.0,
+                        "border-bottom" => style.border_width.bottom = 0.0,
+                        "border-left" => style.border_width.left = 0.0,
+                        _ => {}
+                    }
+                } else {
+                    for part in crate::parser::split_whitespace_outside_parens(val) {
+                        if let Some(bs) = parse_border_style(part) {
+                            style.border_style = bs;
+                        } else if let Some(px) =
+                            resolve_length_px(part, style.font_size, style.root_font_size)
+                        {
+                            match prop {
+                                "border-top" => style.border_width.top = px,
+                                "border-right" => style.border_width.right = px,
+                                "border-bottom" => style.border_width.bottom = px,
+                                "border-left" => style.border_width.left = px,
+                                _ => {}
+                            }
                         } else if let Some(c) = parse_color(part) {
                             style.border_color = Some(c);
                         }
@@ -1251,8 +1306,22 @@ impl CascadeSolver {
                 }
             }
             "border-radius" => {
-                if let Some(px) = resolve_length_px(val, style.font_size, style.root_font_size) {
-                    style.border_radius = BorderRadius::all(px);
+                let parts: Vec<f32> = val
+                    .split_whitespace()
+                    .filter_map(|p| resolve_length_px(p, style.font_size, style.root_font_size))
+                    .collect();
+                match parts.as_slice() {
+                    [all] => style.border_radius = BorderRadius::all(*all),
+                    [tl_br, tr_bl] => {
+                        style.border_radius = BorderRadius::new(*tl_br, *tr_bl, *tl_br, *tr_bl);
+                    }
+                    [tl, tr_bl, br] => {
+                        style.border_radius = BorderRadius::new(*tl, *tr_bl, *br, *tr_bl);
+                    }
+                    [tl, tr, br, bl, ..] => {
+                        style.border_radius = BorderRadius::new(*tl, *tr, *br, *bl);
+                    }
+                    _ => {}
                 }
             }
             "opacity" => {
@@ -1487,11 +1556,11 @@ impl CascadeSolver {
                 }
             }
             "outline" => {
-                if val == "none" || val == "0" {
+                if val.trim() == "none" || val.trim() == "0" {
                     style.outline_width = 0.0;
                     style.outline_style = BorderStyle::None;
                 } else {
-                    for part in val.split_whitespace() {
+                    for part in crate::parser::split_whitespace_outside_parens(val) {
                         if let Some(bs) = parse_border_style(part) {
                             style.outline_style = bs;
                         } else if let Some(Dimension::Px(px)) = parse_dimension(part) {

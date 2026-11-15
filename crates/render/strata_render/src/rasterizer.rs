@@ -1292,7 +1292,7 @@ impl FrameBuffer {
                         Some(effective_clip),
                     );
                 }
-                DrawCommand::DrawShadow { bounds, shadow } => {
+                DrawCommand::DrawShadow { bounds, shadow, .. } => {
                     target.draw_shadow(transform_rect_fn(*bounds), shadow, Some(effective_clip));
                 }
                 DrawCommand::DrawBorder {

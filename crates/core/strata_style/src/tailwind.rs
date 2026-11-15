@@ -62,29 +62,50 @@ impl TailwindEngine {
         Self::apply_class_with_pseudo_state(style, token, &state);
     }
 
-    /// Applies a single Tailwind class token evaluating a full `PseudoState`.
+    /// Applies a single Tailwind class token evaluating a full `PseudoState` (including chained modifiers like `dark:hover:*`).
     pub fn apply_class_with_pseudo_state(
         style: &mut ComputedStyle,
         token: &str,
         state: &crate::selector::PseudoState,
     ) {
-        let (modifier, class) = split_modifier(token);
-        let should_apply = match modifier {
-            None => true,
-            Some("hover") => state.is_hovered,
-            Some("focus") => state.is_focused,
-            Some("active") => state.is_active,
-            Some("disabled") => state.is_disabled,
-            Some("dark") => state.is_dark,
-            Some(_) => false,
-        };
-        if should_apply {
+        if let Some((_is_interactive, class)) = match_modifiers(token, state) {
             Self::apply_class(style, class);
+        }
+    }
+
+    /// Applies a Tailwind class token ONLY if it has no interactive pseudo-modifiers (`hover:`, `focus:`, `active:`).
+    /// Non-interactive modifiers (`dark:`, `disabled:`) are still evaluated against `state`.
+    pub fn apply_base_class_with_pseudo_state(
+        style: &mut ComputedStyle,
+        token: &str,
+        state: &crate::selector::PseudoState,
+    ) {
+        if let Some((is_interactive, class)) = match_modifiers(token, state) {
+            if !is_interactive {
+                Self::apply_class(style, class);
+            }
+        }
+    }
+
+    /// Applies a Tailwind class token ONLY if it includes at least one active interactive pseudo-modifier
+    /// (`hover:`, `focus:`, `active:`) and all of its modifiers match `state`.
+    pub fn apply_interactive_class_with_pseudo_state(
+        style: &mut ComputedStyle,
+        token: &str,
+        state: &crate::selector::PseudoState,
+    ) {
+        if let Some((is_interactive, class)) = match_modifiers(token, state) {
+            if is_interactive {
+                Self::apply_class(style, class);
+            }
         }
     }
 
     /// Applies a single, non-modified Tailwind class to `ComputedStyle`.
     pub fn apply_class(style: &mut ComputedStyle, class: &str) {
+        let resolved_class_cow = expand_arbitrary_vars_in_class(class, style);
+        let class = resolved_class_cow.as_ref();
+
         // 1. Display & Layout Mode
         match class {
             "flex" => {
@@ -657,6 +678,25 @@ impl TailwindEngine {
 
         // 6. Colors: Background, Text, Border
         if let Some(rest) = class.strip_prefix("bg-") {
+            if rest == "transparent" {
+                style.background_color = Some(Color::TRANSPARENT);
+                style.background_gradient = None;
+                return;
+            }
+            if rest == "current" {
+                style.background_color = Some(style.color);
+                style.background_gradient = None;
+                return;
+            }
+            if let Some(inner) = extract_bracket_content(rest) {
+                let normalized = replace_tailwind_underscores(inner.trim());
+                if normalized.contains("gradient(") {
+                    if let Some(grad) = crate::parser::parse_gradient(&normalized) {
+                        style.background_gradient = Some(grad);
+                        return;
+                    }
+                }
+            }
             let (color_part, opacity) = split_opacity(rest);
             if let Some(c) = lookup_color_or_arbitrary(color_part, opacity) {
                 style.background_color = Some(c);
@@ -664,18 +704,30 @@ impl TailwindEngine {
             }
         }
         if let Some(rest) = class.strip_prefix("text-") {
+            if rest == "transparent" {
+                style.color = Color::TRANSPARENT;
+                return;
+            }
+            if rest == "current" {
+                return;
+            }
             if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                if let Some(px_str) = inner.strip_suffix("px") {
-                    if let Ok(px) = px_str.parse::<f32>() {
-                        style.font_size = px;
-                        style.line_height = 1.35;
-                        return;
-                    }
-                } else if let Some(rem_str) = inner.strip_suffix("rem") {
-                    if let Ok(rem) = rem_str.parse::<f32>() {
-                        style.font_size = rem * 16.0;
-                        style.line_height = 1.35;
-                        return;
+                let inner_trimmed = inner.trim();
+                let explicit_color = inner_trimmed.strip_prefix("color:");
+                let length_candidate = inner_trimmed.strip_prefix("length:").unwrap_or(inner_trimmed);
+                if explicit_color.is_none() {
+                    if let Some(px_str) = length_candidate.strip_suffix("px") {
+                        if let Ok(px) = px_str.trim().parse::<f32>() {
+                            style.font_size = px;
+                            style.line_height = 1.35;
+                            return;
+                        }
+                    } else if let Some(rem_str) = length_candidate.strip_suffix("rem") {
+                        if let Ok(rem) = rem_str.trim().parse::<f32>() {
+                            style.font_size = rem * 16.0;
+                            style.line_height = 1.35;
+                            return;
+                        }
                     }
                 }
             }
@@ -686,7 +738,49 @@ impl TailwindEngine {
             }
         }
         if let Some(rest) = class.strip_prefix("border-") {
-            let (color_part, opacity) = split_opacity(rest);
+            if rest == "transparent" {
+                style.border_color = Some(Color::TRANSPARENT);
+                return;
+            }
+            if rest == "current" {
+                style.border_color = Some(style.color);
+                return;
+            }
+            let mut color_rest = rest;
+            for side in ["t-", "r-", "b-", "l-", "x-", "y-", "s-", "e-"] {
+                if let Some(stripped) = rest.strip_prefix(side) {
+                    if stripped.starts_with('[') || lookup_tailwind_color(split_opacity(stripped).0, None).is_some() {
+                        color_rest = stripped;
+                    }
+                    break;
+                }
+            }
+            if let Some(inner) = extract_bracket_content(color_rest) {
+                let inner_trimmed = inner.trim();
+                if !inner_trimmed.starts_with("color:") {
+                    if let Some(px) = resolve_arbitrary_px(inner_trimmed.strip_prefix("length:").unwrap_or(inner_trimmed)) {
+                        if rest.starts_with("t-[") {
+                            style.border_width.top = px;
+                        } else if rest.starts_with("r-[") {
+                            style.border_width.right = px;
+                        } else if rest.starts_with("b-[") {
+                            style.border_width.bottom = px;
+                        } else if rest.starts_with("l-[") {
+                            style.border_width.left = px;
+                        } else if rest.starts_with("x-[") {
+                            style.border_width.left = px;
+                            style.border_width.right = px;
+                        } else if rest.starts_with("y-[") {
+                            style.border_width.top = px;
+                            style.border_width.bottom = px;
+                        } else {
+                            style.border_width = EdgeInsets::all(px);
+                        }
+                        return;
+                    }
+                }
+            }
+            let (color_part, opacity) = split_opacity(color_rest);
             if let Some(c) = lookup_color_or_arbitrary(color_part, opacity) {
                 style.border_color = Some(c);
                 return;
@@ -1093,6 +1187,60 @@ impl TailwindEngine {
                 }
             }
         }
+        if let Some(rest) = class.strip_prefix("rounded-") {
+            let resolve_radius_token = |tok: &str| -> Option<f32> {
+                match tok {
+                    "none" => Some(0.0),
+                    "sm" => Some(2.0),
+                    "" => Some(4.0),
+                    "md" => Some(6.0),
+                    "lg" => Some(8.0),
+                    "xl" => Some(12.0),
+                    "2xl" => Some(16.0),
+                    "3xl" => Some(24.0),
+                    "full" => Some(9999.0),
+                    other => extract_bracket_content(other).and_then(resolve_arbitrary_px),
+                }
+            };
+            for (prefix, tl, tr, br, bl) in [
+                ("tl-", true, false, false, false),
+                ("tr-", false, true, false, false),
+                ("br-", false, false, true, false),
+                ("bl-", false, false, false, true),
+                ("t-", true, true, false, false),
+                ("r-", false, true, true, false),
+                ("b-", false, false, true, true),
+                ("l-", true, false, false, true),
+                ("tl", true, false, false, false),
+                ("tr", false, true, false, false),
+                ("br", false, false, true, false),
+                ("bl", false, false, false, true),
+                ("t", true, true, false, false),
+                ("r", false, true, true, false),
+                ("b", false, false, true, true),
+                ("l", true, false, false, true),
+            ] {
+                if let Some(tok) = rest.strip_prefix(prefix) {
+                    if prefix.ends_with('-') || tok.is_empty() {
+                        if let Some(px) = resolve_radius_token(tok) {
+                            if tl {
+                                style.border_radius.top_left = px;
+                            }
+                            if tr {
+                                style.border_radius.top_right = px;
+                            }
+                            if br {
+                                style.border_radius.bottom_right = px;
+                            }
+                            if bl {
+                                style.border_radius.bottom_left = px;
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+        }
 
         if let Some(rest) = class.strip_prefix("border-spacing-x-") {
             if let Some(px) = resolve_spacing(rest) {
@@ -1115,8 +1263,14 @@ impl TailwindEngine {
 
         // 9. Opacity & Shadows
         if let Some(rest) = class.strip_prefix("opacity-") {
-            if let Ok(pct) = rest.parse::<f32>() {
-                style.opacity = (pct / 100.0).clamp(0.0, 1.0);
+            let num_str = extract_bracket_content(rest).unwrap_or(rest);
+            if let Ok(val) = num_str.parse::<f32>() {
+                let op = if extract_bracket_content(rest).is_some() && val <= 1.0 {
+                    val
+                } else {
+                    val / 100.0
+                };
+                style.opacity = op.clamp(0.0, 1.0);
                 return;
             }
         }
@@ -1176,11 +1330,47 @@ impl TailwindEngine {
                 }];
                 return;
             }
+            "shadow-2xl" => {
+                style.box_shadow = vec![BoxShadow {
+                    offset_x: 0.0,
+                    offset_y: 25.0,
+                    blur_radius: 50.0,
+                    spread_radius: -12.0,
+                    color: Color::new(0, 0, 0, 64),
+                    inset: false,
+                }];
+                return;
+            }
+            "shadow-inner" => {
+                style.box_shadow = vec![BoxShadow {
+                    offset_x: 0.0,
+                    offset_y: 2.0,
+                    blur_radius: 4.0,
+                    spread_radius: 0.0,
+                    color: Color::new(0, 0, 0, 15),
+                    inset: true,
+                }];
+                return;
+            }
             "shadow-none" => {
                 style.box_shadow.clear();
                 return;
             }
             _ => {}
+        }
+        if let Some(rest) = class.strip_prefix("shadow-") {
+            if let Some(inner) = extract_bracket_content(rest) {
+                let normalized = replace_tailwind_underscores(inner.trim());
+                if normalized.eq_ignore_ascii_case("none") {
+                    style.box_shadow.clear();
+                    return;
+                }
+                let parsed = crate::parser::parse_box_shadow(&normalized);
+                if !parsed.is_empty() {
+                    style.box_shadow = parsed;
+                    return;
+                }
+            }
         }
 
         // 10. Positioning & Insets
@@ -2343,6 +2533,114 @@ pub fn tokenize_classes(classes: &str) -> Vec<&str> {
     tokens
 }
 
+/// Evaluates all chained modifiers (`dark:hover:...`, `hover:active:...`) on `token` against `state`.
+/// Returns `Some((has_interactive_modifier, base_class))` when all modifiers are satisfied, or `None` otherwise.
+fn match_modifiers<'a>(
+    token: &'a str,
+    state: &crate::selector::PseudoState,
+) -> Option<(bool, &'a str)> {
+    let mut cur = token;
+    let mut has_interactive = false;
+    while let (Some(modifier), rest) = split_modifier(cur) {
+        let matched = match modifier {
+            "hover" => {
+                has_interactive = true;
+                state.is_hovered
+            }
+            "focus" | "focus-visible" | "focus-within" => {
+                has_interactive = true;
+                state.is_focused
+            }
+            "active" => {
+                has_interactive = true;
+                state.is_active
+            }
+            "disabled" => state.is_disabled,
+            "dark" => state.is_dark,
+            _ => false,
+        };
+        if !matched {
+            return None;
+        }
+        cur = rest;
+    }
+    Some((has_interactive, cur))
+}
+
+/// Replaces Tailwind's underscore-as-space convention inside arbitrary bracket values while
+/// preserving underscores inside CSS custom property identifiers (`--my_custom_var`).
+fn replace_tailwind_underscores(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut in_custom_prop = false;
+    while let Some(ch) = chars.next() {
+        if ch == '\\' && chars.peek() == Some(&'_') {
+            chars.next();
+            out.push('_');
+            continue;
+        }
+        if ch == '-' && chars.peek() == Some(&'-') && !in_custom_prop {
+            in_custom_prop = true;
+            out.push('-');
+            out.push(chars.next().unwrap());
+            continue;
+        }
+        if in_custom_prop {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                out.push(ch);
+                continue;
+            }
+            in_custom_prop = false;
+        }
+        if ch == '_' {
+            out.push(' ');
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Expands `var(--*)` inside `[...]` arbitrary value brackets of a Tailwind class token
+/// against `style.custom_properties` before utility dispatch.
+fn expand_arbitrary_vars_in_class<'a>(
+    class: &'a str,
+    style: &ComputedStyle,
+) -> std::borrow::Cow<'a, str> {
+    if !class.contains("var(") {
+        return std::borrow::Cow::Borrowed(class);
+    }
+    let Some(open_bracket) = class.find('[') else {
+        return std::borrow::Cow::Borrowed(class);
+    };
+    let mut depth = 0usize;
+    let mut close_bracket = None;
+    for (rel_i, ch) in class[open_bracket..].char_indices() {
+        match ch {
+            '[' => depth += 1,
+            ']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    close_bracket = Some(open_bracket + rel_i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(close_idx) = close_bracket else {
+        return std::borrow::Cow::Borrowed(class);
+    };
+    let inner = &class[open_bracket + 1..close_idx];
+    let inner_unescaped = replace_tailwind_underscores(inner);
+    let resolved_inner = crate::cascade::resolve_var(&inner_unescaped, style);
+    let mut rebuilt = String::with_capacity(class.len() + resolved_inner.len());
+    rebuilt.push_str(&class[..=open_bracket]);
+    rebuilt.push_str(resolved_inner.trim());
+    rebuilt.push_str(&class[close_idx..]);
+    std::borrow::Cow::Owned(rebuilt)
+}
+
 /// Splits a modifier prefix (`hover:`, `dark:`, `sm:`) from a class token,
 /// ignoring colons located within arbitrary value brackets `[...]`.
 pub fn split_modifier(token: &str) -> (Option<&str>, &str) {
@@ -2413,7 +2711,8 @@ fn split_opacity(token: &str) -> (&str, Option<f32>) {
 fn lookup_color_or_arbitrary(token: &str, opacity: Option<f32>) -> Option<Color> {
     if let Some(inner) = extract_bracket_content(token) {
         let clean = inner.trim();
-        let normalized = clean.replace('_', " ");
+        let clean = clean.strip_prefix("color:").unwrap_or(clean).trim();
+        let normalized = replace_tailwind_underscores(clean);
         if let Some(mut c) = crate::parser::parse_color(&normalized) {
             if let Some(op) = opacity {
                 c.a = (c.a as f32 * op.clamp(0.0, 1.0)).round() as u8;

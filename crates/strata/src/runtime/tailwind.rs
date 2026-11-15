@@ -28,8 +28,42 @@ impl AppRuntime {
         state: &strata_style::selector::PseudoState,
     ) {
         for cls in classes.iter() {
-            for single_class in cls.split_whitespace() {
+            for single_class in strata_style::tailwind::tokenize_classes(cls) {
                 strata_style::tailwind::TailwindEngine::apply_class_with_pseudo_state(
+                    style,
+                    single_class,
+                    state,
+                );
+            }
+        }
+    }
+
+    /// Applies only non-interactive (base + `dark:` + `disabled:`) Tailwind classes.
+    pub fn apply_base_tailwind_classes(
+        style: &mut ComputedStyle,
+        classes: &strata_dom::ClassList,
+        state: &strata_style::selector::PseudoState,
+    ) {
+        for cls in classes.iter() {
+            for single_class in strata_style::tailwind::tokenize_classes(cls) {
+                strata_style::tailwind::TailwindEngine::apply_base_class_with_pseudo_state(
+                    style,
+                    single_class,
+                    state,
+                );
+            }
+        }
+    }
+
+    /// Applies only active interactive (`hover:`, `focus:`, `active:`) Tailwind classes.
+    pub fn apply_interactive_tailwind_classes(
+        style: &mut ComputedStyle,
+        classes: &strata_dom::ClassList,
+        state: &strata_style::selector::PseudoState,
+    ) {
+        for cls in classes.iter() {
+            for single_class in strata_style::tailwind::tokenize_classes(cls) {
+                strata_style::tailwind::TailwindEngine::apply_interactive_class_with_pseudo_state(
                     style,
                     single_class,
                     state,
@@ -43,12 +77,14 @@ impl AppRuntime {
         self.hover_paint_only
     }
 
-    /// Returns true when any `hover:` utility on the path mutates box geometry.
+    /// Returns true when any `hover:` utility or `<style>` `:hover` rule on the path mutates box geometry.
     pub(crate) fn path_hover_affects_layout(blueprint: &NodeBlueprint, path: &[usize]) -> bool {
+        let mut path_nodes: Vec<&NodeBlueprint> = Vec::with_capacity(path.len() + 1);
         let mut current = blueprint;
         if Self::node_hover_classes_affect_layout(current) {
             return true;
         }
+        path_nodes.push(current);
         for &idx in path {
             let mut flat = Vec::new();
             match current {
@@ -57,27 +93,192 @@ impl AppRuntime {
                         Self::flatten_blueprints(child, &mut flat);
                     }
                 }
-                _ => return false,
+                _ => break,
             }
             if idx >= flat.len() {
-                return false;
+                break;
             }
             current = flat[idx];
             if Self::node_hover_classes_affect_layout(current) {
                 return true;
             }
+            path_nodes.push(current);
         }
+
+        let stylesheets = Self::collect_stylesheets_from_blueprint(blueprint);
+        if stylesheets.is_empty() {
+            return false;
+        }
+
+        let compound_has_hover = |comp: &strata_style::selector::CompoundSelector| {
+            comp.parts.iter().any(|p| match p {
+                strata_style::selector::SelectorPart::PseudoClass(name) => {
+                    let n = name.trim().to_ascii_lowercase();
+                    n == "hover" || n.contains(":hover")
+                }
+                _ => false,
+            })
+        };
+        let probe_state = strata_style::selector::PseudoState {
+            is_hovered: true,
+            is_focused: false,
+            is_active: false,
+            is_disabled: false,
+            is_dark: false,
+        };
+        let probe_state_dark = strata_style::selector::PseudoState {
+            is_hovered: true,
+            is_focused: false,
+            is_active: false,
+            is_disabled: false,
+            is_dark: true,
+        };
+
+        for bp in &path_nodes {
+            if let NodeBlueprint::Element {
+                tag,
+                classes,
+                attributes,
+                ..
+            } = bp
+            {
+                if Self::is_style_tag(tag) {
+                    continue;
+                }
+                let tag_str = Self::tag_as_str(tag);
+                let (class_vec, id_val, attr_vec) =
+                    Self::extract_element_selector_meta(classes, attributes);
+                for sheet in &stylesheets {
+                    for rule in &sheet.rules {
+                        let any_hover_sel_matches = rule.selectors.iter().any(|sel| {
+                            if !sel.has_any_hover_pseudo() {
+                                return false;
+                            }
+                            let target_matches = compound_has_hover(&sel.target)
+                                && (sel.target.matches_with_context(
+                                    tag_str,
+                                    &class_vec,
+                                    id_val.as_deref(),
+                                    &attr_vec,
+                                    &probe_state,
+                                    &[],
+                                    Some(true),
+                                    Some(true),
+                                    &[],
+                                ) || sel.target.matches_with_context(
+                                    tag_str,
+                                    &class_vec,
+                                    id_val.as_deref(),
+                                    &attr_vec,
+                                    &probe_state_dark,
+                                    &[],
+                                    Some(true),
+                                    Some(true),
+                                    &[],
+                                ));
+                            let step_matches = sel.steps.iter().any(|(_, comp)| {
+                                compound_has_hover(comp)
+                                    && (comp.matches_with_context(
+                                        tag_str,
+                                        &class_vec,
+                                        id_val.as_deref(),
+                                        &attr_vec,
+                                        &probe_state,
+                                        &[],
+                                        Some(true),
+                                        Some(true),
+                                        &[],
+                                    ) || comp.matches_with_context(
+                                        tag_str,
+                                        &class_vec,
+                                        id_val.as_deref(),
+                                        &attr_vec,
+                                        &probe_state_dark,
+                                        &[],
+                                        Some(true),
+                                        Some(true),
+                                        &[],
+                                    ))
+                            });
+                            target_matches || step_matches
+                        });
+                        if any_hover_sel_matches
+                            && rule
+                                .declarations
+                                .iter()
+                                .any(|d| !Self::css_declaration_is_paint_only(&d.property))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
         false
+    }
+
+    pub(crate) fn css_declaration_is_paint_only(prop: &str) -> bool {
+        matches!(
+            prop.trim().to_ascii_lowercase().as_str(),
+            "background"
+                | "background-color"
+                | "background-image"
+                | "color"
+                | "border-color"
+                | "border-top-color"
+                | "border-right-color"
+                | "border-bottom-color"
+                | "border-left-color"
+                | "border-radius"
+                | "border-top-left-radius"
+                | "border-top-right-radius"
+                | "border-bottom-right-radius"
+                | "border-bottom-left-radius"
+                | "opacity"
+                | "box-shadow"
+                | "outline"
+                | "outline-color"
+                | "outline-offset"
+                | "filter"
+                | "backdrop-filter"
+                | "-webkit-backdrop-filter"
+                | "transform"
+                | "transform-origin"
+                | "cursor"
+                | "transition"
+                | "transition-property"
+                | "transition-duration"
+                | "transition-timing-function"
+                | "transition-delay"
+                | "z-index"
+                | "text-decoration"
+                | "visibility"
+                | "pointer-events"
+                | "user-select"
+                | "will-change"
+                | "mix-blend-mode"
+                | "isolation"
+                | "clip-path"
+        )
     }
 
     pub(crate) fn node_hover_classes_affect_layout(node: &NodeBlueprint) -> bool {
         match node {
             NodeBlueprint::Element { classes, .. } => classes.iter().any(|class| {
-                class.split_whitespace().any(|token| {
-                    token
-                        .strip_prefix("hover:")
-                        .is_some_and(|rest| !Self::hover_token_is_paint_only(rest))
-                })
+                strata_style::tailwind::tokenize_classes(class)
+                    .into_iter()
+                    .any(|token| {
+                        let mut cur = token;
+                        let mut has_hover = false;
+                        while let (Some(m), rest) = strata_style::tailwind::split_modifier(cur) {
+                            if m == "hover" {
+                                has_hover = true;
+                            }
+                            cur = rest;
+                        }
+                        has_hover && !Self::hover_token_is_paint_only(cur)
+                    })
             }),
             _ => false,
         }
@@ -117,6 +318,8 @@ impl AppRuntime {
             "scale-",
             "rotate-",
             "translate-",
+            "-translate-",
+            "-rotate-",
             "filter-",
             "backdrop-",
             "blur-",
@@ -125,6 +328,7 @@ impl AppRuntime {
             "saturate-",
             "hue-rotate-",
             "z-",
+            "-z-",
             "pointer-events-",
             "select-",
             "will-change-",
@@ -146,6 +350,7 @@ impl AppRuntime {
                 | "visible"
                 | "invisible"
                 | "drop-shadow"
+                | "shadow"
         )
     }
 
@@ -159,11 +364,16 @@ impl AppRuntime {
             return false;
         }
         if value.starts_with('[') {
+            if value.starts_with("[length:") {
+                return false;
+            }
             return value.contains('#')
                 || value.contains("rgb")
                 || value.contains("hsl")
                 || value.contains("oklch")
-                || value.contains("color(");
+                || value.contains("color(")
+                || value.contains("color:")
+                || value.contains("var(");
         }
         true
     }
@@ -177,10 +387,16 @@ impl AppRuntime {
             }
         }
         if value.starts_with('[') {
+            if value.starts_with("[length:") {
+                return false;
+            }
             return value.contains('#')
                 || value.contains("rgb")
                 || value.contains("hsl")
-                || value.contains("oklch");
+                || value.contains("oklch")
+                || value.contains("color(")
+                || value.contains("color:")
+                || value.contains("var(");
         }
         if matches!(value, "transparent" | "current" | "black" | "white") {
             return true;
@@ -190,5 +406,4 @@ impl AppRuntime {
             .map(|(_, shade)| !shade.is_empty() && shade.chars().all(|c| c.is_ascii_digit()))
             .unwrap_or(false)
     }
-
 }

@@ -115,6 +115,7 @@ impl AppRuntime {
             &self.base_node_styles,
             &self.transition_manager,
             &self.animation_manager,
+            None,
         );
     }
 
@@ -124,13 +125,27 @@ impl AppRuntime {
         base_styles: &std::collections::HashMap<u64, ComputedStyle>,
         transition_manager: &strata_style::transition::TransitionManager,
         animation_manager: &strata_style::animation::AnimationManager,
+        inherited_color_override: Option<(strata_style::types::Color, strata_style::types::Color)>,
     ) {
         let node_id = path_to_node_id(path);
         if let Some(base) = base_styles.get(&node_id) {
             node.style = base.clone();
         }
+        let own_base_color = node.style.color;
+        if let Some((anc_base_color, anc_anim_color)) = inherited_color_override {
+            if own_base_color == anc_base_color {
+                node.style.color = anc_anim_color;
+            }
+        }
         transition_manager.apply_to_style(node_id, &mut node.style);
         animation_manager.apply_to_style(node_id, &mut node.style);
+        node.active_transitions = transition_manager.has_node_transitions(node_id);
+
+        let next_color_override = if node.style.color != own_base_color {
+            Some((own_base_color, node.style.color))
+        } else {
+            None
+        };
 
         for (idx, child) in node.children.iter_mut().enumerate() {
             path.push(idx);
@@ -140,6 +155,7 @@ impl AppRuntime {
                 base_styles,
                 transition_manager,
                 animation_manager,
+                next_color_override,
             );
             path.pop();
         }
@@ -255,6 +271,13 @@ impl AppRuntime {
         }
     }
 
+    /// Returns true if any CSS property transitions or view transitions are currently active.
+    pub fn has_active_transitions(&self) -> bool {
+        self.transition_manager.has_active_transitions()
+            || self.view_transition_manager.has_active_transitions()
+            || self.layout_root.has_active_transitions()
+    }
+
     /// Returns true if there are any active transitions or keyframe animations running.
     pub fn has_active_animations(&self) -> bool {
         self.transition_manager.has_active_transitions()
@@ -297,6 +320,7 @@ impl AppRuntime {
         if layout_affecting {
             self.tick_frame();
         } else {
+            strata_layout::box_model::refresh_inline_fragment_styles(&mut self.layout_root);
             self.compile_display_list();
         }
 

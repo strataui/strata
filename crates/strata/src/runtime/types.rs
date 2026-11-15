@@ -265,4 +265,15 @@ pub struct InteractionContext<'a> {
     pub is_dark_mode: bool,
 }
 
+/// Element selector metadata used when matching `<style>` rules across ancestors and siblings.
+#[derive(Debug, Clone)]
+pub(crate) struct CascadeElementMeta {
+    pub tag: &'static str,
+    pub classes: Vec<String>,
+    pub id: Option<String>,
+    pub attributes: Vec<(String, String)>,
+    pub pseudo_state: strata_style::selector::PseudoState,
+}
+
+
 

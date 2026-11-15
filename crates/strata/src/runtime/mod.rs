@@ -270,6 +270,10 @@ impl AppRuntime {
             csd_controller: strata_platform::CsdController::default(),
         };
 
+        let initial_sheets = Self::collect_stylesheets_from_blueprint(&runtime.root_blueprint);
+        for sheet in &initial_sheets {
+            runtime.register_keyframes_stylesheet(sheet);
+        }
         runtime.sync_tree_animations(0.0);
         runtime.apply_viewport_clamps();
         runtime.apply_scroll_offsets();
@@ -388,6 +392,10 @@ impl AppRuntime {
         self.root_blueprint = new_view.root.flatten_fragments();
         self.root_blueprint.ensure_entity_ids();
         self.ir_graph = Self::build_ir_graph(&self.root_blueprint);
+        let sheets = Self::collect_stylesheets_from_blueprint(&self.root_blueprint);
+        for sheet in &sheets {
+            self.register_keyframes_stylesheet(sheet);
+        }
         let build_start = std::time::Instant::now();
         let ctx = self.interaction_context();
         self.layout_root = Self::build_layout_tree_with_interaction(

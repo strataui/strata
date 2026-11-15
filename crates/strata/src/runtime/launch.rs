@@ -459,6 +459,7 @@ where
             if let strata_platform::PlatformEvent::MouseDown { x, y, button } = event {
                 let btn_idx = button.to_button_index();
                 if *button == strata_platform::MouseButton::Left {
+                    rt.is_mouse_down = true;
                     if rt.check_scrollbar_thumb_press(*x, *y) {
                         needs_redraw = true;
                     } else {
@@ -478,6 +479,10 @@ where
                         }
                         if rt.drain_edit_commands() {
                             needs_rebuild = true;
+                        }
+                        if !needs_rebuild {
+                            rt.restyle_for_hover_paint();
+                            needs_redraw = true;
                         }
                     }
                 } else if *button == strata_platform::MouseButton::Middle {
@@ -499,7 +504,11 @@ where
                     }
                 }
             }
-            if let strata_platform::PlatformEvent::MouseUp { x, y, button: _ } = event {
+            if let strata_platform::PlatformEvent::MouseUp { x, y, button } = event {
+                let was_mouse_down = rt.is_mouse_down;
+                if *button == strata_platform::MouseButton::Left {
+                    rt.is_mouse_down = false;
+                }
                 if rt.scrollbar_drag.is_some() {
                     rt.scrollbar_drag = None;
                     needs_redraw = true;
@@ -509,6 +518,10 @@ where
                 if action.needs_rebuild() {
                     needs_rebuild = true;
                 } else if action.needs_redraw() {
+                    needs_redraw = true;
+                }
+                if was_mouse_down && !needs_rebuild {
+                    rt.restyle_for_hover_paint();
                     needs_redraw = true;
                 }
             }
@@ -559,6 +572,7 @@ where
                 }
             }
             if matches!(event, strata_platform::PlatformEvent::CursorLeft) {
+                rt.is_mouse_down = false;
                 rt.current_cursor = strata_platform::window::CursorIcon::Default;
                 strata_platform::gtk_set_cursor(strata_platform::window::CursorIcon::Default);
                 if rt.clear_hover() {
