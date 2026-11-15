@@ -379,3 +379,56 @@ fn create_dropdown_portal_match_width_and_css_anchor_positioning_work() {
     runtime.dispatch_mouse_click(380.0, 280.0, 0, 1);
     assert_eq!(dismissed.get(), 1);
 }
+
+#[test]
+fn test_path_qualified_strata_dom_portal_renders_and_dispatches_clicks() {
+    let modal_clicks = Rc::new(Cell::new(0usize));
+    let anchored_clicks = Rc::new(Cell::new(0usize));
+
+    let mc = modal_clicks.clone();
+    let ac = anchored_clicks.clone();
+
+    let view = rsx! {
+        <div class="w-[400px] h-[300px] relative overflow-hidden">
+            <div class="w-[160px] h-[60px] overflow-hidden">
+                <button id="qual-trig" class="w-[100px] h-[32px]">{"Open"}</button>
+                <strata_dom::Portal>
+                    <button
+                        id="qual-modal-btn"
+                        style="position: fixed; left: 220px; top: 180px; width: 120px; height: 40px;"
+                        onclick={move |_: Event| mc.set(mc.get() + 1)}
+                    >
+                        {"Modal Action"}
+                    </button>
+                </strata_dom::Portal>
+                <::strata_dom::Portal anchor="qual-trig" placement="bottom-start" offset={4.0}>
+                    <button
+                        id="qual-anchored-btn"
+                        class="w-[120px] h-[36px]"
+                        onclick={move |_: Event| ac.set(ac.get() + 1)}
+                    >
+                        {"Anchored Action"}
+                    </button>
+                </::strata_dom::Portal>
+            </div>
+        </div>
+    };
+    let runtime = AppRuntime::new(view, 400.0, 300.0, 1.0);
+
+    // Unanchored `<strata_dom::Portal>` escapes the 160x60 overflow-hidden container
+    runtime.dispatch_mouse_click(250.0, 200.0, 0, 1);
+    assert_eq!(modal_clicks.get(), 1);
+
+    // Anchored `<::strata_dom::Portal>` positions below `qual-trig` and receives clicks outside the 60px clip
+    let anchored_box = find_node_by_element_id(&runtime.layout_root, "qual-anchored-btn")
+        .expect("qual-anchored-btn in layout tree")
+        .geometry
+        .border_box;
+    assert!(
+        (anchored_box.y - 36.0).abs() <= 1.5,
+        "Expected anchored ::strata_dom::Portal at y ~ 36, got {:?}",
+        anchored_box
+    );
+    runtime.dispatch_mouse_click(anchored_box.x + 20.0, anchored_box.y + 30.0, 0, 1);
+    assert_eq!(anchored_clicks.get(), 1);
+}

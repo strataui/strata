@@ -395,3 +395,97 @@ fn test_rsx_class_deduplication_removes_redundant_tokens() {
         _ => panic!("Expected Element"),
     }
 }
+
+mod nested_ui {
+    use strata_dom::{NodeBlueprint, View};
+    use strata_macro::{component, rsx};
+
+    #[component]
+    pub fn Pill(label: &'static str, children: Option<Vec<NodeBlueprint>>) -> View {
+        rsx! {
+            <div class="pill" data-label={label}>
+                {children.unwrap_or_default()}
+            </div>
+        }
+    }
+
+    #[component]
+    pub fn Divider() -> View {
+        rsx! {
+            <hr class="divider" />
+        }
+    }
+
+    pub fn render_status(code: &'static str) -> View {
+        rsx! {
+            <span class="status">{code}</span>
+        }
+    }
+
+    pub struct FakeIcons;
+
+    #[allow(non_snake_case)]
+    impl FakeIcons {
+        pub fn Plus(class: Option<&'static str>) -> View {
+            let cls = class.unwrap_or("icon-default");
+            rsx! {
+                <i class={cls} />
+            }
+        }
+    }
+}
+
+#[test]
+fn test_rsx_path_qualified_components_and_portals() {
+    use nested_ui::FakeIcons;
+
+    let view = rsx! {
+        <div class="host">
+            <strata_dom::Portal>
+                <div id="unanchored-portal-body">{"Top Layer"}</div>
+            </strata_dom::Portal>
+            <strata_dom::Portal anchor="menu-trigger" placement="bottom-end" offset={6.0}>
+                <button id="anchored-portal-action">{"Action"}</button>
+            </strata_dom::Portal>
+            <strata_dom::Portal />
+            <::strata_dom::Portal>
+                <span id="global-path-portal">{"Global Path"}</span>
+            </::strata_dom::Portal>
+            <nested_ui::Pill label="beta">
+                <span>{"Child"}</span>
+            </nested_ui::Pill>
+            <self::nested_ui::Divider />
+            <nested_ui::render_status code="200" />
+            <FakeIcons::Plus class={Some("w-4 h-4")} />
+            <nested_ui::FakeIcons::Plus />
+        </div>
+    };
+
+    match view.root {
+        NodeBlueprint::Element { tag, children, .. } => {
+            assert_eq!(tag, Tag::Div);
+            assert_eq!(children.len(), 9);
+
+            // First 4 children are path-qualified `<strata_dom::Portal>` / `<::strata_dom::Portal>` nodes
+            for (idx, portal_node) in children.iter().take(4).enumerate() {
+                match portal_node {
+                    NodeBlueprint::Element {
+                        tag, attributes, ..
+                    } => {
+                        assert_eq!(*tag, Tag::Custom("portal"));
+                        assert!(
+                            attributes.iter().any(|attr| matches!(
+                                attr,
+                                Attribute::Property { key, value }
+                                    if key == "data-portal" && value == "true"
+                            )),
+                            "Child {idx} must be a top-layer Portal element"
+                        );
+                    }
+                    _ => panic!("Expected Portal Element at child {idx}"),
+                }
+            }
+        }
+        _ => panic!("Expected root Element"),
+    }
+}
