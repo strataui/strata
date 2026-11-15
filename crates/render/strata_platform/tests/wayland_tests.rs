@@ -228,45 +228,50 @@ fn test_wayland_pointer_motion_and_keyboard_events() {
         enc.finish_message(3, 0);
         let _ = client_sock.write_all(enc.as_bytes());
 
-        // Drain bind requests and xdg configure
-        let _ = client_sock.read(&mut buf);
-
-        // Send xdg_wm_base ping (serial = 99)
-        enc.begin_message();
-        enc.push_u32(99);
-        enc.finish_message(5, 0);
-        let _ = client_sock.write_all(enc.as_bytes());
-
-        // Send pointer motion: object pointer_id=10, opcode 2 (motion: time, surface_x, surface_y)
-        enc.begin_message();
-        enc.push_u32(1000);
-        enc.push_fixed(150.0);
-        enc.push_fixed(200.0);
-        enc.finish_message(10, 2);
-        let _ = client_sock.write_all(enc.as_bytes());
-
-        // Send keyboard key event: object keyboard_id=11, opcode 3 (serial, time, key=30 ('a'), state=1)
-        enc.begin_message();
-        enc.push_u32(1);
-        enc.push_u32(1001);
-        enc.push_u32(30);
-        enc.push_u32(1);
-        enc.finish_message(11, 3);
-        let _ = client_sock.write_all(enc.as_bytes());
+        // Return the connected socket so it stays open while the client completes binding
+        client_sock
     });
 
-    let window_result = WaylandWindow::new(WindowConfig::default());
-    let _ = server_thread.join();
+    let mut win = WaylandWindow::new(WindowConfig::default())
+        .expect("WaylandWindow handshake should succeed");
+    let mut client_sock = server_thread.join().expect("Join mock Wayland server thread");
     let _ = std::fs::remove_file(&socket_path);
 
-    if let Ok(mut win) = window_result {
-        let events = win.poll_native_events();
-        let has_move = events.iter().any(|e| {
-            matches!(e, PlatformEvent::MouseMove { x, y } if (*x - 150.0).abs() < 1.0 && (*y - 200.0).abs() < 1.0)
-        });
-        let has_char = events.iter().any(|e| matches!(e, PlatformEvent::ReceivedCharacter('a')));
-        assert!(has_move, "Expected MouseMove event from Wayland wire");
-        assert!(has_char, "Expected ReceivedCharacter('a') from Wayland wire");
-    }
+    let _ = client_sock.set_nonblocking(true);
+    let mut drain_buf = [0u8; 4096];
+    let _ = client_sock.read(&mut drain_buf);
+
+    let mut enc = WaylandEncoder::new();
+
+    // Send xdg_wm_base ping (serial = 99)
+    enc.begin_message();
+    enc.push_u32(99);
+    enc.finish_message(win.xdg_wm_base_id, 0);
+    let _ = client_sock.write_all(enc.as_bytes());
+
+    // Send pointer motion: opcode 2 (motion: time, surface_x, surface_y)
+    enc.begin_message();
+    enc.push_u32(1000);
+    enc.push_fixed(150.0);
+    enc.push_fixed(200.0);
+    enc.finish_message(win.pointer_id, 2);
+    let _ = client_sock.write_all(enc.as_bytes());
+
+    // Send keyboard key event: opcode 3 (serial, time, key=30 ('a'), state=1)
+    enc.begin_message();
+    enc.push_u32(1);
+    enc.push_u32(1001);
+    enc.push_u32(30);
+    enc.push_u32(1);
+    enc.finish_message(win.keyboard_id, 3);
+    let _ = client_sock.write_all(enc.as_bytes());
+
+    let events = win.poll_native_events();
+    let has_move = events.iter().any(|e| {
+        matches!(e, PlatformEvent::MouseMove { x, y } if (*x - 150.0).abs() < 1.0 && (*y - 200.0).abs() < 1.0)
+    });
+    let has_char = events.iter().any(|e| matches!(e, PlatformEvent::ReceivedCharacter('a')));
+    assert!(has_move, "Expected MouseMove event from Wayland wire");
+    assert!(has_char, "Expected ReceivedCharacter('a') from Wayland wire");
 }
 

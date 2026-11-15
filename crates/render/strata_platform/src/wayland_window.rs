@@ -614,9 +614,13 @@ impl WaylandWindow {
     fn read_and_dispatch(&mut self, sync_done: &mut bool, target_callback_id: u32) -> Result<(), String> {
         if let Some(ref mut stream) = self.stream {
             let mut chunk = [0u8; 4096];
+            let mut peer_closed = false;
             loop {
                 match stream.read(&mut chunk) {
-                    Ok(0) => return Err("Wayland server closed connection".to_string()),
+                    Ok(0) => {
+                        peer_closed = true;
+                        break;
+                    }
                     Ok(n) => {
                         self.read_buffer.extend_from_slice(&chunk[..n]);
                     }
@@ -629,13 +633,17 @@ impl WaylandWindow {
             while self.read_buffer.len() >= 8 {
                 let header = WaylandHeader::from_bytes(&self.read_buffer[..8]).unwrap();
                 let msg_len = header.size as usize;
-                if self.read_buffer.len() < msg_len {
+                if msg_len < 8 || self.read_buffer.len() < msg_len {
                     break;
                 }
 
                 let payload = self.read_buffer[8..msg_len].to_vec();
                 self.read_buffer.drain(..msg_len);
                 self.handle_event(header.object_id, header.opcode, &payload, sync_done, target_callback_id);
+            }
+
+            if peer_closed && !*sync_done {
+                return Err("Wayland server closed connection".to_string());
             }
         }
         Ok(())
@@ -940,7 +948,7 @@ impl WaylandWindow {
     pub fn poll_native_events(&mut self) -> Vec<PlatformEvent> {
         let mut dummy = false;
         let _ = self.read_and_dispatch(&mut dummy, 0);
-        self.poll_events()
+        self.event_queue.drain(..).collect()
     }
 }
 

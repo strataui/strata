@@ -257,3 +257,110 @@ fn test_sticky_element_clamped_to_static_parent_container() {
     assert_eq!(sticky_geom.y, 350.0, "Sticky child must be clamped to static parent container bottom");
 }
 
+#[test]
+fn test_absolute_auto_width_and_height_with_right_inset_in_block_and_flex_parents() {
+    use strata_style::types::FlexDirection;
+
+    for is_flex in [false, true] {
+        let mut parent_style = ComputedStyle {
+            display: if is_flex { Display::Flex } else { Display::Block },
+            flex_direction: FlexDirection::Row,
+            position: Position::Relative,
+            width: Dimension::Px(360.0),
+            height: Dimension::Px(80.0),
+            ..Default::default()
+        };
+        if is_flex {
+            parent_style.justify_content = strata_style::types::JustifyContent::SpaceBetween;
+        }
+
+        // Absolute dropdown wrapper: width: auto, height: auto, right: 8px, top: 36px
+        let mut dropdown_wrap_style = ComputedStyle {
+            display: Display::Block,
+            position: Position::Absolute,
+            width: Dimension::Auto,
+            height: Dimension::Auto,
+            ..Default::default()
+        };
+        dropdown_wrap_style.insets.right = Dimension::Px(8.0);
+        dropdown_wrap_style.insets.top = Dimension::Px(36.0);
+
+        // Fixed-width w-48 (192px) menu panel inside the auto-sized absolute wrapper
+        let menu_panel = LayoutNode::new(ComputedStyle {
+            display: Display::Block,
+            width: Dimension::Px(192.0),
+            height: Dimension::Px(112.0),
+            ..Default::default()
+        });
+
+        let dropdown_wrap = LayoutNode::with_children(dropdown_wrap_style, vec![menu_panel]);
+        let mut parent = LayoutNode::with_children(parent_style, vec![dropdown_wrap]);
+        parent.compute_layout(360.0, 80.0);
+
+        let wrap_box = parent.children[0].geometry.border_box;
+        let panel_box = parent.children[0].children[0].geometry.border_box;
+
+        // Expected x = 360 - 8 - 192 = 160.0 (NOT 360 - 8 - 0 = 352.0)
+        assert_eq!(wrap_box.width, 192.0, "is_flex={is_flex}: auto width must shrink-to-fit w-48 child");
+        assert_eq!(wrap_box.height, 112.0, "is_flex={is_flex}: auto height must wrap laid-out child");
+        assert_eq!(wrap_box.x, 160.0, "is_flex={is_flex}: right inset must subtract intrinsic width");
+        assert_eq!(wrap_box.y, 36.0, "is_flex={is_flex}: top inset must anchor to 36px");
+        assert_eq!(panel_box.x, 160.0, "is_flex={is_flex}: child subtree must translate to item_x");
+        assert_eq!(panel_box.y, 36.0, "is_flex={is_flex}: child subtree must translate to item_y");
+        assert!(wrap_box.contains_point(220.0, 90.0), "border_box hit-test must cover dropdown");
+    }
+}
+
+#[test]
+fn test_absolute_auto_height_with_bottom_and_right_insets() {
+    let mut root_style = ComputedStyle {
+        display: Display::Flex,
+        flex_direction: strata_style::types::FlexDirection::Column,
+        position: Position::Relative,
+        width: Dimension::Px(400.0),
+        height: Dimension::Px(300.0),
+        ..Default::default()
+    };
+    root_style.align_items = strata_style::types::AlignItems::Center;
+
+    let mut popover_style = ComputedStyle {
+        display: Display::Flex,
+        flex_direction: strata_style::types::FlexDirection::Column,
+        position: Position::Absolute,
+        width: Dimension::Auto,
+        height: Dimension::Auto,
+        ..Default::default()
+    };
+    popover_style.insets.right = Dimension::Px(12.0);
+    popover_style.insets.bottom = Dimension::Px(16.0);
+
+    let item_a = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        width: Dimension::Px(180.0),
+        height: Dimension::Px(36.0),
+        ..Default::default()
+    });
+    let item_b = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        width: Dimension::Px(180.0),
+        height: Dimension::Px(44.0),
+        ..Default::default()
+    });
+
+    let popover = LayoutNode::with_children(popover_style, vec![item_a, item_b]);
+    let mut root = LayoutNode::with_children(root_style, vec![popover]);
+    root.compute_layout(400.0, 300.0);
+
+    let pop_box = root.children[0].geometry.border_box;
+    // Total width = 180, total height = 36 + 44 = 80
+    // x = 400 - 12 - 180 = 208
+    // y = 300 - 16 - 80 = 204
+    assert_eq!(pop_box.width, 180.0);
+    assert_eq!(pop_box.height, 80.0);
+    assert_eq!(pop_box.x, 208.0);
+    assert_eq!(pop_box.y, 204.0);
+    assert_eq!(root.children[0].children[0].geometry.border_box.y, 204.0);
+    assert_eq!(root.children[0].children[1].geometry.border_box.y, 240.0);
+}
+
+
