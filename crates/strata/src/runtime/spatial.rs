@@ -109,6 +109,41 @@ impl SpatialIndex {
         }
     }
 
+    fn collect_top_layer_portals<'a>(
+        bp: &'a NodeBlueprint,
+        layout: &'a LayoutNode,
+        fallback_bp: &'a NodeBlueprint,
+        current_path: &mut Vec<usize>,
+        out: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode, Vec<usize>)>,
+        depth: usize,
+    ) {
+        if depth >= 256 {
+            return;
+        }
+        for (idx, child_bp, child_layout) in
+            Self::paired_children_with_fallback(bp, layout, fallback_bp)
+        {
+            if child_layout.style.display == Display::None {
+                continue;
+            }
+            current_path.push(idx);
+            if child_layout.is_top_layer {
+                out.push((child_bp, child_layout, current_path.clone()));
+            }
+            if !child_layout.children.is_empty() {
+                Self::collect_top_layer_portals(
+                    child_bp,
+                    child_layout,
+                    fallback_bp,
+                    current_path,
+                    out,
+                    depth + 1,
+                );
+            }
+            current_path.pop();
+        }
+    }
+
     /// Clears and rebuilds the spatial index from the active blueprint and computed layout hierarchy.
     pub fn rebuild(&mut self, blueprint: &NodeBlueprint, layout: &LayoutNode) {
         self.entries.clear();
@@ -129,6 +164,33 @@ impl SpatialIndex {
             &[],
             0,
         );
+
+        let fallback_bp = NodeBlueprint::Empty;
+        let mut portals = Vec::new();
+        path.clear();
+        Self::collect_top_layer_portals(
+            blueprint,
+            layout,
+            &fallback_bp,
+            &mut path,
+            &mut portals,
+            0,
+        );
+        for (p_bp, p_layout, mut p_path) in portals {
+            let p_z = p_layout.style.z_index.unwrap_or(0);
+            Self::collect_stacking_context(
+                p_bp,
+                p_layout,
+                &mut p_path,
+                &mut self.entries,
+                &mut order,
+                p_z,
+                i64::MAX,
+                false,
+                &[],
+                1,
+            );
+        }
 
         for (idx, entry) in self.entries.iter().enumerate() {
             if entry.entity_id.is_valid() {
@@ -264,7 +326,7 @@ impl SpatialIndex {
         for (idx, child_bp, child_layout) in
             Self::paired_children_with_fallback(bp, layout, fallback_bp)
         {
-            if child_layout.style.display == Display::None {
+            if child_layout.style.display == Display::None || child_layout.is_top_layer {
                 continue;
             }
             current_path.push(idx);
@@ -338,6 +400,7 @@ impl SpatialIndex {
         let parent_display = Some(layout.style.display);
         let is_in_flow_non_sc = |c: &LayoutNode| {
             c.style.display != Display::None
+                && !c.is_top_layer
                 && !AppRuntime::establishes_stacking_context_in(c, parent_display, false)
                 && c.style.position == Position::Static
         };

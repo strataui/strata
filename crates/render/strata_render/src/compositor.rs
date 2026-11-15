@@ -392,7 +392,7 @@ impl Compositor {
                 vp.height + buffer_y * 2.0,
             )
         });
-        Self::paint_stacking_context_inner(root, &mut list, cull_rect, cull_rect, &[], true, 0);
+        Self::paint_stacking_context_guarded(root, &mut list, cull_rect, 0);
         list
     }
 
@@ -594,6 +594,38 @@ impl Compositor {
         depth: usize,
     ) {
         Self::paint_stacking_context_inner(node, list, cull, cull, &[], depth == 0, depth);
+        if depth == 0 {
+            Self::paint_top_layer_portals(node, list, cull);
+        }
+    }
+
+    fn collect_top_layer_portals<'a>(node: &'a LayoutNode, out: &mut Vec<&'a LayoutNode>) {
+        let mut stack: Vec<(&'a LayoutNode, usize)> = vec![(node, 0)];
+        while let Some((cur, depth)) = stack.pop() {
+            if depth > 0 && cur.is_top_layer {
+                out.push(cur);
+            }
+            if depth >= Self::MAX_COMPOSITOR_DEPTH {
+                continue;
+            }
+            for child in cur.children.iter().rev() {
+                if child.style.display == Display::None
+                    || child.style.content_visibility
+                        == strata_style::types::ContentVisibility::Hidden
+                {
+                    continue;
+                }
+                stack.push((child, depth + 1));
+            }
+        }
+    }
+
+    fn paint_top_layer_portals(node: &LayoutNode, list: &mut DisplayList, root_cull: Option<Rect>) {
+        let mut portals = Vec::new();
+        Self::collect_top_layer_portals(node, &mut portals);
+        for portal in portals {
+            Self::paint_stacking_context_inner(portal, list, root_cull, root_cull, &[], false, 1);
+        }
     }
 
     fn node_clip_scroll_step(node: &LayoutNode) -> Option<ClipScrollStep> {
@@ -701,7 +733,10 @@ impl Compositor {
     }
 
     fn subtree_has_fixed_escape(node: &LayoutNode, depth: usize) -> bool {
-        if depth >= Self::MAX_COMPOSITOR_DEPTH || node.style.display == Display::None {
+        if depth >= Self::MAX_COMPOSITOR_DEPTH
+            || node.style.display == Display::None
+            || node.is_top_layer
+        {
             return false;
         }
         if node.style.position == Position::Fixed {
@@ -730,7 +765,8 @@ impl Compositor {
         let parent_display = parent.style.display;
 
         for child in &parent.children {
-            if child.style.display == Display::None
+            if child.is_top_layer
+                || child.style.display == Display::None
                 || child.style.content_visibility == strata_style::types::ContentVisibility::Hidden
             {
                 continue;
@@ -1027,7 +1063,8 @@ impl Compositor {
             let has_line_boxes = !node.line_boxes.is_empty();
             let parent_display = node.style.display;
             for child in &node.children {
-                if child.style.display == Display::None
+                if child.is_top_layer
+                    || child.style.display == Display::None
                     || child.style.content_visibility
                         == strata_style::types::ContentVisibility::Hidden
                 {
@@ -1598,7 +1635,7 @@ impl Compositor {
         let has_line_boxes = !node.line_boxes.is_empty();
         let parent_display = node.style.display;
         for child in &node.children {
-            if child.style.display == Display::None {
+            if child.is_top_layer || child.style.display == Display::None {
                 continue;
             }
             if has_line_boxes

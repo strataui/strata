@@ -89,6 +89,10 @@ pub struct AppRuntime {
     pub last_scroll_interaction: Option<std::time::Instant>,
     /// Scroll offsets currently applied via translation to the layout tree, keyed by hierarchical tree path.
     pub applied_scroll_offsets: std::collections::HashMap<Vec<usize>, (f32, f32)>,
+    /// Anchored top-layer `<Portal>` translations currently applied to the layout tree, keyed by path.
+    pub applied_portal_offsets: std::collections::HashMap<Vec<usize>, (f32, f32)>,
+    /// Cached flag indicating whether the active layout tree contains any anchored `<Portal>` nodes.
+    pub(crate) has_anchored_portals: bool,
     /// Continuous presentation epoch for animation and transition timing.
     pub runtime_start_epoch: std::time::Instant,
     /// Coordinator for CSS transition properties across elements.
@@ -247,6 +251,8 @@ impl AppRuntime {
             active_smooth_scroll: None,
             last_scroll_interaction: None,
             applied_scroll_offsets: std::collections::HashMap::new(),
+            applied_portal_offsets: std::collections::HashMap::new(),
+            has_anchored_portals: false,
             runtime_start_epoch: std::time::Instant::now(),
             transition_manager: strata_style::transition::TransitionManager::new(),
             animation_manager: strata_style::animation::AnimationManager::new(),
@@ -393,6 +399,7 @@ impl AppRuntime {
     /// Updates the application root view, reconstructing the layout tree and compiling a new display list.
     pub fn update_view(&mut self, new_view: View) {
         self.applied_scroll_offsets.clear();
+        self.applied_portal_offsets.clear();
         self.root_blueprint = new_view.root.flatten_fragments();
         self.root_blueprint.ensure_entity_ids();
         self.ir_graph = Self::build_ir_graph(&self.root_blueprint);

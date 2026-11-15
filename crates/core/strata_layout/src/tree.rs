@@ -197,6 +197,245 @@ pub fn record_layout_overflow(depth: usize, max_depth: usize) {
     });
 }
 
+/// Placement of an anchored top-layer portal or floating element relative to its anchor box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum AnchorPlacement {
+    Bottom,
+    BottomStart,
+    #[default]
+    BottomEnd,
+    Top,
+    TopStart,
+    TopEnd,
+    Left,
+    LeftStart,
+    LeftEnd,
+    Right,
+    RightStart,
+    RightEnd,
+}
+
+impl AnchorPlacement {
+    /// Parses a CSS/Floating-UI placement string such as `"bottom-end"`, `"top-start"`, `"bottom"`, etc.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "bottom" | "block-end" => Some(Self::Bottom),
+            "bottom-start" | "bottom_start" | "bottom-left" => Some(Self::BottomStart),
+            "bottom-end" | "bottom_end" | "bottom-right" => Some(Self::BottomEnd),
+            "top" | "block-start" => Some(Self::Top),
+            "top-start" | "top_start" | "top-left" => Some(Self::TopStart),
+            "top-end" | "top_end" | "top-right" => Some(Self::TopEnd),
+            "left" | "inline-start" => Some(Self::Left),
+            "left-start" | "left_start" | "left-top" => Some(Self::LeftStart),
+            "left-end" | "left_end" | "left-bottom" => Some(Self::LeftEnd),
+            "right" | "inline-end" => Some(Self::Right),
+            "right-start" | "right_start" | "right-top" => Some(Self::RightStart),
+            "right-end" | "right_end" | "right-bottom" => Some(Self::RightEnd),
+            _ => None,
+        }
+    }
+
+    /// Canonical kebab-case string representation.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bottom => "bottom",
+            Self::BottomStart => "bottom-start",
+            Self::BottomEnd => "bottom-end",
+            Self::Top => "top",
+            Self::TopStart => "top-start",
+            Self::TopEnd => "top-end",
+            Self::Left => "left",
+            Self::LeftStart => "left-start",
+            Self::LeftEnd => "left-end",
+            Self::Right => "right",
+            Self::RightStart => "right-start",
+            Self::RightEnd => "right-end",
+        }
+    }
+
+    /// Returns the opposite primary-axis placement preserving cross-axis alignment (`bottom-end <-> top-end`).
+    pub const fn opposite(self) -> Self {
+        match self {
+            Self::Bottom => Self::Top,
+            Self::BottomStart => Self::TopStart,
+            Self::BottomEnd => Self::TopEnd,
+            Self::Top => Self::Bottom,
+            Self::TopStart => Self::BottomStart,
+            Self::TopEnd => Self::BottomEnd,
+            Self::Left => Self::Right,
+            Self::LeftStart => Self::RightStart,
+            Self::LeftEnd => Self::RightEnd,
+            Self::Right => Self::Left,
+            Self::RightStart => Self::LeftStart,
+            Self::RightEnd => Self::LeftEnd,
+        }
+    }
+
+    #[inline]
+    fn raw_coords(
+        self,
+        anchor: crate::geometry::Rect,
+        floating_w: f32,
+        floating_h: f32,
+        offset: f32,
+    ) -> (f32, f32) {
+        match self {
+            Self::Bottom => (
+                anchor.x + (anchor.width - floating_w) * 0.5,
+                anchor.y + anchor.height + offset,
+            ),
+            Self::BottomStart => (anchor.x, anchor.y + anchor.height + offset),
+            Self::BottomEnd => (
+                anchor.x + anchor.width - floating_w,
+                anchor.y + anchor.height + offset,
+            ),
+            Self::Top => (
+                anchor.x + (anchor.width - floating_w) * 0.5,
+                anchor.y - floating_h - offset,
+            ),
+            Self::TopStart => (anchor.x, anchor.y - floating_h - offset),
+            Self::TopEnd => (
+                anchor.x + anchor.width - floating_w,
+                anchor.y - floating_h - offset,
+            ),
+            Self::Left => (
+                anchor.x - floating_w - offset,
+                anchor.y + (anchor.height - floating_h) * 0.5,
+            ),
+            Self::LeftStart => (anchor.x - floating_w - offset, anchor.y),
+            Self::LeftEnd => (
+                anchor.x - floating_w - offset,
+                anchor.y + anchor.height - floating_h,
+            ),
+            Self::Right => (
+                anchor.x + anchor.width + offset,
+                anchor.y + (anchor.height - floating_h) * 0.5,
+            ),
+            Self::RightStart => (anchor.x + anchor.width + offset, anchor.y),
+            Self::RightEnd => (
+                anchor.x + anchor.width + offset,
+                anchor.y + anchor.height - floating_h,
+            ),
+        }
+    }
+}
+
+/// Computes the viewport-aware anchored `(x, y, resolved_placement)` for a floating/top-layer element,
+/// performing automatic primary-axis collision flipping (`bottom-end <-> top-end`, `left <-> right`)
+/// and cross-axis viewport shift clamping.
+#[allow(clippy::too_many_arguments)]
+pub fn solve_anchored_position(
+    anchor: crate::geometry::Rect,
+    floating_w: f32,
+    floating_h: f32,
+    placement: AnchorPlacement,
+    offset: f32,
+    flip: bool,
+    shift: bool,
+    padding: f32,
+    viewport: crate::geometry::Rect,
+) -> (f32, f32, AnchorPlacement) {
+    let min_x = viewport.x + padding;
+    let min_y = viewport.y + padding;
+    let max_x = (viewport.x + viewport.width - padding).max(min_x);
+    let max_y = (viewport.y + viewport.height - padding).max(min_y);
+
+    let mut chosen = placement;
+    let (mut x, mut y) = chosen.raw_coords(anchor, floating_w, floating_h, offset);
+
+    if flip {
+        match placement {
+            AnchorPlacement::Bottom | AnchorPlacement::BottomStart | AnchorPlacement::BottomEnd => {
+                if y + floating_h > max_y {
+                    let opp = placement.opposite();
+                    let (ox, oy) = opp.raw_coords(anchor, floating_w, floating_h, offset);
+                    let space_above = anchor.y - min_y;
+                    let space_below = max_y - (anchor.y + anchor.height);
+                    if oy >= min_y || space_above > space_below {
+                        chosen = opp;
+                        x = ox;
+                        y = oy;
+                    }
+                }
+            }
+            AnchorPlacement::Top | AnchorPlacement::TopStart | AnchorPlacement::TopEnd => {
+                if y < min_y {
+                    let opp = placement.opposite();
+                    let (ox, oy) = opp.raw_coords(anchor, floating_w, floating_h, offset);
+                    let space_above = anchor.y - min_y;
+                    let space_below = max_y - (anchor.y + anchor.height);
+                    if oy + floating_h <= max_y || space_below > space_above {
+                        chosen = opp;
+                        x = ox;
+                        y = oy;
+                    }
+                }
+            }
+            AnchorPlacement::Right | AnchorPlacement::RightStart | AnchorPlacement::RightEnd => {
+                if x + floating_w > max_x {
+                    let opp = placement.opposite();
+                    let (ox, oy) = opp.raw_coords(anchor, floating_w, floating_h, offset);
+                    let space_left = anchor.x - min_x;
+                    let space_right = max_x - (anchor.x + anchor.width);
+                    if ox >= min_x || space_left > space_right {
+                        chosen = opp;
+                        x = ox;
+                        y = oy;
+                    }
+                }
+            }
+            AnchorPlacement::Left | AnchorPlacement::LeftStart | AnchorPlacement::LeftEnd => {
+                if x < min_x {
+                    let opp = placement.opposite();
+                    let (ox, oy) = opp.raw_coords(anchor, floating_w, floating_h, offset);
+                    let space_left = anchor.x - min_x;
+                    let space_right = max_x - (anchor.x + anchor.width);
+                    if ox + floating_w <= max_x || space_right > space_left {
+                        chosen = opp;
+                        x = ox;
+                        y = oy;
+                    }
+                }
+            }
+        }
+    }
+
+    if shift {
+        let upper_x = (max_x - floating_w).max(min_x);
+        let upper_y = (max_y - floating_h).max(min_y);
+        x = x.clamp(min_x, upper_x);
+        y = y.clamp(min_y, upper_y);
+    }
+
+    (x, y, chosen)
+}
+
+/// Configuration attaching a top-layer portal or CSS anchor-positioned box to a trigger element.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortalAnchorSpec {
+    pub anchor_id: String,
+    pub placement: AnchorPlacement,
+    pub offset: f32,
+    pub flip: bool,
+    pub shift: bool,
+    pub viewport_padding: f32,
+    pub match_width: bool,
+}
+
+impl PortalAnchorSpec {
+    pub fn new(anchor_id: impl Into<String>, placement: AnchorPlacement) -> Self {
+        Self {
+            anchor_id: anchor_id.into(),
+            placement,
+            offset: 4.0,
+            flip: true,
+            shift: true,
+            viewport_padding: 8.0,
+            match_width: false,
+        }
+    }
+}
+
 /// A node participating in the layout tree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayoutNode {
@@ -210,13 +449,7 @@ pub struct LayoutNode {
     pub inline_items: Vec<InlineItem>,
     pub line_boxes: Vec<LineBox>,
     pub layout_cache: LayoutCacheEntry,
-    /// Content-box size used the last time this node formatted its children.
-    ///
-    /// Multi-pass flex layout can stretch or shrink an item's border box after a
-    /// previous pass formatted its descendants. This records the content size
-    /// the descendants were actually laid out for, so the final placement pass
-    /// can detect stale child geometry and re-run `layout_children` even when
-    /// the border box itself did not change.
+    /// Content-box size used the last time this node formatted its descendants.
     pub last_child_layout_content: Option<(f32, f32)>,
     /// Table border grid matrix for collapsed border rendering (CSS 2.1 §17.6.2).
     pub table_grid: Option<crate::table::TableBorderGrid>,
@@ -224,6 +457,15 @@ pub struct LayoutNode {
     pub entity_id: strata_primitives::EntityId,
     /// True when one or more CSS `transition-*` interpolations are currently in-flight on this node.
     pub active_transitions: bool,
+    /// DOM `id` or `data-anchor-id` attribute used for live anchor lookup.
+    pub element_id: Option<String>,
+    /// CSS `anchor-name` (e.g. `--card-menu-trigger`) declared on this element.
+    pub anchor_name: Option<String>,
+    /// True when this element renders in the root Top Layer (`<Portal>` / `create_portal`),
+    /// escaping all ancestor `overflow`, `transform`, `filter`, and stacking-context boundaries.
+    pub is_top_layer: bool,
+    /// Live anchor positioning specification resolved against post-scroll trigger bounds.
+    pub portal_anchor: Option<Box<PortalAnchorSpec>>,
 }
 
 impl LayoutNode {
@@ -244,6 +486,10 @@ impl LayoutNode {
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
             active_transitions: false,
+            element_id: None,
+            anchor_name: None,
+            is_top_layer: false,
+            portal_anchor: None,
         }
     }
 
@@ -264,6 +510,10 @@ impl LayoutNode {
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
             active_transitions: false,
+            element_id: None,
+            anchor_name: None,
+            is_top_layer: false,
+            portal_anchor: None,
         }
     }
 
@@ -284,6 +534,10 @@ impl LayoutNode {
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
             active_transitions: false,
+            element_id: None,
+            anchor_name: None,
+            is_top_layer: false,
+            portal_anchor: None,
         }
     }
 
@@ -304,6 +558,10 @@ impl LayoutNode {
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
             active_transitions: false,
+            element_id: None,
+            anchor_name: None,
+            is_top_layer: false,
+            portal_anchor: None,
         }
     }
 
@@ -336,6 +594,10 @@ impl LayoutNode {
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
             active_transitions: false,
+            element_id: None,
+            anchor_name: None,
+            is_top_layer: false,
+            portal_anchor: None,
         }
     }
 
@@ -357,6 +619,10 @@ impl LayoutNode {
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
             active_transitions: false,
+            element_id: None,
+            anchor_name: None,
+            is_top_layer: false,
+            portal_anchor: None,
         }
     }
 
@@ -377,6 +643,10 @@ impl LayoutNode {
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
             active_transitions: false,
+            element_id: None,
+            anchor_name: None,
+            is_top_layer: false,
+            portal_anchor: None,
         }
     }
 
@@ -502,6 +772,9 @@ impl LayoutNode {
         let mut stack: Vec<(&mut LayoutNode, bool, bool)> =
             vec![(self, parent_is_abs_cb, parent_is_fixed_cb)];
         while let Some((node, abs_cb_inside, fixed_cb_inside)) = stack.pop() {
+            if node.is_top_layer {
+                continue;
+            }
             match node.style.position {
                 strata_style::types::Position::Fixed if !fixed_cb_inside => {
                     continue;
