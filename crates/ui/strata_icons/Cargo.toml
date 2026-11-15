@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Built-in vector icon system with over 1,000+ icons and subpixel GPU rendering for Strata"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 strata_primitives = { workspace = true }

@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Automated Mobile Testing, Pure-Rust ADB Client, Multi-Backend Emulator Orchestration, and Foldable Posture Testing for Strata"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 strata_primitives = { workspace = true }

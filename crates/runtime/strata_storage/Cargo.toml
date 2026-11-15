@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Pure-Rust Bitcask WAL engine, synchronous in-memory storage, and secure keystore for Strata"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 strata_vfs = { workspace = true }

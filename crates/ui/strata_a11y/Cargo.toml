@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Native screen-reader accessibility bridge and WCAG 2.1 AAA auditor for Project Strata"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 accesskit = "0.25.2"

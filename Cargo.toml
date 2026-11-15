@@ -18,71 +18,71 @@ edition = "2021"
 license = "MIT"
 repository = "https://github.com/strataui/strata"
 homepage = "https://github.com/strataui/strata"
-documentation = "https://docs.rs/strata"
+documentation = "https://docs.rs/strata-ui"
 keywords = ["gui", "frontend", "framework", "css", "tailwind"]
 categories = ["gui", "web-programming", "rendering"]
 
 [workspace.dependencies]
 # Facade
-strata = { path = "crates/strata" }
+strata = { package = "strata-ui", path = "crates/strata", version = "0.1.0" }
 
 # Core
-strata_primitives = { path = "crates/core/strata_primitives" }
-strata_dom = { path = "crates/core/strata_dom" }
-strata_style = { path = "crates/core/strata_style" }
-strata_layout = { path = "crates/core/strata_layout" }
-strata_macro = { path = "crates/core/strata_macro" }
-strata_aria = { path = "crates/core/strata_aria" }
+strata_primitives = { path = "crates/core/strata_primitives", version = "0.1.0" }
+strata_dom = { path = "crates/core/strata_dom", version = "0.1.0" }
+strata_style = { path = "crates/core/strata_style", version = "0.1.0" }
+strata_layout = { path = "crates/core/strata_layout", version = "0.1.0" }
+strata_macro = { path = "crates/core/strata_macro", version = "0.1.0" }
+strata_aria = { path = "crates/core/strata_aria", version = "0.1.0" }
 
 # Render
-strata_render = { path = "crates/render/strata_render" }
-strata_gpu_path = { path = "crates/render/strata_gpu_path" }
-strata_platform = { path = "crates/render/strata_platform" }
-strata_tui = { path = "crates/render/strata_tui" }
-strata_audio = { path = "crates/render/strata_audio" }
+strata_render = { path = "crates/render/strata_render", version = "0.1.0" }
+strata_gpu_path = { path = "crates/render/strata_gpu_path", version = "0.1.0" }
+strata_platform = { path = "crates/render/strata_platform", version = "0.1.0" }
+strata_tui = { path = "crates/render/strata_tui", version = "0.1.0" }
+strata_audio = { path = "crates/render/strata_audio", version = "0.1.0" }
 
 # Runtime
-strata_js = { path = "crates/runtime/strata_js" }
-strata_codegen_js = { path = "crates/runtime/strata_codegen_js" }
-strata_web_api = { path = "crates/runtime/strata_web_api" }
-strata_vfs = { path = "crates/runtime/strata_vfs" }
-strata_storage = { path = "crates/runtime/strata_storage" }
-strata_store = { path = "crates/runtime/strata_store" }
-strata_crdt = { path = "crates/runtime/strata_crdt" }
-strata_plugin_runtime = { path = "crates/runtime/strata_plugin_runtime" }
-strata_ffi = { path = "crates/runtime/strata_ffi" }
-strata_router = { path = "crates/runtime/strata_router" }
-strata_device = { path = "crates/runtime/strata_device" }
-strata_parallel = { path = "crates/runtime/strata_parallel" }
-strata_web_reader = { path = "crates/runtime/strata_web_reader" }
+strata_js = { path = "crates/runtime/strata_js", version = "0.1.0" }
+strata_codegen_js = { path = "crates/runtime/strata_codegen_js", version = "0.1.0" }
+strata_web_api = { path = "crates/runtime/strata_web_api", version = "0.1.0" }
+strata_vfs = { path = "crates/runtime/strata_vfs", version = "0.1.0" }
+strata_storage = { path = "crates/runtime/strata_storage", version = "0.1.0" }
+strata_store = { path = "crates/runtime/strata_store", version = "0.1.0" }
+strata_crdt = { path = "crates/runtime/strata_crdt", version = "0.1.0" }
+strata_plugin_runtime = { path = "crates/runtime/strata_plugin_runtime", version = "0.1.0" }
+strata_ffi = { path = "crates/runtime/strata_ffi", version = "0.1.0" }
+strata_router = { path = "crates/runtime/strata_router", version = "0.1.0" }
+strata_device = { path = "crates/runtime/strata_device", version = "0.1.0" }
+strata_parallel = { path = "crates/runtime/strata_parallel", version = "0.1.0" }
+strata_web_reader = { path = "crates/runtime/strata_web_reader", version = "0.1.0" }
 
 # UI
-strata_ui = { path = "crates/ui/strata_ui" }
-strata_icons = { path = "crates/ui/strata_icons" }
-strata_table = { path = "crates/ui/strata_table" }
-strata_virtual = { path = "crates/ui/strata_virtual" }
-strata_form = { path = "crates/ui/strata_form" }
-strata_toast = { path = "crates/ui/strata_toast" }
-strata_motion = { path = "crates/ui/strata_motion" }
-strata_charts = { path = "crates/ui/strata_charts" }
-strata_editor = { path = "crates/ui/strata_editor" }
-strata_agent_ui = { path = "crates/ui/strata_agent_ui" }
-strata_a11y = { path = "crates/ui/strata_a11y" }
-strata_i18n = { path = "crates/ui/strata_i18n" }
-strata_query = { path = "crates/ui/strata_query" }
+strata_ui = { path = "crates/ui/strata_ui", version = "0.1.0" }
+strata_icons = { path = "crates/ui/strata_icons", version = "0.1.0" }
+strata_table = { path = "crates/ui/strata_table", version = "0.1.0" }
+strata_virtual = { path = "crates/ui/strata_virtual", version = "0.1.0" }
+strata_form = { path = "crates/ui/strata_form", version = "0.1.0" }
+strata_toast = { path = "crates/ui/strata_toast", version = "0.1.0" }
+strata_motion = { path = "crates/ui/strata_motion", version = "0.1.0" }
+strata_charts = { path = "crates/ui/strata_charts", version = "0.1.0" }
+strata_editor = { path = "crates/ui/strata_editor", version = "0.1.0" }
+strata_agent_ui = { path = "crates/ui/strata_agent_ui", version = "0.1.0" }
+strata_a11y = { path = "crates/ui/strata_a11y", version = "0.1.0" }
+strata_i18n = { path = "crates/ui/strata_i18n", version = "0.1.0" }
+strata_query = { path = "crates/ui/strata_query", version = "0.1.0" }
 
 # Tooling
-strata_devtools = { path = "crates/tooling/strata_devtools" }
-strata_build = { path = "crates/tooling/strata_build" }
-strata_hot_reload = { path = "crates/tooling/strata_hot_reload" }
-strata_mcp = { path = "crates/tooling/strata_mcp" }
+strata_devtools = { path = "crates/tooling/strata_devtools", version = "0.1.0" }
+strata_build = { path = "crates/tooling/strata_build", version = "0.1.0" }
+strata_hot_reload = { path = "crates/tooling/strata_hot_reload", version = "0.1.0" }
+strata_mcp = { path = "crates/tooling/strata_mcp", version = "0.1.0" }
 
 # Harnesses
-strata_parity_tauri = { path = "crates/harnesses/strata_parity_tauri" }
-strata_mobile_test = { path = "crates/harnesses/strata_mobile_test" }
-strata_sim = { path = "crates/harnesses/strata_sim" }
-strata_benchmark = { path = "crates/harnesses/strata_benchmark" }
-strata_chromium_surface = { path = "crates/harnesses/strata_chromium_surface" }
+strata_parity_tauri = { path = "crates/harnesses/strata_parity_tauri", version = "0.1.0" }
+strata_mobile_test = { path = "crates/harnesses/strata_mobile_test", version = "0.1.0" }
+strata_sim = { path = "crates/harnesses/strata_sim", version = "0.1.0" }
+strata_benchmark = { path = "crates/harnesses/strata_benchmark", version = "0.1.0" }
+strata_chromium_surface = { path = "crates/harnesses/strata_chromium_surface", version = "0.1.0" }
 
 [profile.dev]
 opt-level = 1

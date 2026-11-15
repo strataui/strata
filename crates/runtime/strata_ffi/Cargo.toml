@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 authors = ["larvance <64753457+larvance@users.noreply.github.com>"]
 description = "Universal C-compatible Foreign Function Interface (FFI) and embeddable dynamic library for Strata"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [lib]
 crate-type = ["lib", "cdylib"]

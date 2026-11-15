@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Procedural macros for Strata: rsx! declarative syntax, #[component], and dynamic! macro"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [lib]
 proc-macro = true

@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Native Hardware Abstraction Layer for Android, iOS, macOS, Windows, Linux, and Web"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 strata_render = { workspace = true }

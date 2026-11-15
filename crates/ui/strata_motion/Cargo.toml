@@ -3,6 +3,10 @@ name = "strata_motion"
 version = "0.1.0"
 edition = "2021"
 description = "Spring Physics, Layout Transitions & Morphing Animation Engine for Strata"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 strata_dom = { workspace = true }
