@@ -68,7 +68,11 @@ pub fn format_number(val: f64, locale: &LocaleId, options: &NumberFormatOptions)
 
     // Format fraction part
     let mut frac_str = if options.max_fraction_digits > 0 {
-        format!("{:0width$}", fraction_part, width = options.max_fraction_digits)
+        format!(
+            "{:0width$}",
+            fraction_part,
+            width = options.max_fraction_digits
+        )
     } else {
         String::new()
     };
@@ -150,31 +154,73 @@ pub fn format_relative_time(delta_value: i64, unit: TimeUnit, locale: &LocaleId)
 
     match (lang, is_past) {
         ("de", true) => match unit {
-            TimeUnit::Second => if abs_val == 1 { "vor 1 Sekunde".into() } else { format!("vor {abs_val} Sekunden") },
-            TimeUnit::Minute => if abs_val == 1 { "vor 1 Minute".into() } else { format!("vor {abs_val} Minuten") },
-            TimeUnit::Hour => if abs_val == 1 { "vor 1 Stunde".into() } else { format!("vor {abs_val} Stunden") },
-            TimeUnit::Day => if abs_val == 1 { "gestern".into() } else { format!("vor {abs_val} Tagen") },
+            TimeUnit::Second => {
+                if abs_val == 1 {
+                    "vor 1 Sekunde".into()
+                } else {
+                    format!("vor {abs_val} Sekunden")
+                }
+            }
+            TimeUnit::Minute => {
+                if abs_val == 1 {
+                    "vor 1 Minute".into()
+                } else {
+                    format!("vor {abs_val} Minuten")
+                }
+            }
+            TimeUnit::Hour => {
+                if abs_val == 1 {
+                    "vor 1 Stunde".into()
+                } else {
+                    format!("vor {abs_val} Stunden")
+                }
+            }
+            TimeUnit::Day => {
+                if abs_val == 1 {
+                    "gestern".into()
+                } else {
+                    format!("vor {abs_val} Tagen")
+                }
+            }
             _ => format!("vor {abs_val} Einheiten"),
         },
         ("de", false) => match unit {
             TimeUnit::Second => format!("in {abs_val} Sekunden"),
             TimeUnit::Minute => format!("in {abs_val} Minuten"),
             TimeUnit::Hour => format!("in {abs_val} Stunden"),
-            TimeUnit::Day => if abs_val == 1 { "morgen".into() } else { format!("in {abs_val} Tagen") },
+            TimeUnit::Day => {
+                if abs_val == 1 {
+                    "morgen".into()
+                } else {
+                    format!("in {abs_val} Tagen")
+                }
+            }
             _ => format!("in {abs_val} Einheiten"),
         },
         ("fr", true) => match unit {
             TimeUnit::Second => format!("il y a {abs_val} secondes"),
             TimeUnit::Minute => format!("il y a {abs_val} minutes"),
             TimeUnit::Hour => format!("il y a {abs_val} heures"),
-            TimeUnit::Day => if abs_val == 1 { "hier".into() } else { format!("il y a {abs_val} jours") },
+            TimeUnit::Day => {
+                if abs_val == 1 {
+                    "hier".into()
+                } else {
+                    format!("il y a {abs_val} jours")
+                }
+            }
             _ => format!("il y a {abs_val} unités"),
         },
         ("fr", false) => match unit {
             TimeUnit::Second => format!("dans {abs_val} secondes"),
             TimeUnit::Minute => format!("dans {abs_val} minutes"),
             TimeUnit::Hour => format!("dans {abs_val} heures"),
-            TimeUnit::Day => if abs_val == 1 { "demain".into() } else { format!("dans {abs_val} jours") },
+            TimeUnit::Day => {
+                if abs_val == 1 {
+                    "demain".into()
+                } else {
+                    format!("dans {abs_val} jours")
+                }
+            }
             _ => format!("dans {abs_val} unités"),
         },
         _ => {
@@ -243,7 +289,10 @@ mod tests {
         let en = LocaleId::en_us();
         let de = LocaleId::de_de();
 
-        assert_eq!(format_relative_time(-5, TimeUnit::Minute, &en), "5 minutes ago");
+        assert_eq!(
+            format_relative_time(-5, TimeUnit::Minute, &en),
+            "5 minutes ago"
+        );
         assert_eq!(format_relative_time(2, TimeUnit::Hour, &en), "in 2 hours");
         assert_eq!(format_relative_time(-1, TimeUnit::Day, &de), "gestern");
         assert_eq!(format_relative_time(1, TimeUnit::Day, &de), "morgen");

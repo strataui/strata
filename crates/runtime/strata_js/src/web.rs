@@ -1,10 +1,10 @@
 //! Universal Web Platform APIs implemented in pure standard-library Rust.
 
+use crate::JsValue;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use crate::JsValue;
 
 /// W3C-compliant case-insensitive HTTP Headers map.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -447,8 +447,16 @@ impl TimerScheduler {
     fn cancel(&mut self, id: TimerId) {
         for entry in &mut self.entries {
             match entry {
-                TimerEntry::Timeout { id: entry_id, cancelled, .. }
-                | TimerEntry::Interval { id: entry_id, cancelled, .. } => {
+                TimerEntry::Timeout {
+                    id: entry_id,
+                    cancelled,
+                    ..
+                }
+                | TimerEntry::Interval {
+                    id: entry_id,
+                    cancelled,
+                    ..
+                } => {
                     if *entry_id == id {
                         *cancelled = true;
                     }
@@ -465,7 +473,12 @@ impl TimerScheduler {
 
         for (idx, entry) in self.entries.iter_mut().enumerate() {
             match entry {
-                TimerEntry::Timeout { trigger_at, cancelled, callback, .. } => {
+                TimerEntry::Timeout {
+                    trigger_at,
+                    cancelled,
+                    callback,
+                    ..
+                } => {
                     if !*cancelled && now >= *trigger_at {
                         if let Some(cb) = callback.take() {
                             pending_timeouts.push(cb);
@@ -474,7 +487,12 @@ impl TimerScheduler {
                         }
                     }
                 }
-                TimerEntry::Interval { next_trigger, interval, cancelled, .. } => {
+                TimerEntry::Interval {
+                    next_trigger,
+                    interval,
+                    cancelled,
+                    ..
+                } => {
                     if !*cancelled && now >= *next_trigger {
                         pending_intervals.push(idx);
                         *next_trigger = now + *interval;
@@ -491,7 +509,12 @@ impl TimerScheduler {
 
         // Execute intervals
         for idx in pending_intervals {
-            if let Some(TimerEntry::Interval { callback, cancelled, .. }) = self.entries.get_mut(idx) {
+            if let Some(TimerEntry::Interval {
+                callback,
+                cancelled,
+                ..
+            }) = self.entries.get_mut(idx)
+            {
                 if !*cancelled {
                     callback();
                 }
@@ -517,14 +540,22 @@ impl TimerScheduler {
         self.entries
             .iter()
             .filter_map(|e| match e {
-                TimerEntry::Timeout { trigger_at, cancelled, .. } if !*cancelled => {
+                TimerEntry::Timeout {
+                    trigger_at,
+                    cancelled,
+                    ..
+                } if !*cancelled => {
                     if *trigger_at > now {
                         Some(*trigger_at - now)
                     } else {
                         Some(Duration::ZERO)
                     }
                 }
-                TimerEntry::Interval { next_trigger, cancelled, .. } if !*cancelled => {
+                TimerEntry::Interval {
+                    next_trigger,
+                    cancelled,
+                    ..
+                } if !*cancelled => {
                     if *next_trigger > now {
                         Some(*next_trigger - now)
                     } else {
@@ -573,9 +604,13 @@ pub fn time_until_next_timer() -> Option<Duration> {
 
 /// Returns true if there are any active, uncancelled timeouts or intervals.
 pub fn has_pending_timers() -> bool {
-    TIMER_SCHEDULER.with(|s| s.borrow().entries.iter().any(|e| match e {
-        TimerEntry::Timeout { cancelled, .. } | TimerEntry::Interval { cancelled, .. } => !*cancelled,
-    }))
+    TIMER_SCHEDULER.with(|s| {
+        s.borrow().entries.iter().any(|e| match e {
+            TimerEntry::Timeout { cancelled, .. } | TimerEntry::Interval { cancelled, .. } => {
+                !*cancelled
+            }
+        })
+    })
 }
 
 /// Advances the simulated timer clock by a given duration and executes due timers.

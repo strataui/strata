@@ -1,9 +1,9 @@
 //! Analytical Signed Distance Field (SDF) 2D Rasterizer & Headless Software FrameBuffer.
 
+use crate::compositor::{DisplayList, DrawCommand};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use crate::compositor::{DisplayList, DrawCommand};
 use strata_layout::Rect;
 use strata_style::effects::ClipPath;
 use strata_style::types::{BlendMode, BoxShadow, Color, ColorStop};
@@ -356,7 +356,10 @@ impl FrameBuffer {
             }
 
             let glyph = crate::font::get_glyph_or_fallback(ch);
-            if (scale - 1.0).abs() < 1e-4 && cursor_x.fract().abs() < 1e-4 && cursor_y.fract().abs() < 1e-4 {
+            if (scale - 1.0).abs() < 1e-4
+                && cursor_x.fract().abs() < 1e-4
+                && cursor_y.fract().abs() < 1e-4
+            {
                 let base_x = cursor_x.round() as usize;
                 let base_y = cursor_y.round() as usize;
                 for (row_idx, &row) in glyph.iter().enumerate() {
@@ -384,9 +387,13 @@ impl FrameBuffer {
                 }
             } else {
                 let min_x = (cursor_x.floor() as isize).max(0).min(self.width as isize) as usize;
-                let max_x = ((cursor_x + char_w).ceil() as isize).max(0).min(self.width as isize) as usize;
+                let max_x = ((cursor_x + char_w).ceil() as isize)
+                    .max(0)
+                    .min(self.width as isize) as usize;
                 let min_y = (cursor_y.floor() as isize).max(0).min(self.height as isize) as usize;
-                let max_y = ((cursor_y + char_h).ceil() as isize).max(0).min(self.height as isize) as usize;
+                let max_y = ((cursor_y + char_h).ceil() as isize)
+                    .max(0)
+                    .min(self.height as isize) as usize;
 
                 for y in min_y..max_y {
                     let py = y as f32 + 0.5;
@@ -416,10 +423,26 @@ impl FrameBuffer {
                         let c1 = (c0 + 1).min(7);
                         let fc = col_f - c0 as f32;
 
-                        let b00 = if (glyph[r0] & (1 << (7 - c0))) != 0 { 1.0f32 } else { 0.0f32 };
-                        let b10 = if (glyph[r0] & (1 << (7 - c1))) != 0 { 1.0f32 } else { 0.0f32 };
-                        let b01 = if (glyph[r1] & (1 << (7 - c0))) != 0 { 1.0f32 } else { 0.0f32 };
-                        let b11 = if (glyph[r1] & (1 << (7 - c1))) != 0 { 1.0f32 } else { 0.0f32 };
+                        let b00 = if (glyph[r0] & (1 << (7 - c0))) != 0 {
+                            1.0f32
+                        } else {
+                            0.0f32
+                        };
+                        let b10 = if (glyph[r0] & (1 << (7 - c1))) != 0 {
+                            1.0f32
+                        } else {
+                            0.0f32
+                        };
+                        let b01 = if (glyph[r1] & (1 << (7 - c0))) != 0 {
+                            1.0f32
+                        } else {
+                            0.0f32
+                        };
+                        let b11 = if (glyph[r1] & (1 << (7 - c1))) != 0 {
+                            1.0f32
+                        } else {
+                            0.0f32
+                        };
 
                         let top = b00 * (1.0 - fc) + b10 * fc;
                         let bot = b01 * (1.0 - fc) + b11 * fc;
@@ -539,14 +562,7 @@ impl FrameBuffer {
     }
 
     /// Renders an anti-aliased circle.
-    pub fn draw_circle(
-        &mut self,
-        cx: f32,
-        cy: f32,
-        radius: f32,
-        color: Color,
-        clip: Option<Rect>,
-    ) {
+    pub fn draw_circle(&mut self, cx: f32, cy: f32, radius: f32, color: Color, clip: Option<Rect>) {
         if radius <= 0.0 || color.a() <= 0.001 {
             return;
         }
@@ -639,8 +655,16 @@ impl FrameBuffer {
         let half_w = bounds.width * 0.5;
         let half_h = bounds.height * 0.5;
 
-        let focal_x = if center.0 <= 1.0 { bounds.x + bounds.width * center.0 } else { center.0 };
-        let focal_y = if center.1 <= 1.0 { bounds.y + bounds.height * center.1 } else { center.1 };
+        let focal_x = if center.0 <= 1.0 {
+            bounds.x + bounds.width * center.0
+        } else {
+            center.0
+        };
+        let focal_y = if center.1 <= 1.0 {
+            bounds.y + bounds.height * center.1
+        } else {
+            center.1
+        };
         let rx = half_w.max(1e-4);
         let ry = half_h.max(1e-4);
 
@@ -685,7 +709,8 @@ impl FrameBuffer {
             return;
         }
 
-        let raw_pixels = decode_or_get_rgba(&image.data, image.width as usize, image.height as usize);
+        let raw_pixels =
+            decode_or_get_rgba(&image.data, image.width as usize, image.height as usize);
         let src_w = image.width as usize;
         let src_h = image.height as usize;
         if raw_pixels.len() < src_w * src_h * 4 {
@@ -713,15 +738,29 @@ impl FrameBuffer {
                 let idx_bl = (y_high * src_w + x_low) * 4;
                 let idx_br = (y_high * src_w + x_high) * 4;
 
-                let r_t = (raw_pixels[idx_tl] as f32 * (1.0 - fx) + raw_pixels[idx_tr] as f32 * fx) / 255.0;
-                let g_t = (raw_pixels[idx_tl + 1] as f32 * (1.0 - fx) + raw_pixels[idx_tr + 1] as f32 * fx) / 255.0;
-                let b_t = (raw_pixels[idx_tl + 2] as f32 * (1.0 - fx) + raw_pixels[idx_tr + 2] as f32 * fx) / 255.0;
-                let a_t = (raw_pixels[idx_tl + 3] as f32 * (1.0 - fx) + raw_pixels[idx_tr + 3] as f32 * fx) / 255.0;
+                let r_t = (raw_pixels[idx_tl] as f32 * (1.0 - fx) + raw_pixels[idx_tr] as f32 * fx)
+                    / 255.0;
+                let g_t = (raw_pixels[idx_tl + 1] as f32 * (1.0 - fx)
+                    + raw_pixels[idx_tr + 1] as f32 * fx)
+                    / 255.0;
+                let b_t = (raw_pixels[idx_tl + 2] as f32 * (1.0 - fx)
+                    + raw_pixels[idx_tr + 2] as f32 * fx)
+                    / 255.0;
+                let a_t = (raw_pixels[idx_tl + 3] as f32 * (1.0 - fx)
+                    + raw_pixels[idx_tr + 3] as f32 * fx)
+                    / 255.0;
 
-                let r_b = (raw_pixels[idx_bl] as f32 * (1.0 - fx) + raw_pixels[idx_br] as f32 * fx) / 255.0;
-                let g_b = (raw_pixels[idx_bl + 1] as f32 * (1.0 - fx) + raw_pixels[idx_br + 1] as f32 * fx) / 255.0;
-                let b_b = (raw_pixels[idx_bl + 2] as f32 * (1.0 - fx) + raw_pixels[idx_br + 2] as f32 * fx) / 255.0;
-                let a_b = (raw_pixels[idx_bl + 3] as f32 * (1.0 - fx) + raw_pixels[idx_br + 3] as f32 * fx) / 255.0;
+                let r_b = (raw_pixels[idx_bl] as f32 * (1.0 - fx) + raw_pixels[idx_br] as f32 * fx)
+                    / 255.0;
+                let g_b = (raw_pixels[idx_bl + 1] as f32 * (1.0 - fx)
+                    + raw_pixels[idx_br + 1] as f32 * fx)
+                    / 255.0;
+                let b_b = (raw_pixels[idx_bl + 2] as f32 * (1.0 - fx)
+                    + raw_pixels[idx_br + 2] as f32 * fx)
+                    / 255.0;
+                let a_b = (raw_pixels[idx_bl + 3] as f32 * (1.0 - fx)
+                    + raw_pixels[idx_br + 3] as f32 * fx)
+                    / 255.0;
 
                 let r = r_t * (1.0 - fy) + r_b * fy;
                 let g = g_t * (1.0 - fy) + g_b * fy;
@@ -749,21 +788,41 @@ impl FrameBuffer {
         clip: Option<Rect>,
     ) {
         let path = strata_gpu_path::PathBuilder::from_svg(path_data);
-        let scale_x = if view_box.0 > 0.0 { bounds.width / view_box.0 } else { 1.0 };
-        let scale_y = if view_box.1 > 0.0 { bounds.height / view_box.1 } else { 1.0 };
+        let scale_x = if view_box.0 > 0.0 {
+            bounds.width / view_box.0
+        } else {
+            1.0
+        };
+        let scale_y = if view_box.1 > 0.0 {
+            bounds.height / view_box.1
+        } else {
+            1.0
+        };
 
         let quads = path.to_quadratics(0.25);
         if quads.is_empty() {
             return;
         }
 
-        let transformed_quads: Vec<strata_gpu_path::QuadraticBezier> = quads.into_iter().map(|q| {
-            strata_gpu_path::QuadraticBezier::new(
-                strata_gpu_path::Point2D::new(bounds.x + q.p0.x * scale_x, bounds.y + q.p0.y * scale_y),
-                strata_gpu_path::Point2D::new(bounds.x + q.p1.x * scale_x, bounds.y + q.p1.y * scale_y),
-                strata_gpu_path::Point2D::new(bounds.x + q.p2.x * scale_x, bounds.y + q.p2.y * scale_y),
-            )
-        }).collect();
+        let transformed_quads: Vec<strata_gpu_path::QuadraticBezier> = quads
+            .into_iter()
+            .map(|q| {
+                strata_gpu_path::QuadraticBezier::new(
+                    strata_gpu_path::Point2D::new(
+                        bounds.x + q.p0.x * scale_x,
+                        bounds.y + q.p0.y * scale_y,
+                    ),
+                    strata_gpu_path::Point2D::new(
+                        bounds.x + q.p1.x * scale_x,
+                        bounds.y + q.p1.y * scale_y,
+                    ),
+                    strata_gpu_path::Point2D::new(
+                        bounds.x + q.p2.x * scale_x,
+                        bounds.y + q.p2.y * scale_y,
+                    ),
+                )
+            })
+            .collect();
 
         let gpu_fill_rule = match fill_rule {
             strata_layout::FillRule::NonZero => strata_gpu_path::FillRule::NonZero,
@@ -794,14 +853,21 @@ impl FrameBuffer {
                     cap,
                     join,
                 };
-                let stroked_quads = strata_gpu_path::expand_stroke_quadratics(&transformed_quads, &stroke_opts);
+                let stroked_quads =
+                    strata_gpu_path::expand_stroke_quadratics(&transformed_quads, &stroke_opts);
                 let inflated = Rect::new(
                     bounds.x - stroke_width,
                     bounds.y - stroke_width,
                     bounds.width + stroke_width * 2.0,
                     bounds.height + stroke_width * 2.0,
                 );
-                self.rasterize_curves_fill(&stroked_quads, inflated, sc, strata_gpu_path::FillRule::NonZero, clip);
+                self.rasterize_curves_fill(
+                    &stroked_quads,
+                    inflated,
+                    sc,
+                    strata_gpu_path::FillRule::NonZero,
+                    clip,
+                );
             }
         }
     }
@@ -822,27 +888,30 @@ impl FrameBuffer {
             return;
         }
 
-        let transformed_quads: Vec<strata_gpu_path::QuadraticBezier> = quads.into_iter().map(|q| {
-            let p0 = if let Some(ref m) = transform {
-                let (tx, ty) = m.transform_point(q.p0.x, q.p0.y);
-                strata_gpu_path::Point2D::new(bounds.x + tx, bounds.y + ty)
-            } else {
-                strata_gpu_path::Point2D::new(bounds.x + q.p0.x, bounds.y + q.p0.y)
-            };
-            let p1 = if let Some(ref m) = transform {
-                let (tx, ty) = m.transform_point(q.p1.x, q.p1.y);
-                strata_gpu_path::Point2D::new(bounds.x + tx, bounds.y + ty)
-            } else {
-                strata_gpu_path::Point2D::new(bounds.x + q.p1.x, bounds.y + q.p1.y)
-            };
-            let p2 = if let Some(ref m) = transform {
-                let (tx, ty) = m.transform_point(q.p2.x, q.p2.y);
-                strata_gpu_path::Point2D::new(bounds.x + tx, bounds.y + ty)
-            } else {
-                strata_gpu_path::Point2D::new(bounds.x + q.p2.x, bounds.y + q.p2.y)
-            };
-            strata_gpu_path::QuadraticBezier::new(p0, p1, p2)
-        }).collect();
+        let transformed_quads: Vec<strata_gpu_path::QuadraticBezier> = quads
+            .into_iter()
+            .map(|q| {
+                let p0 = if let Some(ref m) = transform {
+                    let (tx, ty) = m.transform_point(q.p0.x, q.p0.y);
+                    strata_gpu_path::Point2D::new(bounds.x + tx, bounds.y + ty)
+                } else {
+                    strata_gpu_path::Point2D::new(bounds.x + q.p0.x, bounds.y + q.p0.y)
+                };
+                let p1 = if let Some(ref m) = transform {
+                    let (tx, ty) = m.transform_point(q.p1.x, q.p1.y);
+                    strata_gpu_path::Point2D::new(bounds.x + tx, bounds.y + ty)
+                } else {
+                    strata_gpu_path::Point2D::new(bounds.x + q.p1.x, bounds.y + q.p1.y)
+                };
+                let p2 = if let Some(ref m) = transform {
+                    let (tx, ty) = m.transform_point(q.p2.x, q.p2.y);
+                    strata_gpu_path::Point2D::new(bounds.x + tx, bounds.y + ty)
+                } else {
+                    strata_gpu_path::Point2D::new(bounds.x + q.p2.x, bounds.y + q.p2.y)
+                };
+                strata_gpu_path::QuadraticBezier::new(p0, p1, p2)
+            })
+            .collect();
 
         let path_fill_rule = path.fill_rule.unwrap_or(strata_gpu_path::FillRule::NonZero);
         if let Some(fc) = fill_color {
@@ -854,14 +923,21 @@ impl FrameBuffer {
         if let Some(sc) = stroke_color {
             if sc.a() > 0.001 {
                 let opts = stroke.unwrap_or_else(|| strata_gpu_path::StrokeOptions::new(1.0));
-                let stroked_quads = strata_gpu_path::expand_stroke_quadratics(&transformed_quads, &opts);
+                let stroked_quads =
+                    strata_gpu_path::expand_stroke_quadratics(&transformed_quads, &opts);
                 let inflated = Rect::new(
                     bounds.x - opts.width,
                     bounds.y - opts.width,
                     bounds.width + opts.width * 2.0,
                     bounds.height + opts.width * 2.0,
                 );
-                self.rasterize_curves_fill(&stroked_quads, inflated, sc, strata_gpu_path::FillRule::NonZero, clip);
+                self.rasterize_curves_fill(
+                    &stroked_quads,
+                    inflated,
+                    sc,
+                    strata_gpu_path::FillRule::NonZero,
+                    clip,
+                );
             }
         }
     }
@@ -899,12 +975,7 @@ impl FrameBuffer {
             for x in min_x..max_x {
                 let px = x as f32;
                 let mut hits = 0;
-                let sub_offsets = [
-                    (0.25, 0.25),
-                    (0.75, 0.25),
-                    (0.25, 0.75),
-                    (0.75, 0.75),
-                ];
+                let sub_offsets = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
                 for (ox, oy) in sub_offsets {
                     let pt = strata_gpu_path::Point2D::new(px + ox, py + oy);
                     if strata_gpu_path::is_point_inside_closed_path_rule(pt, curves, fill_rule) {
@@ -930,7 +1001,11 @@ impl FrameBuffer {
             ClipPath::None => {
                 mask.fill(255);
             }
-            ClipPath::Circle { radius, center_x, center_y } => {
+            ClipPath::Circle {
+                radius,
+                center_x,
+                center_y,
+            } => {
                 let cx = bounds.x + center_x;
                 let cy = bounds.y + center_y;
                 let r = *radius;
@@ -944,7 +1019,12 @@ impl FrameBuffer {
                     }
                 }
             }
-            ClipPath::Ellipse { radius_x, radius_y, center_x, center_y } => {
+            ClipPath::Ellipse {
+                radius_x,
+                radius_y,
+                center_x,
+                center_y,
+            } => {
                 let cx = bounds.x + center_x;
                 let cy = bounds.y + center_y;
                 let rx = (*radius_x).max(1e-4);
@@ -959,7 +1039,13 @@ impl FrameBuffer {
                     }
                 }
             }
-            ClipPath::Inset { top, right, bottom, left, border_radius } => {
+            ClipPath::Inset {
+                top,
+                right,
+                bottom,
+                left,
+                border_radius,
+            } => {
                 let ix = bounds.x + left;
                 let iy = bounds.y + top;
                 let iw = (bounds.width - left - right).max(0.0);
@@ -980,7 +1066,10 @@ impl FrameBuffer {
             }
             ClipPath::Polygon(pts) => {
                 if pts.len() >= 3 {
-                    let poly_pts: Vec<(f32, f32)> = pts.iter().map(|p| (bounds.x + p.x, bounds.y + p.y)).collect();
+                    let poly_pts: Vec<(f32, f32)> = pts
+                        .iter()
+                        .map(|p| (bounds.x + p.x, bounds.y + p.y))
+                        .collect();
                     for y in 0..self.height {
                         let py = y as f32 + 0.5;
                         for x in 0..self.width {
@@ -991,7 +1080,9 @@ impl FrameBuffer {
                             for i in 0..n {
                                 let (xi, yi) = poly_pts[i];
                                 let (xj, yj) = poly_pts[j];
-                                if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+                                if ((yi > py) != (yj > py))
+                                    && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)
+                                {
                                     inside = !inside;
                                 }
                                 j = i;
@@ -1006,13 +1097,16 @@ impl FrameBuffer {
             ClipPath::Path(svg_data) => {
                 let path = strata_gpu_path::PathBuilder::from_svg(svg_data);
                 let curves = path.to_quadratics(0.2);
-                let offset_curves: Vec<strata_gpu_path::QuadraticBezier> = curves.into_iter().map(|q| {
-                    strata_gpu_path::QuadraticBezier::new(
-                        strata_gpu_path::Point2D::new(q.p0.x + bounds.x, q.p0.y + bounds.y),
-                        strata_gpu_path::Point2D::new(q.p1.x + bounds.x, q.p1.y + bounds.y),
-                        strata_gpu_path::Point2D::new(q.p2.x + bounds.x, q.p2.y + bounds.y),
-                    )
-                }).collect();
+                let offset_curves: Vec<strata_gpu_path::QuadraticBezier> = curves
+                    .into_iter()
+                    .map(|q| {
+                        strata_gpu_path::QuadraticBezier::new(
+                            strata_gpu_path::Point2D::new(q.p0.x + bounds.x, q.p0.y + bounds.y),
+                            strata_gpu_path::Point2D::new(q.p1.x + bounds.x, q.p1.y + bounds.y),
+                            strata_gpu_path::Point2D::new(q.p2.x + bounds.x, q.p2.y + bounds.y),
+                        )
+                    })
+                    .collect();
 
                 for y in 0..self.height {
                     let py = y as f32 + 0.5;
@@ -1052,7 +1146,11 @@ impl FrameBuffer {
     }
 
     /// Executes a display list scissored strictly to the clustered damage regions tracked by the DamageTracker.
-    pub fn rasterize_damaged(&mut self, list: &DisplayList, damage: &crate::compositor::DamageTracker) {
+    pub fn rasterize_damaged(
+        &mut self,
+        list: &DisplayList,
+        damage: &crate::compositor::DamageTracker,
+    ) {
         let clusters = damage.cluster_damage_rects();
         if clusters.is_empty() {
             return;
@@ -1113,7 +1211,12 @@ impl FrameBuffer {
                         let active_matrix = transform_stack.last();
                         let tb = if let Some(mat) = active_matrix {
                             if !mat.is_identity() {
-                                let (x, y, w, h) = mat.transform_bounds(bounds.x, bounds.y, bounds.width, bounds.height);
+                                let (x, y, w, h) = mat.transform_bounds(
+                                    bounds.x,
+                                    bounds.y,
+                                    bounds.width,
+                                    bounds.height,
+                                );
                                 Rect::new(x, y, w, h)
                             } else {
                                 bounds
@@ -1155,7 +1258,13 @@ impl FrameBuffer {
                         } else {
                             &mut *self
                         };
-                        composite_layer(target, &popped.buffer, popped.opacity, popped.blend_mode, effective_clip);
+                        composite_layer(
+                            target,
+                            &popped.buffer,
+                            popped.opacity,
+                            popped.blend_mode,
+                            effective_clip,
+                        );
                     }
                     continue;
                 }
@@ -1178,7 +1287,13 @@ impl FrameBuffer {
                         } else {
                             &mut *self
                         };
-                        composite_layer(target, &popped.buffer, popped.opacity, popped.blend_mode, effective_clip);
+                        composite_layer(
+                            target,
+                            &popped.buffer,
+                            popped.opacity,
+                            popped.blend_mode,
+                            effective_clip,
+                        );
                     }
                     continue;
                 }
@@ -1201,7 +1316,13 @@ impl FrameBuffer {
                         } else {
                             &mut *self
                         };
-                        composite_layer(target, &popped.buffer, popped.opacity, popped.blend_mode, effective_clip);
+                        composite_layer(
+                            target,
+                            &popped.buffer,
+                            popped.opacity,
+                            popped.blend_mode,
+                            effective_clip,
+                        );
                     }
                     continue;
                 }
@@ -1209,7 +1330,12 @@ impl FrameBuffer {
                     let active_matrix = transform_stack.last();
                     let tb = if let Some(mat) = active_matrix {
                         if !mat.is_identity() {
-                            let (x, y, w, h) = mat.transform_bounds(bounds.x, bounds.y, bounds.width, bounds.height);
+                            let (x, y, w, h) = mat.transform_bounds(
+                                bounds.x,
+                                bounds.y,
+                                bounds.width,
+                                bounds.height,
+                            );
                             Rect::new(x, y, w, h)
                         } else {
                             *bounds
@@ -1454,7 +1580,13 @@ impl FrameBuffer {
             } else {
                 &mut *self
             };
-            composite_layer(target, &popped.buffer, popped.opacity, popped.blend_mode, None);
+            composite_layer(
+                target,
+                &popped.buffer,
+                popped.opacity,
+                popped.blend_mode,
+                None,
+            );
         }
     }
 
@@ -1784,7 +1916,10 @@ fn normalize_color_stops(stops: &[ColorStop]) -> Vec<(f32, Color)> {
         return vec![(0.0, stops[0].color), (1.0, stops[0].color)];
     }
 
-    let mut result: Vec<(f32, Color)> = stops.iter().map(|s| (s.position.unwrap_or(-1.0), s.color)).collect();
+    let mut result: Vec<(f32, Color)> = stops
+        .iter()
+        .map(|s| (s.position.unwrap_or(-1.0), s.color))
+        .collect();
 
     // 1. First stop default is 0.0
     if result[0].0 < 0.0 {
@@ -1806,7 +1941,11 @@ fn normalize_color_stops(stops: &[ColorStop]) -> Vec<(f32, Color)> {
             while end_idx < result.len() && result[end_idx].0 < 0.0 {
                 end_idx += 1;
             }
-            let end_pos = if end_idx < result.len() { result[end_idx].0 } else { 1.0 };
+            let end_pos = if end_idx < result.len() {
+                result[end_idx].0
+            } else {
+                1.0
+            };
             let count = (end_idx - start_idx) as f32;
             let step = (end_pos - start_pos) / count;
             for (k, entry) in result[(start_idx + 1)..end_idx].iter_mut().enumerate() {
@@ -1882,7 +2021,11 @@ fn decode_or_get_rgba(data: &[u8], width: usize, height: usize) -> Vec<u8> {
     vec![0u8; width * height * 4]
 }
 
-fn decode_png_to_rgba(data: &[u8], expected_w: usize, expected_h: usize) -> Result<Vec<u8>, String> {
+fn decode_png_to_rgba(
+    data: &[u8],
+    expected_w: usize,
+    expected_h: usize,
+) -> Result<Vec<u8>, String> {
     if data.len() < 8 || data[0..8] != [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A] {
         return Err("Invalid PNG signature".to_string());
     }
@@ -1971,12 +2114,22 @@ fn decode_png_to_rgba(data: &[u8], expected_w: usize, expected_h: usize) -> Resu
                 for x in 0..raw_row.len() {
                     let a = if x >= bpp { row_out[x - bpp] as i32 } else { 0 };
                     let b = prev_row[x] as i32;
-                    let c = if x >= bpp { prev_row[x - bpp] as i32 } else { 0 };
+                    let c = if x >= bpp {
+                        prev_row[x - bpp] as i32
+                    } else {
+                        0
+                    };
                     let p = a + b - c;
                     let pa = (p - a).abs();
                     let pb = (p - b).abs();
                     let pc = (p - c).abs();
-                    let pr = if pa <= pb && pa <= pc { a } else if pb <= pc { b } else { c };
+                    let pr = if pa <= pb && pa <= pc {
+                        a
+                    } else if pb <= pc {
+                        b
+                    } else {
+                        c
+                    };
                     row_out[x] = raw_row[x].wrapping_add(pr as u8);
                 }
             }

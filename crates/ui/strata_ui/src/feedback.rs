@@ -274,10 +274,30 @@ pub fn Alert(
 ) -> View {
     let var = variant.unwrap_or_default();
     let (border, bg, text, icon) = match var {
-        AlertVariant::Info => ("border-indigo-500/20", "bg-indigo-500/10", "text-indigo-400", IconName::Info),
-        AlertVariant::Success => ("border-emerald-500/20", "bg-emerald-500/10", "text-emerald-400", IconName::CheckCircle2),
-        AlertVariant::Warning => ("border-amber-500/20", "bg-amber-500/10", "text-amber-400", IconName::AlertTriangle),
-        AlertVariant::Destructive => ("border-rose-500/20", "bg-rose-500/10", "text-rose-400", IconName::AlertOctagon),
+        AlertVariant::Info => (
+            "border-indigo-500/20",
+            "bg-indigo-500/10",
+            "text-indigo-400",
+            IconName::Info,
+        ),
+        AlertVariant::Success => (
+            "border-emerald-500/20",
+            "bg-emerald-500/10",
+            "text-emerald-400",
+            IconName::CheckCircle2,
+        ),
+        AlertVariant::Warning => (
+            "border-amber-500/20",
+            "bg-amber-500/10",
+            "text-amber-400",
+            IconName::AlertTriangle,
+        ),
+        AlertVariant::Destructive => (
+            "border-rose-500/20",
+            "bg-rose-500/10",
+            "text-rose-400",
+            IconName::AlertOctagon,
+        ),
     };
 
     let custom = class.unwrap_or("");
@@ -302,10 +322,7 @@ pub fn Alert(
 
 /// Linear Progress bar (determinate or indeterminate).
 #[component]
-pub fn Progress(
-    value: Option<f32>,
-    class: Option<&'static str>,
-) -> View {
+pub fn Progress(value: Option<f32>, class: Option<&'static str>) -> View {
     let custom = class.unwrap_or("");
     let base = "w-full h-2 rounded-full bg-neutral-800 overflow-hidden relative";
 
@@ -330,10 +347,7 @@ pub fn Progress(
 
 /// Circular Loading Spinner.
 #[component]
-pub fn Spinner(
-    size: Option<&'static str>,
-    class: Option<&'static str>,
-) -> View {
+pub fn Spinner(size: Option<&'static str>, class: Option<&'static str>) -> View {
     let sz = size.unwrap_or("w-5 h-5");
     let custom = class.unwrap_or("text-indigo-500");
 

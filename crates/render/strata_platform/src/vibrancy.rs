@@ -34,10 +34,15 @@ impl VibrancyEffect {
     pub fn is_supported_on_current_host(&self) -> bool {
         match self {
             VibrancyEffect::None => true,
-            VibrancyEffect::Mica | VibrancyEffect::MicaAlt | VibrancyEffect::Acrylic | VibrancyEffect::BlurBehind => {
+            VibrancyEffect::Mica
+            | VibrancyEffect::MicaAlt
+            | VibrancyEffect::Acrylic
+            | VibrancyEffect::BlurBehind => {
                 cfg!(windows)
             }
-            VibrancyEffect::UnderWindowBackground | VibrancyEffect::HudWindow | VibrancyEffect::FullScreenUI => {
+            VibrancyEffect::UnderWindowBackground
+            | VibrancyEffect::HudWindow
+            | VibrancyEffect::FullScreenUI => {
                 cfg!(target_os = "macos")
             }
         }
@@ -86,7 +91,10 @@ impl fmt::Display for VibrancyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             VibrancyError::UnsupportedPlatform => {
-                write!(f, "Backdrop vibrancy is unsupported on the current host platform")
+                write!(
+                    f,
+                    "Backdrop vibrancy is unsupported on the current host platform"
+                )
             }
             VibrancyError::InvalidWindowHandle => write!(f, "Invalid native window handle"),
             VibrancyError::OsApiError(msg) => write!(f, "Operating system API error: {}", msg),
@@ -140,7 +148,10 @@ mod windows_backend {
     const DWMSBT_TRANSIENTWINDOW: u32 = 3; // Acrylic
     const DWMSBT_TABBEDWINDOW: u32 = 4; // Mica Alt
 
-    pub fn apply_vibrancy(window_handle: isize, config: VibrancyConfig) -> Result<(), VibrancyError> {
+    pub fn apply_vibrancy(
+        window_handle: isize,
+        config: VibrancyConfig,
+    ) -> Result<(), VibrancyError> {
         let hwnd = window_handle as HWND;
 
         unsafe {
@@ -254,7 +265,10 @@ mod macos_backend {
         fn objc_msgSend(receiver: *mut c_void, op: *mut c_void, ...) -> *mut c_void;
     }
 
-    pub fn apply_vibrancy(window_handle: isize, config: VibrancyConfig) -> Result<(), VibrancyError> {
+    pub fn apply_vibrancy(
+        window_handle: isize,
+        config: VibrancyConfig,
+    ) -> Result<(), VibrancyError> {
         let nswindow = window_handle as *mut c_void;
         if nswindow.is_null() {
             return Err(VibrancyError::InvalidWindowHandle);
@@ -268,7 +282,8 @@ mod macos_backend {
             let material_value: isize = match config.effect {
                 VibrancyEffect::None => {
                     // Restore window opacity
-                    let set_opaque_sel = sel_registerName(b"setOpaque:\0".as_ptr() as *const c_char);
+                    let set_opaque_sel =
+                        sel_registerName(b"setOpaque:\0".as_ptr() as *const c_char);
                     let msg_set_bool: unsafe extern "C" fn(*mut c_void, *mut c_void, bool) =
                         std::mem::transmute(objc_msgSend as *const ());
                     msg_set_bool(nswindow, set_opaque_sel, true);
@@ -303,7 +318,9 @@ mod macos_backend {
                 std::mem::transmute(objc_msgSend as *const ());
             let content_view = msg_get_obj(nswindow, content_sel);
             if content_view.is_null() {
-                return Err(VibrancyError::OsApiError("Failed to obtain NSWindow contentView".to_string()));
+                return Err(VibrancyError::OsApiError(
+                    "Failed to obtain NSWindow contentView".to_string(),
+                ));
             }
 
             // Create NSVisualEffectView
@@ -338,7 +355,13 @@ mod macos_backend {
                 isize,
                 *mut c_void,
             ) = std::mem::transmute(objc_msgSend as *const ());
-            msg_add_sub(content_view, add_sub_sel, effect_view, -1, std::ptr::null_mut());
+            msg_add_sub(
+                content_view,
+                add_sub_sel,
+                effect_view,
+                -1,
+                std::ptr::null_mut(),
+            );
 
             Ok(())
         }
@@ -349,7 +372,10 @@ mod macos_backend {
 mod linux_backend {
     use super::*;
 
-    pub fn apply_vibrancy(window_handle: isize, config: VibrancyConfig) -> Result<(), VibrancyError> {
+    pub fn apply_vibrancy(
+        window_handle: isize,
+        config: VibrancyConfig,
+    ) -> Result<(), VibrancyError> {
         let _ = window_handle;
         match config.effect {
             VibrancyEffect::None => Ok(()),

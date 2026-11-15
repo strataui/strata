@@ -167,7 +167,11 @@ impl Event {
         }
     }
 
-    pub fn transition(event_type: EventType, property: impl Into<String>, elapsed_time: f32) -> Self {
+    pub fn transition(
+        event_type: EventType,
+        property: impl Into<String>,
+        elapsed_time: f32,
+    ) -> Self {
         Self {
             event_type,
             property_name: property.into(),
@@ -176,7 +180,11 @@ impl Event {
         }
     }
 
-    pub fn animation(event_type: EventType, animation_name: impl Into<String>, elapsed_time: f32) -> Self {
+    pub fn animation(
+        event_type: EventType,
+        animation_name: impl Into<String>,
+        elapsed_time: f32,
+    ) -> Self {
         Self {
             event_type,
             animation_name: animation_name.into(),

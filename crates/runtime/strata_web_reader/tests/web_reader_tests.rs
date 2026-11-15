@@ -25,13 +25,18 @@ fn test_html_tokenizer_and_entity_decoding() {
     assert!(tokens.iter().any(|t| matches!(t, HtmlToken::DocType(_))));
 
     // Verify Comment emitted
-    assert!(tokens.iter().any(|t| matches!(t, HtmlToken::Comment(c) if c.contains("System Architecture"))));
+    assert!(tokens
+        .iter()
+        .any(|t| matches!(t, HtmlToken::Comment(c) if c.contains("System Architecture"))));
 
     // Verify entity decoding in StartTag attribute and Text
-    let h1_start = tokens.iter().find(|t| match t {
-        HtmlToken::StartTag { name, .. } => name == "h1",
-        _ => false,
-    }).expect("h1 tag must exist");
+    let h1_start = tokens
+        .iter()
+        .find(|t| match t {
+            HtmlToken::StartTag { name, .. } => name == "h1",
+            _ => false,
+        })
+        .expect("h1 tag must exist");
 
     if let HtmlToken::StartTag { attributes, .. } = h1_start {
         let title_attr = attributes.iter().find(|(k, _)| k == "title").unwrap();
@@ -43,11 +48,16 @@ fn test_html_tokenizer_and_entity_decoding() {
         HtmlToken::Text(s) => s.contains("Cloud — Architecture & Scale"),
         _ => false,
     });
-    assert!(text_token.is_some(), "Text with &mdash; and &amp; must be decoded");
+    assert!(
+        text_token.is_some(),
+        "Text with &mdash; and &amp; must be decoded"
+    );
 
     // Verify self-closing img tag
     let img_token = tokens.iter().find(|t| match t {
-        HtmlToken::StartTag { name, self_closing, .. } => name == "img" && *self_closing,
+        HtmlToken::StartTag {
+            name, self_closing, ..
+        } => name == "img" && *self_closing,
         _ => false,
     });
     assert!(img_token.is_some(), "img must be self closing");
@@ -76,8 +86,14 @@ fn test_semantic_html_parser_tree_builder() {
     assert!(root.has_class("content"));
 
     // Ensure <script> was stripped and <style> was preserved for CSS extraction
-    assert!(root.find_first("script").is_none(), "Scripts must be stripped");
-    assert!(root.find_first("style").is_some(), "Styles must be preserved");
+    assert!(
+        root.find_first("script").is_none(),
+        "Scripts must be stripped"
+    );
+    assert!(
+        root.find_first("style").is_some(),
+        "Styles must be preserved"
+    );
 
     // Verify children
     let h2 = root.find_first("h2").expect("h2 should exist");
@@ -109,7 +125,12 @@ fn test_web_transpiler_node_blueprint_generation() {
 
     // Verify root is div with max reading width styling
     match blueprint {
-        strata_dom::NodeBlueprint::Element { tag, classes, children, .. } => {
+        strata_dom::NodeBlueprint::Element {
+            tag,
+            classes,
+            children,
+            ..
+        } => {
             assert_eq!(tag, Tag::Div);
             assert!(classes.iter().any(|c| c.contains("max-w-[760px]")));
             assert!(classes.iter().any(|c| c.contains("bg-neutral-950")));
@@ -154,7 +175,10 @@ fn test_web_transpiler_infobox_and_float_exclusions() {
         strata_dom::NodeBlueprint::Element { children, .. } => {
             let article = &children[0];
             match article {
-                strata_dom::NodeBlueprint::Element { children: article_children, .. } => {
+                strata_dom::NodeBlueprint::Element {
+                    children: article_children,
+                    ..
+                } => {
                     // 1. Infobox table has float-right and width constraint
                     let infobox = &article_children[0];
                     match infobox {
@@ -255,12 +279,18 @@ fn test_wikipedia_article_engine_infobox_and_toc() {
     assert_eq!(article.title, "Rust (programming language)");
 
     // Verify extracted lead summary
-    assert!(article.summary.contains("multi-paradigm, general-purpose programming language"));
+    assert!(article
+        .summary
+        .contains("multi-paradigm, general-purpose programming language"));
 
     // Verify infobox extraction
     let infobox = article.infobox.as_ref().expect("Infobox must be extracted");
     assert_eq!(infobox.title, "Rust");
-    assert!(infobox.image_url.as_ref().unwrap().starts_with("https://upload.wikimedia.org"));
+    assert!(infobox
+        .image_url
+        .as_ref()
+        .unwrap()
+        .starts_with("https://upload.wikimedia.org"));
     assert_eq!(infobox.rows.len(), 3);
     assert_eq!(infobox.rows[0].label, "Designed by");
     assert_eq!(infobox.rows[0].value, "Graydon Hoare");
@@ -280,9 +310,17 @@ fn test_wikipedia_article_engine_infobox_and_toc() {
     let view = WikipediaEngine::render_to_blueprint(&article, &theme);
 
     match view {
-        strata_dom::NodeBlueprint::Element { classes, children, .. } => {
-            assert!(classes.iter().any(|c| c.contains("bg-[#fbf0d9]")), "Must use sepia background");
-            assert!(children.len() >= 3, "Must contain title, infobox, and sections");
+        strata_dom::NodeBlueprint::Element {
+            classes, children, ..
+        } => {
+            assert!(
+                classes.iter().any(|c| c.contains("bg-[#fbf0d9]")),
+                "Must use sepia background"
+            );
+            assert!(
+                children.len() >= 3,
+                "Must contain title, infobox, and sections"
+            );
         }
         _ => panic!("Expected element root"),
     }
@@ -313,7 +351,13 @@ fn test_reader_theme_and_color_palettes() {
 
 #[test]
 fn test_offline_article_cache_roundtrip() {
-    let tmp_dir = std::env::temp_dir().join(format!("strata_reader_cache_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "strata_reader_cache_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
     std::fs::create_dir_all(&tmp_dir).unwrap();
     let wal_path = tmp_dir.join("test_articles.wal");
 
@@ -367,7 +411,11 @@ fn test_document_style_extraction_and_cascade_transpilation() {
 
     fn find_blueprint_element<'a>(
         node: &'a strata_dom::NodeBlueprint,
-        predicate: &dyn Fn(strata_dom::Tag, &strata_dom::ClassList, &[strata_dom::Attribute]) -> bool,
+        predicate: &dyn Fn(
+            strata_dom::Tag,
+            &strata_dom::ClassList,
+            &[strata_dom::Attribute],
+        ) -> bool,
     ) -> Option<&'a strata_dom::NodeBlueprint> {
         match node {
             strata_dom::NodeBlueprint::Element {
@@ -471,11 +519,18 @@ fn test_wikipedia_citation_inline_phrasing_and_flow() {
     let theme = ReaderTheme::dark();
     let transpiler = WebTranspiler::new(&theme);
     let parsed_nodes = HtmlParser::parse(citation_html);
-    let blueprint = transpiler.transpile_node(&parsed_nodes[0]).expect("Must transpile li");
+    let blueprint = transpiler
+        .transpile_node(&parsed_nodes[0])
+        .expect("Must transpile li");
 
     // 1. Verify li is NOT a flex container with wrapping (which broke citations)
     match &blueprint {
-        NodeBlueprint::Element { tag, classes, children, .. } => {
+        NodeBlueprint::Element {
+            tag,
+            classes,
+            children,
+            ..
+        } => {
             assert_eq!(*tag, Tag::Li);
             let class_str = classes.join(" ");
             assert!(
@@ -492,12 +547,17 @@ fn test_wikipedia_citation_inline_phrasing_and_flow() {
             // 2. Verify all phrasing children have inline class
             let mut all_spans_are_inline = true;
             fn check_inline(bp: &NodeBlueprint, all_inline: &mut bool) {
-                if let NodeBlueprint::Element { tag, classes, children, .. } = bp {
+                if let NodeBlueprint::Element {
+                    tag,
+                    classes,
+                    children,
+                    ..
+                } = bp
+                {
                     let cls = classes.join(" ");
-                    if matches!(tag, Tag::Span | Tag::A)
-                        && !cls.contains("inline") {
-                            *all_inline = false;
-                        }
+                    if matches!(tag, Tag::Span | Tag::A) && !cls.contains("inline") {
+                        *all_inline = false;
+                    }
                     for c in children {
                         check_inline(c, all_inline);
                     }
@@ -523,16 +583,32 @@ fn test_wikipedia_article_inline_whitespace_and_word_spacing() {
     let theme = ReaderTheme::dark();
     let transpiler = WebTranspiler::new(&theme);
     let parsed_nodes = HtmlParser::parse(html);
-    let blueprint = transpiler.transpile_node(&parsed_nodes[0]).expect("Must transpile p");
+    let blueprint = transpiler
+        .transpile_node(&parsed_nodes[0])
+        .expect("Must transpile p");
 
     if let NodeBlueprint::Element { children, .. } = blueprint {
-        let texts: Vec<String> = children.iter().filter_map(|c| match c {
-            NodeBlueprint::Text(t) => Some(t.clone()),
-            _ => None,
-        }).collect();
-        assert!(texts.iter().any(|t| t.ends_with("supports multiple ")), "Must preserve trailing space before link");
-        assert!(texts.iter().any(|t| t.starts_with(". It was influenced by ideas from ")), "Must preserve leading space and period after link");
-        assert!(texts.iter().any(|t| t.starts_with(", including ")), "Must preserve comma and trailing space");
+        let texts: Vec<String> = children
+            .iter()
+            .filter_map(|c| match c {
+                NodeBlueprint::Text(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.ends_with("supports multiple ")),
+            "Must preserve trailing space before link"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.starts_with(". It was influenced by ideas from ")),
+            "Must preserve leading space and period after link"
+        );
+        assert!(
+            texts.iter().any(|t| t.starts_with(", including ")),
+            "Must preserve comma and trailing space"
+        );
     } else {
         panic!("Expected element");
     }
@@ -546,7 +622,9 @@ fn test_stream_tokenizer_chunk_boundary_preservation() {
     let t1 = stream.feed_chunk("<div class=\"hero\">Hello ");
     assert_eq!(t1.len(), 2); // <div class="hero"> and "Hello " emitted
     match &t1[0] {
-        HtmlToken::StartTag { name, attributes, .. } => {
+        HtmlToken::StartTag {
+            name, attributes, ..
+        } => {
             assert_eq!(name, "div");
             assert_eq!(attributes[0], ("class".to_string(), "hero".to_string()));
         }
@@ -562,7 +640,12 @@ fn test_stream_tokenizer_chunk_boundary_preservation() {
     let t3 = stream.feed_chunk("e; 100</div>");
     assert_eq!(t3.len(), 2);
     assert_eq!(t3[0], HtmlToken::Text("≥ 100".to_string()));
-    assert_eq!(t3[1], HtmlToken::EndTag { name: "div".to_string() });
+    assert_eq!(
+        t3[1],
+        HtmlToken::EndTag {
+            name: "div".to_string()
+        }
+    );
 
     // Stream finish
     let t4 = stream.finish();
@@ -593,4 +676,3 @@ fn test_resource_urls_prefetch_extraction() {
     assert_eq!(urls[1], "https://images.strata.dev/logo.png");
     assert_eq!(urls[2], "/static/chart.svg");
 }
-

@@ -32,8 +32,7 @@ fn test_rect_subpixel_edge_boundary_snapping() {
     // Total width across all 3 boxes must equal exactly 100.0 (the outer span)
     let total_w = b1.width + b2.width + b3.width;
     assert_eq!(
-        total_w,
-        100.0,
+        total_w, 100.0,
         "Sum of snapped widths must equal exact container width without subpixel drift"
     );
 }
@@ -71,11 +70,8 @@ fn test_grid_subpixel_column_tracks_no_hairline_gaps() {
     grid_style.display = Display::Grid;
     grid_style.width = Dimension::Px(100.0);
     grid_style.height = Dimension::Px(50.0);
-    grid_style.grid_template_columns = vec![
-        GridTrack::Fr(1.0),
-        GridTrack::Fr(1.0),
-        GridTrack::Fr(1.0),
-    ];
+    grid_style.grid_template_columns =
+        vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0), GridTrack::Fr(1.0)];
     grid_style.grid_template_rows = vec![GridTrack::Fr(1.0)];
 
     let c1 = LayoutNode::new(ComputedStyle::default());
@@ -92,21 +88,17 @@ fn test_grid_subpixel_column_tracks_no_hairline_gaps() {
     // Assert that cell 1 and cell 2 share boundary with zero gap
     let cell1_right = cell1.geometry.border_box.x + cell1.geometry.border_box.width;
     assert_eq!(
-        cell1_right,
-        cell2.geometry.border_box.x,
+        cell1_right, cell2.geometry.border_box.x,
         "Cell 1 right edge ({}) must equal Cell 2 left edge ({})",
-        cell1_right,
-        cell2.geometry.border_box.x
+        cell1_right, cell2.geometry.border_box.x
     );
 
     // Assert that cell 2 and cell 3 share boundary with zero gap
     let cell2_right = cell2.geometry.border_box.x + cell2.geometry.border_box.width;
     assert_eq!(
-        cell2_right,
-        cell3.geometry.border_box.x,
+        cell2_right, cell3.geometry.border_box.x,
         "Cell 2 right edge ({}) must equal Cell 3 left edge ({})",
-        cell2_right,
-        cell3.geometry.border_box.x
+        cell2_right, cell3.geometry.border_box.x
     );
 
     // Cell 3 right edge must equal grid right edge (100.0)

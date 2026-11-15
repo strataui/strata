@@ -1,7 +1,7 @@
 //! Filter and Sorting Bar for Apex Athletics Storefront.
 
-use strata::prelude::*;
 use crate::state::StoreState;
+use strata::prelude::*;
 
 #[component]
 pub fn FilterBar(state: StoreState) -> View {

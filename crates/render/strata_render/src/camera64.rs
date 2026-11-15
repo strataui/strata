@@ -63,7 +63,6 @@ impl std::ops::Add for DVec3 {
 }
 
 impl DVec3 {
-
     #[inline(always)]
     pub fn scale(self, k: f64) -> Self {
         Self::new(self.x * k, self.y * k, self.z * k)
@@ -435,9 +434,21 @@ mod tests {
         let ry = high[1] as f64 + low[1] as f64;
         let rz = high[2] as f64 + low[2] as f64;
 
-        assert!((rx - p.x).abs() < 1e-6, "x reconstruction error: {}", (rx - p.x).abs());
-        assert!((ry - p.y).abs() < 1e-6, "y reconstruction error: {}", (ry - p.y).abs());
-        assert!((rz - p.z).abs() < 1e-6, "z reconstruction error: {}", (rz - p.z).abs());
+        assert!(
+            (rx - p.x).abs() < 1e-6,
+            "x reconstruction error: {}",
+            (rx - p.x).abs()
+        );
+        assert!(
+            (ry - p.y).abs() < 1e-6,
+            "y reconstruction error: {}",
+            (ry - p.y).abs()
+        );
+        assert!(
+            (rz - p.z).abs() < 1e-6,
+            "z reconstruction error: {}",
+            (rz - p.z).abs()
+        );
     }
 
     #[test]

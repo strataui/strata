@@ -677,10 +677,16 @@ pub fn PerspectiveCamera(
         attrs.push(Attribute::property("data-far", fa.to_string()));
     }
     if let Some(p) = position {
-        attrs.push(Attribute::property("data-position", format!("{},{},{}", p[0], p[1], p[2])));
+        attrs.push(Attribute::property(
+            "data-position",
+            format!("{},{},{}", p[0], p[1], p[2]),
+        ));
     }
     if let Some(t) = target {
-        attrs.push(Attribute::property("data-target", format!("{},{},{}", t[0], t[1], t[2])));
+        attrs.push(Attribute::property(
+            "data-target",
+            format!("{},{},{}", t[0], t[1], t[2]),
+        ));
     }
     View::new(NodeBlueprint::element(
         Tag::Custom("PerspectiveCamera"),
@@ -702,17 +708,35 @@ pub fn OrthographicCamera(
     target: Option<[f32; 3]>,
 ) -> View {
     let mut attrs = Vec::new();
-    if let Some(v) = left { attrs.push(Attribute::property("data-left", v.to_string())); }
-    if let Some(v) = right { attrs.push(Attribute::property("data-right", v.to_string())); }
-    if let Some(v) = top { attrs.push(Attribute::property("data-top", v.to_string())); }
-    if let Some(v) = bottom { attrs.push(Attribute::property("data-bottom", v.to_string())); }
-    if let Some(v) = near { attrs.push(Attribute::property("data-near", v.to_string())); }
-    if let Some(v) = far { attrs.push(Attribute::property("data-far", v.to_string())); }
+    if let Some(v) = left {
+        attrs.push(Attribute::property("data-left", v.to_string()));
+    }
+    if let Some(v) = right {
+        attrs.push(Attribute::property("data-right", v.to_string()));
+    }
+    if let Some(v) = top {
+        attrs.push(Attribute::property("data-top", v.to_string()));
+    }
+    if let Some(v) = bottom {
+        attrs.push(Attribute::property("data-bottom", v.to_string()));
+    }
+    if let Some(v) = near {
+        attrs.push(Attribute::property("data-near", v.to_string()));
+    }
+    if let Some(v) = far {
+        attrs.push(Attribute::property("data-far", v.to_string()));
+    }
     if let Some(p) = position {
-        attrs.push(Attribute::property("data-position", format!("{},{},{}", p[0], p[1], p[2])));
+        attrs.push(Attribute::property(
+            "data-position",
+            format!("{},{},{}", p[0], p[1], p[2]),
+        ));
     }
     if let Some(t) = target {
-        attrs.push(Attribute::property("data-target", format!("{},{},{}", t[0], t[1], t[2])));
+        attrs.push(Attribute::property(
+            "data-target",
+            format!("{},{},{}", t[0], t[1], t[2]),
+        ));
     }
     View::new(NodeBlueprint::element(
         Tag::Custom("OrthographicCamera"),
@@ -748,7 +772,10 @@ pub fn DirectionalLight(
 ) -> View {
     let mut attrs = Vec::new();
     if let Some(p) = position {
-        attrs.push(Attribute::property("data-position", format!("{},{},{}", p[0], p[1], p[2])));
+        attrs.push(Attribute::property(
+            "data-position",
+            format!("{},{},{}", p[0], p[1], p[2]),
+        ));
     }
     if let Some(c) = color {
         attrs.push(Attribute::property("data-color", c));
@@ -776,7 +803,10 @@ pub fn PointLight(
 ) -> View {
     let mut attrs = Vec::new();
     if let Some(p) = position {
-        attrs.push(Attribute::property("data-position", format!("{},{},{}", p[0], p[1], p[2])));
+        attrs.push(Attribute::property(
+            "data-position",
+            format!("{},{},{}", p[0], p[1], p[2]),
+        ));
     }
     if let Some(c) = color {
         attrs.push(Attribute::property("data-color", c));
@@ -804,13 +834,22 @@ pub fn Mesh(
 ) -> View {
     let mut attrs = Vec::new();
     if let Some(p) = position {
-        attrs.push(Attribute::property("data-position", format!("{},{},{}", p[0], p[1], p[2])));
+        attrs.push(Attribute::property(
+            "data-position",
+            format!("{},{},{}", p[0], p[1], p[2]),
+        ));
     }
     if let Some(r) = rotation {
-        attrs.push(Attribute::property("data-rotation", format!("{},{},{}", r[0], r[1], r[2])));
+        attrs.push(Attribute::property(
+            "data-rotation",
+            format!("{},{},{}", r[0], r[1], r[2]),
+        ));
     }
     if let Some(s) = scale {
-        attrs.push(Attribute::property("data-scale", format!("{},{},{}", s[0], s[1], s[2])));
+        attrs.push(Attribute::property(
+            "data-scale",
+            format!("{},{},{}", s[0], s[1], s[2]),
+        ));
     }
     View::new(NodeBlueprint::element(
         Tag::Custom("Mesh"),
@@ -823,9 +862,15 @@ pub fn Mesh(
 #[component]
 pub fn BoxGeometry(width: Option<f32>, height: Option<f32>, depth: Option<f32>) -> View {
     let mut attrs = Vec::new();
-    if let Some(w) = width { attrs.push(Attribute::property("data-width", w.to_string())); }
-    if let Some(h) = height { attrs.push(Attribute::property("data-height", h.to_string())); }
-    if let Some(d) = depth { attrs.push(Attribute::property("data-depth", d.to_string())); }
+    if let Some(w) = width {
+        attrs.push(Attribute::property("data-width", w.to_string()));
+    }
+    if let Some(h) = height {
+        attrs.push(Attribute::property("data-height", h.to_string()));
+    }
+    if let Some(d) = depth {
+        attrs.push(Attribute::property("data-depth", d.to_string()));
+    }
     View::new(NodeBlueprint::element(
         Tag::Custom("BoxGeometry"),
         strata_dom::ClassList::default(),
@@ -841,9 +886,15 @@ pub fn SphereGeometry(
     height_segments: Option<u32>,
 ) -> View {
     let mut attrs = Vec::new();
-    if let Some(r) = radius { attrs.push(Attribute::property("data-radius", r.to_string())); }
-    if let Some(w) = width_segments { attrs.push(Attribute::property("data-width-segments", w.to_string())); }
-    if let Some(h) = height_segments { attrs.push(Attribute::property("data-height-segments", h.to_string())); }
+    if let Some(r) = radius {
+        attrs.push(Attribute::property("data-radius", r.to_string()));
+    }
+    if let Some(w) = width_segments {
+        attrs.push(Attribute::property("data-width-segments", w.to_string()));
+    }
+    if let Some(h) = height_segments {
+        attrs.push(Attribute::property("data-height-segments", h.to_string()));
+    }
     View::new(NodeBlueprint::element(
         Tag::Custom("SphereGeometry"),
         strata_dom::ClassList::default(),
@@ -855,8 +906,12 @@ pub fn SphereGeometry(
 #[component]
 pub fn PlaneGeometry(width: Option<f32>, height: Option<f32>) -> View {
     let mut attrs = Vec::new();
-    if let Some(w) = width { attrs.push(Attribute::property("data-width", w.to_string())); }
-    if let Some(h) = height { attrs.push(Attribute::property("data-height", h.to_string())); }
+    if let Some(w) = width {
+        attrs.push(Attribute::property("data-width", w.to_string()));
+    }
+    if let Some(h) = height {
+        attrs.push(Attribute::property("data-height", h.to_string()));
+    }
     View::new(NodeBlueprint::element(
         Tag::Custom("PlaneGeometry"),
         strata_dom::ClassList::default(),
@@ -873,10 +928,18 @@ pub fn CylinderGeometry(
     radial_segments: Option<u32>,
 ) -> View {
     let mut attrs = Vec::new();
-    if let Some(rt) = radius_top { attrs.push(Attribute::property("data-radius-top", rt.to_string())); }
-    if let Some(rb) = radius_bottom { attrs.push(Attribute::property("data-radius-bottom", rb.to_string())); }
-    if let Some(h) = height { attrs.push(Attribute::property("data-height", h.to_string())); }
-    if let Some(rs) = radial_segments { attrs.push(Attribute::property("data-radial-segments", rs.to_string())); }
+    if let Some(rt) = radius_top {
+        attrs.push(Attribute::property("data-radius-top", rt.to_string()));
+    }
+    if let Some(rb) = radius_bottom {
+        attrs.push(Attribute::property("data-radius-bottom", rb.to_string()));
+    }
+    if let Some(h) = height {
+        attrs.push(Attribute::property("data-height", h.to_string()));
+    }
+    if let Some(rs) = radial_segments {
+        attrs.push(Attribute::property("data-radial-segments", rs.to_string()));
+    }
     View::new(NodeBlueprint::element(
         Tag::Custom("CylinderGeometry"),
         strata_dom::ClassList::default(),
@@ -892,9 +955,15 @@ pub fn StandardMaterial(
     metalness: Option<f32>,
 ) -> View {
     let mut attrs = Vec::new();
-    if let Some(c) = color { attrs.push(Attribute::property("data-color", c)); }
-    if let Some(r) = roughness { attrs.push(Attribute::property("data-roughness", r.to_string())); }
-    if let Some(m) = metalness { attrs.push(Attribute::property("data-metalness", m.to_string())); }
+    if let Some(c) = color {
+        attrs.push(Attribute::property("data-color", c));
+    }
+    if let Some(r) = roughness {
+        attrs.push(Attribute::property("data-roughness", r.to_string()));
+    }
+    if let Some(m) = metalness {
+        attrs.push(Attribute::property("data-metalness", m.to_string()));
+    }
     View::new(NodeBlueprint::element(
         Tag::Custom("StandardMaterial"),
         strata_dom::ClassList::default(),
@@ -910,8 +979,12 @@ pub fn ShaderMaterial(
     uniforms: Option<strata_js::JsValue>,
 ) -> View {
     let mut attrs = Vec::new();
-    if let Some(g) = glsl_fragment { attrs.push(Attribute::property("data-glsl", g)); }
-    if let Some(t) = uniform_time { attrs.push(Attribute::property("data-time", t.to_string())); }
+    if let Some(g) = glsl_fragment {
+        attrs.push(Attribute::property("data-glsl", g));
+    }
+    if let Some(t) = uniform_time {
+        attrs.push(Attribute::property("data-time", t.to_string()));
+    }
     View::new(NodeBlueprint::element(
         Tag::Custom("ShaderMaterial"),
         strata_dom::ClassList::default(),
@@ -997,23 +1070,41 @@ pub fn compile_scene3d_from_blueprint(canvas_node: &NodeBlueprint) -> Scene3D {
     let mut scene = attributes
         .iter()
         .find_map(|attr| match attr {
-            strata_dom::Attribute::ScenePayload(any) => any
-                .downcast_ref::<Scene3D>()
-                .cloned()
-                .or_else(|| any.downcast_ref::<std::sync::Arc<Scene3D>>().map(|a| (**a).clone())),
+            strata_dom::Attribute::ScenePayload(any) => {
+                any.downcast_ref::<Scene3D>().cloned().or_else(|| {
+                    any.downcast_ref::<std::sync::Arc<Scene3D>>()
+                        .map(|a| (**a).clone())
+                })
+            }
             _ => None,
         })
         .unwrap_or_default();
 
     for child in children {
-        if let NodeBlueprint::Element { tag, attributes, children: mesh_children, .. } = child {
+        if let NodeBlueprint::Element {
+            tag,
+            attributes,
+            children: mesh_children,
+            ..
+        } = child
+        {
             match tag {
                 Tag::Custom("PerspectiveCamera") => {
-                    let fov = get_3d_attr(attributes, "data-fov").and_then(|v| v.parse().ok()).unwrap_or(60.0);
-                    let near = get_3d_attr(attributes, "data-near").and_then(|v| v.parse().ok()).unwrap_or(0.1);
-                    let far = get_3d_attr(attributes, "data-far").and_then(|v| v.parse().ok()).unwrap_or(1000.0);
-                    let position = get_3d_attr(attributes, "data-position").and_then(parse_3d_vec3).unwrap_or([0.0, 2.0, 5.0]);
-                    let target = get_3d_attr(attributes, "data-target").and_then(parse_3d_vec3).unwrap_or([0.0, 0.0, 0.0]);
+                    let fov = get_3d_attr(attributes, "data-fov")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(60.0);
+                    let near = get_3d_attr(attributes, "data-near")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0.1);
+                    let far = get_3d_attr(attributes, "data-far")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1000.0);
+                    let position = get_3d_attr(attributes, "data-position")
+                        .and_then(parse_3d_vec3)
+                        .unwrap_or([0.0, 2.0, 5.0]);
+                    let target = get_3d_attr(attributes, "data-target")
+                        .and_then(parse_3d_vec3)
+                        .unwrap_or([0.0, 0.0, 0.0]);
                     scene.camera = Camera3D::Perspective {
                         fov_horizontal_deg: fov,
                         near,
@@ -1023,14 +1114,30 @@ pub fn compile_scene3d_from_blueprint(canvas_node: &NodeBlueprint) -> Scene3D {
                     };
                 }
                 Tag::Custom("OrthographicCamera") => {
-                    let left = get_3d_attr(attributes, "data-left").and_then(|v| v.parse().ok()).unwrap_or(-5.0);
-                    let right = get_3d_attr(attributes, "data-right").and_then(|v| v.parse().ok()).unwrap_or(5.0);
-                    let top = get_3d_attr(attributes, "data-top").and_then(|v| v.parse().ok()).unwrap_or(5.0);
-                    let bottom = get_3d_attr(attributes, "data-bottom").and_then(|v| v.parse().ok()).unwrap_or(-5.0);
-                    let near = get_3d_attr(attributes, "data-near").and_then(|v| v.parse().ok()).unwrap_or(0.1);
-                    let far = get_3d_attr(attributes, "data-far").and_then(|v| v.parse().ok()).unwrap_or(1000.0);
-                    let position = get_3d_attr(attributes, "data-position").and_then(parse_3d_vec3).unwrap_or([0.0, 2.0, 5.0]);
-                    let target = get_3d_attr(attributes, "data-target").and_then(parse_3d_vec3).unwrap_or([0.0, 0.0, 0.0]);
+                    let left = get_3d_attr(attributes, "data-left")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(-5.0);
+                    let right = get_3d_attr(attributes, "data-right")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(5.0);
+                    let top = get_3d_attr(attributes, "data-top")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(5.0);
+                    let bottom = get_3d_attr(attributes, "data-bottom")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(-5.0);
+                    let near = get_3d_attr(attributes, "data-near")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0.1);
+                    let far = get_3d_attr(attributes, "data-far")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1000.0);
+                    let position = get_3d_attr(attributes, "data-position")
+                        .and_then(parse_3d_vec3)
+                        .unwrap_or([0.0, 2.0, 5.0]);
+                    let target = get_3d_attr(attributes, "data-target")
+                        .and_then(parse_3d_vec3)
+                        .unwrap_or([0.0, 0.0, 0.0]);
                     scene.camera = Camera3D::Orthographic {
                         left,
                         right,
@@ -1045,71 +1152,169 @@ pub fn compile_scene3d_from_blueprint(canvas_node: &NodeBlueprint) -> Scene3D {
                 Tag::Custom("AmbientLight") => {
                     let color_str = get_3d_attr(attributes, "data-color").unwrap_or("#ffffff");
                     let color = strata_style::parse_color(color_str).unwrap_or(Color::WHITE);
-                    let intensity = get_3d_attr(attributes, "data-intensity").and_then(|v| v.parse().ok()).unwrap_or(1.0);
+                    let intensity = get_3d_attr(attributes, "data-intensity")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1.0);
                     scene.add_light(Light3D::Ambient { color, intensity });
                 }
                 Tag::Custom("DirectionalLight") => {
-                    let pos = get_3d_attr(attributes, "data-position").and_then(parse_3d_vec3).unwrap_or([5.0, 10.0, 7.0]);
+                    let pos = get_3d_attr(attributes, "data-position")
+                        .and_then(parse_3d_vec3)
+                        .unwrap_or([5.0, 10.0, 7.0]);
                     let color_str = get_3d_attr(attributes, "data-color").unwrap_or("#ffffff");
                     let color = strata_style::parse_color(color_str).unwrap_or(Color::WHITE);
-                    let intensity = get_3d_attr(attributes, "data-intensity").and_then(|v| v.parse().ok()).unwrap_or(1.0);
-                    let cast_shadow = get_3d_attr(attributes, "data-cast-shadow").and_then(|v| v.parse().ok()).unwrap_or(false);
-                    scene.add_light(Light3D::Directional { position: pos, color, intensity, cast_shadow });
+                    let intensity = get_3d_attr(attributes, "data-intensity")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1.0);
+                    let cast_shadow = get_3d_attr(attributes, "data-cast-shadow")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(false);
+                    scene.add_light(Light3D::Directional {
+                        position: pos,
+                        color,
+                        intensity,
+                        cast_shadow,
+                    });
                 }
                 Tag::Custom("PointLight") => {
-                    let pos = get_3d_attr(attributes, "data-position").and_then(parse_3d_vec3).unwrap_or([0.0, 2.0, 0.0]);
+                    let pos = get_3d_attr(attributes, "data-position")
+                        .and_then(parse_3d_vec3)
+                        .unwrap_or([0.0, 2.0, 0.0]);
                     let color_str = get_3d_attr(attributes, "data-color").unwrap_or("#ffffff");
                     let color = strata_style::parse_color(color_str).unwrap_or(Color::WHITE);
-                    let intensity = get_3d_attr(attributes, "data-intensity").and_then(|v| v.parse().ok()).unwrap_or(1.0);
-                    let distance = get_3d_attr(attributes, "data-distance").and_then(|v| v.parse().ok()).unwrap_or(10.0);
-                    scene.add_light(Light3D::Point { position: pos, color, intensity, distance });
+                    let intensity = get_3d_attr(attributes, "data-intensity")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1.0);
+                    let distance = get_3d_attr(attributes, "data-distance")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(10.0);
+                    scene.add_light(Light3D::Point {
+                        position: pos,
+                        color,
+                        intensity,
+                        distance,
+                    });
                 }
                 Tag::Custom("Mesh") => {
-                    let position = get_3d_attr(attributes, "data-position").and_then(parse_3d_vec3).unwrap_or([0.0, 0.0, 0.0]);
-                    let rotation = get_3d_attr(attributes, "data-rotation").and_then(parse_3d_vec3).unwrap_or([0.0, 0.0, 0.0]);
-                    let scale = get_3d_attr(attributes, "data-scale").and_then(parse_3d_vec3).unwrap_or([1.0, 1.0, 1.0]);
-                    let transform = Transform3D { position, rotation, scale };
+                    let position = get_3d_attr(attributes, "data-position")
+                        .and_then(parse_3d_vec3)
+                        .unwrap_or([0.0, 0.0, 0.0]);
+                    let rotation = get_3d_attr(attributes, "data-rotation")
+                        .and_then(parse_3d_vec3)
+                        .unwrap_or([0.0, 0.0, 0.0]);
+                    let scale = get_3d_attr(attributes, "data-scale")
+                        .and_then(parse_3d_vec3)
+                        .unwrap_or([1.0, 1.0, 1.0]);
+                    let transform = Transform3D {
+                        position,
+                        rotation,
+                        scale,
+                    };
 
-                    let mut geometry = Geometry3D::Box { width: 1.0, height: 1.0, depth: 1.0 };
+                    let mut geometry = Geometry3D::Box {
+                        width: 1.0,
+                        height: 1.0,
+                        depth: 1.0,
+                    };
                     let mut material = Material3D::default();
 
                     for sub in mesh_children {
-                        if let NodeBlueprint::Element { tag: sub_tag, attributes: sub_attrs, .. } = sub {
+                        if let NodeBlueprint::Element {
+                            tag: sub_tag,
+                            attributes: sub_attrs,
+                            ..
+                        } = sub
+                        {
                             match sub_tag {
                                 Tag::Custom("BoxGeometry") => {
-                                    let width = get_3d_attr(sub_attrs, "data-width").and_then(|v| v.parse().ok()).unwrap_or(1.0);
-                                    let height = get_3d_attr(sub_attrs, "data-height").and_then(|v| v.parse().ok()).unwrap_or(1.0);
-                                    let depth = get_3d_attr(sub_attrs, "data-depth").and_then(|v| v.parse().ok()).unwrap_or(1.0);
-                                    geometry = Geometry3D::Box { width, height, depth };
+                                    let width = get_3d_attr(sub_attrs, "data-width")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(1.0);
+                                    let height = get_3d_attr(sub_attrs, "data-height")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(1.0);
+                                    let depth = get_3d_attr(sub_attrs, "data-depth")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(1.0);
+                                    geometry = Geometry3D::Box {
+                                        width,
+                                        height,
+                                        depth,
+                                    };
                                 }
                                 Tag::Custom("SphereGeometry") => {
-                                    let radius = get_3d_attr(sub_attrs, "data-radius").and_then(|v| v.parse().ok()).unwrap_or(1.0);
-                                    let width_segments = get_3d_attr(sub_attrs, "data-width-segments").and_then(|v| v.parse().ok()).unwrap_or(16);
-                                    let height_segments = get_3d_attr(sub_attrs, "data-height-segments").and_then(|v| v.parse().ok()).unwrap_or(16);
-                                    geometry = Geometry3D::Sphere { radius, width_segments, height_segments };
+                                    let radius = get_3d_attr(sub_attrs, "data-radius")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(1.0);
+                                    let width_segments =
+                                        get_3d_attr(sub_attrs, "data-width-segments")
+                                            .and_then(|v| v.parse().ok())
+                                            .unwrap_or(16);
+                                    let height_segments =
+                                        get_3d_attr(sub_attrs, "data-height-segments")
+                                            .and_then(|v| v.parse().ok())
+                                            .unwrap_or(16);
+                                    geometry = Geometry3D::Sphere {
+                                        radius,
+                                        width_segments,
+                                        height_segments,
+                                    };
                                 }
                                 Tag::Custom("PlaneGeometry") => {
-                                    let width = get_3d_attr(sub_attrs, "data-width").and_then(|v| v.parse().ok()).unwrap_or(1.0);
-                                    let height = get_3d_attr(sub_attrs, "data-height").and_then(|v| v.parse().ok()).unwrap_or(1.0);
+                                    let width = get_3d_attr(sub_attrs, "data-width")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(1.0);
+                                    let height = get_3d_attr(sub_attrs, "data-height")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(1.0);
                                     geometry = Geometry3D::Plane { width, height };
                                 }
                                 Tag::Custom("CylinderGeometry") => {
-                                    let radius_top = get_3d_attr(sub_attrs, "data-radius-top").and_then(|v| v.parse().ok()).unwrap_or(1.0);
-                                    let radius_bottom = get_3d_attr(sub_attrs, "data-radius-bottom").and_then(|v| v.parse().ok()).unwrap_or(1.0);
-                                    let height = get_3d_attr(sub_attrs, "data-height").and_then(|v| v.parse().ok()).unwrap_or(1.0);
-                                    let radial_segments = get_3d_attr(sub_attrs, "data-radial-segments").and_then(|v| v.parse().ok()).unwrap_or(16);
-                                    geometry = Geometry3D::Cylinder { radius_top, radius_bottom, height, radial_segments };
+                                    let radius_top = get_3d_attr(sub_attrs, "data-radius-top")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(1.0);
+                                    let radius_bottom =
+                                        get_3d_attr(sub_attrs, "data-radius-bottom")
+                                            .and_then(|v| v.parse().ok())
+                                            .unwrap_or(1.0);
+                                    let height = get_3d_attr(sub_attrs, "data-height")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(1.0);
+                                    let radial_segments =
+                                        get_3d_attr(sub_attrs, "data-radial-segments")
+                                            .and_then(|v| v.parse().ok())
+                                            .unwrap_or(16);
+                                    geometry = Geometry3D::Cylinder {
+                                        radius_top,
+                                        radius_bottom,
+                                        height,
+                                        radial_segments,
+                                    };
                                 }
                                 Tag::Custom("StandardMaterial") => {
-                                    let color_str = get_3d_attr(sub_attrs, "data-color").unwrap_or("#ffffff");
-                                    let color = strata_style::parse_color(color_str).unwrap_or(Color::WHITE);
-                                    let roughness = get_3d_attr(sub_attrs, "data-roughness").and_then(|v| v.parse().ok()).unwrap_or(0.5);
-                                    let metalness = get_3d_attr(sub_attrs, "data-metalness").and_then(|v| v.parse().ok()).unwrap_or(0.0);
-                                    material = Material3D::Standard { color, roughness, metalness, emissive: None };
+                                    let color_str =
+                                        get_3d_attr(sub_attrs, "data-color").unwrap_or("#ffffff");
+                                    let color = strata_style::parse_color(color_str)
+                                        .unwrap_or(Color::WHITE);
+                                    let roughness = get_3d_attr(sub_attrs, "data-roughness")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(0.5);
+                                    let metalness = get_3d_attr(sub_attrs, "data-metalness")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(0.0);
+                                    material = Material3D::Standard {
+                                        color,
+                                        roughness,
+                                        metalness,
+                                        emissive: None,
+                                    };
                                 }
                                 Tag::Custom("ShaderMaterial") => {
-                                    let glsl = get_3d_attr(sub_attrs, "data-glsl").map(|s| s.to_string());
-                                    let time = get_3d_attr(sub_attrs, "data-time").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                                    let glsl =
+                                        get_3d_attr(sub_attrs, "data-glsl").map(|s| s.to_string());
+                                    let time = get_3d_attr(sub_attrs, "data-time")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(0.0);
                                     let mut uniforms = BTreeMap::new();
                                     uniforms.insert("u_time".to_string(), time);
                                     material = Material3D::Shader {
@@ -1124,7 +1329,11 @@ pub fn compile_scene3d_from_blueprint(canvas_node: &NodeBlueprint) -> Scene3D {
                         }
                     }
 
-                    scene.add_mesh(Mesh3D { geometry, material, transform });
+                    scene.add_mesh(Mesh3D {
+                        geometry,
+                        material,
+                        transform,
+                    });
                 }
                 _ => {}
             }

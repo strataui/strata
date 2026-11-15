@@ -22,8 +22,18 @@ fn test_css_custom_properties_and_var_resolution() {
     let state = PseudoState::default();
 
     let root_style = CascadeSolver::resolve(":root", &[], None, None, &[&sheet], None, &state);
-    assert_eq!(root_style.get_custom_property(strata_primitives::atom::intern("--primary")).and_then(strata_primitives::atom::resolve), Some("#3b82f6".to_string()));
-    assert_eq!(root_style.get_custom_property(strata_primitives::atom::intern("--secondary")).and_then(strata_primitives::atom::resolve), Some("#10b981".to_string()));
+    assert_eq!(
+        root_style
+            .get_custom_property(strata_primitives::atom::intern("--primary"))
+            .and_then(strata_primitives::atom::resolve),
+        Some("#3b82f6".to_string())
+    );
+    assert_eq!(
+        root_style
+            .get_custom_property(strata_primitives::atom::intern("--secondary"))
+            .and_then(strata_primitives::atom::resolve),
+        Some("#10b981".to_string())
+    );
 
     let card_style = CascadeSolver::resolve(
         "div",
@@ -37,7 +47,10 @@ fn test_css_custom_properties_and_var_resolution() {
 
     assert_eq!(card_style.background_color, Some(Color::rgb(59, 130, 246)));
     assert_eq!(card_style.color, Color::rgb(16, 185, 129));
-    assert_eq!(card_style.font_family, strata_primitives::atom::intern("Inter, sans-serif"));
+    assert_eq!(
+        card_style.font_family,
+        strata_primitives::atom::intern("Inter, sans-serif")
+    );
     assert_eq!(card_style.border_width.top, 2.0);
     assert_eq!(card_style.border_width.left, 2.0);
     assert_eq!(card_style.outline_color, Some(Color::rgb(239, 68, 68)));
@@ -73,29 +86,18 @@ fn test_w3c_inheritance_rules() {
     let sheet = StyleSheet::parse(parent_css).expect("Failed to parse parent CSS");
     let state = PseudoState::default();
 
-    let parent_style = CascadeSolver::resolve(
-        "div",
-        &["parent"],
-        None,
-        None,
-        &[&sheet],
-        None,
-        &state,
-    );
+    let parent_style =
+        CascadeSolver::resolve("div", &["parent"], None, None, &[&sheet], None, &state);
 
-    let child_style = CascadeSolver::resolve(
-        "span",
-        &[],
-        None,
-        None,
-        &[],
-        Some(&parent_style),
-        &state,
-    );
+    let child_style =
+        CascadeSolver::resolve("span", &[], None, None, &[], Some(&parent_style), &state);
 
     // Inherited properties
     assert_eq!(child_style.color, Color::rgb(30, 41, 59));
-    assert_eq!(child_style.font_family, strata_primitives::atom::intern("Fira Code"));
+    assert_eq!(
+        child_style.font_family,
+        strata_primitives::atom::intern("Fira Code")
+    );
     assert_eq!(child_style.font_size, 14.0);
     assert_eq!(child_style.font_weight, FontWeight::SemiBold);
     assert_eq!(child_style.font_style, FontStyle::Italic);
@@ -159,15 +161,8 @@ fn test_shorthand_properties_border_and_outline() {
     assert_eq!(style.outline_offset, 4.0);
     assert_eq!(style.aspect_ratio, Some(16.0 / 9.0));
 
-    let reset_style = CascadeSolver::resolve(
-        "div",
-        &["box-reset"],
-        None,
-        None,
-        &[&sheet],
-        None,
-        &state,
-    );
+    let reset_style =
+        CascadeSolver::resolve("div", &["box-reset"], None, None, &[&sheet], None, &state);
 
     assert_eq!(reset_style.border_width, EdgeInsets::ZERO);
     assert_eq!(reset_style.border_style, BorderStyle::None);
@@ -193,15 +188,7 @@ fn test_typography_and_interaction_spec() {
     let sheet = StyleSheet::parse(css).expect("Failed to parse hero CSS");
     let state = PseudoState::default();
 
-    let style = CascadeSolver::resolve(
-        "h1",
-        &["hero-title"],
-        None,
-        None,
-        &[&sheet],
-        None,
-        &state,
-    );
+    let style = CascadeSolver::resolve("h1", &["hero-title"], None, None, &[&sheet], None, &state);
 
     assert_eq!(style.text_transform, TextTransform::Capitalize);
     assert_eq!(style.text_decoration, TextDecoration::LineThrough);
@@ -279,7 +266,12 @@ fn test_nested_var_resolution_and_multi_tier_custom_property_tree() {
         Some(&root),
         &state,
     );
-    assert_eq!(container.get_custom_property(strata_primitives::atom::intern("--brand-primary")).and_then(strata_primitives::atom::resolve), Some("#4338ca".to_string()));
+    assert_eq!(
+        container
+            .get_custom_property(strata_primitives::atom::intern("--brand-primary"))
+            .and_then(strata_primitives::atom::resolve),
+        Some("#4338ca".to_string())
+    );
 
     // Level 3: Card Button inheriting dark theme variables
     let button_css = r#"
@@ -327,10 +319,19 @@ fn test_float_and_clear_resolution() {
     assert_eq!(infobox.float, Float::Right);
     assert_eq!(infobox.clear, Clear::None);
 
-    let figure = CascadeSolver::resolve("div", &["figure-left"], None, None, &[&sheet], None, &state);
+    let figure =
+        CascadeSolver::resolve("div", &["figure-left"], None, None, &[&sheet], None, &state);
     assert_eq!(figure.float, Float::Left);
 
-    let footer = CascadeSolver::resolve("div", &["footer-clear"], None, None, &[&sheet], None, &state);
+    let footer = CascadeSolver::resolve(
+        "div",
+        &["footer-clear"],
+        None,
+        None,
+        &[&sheet],
+        None,
+        &state,
+    );
     assert_eq!(footer.clear, Clear::Both);
 
     // Test Tailwind utilities

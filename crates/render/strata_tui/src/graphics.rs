@@ -70,14 +70,30 @@ pub fn render_half_block(
 /// Encodes a 2x4 dot binary matrix into a single Unicode Braille character (U+2800..U+28FF).
 pub fn braille_char_from_dots(dots: [bool; 8]) -> char {
     let mut code: u32 = 0x2800;
-    if dots[0] { code |= 0x01; } // Row 0, Col 0
-    if dots[1] { code |= 0x02; } // Row 1, Col 0
-    if dots[2] { code |= 0x04; } // Row 2, Col 0
-    if dots[3] { code |= 0x08; } // Row 0, Col 1
-    if dots[4] { code |= 0x10; } // Row 1, Col 1
-    if dots[5] { code |= 0x20; } // Row 2, Col 1
-    if dots[6] { code |= 0x40; } // Row 3, Col 0
-    if dots[7] { code |= 0x80; } // Row 3, Col 1
+    if dots[0] {
+        code |= 0x01;
+    } // Row 0, Col 0
+    if dots[1] {
+        code |= 0x02;
+    } // Row 1, Col 0
+    if dots[2] {
+        code |= 0x04;
+    } // Row 2, Col 0
+    if dots[3] {
+        code |= 0x08;
+    } // Row 0, Col 1
+    if dots[4] {
+        code |= 0x10;
+    } // Row 1, Col 1
+    if dots[5] {
+        code |= 0x20;
+    } // Row 2, Col 1
+    if dots[6] {
+        code |= 0x40;
+    } // Row 3, Col 0
+    if dots[7] {
+        code |= 0x80;
+    } // Row 3, Col 1
 
     char::from_u32(code).unwrap_or(' ')
 }

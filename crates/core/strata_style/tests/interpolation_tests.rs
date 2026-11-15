@@ -47,7 +47,10 @@ fn test_de_casteljau_cubic_bezier_root_finding_curves() {
 
     // 5. Overshoot / bounce curve: cubic-bezier(0.68, -0.55, 0.265, 1.55)
     let y_overshoot = cubic_bezier_solve(0.9, 0.68, -0.55, 0.265, 1.55);
-    assert!(y_overshoot > 0.9, "Overshoot curve solves stably with De Casteljau");
+    assert!(
+        y_overshoot > 0.9,
+        "Overshoot curve solves stably with De Casteljau"
+    );
 }
 
 #[test]
@@ -71,8 +74,14 @@ fn test_perceptually_uniform_oklab_color_interpolation() {
 
     // Interpolating red to green produces vibrant yellow/amber in Oklab
     let mid_rg = interpolate_color_oklab(red, green, 0.5);
-    assert!(mid_rg.r > 150, "Oklab midpoint must have high red component");
-    assert!(mid_rg.g > 120, "Oklab midpoint must have high green component");
+    assert!(
+        mid_rg.r > 150,
+        "Oklab midpoint must have high red component"
+    );
+    assert!(
+        mid_rg.g > 120,
+        "Oklab midpoint must have high green component"
+    );
 }
 
 #[test]
@@ -92,7 +101,14 @@ fn test_matrix_decomposition_and_shortest_arc_interpolation() {
 
     // 3. Pure rotation matrix (90 degrees = PI/2)
     let theta = PI / 2.0;
-    let m_rot = [theta.cos(), theta.sin(), -theta.sin(), theta.cos(), 0.0, 0.0];
+    let m_rot = [
+        theta.cos(),
+        theta.sin(),
+        -theta.sin(),
+        theta.cos(),
+        0.0,
+        0.0,
+    ];
     let decomp_r = Decomposed2d::from_matrix(m_rot).expect("Decompose rotation");
     assert!((decomp_r.angle - theta).abs() < 1e-5);
     assert!((decomp_r.scale.0 - 1.0).abs() < 1e-5);

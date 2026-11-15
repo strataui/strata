@@ -195,7 +195,10 @@ impl AppRuntime {
 
                 // 1. Update blueprint tree node
                 if let Some(bp) = find_blueprint_node_mut(&mut self.root_blueprint, &path) {
-                    if let NodeBlueprint::Element { ref mut children, .. } = bp {
+                    if let NodeBlueprint::Element {
+                        ref mut children, ..
+                    } = bp
+                    {
                         children.clear();
                         children.push(NodeBlueprint::Text(new_text.clone()));
                     }
@@ -331,7 +334,9 @@ impl AppRuntime {
                         let new_bp = dom_node_to_blueprint(&dom_node);
                         let ctx = self.interaction_context();
                         let rebuilt = Self::build_layout_tree_with_interaction(&new_bp, &ctx);
-                        if let Some(target) = Self::find_layout_node_mut(&mut self.layout_root, &path) {
+                        if let Some(target) =
+                            Self::find_layout_node_mut(&mut self.layout_root, &path)
+                        {
                             target.style = rebuilt.style.clone();
                         }
                     }
@@ -360,8 +365,13 @@ impl AppRuntime {
                 };
 
                 // Append to blueprint
-                if let Some(parent_bp) = find_blueprint_node_mut(&mut self.root_blueprint, &parent_path) {
-                    if let NodeBlueprint::Element { ref mut children, .. } = parent_bp {
+                if let Some(parent_bp) =
+                    find_blueprint_node_mut(&mut self.root_blueprint, &parent_path)
+                {
+                    if let NodeBlueprint::Element {
+                        ref mut children, ..
+                    } = parent_bp
+                    {
                         children.push(child_bp.clone());
                     }
                 }
@@ -371,7 +381,9 @@ impl AppRuntime {
                     .map(|n| n.style.clone());
                 let child_layout =
                     Self::build_layout_tree_with_parent(&child_bp, parent_style.as_ref());
-                if let Some(parent_layout) = Self::find_layout_node_mut(&mut self.layout_root, &parent_path) {
+                if let Some(parent_layout) =
+                    Self::find_layout_node_mut(&mut self.layout_root, &parent_path)
+                {
                     parent_layout.children.push(child_layout);
                 }
 
@@ -398,8 +410,13 @@ impl AppRuntime {
                 };
 
                 // Prepend to blueprint
-                if let Some(parent_bp) = find_blueprint_node_mut(&mut self.root_blueprint, &parent_path) {
-                    if let NodeBlueprint::Element { ref mut children, .. } = parent_bp {
+                if let Some(parent_bp) =
+                    find_blueprint_node_mut(&mut self.root_blueprint, &parent_path)
+                {
+                    if let NodeBlueprint::Element {
+                        ref mut children, ..
+                    } = parent_bp
+                    {
                         children.insert(0, child_bp.clone());
                     }
                 }
@@ -409,7 +426,9 @@ impl AppRuntime {
                     .map(|n| n.style.clone());
                 let child_layout =
                     Self::build_layout_tree_with_parent(&child_bp, parent_style.as_ref());
-                if let Some(parent_layout) = Self::find_layout_node_mut(&mut self.layout_root, &parent_path) {
+                if let Some(parent_layout) =
+                    Self::find_layout_node_mut(&mut self.layout_root, &parent_path)
+                {
                     parent_layout.children.insert(0, child_layout);
                 }
 
@@ -451,8 +470,13 @@ impl AppRuntime {
                 };
 
                 // Insert into blueprint
-                if let Some(parent_bp) = find_blueprint_node_mut(&mut self.root_blueprint, &parent_path) {
-                    if let NodeBlueprint::Element { ref mut children, .. } = parent_bp {
+                if let Some(parent_bp) =
+                    find_blueprint_node_mut(&mut self.root_blueprint, &parent_path)
+                {
+                    if let NodeBlueprint::Element {
+                        ref mut children, ..
+                    } = parent_bp
+                    {
                         if let Some(idx) = insert_idx {
                             if idx < children.len() {
                                 children.insert(idx, child_bp.clone());
@@ -470,7 +494,9 @@ impl AppRuntime {
                     .map(|n| n.style.clone());
                 let child_layout =
                     Self::build_layout_tree_with_parent(&child_bp, parent_style.as_ref());
-                if let Some(parent_layout) = Self::find_layout_node_mut(&mut self.layout_root, &parent_path) {
+                if let Some(parent_layout) =
+                    Self::find_layout_node_mut(&mut self.layout_root, &parent_path)
+                {
                     if let Some(idx) = insert_idx {
                         if idx < parent_layout.children.len() {
                             parent_layout.children.insert(idx, child_layout);
@@ -496,9 +522,17 @@ impl AppRuntime {
 
                 // Remove from blueprint
                 let mut removed_idx = None;
-                if let Some(parent_bp) = find_blueprint_node_mut(&mut self.root_blueprint, &parent_path) {
-                    if let NodeBlueprint::Element { ref mut children, .. } = parent_bp {
-                        if let Some(pos) = children.iter().position(|c| c.dom_uid() == Some(*child_uid)) {
+                if let Some(parent_bp) =
+                    find_blueprint_node_mut(&mut self.root_blueprint, &parent_path)
+                {
+                    if let NodeBlueprint::Element {
+                        ref mut children, ..
+                    } = parent_bp
+                    {
+                        if let Some(pos) = children
+                            .iter()
+                            .position(|c| c.dom_uid() == Some(*child_uid))
+                        {
                             children.remove(pos);
                             removed_idx = Some(pos);
                         }
@@ -507,7 +541,9 @@ impl AppRuntime {
 
                 // Remove from layout tree
                 if let Some(idx) = removed_idx {
-                    if let Some(parent_layout) = Self::find_layout_node_mut(&mut self.layout_root, &parent_path) {
+                    if let Some(parent_layout) =
+                        Self::find_layout_node_mut(&mut self.layout_root, &parent_path)
+                    {
                         if idx < parent_layout.children.len() {
                             parent_layout.children.remove(idx);
                         }
@@ -538,9 +574,17 @@ impl AppRuntime {
                 };
 
                 let mut replaced_idx = None;
-                if let Some(parent_bp) = find_blueprint_node_mut(&mut self.root_blueprint, &parent_path) {
-                    if let NodeBlueprint::Element { ref mut children, .. } = parent_bp {
-                        if let Some(pos) = children.iter().position(|c| c.dom_uid() == Some(*old_child_uid)) {
+                if let Some(parent_bp) =
+                    find_blueprint_node_mut(&mut self.root_blueprint, &parent_path)
+                {
+                    if let NodeBlueprint::Element {
+                        ref mut children, ..
+                    } = parent_bp
+                    {
+                        if let Some(pos) = children
+                            .iter()
+                            .position(|c| c.dom_uid() == Some(*old_child_uid))
+                        {
                             children[pos] = new_child_bp.clone();
                             replaced_idx = Some(pos);
                         }
@@ -548,11 +592,14 @@ impl AppRuntime {
                 }
 
                 if let Some(idx) = replaced_idx {
-                    let parent_style = Self::find_layout_node_mut(&mut self.layout_root, &parent_path)
-                        .map(|n| n.style.clone());
+                    let parent_style =
+                        Self::find_layout_node_mut(&mut self.layout_root, &parent_path)
+                            .map(|n| n.style.clone());
                     let new_child_layout =
                         Self::build_layout_tree_with_parent(&new_child_bp, parent_style.as_ref());
-                    if let Some(parent_layout) = Self::find_layout_node_mut(&mut self.layout_root, &parent_path) {
+                    if let Some(parent_layout) =
+                        Self::find_layout_node_mut(&mut self.layout_root, &parent_path)
+                    {
                         if idx < parent_layout.children.len() {
                             parent_layout.children[idx] = new_child_layout;
                         }
@@ -562,10 +609,7 @@ impl AppRuntime {
                 self.incremental_relayout(&parent_path)
             }
 
-            DomMutationType::InnerHtmlChanged {
-                node_uid,
-                html: _,
-            } => {
+            DomMutationType::InnerHtmlChanged { node_uid, html: _ } => {
                 let path = match self.root_blueprint.find_path_by_dom_uid(*node_uid) {
                     Some(p) => p,
                     None => return false,
@@ -587,7 +631,10 @@ impl AppRuntime {
 
                 // Update blueprint
                 if let Some(bp) = find_blueprint_node_mut(&mut self.root_blueprint, &path) {
-                    if let NodeBlueprint::Element { ref mut children, .. } = bp {
+                    if let NodeBlueprint::Element {
+                        ref mut children, ..
+                    } = bp
+                    {
                         *children = new_children_bp.clone();
                     }
                 }
@@ -616,7 +663,9 @@ impl AppRuntime {
         self.layout_root.invalidate_ancestors(dirty_path);
 
         // Attempt isolated subgrid/boundary layout first if an ancestor layout boundary exists
-        let handled_locally = self.layout_root.compute_subgrid_or_boundary_layout(dirty_path);
+        let handled_locally = self
+            .layout_root
+            .compute_subgrid_or_boundary_layout(dirty_path);
         if !handled_locally {
             // Full incremental traversal: untouched sibling branches hit layout_cache.is_valid and return in O(1)
             self.layout_root

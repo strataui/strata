@@ -1,12 +1,12 @@
 use strata::dom::View;
 use strata::gpu_path::{
-    CurveComputeDispatcher, FillRule, LineCap, LineJoin, PathBuilder, StrokeOptions,
-    FLAG_FILL, FLAG_STROKE,
+    CurveComputeDispatcher, FillRule, LineCap, LineJoin, PathBuilder, StrokeOptions, FLAG_FILL,
+    FLAG_STROKE,
 };
-use strata::{component, rsx};
 use strata::render::compositor::DrawCommand;
-use strata::style::types::Color;
 use strata::runtime::AppRuntime;
+use strata::style::types::Color;
+use strata::{component, rsx};
 use strata_layout::Rect;
 
 #[component]
@@ -27,7 +27,10 @@ fn test_runtime_gpu_path_compilation_and_segments() {
     runtime.tick_frame();
 
     let initial_count = runtime.gpu_path_segments().len();
-    assert!(initial_count > 0, "Display list paths should compile to GPU path segments");
+    assert!(
+        initial_count > 0,
+        "Display list paths should compile to GPU path segments"
+    );
     assert_eq!(runtime.gpu_path_uniform_bytes().len(), 16);
 
     // Inject direct hardware path command
@@ -45,8 +48,13 @@ fn test_runtime_gpu_path_compilation_and_segments() {
         transform: None,
     });
 
-    let count = runtime.gpu_path_pipeline.compile_frame(&runtime.display_list, None);
-    assert!(count > initial_count, "Direct hardware path should expand segments");
+    let count = runtime
+        .gpu_path_pipeline
+        .compile_frame(&runtime.display_list, None);
+    assert!(
+        count > initial_count,
+        "Direct hardware path should expand segments"
+    );
 
     let uniforms_bytes = runtime.gpu_path_uniform_bytes();
     let curve_count = u32::from_ne_bytes(uniforms_bytes[12..16].try_into().unwrap());
@@ -60,8 +68,13 @@ fn test_runtime_direct_hardware_path_damage_scissoring() {
 
     // Damage rect outside the SVG icon in top-left
     let damage = Rect::new(500.0, 400.0, 200.0, 150.0);
-    let damaged_count = runtime.gpu_path_pipeline.compile_frame(&runtime.display_list, Some(damage));
-    assert_eq!(damaged_count, 0, "Segments completely outside damage box should be culled");
+    let damaged_count = runtime
+        .gpu_path_pipeline
+        .compile_frame(&runtime.display_list, Some(damage));
+    assert_eq!(
+        damaged_count, 0,
+        "Segments completely outside damage box should be culled"
+    );
 }
 
 #[test]

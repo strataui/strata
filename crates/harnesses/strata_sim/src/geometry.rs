@@ -52,12 +52,15 @@ impl GeometrySolver {
     }
 
     /// Computes safe area insets for the active screen under the specified orientation.
-    pub fn calculate_safe_area(profile: &DeviceProfile, orientation: DeviceOrientation) -> SafeAreaInsets {
+    pub fn calculate_safe_area(
+        profile: &DeviceProfile,
+        orientation: DeviceOrientation,
+    ) -> SafeAreaInsets {
         let _screen = profile.form_factor.active_screen();
         let bezels = &profile.chassis.bezel_insets;
 
         let nav_bottom_inset = match profile.navigation_type {
-            NavigationType::Gesture => 34.0, // Gesture pill bar clearance
+            NavigationType::Gesture => 34.0,     // Gesture pill bar clearance
             NavigationType::ThreeButton => 48.0, // 3-button navigation bar height
         };
 
@@ -65,9 +68,17 @@ impl GeometrySolver {
             CutoutProfile::None => bezels.top + 10.0,
             CutoutProfile::TopNotch { height, .. } => bezels.top + height + 6.0,
             CutoutProfile::Teardrop { height, .. } => bezels.top + height + 6.0,
-            CutoutProfile::HolePunch { top_offset, diameter, .. } => bezels.top + top_offset + diameter + 6.0,
+            CutoutProfile::HolePunch {
+                top_offset,
+                diameter,
+                ..
+            } => bezels.top + top_offset + diameter + 6.0,
             CutoutProfile::DualHole { pill_height, .. } => bezels.top + pill_height + 14.0,
-            CutoutProfile::DynamicIsland { resting_height, top_offset, .. } => bezels.top + top_offset + resting_height + 10.0,
+            CutoutProfile::DynamicIsland {
+                resting_height,
+                top_offset,
+                ..
+            } => bezels.top + top_offset + resting_height + 10.0,
         };
 
         match orientation {
@@ -284,4 +295,3 @@ fn concentric_fillet_clip(
     return vec4<f32>(screen_coverage, chassis_coverage, bezel_mask, d_inner);
 }
 "#;
-

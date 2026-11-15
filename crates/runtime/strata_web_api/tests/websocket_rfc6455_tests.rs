@@ -108,7 +108,9 @@ fn test_loopback_websocket_handshake_and_exchange() {
              Sec-WebSocket-Accept: {}\r\n\r\n",
             accept
         );
-        socket.write_all(resp.as_bytes()).expect("write handshake response");
+        socket
+            .write_all(resp.as_bytes())
+            .expect("write handshake response");
         socket.flush().expect("flush handshake response");
 
         // Read client frame (Ping or Text)
@@ -120,7 +122,13 @@ fn test_loopback_websocket_handshake_and_exchange() {
         assert_eq!(received_text, "Hello WebSocket Server!");
 
         // Echo response back to client unmasked
-        let reply = encode_frame(true, WsOpcode::Text, b"Echo: Hello WebSocket Server!", false, None);
+        let reply = encode_frame(
+            true,
+            WsOpcode::Text,
+            b"Echo: Hello WebSocket Server!",
+            false,
+            None,
+        );
         socket.write_all(&reply).expect("write reply");
         socket.flush().expect("flush reply");
 
@@ -165,7 +173,9 @@ fn test_rfc6455_fragmented_text_frames_reassembly() {
     stream.extend_from_slice(&f2);
     stream.extend_from_slice(&f3);
 
-    let consumed = ws.ingest_incoming_bytes(&stream).expect("ingest must succeed");
+    let consumed = ws
+        .ingest_incoming_bytes(&stream)
+        .expect("ingest must succeed");
     assert_eq!(consumed, stream.len());
 
     let msg = ws.poll_message().expect("must receive reassembled message");
@@ -185,14 +195,21 @@ fn test_rfc6455_fragmented_binary_with_interleaved_ping() {
     // Frame 2: Interleaved Ping control frame (FIN = true) per RFC 6455 §5.4
     let f2 = encode_frame(true, WsOpcode::Ping, b"heartbeat", false, None);
     // Frame 3: Final Binary continuation frame (FIN = true)
-    let f3 = encode_frame(true, WsOpcode::Continuation, &[0x04, 0x05, 0x06], false, None);
+    let f3 = encode_frame(
+        true,
+        WsOpcode::Continuation,
+        &[0x04, 0x05, 0x06],
+        false,
+        None,
+    );
 
     let mut stream = Vec::new();
     stream.extend_from_slice(&f1);
     stream.extend_from_slice(&f2);
     stream.extend_from_slice(&f3);
 
-    ws.ingest_incoming_bytes(&stream).expect("ingest must succeed");
+    ws.ingest_incoming_bytes(&stream)
+        .expect("ingest must succeed");
 
     // Ping control message should be processed immediately
     let m1 = ws.poll_message().expect("first message");
@@ -217,7 +234,10 @@ fn test_rfc6455_unexpected_continuation_frame_returns_protocol_error() {
     // Orphaned continuation frame with no prior unfinalized message
     let orphan = encode_frame(true, WsOpcode::Continuation, b"orphan payload", false, None);
     let res = ws.ingest_incoming_bytes(&orphan);
-    assert!(res.is_err(), "Orphaned continuation frame must return ProtocolError");
+    assert!(
+        res.is_err(),
+        "Orphaned continuation frame must return ProtocolError"
+    );
     match res.unwrap_err() {
         strata_web_api::websocket::WsError::ProtocolError(msg) => {
             assert!(msg.contains("Unexpected continuation frame"));
@@ -283,10 +303,17 @@ fn test_rfc6455_new_data_frame_during_active_fragmentation_rejected() {
 
     // Start a fragmented text message (FIN = false)
     let f1 = encode_frame(false, WsOpcode::Text, b"Part 1...", false, None);
-    ws.ingest_incoming_bytes(&f1).expect("initial fragment accepted");
+    ws.ingest_incoming_bytes(&f1)
+        .expect("initial fragment accepted");
 
     // Receive a new Binary frame instead of Continuation frame (RFC 6455 §5.4 violation)
-    let f2 = encode_frame(true, WsOpcode::Binary, b"interleaved new stream", false, None);
+    let f2 = encode_frame(
+        true,
+        WsOpcode::Binary,
+        b"interleaved new stream",
+        false,
+        None,
+    );
     let res = ws.ingest_incoming_bytes(&f2);
     assert!(res.is_err(), "Interleaved new data frame must be rejected");
     match res.unwrap_err() {
@@ -309,13 +336,19 @@ fn test_rfc6455_client_fragmented_send_and_reassembly() {
     ws.send_text(&large_text).expect("send_text must succeed");
 
     let queued_frames = ws.drain_outgoing_frames();
-    assert!(queued_frames.len() >= 3, "Payload should be split into multiple frames");
+    assert!(
+        queued_frames.len() >= 3,
+        "Payload should be split into multiple frames"
+    );
 
     // Verify frames properties: first has opcode Text, continuation has Continuation, only last has FIN
     for (i, frame_bytes) in queued_frames.iter().enumerate() {
         let (decoded, consumed) = decode_frame(frame_bytes).unwrap().unwrap();
         assert_eq!(consumed, frame_bytes.len());
-        assert!(decoded.masked, "Client frames must be masked (RFC 6455 §5.1)");
+        assert!(
+            decoded.masked,
+            "Client frames must be masked (RFC 6455 §5.1)"
+        );
 
         if i == 0 {
             assert_eq!(decoded.opcode, WsOpcode::Text);
@@ -334,8 +367,11 @@ fn test_rfc6455_client_fragmented_send_and_reassembly() {
     for frame_bytes in queued_frames {
         let (decoded, _) = decode_frame(&frame_bytes).unwrap().unwrap();
         // Server would forward unmasked frames to client
-        let unmasked_frame = encode_frame(decoded.fin, decoded.opcode, &decoded.payload, false, None);
-        receiver.ingest_incoming_bytes(&unmasked_frame).expect("ingest must succeed");
+        let unmasked_frame =
+            encode_frame(decoded.fin, decoded.opcode, &decoded.payload, false, None);
+        receiver
+            .ingest_incoming_bytes(&unmasked_frame)
+            .expect("ingest must succeed");
     }
 
     let reassembled = receiver.poll_message().expect("message must be ready");
@@ -344,4 +380,3 @@ fn test_rfc6455_client_fragmented_send_and_reassembly() {
         other => panic!("Expected Text message, got {other:?}"),
     }
 }
-

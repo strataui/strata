@@ -2,7 +2,8 @@
 
 use std::collections::HashMap;
 
-pub type ToolActionCallback = Box<dyn Fn(&str, &HashMap<String, String>) -> Result<String, String> + Send + Sync>;
+pub type ToolActionCallback =
+    Box<dyn Fn(&str, &HashMap<String, String>) -> Result<String, String> + Send + Sync>;
 
 /// Manages and routes action dispatches triggered by user gestures in agent-generated UIs.
 #[derive(Default)]
@@ -24,11 +25,18 @@ impl AgentActionBus {
     }
 
     /// Dispatches an action with parameters.
-    pub fn dispatch(&self, action_name: &str, params: &HashMap<String, String>) -> Result<String, String> {
+    pub fn dispatch(
+        &self,
+        action_name: &str,
+        params: &HashMap<String, String>,
+    ) -> Result<String, String> {
         if let Some(handler) = self.handlers.get(action_name) {
             handler(action_name, params)
         } else {
-            Err(format!("No agent tool handler registered for action '{}'", action_name))
+            Err(format!(
+                "No agent tool handler registered for action '{}'",
+                action_name
+            ))
         }
     }
 

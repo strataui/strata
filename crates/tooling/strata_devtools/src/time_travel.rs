@@ -159,7 +159,11 @@ impl TimeTravelDebugger {
     }
 
     /// Computes signal deltas between two snapshots in history.
-    pub fn compute_delta(&self, from_id: SnapshotId, to_id: SnapshotId) -> Option<Vec<SnapshotDelta>> {
+    pub fn compute_delta(
+        &self,
+        from_id: SnapshotId,
+        to_id: SnapshotId,
+    ) -> Option<Vec<SnapshotDelta>> {
         let from_snap = self.snapshots.iter().find(|s| s.id == from_id)?;
         let to_snap = self.snapshots.iter().find(|s| s.id == to_id)?;
 

@@ -1,8 +1,8 @@
 //! Root Application for Strata Creative Studio.
 
-use strata::prelude::*;
 use crate::components::*;
 use crate::state::StudioState;
+use strata::prelude::*;
 
 #[component]
 pub fn App() -> View {

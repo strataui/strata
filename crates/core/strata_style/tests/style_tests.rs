@@ -112,29 +112,13 @@ fn test_cascade_solver_and_inheritance() {
     let state = PseudoState::default();
 
     // 1. Tag match only: red color, 20px font
-    let style1 = CascadeSolver::resolve(
-        "div",
-        &[],
-        None,
-        None,
-        &[&sheet],
-        None,
-        &state,
-    );
+    let style1 = CascadeSolver::resolve("div", &[], None, None, &[&sheet], None, &state);
     assert_eq!(style1.color, Color::new(255, 0, 0, 255));
     assert_eq!(style1.font_size, 20.0);
     assert_eq!(style1.padding.top, 10.0);
 
     // 2. Class match beats tag: green color
-    let style2 = CascadeSolver::resolve(
-        "div",
-        &["highlight"],
-        None,
-        None,
-        &[&sheet],
-        None,
-        &state,
-    );
+    let style2 = CascadeSolver::resolve("div", &["highlight"], None, None, &[&sheet], None, &state);
     assert_eq!(style2.color, Color::new(0, 255, 0, 255));
 
     // 3. ID match beats class: blue color
@@ -233,11 +217,17 @@ fn test_tailwind_state_modifiers() {
 
     // Unhovered, Light Mode
     let normal_style = TailwindEngine::resolve_classes_with_state(classes, false, false, false);
-    assert_eq!(normal_style.background_color, Some(Color::new(30, 41, 59, 255))); // slate-800
+    assert_eq!(
+        normal_style.background_color,
+        Some(Color::new(30, 41, 59, 255))
+    ); // slate-800
 
     // Hovered, Light Mode
     let hovered_style = TailwindEngine::resolve_classes_with_state(classes, true, false, false);
-    assert_eq!(hovered_style.background_color, Some(Color::new(37, 99, 235, 255))); // blue-600
+    assert_eq!(
+        hovered_style.background_color,
+        Some(Color::new(37, 99, 235, 255))
+    ); // blue-600
 
     // Dark Mode
     let dark_style = TailwindEngine::resolve_classes_with_state(classes, false, false, true);
@@ -266,7 +256,8 @@ fn test_tailwind_arbitrary_utf8_and_bracket_safety() {
     assert!(matches!(style.width, Dimension::Calc(_)));
 
     // 2. Colons inside brackets do not get confused with modifiers
-    let (mod1, rest1) = strata_style::tailwind::split_modifier("bg-[url(https://example.com/asset.png)]");
+    let (mod1, rest1) =
+        strata_style::tailwind::split_modifier("bg-[url(https://example.com/asset.png)]");
     assert_eq!(mod1, None);
     assert_eq!(rest1, "bg-[url(https://example.com/asset.png)]");
 
@@ -301,4 +292,3 @@ fn test_tailwind_arbitrary_utf8_and_bracket_safety() {
     assert!(matches!(style_spaced.width, Dimension::Calc(_)));
     assert_eq!(style_spaced.font_size, 14.0);
 }
-

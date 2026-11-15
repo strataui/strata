@@ -68,13 +68,13 @@ impl CsdHitZone {
     /// Converts the zone to a Wayland `xdg_toplevel` resize edge bitmask.
     pub fn to_wayland_resize_edge(&self) -> Option<u32> {
         match self {
-            CsdHitZone::ResizeBorderTop => Some(1),         // TOP
-            CsdHitZone::ResizeBorderBottom => Some(2),      // BOTTOM
-            CsdHitZone::ResizeBorderLeft => Some(4),        // LEFT
-            CsdHitZone::ResizeCornerTopLeft => Some(5),     // TOP | LEFT
-            CsdHitZone::ResizeCornerBottomLeft => Some(6),  // BOTTOM | LEFT
-            CsdHitZone::ResizeBorderRight => Some(8),       // RIGHT
-            CsdHitZone::ResizeCornerTopRight => Some(9),    // TOP | RIGHT
+            CsdHitZone::ResizeBorderTop => Some(1),          // TOP
+            CsdHitZone::ResizeBorderBottom => Some(2),       // BOTTOM
+            CsdHitZone::ResizeBorderLeft => Some(4),         // LEFT
+            CsdHitZone::ResizeCornerTopLeft => Some(5),      // TOP | LEFT
+            CsdHitZone::ResizeCornerBottomLeft => Some(6),   // BOTTOM | LEFT
+            CsdHitZone::ResizeBorderRight => Some(8),        // RIGHT
+            CsdHitZone::ResizeCornerTopRight => Some(9),     // TOP | RIGHT
             CsdHitZone::ResizeCornerBottomRight => Some(10), // BOTTOM | RIGHT
             _ => None,
         }
@@ -83,18 +83,18 @@ impl CsdHitZone {
     /// Converts the zone to a Win32 `WM_NCHITTEST` result code.
     pub fn to_win32_nchittest(&self) -> isize {
         match self {
-            CsdHitZone::None => 1,             // HTCLIENT
-            CsdHitZone::Titlebar => 2,         // HTCAPTION
-            CsdHitZone::MinimizeButton => 8,   // HTMINBUTTON
-            CsdHitZone::MaximizeButton => 9,   // HTMAXBUTTON
-            CsdHitZone::CloseButton => 20,     // HTCLOSE
-            CsdHitZone::ResizeBorderLeft => 10,   // HTLEFT
-            CsdHitZone::ResizeBorderRight => 11,  // HTRIGHT
-            CsdHitZone::ResizeBorderTop => 12,    // HTTOP
-            CsdHitZone::ResizeCornerTopLeft => 13, // HTTOPLEFT
-            CsdHitZone::ResizeCornerTopRight => 14, // HTTOPRIGHT
-            CsdHitZone::ResizeBorderBottom => 15,  // HTBOTTOM
-            CsdHitZone::ResizeCornerBottomLeft => 16, // HTBOTTOMLEFT
+            CsdHitZone::None => 1,                     // HTCLIENT
+            CsdHitZone::Titlebar => 2,                 // HTCAPTION
+            CsdHitZone::MinimizeButton => 8,           // HTMINBUTTON
+            CsdHitZone::MaximizeButton => 9,           // HTMAXBUTTON
+            CsdHitZone::CloseButton => 20,             // HTCLOSE
+            CsdHitZone::ResizeBorderLeft => 10,        // HTLEFT
+            CsdHitZone::ResizeBorderRight => 11,       // HTRIGHT
+            CsdHitZone::ResizeBorderTop => 12,         // HTTOP
+            CsdHitZone::ResizeCornerTopLeft => 13,     // HTTOPLEFT
+            CsdHitZone::ResizeCornerTopRight => 14,    // HTTOPRIGHT
+            CsdHitZone::ResizeBorderBottom => 15,      // HTBOTTOM
+            CsdHitZone::ResizeCornerBottomLeft => 16,  // HTBOTTOMLEFT
             CsdHitZone::ResizeCornerBottomRight => 17, // HTBOTTOMRIGHT
         }
     }
@@ -323,4 +323,3 @@ impl CsdController {
         false
     }
 }
-

@@ -1,7 +1,7 @@
 //! Top Application Bar for Strata Creative Studio.
 
-use strata::prelude::*;
 use crate::state::StudioState;
+use strata::prelude::*;
 
 #[component]
 pub fn TopBar(state: StudioState) -> View {

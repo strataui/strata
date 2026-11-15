@@ -1,6 +1,6 @@
 //! Comprehensive integration tests for strata_icons.
 
-use strata_dom::{NodeBlueprint, Tag, Attribute};
+use strata_dom::{Attribute, NodeBlueprint, Tag};
 use strata_icons::prelude::*;
 
 #[test]
@@ -27,12 +27,20 @@ fn test_path_command_and_bounds() {
 #[test]
 fn test_icon_registry_all_icons_valid() {
     let list = all_icons();
-    assert!(list.len() >= 1000, "Expected at least 1,000 icons, found {}", list.len());
+    assert!(
+        list.len() >= 1000,
+        "Expected at least 1,000 icons, found {}",
+        list.len()
+    );
 
     for name in list {
         let data = lookup_icon(*name);
         assert_eq!(data.name, *name);
-        assert!(!data.svg_path.is_empty(), "Icon {:?} has empty SVG path", name);
+        assert!(
+            !data.svg_path.is_empty(),
+            "Icon {:?} has empty SVG path",
+            name
+        );
         assert_eq!(data.view_box, (0.0, 0.0, 24.0, 24.0));
     }
 }
@@ -61,7 +69,12 @@ fn test_vector_path_binary_serialization_roundtrip() {
 fn test_icon_component_rendering() {
     let view = Icon(IconName::Search, Some("w-6 h-6 text-indigo-500"));
     match &view.root {
-        NodeBlueprint::Element { tag, classes, children, .. } => {
+        NodeBlueprint::Element {
+            tag,
+            classes,
+            children,
+            ..
+        } => {
             assert_eq!(*tag, Tag::Svg);
             assert!(classes.iter().any(|c| c.contains("w-6")));
             assert!(classes.iter().any(|c| c.contains("h-6")));
@@ -107,9 +120,16 @@ fn test_icons_typed_constructors() {
 
 #[test]
 fn test_icon_config_with_custom_size_and_stroke() {
-    let view = IconConfig(IconName::Bell, Some(32.0), Some(1.5), Some("text-yellow-400"));
+    let view = IconConfig(
+        IconName::Bell,
+        Some(32.0),
+        Some(1.5),
+        Some("text-yellow-400"),
+    );
     match &view.root {
-        NodeBlueprint::Element { tag, attributes, .. } => {
+        NodeBlueprint::Element {
+            tag, attributes, ..
+        } => {
             assert_eq!(*tag, Tag::Svg);
             let style_attr = attributes.iter().find(|a| match a {
                 Attribute::Property { key, value } => key == "style" && value.contains("32px"),

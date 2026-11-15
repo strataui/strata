@@ -124,7 +124,12 @@ impl Vec4 {
 
     #[inline(always)]
     pub const fn from_vec3(v: Vec3, w: f32) -> Self {
-        Self { x: v.x, y: v.y, z: v.z, w }
+        Self {
+            x: v.x,
+            y: v.y,
+            z: v.z,
+            w,
+        }
     }
 
     #[inline(always)]
@@ -142,7 +147,12 @@ impl Add for Vec4 {
     type Output = Self;
     #[inline(always)]
     fn add(self, rhs: Self) -> Self::Output {
-        Self::new(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z, self.w + rhs.w)
+        Self::new(
+            self.x + rhs.x,
+            self.y + rhs.y,
+            self.z + rhs.z,
+            self.w + rhs.w,
+        )
     }
 }
 
@@ -150,7 +160,12 @@ impl Sub for Vec4 {
     type Output = Self;
     #[inline(always)]
     fn sub(self, rhs: Self) -> Self::Output {
-        Self::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z, self.w - rhs.w)
+        Self::new(
+            self.x - rhs.x,
+            self.y - rhs.y,
+            self.z - rhs.z,
+            self.w - rhs.w,
+        )
     }
 }
 
@@ -202,10 +217,8 @@ impl Mat4 {
     pub const fn from_cols(c0: Vec4, c1: Vec4, c2: Vec4, c3: Vec4) -> Self {
         Self {
             m: [
-                c0.x, c0.y, c0.z, c0.w,
-                c1.x, c1.y, c1.z, c1.w,
-                c2.x, c2.y, c2.z, c2.w,
-                c3.x, c3.y, c3.z, c3.w,
+                c0.x, c0.y, c0.z, c0.w, c1.x, c1.y, c1.z, c1.w, c2.x, c2.y, c2.z, c2.w, c3.x, c3.y,
+                c3.z, c3.w,
             ],
         }
     }
@@ -347,25 +360,57 @@ impl Mat4 {
         let m = self.m;
         let mut inv = [0.0f32; 16];
 
-        inv[0] = (m[5] * (m[10] * m[15] - m[11] * m[14]) - m[9] * (m[6] * m[15] - m[7] * m[14]) + m[13] * (m[6] * m[11] - m[7] * m[10])) * inv_det;
-        inv[1] = -(m[1] * (m[10] * m[15] - m[11] * m[14]) - m[9] * (m[2] * m[15] - m[3] * m[14]) + m[13] * (m[2] * m[11] - m[3] * m[10])) * inv_det;
-        inv[2] = (m[1] * (m[6] * m[15] - m[7] * m[14]) - m[5] * (m[2] * m[15] - m[3] * m[14]) + m[13] * (m[2] * m[7] - m[3] * m[6])) * inv_det;
-        inv[3] = -(m[1] * (m[6] * m[11] - m[7] * m[10]) - m[5] * (m[2] * m[11] - m[3] * m[10]) + m[9] * (m[2] * m[7] - m[3] * m[6])) * inv_det;
+        inv[0] = (m[5] * (m[10] * m[15] - m[11] * m[14]) - m[9] * (m[6] * m[15] - m[7] * m[14])
+            + m[13] * (m[6] * m[11] - m[7] * m[10]))
+            * inv_det;
+        inv[1] = -(m[1] * (m[10] * m[15] - m[11] * m[14]) - m[9] * (m[2] * m[15] - m[3] * m[14])
+            + m[13] * (m[2] * m[11] - m[3] * m[10]))
+            * inv_det;
+        inv[2] = (m[1] * (m[6] * m[15] - m[7] * m[14]) - m[5] * (m[2] * m[15] - m[3] * m[14])
+            + m[13] * (m[2] * m[7] - m[3] * m[6]))
+            * inv_det;
+        inv[3] = -(m[1] * (m[6] * m[11] - m[7] * m[10]) - m[5] * (m[2] * m[11] - m[3] * m[10])
+            + m[9] * (m[2] * m[7] - m[3] * m[6]))
+            * inv_det;
 
-        inv[4] = -(m[4] * (m[10] * m[15] - m[11] * m[14]) - m[8] * (m[6] * m[15] - m[7] * m[14]) + m[12] * (m[6] * m[11] - m[7] * m[10])) * inv_det;
-        inv[5] = (m[0] * (m[10] * m[15] - m[11] * m[14]) - m[8] * (m[2] * m[15] - m[3] * m[14]) + m[12] * (m[2] * m[11] - m[3] * m[10])) * inv_det;
-        inv[6] = -(m[0] * (m[6] * m[15] - m[7] * m[14]) - m[4] * (m[2] * m[15] - m[3] * m[14]) + m[12] * (m[2] * m[7] - m[3] * m[6])) * inv_det;
-        inv[7] = (m[0] * (m[6] * m[11] - m[7] * m[10]) - m[4] * (m[2] * m[11] - m[3] * m[10]) + m[8] * (m[2] * m[7] - m[3] * m[6])) * inv_det;
+        inv[4] = -(m[4] * (m[10] * m[15] - m[11] * m[14]) - m[8] * (m[6] * m[15] - m[7] * m[14])
+            + m[12] * (m[6] * m[11] - m[7] * m[10]))
+            * inv_det;
+        inv[5] = (m[0] * (m[10] * m[15] - m[11] * m[14]) - m[8] * (m[2] * m[15] - m[3] * m[14])
+            + m[12] * (m[2] * m[11] - m[3] * m[10]))
+            * inv_det;
+        inv[6] = -(m[0] * (m[6] * m[15] - m[7] * m[14]) - m[4] * (m[2] * m[15] - m[3] * m[14])
+            + m[12] * (m[2] * m[7] - m[3] * m[6]))
+            * inv_det;
+        inv[7] = (m[0] * (m[6] * m[11] - m[7] * m[10]) - m[4] * (m[2] * m[11] - m[3] * m[10])
+            + m[8] * (m[2] * m[7] - m[3] * m[6]))
+            * inv_det;
 
-        inv[8] = (m[4] * (m[9] * m[15] - m[11] * m[13]) - m[8] * (m[5] * m[15] - m[7] * m[13]) + m[12] * (m[5] * m[11] - m[7] * m[9])) * inv_det;
-        inv[9] = -(m[0] * (m[9] * m[15] - m[11] * m[13]) - m[8] * (m[1] * m[15] - m[3] * m[13]) + m[12] * (m[1] * m[11] - m[3] * m[9])) * inv_det;
-        inv[10] = (m[0] * (m[5] * m[15] - m[7] * m[13]) - m[4] * (m[1] * m[15] - m[3] * m[13]) + m[12] * (m[1] * m[7] - m[3] * m[5])) * inv_det;
-        inv[11] = -(m[0] * (m[5] * m[11] - m[7] * m[9]) - m[4] * (m[1] * m[11] - m[3] * m[9]) + m[8] * (m[1] * m[7] - m[3] * m[5])) * inv_det;
+        inv[8] = (m[4] * (m[9] * m[15] - m[11] * m[13]) - m[8] * (m[5] * m[15] - m[7] * m[13])
+            + m[12] * (m[5] * m[11] - m[7] * m[9]))
+            * inv_det;
+        inv[9] = -(m[0] * (m[9] * m[15] - m[11] * m[13]) - m[8] * (m[1] * m[15] - m[3] * m[13])
+            + m[12] * (m[1] * m[11] - m[3] * m[9]))
+            * inv_det;
+        inv[10] = (m[0] * (m[5] * m[15] - m[7] * m[13]) - m[4] * (m[1] * m[15] - m[3] * m[13])
+            + m[12] * (m[1] * m[7] - m[3] * m[5]))
+            * inv_det;
+        inv[11] = -(m[0] * (m[5] * m[11] - m[7] * m[9]) - m[4] * (m[1] * m[11] - m[3] * m[9])
+            + m[8] * (m[1] * m[7] - m[3] * m[5]))
+            * inv_det;
 
-        inv[12] = -(m[4] * (m[9] * m[14] - m[10] * m[13]) - m[8] * (m[5] * m[14] - m[6] * m[13]) + m[12] * (m[5] * m[10] - m[6] * m[9])) * inv_det;
-        inv[13] = (m[0] * (m[9] * m[14] - m[10] * m[13]) - m[8] * (m[1] * m[14] - m[2] * m[13]) + m[12] * (m[1] * m[10] - m[2] * m[9])) * inv_det;
-        inv[14] = -(m[0] * (m[5] * m[14] - m[6] * m[13]) - m[4] * (m[1] * m[14] - m[2] * m[13]) + m[12] * (m[1] * m[6] - m[2] * m[5])) * inv_det;
-        inv[15] = (m[0] * (m[5] * m[10] - m[6] * m[9]) - m[4] * (m[1] * m[10] - m[2] * m[9]) + m[8] * (m[1] * m[6] - m[2] * m[5])) * inv_det;
+        inv[12] = -(m[4] * (m[9] * m[14] - m[10] * m[13]) - m[8] * (m[5] * m[14] - m[6] * m[13])
+            + m[12] * (m[5] * m[10] - m[6] * m[9]))
+            * inv_det;
+        inv[13] = (m[0] * (m[9] * m[14] - m[10] * m[13]) - m[8] * (m[1] * m[14] - m[2] * m[13])
+            + m[12] * (m[1] * m[10] - m[2] * m[9]))
+            * inv_det;
+        inv[14] = -(m[0] * (m[5] * m[14] - m[6] * m[13]) - m[4] * (m[1] * m[14] - m[2] * m[13])
+            + m[12] * (m[1] * m[6] - m[2] * m[5]))
+            * inv_det;
+        inv[15] = (m[0] * (m[5] * m[10] - m[6] * m[9]) - m[4] * (m[1] * m[10] - m[2] * m[9])
+            + m[8] * (m[1] * m[6] - m[2] * m[5]))
+            * inv_det;
 
         Some(Self { m: inv })
     }
@@ -378,10 +423,22 @@ impl Mat4 {
 
         Self {
             m: [
-                s.x, u.x, -f.x, 0.0,
-                s.y, u.y, -f.y, 0.0,
-                s.z, u.z, -f.z, 0.0,
-                -s.dot(eye), -u.dot(eye), f.dot(eye), 1.0,
+                s.x,
+                u.x,
+                -f.x,
+                0.0,
+                s.y,
+                u.y,
+                -f.y,
+                0.0,
+                s.z,
+                u.z,
+                -f.z,
+                0.0,
+                -s.dot(eye),
+                -u.dot(eye),
+                f.dot(eye),
+                1.0,
             ],
         }
     }
@@ -393,10 +450,22 @@ impl Mat4 {
 
         Self {
             m: [
-                f / aspect, 0.0, 0.0, 0.0,
-                0.0, f, 0.0, 0.0,
-                0.0, 0.0, far * range_inv, -1.0,
-                0.0, 0.0, near * far * range_inv, 0.0,
+                f / aspect,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                f,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                far * range_inv,
+                -1.0,
+                0.0,
+                0.0,
+                near * far * range_inv,
+                0.0,
             ],
         }
     }
@@ -409,10 +478,22 @@ impl Mat4 {
 
         Self {
             m: [
-                2.0 * r_l, 0.0, 0.0, 0.0,
-                0.0, 2.0 * t_b, 0.0, 0.0,
-                0.0, 0.0, f_n, 0.0,
-                -(right + left) * r_l, -(top + bottom) * t_b, near * f_n, 1.0,
+                2.0 * r_l,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                2.0 * t_b,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                f_n,
+                0.0,
+                -(right + left) * r_l,
+                -(top + bottom) * t_b,
+                near * f_n,
+                1.0,
             ],
         }
     }

@@ -1,8 +1,8 @@
 //! Headless Editor State Machine and Text Mutation Pipeline.
 
-use strata_dom::Signal;
 use crate::markdown::{from_markdown, to_markdown};
 use crate::model::{BlockKind, BlockNode, Document, InlineSpan};
+use strata_dom::Signal;
 
 /// Headless editor state controller managing document AST and active selection cursor.
 #[derive(Clone)]

@@ -18,15 +18,23 @@ fn test_containment_classifier_5_axioms() {
     style.padding.top = 16.0;
 
     // Both dimensions definite -> certified boundary
-    assert!(ContainmentClassifier::is_layout_boundary(&style, true, true));
+    assert!(ContainmentClassifier::is_layout_boundary(
+        &style, true, true
+    ));
 
     // Violate Axiom 1 (Indefinite sizing)
-    assert!(!ContainmentClassifier::is_layout_boundary(&style, false, true));
-    assert!(!ContainmentClassifier::is_layout_boundary(&style, true, false));
+    assert!(!ContainmentClassifier::is_layout_boundary(
+        &style, false, true
+    ));
+    assert!(!ContainmentClassifier::is_layout_boundary(
+        &style, true, false
+    ));
 
     // Violate Axiom 4 (Inline element)
     style.display = Display::Inline;
-    assert!(!ContainmentClassifier::is_layout_boundary(&style, true, true));
+    assert!(!ContainmentClassifier::is_layout_boundary(
+        &style, true, true
+    ));
 }
 
 #[test]
@@ -227,8 +235,14 @@ fn test_sparse_partition_ids_and_z_index_inversion_bugs_4a_4b() {
 
     // Verify 0% data loss: both slots must be populated
     assert_eq!(completed_slots.len(), 2);
-    assert!(completed_slots[0].is_some(), "Partition 5 must not be lost!");
-    assert!(completed_slots[1].is_some(), "Partition 8 must not be lost!");
+    assert!(
+        completed_slots[0].is_some(),
+        "Partition 5 must not be lost!"
+    );
+    assert!(
+        completed_slots[1].is_some(),
+        "Partition 8 must not be lost!"
+    );
 
     let master_list = engine.assemble_master_display_list(&completed_slots);
     assert_eq!(master_list.commands.len(), 2);
@@ -278,7 +292,10 @@ fn test_persistent_worker_pool_reuses_threads_and_eliminates_churn() {
 
         assert_eq!(slots.len(), count);
         for slot in &slots {
-            assert!(slot.is_some(), "Every slot must be completed in frame {frame}");
+            assert!(
+                slot.is_some(),
+                "Every slot must be completed in frame {frame}"
+            );
         }
 
         let master = engine.assemble_master_display_list(&slots);
@@ -400,11 +417,8 @@ fn test_rayon_work_stealing_parallel_grid_subtrees() {
             let mut grid = LayoutNode::new(ComputedStyle::default());
             grid.style.display = Display::Grid;
             grid.style.width = Dimension::Px(600.0);
-            grid.style.grid_template_columns = vec![
-                GridTrack::Fr(1.0),
-                GridTrack::Fr(2.0),
-                GridTrack::Fr(1.0),
-            ];
+            grid.style.grid_template_columns =
+                vec![GridTrack::Fr(1.0), GridTrack::Fr(2.0), GridTrack::Fr(1.0)];
             grid.children = (0..12)
                 .map(|j| {
                     let mut child = LayoutNode::new(ComputedStyle::default());
@@ -465,13 +479,14 @@ fn test_rayon_join_recursive_divide_and_conquer_subtrees() {
 
     for (i, tree) in subtrees.iter().enumerate() {
         assert_eq!(tree.geometry.border_box.width, 400.0);
-        let sum_children_width: f32 = tree.children.iter().map(|c| c.geometry.border_box.width).sum();
+        let sum_children_width: f32 = tree
+            .children
+            .iter()
+            .map(|c| c.geometry.border_box.width)
+            .sum();
         assert!(
             (sum_children_width - 400.0).abs() < 0.01,
             "Subtree {i} children flex widths sum to {sum_children_width}"
         );
     }
 }
-
-
-

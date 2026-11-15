@@ -19,7 +19,8 @@ fn test_client_side_append_child_hydration() {
         .expect("Container must have path in blueprint");
 
     let initial_child_count = {
-        let node = AppRuntime::find_layout_node_mut(&mut runtime.layout_root, &container_path).unwrap();
+        let node =
+            AppRuntime::find_layout_node_mut(&mut runtime.layout_root, &container_path).unwrap();
         node.children.len()
     };
     assert_eq!(initial_child_count, 1);
@@ -36,19 +37,37 @@ fn test_client_side_append_child_hydration() {
     assert!(res.is_ok(), "Script execution failed: {:?}", res);
 
     let mutations = engine.document.drain_mutations();
-    assert_eq!(mutations.len(), 4, "Must emit 4 mutations (2 setAttribute, 1 textContent, 1 appendChild)");
+    assert_eq!(
+        mutations.len(),
+        4,
+        "Must emit 4 mutations (2 setAttribute, 1 textContent, 1 appendChild)"
+    );
 
     let hydrated = runtime.hydrate_dom_mutations(&mutations, Some(&engine.document));
     assert!(hydrated, "Hydration must report changes");
 
     // Verify layout tree now has the new button child
-    let container_layout = AppRuntime::find_layout_node_mut(&mut runtime.layout_root, &container_path).unwrap();
-    assert_eq!(container_layout.children.len(), 2, "Container must have 2 children after appendChild");
+    let container_layout =
+        AppRuntime::find_layout_node_mut(&mut runtime.layout_root, &container_path).unwrap();
+    assert_eq!(
+        container_layout.children.len(),
+        2,
+        "Container must have 2 children after appendChild"
+    );
 
     let btn_layout = &container_layout.children[1];
-    assert!(btn_layout.geometry.border_box.width > 0.0, "New button must have positive layout width");
-    assert!(btn_layout.geometry.border_box.height > 0.0, "New button must have positive layout height");
-    assert_eq!(btn_layout.children[0].text.as_deref(), Some("Enterprise Action"));
+    assert!(
+        btn_layout.geometry.border_box.width > 0.0,
+        "New button must have positive layout width"
+    );
+    assert!(
+        btn_layout.geometry.border_box.height > 0.0,
+        "New button must have positive layout height"
+    );
+    assert_eq!(
+        btn_layout.children[0].text.as_deref(),
+        Some("Enterprise Action")
+    );
 }
 
 #[test]
@@ -79,12 +98,17 @@ fn test_client_side_text_content_mutation() {
     assert!(res.is_ok());
 
     let mutations = engine.document.drain_mutations();
-    assert_eq!(mutations.len(), 1, "Must emit 1 mutation for textContent update");
+    assert_eq!(
+        mutations.len(),
+        1,
+        "Must emit 1 mutation for textContent update"
+    );
 
     let hydrated = runtime.hydrate_dom_mutations(&mutations, Some(&engine.document));
     assert!(hydrated);
 
-    let updated_node = AppRuntime::find_layout_node_mut(&mut runtime.layout_root, &label_path).unwrap();
+    let updated_node =
+        AppRuntime::find_layout_node_mut(&mut runtime.layout_root, &label_path).unwrap();
     assert_eq!(
         updated_node.text.as_deref(),
         Some("Processing batch job with 50,000 items in cluster partition 4")
@@ -123,8 +147,13 @@ fn test_client_side_inner_html_mutation() {
     let hydrated = runtime.hydrate_dom_mutations(&mutations, Some(&engine.document));
     assert!(hydrated);
 
-    let content_layout = AppRuntime::find_layout_node_mut(&mut runtime.layout_root, &content_path).unwrap();
-    assert_eq!(content_layout.children.len(), 2, "Inner HTML replacement must yield 2 child nodes");
+    let content_layout =
+        AppRuntime::find_layout_node_mut(&mut runtime.layout_root, &content_path).unwrap();
+    assert_eq!(
+        content_layout.children.len(),
+        2,
+        "Inner HTML replacement must yield 2 child nodes"
+    );
 
     let h2_child = &content_layout.children[0];
     let p_child = &content_layout.children[1];
@@ -167,8 +196,12 @@ fn test_client_side_attribute_and_class_mutation() {
         panic!("Badge must be an element blueprint");
     }
 
-    let layout_node = AppRuntime::find_layout_node_mut(&mut runtime.layout_root, &badge_path).unwrap();
-    assert_eq!(layout_node.style.font_weight, strata_style::types::FontWeight::Bold);
+    let layout_node =
+        AppRuntime::find_layout_node_mut(&mut runtime.layout_root, &badge_path).unwrap();
+    assert_eq!(
+        layout_node.style.font_weight,
+        strata_style::types::FontWeight::Bold
+    );
 }
 
 #[test]
@@ -181,7 +214,10 @@ fn test_client_side_remove_child() {
     let mut runtime = AppRuntime::new(View::new(root_bp), 1024.0, 768.0, 1.0);
 
     let list_uid = doc.get_element_by_id("card-list").unwrap().uid();
-    let list_path = runtime.root_blueprint.find_path_by_dom_uid(list_uid).unwrap();
+    let list_path = runtime
+        .root_blueprint
+        .find_path_by_dom_uid(list_uid)
+        .unwrap();
 
     let initial_count = {
         let node = AppRuntime::find_layout_node_mut(&mut runtime.layout_root, &list_path).unwrap();
@@ -235,14 +271,18 @@ fn test_channel_based_dom_mutation_pumping() {
 
     // Poll mutations via runtime channel
     let redraw_needed = runtime.poll_dom_mutations(Some(&engine.document));
-    assert!(redraw_needed, "Polling channel must detect incoming mutations");
+    assert!(
+        redraw_needed,
+        "Polling channel must detect incoming mutations"
+    );
 
     let area_path = runtime
         .root_blueprint
         .find_path_by_dom_uid(doc.get_element_by_id("notification-area").unwrap().uid())
         .unwrap();
 
-    let area_layout = AppRuntime::find_layout_node_mut(&mut runtime.layout_root, &area_path).unwrap();
+    let area_layout =
+        AppRuntime::find_layout_node_mut(&mut runtime.layout_root, &area_path).unwrap();
     assert_eq!(area_layout.children.len(), 2);
     assert_eq!(
         area_layout.children[1].children[0].text.as_deref(),

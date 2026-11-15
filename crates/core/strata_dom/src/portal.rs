@@ -342,7 +342,10 @@ impl PortalBuilder {
             ));
         }
         if let Some(offset) = self.offset {
-            attrs.push(Attribute::property("data-portal-offset", offset.to_string()));
+            attrs.push(Attribute::property(
+                "data-portal-offset",
+                offset.to_string(),
+            ));
         }
         if let Some(flip) = self.flip {
             attrs.push(Attribute::property(

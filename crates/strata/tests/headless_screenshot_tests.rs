@@ -24,12 +24,19 @@ fn test_app_runtime_render_to_framebuffer_and_export_png() {
     // 2. Headless PNG export
     let tmp_path = std::env::temp_dir().join("strata_runtime_screenshot_test.png");
     let export_res = runtime.export_png(&tmp_path);
-    assert!(export_res.is_ok(), "runtime.export_png must succeed: {:?}", export_res);
+    assert!(
+        export_res.is_ok(),
+        "runtime.export_png must succeed: {:?}",
+        export_res
+    );
 
     assert!(tmp_path.exists());
     let file_bytes = std::fs::read(&tmp_path).expect("Must read exported screenshot");
     assert!(file_bytes.len() > 100);
-    assert_eq!(&file_bytes[0..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+    assert_eq!(
+        &file_bytes[0..8],
+        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]
+    );
 
     let _ = std::fs::remove_file(&tmp_path);
 }

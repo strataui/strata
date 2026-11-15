@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::thread;
 
 use strata_web_api::fetch::{
-    compute_origin, fetch, is_cors_simple_request, FetchError, RequestCredentials,
-    RequestInit, RequestMode,
+    compute_origin, fetch, is_cors_simple_request, FetchError, RequestCredentials, RequestInit,
+    RequestMode,
 };
 
 #[test]
@@ -232,8 +232,14 @@ fn test_cors_preflight_options_handshake_and_actual_request() {
         let n1 = stream1.read(&mut buf1).unwrap();
         let req1_str = String::from_utf8_lossy(&buf1[..n1]);
 
-        assert!(req1_str.starts_with("OPTIONS "), "First request must be OPTIONS preflight");
-        assert!(req1_str.contains("access-control-request-method: PUT") || req1_str.contains("Access-Control-Request-Method: PUT"));
+        assert!(
+            req1_str.starts_with("OPTIONS "),
+            "First request must be OPTIONS preflight"
+        );
+        assert!(
+            req1_str.contains("access-control-request-method: PUT")
+                || req1_str.contains("Access-Control-Request-Method: PUT")
+        );
         assert!(req1_str.to_ascii_lowercase().contains("x-custom-token"));
         p_flag.store(true, Ordering::SeqCst);
 
@@ -251,8 +257,13 @@ fn test_cors_preflight_options_handshake_and_actual_request() {
         let n2 = stream2.read(&mut buf2).unwrap();
         let req2_str = String::from_utf8_lossy(&buf2[..n2]);
 
-        assert!(req2_str.starts_with("PUT "), "Second request must be actual PUT");
-        assert!(req2_str.to_ascii_lowercase().contains("origin: http://portal.company.test"));
+        assert!(
+            req2_str.starts_with("PUT "),
+            "Second request must be actual PUT"
+        );
+        assert!(req2_str
+            .to_ascii_lowercase()
+            .contains("origin: http://portal.company.test"));
         put_flag.store(true, Ordering::SeqCst);
 
         let put_resp = "HTTP/1.1 200 OK\r\n\

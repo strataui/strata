@@ -9,7 +9,9 @@
 use strata_layout::Rect;
 use strata_platform::render_to_png_bytes;
 use strata_render::compositor::{DisplayList, DrawCommand};
-use strata_render::scene3d::{Background3D, Camera3D, Geometry3D, Light3D, Material3D, Mesh3D, Scene3D};
+use strata_render::scene3d::{
+    Background3D, Camera3D, Geometry3D, Light3D, Material3D, Mesh3D, Scene3D,
+};
 use strata_style::types::Color;
 
 #[test]
@@ -57,7 +59,10 @@ fn test_draw_viewport_3d_cairo_presentation_renders_cube() {
     let png_bytes = render_to_png_bytes(&dl, 160, 160, None)
         .expect("render_to_png_bytes must successfully render 3D viewport");
 
-    assert!(!png_bytes.is_empty(), "Rendered PNG bytes must not be empty");
+    assert!(
+        !png_bytes.is_empty(),
+        "Rendered PNG bytes must not be empty"
+    );
     assert_eq!(
         &png_bytes[0..8],
         &[137, 80, 78, 71, 13, 10, 26, 10],
@@ -66,10 +71,12 @@ fn test_draw_viewport_3d_cairo_presentation_renders_cube() {
 
     // 6. Decode PNG image to inspect pixel values directly
     let mut cursor = std::io::Cursor::new(&png_bytes);
-    let mut surface = cairo::ImageSurface::create_from_png(&mut cursor)
-        .expect("Cairo must decode rendered PNG");
+    let mut surface =
+        cairo::ImageSurface::create_from_png(&mut cursor).expect("Cairo must decode rendered PNG");
 
-    let data = surface.data().expect("ImageSurface data must be accessible");
+    let data = surface
+        .data()
+        .expect("ImageSurface data must be accessible");
     let mut found_emerald_pixels = false;
     let mut found_background_pixels = false;
 

@@ -105,15 +105,15 @@ mod tests {
         let en = LocaleId::en_us();
         let de = LocaleId::de_de();
 
+        catalog.register(&en, "greeting", "Hello, {name}!").unwrap();
         catalog
-            .register(&en, "greeting", "Hello, {name}!")
+            .register(
+                &en,
+                "items",
+                "{count, plural, one {# item} other {# items}}",
+            )
             .unwrap();
-        catalog
-            .register(&en, "items", "{count, plural, one {# item} other {# items}}")
-            .unwrap();
-        catalog
-            .register(&de, "greeting", "Hallo, {name}!")
-            .unwrap();
+        catalog.register(&de, "greeting", "Hallo, {name}!").unwrap();
 
         let mut args = HashMap::new();
         args.insert("name".to_string(), "Sam".into());

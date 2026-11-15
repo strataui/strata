@@ -92,7 +92,11 @@ impl HistoryStack {
         // Attempt coalescing with previous insertion
         if let Some(last) = self.undo_stack.last_mut() {
             if now_ms.saturating_sub(last.timestamp_ms) < 400 && last.operations.len() == 1 {
-                if let EditOperation::Insert { text: ref mut prev_text, .. } = last.operations[0] {
+                if let EditOperation::Insert {
+                    text: ref mut prev_text,
+                    ..
+                } = last.operations[0]
+                {
                     if !prev_text.contains('\n') && !text.contains('\n') {
                         prev_text.push_str(text);
                         last.after_cursors = after_cursors;

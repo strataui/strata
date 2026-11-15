@@ -289,19 +289,33 @@ pub const SHM_HEADER_SIZE: usize = std::mem::size_of::<ShmBufferHeader>();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShmError {
-    BufferTooSmall { required: usize, provided: usize },
+    BufferTooSmall {
+        required: usize,
+        provided: usize,
+    },
     InvalidMagic(u32),
     UnsupportedVersion(u32),
-    DimensionMismatch { expected: (u32, u32), received: (u32, u32) },
+    DimensionMismatch {
+        expected: (u32, u32),
+        received: (u32, u32),
+    },
 }
 
 impl std::fmt::Display for ShmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::BufferTooSmall { required, provided } => write!(f, "SHM buffer too small: required {}, got {}", required, provided),
+            Self::BufferTooSmall { required, provided } => write!(
+                f,
+                "SHM buffer too small: required {}, got {}",
+                required, provided
+            ),
             Self::InvalidMagic(m) => write!(f, "Invalid SHM magic: 0x{:08X}", m),
             Self::UnsupportedVersion(v) => write!(f, "Unsupported SHM protocol version: {}", v),
-            Self::DimensionMismatch { expected, received } => write!(f, "SHM dimension mismatch: expected {:?}, got {:?}", expected, received),
+            Self::DimensionMismatch { expected, received } => write!(
+                f,
+                "SHM dimension mismatch: expected {:?}, got {:?}",
+                expected, received
+            ),
         }
     }
 }

@@ -81,11 +81,13 @@ impl CssExtractor {
         // Pseudo-classes
         if let Some(rest) = class.strip_prefix("hover:") {
             let inner_selector = format!(".{}:hover", Self::escape_selector(class));
-            return Self::generate_inner_declaration(rest).map(|decl| format!("{} {{ {} }}", inner_selector, decl));
+            return Self::generate_inner_declaration(rest)
+                .map(|decl| format!("{} {{ {} }}", inner_selector, decl));
         }
         if let Some(rest) = class.strip_prefix("focus:") {
             let inner_selector = format!(".{}:focus", Self::escape_selector(class));
-            return Self::generate_inner_declaration(rest).map(|decl| format!("{} {{ {} }}", inner_selector, decl));
+            return Self::generate_inner_declaration(rest)
+                .map(|decl| format!("{} {{ {} }}", inner_selector, decl));
         }
 
         Self::generate_inner_declaration(class).map(|decl| format!("{} {{ {} }}", selector, decl))

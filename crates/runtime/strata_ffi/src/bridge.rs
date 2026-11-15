@@ -33,9 +33,15 @@ pub unsafe extern "C" fn strata_eval_tailwind_css(
         _ => css_out.push_str(&format!("height: {:?}; ", style.height)),
     }
     if let Some(c) = style.background_color {
-        css_out.push_str(&format!("background-color: rgba({}, {}, {}, {}); ", c.r, c.g, c.b, c.a));
+        css_out.push_str(&format!(
+            "background-color: rgba({}, {}, {}, {}); ",
+            c.r, c.g, c.b, c.a
+        ));
     }
-    css_out.push_str(&format!("color: rgba({}, {}, {}, {}); ", style.color.r, style.color.g, style.color.b, style.color.a));
+    css_out.push_str(&format!(
+        "color: rgba({}, {}, {}, {}); ",
+        style.color.r, style.color.g, style.color.b, style.color.a
+    ));
 
     let bytes = css_out.as_bytes();
     if bytes.len() >= max_len {
@@ -78,4 +84,3 @@ pub unsafe extern "C" fn strata_render_to_buffer(
 
     total_bytes as i32
 }
-

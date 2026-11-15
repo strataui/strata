@@ -69,7 +69,11 @@ fn test_canvas2d_oscilloscope_waveform_trace() {
 
     // At x=0, sin(0) = 0 => y = 100
     let wave_pixel = fb.get_pixel(0, 100);
-    assert!(wave_pixel.b() > 0.4, "Waveform point at (0, 100) must have blue component: {:?}", wave_pixel);
+    assert!(
+        wave_pixel.b() > 0.4,
+        "Waveform point at (0, 100) must have blue component: {:?}",
+        wave_pixel
+    );
 
     // Far from waveform (x=0, y=10) should be dark background
     let bg_pixel = fb.get_pixel(0, 10);

@@ -119,7 +119,9 @@ impl Geolocation {
             .map_err(|e| GeolocationError::PositionUnavailable(e.to_string()))?;
 
         pos.clone().ok_or_else(|| {
-            GeolocationError::PositionUnavailable("No position available from device provider".into())
+            GeolocationError::PositionUnavailable(
+                "No position available from device provider".into(),
+            )
         })
     }
 }
@@ -135,8 +137,8 @@ pub fn haversine_distance_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> 
     let rad_lat1 = lat1.to_radians();
     let rad_lat2 = lat2.to_radians();
 
-    let a = (d_lat / 2.0).sin().powi(2)
-        + rad_lat1.cos() * rad_lat2.cos() * (d_lon / 2.0).sin().powi(2);
+    let a =
+        (d_lat / 2.0).sin().powi(2) + rad_lat1.cos() * rad_lat2.cos() * (d_lon / 2.0).sin().powi(2);
 
     let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
 

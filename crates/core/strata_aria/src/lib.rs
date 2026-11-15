@@ -42,4 +42,3 @@ pub mod prelude {
     pub use crate::roving_tabindex::{Orientation, RovingTabIndex};
     pub use crate::tooltip::{use_tooltip, TooltipConfig, TooltipState};
 }
-

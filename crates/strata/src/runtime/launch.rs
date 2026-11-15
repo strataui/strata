@@ -24,7 +24,11 @@ where
 }
 
 /// Launches a Strata window with custom window configuration and low-level platform event hook.
-pub fn launch_with_events<F, E>(root: F, config: WindowConfig, event_handler: E) -> Result<(), String>
+pub fn launch_with_events<F, E>(
+    root: F,
+    config: WindowConfig,
+    event_handler: E,
+) -> Result<(), String>
 where
     F: FnMut() -> View + 'static,
     E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
@@ -33,11 +37,7 @@ where
 }
 
 /// Auto-detects the host platform display server and launches an interactive desktop window.
-pub fn launch_auto<F, E>(
-    root_fn: F,
-    config: WindowConfig,
-    event_handler: E,
-) -> Result<(), String>
+pub fn launch_auto<F, E>(root_fn: F, config: WindowConfig, event_handler: E) -> Result<(), String>
 where
     F: FnMut() -> View + 'static,
     E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
@@ -52,7 +52,9 @@ where
 
     #[cfg(target_os = "linux")]
     {
-        let backend = std::env::var("STRATA_BACKEND").unwrap_or_default().to_lowercase();
+        let backend = std::env::var("STRATA_BACKEND")
+            .unwrap_or_default()
+            .to_lowercase();
         if backend == "x11" {
             let r = root_rc.clone();
             let ev = event_rc.clone();
@@ -184,11 +186,8 @@ where
     let width = config.width as f32;
     let height = config.height as f32;
     let mut runtime = AppRuntime::new(view, width, height, 1.0);
-    let mut presenter = SoftwareSurfacePresenter::new(
-        config.width,
-        config.height,
-        SwapchainFormat::Bgra8Unorm,
-    );
+    let mut presenter =
+        SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
     let mut compositor = SwapchainCompositor::new(config.width, config.height, 1.0);
 
     let max_frames = std::env::var("STRATA_HEADLESS_EXIT_AFTER_FRAMES")
@@ -200,7 +199,8 @@ where
 
     while frames_rendered < max_frames {
         let _ = runtime.render_frame(&mut compositor, &mut presenter, frames_rendered == 0);
-        let _ = window.present_surface(&presenter.backing_buffer, presenter.width, presenter.height);
+        let _ =
+            window.present_surface(&presenter.backing_buffer, presenter.width, presenter.height);
         frames_rendered += 1;
 
         let events = window.poll_events();
@@ -361,7 +361,8 @@ where
             AppRuntime::sync_layout_to_ir(&rt.layout_root, &mut rt.ir_graph);
             rt.apply_viewport_clamps();
             rt.apply_scroll_offsets();
-            rt.spatial_index.rebuild(&rt.root_blueprint, &rt.layout_root);
+            rt.spatial_index
+                .rebuild(&rt.root_blueprint, &rt.layout_root);
         }
         rt.compile_display_list();
 
@@ -630,5 +631,3 @@ where
     let _ = crate::mcp_bridge::start_mcp_dev_listener(None);
     strata_platform::launch_gtk_window_with_config(&config, on_draw, on_event)
 }
-
-

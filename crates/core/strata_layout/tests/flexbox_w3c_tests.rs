@@ -10,9 +10,7 @@
 #![allow(clippy::field_reassign_with_default)]
 
 use strata_layout::prelude::*;
-use strata_style::types::{
-    AlignItems, ComputedStyle, Dimension, Display, FlexDirection,
-};
+use strata_style::types::{AlignItems, ComputedStyle, Dimension, Display, FlexDirection};
 
 #[test]
 fn test_flexbox_main_axis_auto_margins_push_end() {
@@ -68,7 +66,8 @@ fn test_flexbox_main_axis_auto_margins_centering() {
     item_style.margin_auto_left = true;
     item_style.margin_auto_right = true;
 
-    let mut container = LayoutNode::with_children(container_style, vec![LayoutNode::new(item_style)]);
+    let mut container =
+        LayoutNode::with_children(container_style, vec![LayoutNode::new(item_style)]);
     container.compute_layout(600.0, 100.0);
 
     assert_eq!(container.children[0].geometry.border_box.x, 200.0);

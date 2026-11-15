@@ -45,19 +45,28 @@ impl MobileSimulatorWorkspace {
         };
 
         let foldable = match &profile.form_factor {
-            DeviceFormFactor::ClamshellFlip { hinge_axis, hinge_angle_deg, .. } => {
-                Some(FoldableState::new(*hinge_axis, *hinge_angle_deg, w, h))
-            }
-            DeviceFormFactor::BookFoldable { hinge_axis, hinge_angle_deg, .. } => {
-                Some(FoldableState::new(*hinge_axis, *hinge_angle_deg, w, h))
-            }
+            DeviceFormFactor::ClamshellFlip {
+                hinge_axis,
+                hinge_angle_deg,
+                ..
+            } => Some(FoldableState::new(*hinge_axis, *hinge_angle_deg, w, h)),
+            DeviceFormFactor::BookFoldable {
+                hinge_axis,
+                hinge_angle_deg,
+                ..
+            } => Some(FoldableState::new(*hinge_axis, *hinge_angle_deg, w, h)),
             _ => None,
         };
 
         let island = match &profile.cutout {
-            CutoutProfile::DynamicIsland { resting_width, resting_height, .. } => {
-                Some(DynamicIslandOscillator::new(*resting_width, *resting_height))
-            }
+            CutoutProfile::DynamicIsland {
+                resting_width,
+                resting_height,
+                ..
+            } => Some(DynamicIslandOscillator::new(
+                *resting_width,
+                *resting_height,
+            )),
             _ => None,
         };
 
@@ -97,7 +106,12 @@ impl MobileSimulatorWorkspace {
     pub fn set_hinge_angle(&mut self, angle_deg: f32) {
         if let Some(foldable) = &mut self.foldable {
             let screen = self.profile.form_factor.active_screen();
-            foldable.set_hinge_angle(angle_deg, false, screen.logical_width, screen.logical_height);
+            foldable.set_hinge_angle(
+                angle_deg,
+                false,
+                screen.logical_width,
+                screen.logical_height,
+            );
             self.sandbox.execute_display_handover();
         }
     }

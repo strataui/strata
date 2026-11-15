@@ -119,10 +119,7 @@ pub struct BreadcrumbItemData {
 
 /// Breadcrumb hierarchical navigation trail.
 #[component]
-pub fn Breadcrumb(
-    items: Vec<BreadcrumbItemData>,
-    class: Option<&'static str>,
-) -> View {
+pub fn Breadcrumb(items: Vec<BreadcrumbItemData>, class: Option<&'static str>) -> View {
     let custom = class.unwrap_or("");
     let total = items.len();
 
@@ -227,7 +224,11 @@ pub fn CommandPalette(
     let q = query.get().to_lowercase();
     let filtered: Vec<CommandItemData> = items
         .into_iter()
-        .filter(|item| q.is_empty() || item.title.to_lowercase().contains(&q) || item.category.to_lowercase().contains(&q))
+        .filter(|item| {
+            q.is_empty()
+                || item.title.to_lowercase().contains(&q)
+                || item.category.to_lowercase().contains(&q)
+        })
         .collect();
 
     let op = open.clone();

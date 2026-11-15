@@ -181,7 +181,10 @@ fn test_real_os_hardware_telemetry_probing() {
     if let Some(thermal) = strata_device::probe_os_thermal() {
         assert!(matches!(
             thermal,
-            ThermalState::Nominal | ThermalState::Fair | ThermalState::Serious | ThermalState::Critical
+            ThermalState::Nominal
+                | ThermalState::Fair
+                | ThermalState::Serious
+                | ThermalState::Critical
         ));
     }
 
@@ -342,4 +345,3 @@ fn test_macos_power_source_snapshot_decoding() {
     };
     assert!(decode_macos_power_snapshot(&invalid).is_none());
 }
-

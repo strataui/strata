@@ -1168,7 +1168,11 @@ impl CascadeSolver {
                 );
             }
             "grid-column-end" => {
-                apply_grid_placement_end(val, &mut style.grid_column_end, &mut style.grid_column_span);
+                apply_grid_placement_end(
+                    val,
+                    &mut style.grid_column_end,
+                    &mut style.grid_column_span,
+                );
             }
             "grid-row" => {
                 apply_grid_placement_shorthand(
@@ -2109,15 +2113,27 @@ fn apply_grid_area_shorthand(value: &str, style: &mut ComputedStyle) {
         .collect();
 
     if let Some(&row_start) = parts.first() {
-        apply_grid_placement_line(row_start, &mut style.grid_row_start, &mut style.grid_row_span);
+        apply_grid_placement_line(
+            row_start,
+            &mut style.grid_row_start,
+            &mut style.grid_row_span,
+        );
     }
     if let Some(&col_start) = parts.get(1) {
-        apply_grid_placement_line(col_start, &mut style.grid_column_start, &mut style.grid_column_span);
+        apply_grid_placement_line(
+            col_start,
+            &mut style.grid_column_start,
+            &mut style.grid_column_span,
+        );
     }
     if let Some(&row_end) = parts.get(2) {
         apply_grid_placement_end(row_end, &mut style.grid_row_end, &mut style.grid_row_span);
     }
     if let Some(&col_end) = parts.get(3) {
-        apply_grid_placement_end(col_end, &mut style.grid_column_end, &mut style.grid_column_span);
+        apply_grid_placement_end(
+            col_end,
+            &mut style.grid_column_end,
+            &mut style.grid_column_span,
+        );
     }
 }

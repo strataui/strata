@@ -46,8 +46,7 @@ static FAMILY_TEXT_MEASURER: std::sync::RwLock<Option<FamilyTextMeasurementCallb
     std::sync::RwLock::new(None);
 static FAMILY_STYLED_TEXT_MEASURER: std::sync::RwLock<Option<FamilyStyledTextMeasurementCallback>> =
     std::sync::RwLock::new(None);
-static FONT_METRICS: std::sync::RwLock<Option<FontMetricsCallback>> =
-    std::sync::RwLock::new(None);
+static FONT_METRICS: std::sync::RwLock<Option<FontMetricsCallback>> = std::sync::RwLock::new(None);
 static FONT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Returns the current font configuration generation. Caches key on this value
@@ -117,7 +116,10 @@ pub fn get_family_text_measurer() -> Option<FamilyTextMeasurementCallback> {
 
 /// Retrieves the active registered family-aware styled text measurer callback, if any.
 pub fn get_family_styled_text_measurer() -> Option<FamilyStyledTextMeasurementCallback> {
-    FAMILY_STYLED_TEXT_MEASURER.read().ok().and_then(|lock| *lock)
+    FAMILY_STYLED_TEXT_MEASURER
+        .read()
+        .ok()
+        .and_then(|lock| *lock)
 }
 
 /// Retrieves the active registered font metrics callback, if any.

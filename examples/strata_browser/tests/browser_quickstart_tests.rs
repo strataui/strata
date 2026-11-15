@@ -23,7 +23,11 @@ fn test_browser_state_lifecycle_and_navigation() {
     assert!(active.html.contains("Empirical Performance Metrics"));
 
     // Open a new tab
-    state.new_tab("Rust Lang", "https://www.rust-lang.org", "<h1>Empowering Everyone</h1>");
+    state.new_tab(
+        "Rust Lang",
+        "https://www.rust-lang.org",
+        "<h1>Empowering Everyone</h1>",
+    );
     assert_eq!(state.tabs.get().len(), 3);
     assert_eq!(state.active_index.get(), 2);
     assert_eq!(state.url_input.get(), "https://www.rust-lang.org");
@@ -64,10 +68,16 @@ fn test_browser_html_transpilation_pipeline() {
 
     match blueprint {
         NodeBlueprint::Element { children, .. } => {
-            assert!(!children.is_empty(), "Transpiled element must contain child nodes");
+            assert!(
+                !children.is_empty(),
+                "Transpiled element must contain child nodes"
+            );
         }
         NodeBlueprint::Fragment(children) => {
-            assert!(!children.is_empty(), "Transpiled fragment must contain child nodes");
+            assert!(
+                !children.is_empty(),
+                "Transpiled fragment must contain child nodes"
+            );
         }
         _ => panic!("Expected Element or Fragment blueprint"),
     }
@@ -78,11 +88,7 @@ fn test_browser_headless_presentation_tick() {
     let state = BrowserState::new();
     let render_state = state.clone();
 
-    let runtime = strata::launch_headless(
-        move || BrowserApp(render_state),
-        1280.0,
-        800.0,
-    );
+    let runtime = strata::launch_headless(move || BrowserApp(render_state), 1280.0, 800.0);
 
     assert_eq!(runtime.viewport_width, 1280.0);
     assert_eq!(runtime.viewport_height, 800.0);

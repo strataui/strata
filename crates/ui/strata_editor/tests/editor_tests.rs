@@ -58,10 +58,16 @@ fn test_multi_cursor_selection_and_normalization() {
 
     let sel = Selection::range(Position::new(0, 0), Position::new(0, 5));
     assert!(!sel.is_collapsed());
-    assert_eq!(sel.ordered_range(), (Position::new(0, 0), Position::new(0, 5)));
+    assert_eq!(
+        sel.ordered_range(),
+        (Position::new(0, 0), Position::new(0, 5))
+    );
 
     let reverse_sel = Selection::range(Position::new(0, 5), Position::new(0, 0));
-    assert_eq!(reverse_sel.ordered_range(), (Position::new(0, 0), Position::new(0, 5)));
+    assert_eq!(
+        reverse_sel.ordered_range(),
+        (Position::new(0, 0), Position::new(0, 5))
+    );
 }
 
 #[test]
@@ -70,18 +76,28 @@ fn test_syntax_highlighting_rust_and_python() {
 
     let rust_code = "fn compute_sum(a: i32, b: i32) -> i32 {\n    let result = a + b;\n    // return value\n    \"done\"\n}";
     let rust_tokens = highlighter.highlight_line("fn compute_sum(a: i32) -> i32 {", Language::Rust);
-    
-    assert!(rust_tokens.iter().any(|t| t.token_type == TokenType::Keyword && t.text == "fn"));
-    assert!(rust_tokens.iter().any(|t| t.token_type == TokenType::Function && t.text == "compute_sum"));
-    assert!(rust_tokens.iter().any(|t| t.token_type == TokenType::Type && t.text == "i32"));
+
+    assert!(rust_tokens
+        .iter()
+        .any(|t| t.token_type == TokenType::Keyword && t.text == "fn"));
+    assert!(rust_tokens
+        .iter()
+        .any(|t| t.token_type == TokenType::Function && t.text == "compute_sum"));
+    assert!(rust_tokens
+        .iter()
+        .any(|t| t.token_type == TokenType::Type && t.text == "i32"));
 
     let comment_tokens = highlighter.highlight_line("// this is a comment", Language::Rust);
     assert_eq!(comment_tokens.len(), 1);
     assert_eq!(comment_tokens[0].token_type, TokenType::Comment);
 
     let py_tokens = highlighter.highlight_line("def process_data(records):", Language::Python);
-    assert!(py_tokens.iter().any(|t| t.token_type == TokenType::Keyword && t.text == "def"));
-    assert!(py_tokens.iter().any(|t| t.token_type == TokenType::Function && t.text == "process_data"));
+    assert!(py_tokens
+        .iter()
+        .any(|t| t.token_type == TokenType::Keyword && t.text == "def"));
+    assert!(py_tokens
+        .iter()
+        .any(|t| t.token_type == TokenType::Function && t.text == "process_data"));
 
     let buffer = LineBuffer::from_str(rust_code);
     let folds = highlighter.compute_fold_ranges(&buffer);
@@ -135,18 +151,37 @@ fn test_clipboard_bridge_multiformat_payload() {
 
     let payload = ClipboardBridge::from_selection(&buffer, sel);
     assert_eq!(payload.plain_text, "one\nline");
-    assert!(payload.html.as_ref().unwrap().contains("<pre><code>one\nline</code></pre>"));
+    assert!(payload
+        .html
+        .as_ref()
+        .unwrap()
+        .contains("<pre><code>one\nline</code></pre>"));
     assert!(payload.rtf.as_ref().unwrap().contains(r"{\rtf1"));
 
     let mut doc = Document::new();
     doc.push(BlockNode::heading("h1", 1, "Document Title"));
-    doc.push(BlockNode::paragraph("p1", "Rich text paragraph with formatting"));
+    doc.push(BlockNode::paragraph(
+        "p1",
+        "Rich text paragraph with formatting",
+    ));
 
     let doc_payload = ClipboardBridge::from_document(&doc);
     assert!(doc_payload.plain_text.contains("Document Title"));
-    assert!(doc_payload.markdown.as_ref().unwrap().contains("# Document Title"));
-    assert!(doc_payload.html.as_ref().unwrap().contains("<h1>Document Title</h1>"));
-    assert!(doc_payload.html.as_ref().unwrap().contains("<p>Rich text paragraph with formatting</p>"));
+    assert!(doc_payload
+        .markdown
+        .as_ref()
+        .unwrap()
+        .contains("# Document Title"));
+    assert!(doc_payload
+        .html
+        .as_ref()
+        .unwrap()
+        .contains("<h1>Document Title</h1>"));
+    assert!(doc_payload
+        .html
+        .as_ref()
+        .unwrap()
+        .contains("<p>Rich text paragraph with formatting</p>"));
 }
 
 #[test]
@@ -159,7 +194,12 @@ fn test_ime_composition_lifecycle() {
     assert!(ime.is_composing());
 
     ime.update("nihao", 5);
-    if let ImeState::Composing { ref preedit_text, cursor_offset, .. } = *ime.state() {
+    if let ImeState::Composing {
+        ref preedit_text,
+        cursor_offset,
+        ..
+    } = *ime.state()
+    {
         assert_eq!(preedit_text, "nihao");
         assert_eq!(cursor_offset, 5);
     } else {
@@ -249,7 +289,10 @@ fn test_soft_wrapping_and_coordinate_mapping() {
     // Wrap at 40 columns with indent preservation
     let wrapped = wrap_logical_line(long_line, 0, 40, true);
 
-    assert!(wrapped.len() >= 2, "Long line must be split into multiple visual lines");
+    assert!(
+        wrapped.len() >= 2,
+        "Long line must be split into multiple visual lines"
+    );
     assert_eq!(wrapped[0].logical_line, 0);
     assert_eq!(wrapped[0].visual_subline, 0);
     assert!(!wrapped[0].is_continuation);
@@ -261,7 +304,8 @@ fn test_soft_wrapping_and_coordinate_mapping() {
     // Coordinate mapping round-trip
     let pos_start = Position::new(0, 4); // right after indent
     let visual_pos = logical_to_visual(pos_start, &wrapped).expect("Must map logical to visual");
-    let mapped_back = visual_to_logical(visual_pos.0, visual_pos.1, &wrapped).expect("Must map visual to logical");
+    let mapped_back = visual_to_logical(visual_pos.0, visual_pos.1, &wrapped)
+        .expect("Must map visual to logical");
     assert_eq!(mapped_back, pos_start);
 }
 
@@ -327,13 +371,21 @@ fn test_virtualized_viewport_rendering_on_massive_buffer() {
     let viewport_height = 480.0; // 20 lines visible
     let scroll_top = 2400.0; // scrolled to line 100
 
-    let blueprint = editor.render_virtualized(scroll_top, viewport_height, line_height, "h-[480px]");
+    let blueprint =
+        editor.render_virtualized(scroll_top, viewport_height, line_height, "h-[480px]");
 
     if let strata_dom::NodeBlueprint::Element { children, .. } = blueprint {
         // Child nodes should be: Top spacer + (20 visible + 4 overscan lines = ~24-25 lines) + Bottom spacer
         // Total DOM nodes MUST be under 35, NEVER 10,000!
-        assert!(children.len() < 35, "Virtualized blueprint must not instantiate 10,000 nodes! Actual: {}", children.len());
-        assert!(children.len() >= 20, "Must contain all visible lines and spacers");
+        assert!(
+            children.len() < 35,
+            "Virtualized blueprint must not instantiate 10,000 nodes! Actual: {}",
+            children.len()
+        );
+        assert!(
+            children.len() >= 20,
+            "Must contain all visible lines and spacers"
+        );
     } else {
         panic!("Expected Element blueprint");
     }
@@ -363,12 +415,18 @@ fn test_rope_100k_lines_scaling_and_editing() {
     }
     let access_duration = start_access.elapsed();
     println!("Random line access in {:?}", access_duration);
-    assert!(access_duration.as_micros() < 500, "Logarithmic indexing must take < 500 us");
+    assert!(
+        access_duration.as_micros() < 500,
+        "Logarithmic indexing must take < 500 us"
+    );
 
     // 3. Fine-grained editing in the middle of 100,000 lines (O(log N))
     let start_edit = Instant::now();
     buffer.insert_str(50_000, 3, "/* mutated */ ");
-    assert!(buffer.line(50_000).unwrap().contains("fn /* mutated */ logic_gate_050000"));
+    assert!(buffer
+        .line(50_000)
+        .unwrap()
+        .contains("fn /* mutated */ logic_gate_050000"));
 
     buffer.split_line(50_000, 16);
     assert_eq!(buffer.line_count(), 100_002);
@@ -379,7 +437,10 @@ fn test_rope_100k_lines_scaling_and_editing() {
 
     let edit_duration = start_edit.elapsed();
     println!("100k-line editing operations in {:?}", edit_duration);
-    assert!(edit_duration.as_millis() < 10, "Editing in 100k-line rope must be < 10 ms");
+    assert!(
+        edit_duration.as_millis() < 10,
+        "Editing in 100k-line rope must be < 10 ms"
+    );
 
     // 4. Virtualized slice extraction
     let start_slice = Instant::now();
@@ -387,7 +448,10 @@ fn test_rope_100k_lines_scaling_and_editing() {
     let slice_duration = start_slice.elapsed();
     assert_eq!(slice.len(), 30);
     println!("Slicing 30 lines at offset 50,000 in {:?}", slice_duration);
-    assert!(slice_duration.as_micros() < 100, "Slicing viewport lines must be < 100 us");
+    assert!(
+        slice_duration.as_micros() < 100,
+        "Slicing viewport lines must be < 100 us"
+    );
 }
 
 #[test]
@@ -408,9 +472,18 @@ fn test_virtualized_rendering_with_soft_wrapping_continuation() {
         // Find continuation gutter elements with arrow indicator '↳'
         let mut found_continuation_gutter = false;
         for row in &children {
-            if let strata_dom::NodeBlueprint::Element { children: row_children, .. } = row {
+            if let strata_dom::NodeBlueprint::Element {
+                children: row_children,
+                ..
+            } = row
+            {
                 for col in row_children {
-                    if let strata_dom::NodeBlueprint::Element { children: gutter_children, classes, .. } = col {
+                    if let strata_dom::NodeBlueprint::Element {
+                        children: gutter_children,
+                        classes,
+                        ..
+                    } = col
+                    {
                         if classes.iter().any(|c| c.contains("text-slate-600")) {
                             for g in gutter_children {
                                 if let strata_dom::NodeBlueprint::Text(t) = g {
@@ -425,7 +498,10 @@ fn test_virtualized_rendering_with_soft_wrapping_continuation() {
             }
         }
 
-        assert!(found_continuation_gutter, "Virtualized rendering with soft-wrapping must render continuation markers '↳'");
+        assert!(
+            found_continuation_gutter,
+            "Virtualized rendering with soft-wrapping must render continuation markers '↳'"
+        );
     } else {
         panic!("Expected Element blueprint");
     }
@@ -442,7 +518,11 @@ fn test_code_editor_auto_virtualization_on_large_document() {
     // render() on 5,000 lines should NOT instantiate 5,000 DOM rows
     let blueprint = editor.render();
     if let strata_dom::NodeBlueprint::Element { children, .. } = blueprint {
-        assert!(children.len() < 50, "Auto-virtualization must bound DOM tree nodes. Actual: {}", children.len());
+        assert!(
+            children.len() < 50,
+            "Auto-virtualization must bound DOM tree nodes. Actual: {}",
+            children.len()
+        );
     } else {
         panic!("Expected Element blueprint");
     }
@@ -458,12 +538,21 @@ fn test_tree_sitter_ast_parsing_and_token_classification() {
     let root = highlighter.root_node().expect("Root node must exist");
     assert_eq!(root.kind(), "source_file");
 
-    let tokens = highlighter.highlight_line_ast(0, "pub fn add_values(left: u32, right: u32) -> u32 {");
+    let tokens =
+        highlighter.highlight_line_ast(0, "pub fn add_values(left: u32, right: u32) -> u32 {");
     assert!(!tokens.is_empty());
-    assert!(tokens.iter().any(|t| t.token_type == TokenType::Keyword && t.text == "pub"));
-    assert!(tokens.iter().any(|t| t.token_type == TokenType::Keyword && t.text == "fn"));
-    assert!(tokens.iter().any(|t| t.token_type == TokenType::Function && t.text == "add_values"));
-    assert!(tokens.iter().any(|t| t.token_type == TokenType::Type && t.text == "u32"));
+    assert!(tokens
+        .iter()
+        .any(|t| t.token_type == TokenType::Keyword && t.text == "pub"));
+    assert!(tokens
+        .iter()
+        .any(|t| t.token_type == TokenType::Keyword && t.text == "fn"));
+    assert!(tokens
+        .iter()
+        .any(|t| t.token_type == TokenType::Function && t.text == "add_values"));
+    assert!(tokens
+        .iter()
+        .any(|t| t.token_type == TokenType::Type && t.text == "u32"));
 
     // JavaScript grammar
     let mut js_highlighter = SyntaxHighlighter::with_language(Language::JavaScript);
@@ -471,8 +560,12 @@ fn test_tree_sitter_ast_parsing_and_token_classification() {
     js_highlighter.parse(js_src);
     assert!(js_highlighter.tree().is_some());
     let js_tokens = js_highlighter.highlight_line_ast(0, "function calculate(x) {");
-    assert!(js_tokens.iter().any(|t| t.token_type == TokenType::Keyword && t.text == "function"));
-    assert!(js_tokens.iter().any(|t| t.token_type == TokenType::Function && t.text == "calculate"));
+    assert!(js_tokens
+        .iter()
+        .any(|t| t.token_type == TokenType::Keyword && t.text == "function"));
+    assert!(js_tokens
+        .iter()
+        .any(|t| t.token_type == TokenType::Function && t.text == "calculate"));
 }
 
 #[test]
@@ -487,10 +580,20 @@ fn test_tree_sitter_incremental_reparsing_on_editor_mutations() {
     editor.move_to_line_end(false);
     editor.insert_text("\n\nfn beta() -> i32 {\n    2\n}");
 
-    let updated_root = editor.highlighter().root_node().expect("AST must be updated");
-    let has_beta = (0..updated_root.child_count())
-        .any(|i| updated_root.child(i).map(|c| c.kind() == "function_item").unwrap_or(false));
-    assert!(has_beta, "Updated AST must contain newly parsed function nodes");
+    let updated_root = editor
+        .highlighter()
+        .root_node()
+        .expect("AST must be updated");
+    let has_beta = (0..updated_root.child_count()).any(|i| {
+        updated_root
+            .child(i)
+            .map(|c| c.kind() == "function_item")
+            .unwrap_or(false)
+    });
+    assert!(
+        has_beta,
+        "Updated AST must contain newly parsed function nodes"
+    );
 }
 
 #[test]
@@ -501,8 +604,11 @@ fn test_tree_sitter_ast_code_folding_and_navigation() {
 
     let buffer = LineBuffer::from_str(src);
     let folds = highlighter.compute_fold_ranges(&buffer);
-    assert!(!folds.is_empty(), "AST folding should extract multiple foldable blocks");
-    
+    assert!(
+        !folds.is_empty(),
+        "AST folding should extract multiple foldable blocks"
+    );
+
     // Check that struct, impl, and fn blocks are folded
     assert!(folds.iter().any(|f| f.start_line == 0 && f.end_line == 2));
     assert!(folds.iter().any(|f| f.start_line == 4 && f.end_line == 8));
@@ -530,9 +636,16 @@ fn test_editor_rendering_preserves_token_whitespace_gaps() {
     if let strata_dom::NodeBlueprint::Element { children, .. } = blueprint {
         let mut found_whitespace_node = false;
         for row in &children {
-            if let strata_dom::NodeBlueprint::Element { children: row_cols, .. } = row {
+            if let strata_dom::NodeBlueprint::Element {
+                children: row_cols, ..
+            } = row
+            {
                 for col in row_cols {
-                    if let strata_dom::NodeBlueprint::Element { children: code_spans, .. } = col {
+                    if let strata_dom::NodeBlueprint::Element {
+                        children: code_spans,
+                        ..
+                    } = col
+                    {
                         for span in code_spans {
                             if let strata_dom::NodeBlueprint::Text(t) = span {
                                 if t.contains(' ') {
@@ -544,7 +657,10 @@ fn test_editor_rendering_preserves_token_whitespace_gaps() {
                 }
             }
         }
-        assert!(found_whitespace_node, "Rendering must preserve whitespace gaps between tokens");
+        assert!(
+            found_whitespace_node,
+            "Rendering must preserve whitespace gaps between tokens"
+        );
     } else {
         panic!("Expected Element blueprint");
     }
@@ -560,12 +676,21 @@ fn test_btree_rope_node_metrics_and_logarithmic_height() {
 
     // Height of balanced B-Tree for 10,000 lines should be <= 4
     let height = buffer.height();
-    assert!((2..=5).contains(&height), "B-Tree height must be logarithmic (2..=5). Actual: {height}");
+    assert!(
+        (2..=5).contains(&height),
+        "B-Tree height must be logarithmic (2..=5). Actual: {height}"
+    );
 
     // Cached metrics verification
     assert_eq!(buffer.line_count(), 10_001);
-    assert_eq!(buffer.rope().total_char_count(), buffer.to_text().chars().count() - 10_000); // without newline chars
-    assert_eq!(buffer.rope().total_byte_count(), buffer.to_text().len() - 10_000);
+    assert_eq!(
+        buffer.rope().total_char_count(),
+        buffer.to_text().chars().count() - 10_000
+    ); // without newline chars
+    assert_eq!(
+        buffer.rope().total_byte_count(),
+        buffer.to_text().len() - 10_000
+    );
 
     // Verify fine-grained mutations maintain exact line counts and height
     let mut rope = buffer.rope().clone();
@@ -581,7 +706,7 @@ fn test_btree_rope_node_metrics_and_logarithmic_height() {
 #[test]
 fn test_multicursor_transactional_descending_coalescing() {
     let mut editor = CodeEditor::new("apple, banana, cherry", Language::PlainText);
-    
+
     // Add cursors on the same line at col 0, col 7, col 15
     editor.cursors_mut().set_single(Position::new(0, 0));
     editor.cursors_mut().add_cursor(Position::new(0, 7));
@@ -591,29 +716,41 @@ fn test_multicursor_transactional_descending_coalescing() {
     // Insert prefix at all 3 cursors simultaneously
     editor.insert_text("fruit: ");
 
-    assert_eq!(editor.buffer().line(0), Some("fruit: apple, fruit: banana, fruit: cherry"));
-    
+    assert_eq!(
+        editor.buffer().line(0),
+        Some("fruit: apple, fruit: banana, fruit: cherry")
+    );
+
     // Verify carets shifted correctly and did not invalidate each other's offsets
     let carets: Vec<Position> = editor.cursors().all().iter().map(|s| s.focus).collect();
-    assert_eq!(carets, vec![
-        Position::new(0, 7),
-        Position::new(0, 21),
-        Position::new(0, 36),
-    ]);
+    assert_eq!(
+        carets,
+        vec![
+            Position::new(0, 7),
+            Position::new(0, 21),
+            Position::new(0, 36),
+        ]
+    );
 
     // Single atomic undo should restore initial state and all 3 original cursors
     editor.undo();
     assert_eq!(editor.buffer().line(0), Some("apple, banana, cherry"));
     let restored_carets: Vec<Position> = editor.cursors().all().iter().map(|s| s.focus).collect();
-    assert_eq!(restored_carets, vec![
-        Position::new(0, 0),
-        Position::new(0, 7),
-        Position::new(0, 15),
-    ]);
+    assert_eq!(
+        restored_carets,
+        vec![
+            Position::new(0, 0),
+            Position::new(0, 7),
+            Position::new(0, 15),
+        ]
+    );
 
     // Redo restores modified text
     editor.redo();
-    assert_eq!(editor.buffer().line(0), Some("fruit: apple, fruit: banana, fruit: cherry"));
+    assert_eq!(
+        editor.buffer().line(0),
+        Some("fruit: apple, fruit: banana, fruit: cherry")
+    );
 }
 
 #[test]
@@ -622,8 +759,12 @@ fn test_multicursor_overlapping_selection_merge_and_undo() {
 
     // Add two overlapping ranges: 2..5 ("cde") and 4..8 ("efgh")
     editor.cursors_mut().clear();
-    editor.cursors_mut().add_selection(Selection::range(Position::new(0, 2), Position::new(0, 5)));
-    editor.cursors_mut().add_selection(Selection::range(Position::new(0, 4), Position::new(0, 8)));
+    editor
+        .cursors_mut()
+        .add_selection(Selection::range(Position::new(0, 2), Position::new(0, 5)));
+    editor
+        .cursors_mut()
+        .add_selection(Selection::range(Position::new(0, 4), Position::new(0, 8)));
 
     // MultiCursor should merge them into single range 2..8 ("cdefgh")
     assert_eq!(editor.cursors().count(), 1);
@@ -665,7 +806,3 @@ fn test_multicursor_multiline_newline_insertion_safety() {
     assert_eq!(editor.buffer().line(1), Some("beta"));
     assert_eq!(editor.buffer().line(2), Some("gamma"));
 }
-
-
-
-

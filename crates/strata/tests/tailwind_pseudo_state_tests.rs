@@ -17,7 +17,10 @@ fn test_tailwind_engine_pseudo_state_resolution() {
         is_dark: false,
     };
     let style_default = TailwindEngine::resolve_classes_with_pseudo_state(classes, &state_default);
-    assert_eq!(style_default.background_color, Some(Color::new(255, 255, 255, 255)));
+    assert_eq!(
+        style_default.background_color,
+        Some(Color::new(255, 255, 255, 255))
+    );
 
     // 2. Hovered state
     let state_hover = PseudoState {
@@ -28,7 +31,10 @@ fn test_tailwind_engine_pseudo_state_resolution() {
         is_dark: false,
     };
     let style_hover = TailwindEngine::resolve_classes_with_pseudo_state(classes, &state_hover);
-    assert_eq!(style_hover.background_color, Some(Color::new(245, 245, 245, 255)));
+    assert_eq!(
+        style_hover.background_color,
+        Some(Color::new(245, 245, 245, 255))
+    );
 
     // 3. Active state
     let state_active = PseudoState {
@@ -39,7 +45,10 @@ fn test_tailwind_engine_pseudo_state_resolution() {
         is_dark: false,
     };
     let style_active = TailwindEngine::resolve_classes_with_pseudo_state(classes, &state_active);
-    assert_eq!(style_active.background_color, Some(Color::new(229, 229, 229, 255)));
+    assert_eq!(
+        style_active.background_color,
+        Some(Color::new(229, 229, 229, 255))
+    );
 
     // 4. Disabled state
     let state_disabled = PseudoState {
@@ -49,7 +58,8 @@ fn test_tailwind_engine_pseudo_state_resolution() {
         is_disabled: true,
         is_dark: false,
     };
-    let style_disabled = TailwindEngine::resolve_classes_with_pseudo_state(classes, &state_disabled);
+    let style_disabled =
+        TailwindEngine::resolve_classes_with_pseudo_state(classes, &state_disabled);
     assert_eq!(style_disabled.opacity, 0.5);
 
     // 5. Dark mode state

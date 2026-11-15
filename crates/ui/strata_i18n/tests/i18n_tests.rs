@@ -1,5 +1,5 @@
-use strata_i18n::prelude::*;
 use std::collections::HashMap;
+use strata_i18n::prelude::*;
 
 #[test]
 fn test_bcp47_parsing_and_rtl() {
@@ -48,15 +48,30 @@ fn test_icu_message_plurals_and_formatting() {
     let mut args = HashMap::new();
     args.insert("count".to_string(), 0.into());
     assert_eq!(catalog.translate("cart.items", &args, &en), "Cart is empty");
-    assert_eq!(catalog.translate("cart.items", &args, &de), "Warenkorb ist leer");
+    assert_eq!(
+        catalog.translate("cart.items", &args, &de),
+        "Warenkorb ist leer"
+    );
 
     args.insert("count".to_string(), 1.into());
-    assert_eq!(catalog.translate("cart.items", &args, &en), "1 item in cart");
-    assert_eq!(catalog.translate("cart.items", &args, &de), "1 Artikel im Warenkorb");
+    assert_eq!(
+        catalog.translate("cart.items", &args, &en),
+        "1 item in cart"
+    );
+    assert_eq!(
+        catalog.translate("cart.items", &args, &de),
+        "1 Artikel im Warenkorb"
+    );
 
     args.insert("count".to_string(), 15.into());
-    assert_eq!(catalog.translate("cart.items", &args, &en), "15 items in cart");
-    assert_eq!(catalog.translate("cart.items", &args, &de), "15 Artikel im Warenkorb");
+    assert_eq!(
+        catalog.translate("cart.items", &args, &en),
+        "15 items in cart"
+    );
+    assert_eq!(
+        catalog.translate("cart.items", &args, &de),
+        "15 Artikel im Warenkorb"
+    );
 }
 
 #[test]
@@ -109,9 +124,15 @@ fn test_number_and_currency_formatters() {
     assert_eq!(format_percent(0.854, &en), "85.4%");
     assert_eq!(format_percent(0.854, &de), "85,4 %");
 
-    assert_eq!(format_relative_time(-45, TimeUnit::Second, &en), "45 seconds ago");
+    assert_eq!(
+        format_relative_time(-45, TimeUnit::Second, &en),
+        "45 seconds ago"
+    );
     assert_eq!(format_relative_time(3, TimeUnit::Hour, &en), "in 3 hours");
-    assert_eq!(format_relative_time(-2, TimeUnit::Hour, &de), "vor 2 Stunden");
+    assert_eq!(
+        format_relative_time(-2, TimeUnit::Hour, &de),
+        "vor 2 Stunden"
+    );
 }
 
 #[test]
@@ -132,11 +153,17 @@ fn test_reactive_locale_switching_and_macro() {
     init_i18n(en, catalog);
 
     assert_eq!(t!("nav.dashboard"), "Dashboard");
-    assert_eq!(t!("welcome.user", user => "Taylor"), "Welcome back, Taylor!");
+    assert_eq!(
+        t!("welcome.user", user => "Taylor"),
+        "Welcome back, Taylor!"
+    );
 
     // Switch locale reactively to German
     set_locale(de);
 
     assert_eq!(t!("nav.dashboard"), "Übersicht");
-    assert_eq!(t!("welcome.user", user => "Taylor"), "Willkommen zurück, Taylor!");
+    assert_eq!(
+        t!("welcome.user", user => "Taylor"),
+        "Willkommen zurück, Taylor!"
+    );
 }

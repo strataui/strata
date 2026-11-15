@@ -1,13 +1,12 @@
 //! Comprehensive integration and unit test suite for the Strata MCP Server,
 //! authentic Yaru cursor overlay engine, action batching, and debug build policy.
 
-use std::time::{Duration, Instant};
 use serde_json::json;
+use std::time::{Duration, Instant};
 use strata::prelude::*;
-use strata_platform::{CursorIcon as PlatformCursorIcon, McpCursorState, CursorTheme};
 use strata_mcp::protocol::*;
 use strata_mcp::server::McpServer;
-
+use strata_platform::{CursorIcon as PlatformCursorIcon, CursorTheme, McpCursorState};
 
 #[test]
 fn test_mcp_server_initialize_and_tools_list() {
@@ -32,7 +31,10 @@ fn test_mcp_server_initialize_and_tools_list() {
     let list_req = JsonRpcRequest::new(Some(json!(2)), "tools/list", None);
     let list_resp = server.handle_request(&list_req).expect("Response expected");
     assert!(list_resp.is_success());
-    let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().clone();
+    let tools = list_resp.result.unwrap()["tools"]
+        .as_array()
+        .unwrap()
+        .clone();
     assert_eq!(tools.len(), 12);
 
     let tool_names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -138,7 +140,8 @@ fn test_app_runtime_mcp_bridge_commands_and_cursor_emulation() {
     let mut runtime = AppRuntime::new(view, 800.0, 600.0, 1.0);
 
     // 1. Session info command
-    let (info_res, _) = strata::mcp_bridge::execute_mcp_command_core(&mut runtime, "session_info", json!({}));
+    let (info_res, _) =
+        strata::mcp_bridge::execute_mcp_command_core(&mut runtime, "session_info", json!({}));
     let info = info_res.expect("session_info must succeed");
     assert_eq!(info["viewport_width"], 800.0);
     assert_eq!(info["viewport_height"], 600.0);
@@ -151,7 +154,10 @@ fn test_app_runtime_mcp_bridge_commands_and_cursor_emulation() {
     );
     let move_val = move_res.expect("mouse_move must succeed");
     assert_eq!(move_val["smooth"], true);
-    assert_eq!(runtime.mcp_cursor.as_ref().unwrap().cursor_icon, PlatformCursorIcon::Pointer);
+    assert_eq!(
+        runtime.mcp_cursor.as_ref().unwrap().cursor_icon,
+        PlatformCursorIcon::Pointer
+    );
 
     // 3. Mouse move to input field (within bounds x: 16..111, y: 72..112)
     let (move_input, _) = strata::mcp_bridge::execute_mcp_command_core(
@@ -160,7 +166,10 @@ fn test_app_runtime_mcp_bridge_commands_and_cursor_emulation() {
         json!({ "x": 50.0, "y": 85.0, "smooth": false }),
     );
     let _ = move_input.expect("mouse_move to input must succeed");
-    assert_eq!(runtime.mcp_cursor.as_ref().unwrap().cursor_icon, PlatformCursorIcon::Text);
+    assert_eq!(
+        runtime.mcp_cursor.as_ref().unwrap().cursor_icon,
+        PlatformCursorIcon::Text
+    );
 
     // 4. Click input to focus
     let (click_res, _) = strata::mcp_bridge::execute_mcp_command_core(
@@ -178,7 +187,10 @@ fn test_app_runtime_mcp_bridge_commands_and_cursor_emulation() {
         json!({ "text": "Strata MCP" }),
     );
     assert!(type_res.is_ok());
-    assert_eq!(runtime.active_focus.as_ref().unwrap().state.text.get(), "Strata MCP");
+    assert_eq!(
+        runtime.active_focus.as_ref().unwrap().state.text.get(),
+        "Strata MCP"
+    );
 
     // 6. Keyboard key: Backspace
     let (key_res, _) = strata::mcp_bridge::execute_mcp_command_core(
@@ -187,7 +199,10 @@ fn test_app_runtime_mcp_bridge_commands_and_cursor_emulation() {
         json!({ "key": "backspace" }),
     );
     assert!(key_res.is_ok());
-    assert_eq!(runtime.active_focus.as_ref().unwrap().state.text.get(), "Strata MC");
+    assert_eq!(
+        runtime.active_focus.as_ref().unwrap().state.text.get(),
+        "Strata MC"
+    );
 
     // 7. Safe execute_actions batch
     let (batch_res, _) = strata::mcp_bridge::execute_mcp_command_core(
@@ -205,7 +220,8 @@ fn test_app_runtime_mcp_bridge_commands_and_cursor_emulation() {
     assert_eq!(batch["executed_actions"], 3);
 
     // 8. Screenshot capture
-    let (shot_res, _) = strata::mcp_bridge::execute_mcp_command_core(&mut runtime, "take_screenshot", json!({}));
+    let (shot_res, _) =
+        strata::mcp_bridge::execute_mcp_command_core(&mut runtime, "take_screenshot", json!({}));
     let shot = shot_res.expect("take_screenshot must succeed");
     let b64 = shot["png_base64"].as_str().unwrap();
     assert!(!b64.is_empty());
@@ -213,7 +229,6 @@ fn test_app_runtime_mcp_bridge_commands_and_cursor_emulation() {
     let raw = strata_mcp::client::StrataDevClient::default();
     let _ = raw;
 }
-
 
 #[test]
 fn test_strata_run_app_security_and_rce_mitigation() {
@@ -229,14 +244,21 @@ fn test_strata_run_app_security_and_rce_mitigation() {
     }
 
     // 2. Path outside authorized workspace root rejected
-    let outside_path = if cfg!(windows) { "C:\\Windows\\System32" } else { "/tmp" };
+    let outside_path = if cfg!(windows) {
+        "C:\\Windows\\System32"
+    } else {
+        "/tmp"
+    };
     let outside_res = server.call_tool(
         "strata_run_app",
         json!({ "mode": "debug", "project_dir": outside_path }),
     );
     assert_eq!(outside_res.is_error, Some(true));
     if let McpContent::Text { text } = &outside_res.content[0] {
-        assert!(text.contains("outside the authorized workspace roots") || text.contains("does not contain a Cargo.toml"));
+        assert!(
+            text.contains("outside the authorized workspace roots")
+                || text.contains("does not contain a Cargo.toml")
+        );
     } else {
         panic!("Expected text response");
     }
@@ -253,4 +275,3 @@ fn test_strata_run_app_security_and_rce_mitigation() {
         panic!("Expected text response");
     }
 }
-

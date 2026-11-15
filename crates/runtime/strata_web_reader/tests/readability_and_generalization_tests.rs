@@ -134,7 +134,10 @@ fn test_generic_news_article_reader_extraction() {
 
     // Verify primary content extraction
     let primary = WebTranspiler::extract_primary_content(&nodes);
-    assert!(!primary.is_empty(), "Primary content slice must not be empty");
+    assert!(
+        !primary.is_empty(),
+        "Primary content slice must not be empty"
+    );
 
     // The primary content must contain the article text and NOT site header or footer
     let transpiler = WebTranspiler::new(&theme).with_render_mode(RenderMode::Reader);
@@ -188,7 +191,10 @@ fn test_generic_blog_without_article_tag() {
     let blueprint = transpiler.transpile(&nodes, None, &media);
 
     assert!(
-        contains_text(&blueprint, "Compiling WebAssembly with Zero-Cost Cranelift Backends"),
+        contains_text(
+            &blueprint,
+            "Compiling WebAssembly with Zero-Cost Cranelift Backends"
+        ),
         "Must extract story heading from generic story-body div"
     );
     assert!(

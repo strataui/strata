@@ -75,7 +75,10 @@ pub fn unit_normal(tangent: Point2D) -> Point2D {
 }
 
 /// Expands a quadratic curve into parallel offset curves at distance `+offset` and `-offset`.
-pub fn offset_quadratic(curve: &QuadraticBezier, offset: f32) -> (QuadraticBezier, QuadraticBezier) {
+pub fn offset_quadratic(
+    curve: &QuadraticBezier,
+    offset: f32,
+) -> (QuadraticBezier, QuadraticBezier) {
     let n0 = unit_normal(curve.tangent(0.0));
     let n1 = unit_normal(curve.tangent(0.5));
     let n2 = unit_normal(curve.tangent(1.0));
@@ -146,7 +149,9 @@ pub fn expand_stroke_quadratics(
         }
         LineCap::Square => {
             let tangent = quads.last().unwrap().tangent(1.0);
-            let len = (tangent.x * tangent.x + tangent.y * tangent.y).sqrt().max(1e-4);
+            let len = (tangent.x * tangent.x + tangent.y * tangent.y)
+                .sqrt()
+                .max(1e-4);
             let forward = Point2D::new(tangent.x / len * half_width, tangent.y / len * half_width);
 
             let ext_outer = Point2D::new(last_outer.x + forward.x, last_outer.y + forward.y);
@@ -161,7 +166,9 @@ pub fn expand_stroke_quadratics(
         }
         LineCap::Round => {
             let tangent = quads.last().unwrap().tangent(1.0);
-            let len = (tangent.x * tangent.x + tangent.y * tangent.y).sqrt().max(1e-4);
+            let len = (tangent.x * tangent.x + tangent.y * tangent.y)
+                .sqrt()
+                .max(1e-4);
             let forward = Point2D::new(tangent.x / len * half_width, tangent.y / len * half_width);
             let apex = Point2D::new(
                 (last_outer.x + last_inner.x) * 0.5 + forward.x,
@@ -188,8 +195,11 @@ pub fn expand_stroke_quadratics(
         }
         LineCap::Square => {
             let tangent = quads.first().unwrap().tangent(0.0);
-            let len = (tangent.x * tangent.x + tangent.y * tangent.y).sqrt().max(1e-4);
-            let backward = Point2D::new(-tangent.x / len * half_width, -tangent.y / len * half_width);
+            let len = (tangent.x * tangent.x + tangent.y * tangent.y)
+                .sqrt()
+                .max(1e-4);
+            let backward =
+                Point2D::new(-tangent.x / len * half_width, -tangent.y / len * half_width);
 
             let ext_inner = Point2D::new(first_inner.x + backward.x, first_inner.y + backward.y);
             let ext_outer = Point2D::new(first_outer.x + backward.x, first_outer.y + backward.y);
@@ -203,8 +213,11 @@ pub fn expand_stroke_quadratics(
         }
         LineCap::Round => {
             let tangent = quads.first().unwrap().tangent(0.0);
-            let len = (tangent.x * tangent.x + tangent.y * tangent.y).sqrt().max(1e-4);
-            let backward = Point2D::new(-tangent.x / len * half_width, -tangent.y / len * half_width);
+            let len = (tangent.x * tangent.x + tangent.y * tangent.y)
+                .sqrt()
+                .max(1e-4);
+            let backward =
+                Point2D::new(-tangent.x / len * half_width, -tangent.y / len * half_width);
             let apex = Point2D::new(
                 (first_inner.x + first_outer.x) * 0.5 + backward.x,
                 (first_inner.y + first_outer.y) * 0.5 + backward.y,

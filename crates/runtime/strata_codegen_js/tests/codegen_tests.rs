@@ -40,7 +40,9 @@ fn test_transpiler_nested_blueprints() {
     };
 
     let component_js = JsTranspiler::emit_esm_component("Dashboard", &blueprint, "./runtime.js");
-    assert!(component_js.contains("import { el, txt, frag, on, bindText, bindAttr, bindClass, mount } from './runtime.js';"));
+    assert!(component_js.contains(
+        "import { el, txt, frag, on, bindText, bindAttr, bindClass, mount } from './runtime.js';"
+    ));
     assert!(component_js.contains("export function Dashboard() {"));
     assert!(component_js.contains("el('div', 'flex items-center', {'id': 'container', 'onclick': (e) => { /* event handler */ }}, ["));
     assert!(component_js.contains("el('h1', 'font-bold', {}, ["));
@@ -81,7 +83,8 @@ fn test_css_extractor_classes_and_rules() {
 
 #[test]
 fn test_wasm_canvas_harness_generation() {
-    let html = WasmHarnessGenerator::generate_index_html("Strata Studio", "strata-canvas", "bundle.js");
+    let html =
+        WasmHarnessGenerator::generate_index_html("Strata Studio", "strata-canvas", "bundle.js");
     assert!(html.contains("<title>Strata Studio</title>"));
     assert!(html.contains("<canvas id=\"strata-canvas\""));
     assert!(html.contains("<script type=\"module\" src=\"bundle.js\"></script>"));
@@ -110,7 +113,9 @@ fn test_unified_web_target_builder_pure_js_mode() {
     assert_eq!(artifacts.mode, WebTargetMode::PureJsDom);
     assert!(artifacts.html.contains("<title>Apex Storefront</title>"));
     assert!(artifacts.html.contains("<div id=\"apex-root\"></div>"));
-    assert!(artifacts.html.contains("<link rel=\"stylesheet\" href=\"./styles.css\">"));
+    assert!(artifacts
+        .html
+        .contains("<link rel=\"stylesheet\" href=\"./styles.css\">"));
     assert!(artifacts.css.is_some());
     assert!(artifacts.runtime_js.is_some());
     assert!(artifacts.wasm_loader.is_none());

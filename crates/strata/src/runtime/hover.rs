@@ -65,7 +65,10 @@ impl AppRuntime {
             return;
         }
         for (idx, child_bp, child_layout) in Self::paired_blueprint_children(bp, layout) {
-            if matches!(child_layout.style.display, strata_style::types::Display::None) {
+            if matches!(
+                child_layout.style.display,
+                strata_style::types::Display::None
+            ) {
                 continue;
             }
             current_path.push(idx);
@@ -133,7 +136,10 @@ impl AppRuntime {
         let parent_display = Some(layout.style.display);
         for (idx, child_bp, child_layout) in Self::paired_blueprint_children(bp, layout) {
             if child_layout.is_top_layer
-                || matches!(child_layout.style.display, strata_style::types::Display::None)
+                || matches!(
+                    child_layout.style.display,
+                    strata_style::types::Display::None
+                )
                 || matches!(
                     child_layout.style.visibility,
                     strata_style::types::Visibility::Hidden
@@ -230,21 +236,19 @@ impl AppRuntime {
         let paired = Self::paired_blueprint_children(blueprint, layout);
         for &(idx, child_bp, child_layout) in paired.iter().rev() {
             if child_layout.is_top_layer
-                || matches!(child_layout.style.display, strata_style::types::Display::None)
+                || matches!(
+                    child_layout.style.display,
+                    strata_style::types::Display::None
+                )
                 || Self::establishes_stacking_context_in(child_layout, parent_display, false)
                 || child_layout.style.position != strata_style::types::Position::Static
             {
                 continue;
             }
             current_path.push(idx);
-            if let Some(res) = Self::hit_test_node_path_in_flow(
-                child_bp,
-                child_layout,
-                px,
-                py,
-                &[],
-                current_path,
-            ) {
+            if let Some(res) =
+                Self::hit_test_node_path_in_flow(child_bp, child_layout, px, py, &[], current_path)
+            {
                 return Some(res);
             }
             current_path.pop();
@@ -347,7 +351,10 @@ impl AppRuntime {
             let paired = Self::paired_blueprint_children(blueprint, layout);
             for &(idx, child_bp, child_layout) in paired.iter().rev() {
                 if child_layout.is_top_layer
-                    || matches!(child_layout.style.display, strata_style::types::Display::None)
+                    || matches!(
+                        child_layout.style.display,
+                        strata_style::types::Display::None
+                    )
                     || Self::establishes_stacking_context_in(child_layout, parent_display, false)
                     || child_layout.style.position != strata_style::types::Position::Static
                 {
@@ -713,24 +720,26 @@ impl AppRuntime {
 
         self.dispatch_boundary_events(old_path.as_deref(), new_path.as_deref(), px, py);
 
-        let old_has_effects = old_path.as_deref().is_some_and(|p| {
-            Self::node_path_has_hover_effects(&self.root_blueprint, p)
-        });
-        let new_has_effects = new_path.as_deref().is_some_and(|p| {
-            Self::node_path_has_hover_effects(&self.root_blueprint, p)
-        });
+        let old_has_effects = old_path
+            .as_deref()
+            .is_some_and(|p| Self::node_path_has_hover_effects(&self.root_blueprint, p));
+        let new_has_effects = new_path
+            .as_deref()
+            .is_some_and(|p| Self::node_path_has_hover_effects(&self.root_blueprint, p));
 
         if old_has_effects || new_has_effects {
-            let has_listeners = old_path.as_deref().is_some_and(|p| {
-                Self::path_has_hover_listeners(&self.root_blueprint, p)
-            }) || new_path.as_deref().is_some_and(|p| {
-                Self::path_has_hover_listeners(&self.root_blueprint, p)
-            });
-            let layout_required = old_path.as_deref().is_some_and(|p| {
-                Self::path_hover_affects_layout(&self.root_blueprint, p)
-            }) || new_path.as_deref().is_some_and(|p| {
-                Self::path_hover_affects_layout(&self.root_blueprint, p)
-            });
+            let has_listeners = old_path
+                .as_deref()
+                .is_some_and(|p| Self::path_has_hover_listeners(&self.root_blueprint, p))
+                || new_path
+                    .as_deref()
+                    .is_some_and(|p| Self::path_has_hover_listeners(&self.root_blueprint, p));
+            let layout_required = old_path
+                .as_deref()
+                .is_some_and(|p| Self::path_hover_affects_layout(&self.root_blueprint, p))
+                || new_path
+                    .as_deref()
+                    .is_some_and(|p| Self::path_hover_affects_layout(&self.root_blueprint, p));
             if layout_required || has_listeners {
                 self.hover_paint_only = false;
                 self.rebuild_layout_tree();
@@ -761,10 +770,7 @@ impl AppRuntime {
             self.register_keyframes_stylesheet(sheet);
         }
         let ctx = self.interaction_context();
-        let new_tree = Self::build_layout_tree_with_interaction(
-            &self.root_blueprint,
-            &ctx,
-        );
+        let new_tree = Self::build_layout_tree_with_interaction(&self.root_blueprint, &ctx);
         let mut previous = std::mem::replace(&mut self.layout_root, new_tree);
         let transplanted = Self::transplant_layout_state(&mut previous, &mut self.layout_root);
         let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
@@ -793,7 +799,10 @@ impl AppRuntime {
     }
 
     /// Copies resolved geometry and text state from a previous tree into a newly styled tree.
-    pub(crate) fn transplant_layout_state(previous: &mut LayoutNode, next: &mut LayoutNode) -> bool {
+    pub(crate) fn transplant_layout_state(
+        previous: &mut LayoutNode,
+        next: &mut LayoutNode,
+    ) -> bool {
         if previous.children.len() != next.children.len() {
             return false;
         }
@@ -864,16 +873,16 @@ impl AppRuntime {
             self.last_mouse_pos.0,
             self.last_mouse_pos.1,
         );
-        let old_has_effects = old_path.as_deref().is_some_and(|p| {
-            Self::node_path_has_hover_effects(&self.root_blueprint, p)
-        });
+        let old_has_effects = old_path
+            .as_deref()
+            .is_some_and(|p| Self::node_path_has_hover_effects(&self.root_blueprint, p));
         if old_has_effects {
-            let has_listeners = old_path.as_deref().is_some_and(|p| {
-                Self::path_has_hover_listeners(&self.root_blueprint, p)
-            });
-            let layout_required = old_path.as_deref().is_some_and(|p| {
-                Self::path_hover_affects_layout(&self.root_blueprint, p)
-            });
+            let has_listeners = old_path
+                .as_deref()
+                .is_some_and(|p| Self::path_has_hover_listeners(&self.root_blueprint, p));
+            let layout_required = old_path
+                .as_deref()
+                .is_some_and(|p| Self::path_hover_affects_layout(&self.root_blueprint, p));
             if layout_required || has_listeners {
                 self.hover_paint_only = false;
                 self.rebuild_layout_tree();
@@ -891,5 +900,4 @@ impl AppRuntime {
             false
         }
     }
-
 }

@@ -1,10 +1,10 @@
 //! Cross-Platform Physical Directory Resolution for VfsRoot.
 
+use crate::types::VfsRoot;
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::RwLock;
-use crate::types::VfsRoot;
 
 static APP_ID: RwLock<Option<String>> = RwLock::new(None);
 static TEST_OVERRIDES: RwLock<Option<HashMap<VfsRoot, PathBuf>>> = RwLock::new(None);
@@ -106,7 +106,9 @@ pub fn resolve_root_dir(root: VfsRoot) -> PathBuf {
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn resolve_linux(root: VfsRoot, app_id: &str) -> PathBuf {
-    let home = env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/tmp"));
+    let home = env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp"));
 
     match root {
         VfsRoot::AppData => {
@@ -123,9 +125,7 @@ fn resolve_linux(root: VfsRoot, app_id: &str) -> PathBuf {
                 home.join(".cache").join(app_id)
             }
         }
-        VfsRoot::Documents => {
-            home.join("Documents")
-        }
+        VfsRoot::Documents => home.join("Documents"),
         VfsRoot::Temp => {
             if let Ok(tmp) = env::var("TMPDIR") {
                 PathBuf::from(tmp).join(app_id)
@@ -138,18 +138,14 @@ fn resolve_linux(root: VfsRoot, app_id: &str) -> PathBuf {
 
 #[cfg(target_os = "macos")]
 fn resolve_macos(root: VfsRoot, app_id: &str) -> PathBuf {
-    let home = env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/tmp"));
+    let home = env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp"));
 
     match root {
-        VfsRoot::AppData => {
-            home.join("Library/Application Support").join(app_id)
-        }
-        VfsRoot::Cache => {
-            home.join("Library/Caches").join(app_id)
-        }
-        VfsRoot::Documents => {
-            home.join("Documents")
-        }
+        VfsRoot::AppData => home.join("Library/Application Support").join(app_id),
+        VfsRoot::Cache => home.join("Library/Caches").join(app_id),
+        VfsRoot::Documents => home.join("Documents"),
         VfsRoot::Temp => {
             if let Ok(tmp) = env::var("TMPDIR") {
                 PathBuf::from(tmp).join(app_id)
@@ -162,10 +158,16 @@ fn resolve_macos(root: VfsRoot, app_id: &str) -> PathBuf {
 
 #[cfg(target_os = "windows")]
 fn resolve_windows(root: VfsRoot, app_id: &str) -> PathBuf {
-    let local_app_data = env::var("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(|_| {
-        env::var("USERPROFILE").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("C:\\"))
-    });
-    let user_profile = env::var("USERPROFILE").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("C:\\"));
+    let local_app_data = env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            env::var("USERPROFILE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("C:\\"))
+        });
+    let user_profile = env::var("USERPROFILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("C:\\"));
 
     match root {
         VfsRoot::AppData => local_app_data.join(app_id),

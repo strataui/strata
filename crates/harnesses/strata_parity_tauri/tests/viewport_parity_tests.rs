@@ -50,10 +50,10 @@ fn test_strata_maximized_viewport_rendering() {
     let media_ctx = strata_style::MediaContext::new(1280.0, 720.0, true);
     let transpiler = strata_web_reader::WebTranspiler::new(&theme);
     let bp = transpiler.transpile_full_document(&nodes, &media_ctx);
-    let mut runtime = strata::AppRuntime::new(strata::prelude::View { root: bp }, 1280.0, 720.0, 1.0);
+    let mut runtime =
+        strata::AppRuntime::new(strata::prelude::View { root: bp }, 1280.0, 720.0, 1.0);
     runtime.layout_root.compute_layout(1280.0, 720.0);
     println!("Root box: {:?}", runtime.layout_root.geometry.border_box);
-
 
     for cmd in runtime.display_list.commands() {
         match cmd {
@@ -74,7 +74,11 @@ fn test_strata_maximized_viewport_rendering() {
 
     let out_1080p = format!("{out_dir}/strata_maximized_1920x1080.png");
     let res_1080p = render_strata_web_viewport(TEST_ARTICLE_HTML, 1920, 1080, 0.0, &out_1080p);
-    assert!(res_1080p.is_ok(), "1080p render must succeed: {:?}", res_1080p);
+    assert!(
+        res_1080p.is_ok(),
+        "1080p render must succeed: {:?}",
+        res_1080p
+    );
     assert!(Path::new(&out_1080p).exists(), "1080p PNG must exist");
 
     let out_720p = format!("{out_dir}/strata_maximized_1280x720.png");
@@ -84,8 +88,13 @@ fn test_strata_maximized_viewport_rendering() {
 
     // Scrolled state
     let out_scrolled = format!("{out_dir}/strata_maximized_1280x720_scrolled.png");
-    let res_scrolled = render_strata_web_viewport(TEST_ARTICLE_HTML, 1280, 720, 200.0, &out_scrolled);
-    assert!(res_scrolled.is_ok(), "Scrolled render must succeed: {:?}", res_scrolled);
+    let res_scrolled =
+        render_strata_web_viewport(TEST_ARTICLE_HTML, 1280, 720, 200.0, &out_scrolled);
+    assert!(
+        res_scrolled.is_ok(),
+        "Scrolled render must succeed: {:?}",
+        res_scrolled
+    );
     assert!(Path::new(&out_scrolled).exists(), "Scrolled PNG must exist");
 }
 
@@ -93,7 +102,9 @@ fn test_strata_maximized_viewport_rendering() {
 fn test_chromium_headless_and_ssim_comparison() {
     let chrome_bin = find_chromium_binary(None);
     if chrome_bin.is_none() {
-        eprintln!("[SKIP] Chromium/Chrome binary not found on this system, skipping headless Chrome diff");
+        eprintln!(
+            "[SKIP] Chromium/Chrome binary not found on this system, skipping headless Chrome diff"
+        );
         return;
     }
 
@@ -105,16 +116,26 @@ fn test_chromium_headless_and_ssim_comparison() {
     let heatmap_png = format!("{out_dir}/diff_heatmap_1280x720.png");
 
     let strata_res = render_strata_web_viewport(TEST_ARTICLE_HTML, 1280, 720, 0.0, &strata_png);
-    assert!(strata_res.is_ok(), "Strata render must succeed: {:?}", strata_res);
+    assert!(
+        strata_res.is_ok(),
+        "Strata render must succeed: {:?}",
+        strata_res
+    );
 
-    let chrom_res = render_chromium_headless(TEST_ARTICLE_HTML, 1280, 720, 0.0, &chromium_png, None);
-    assert!(chrom_res.is_ok(), "Chromium render must succeed: {:?}", chrom_res);
+    let chrom_res =
+        render_chromium_headless(TEST_ARTICLE_HTML, 1280, 720, 0.0, &chromium_png, None);
+    assert!(
+        chrom_res.is_ok(),
+        "Chromium render must succeed: {:?}",
+        chrom_res
+    );
 
     let metrics = compare_screenshots(
         Path::new(&chromium_png),
         Path::new(&strata_png),
         Path::new(&heatmap_png),
-    ).expect("Differential comparison must succeed");
+    )
+    .expect("Differential comparison must succeed");
 
     println!(
         "[Parity Test Result] SSIM: {:.4}, Exact: {:.2}%, Perceptual: {:.2}%, Mean Delta E: {:.2}",
@@ -135,13 +156,20 @@ fn test_chromium_headless_and_ssim_comparison() {
         "Perceptual match percentage ({:.2}%) must meet threshold",
         metrics.perceptual_match_percentage
     );
-    assert!(Path::new(&heatmap_png).exists(), "Diff heatmap must be generated");
+    assert!(
+        Path::new(&heatmap_png).exists(),
+        "Diff heatmap must be generated"
+    );
 }
 
 #[test]
 fn test_synthetic_wheel_scroll_benchmark_60hz_and_120hz() {
-    let scorecard_60hz = run_synthetic_wheel_scroll_benchmark(TEST_ARTICLE_HTML, 1280, 720, 60.0, 60);
-    assert!(scorecard_60hz.monotonic_convergence, "60Hz scroll must converge monotonically");
+    let scorecard_60hz =
+        run_synthetic_wheel_scroll_benchmark(TEST_ARTICLE_HTML, 1280, 720, 60.0, 60);
+    assert!(
+        scorecard_60hz.monotonic_convergence,
+        "60Hz scroll must converge monotonically"
+    );
     assert!(
         scorecard_60hz.p50_frame_time_ms < 16.6,
         "60Hz p50 frame time ({:.2}ms) must be within 16.6ms budget",
@@ -153,8 +181,12 @@ fn test_synthetic_wheel_scroll_benchmark_60hz_and_120hz() {
         scorecard_60hz.cpu_utilization_pct
     );
 
-    let scorecard_120hz = run_synthetic_wheel_scroll_benchmark(TEST_ARTICLE_HTML, 1280, 720, 120.0, 60);
-    assert!(scorecard_120hz.monotonic_convergence, "120Hz scroll must converge monotonically");
+    let scorecard_120hz =
+        run_synthetic_wheel_scroll_benchmark(TEST_ARTICLE_HTML, 1280, 720, 120.0, 60);
+    assert!(
+        scorecard_120hz.monotonic_convergence,
+        "120Hz scroll must converge monotonically"
+    );
     assert!(
         scorecard_120hz.p50_frame_time_ms < 8.33,
         "120Hz p50 frame time ({:.2}ms) must be within 8.33ms budget",
@@ -166,7 +198,9 @@ fn test_synthetic_wheel_scroll_benchmark_60hz_and_120hz() {
 fn test_synchronized_multi_offset_parity_suite() {
     let chrome_bin = find_chromium_binary(None);
     if chrome_bin.is_none() {
-        eprintln!("[SKIP] Chromium/Chrome binary not found on this system, skipping multi-offset suite");
+        eprintln!(
+            "[SKIP] Chromium/Chrome binary not found on this system, skipping multi-offset suite"
+        );
         return;
     }
 
@@ -182,15 +216,23 @@ fn test_synchronized_multi_offset_parity_suite() {
         TEST_ARTICLE_HTML,
         "multi_offset",
         &config,
-    ).expect("Synchronized parity suite must succeed");
+    )
+    .expect("Synchronized parity suite must succeed");
 
     assert_eq!(suite_results.len(), 2);
     for res in suite_results {
         println!(
             "[Multi-Offset Snapshot] y={:.0}: SSIM={:.4}, Exact={:.2}%, Perceptual={:.2}%",
-            res.scroll_y, res.metrics.ssim_score, res.metrics.exact_match_percentage, res.metrics.perceptual_match_percentage
+            res.scroll_y,
+            res.metrics.ssim_score,
+            res.metrics.exact_match_percentage,
+            res.metrics.perceptual_match_percentage
         );
-        assert!(res.metrics.ssim_score >= 0.70, "SSIM must be >= 0.70 at offset {}", res.scroll_y);
+        assert!(
+            res.metrics.ssim_score >= 0.70,
+            "SSIM must be >= 0.70 at offset {}",
+            res.scroll_y
+        );
         assert!(Path::new(&res.strata_image_path).exists());
         assert!(Path::new(&res.chromium_image_path).exists());
         assert!(Path::new(&res.heatmap_path).exists());

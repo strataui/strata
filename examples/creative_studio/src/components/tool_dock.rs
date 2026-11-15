@@ -1,7 +1,7 @@
 //! Floating Tool Dock for Strata Creative Studio.
 
-use strata::prelude::*;
 use crate::state::{StudioState, Tool};
+use strata::prelude::*;
 
 #[component]
 pub fn ToolDock(state: StudioState) -> View {

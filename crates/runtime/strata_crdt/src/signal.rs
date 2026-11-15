@@ -1,12 +1,12 @@
 //! Replicated reactive signal integrating CRDT state with Strata UI listener notifications and fine-grained reactive Signal graphs.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
 use crate::clock::{LamportClock, PeerId};
 use crate::counter::PnCounter;
 use crate::lww::LwwRegister;
 use crate::sync::SyncMessage;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 
 type SubscriberCallback = Box<dyn Fn() + Send + Sync>;
 
@@ -58,7 +58,10 @@ impl<T: Clone> ReplicatedSignal<T> {
     /// Subscribes a listener callback triggered on every state update.
     pub fn subscribe<F: Fn() + Send + Sync + 'static>(&self, callback: F) -> usize {
         let id = self.next_sub_id.fetch_add(1, Ordering::SeqCst);
-        self.subscribers.lock().unwrap().push((id, Box::new(callback)));
+        self.subscribers
+            .lock()
+            .unwrap()
+            .push((id, Box::new(callback)));
         id
     }
 
@@ -182,7 +185,11 @@ impl<T: Clone + Send + 'static> CrdtSignalStore<T> {
     }
 
     /// Merge from a sync message payload.
-    pub fn merge_sync_message(&self, msg: &SyncMessage, deserialize: impl Fn(&[u8]) -> Option<T>) -> bool {
+    pub fn merge_sync_message(
+        &self,
+        msg: &SyncMessage,
+        deserialize: impl Fn(&[u8]) -> Option<T>,
+    ) -> bool {
         match msg {
             SyncMessage::RegisterDelta { clock, payload, .. } => {
                 if let Some(val) = deserialize(payload) {
@@ -197,7 +204,11 @@ impl<T: Clone + Send + 'static> CrdtSignalStore<T> {
     }
 
     /// Export the local state as a sync message.
-    pub fn export_sync_message(&self, key: impl Into<String>, serialize: impl Fn(&T) -> Vec<u8>) -> SyncMessage {
+    pub fn export_sync_message(
+        &self,
+        key: impl Into<String>,
+        serialize: impl Fn(&T) -> Vec<u8>,
+    ) -> SyncMessage {
         let clock = *self.clock.lock().unwrap();
         let val = self.get();
         SyncMessage::RegisterDelta {

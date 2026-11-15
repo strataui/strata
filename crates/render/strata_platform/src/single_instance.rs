@@ -79,7 +79,11 @@ pub fn decode_args(payload: &[u8]) -> Vec<String> {
         if raw.contains('\0') {
             return raw.split('\0').map(|s| s.to_string()).collect();
         }
-        return raw.lines().map(|s| s.to_string()).filter(|s| !s.is_empty()).collect();
+        return raw
+            .lines()
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
     }
 
     Vec::new()
@@ -139,7 +143,10 @@ impl SingleInstanceLock {
                             ));
                         }
                         if meta.permissions().mode() & 0o777 != 0o700 {
-                            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+                            let _ = std::fs::set_permissions(
+                                &dir,
+                                std::fs::Permissions::from_mode(0o700),
+                            );
                         }
                     } else {
                         let mut builder = std::fs::DirBuilder::new();
@@ -156,7 +163,8 @@ impl SingleInstanceLock {
                                 format!("Security violation: created runtime directory {:?} failed verification", dir),
                             ));
                         }
-                        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+                        let _ =
+                            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
                     }
                     dir
                 }
@@ -241,7 +249,8 @@ impl SingleInstanceLock {
         match UnixListener::bind(&socket_path) {
             Ok(listener) => {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600));
+                let _ =
+                    std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600));
                 Ok(SingleInstanceStatus::Primary(Self::establish_unix(
                     app_id,
                     listener,
@@ -265,7 +274,10 @@ impl SingleInstanceLock {
                         let _ = std::fs::remove_file(&socket_path);
                         let listener = UnixListener::bind(&socket_path)?;
                         use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600));
+                        let _ = std::fs::set_permissions(
+                            &socket_path,
+                            std::fs::Permissions::from_mode(0o600),
+                        );
                         Ok(SingleInstanceStatus::Primary(Self::establish_unix(
                             app_id,
                             listener,
@@ -365,7 +377,8 @@ impl SingleInstanceLock {
 
         let running = Arc::new(AtomicBool::new(true));
         let on_args = Arc::new(on_secondary_args);
-        let thread = match windows_ipc::spawn_server_listener(handle, Arc::clone(&running), on_args) {
+        let thread = match windows_ipc::spawn_server_listener(handle, Arc::clone(&running), on_args)
+        {
             Ok(t) => t,
             Err(error) => {
                 windows_ipc::close(handle);
@@ -571,7 +584,11 @@ mod windows_ipc {
 
         let mut sa = SecurityAttributes {
             n_length: std::mem::size_of::<SecurityAttributes>() as u32,
-            lp_security_descriptor: if has_sd != 0 { p_sd } else { std::ptr::null_mut() },
+            lp_security_descriptor: if has_sd != 0 {
+                p_sd
+            } else {
+                std::ptr::null_mut()
+            },
             b_inherit_handle: 0,
         };
 

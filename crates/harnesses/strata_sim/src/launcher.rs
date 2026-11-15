@@ -39,8 +39,18 @@ impl HomeScreenState {
     pub fn new() -> Self {
         let default_apps = vec![
             AppMetadata::new("com.strata.saas", "Cloud SaaS", "server", "Productivity"),
-            AppMetadata::new("com.strata.storefront", "Apex Store", "shopping-cart", "Shopping"),
-            AppMetadata::new("com.strata.studio", "Creative Studio", "palette", "Graphics"),
+            AppMetadata::new(
+                "com.strata.storefront",
+                "Apex Store",
+                "shopping-cart",
+                "Shopping",
+            ),
+            AppMetadata::new(
+                "com.strata.studio",
+                "Creative Studio",
+                "palette",
+                "Graphics",
+            ),
             AppMetadata::new("com.strata.settings", "Settings", "settings", "System"),
             AppMetadata::new("com.strata.camera", "Camera", "camera", "Media"),
             AppMetadata::new("com.strata.browser", "Web Engine", "globe", "Utility"),
@@ -48,8 +58,18 @@ impl HomeScreenState {
 
         let dock = vec![
             AppMetadata::new("com.strata.phone", "Phone", "phone", "System"),
-            AppMetadata::new("com.strata.messages", "Messages", "message-square", "System"),
-            AppMetadata::new("com.strata.storefront", "Apex Store", "shopping-cart", "Shopping"),
+            AppMetadata::new(
+                "com.strata.messages",
+                "Messages",
+                "message-square",
+                "System",
+            ),
+            AppMetadata::new(
+                "com.strata.storefront",
+                "Apex Store",
+                "shopping-cart",
+                "Shopping",
+            ),
             AppMetadata::new("com.strata.saas", "Cloud SaaS", "server", "Productivity"),
         ];
 
@@ -69,7 +89,9 @@ impl HomeScreenState {
             let q = self.search_query.to_lowercase();
             self.grid_apps
                 .iter()
-                .filter(|a| a.name.to_lowercase().contains(&q) || a.bundle_id.to_lowercase().contains(&q))
+                .filter(|a| {
+                    a.name.to_lowercase().contains(&q) || a.bundle_id.to_lowercase().contains(&q)
+                })
                 .collect()
         }
     }

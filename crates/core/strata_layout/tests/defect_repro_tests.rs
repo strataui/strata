@@ -561,9 +561,18 @@ fn bug1_nested_percentage_flex_grid_and_table_do_not_square_percentages() {
     inspector_pane_style.width = Dimension::Percent(30.0);
     inspector_pane_style.height = Dimension::Percent(100.0);
 
-    let left_pane = LayoutNode::with_children(left_pane_style, vec![LayoutNode::new(full_child_style.clone())]);
-    let center_pane = LayoutNode::with_children(center_pane_style, vec![LayoutNode::new(full_child_style.clone())]);
-    let inspector_pane = LayoutNode::with_children(inspector_pane_style, vec![LayoutNode::new(full_child_style)]);
+    let left_pane = LayoutNode::with_children(
+        left_pane_style,
+        vec![LayoutNode::new(full_child_style.clone())],
+    );
+    let center_pane = LayoutNode::with_children(
+        center_pane_style,
+        vec![LayoutNode::new(full_child_style.clone())],
+    );
+    let inspector_pane = LayoutNode::with_children(
+        inspector_pane_style,
+        vec![LayoutNode::new(full_child_style)],
+    );
 
     let right_split = LayoutNode::with_children(
         right_split_style,
@@ -598,14 +607,17 @@ fn bug1_nested_percentage_flex_grid_and_table_do_not_square_percentages() {
     // Nested 76% -> 70% Grid pane (~764px) and 76% -> 30% Flex pane (~327px) must lay out children at full pane width
     assert!((center.geometry.border_box.width - 764.0).abs() <= 3.0);
     assert!(
-        (center.children[0].geometry.border_box.width - center.geometry.border_box.width).abs() <= 1.0,
+        (center.children[0].geometry.border_box.width - center.geometry.border_box.width).abs()
+            <= 1.0,
         "center grid child width {} != center pane width {}",
         center.children[0].geometry.border_box.width,
         center.geometry.border_box.width
     );
     assert!((inspector.geometry.border_box.width - 327.0).abs() <= 3.0);
     assert!(
-        (inspector.children[0].geometry.border_box.width - inspector.geometry.border_box.width).abs() <= 1.0,
+        (inspector.children[0].geometry.border_box.width - inspector.geometry.border_box.width)
+            .abs()
+            <= 1.0,
         "inspector child width {} != inspector pane width {}",
         inspector.children[0].geometry.border_box.width,
         inspector.geometry.border_box.width
@@ -644,10 +656,8 @@ fn bug2_column_flex1_propagates_grown_height_and_invalidates_zero_height_cache()
     inner_flex1_style.flex_basis = Dimension::Percent(0.0);
 
     let middle = LayoutNode::with_children(middle_style, vec![LayoutNode::new(inner_flex1_style)]);
-    let mut outer = LayoutNode::with_children(
-        outer_style,
-        vec![LayoutNode::new(header_style), middle],
-    );
+    let mut outer =
+        LayoutNode::with_children(outer_style, vec![LayoutNode::new(header_style), middle]);
 
     outer.compute_layout(1440.0, 900.0);
     assert!((outer.children[1].geometry.border_box.height - 870.0).abs() <= 1.0);
@@ -702,7 +712,8 @@ fn bug4_flex_children_never_permanently_mutate_to_inline_flex() {
         footer_row_style,
         vec![LayoutNode::new(pill.clone()), LayoutNode::new(pill)],
     );
-    let card = LayoutNode::with_children(card_style, vec![LayoutNode::new(header_style), footer_row]);
+    let card =
+        LayoutNode::with_children(card_style, vec![LayoutNode::new(header_style), footer_row]);
     let mut root = LayoutNode::with_children(outer_col, vec![card]);
 
     root.compute_layout(800.0, 400.0);
@@ -720,4 +731,3 @@ fn bug4_flex_children_never_permanently_mutate_to_inline_flex() {
         footer_node.children[1].geometry.border_box.x
     );
 }
-

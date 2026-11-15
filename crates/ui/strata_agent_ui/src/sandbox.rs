@@ -1,8 +1,8 @@
 //! Sandboxed execution environment applying validated UI patches to an isolated DOM tree.
 
-use std::collections::HashMap;
 use crate::delta::AgentPatch;
 use crate::schema::AgentSchemaValidator;
+use std::collections::HashMap;
 
 /// An isolated virtual node in the agent-generated UI hierarchy.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,7 +49,13 @@ impl AgentUiSandbox {
     /// Validates and applies a streaming agent patch. Returns Err if patch violates security rules.
     pub fn apply_patch(&mut self, patch: AgentPatch) -> Result<(), String> {
         match patch {
-            AgentPatch::InsertNode { node_id, parent_id, tag, props, text } => {
+            AgentPatch::InsertNode {
+                node_id,
+                parent_id,
+                tag,
+                props,
+                text,
+            } => {
                 // 1. Validate tag
                 self.validator.validate_tag(&tag)?;
 
@@ -82,7 +88,11 @@ impl AgentUiSandbox {
 
                 Ok(())
             }
-            AgentPatch::MutateProps { node_id, key, value } => {
+            AgentPatch::MutateProps {
+                node_id,
+                key,
+                value,
+            } => {
                 self.validator.validate_attribute(&key, &value)?;
                 if let Some(node) = self.nodes.get_mut(&node_id) {
                     node.props.insert(key, value);

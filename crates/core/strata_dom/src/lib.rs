@@ -41,7 +41,7 @@ pub mod reactive;
 pub mod spring;
 pub mod text_input;
 
-pub use classes::{ClassBitmask, ClassIter, ClassList, STANDARD_CLASSES, standard_class_index};
+pub use classes::{standard_class_index, ClassBitmask, ClassIter, ClassList, STANDARD_CLASSES};
 pub use events::{Event, EventDispatcher, EventPhase, EventType};
 pub use hooks::*;
 pub use ir::{
@@ -58,8 +58,8 @@ pub use reactive::{
     Signal, SignalId, SubscriberId, WriteSignal,
 };
 pub use spring::{SpringConfig, SpringSignal};
-pub use text_input::{InputKey, InputKeyResult, InputModifiers, TextInputState};
 pub use strata_primitives::EntityId;
+pub use text_input::{InputKey, InputKeyResult, InputModifiers, TextInputState};
 
 /// Trait abstracting event handlers accepting `()` or `(Event)`.
 pub trait EventHandlerMarker<Args> {
@@ -202,10 +202,7 @@ impl std::fmt::Debug for Attribute {
                 .debug_tuple("DirectStyle")
                 .field(&"<typed_style>")
                 .finish(),
-            Self::ScenePayload(_) => f
-                .debug_tuple("ScenePayload")
-                .field(&"<scene_3d>")
-                .finish(),
+            Self::ScenePayload(_) => f.debug_tuple("ScenePayload").field(&"<scene_3d>").finish(),
             Self::Entity(id) => f.debug_tuple("Entity").field(id).finish(),
         }
     }
@@ -319,7 +316,10 @@ impl NodeBlueprint {
     /// Mutably assigns or overrides the EntityId for an Element node blueprint.
     pub fn set_entity_id(&mut self, entity_id: EntityId) {
         if let Self::Element { attributes, .. } = self {
-            if let Some(pos) = attributes.iter().position(|a| matches!(a, Attribute::Entity(_))) {
+            if let Some(pos) = attributes
+                .iter()
+                .position(|a| matches!(a, Attribute::Entity(_)))
+            {
                 attributes[pos] = Attribute::Entity(entity_id);
             } else {
                 attributes.push(Attribute::Entity(entity_id));
@@ -585,9 +585,15 @@ impl NodeBlueprint {
                 children,
             } => {
                 let mut ir_tag = tag.to_ir_tag();
-                if classes.iter().any(|c| c == "grid" || c.starts_with("grid-")) {
+                if classes
+                    .iter()
+                    .any(|c| c == "grid" || c.starts_with("grid-"))
+                {
                     ir_tag = IrTag::GridContainer;
-                } else if classes.iter().any(|c| c == "flex" || c.starts_with("flex-")) {
+                } else if classes
+                    .iter()
+                    .any(|c| c == "flex" || c.starts_with("flex-"))
+                {
                     ir_tag = IrTag::FlexContainer;
                 } else if classes.iter().any(|c| {
                     c == "overflow-auto"
@@ -829,9 +835,7 @@ macro_rules! impl_into_node_blueprint_for_num {
 }
 
 impl_into_node_blueprint_for_num!(
-    i8, i16, i32, i64, i128, isize,
-    u8, u16, u32, u64, u128, usize,
-    f32, f64
+    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64
 );
 
 impl<T: IntoNodeBlueprint> IntoNodeBlueprint for Option<T> {
@@ -847,7 +851,10 @@ impl<T: IntoNodeBlueprint> IntoNodeBlueprint for Option<T> {
 impl<T: IntoNodeBlueprint> IntoNodeBlueprint for Vec<T> {
     #[inline]
     fn into_node_blueprint(self) -> NodeBlueprint {
-        let children: Vec<NodeBlueprint> = self.into_iter().map(|item| item.into_node_blueprint()).collect();
+        let children: Vec<NodeBlueprint> = self
+            .into_iter()
+            .map(|item| item.into_node_blueprint())
+            .collect();
         NodeBlueprint::Fragment(children)
     }
 }
@@ -914,10 +921,12 @@ mod entity_tests {
         let bp = NodeBlueprint::element_simple(
             Tag::Div,
             "container",
-            vec![
-                NodeBlueprint::element_simple(Tag::P, "child", vec![NodeBlueprint::text("Hello")])
-                    .with_entity_id(id2),
-            ],
+            vec![NodeBlueprint::element_simple(
+                Tag::P,
+                "child",
+                vec![NodeBlueprint::text("Hello")],
+            )
+            .with_entity_id(id2)],
         )
         .with_entity_id(id1);
 
@@ -938,12 +947,10 @@ mod entity_tests {
         let mut tree = NodeBlueprint::element_simple(
             Tag::Div,
             "root",
-            vec![
-                NodeBlueprint::fragment(vec![
-                    NodeBlueprint::element_simple(Tag::Span, "first", vec![]),
-                    NodeBlueprint::element_simple(Tag::Span, "second", vec![]),
-                ]),
-            ],
+            vec![NodeBlueprint::fragment(vec![
+                NodeBlueprint::element_simple(Tag::Span, "first", vec![]),
+                NodeBlueprint::element_simple(Tag::Span, "second", vec![]),
+            ])],
         );
 
         tree.ensure_entity_ids();
@@ -963,5 +970,3 @@ mod entity_tests {
         }
     }
 }
-
-

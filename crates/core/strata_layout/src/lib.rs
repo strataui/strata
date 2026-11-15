@@ -53,12 +53,12 @@ pub use tree::{
     MAX_LAYOUT_DEPTH,
 };
 pub use typography::{
-    bidi_mirror, can_break_between_chars, classify_line_break, is_prohibited_end,
+    apply_small_caps, bidi_mirror, can_break_between_chars, classify_line_break, is_prohibited_end,
     is_prohibited_start, AtomicFragment, BidiClass, BidiEngine, BidiRun, CssStrut, FontDatabase,
     FontHeight, FontMetrics, InlineFormattingContext, InlineItem, InlineLayoutOptions,
     InlineLayoutResult, InlineTextStyle, LineBox, LineBreakClass, LineBreaker, OpenTypeFeatures,
     OpenTypeFont, OpenTypeParseError, ShapedGlyph, TextFragment, TextLine, TextShaper,
-    VerticalAlignment, WhiteSpaceMode, apply_small_caps,
+    VerticalAlignment, WhiteSpaceMode,
 };
 pub use wpt::{
     InternalLayoutRegressionSuite, SpecificationConformanceVector, WptSuite, WptTestVector,
@@ -72,9 +72,7 @@ pub mod prelude {
         is_monospace_family, layout_inline_text, measure_text_bounds, measure_text_bounds_ext,
         measure_text_bounds_styled_with_family, measure_text_bounds_with_family,
     };
-    pub use crate::tree::{
-        solve_anchored_position, AnchorPlacement, LayoutNode, PortalAnchorSpec,
-    };
+    pub use crate::tree::{solve_anchored_position, AnchorPlacement, LayoutNode, PortalAnchorSpec};
     pub use crate::typography::*;
     pub use crate::wpt::{
         InternalLayoutRegressionSuite, SpecificationConformanceVector, WptSuite, WptTestVector,

@@ -1,9 +1,9 @@
 //! Plugin host coordinating active runtime plugins and capability enforcement.
 
-use std::collections::HashMap;
 use crate::manifest::PluginManifest;
 use crate::registry::DynamicExtensionRegistry;
 use crate::security::SecuritySandbox;
+use std::collections::HashMap;
 
 /// Manages active dynamic plugins, their sandboxes, and the runtime extension registry.
 pub struct PluginHost {

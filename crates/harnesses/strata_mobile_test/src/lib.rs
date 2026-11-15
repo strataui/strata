@@ -14,11 +14,9 @@ pub use adb::{
     MockEmulatorConsoleServer, STANDARD_EMULATOR_PORTS,
 };
 pub use android::{BootStatusChecker, EmulatorConfig, EmulatorGpuMode, HostDetector, HostPlatform};
-pub use foldable::{
-    DisplayCreaseFeature, FoldPosture, FoldableProfile, PostureCommandEmitter,
-};
+pub use foldable::{DisplayCreaseFeature, FoldPosture, FoldableProfile, PostureCommandEmitter};
 pub use ios::{AppleLicenseTier, IosDeviceModel, MockIosViewport, SimCtlDriver};
-pub use logcat::{LogcatEntry, LogcatParser, LogLevel, PanicReport, PanicTrap};
+pub use logcat::{LogLevel, LogcatEntry, LogcatParser, PanicReport, PanicTrap};
 pub use runner::{MobileTestReport, StrataMobileTestConfig, StrataMobileTestRunner};
 pub use stress::{FuzzRng, MonkeyEvent, MonkeyFuzzer};
 pub use visual::{SsimEngine, VisualDiffResult};

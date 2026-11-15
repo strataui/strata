@@ -86,7 +86,9 @@ impl<'a> JsParser<'a> {
 
     fn parse_statement(&mut self) -> Result<Stmt, String> {
         if self.depth >= MAX_PARSER_DEPTH {
-            return Err("RangeError: Maximum call stack size exceeded (parser recursion limit)".to_string());
+            return Err(
+                "RangeError: Maximum call stack size exceeded (parser recursion limit)".to_string(),
+            );
         }
         self.depth += 1;
         let res = self.parse_statement_inner();
@@ -233,14 +235,20 @@ impl<'a> JsParser<'a> {
                     });
                 }
                 _ => {
-                    return Err(format!("SyntaxError: Unexpected token in switch block at pos {}", self.pos));
+                    return Err(format!(
+                        "SyntaxError: Unexpected token in switch block at pos {}",
+                        self.pos
+                    ));
                 }
             }
             self.skip_whitespace_and_comments();
         }
 
         self.expect_char('}')?;
-        Ok(Stmt::Switch { discriminant, cases })
+        Ok(Stmt::Switch {
+            discriminant,
+            cases,
+        })
     }
 
     fn parse_block_stmts(&mut self) -> Result<Vec<Stmt>, String> {
@@ -683,7 +691,9 @@ impl<'a> JsParser<'a> {
     // Expressions
     pub fn parse_expression(&mut self) -> Result<Expr, String> {
         if self.depth >= MAX_PARSER_DEPTH {
-            return Err("RangeError: Maximum call stack size exceeded (parser recursion limit)".to_string());
+            return Err(
+                "RangeError: Maximum call stack size exceeded (parser recursion limit)".to_string(),
+            );
         }
         self.depth += 1;
         let res = self.parse_assignment();
@@ -696,7 +706,13 @@ impl<'a> JsParser<'a> {
         if self.peek_identifier().as_deref() == Some("yield") {
             self.read_identifier()?; // "yield"
             self.skip_whitespace_and_comments();
-            if self.peek() == Some(';') || self.peek() == Some('}') || self.peek() == Some(')') || self.peek() == Some(']') || self.peek() == Some(',') || self.is_eof() {
+            if self.peek() == Some(';')
+                || self.peek() == Some('}')
+                || self.peek() == Some(')')
+                || self.peek() == Some(']')
+                || self.peek() == Some(',')
+                || self.is_eof()
+            {
                 return Ok(Expr::Yield(None));
             }
             let val = self.parse_assignment()?;
@@ -922,7 +938,8 @@ impl<'a> JsParser<'a> {
                     left: Box::new(left),
                     right: Box::new(right),
                 };
-            } else if self.starts_with(">>") && !self.starts_with(">>=") && !self.starts_with(">>>") {
+            } else if self.starts_with(">>") && !self.starts_with(">>=") && !self.starts_with(">>>")
+            {
                 self.pos += 2;
                 let right = self.parse_additive()?;
                 left = Expr::Binary {
@@ -980,7 +997,11 @@ impl<'a> JsParser<'a> {
                     left: Box::new(left),
                     right: Box::new(right),
                 };
-            } else if self.peek() == Some('/') && !self.starts_with("/=") && !self.starts_with("//") && !self.starts_with("/*") {
+            } else if self.peek() == Some('/')
+                && !self.starts_with("/=")
+                && !self.starts_with("//")
+                && !self.starts_with("/*")
+            {
                 self.advance();
                 let right = self.parse_exponentiation()?;
                 left = Expr::Binary {
@@ -1094,7 +1115,10 @@ impl<'a> JsParser<'a> {
         loop {
             self.skip_whitespace_and_comments();
             if self.starts_with("?.")
-                && !self.src[self.pos + 2..].chars().next().is_some_and(|c| c.is_ascii_digit())
+                && !self.src[self.pos + 2..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit())
             {
                 self.pos += 2; // consume '?.'
                 self.skip_whitespace_and_comments();
@@ -1705,7 +1729,13 @@ impl<'a> JsParser<'a> {
 
         if ident == "yield" {
             self.skip_whitespace_and_comments();
-            if self.peek() == Some(';') || self.peek() == Some('}') || self.peek() == Some(')') || self.peek() == Some(']') || self.peek() == Some(',') || self.is_eof() {
+            if self.peek() == Some(';')
+                || self.peek() == Some('}')
+                || self.peek() == Some(')')
+                || self.peek() == Some(']')
+                || self.peek() == Some(',')
+                || self.is_eof()
+            {
                 return Ok(Expr::Yield(None));
             }
             let val = self.parse_assignment()?;
@@ -1739,8 +1769,8 @@ impl<'a> JsParser<'a> {
                 let bi = crate::bigint::JsBigInt::parse(literal_str)?;
                 return Ok(Expr::Literal(JsValue::BigInt(bi)));
             }
-            let val = u64::from_str_radix(digits, 16)
-                .map_err(|e| format!("Invalid hex literal: {e}"))?;
+            let val =
+                u64::from_str_radix(digits, 16).map_err(|e| format!("Invalid hex literal: {e}"))?;
             return Ok(Expr::Literal(JsValue::Number(val as f64)));
         } else if self.starts_with("0b") || self.starts_with("0B") {
             self.pos += 2;
@@ -1764,7 +1794,12 @@ impl<'a> JsParser<'a> {
         } else if self.starts_with("0o") || self.starts_with("0O") {
             self.pos += 2;
             let digit_start = self.pos;
-            while !self.is_eof() && self.peek().map(|c| ('0'..='7').contains(&c)).unwrap_or(false) {
+            while !self.is_eof()
+                && self
+                    .peek()
+                    .map(|c| ('0'..='7').contains(&c))
+                    .unwrap_or(false)
+            {
                 self.advance();
             }
             let digits = &self.src[digit_start..self.pos];
@@ -1815,7 +1850,9 @@ impl<'a> JsParser<'a> {
         }
 
         let num_str = &self.src[start..self.pos];
-        let n = num_str.parse::<f64>().map_err(|e| format!("Invalid number: {e}"))?;
+        let n = num_str
+            .parse::<f64>()
+            .map_err(|e| format!("Invalid number: {e}"))?;
         Ok(Expr::Literal(JsValue::Number(n)))
     }
 

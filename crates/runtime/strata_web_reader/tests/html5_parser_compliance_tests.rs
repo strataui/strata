@@ -101,7 +101,10 @@ fn test_implied_dt_dd_closing_in_dl() {
         assert_eq!(children[2].tag(), Some("dt"));
         assert_eq!(children[2].text_content().trim(), "GPU");
         assert_eq!(children[3].tag(), Some("dd"));
-        assert_eq!(children[3].text_content().trim(), "Graphics Processing Unit");
+        assert_eq!(
+            children[3].text_content().trim(),
+            "Graphics Processing Unit"
+        );
     } else {
         panic!("Expected dl element");
     }
@@ -147,10 +150,7 @@ fn test_table_foster_parenting_misplaced_content() {
             2,
             "Foster parenting must move misplaced text into parent container before table"
         );
-        assert_eq!(
-            children[0].text_content().trim(),
-            "Misplaced Leading Text"
-        );
+        assert_eq!(children[0].text_content().trim(), "Misplaced Leading Text");
         assert_eq!(children[1].tag(), Some("table"));
     } else {
         panic!("Expected div element");
@@ -196,7 +196,11 @@ fn test_select_option_auto_closing() {
     assert_eq!(select.tag(), Some("select"));
 
     let options = select.find_all("option");
-    assert_eq!(options.len(), 3, "Subsequent <option> must close preceding <option>");
+    assert_eq!(
+        options.len(),
+        3,
+        "Subsequent <option> must close preceding <option>"
+    );
     assert_eq!(options[0].text_content().trim(), "One");
     assert_eq!(options[1].text_content().trim(), "Two");
     assert_eq!(options[2].text_content().trim(), "Three");
@@ -228,4 +232,3 @@ fn test_deeply_nested_html_tree_depth_bound() {
         "Tree depth must be bounded by MAX_TREE_DEPTH ({MAX_TREE_DEPTH}), got {max_depth}"
     );
 }
-

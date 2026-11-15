@@ -152,9 +152,9 @@ fn test_css_stacking_context_painting_order() {
     // 4. Positive z-index (Child 1: Red)
     assert_eq!(colors.len(), 4);
     assert_eq!(colors[0], Color::rgb(20, 20, 20)); // Layer 1 (Root)
-    assert_eq!(colors[1], Color::rgb(0, 0, 255));   // Layer 2 (z-index: -5)
-    assert_eq!(colors[2], Color::rgb(0, 255, 0));   // Layer 3 (In-flow Block)
-    assert_eq!(colors[3], Color::rgb(255, 0, 0));   // Layer 7 (z-index: 10)
+    assert_eq!(colors[1], Color::rgb(0, 0, 255)); // Layer 2 (z-index: -5)
+    assert_eq!(colors[2], Color::rgb(0, 255, 0)); // Layer 3 (In-flow Block)
+    assert_eq!(colors[3], Color::rgb(255, 0, 0)); // Layer 7 (z-index: 10)
 }
 
 #[test]
@@ -174,7 +174,8 @@ fn test_analytical_sdf_rounded_rectangle() {
     assert_eq!(strata_render::rasterizer::sdf_coverage(d_far), 0.0);
 
     // Exact corner apex (50, 30): corner rounded off, so apex is outside
-    let d_corner_apex = strata_render::rasterizer::sd_rounded_rect(50.0, 30.0, half_w, half_h, radius);
+    let d_corner_apex =
+        strata_render::rasterizer::sd_rounded_rect(50.0, 30.0, half_w, half_h, radius);
     assert!(d_corner_apex > 0.0); // Apex cut by fillet radius
 }
 
@@ -246,7 +247,11 @@ fn test_3d_viewport_compositing_into_framebuffer() {
 
     // Center of viewport (x=50, y=50) must hit the red box!
     let center_pixel = fb.get_pixel(50, 50);
-    assert!(center_pixel.r() > 0.3, "Center should have red component: {:?}", center_pixel);
+    assert!(
+        center_pixel.r() > 0.3,
+        "Center should have red component: {:?}",
+        center_pixel
+    );
     assert_eq!(center_pixel.g(), 0.0);
     assert_eq!(center_pixel.b(), 0.0);
 
@@ -335,13 +340,17 @@ fn test_framebuffer_draw_text() {
             }
         }
     }
-    assert!(white_count > 20, "Text should have rasterized pixels, found {}", white_count);
+    assert!(
+        white_count > 20,
+        "Text should have rasterized pixels, found {}",
+        white_count
+    );
 }
 
 #[test]
 fn test_display_list_spatial_viewport_culling() {
-    use strata_style::types::{ComputedStyle, Display, Dimension, Position};
     use strata_render::compositor::Compositor;
+    use strata_style::types::{ComputedStyle, Dimension, Display, Position};
 
     // Create a long root container with 100 vertical child cards
     let mut root_style = ComputedStyle::default();
@@ -372,23 +381,29 @@ fn test_display_list_spatial_viewport_culling() {
 
     // 1. Unculled display list: builds draw commands for ALL 101 nodes
     let dl_full = Compositor::build_display_list(&root);
-    assert!(dl_full.commands.len() >= 101, "Full display list should contain all 101 commands, got {}", dl_full.commands.len());
+    assert!(
+        dl_full.commands.len() >= 101,
+        "Full display list should contain all 101 commands, got {}",
+        dl_full.commands.len()
+    );
 
     // 2. Viewport-culled display list at y=5000 (viewport: 5000..5800, buffer: 3800..7000)
     let viewport = Rect::new(0.0, 5000.0, 1000.0, 800.0);
     let dl_culled = Compositor::build_display_list_with_viewport(&root, Some(viewport));
 
     // Cards far above (e.g. y=0..3500) and far below (e.g. y=7500..9900) must be culled
-    assert!(dl_culled.commands.len() < 40, "Culled display list should contain <40 commands, got {}", dl_culled.commands.len());
+    assert!(
+        dl_culled.commands.len() < 40,
+        "Culled display list should contain <40 commands, got {}",
+        dl_culled.commands.len()
+    );
 
     // Fixed header navbar (position: fixed) must ALWAYS be preserved
-    let has_fixed_nav = dl_culled.commands.iter().any(|cmd| {
-        match cmd {
-            strata_render::compositor::DrawCommand::DrawRect { bounds, color } => {
-                bounds.y == 0.0 && *color == Color::rgb(20, 20, 20)
-            }
-            _ => false,
+    let has_fixed_nav = dl_culled.commands.iter().any(|cmd| match cmd {
+        strata_render::compositor::DrawCommand::DrawRect { bounds, color } => {
+            bounds.y == 0.0 && *color == Color::rgb(20, 20, 20)
         }
+        _ => false,
     });
     assert!(has_fixed_nav, "Fixed header navbar must never be culled");
 }
@@ -419,8 +434,8 @@ fn test_content_visibility_hidden_and_contain_intrinsic_size() {
 
 #[test]
 fn test_compositor_scroll_clipping_and_translation() {
-    use strata_style::types::{ComputedStyle, Dimension, Display, Overflow};
     use strata_layout::Point;
+    use strata_style::types::{ComputedStyle, Dimension, Display, Overflow};
 
     let mut container_style = ComputedStyle::default();
     container_style.display = Display::Block;
@@ -463,7 +478,12 @@ fn test_compositor_scroll_clipping_and_translation() {
             _ => {}
         }
     }
-    assert!(found_clip, "Compositor must clip scroll container to padding box");
-    assert!(found_transform, "Compositor must push translation transform for scroll offset");
+    assert!(
+        found_clip,
+        "Compositor must clip scroll container to padding box"
+    );
+    assert!(
+        found_transform,
+        "Compositor must push translation transform for scroll offset"
+    );
 }
-

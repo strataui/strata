@@ -149,7 +149,12 @@ impl FloatingAnchor {
         placement: Placement,
         offset: f32,
     ) -> Point {
-        let (ax, ay, aw, ah) = (anchor.origin.x, anchor.origin.y, anchor.size.width, anchor.size.height);
+        let (ax, ay, aw, ah) = (
+            anchor.origin.x,
+            anchor.origin.y,
+            anchor.size.width,
+            anchor.size.height,
+        );
         let (fw, fh) = (floating_size.width, floating_size.height);
 
         match placement {
@@ -169,11 +174,7 @@ impl FloatingAnchor {
     }
 
     /// Adjust position to ensure floating box remains within viewport boundaries.
-    pub fn flip_if_overflow(
-        pos: Point,
-        floating_size: Size,
-        viewport: Size,
-    ) -> Point {
+    pub fn flip_if_overflow(pos: Point, floating_size: Size, viewport: Size) -> Point {
         let mut x = pos.x;
         let mut y = pos.y;
 

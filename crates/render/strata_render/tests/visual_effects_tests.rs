@@ -35,7 +35,10 @@ fn test_stacking_context_creation_for_visual_effects() {
     // 3. Filter active
     style.filter = Some(BackdropFilter::new(vec![FilterOp::Blur(5.0)]));
     let node_filter = make_node(style.clone(), Rect::new(0.0, 0.0, 100.0, 100.0));
-    assert!(Compositor::establishes_stacking_context(&node_filter, false));
+    assert!(Compositor::establishes_stacking_context(
+        &node_filter,
+        false
+    ));
     style.filter = None;
 
     // 4. Clip-path active
@@ -61,25 +64,74 @@ fn test_display_list_command_emission_and_lifo_order() {
 
     // Verify presence and order of pushed commands:
     // PushIsolation -> PushBlendMode -> PushFilter -> PushClipPath
-    let push_iso_idx = cmds.iter().position(|c| matches!(c, DrawCommand::PushIsolation { isolate: true })).expect("PushIsolation must be emitted");
-    let push_blend_idx = cmds.iter().position(|c| matches!(c, DrawCommand::PushBlendMode { mode: BlendMode::Screen })).expect("PushBlendMode must be emitted");
-    let push_filter_idx = cmds.iter().position(|c| matches!(c, DrawCommand::PushFilter { .. })).expect("PushFilter must be emitted");
-    let push_clip_idx = cmds.iter().position(|c| matches!(c, DrawCommand::PushClipPath { .. })).expect("PushClipPath must be emitted");
+    let push_iso_idx = cmds
+        .iter()
+        .position(|c| matches!(c, DrawCommand::PushIsolation { isolate: true }))
+        .expect("PushIsolation must be emitted");
+    let push_blend_idx = cmds
+        .iter()
+        .position(|c| {
+            matches!(
+                c,
+                DrawCommand::PushBlendMode {
+                    mode: BlendMode::Screen
+                }
+            )
+        })
+        .expect("PushBlendMode must be emitted");
+    let push_filter_idx = cmds
+        .iter()
+        .position(|c| matches!(c, DrawCommand::PushFilter { .. }))
+        .expect("PushFilter must be emitted");
+    let push_clip_idx = cmds
+        .iter()
+        .position(|c| matches!(c, DrawCommand::PushClipPath { .. }))
+        .expect("PushClipPath must be emitted");
 
-    assert!(push_iso_idx < push_blend_idx, "PushIsolation must precede PushBlendMode");
-    assert!(push_blend_idx < push_filter_idx, "PushBlendMode must precede PushFilter");
-    assert!(push_filter_idx < push_clip_idx, "PushFilter must precede PushClipPath");
+    assert!(
+        push_iso_idx < push_blend_idx,
+        "PushIsolation must precede PushBlendMode"
+    );
+    assert!(
+        push_blend_idx < push_filter_idx,
+        "PushBlendMode must precede PushFilter"
+    );
+    assert!(
+        push_filter_idx < push_clip_idx,
+        "PushFilter must precede PushClipPath"
+    );
 
     // Verify reverse (LIFO) popping order at the end:
     // PopClipPath -> PopFilter -> PopBlendMode -> PopIsolation
-    let pop_clip_idx = cmds.iter().position(|c| matches!(c, DrawCommand::PopClipPath)).expect("PopClipPath must be emitted");
-    let pop_filter_idx = cmds.iter().position(|c| matches!(c, DrawCommand::PopFilter)).expect("PopFilter must be emitted");
-    let pop_blend_idx = cmds.iter().position(|c| matches!(c, DrawCommand::PopBlendMode)).expect("PopBlendMode must be emitted");
-    let pop_iso_idx = cmds.iter().position(|c| matches!(c, DrawCommand::PopIsolation)).expect("PopIsolation must be emitted");
+    let pop_clip_idx = cmds
+        .iter()
+        .position(|c| matches!(c, DrawCommand::PopClipPath))
+        .expect("PopClipPath must be emitted");
+    let pop_filter_idx = cmds
+        .iter()
+        .position(|c| matches!(c, DrawCommand::PopFilter))
+        .expect("PopFilter must be emitted");
+    let pop_blend_idx = cmds
+        .iter()
+        .position(|c| matches!(c, DrawCommand::PopBlendMode))
+        .expect("PopBlendMode must be emitted");
+    let pop_iso_idx = cmds
+        .iter()
+        .position(|c| matches!(c, DrawCommand::PopIsolation))
+        .expect("PopIsolation must be emitted");
 
-    assert!(pop_clip_idx < pop_filter_idx, "PopClipPath must precede PopFilter");
-    assert!(pop_filter_idx < pop_blend_idx, "PopFilter must precede PopBlendMode");
-    assert!(pop_blend_idx < pop_iso_idx, "PopBlendMode must precede PopIsolation");
+    assert!(
+        pop_clip_idx < pop_filter_idx,
+        "PopClipPath must precede PopFilter"
+    );
+    assert!(
+        pop_filter_idx < pop_blend_idx,
+        "PopFilter must precede PopBlendMode"
+    );
+    assert!(
+        pop_blend_idx < pop_iso_idx,
+        "PopBlendMode must precede PopIsolation"
+    );
 }
 
 #[test]
@@ -134,6 +186,12 @@ fn test_draw_command_metadata_and_clipping() {
 
     assert!(DrawCommand::PopClipPath.is_clip());
     assert_eq!(DrawCommand::PopFilter.bounds(), None);
-    assert_eq!(DrawCommand::PushBlendMode { mode: BlendMode::Multiply }.bounds(), None);
+    assert_eq!(
+        DrawCommand::PushBlendMode {
+            mode: BlendMode::Multiply
+        }
+        .bounds(),
+        None
+    );
     assert_eq!(DrawCommand::PushIsolation { isolate: true }.bounds(), None);
 }

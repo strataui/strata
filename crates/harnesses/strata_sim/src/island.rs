@@ -11,14 +11,9 @@ pub enum DynamicIslandState {
         trailing_width: f32,
     },
     /// Expanded transient alert (e.g. FaceID unlock, Silent Switch toggle, AirDrop transfer).
-    ExpandedAlert {
-        alert_kind: DynamicAlertKind,
-    },
+    ExpandedAlert { alert_kind: DynamicAlertKind },
     /// Interactive expanded modal HUD on user tap/long-press.
-    InteractiveModal {
-        title: String,
-        subtitle: String,
-    },
+    InteractiveModal { title: String, subtitle: String },
 }
 
 /// Transient alert types displayed by Dynamic Island.
@@ -94,12 +89,14 @@ impl DynamicIslandOscillator {
         let omega = self.angular_frequency;
 
         // Acceleration along width: a = -2*zeta*omega*v - omega^2 * (x - target)
-        let accel_w = -2.0 * zeta * omega * self.velocity_w - (omega * omega) * (self.current_width - self.target_width);
+        let accel_w = -2.0 * zeta * omega * self.velocity_w
+            - (omega * omega) * (self.current_width - self.target_width);
         self.velocity_w += accel_w * dt_secs;
         self.current_width += self.velocity_w * dt_secs;
 
         // Acceleration along height
-        let accel_h = -2.0 * zeta * omega * self.velocity_h - (omega * omega) * (self.current_height - self.target_height);
+        let accel_h = -2.0 * zeta * omega * self.velocity_h
+            - (omega * omega) * (self.current_height - self.target_height);
         self.velocity_h += accel_h * dt_secs;
         self.current_height += self.velocity_h * dt_secs;
 

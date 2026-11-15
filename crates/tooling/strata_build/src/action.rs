@@ -1,8 +1,8 @@
 //! Action registry for environment-aware custom build tasks and lifecycle actions.
 
+use crate::config::ProjectConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::config::ProjectConfig;
 
 /// Context provided to a dispatched action.
 #[derive(Debug, Clone)]
@@ -43,7 +43,10 @@ impl ActionRegistry {
         if let Some(handler) = self.actions.get(&ctx.name) {
             handler(ctx)
         } else {
-            Err(format!("Action '{}' is not registered in ActionRegistry", ctx.name))
+            Err(format!(
+                "Action '{}' is not registered in ActionRegistry",
+                ctx.name
+            ))
         }
     }
 
@@ -68,7 +71,9 @@ impl ActionRegistry {
                 return Err("Validation failure: app.name cannot be empty".to_string());
             }
             if ctx.config.window.width == 0 || ctx.config.window.height == 0 {
-                return Err("Validation failure: window dimensions must be greater than zero".to_string());
+                return Err(
+                    "Validation failure: window dimensions must be greater than zero".to_string(),
+                );
             }
             Ok("Project configuration is valid".to_string())
         });

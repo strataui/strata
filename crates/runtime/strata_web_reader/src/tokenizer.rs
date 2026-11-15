@@ -13,9 +13,7 @@ pub enum HtmlToken {
         self_closing: bool,
     },
     /// Closing tag: `</tag>`
-    EndTag {
-        name: String,
-    },
+    EndTag { name: String },
     /// Raw character data with decoded entities.
     Text(String),
     /// Comment: `<!-- content -->`
@@ -78,7 +76,10 @@ pub fn decode_html_entities(input: &str) -> String {
 
 fn resolve_entity(entity: &str) -> Option<String> {
     if let Some(stripped) = entity.strip_prefix('#') {
-        if let Some(hex) = stripped.strip_prefix('x').or_else(|| stripped.strip_prefix('X')) {
+        if let Some(hex) = stripped
+            .strip_prefix('x')
+            .or_else(|| stripped.strip_prefix('X'))
+        {
             u32::from_str_radix(hex, 16)
                 .ok()
                 .and_then(char::from_u32)
@@ -435,7 +436,12 @@ impl<'a> HtmlTokenizer<'a> {
         }
 
         let name_lower = tag_name.to_lowercase();
-        if !self_closing && matches!(name_lower.as_str(), "style" | "script" | "textarea" | "title") {
+        if !self_closing
+            && matches!(
+                name_lower.as_str(),
+                "style" | "script" | "textarea" | "title"
+            )
+        {
             self.raw_text_tag = Some(name_lower.clone());
         }
 
@@ -597,7 +603,10 @@ impl StreamTokenizer {
                     let mut tok = HtmlTokenizer::new(&tag_chunk);
                     let parsed = tok.tokenize();
                     let is_raw_text = parsed.iter().any(|t| match t {
-                        HtmlToken::StartTag { name, .. } => matches!(name.to_ascii_lowercase().as_str(), "script" | "style" | "title"),
+                        HtmlToken::StartTag { name, .. } => matches!(
+                            name.to_ascii_lowercase().as_str(),
+                            "script" | "style" | "title"
+                        ),
                         _ => false,
                     });
 
@@ -607,7 +616,8 @@ impl StreamTokenizer {
                             _ => "".to_string(),
                         };
                         let closing_tag = format!("</{}>", tag_name);
-                        if let Some(close_idx) = self.buffer.to_ascii_lowercase().find(&closing_tag) {
+                        if let Some(close_idx) = self.buffer.to_ascii_lowercase().find(&closing_tag)
+                        {
                             let total_len = close_idx + closing_tag.len();
                             let raw_chunk = self.buffer[..total_len].to_string();
                             let mut raw_tok = HtmlTokenizer::new(&raw_chunk);
@@ -633,7 +643,9 @@ impl StreamTokenizer {
                     let text_chunk = self.buffer[..next_tag].to_string();
                     if !is_eof && text_chunk.contains('&') {
                         if let Some(last_amp) = text_chunk.rfind('&') {
-                            if !text_chunk[last_amp..].contains(';') && text_chunk.len() - last_amp <= 10 {
+                            if !text_chunk[last_amp..].contains(';')
+                                && text_chunk.len() - last_amp <= 10
+                            {
                                 if last_amp > 0 {
                                     let sub_chunk = &text_chunk[..last_amp];
                                     let decoded = decode_html_entities(sub_chunk);
@@ -653,7 +665,9 @@ impl StreamTokenizer {
                     self.buffer.drain(..next_tag);
                 } else if !is_eof {
                     if let Some(last_amp) = self.buffer.rfind('&') {
-                        if !self.buffer[last_amp..].contains(';') && self.buffer.len() - last_amp <= 10 {
+                        if !self.buffer[last_amp..].contains(';')
+                            && self.buffer.len() - last_amp <= 10
+                        {
                             if last_amp > 0 {
                                 let sub_chunk = self.buffer[..last_amp].to_string();
                                 let decoded = decode_html_entities(&sub_chunk);
@@ -703,4 +717,3 @@ mod tests {
         assert_eq!(decode_html_entities("&plusmn;5&deg;"), "±5°");
     }
 }
-

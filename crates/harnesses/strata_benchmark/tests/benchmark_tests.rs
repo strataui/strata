@@ -1,16 +1,31 @@
 use strata_benchmark::{
-    bench_cold_start, bench_flexbox_layout_10k, bench_signal_propagation_100k,
-    BenchmarkReport, BenchmarkResult, BenchmarkSample,
+    bench_cold_start, bench_flexbox_layout_10k, bench_signal_propagation_100k, BenchmarkReport,
+    BenchmarkResult, BenchmarkSample,
 };
 
 #[test]
 fn test_benchmark_metrics_calculation() {
     let samples = vec![
-        BenchmarkSample { iteration: 0, elapsed_nanos: 10_000 },
-        BenchmarkSample { iteration: 1, elapsed_nanos: 20_000 },
-        BenchmarkSample { iteration: 2, elapsed_nanos: 30_000 },
-        BenchmarkSample { iteration: 3, elapsed_nanos: 40_000 },
-        BenchmarkSample { iteration: 4, elapsed_nanos: 50_000 },
+        BenchmarkSample {
+            iteration: 0,
+            elapsed_nanos: 10_000,
+        },
+        BenchmarkSample {
+            iteration: 1,
+            elapsed_nanos: 20_000,
+        },
+        BenchmarkSample {
+            iteration: 2,
+            elapsed_nanos: 30_000,
+        },
+        BenchmarkSample {
+            iteration: 3,
+            elapsed_nanos: 40_000,
+        },
+        BenchmarkSample {
+            iteration: 4,
+            elapsed_nanos: 50_000,
+        },
     ];
 
     let result = BenchmarkResult::from_samples("Test Task", &samples, 2.74);
@@ -25,8 +40,15 @@ fn test_benchmark_metrics_calculation() {
 #[test]
 fn test_cold_start_and_layout_benchmarks() {
     let cold_start = bench_cold_start(3);
-    assert_eq!(cold_start.name, "In-Memory Headless Framebuffer Render Pass");
-    assert!(cold_start.mean_us < 120_000.0, "Cold start should be < 120ms in debug builds under test load, got {} us", cold_start.mean_us);
+    assert_eq!(
+        cold_start.name,
+        "In-Memory Headless Framebuffer Render Pass"
+    );
+    assert!(
+        cold_start.mean_us < 120_000.0,
+        "Cold start should be < 120ms in debug builds under test load, got {} us",
+        cold_start.mean_us
+    );
 
     let flex_layout = bench_flexbox_layout_10k(2);
     assert_eq!(flex_layout.name, "W3C Flexbox Layout (10,000 Items)");
@@ -51,7 +73,10 @@ fn test_signal_propagation_benchmark() {
 
 #[test]
 fn test_report_markdown_and_json_generation() {
-    let sample = BenchmarkSample { iteration: 0, elapsed_nanos: 16_000 };
+    let sample = BenchmarkSample {
+        iteration: 0,
+        elapsed_nanos: 16_000,
+    };
     let res = BenchmarkResult::from_samples("Engine Boot", &[sample], 2.74);
     let report = BenchmarkReport::new(vec![res]);
 
@@ -78,7 +103,10 @@ fn test_wikipedia_corpus_benchmarks() {
     assert!(parse_res.throughput_per_sec > 0.0);
 
     let transpile_res = strata_benchmark::bench_web_transpiler(2);
-    assert_eq!(transpile_res.name, "WebTranspiler Blueprint Gen (Wikipedia Article)");
+    assert_eq!(
+        transpile_res.name,
+        "WebTranspiler Blueprint Gen (Wikipedia Article)"
+    );
     assert_eq!(transpile_res.iterations, 2);
     assert!(transpile_res.throughput_per_sec > 0.0);
 }

@@ -178,10 +178,16 @@ fn test_in_place_dynamic_text_sync_without_rebuild() {
 
     // In-place synchronization
     let updated = runtime.sync_dynamic_text();
-    assert!(updated, "sync_dynamic_text must return true when text mutated");
+    assert!(
+        updated,
+        "sync_dynamic_text must return true when text mutated"
+    );
     assert_eq!(runtime.dynamic_text_bindings[0].last_value, "1337");
 
     // Second sync without mutations must return false
     let no_update = runtime.sync_dynamic_text();
-    assert!(!no_update, "subsequent sync without changes must return false");
+    assert!(
+        !no_update,
+        "subsequent sync without changes must return false"
+    );
 }

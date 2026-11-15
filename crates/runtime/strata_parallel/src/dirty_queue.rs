@@ -47,7 +47,12 @@ impl DirtySignalQueue {
 
             if self
                 .head
-                .compare_exchange_weak(head, head.wrapping_add(1), Ordering::AcqRel, Ordering::Relaxed)
+                .compare_exchange_weak(
+                    head,
+                    head.wrapping_add(1),
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
                 .is_ok()
             {
                 let slot = head & self.mask;

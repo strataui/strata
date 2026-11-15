@@ -11,7 +11,11 @@ impl AppRuntime {
     /// Dispatches pointer down at (px, py) coordinates with default modifiers.
     /// Returns the detailed action result (CaretMoved, FocusChanged, DomListenerInvoked, or Ignored).
     pub fn dispatch_pointer_down_action(&mut self, px: f32, py: f32) -> PointerDownAction {
-        self.dispatch_pointer_down_action_with_modifiers(px, py, strata_platform::Modifiers::default())
+        self.dispatch_pointer_down_action_with_modifiers(
+            px,
+            py,
+            strata_platform::Modifiers::default(),
+        )
     }
 
     /// Dispatches pointer down at (px, py) coordinates with no active modifier keys.
@@ -29,7 +33,8 @@ impl AppRuntime {
         py: f32,
         modifiers: strata_platform::Modifiers,
     ) -> bool {
-        self.dispatch_pointer_down_action_with_modifiers(px, py, modifiers).is_handled()
+        self.dispatch_pointer_down_action_with_modifiers(px, py, modifiers)
+            .is_handled()
     }
 
     /// Dispatches pointer down with modifier keys, returning whether the interaction only moved the caret
@@ -424,24 +429,12 @@ impl AppRuntime {
             if let PlatformEvent::KeyDown { key, .. } = event {
                 let (px, py) = self.last_mouse_pos;
                 let scrolled = match key {
-                    strata_platform::KeyCode::ArrowDown => {
-                        self.dispatch_scroll(px, py, 0.0, 40.0)
-                    }
-                    strata_platform::KeyCode::ArrowUp => {
-                        self.dispatch_scroll(px, py, 0.0, -40.0)
-                    }
-                    strata_platform::KeyCode::PageDown => {
-                        self.dispatch_scroll(px, py, 0.0, 400.0)
-                    }
-                    strata_platform::KeyCode::PageUp => {
-                        self.dispatch_scroll(px, py, 0.0, -400.0)
-                    }
-                    strata_platform::KeyCode::Home => {
-                        self.scroll_to_top(px, py)
-                    }
-                    strata_platform::KeyCode::End => {
-                        self.scroll_to_bottom(px, py)
-                    }
+                    strata_platform::KeyCode::ArrowDown => self.dispatch_scroll(px, py, 0.0, 40.0),
+                    strata_platform::KeyCode::ArrowUp => self.dispatch_scroll(px, py, 0.0, -40.0),
+                    strata_platform::KeyCode::PageDown => self.dispatch_scroll(px, py, 0.0, 400.0),
+                    strata_platform::KeyCode::PageUp => self.dispatch_scroll(px, py, 0.0, -400.0),
+                    strata_platform::KeyCode::Home => self.scroll_to_top(px, py),
+                    strata_platform::KeyCode::End => self.scroll_to_bottom(px, py),
                     _ => false,
                 };
                 if scrolled {
@@ -470,9 +463,7 @@ impl AppRuntime {
                     KeyDispatchResult::Ignored
                 }
             }
-            PlatformEvent::ImePreedit { .. } => {
-                KeyDispatchResult::RedrawOnly
-            }
+            PlatformEvent::ImePreedit { .. } => KeyDispatchResult::RedrawOnly,
             PlatformEvent::ReceivedCharacter(ch) => {
                 if !ch.is_control() {
                     self.reset_caret_blink();
@@ -784,7 +775,9 @@ impl AppRuntime {
             "data-app-region",
         );
         let is_drag = region.as_deref() == Some("drag")
-            || self.csd_controller.hit_test(self.viewport_width, self.viewport_height, px, py)
+            || self
+                .csd_controller
+                .hit_test(self.viewport_width, self.viewport_height, px, py)
                 == strata_platform::CsdHitZone::Titlebar;
 
         if !is_drag {
@@ -829,5 +822,4 @@ impl AppRuntime {
         }
         false
     }
-
 }

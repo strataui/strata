@@ -36,16 +36,25 @@ impl SecuritySandbox {
         if self.manifest.has_capability(&PluginCapability::StorageRead) {
             Ok(())
         } else {
-            Err(format!("Plugin '{}' denied storage read access", self.manifest.id))
+            Err(format!(
+                "Plugin '{}' denied storage read access",
+                self.manifest.id
+            ))
         }
     }
 
     /// Verifies if storage write access is authorized.
     pub fn check_storage_write(&self) -> Result<(), String> {
-        if self.manifest.has_capability(&PluginCapability::StorageWrite) {
+        if self
+            .manifest
+            .has_capability(&PluginCapability::StorageWrite)
+        {
             Ok(())
         } else {
-            Err(format!("Plugin '{}' denied storage write access", self.manifest.id))
+            Err(format!(
+                "Plugin '{}' denied storage write access",
+                self.manifest.id
+            ))
         }
     }
 
@@ -54,7 +63,10 @@ impl SecuritySandbox {
         if self.manifest.has_capability(&PluginCapability::Render3D) {
             Ok(())
         } else {
-            Err(format!("Plugin '{}' denied 3D rendering access", self.manifest.id))
+            Err(format!(
+                "Plugin '{}' denied 3D rendering access",
+                self.manifest.id
+            ))
         }
     }
 }

@@ -5,7 +5,12 @@ use strata_dom::{Attribute, EventType, IrNodeFlags, IrTag, NodeBlueprint, Tag, V
 fn test_ui_ir_pipeline_runtime_unification() {
     let blueprint = NodeBlueprint::element(
         Tag::Div,
-        vec!["w-[800px]".to_string(), "h-[600px]".to_string(), "flex".to_string(), "overflow-hidden".to_string()],
+        vec![
+            "w-[800px]".to_string(),
+            "h-[600px]".to_string(),
+            "flex".to_string(),
+            "overflow-hidden".to_string(),
+        ],
         vec![Attribute::event_listener(EventType::Click, || {})],
         vec![
             NodeBlueprint::element_simple(

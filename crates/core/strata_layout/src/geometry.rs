@@ -1,8 +1,6 @@
 //! Geometry structures for CSS Box Model and subpixel layout snapping.
 
-use strata_primitives::geom::{
-    EdgeInsets, Point as PrimPoint, Rect as PrimRect, Size as PrimSize,
-};
+use strata_primitives::geom::{EdgeInsets, Point as PrimPoint, Rect as PrimRect, Size as PrimSize};
 use strata_primitives::LayoutUnit;
 
 /// 2D Cartesian Coordinate Point.
@@ -108,10 +106,26 @@ impl Rect {
     /// as `snapped_max - snapped_min`. This guarantees adjacent sibling boxes and
     /// deeply nested descendants snap seamlessly with zero hairline cracks or rounding drift.
     pub fn snap_to_pixel(self) -> Self {
-        let x = if self.x.is_finite() { self.x.clamp(-1e7, 1e7) } else { 0.0 };
-        let y = if self.y.is_finite() { self.y.clamp(-1e7, 1e7) } else { 0.0 };
-        let w = if self.width.is_finite() { self.width.clamp(0.0, 1e7) } else { 0.0 };
-        let h = if self.height.is_finite() { self.height.clamp(0.0, 1e7) } else { 0.0 };
+        let x = if self.x.is_finite() {
+            self.x.clamp(-1e7, 1e7)
+        } else {
+            0.0
+        };
+        let y = if self.y.is_finite() {
+            self.y.clamp(-1e7, 1e7)
+        } else {
+            0.0
+        };
+        let w = if self.width.is_finite() {
+            self.width.clamp(0.0, 1e7)
+        } else {
+            0.0
+        };
+        let h = if self.height.is_finite() {
+            self.height.clamp(0.0, 1e7)
+        } else {
+            0.0
+        };
 
         let snapped_x = LayoutUnit::from_f32(x).to_f32();
         let snapped_y = LayoutUnit::from_f32(y).to_f32();
@@ -128,11 +142,31 @@ impl Rect {
 
     /// Snaps bounding edges against a device scale factor (e.g. 1.0 for 1x, 2.0 for Retina).
     pub fn snap_to_scale(self, scale: f32) -> Self {
-        let s = if scale > 0.0 && scale.is_finite() { scale } else { 1.0 };
-        let x = if self.x.is_finite() { self.x.clamp(-1e7, 1e7) } else { 0.0 };
-        let y = if self.y.is_finite() { self.y.clamp(-1e7, 1e7) } else { 0.0 };
-        let w = if self.width.is_finite() { self.width.clamp(0.0, 1e7) } else { 0.0 };
-        let h = if self.height.is_finite() { self.height.clamp(0.0, 1e7) } else { 0.0 };
+        let s = if scale > 0.0 && scale.is_finite() {
+            scale
+        } else {
+            1.0
+        };
+        let x = if self.x.is_finite() {
+            self.x.clamp(-1e7, 1e7)
+        } else {
+            0.0
+        };
+        let y = if self.y.is_finite() {
+            self.y.clamp(-1e7, 1e7)
+        } else {
+            0.0
+        };
+        let w = if self.width.is_finite() {
+            self.width.clamp(0.0, 1e7)
+        } else {
+            0.0
+        };
+        let h = if self.height.is_finite() {
+            self.height.clamp(0.0, 1e7)
+        } else {
+            0.0
+        };
 
         let snapped_x = (x * s).round() / s;
         let snapped_y = (y * s).round() / s;
@@ -150,7 +184,10 @@ impl Rect {
     /// Returns true if all components of the rectangle are finite numbers.
     #[inline(always)]
     pub fn is_finite(&self) -> bool {
-        self.x.is_finite() && self.y.is_finite() && self.width.is_finite() && self.height.is_finite()
+        self.x.is_finite()
+            && self.y.is_finite()
+            && self.width.is_finite()
+            && self.height.is_finite()
     }
 
     /// Sanitizes all coordinates ensuring they are finite and clamped to valid layout limits.
@@ -264,10 +301,26 @@ impl LayoutGeometry {
     ) -> Self {
         let sanitize_edge = |e: EdgeInsets<f32>| -> EdgeInsets<f32> {
             EdgeInsets {
-                top: if e.top.is_finite() { e.top.clamp(-1e7, 1e7) } else { 0.0 },
-                right: if e.right.is_finite() { e.right.clamp(-1e7, 1e7) } else { 0.0 },
-                bottom: if e.bottom.is_finite() { e.bottom.clamp(-1e7, 1e7) } else { 0.0 },
-                left: if e.left.is_finite() { e.left.clamp(-1e7, 1e7) } else { 0.0 },
+                top: if e.top.is_finite() {
+                    e.top.clamp(-1e7, 1e7)
+                } else {
+                    0.0
+                },
+                right: if e.right.is_finite() {
+                    e.right.clamp(-1e7, 1e7)
+                } else {
+                    0.0
+                },
+                bottom: if e.bottom.is_finite() {
+                    e.bottom.clamp(-1e7, 1e7)
+                } else {
+                    0.0
+                },
+                left: if e.left.is_finite() {
+                    e.left.clamp(-1e7, 1e7)
+                } else {
+                    0.0
+                },
             }
         };
 
@@ -275,10 +328,26 @@ impl LayoutGeometry {
         let border = sanitize_edge(border);
         let margin = sanitize_edge(margin);
 
-        let bx = if border_box.x.is_finite() { border_box.x.clamp(-1e7, 1e7) } else { 0.0 };
-        let by = if border_box.y.is_finite() { border_box.y.clamp(-1e7, 1e7) } else { 0.0 };
-        let bw = if border_box.width.is_finite() { border_box.width.clamp(0.0, 1e7) } else { 0.0 };
-        let bh = if border_box.height.is_finite() { border_box.height.clamp(0.0, 1e7) } else { 0.0 };
+        let bx = if border_box.x.is_finite() {
+            border_box.x.clamp(-1e7, 1e7)
+        } else {
+            0.0
+        };
+        let by = if border_box.y.is_finite() {
+            border_box.y.clamp(-1e7, 1e7)
+        } else {
+            0.0
+        };
+        let bw = if border_box.width.is_finite() {
+            border_box.width.clamp(0.0, 1e7)
+        } else {
+            0.0
+        };
+        let bh = if border_box.height.is_finite() {
+            border_box.height.clamp(0.0, 1e7)
+        } else {
+            0.0
+        };
         let border_box = Rect::new(bx, by, bw, bh);
 
         let content_box = Rect::new(

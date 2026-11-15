@@ -2,7 +2,10 @@
 
 use strata::prelude::*;
 use strata_dom::View;
-use strata_platform::{MockEventLoop, MockPlatformWindow, PlatformEvent, SoftwareSurfacePresenter, SwapchainCompositor, SwapchainFormat, WindowConfig};
+use strata_platform::{
+    MockEventLoop, MockPlatformWindow, PlatformEvent, SoftwareSurfacePresenter,
+    SwapchainCompositor, SwapchainFormat, WindowConfig,
+};
 
 #[component]
 fn TestWindowApp() -> View {
@@ -51,7 +54,10 @@ fn test_app_runtime_step_event_resize_and_scale() {
     assert_eq!(runtime.dpr, 1.0);
 
     // Resize event
-    let resize_event = PlatformEvent::WindowResized { width: 1920, height: 1080 };
+    let resize_event = PlatformEvent::WindowResized {
+        width: 1920,
+        height: 1080,
+    };
     let dirty = runtime.step_event(&resize_event);
     assert!(dirty);
     assert_eq!(runtime.viewport_width, 1920.0);
@@ -79,11 +85,19 @@ fn test_app_runtime_run_with_window_event_loop() {
     let mut presenter = SoftwareSurfacePresenter::new(800, 600, SwapchainFormat::Bgra8Unorm);
 
     // Queue simulated OS events
-    event_loop.queue_event(PlatformEvent::WindowResized { width: 1024, height: 768 });
+    event_loop.queue_event(PlatformEvent::WindowResized {
+        width: 1024,
+        height: 768,
+    });
     event_loop.queue_event(PlatformEvent::WindowFocused(true));
     event_loop.queue_event(PlatformEvent::WindowCloseRequested);
 
-    runtime.run_with_window(&mut window, &mut event_loop, &mut compositor, &mut presenter);
+    runtime.run_with_window(
+        &mut window,
+        &mut event_loop,
+        &mut compositor,
+        &mut presenter,
+    );
 
     // Verify final state
     assert_eq!(runtime.viewport_width, 1024.0);
@@ -150,7 +164,10 @@ fn test_strata_low_level_app_builder_and_lifecycle_hooks() {
     assert!(!dl.commands.is_empty());
 
     // 2. Test event dispatching and on_event hook
-    let resized = PlatformEvent::WindowResized { width: 1600, height: 1000 };
+    let resized = PlatformEvent::WindowResized {
+        width: 1600,
+        height: 1000,
+    };
     app.dispatch_event(&resized);
     assert!(event_intercepted.load(Ordering::SeqCst));
     assert_eq!(app.runtime.viewport_width, 1600.0);
@@ -222,7 +239,10 @@ fn test_runtime_native_input_focus_and_key_routing() {
     let focused_first = runtime.dispatch_pointer_down(50.0, 30.0);
     assert!(focused_first);
     assert!(runtime.active_focus.is_some());
-    assert_eq!(runtime.active_focus.as_ref().unwrap().state.text.get(), "strata://newtab");
+    assert_eq!(
+        runtime.active_focus.as_ref().unwrap().state.text.get(),
+        "strata://newtab"
+    );
 
     // 2. Type '!' into the first input at the clicked caret position
     let key_ev = PlatformEvent::ReceivedCharacter('!');
@@ -240,8 +260,14 @@ fn test_runtime_native_input_focus_and_key_routing() {
     // 3. Click on the second input (inside y: 68..100)
     let focused_second = runtime.dispatch_pointer_down(50.0, 80.0);
     assert!(focused_second);
-    assert!(url_blurred.load(Ordering::SeqCst), "First input must have received blur event");
-    assert!(search_focused.load(Ordering::SeqCst), "Second input must have received focus event");
+    assert!(
+        url_blurred.load(Ordering::SeqCst),
+        "First input must have received blur event"
+    );
+    assert!(
+        search_focused.load(Ordering::SeqCst),
+        "Second input must have received focus event"
+    );
 
     // 4. Type 'rust' into the second input
     for ch in "rust".chars() {
@@ -261,11 +287,17 @@ fn test_runtime_native_input_focus_and_key_routing() {
     // 6. Click on page background / whitespace (x: 500.0, y: 500.0)
     let unfocused = runtime.dispatch_pointer_down(500.0, 500.0);
     assert!(unfocused);
-    assert!(runtime.active_focus.is_none(), "Active focus must be cleared on outside click");
+    assert!(
+        runtime.active_focus.is_none(),
+        "Active focus must be cleared on outside click"
+    );
 
     // 7. Typing while unfocused must not be consumed
     let stray_key = PlatformEvent::ReceivedCharacter('x');
-    assert!(!runtime.handle_key_event(&stray_key), "Keystrokes while unfocused must return false");
+    assert!(
+        !runtime.handle_key_event(&stray_key),
+        "Keystrokes while unfocused must return false"
+    );
 }
 
 #[test]
@@ -304,7 +336,10 @@ fn test_multi_input_per_field_undo_redo_and_selection() {
     // 1. Focus Field A (at y=30)
     assert!(runtime.dispatch_pointer_down(50.0, 30.0));
     assert!(runtime.dispatch_pointer_up(50.0, 30.0));
-    assert_eq!(runtime.active_focus.as_ref().unwrap().input_id.as_deref(), Some("field-a"));
+    assert_eq!(
+        runtime.active_focus.as_ref().unwrap().input_id.as_deref(),
+        Some("field-a")
+    );
 
     // Type "abc" into Field A
     for ch in "abc".chars() {
@@ -315,7 +350,10 @@ fn test_multi_input_per_field_undo_redo_and_selection() {
     // Undo twice in Field A: "abc" -> "ab" -> "a"
     let ctrl_z = PlatformEvent::KeyDown {
         key: strata_platform::KeyCode::KeyZ,
-        modifiers: strata_platform::Modifiers { ctrl: true, ..Default::default() },
+        modifiers: strata_platform::Modifiers {
+            ctrl: true,
+            ..Default::default()
+        },
     };
     assert!(runtime.handle_key_event(&ctrl_z));
     assert_eq!(*input_a_val.lock().unwrap(), "ab");
@@ -325,7 +363,10 @@ fn test_multi_input_per_field_undo_redo_and_selection() {
     // Redo once with Ctrl+Y: "a" -> "ab"
     let ctrl_y = PlatformEvent::KeyDown {
         key: strata_platform::KeyCode::KeyY,
-        modifiers: strata_platform::Modifiers { ctrl: true, ..Default::default() },
+        modifiers: strata_platform::Modifiers {
+            ctrl: true,
+            ..Default::default()
+        },
     };
     assert!(runtime.handle_key_event(&ctrl_y));
     assert_eq!(*input_a_val.lock().unwrap(), "ab");
@@ -333,7 +374,11 @@ fn test_multi_input_per_field_undo_redo_and_selection() {
     // Redo once with Ctrl+Shift+Z: "ab" -> "abc"
     let ctrl_shift_z = PlatformEvent::KeyDown {
         key: strata_platform::KeyCode::KeyZ,
-        modifiers: strata_platform::Modifiers { ctrl: true, shift: true, ..Default::default() },
+        modifiers: strata_platform::Modifiers {
+            ctrl: true,
+            shift: true,
+            ..Default::default()
+        },
     };
     assert!(runtime.handle_key_event(&ctrl_shift_z));
     assert_eq!(*input_a_val.lock().unwrap(), "abc");
@@ -341,7 +386,10 @@ fn test_multi_input_per_field_undo_redo_and_selection() {
     // 2. Focus Field B (at y=80)
     assert!(runtime.dispatch_pointer_down(50.0, 80.0));
     assert!(runtime.dispatch_pointer_up(50.0, 80.0));
-    assert_eq!(runtime.active_focus.as_ref().unwrap().input_id.as_deref(), Some("field-b"));
+    assert_eq!(
+        runtime.active_focus.as_ref().unwrap().input_id.as_deref(),
+        Some("field-b")
+    );
 
     // Type "xyz" into Field B
     for ch in "xyz".chars() {
@@ -356,7 +404,10 @@ fn test_multi_input_per_field_undo_redo_and_selection() {
     // 3. Switch back to Field A: verify independent history is preserved
     assert!(runtime.dispatch_pointer_down(50.0, 30.0));
     assert!(runtime.dispatch_pointer_up(50.0, 30.0));
-    assert_eq!(runtime.active_focus.as_ref().unwrap().input_id.as_deref(), Some("field-a"));
+    assert_eq!(
+        runtime.active_focus.as_ref().unwrap().input_id.as_deref(),
+        Some("field-a")
+    );
     assert_eq!(*input_a_val.lock().unwrap(), "abc");
 
     // Undo once in Field A: "abc" -> "ab"
@@ -369,7 +420,10 @@ fn test_multi_input_per_field_undo_redo_and_selection() {
     // Switch back to Field B and Redo: "xy" -> "xyz"
     assert!(runtime.dispatch_pointer_down(50.0, 80.0));
     assert!(runtime.dispatch_pointer_up(50.0, 80.0));
-    assert_eq!(runtime.active_focus.as_ref().unwrap().input_id.as_deref(), Some("field-b"));
+    assert_eq!(
+        runtime.active_focus.as_ref().unwrap().input_id.as_deref(),
+        Some("field-b")
+    );
     assert!(runtime.handle_key_event(&ctrl_y));
     assert_eq!(*input_b_val.lock().unwrap(), "xyz");
 
@@ -378,7 +432,13 @@ fn test_multi_input_per_field_undo_redo_and_selection() {
     assert!(runtime.dispatch_pointer_down(35.0, 80.0));
     assert!(runtime.dispatch_pointer_move(65.0, 80.0));
     assert!(runtime.active_focus.as_ref().unwrap().state.has_selection());
-    let (sel_start, sel_end) = runtime.active_focus.as_ref().unwrap().state.selection_range().unwrap();
+    let (sel_start, sel_end) = runtime
+        .active_focus
+        .as_ref()
+        .unwrap()
+        .state
+        .selection_range()
+        .unwrap();
     assert!(sel_start < sel_end);
     assert!(runtime.dispatch_pointer_up(65.0, 80.0));
 
@@ -542,11 +602,15 @@ fn test_native_surface_window_presentation() {
     let mut window = LivePlatformWindow::new(WindowConfig::default());
 
     let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-    assert!(!presenter.backing_buffer.is_empty(), "Backing buffer must contain rendered pixels");
+    assert!(
+        !presenter.backing_buffer.is_empty(),
+        "Backing buffer must contain rendered pixels"
+    );
     assert_eq!(presenter.backing_buffer.len(), 800 * 600 * 4);
 
     let res = window.present_surface(&presenter.backing_buffer, 800, 600);
-    assert!(res.is_ok(), "NativeSurfaceWindow::present_surface must succeed");
+    assert!(
+        res.is_ok(),
+        "NativeSurfaceWindow::present_surface must succeed"
+    );
 }
-
-

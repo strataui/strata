@@ -126,28 +126,62 @@ impl ChromiumCommand {
     pub fn serialize(&self) -> String {
         match self {
             Self::Navigate { url } => format!("NAVIGATE|{}", url),
-            Self::Resize { width, height, scale_factor } => {
+            Self::Resize {
+                width,
+                height,
+                scale_factor,
+            } => {
                 format!("RESIZE|{}|{}|{}", width, height, scale_factor)
             }
-            Self::MouseEvent { action, x, y, button, modifiers, delta_x, delta_y } => {
+            Self::MouseEvent {
+                action,
+                x,
+                y,
+                button,
+                modifiers,
+                delta_x,
+                delta_y,
+            } => {
                 format!(
                     "MOUSE|{:?}|{}|{}|{:?}|{}|{}|{}|{}|{}|{}",
-                    action, x, y, button,
-                    modifiers.shift as u8, modifiers.ctrl as u8, modifiers.alt as u8, modifiers.meta as u8,
-                    delta_x, delta_y
+                    action,
+                    x,
+                    y,
+                    button,
+                    modifiers.shift as u8,
+                    modifiers.ctrl as u8,
+                    modifiers.alt as u8,
+                    modifiers.meta as u8,
+                    delta_x,
+                    delta_y
                 )
             }
-            Self::KeyEvent { action, key_code, text, modifiers } => {
+            Self::KeyEvent {
+                action,
+                key_code,
+                text,
+                modifiers,
+            } => {
                 format!(
                     "KEY|{:?}|{}|{}|{}|{}|{}|{}",
-                    action, key_code, text.as_deref().unwrap_or(""),
-                    modifiers.shift as u8, modifiers.ctrl as u8, modifiers.alt as u8, modifiers.meta as u8
+                    action,
+                    key_code,
+                    text.as_deref().unwrap_or(""),
+                    modifiers.shift as u8,
+                    modifiers.ctrl as u8,
+                    modifiers.alt as u8,
+                    modifiers.meta as u8
                 )
             }
             Self::ExecuteJs { request_id, script } => {
                 format!("EXEC_JS|{}|{}", request_id, script)
             }
-            Self::SetCookie { name, value, domain, path } => {
+            Self::SetCookie {
+                name,
+                value,
+                domain,
+                path,
+            } => {
                 format!("SET_COOKIE|{}|{}|{}|{}", name, value, domain, path)
             }
             Self::Reload => "RELOAD".to_string(),

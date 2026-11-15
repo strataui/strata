@@ -666,7 +666,6 @@ impl Containment {
     }
 }
 
-
 /// Stepped timing function transition position (W3C CSS Easing Functions Level 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StepPosition {
@@ -680,8 +679,7 @@ pub enum StepPosition {
 }
 
 /// Animation and transition timing function (easing curve).
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum TransitionEasing {
     Linear,
     #[default]
@@ -694,7 +692,6 @@ pub enum TransitionEasing {
     Steps(u32, StepPosition),
     CubicBezier(f32, f32, f32, f32),
 }
-
 
 impl TransitionEasing {
     /// Evaluates the easing function at normalized progression `t` in `[0.0, 1.0]`.
@@ -1099,8 +1096,7 @@ pub enum ScrollTimelineSource {
 }
 
 /// CSS animation timeline descriptor per W3C Scroll-Driven Animations Level 1.
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum AnimationTimeline {
     /// Traditional wall-clock time timeline.
     #[default]
@@ -1112,7 +1108,6 @@ pub enum AnimationTimeline {
     /// Named timeline referencing a @scroll-timeline or scroll-timeline-name.
     Named(String),
 }
-
 
 /// Named range anchor for scroll-driven animations per W3C specification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1629,10 +1624,7 @@ impl ComputedStyle {
         self.mix_blend_mode != BlendMode::Normal
             || self.isolation == Isolation::Isolate
             || self.filter.as_ref().is_some_and(|f| !f.is_empty())
-            || self
-                .backdrop_filter
-                .as_ref()
-                .is_some_and(|b| !b.is_empty())
+            || self.backdrop_filter.as_ref().is_some_and(|b| !b.is_empty())
             || self.clip_path.as_ref().is_some_and(|c| !c.is_none())
     }
 
@@ -1671,8 +1663,7 @@ impl ComputedStyle {
             parent_display,
             Some(Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid)
         );
-        let z_index_triggers =
-            self.z_index.is_some() && (is_positioned || is_flex_or_grid_item);
+        let z_index_triggers = self.z_index.is_some() && (is_positioned || is_flex_or_grid_item);
         let fixed_or_sticky = matches!(self.position, Position::Fixed | Position::Sticky);
 
         z_index_triggers

@@ -110,7 +110,9 @@ fn handle_client(
                     break;
                 }
             }
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
+            Err(ref e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
+            {
                 if read_bytes > 0 {
                     break;
                 }
@@ -156,9 +158,10 @@ fn handle_client(
     }
 
     // 3. WebSocket Upgrade
-    let is_upgrade = req_text
-        .lines()
-        .any(|l| l.to_ascii_lowercase().starts_with("upgrade:") && l.to_ascii_lowercase().contains("websocket"));
+    let is_upgrade = req_text.lines().any(|l| {
+        l.to_ascii_lowercase().starts_with("upgrade:")
+            && l.to_ascii_lowercase().contains("websocket")
+    });
 
     if is_upgrade {
         let mut ws_key = None;
@@ -196,7 +199,10 @@ fn handle_client(
                             Ok((frame, consumed)) => {
                                 ws_buffer.drain(..consumed);
                                 if let Some(resp_frame) = dispatcher.handle_ws_frame(&frame) {
-                                    let encoded = WebSocketCodec::encode_frame(resp_frame.opcode, &resp_frame.payload);
+                                    let encoded = WebSocketCodec::encode_frame(
+                                        resp_frame.opcode,
+                                        &resp_frame.payload,
+                                    );
                                     if stream.write_all(&encoded).is_err() {
                                         return Ok(());
                                     }
@@ -207,7 +213,10 @@ fn handle_client(
                         }
                     }
                 }
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
+                Err(ref e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
+                {
                     continue;
                 }
                 Err(_) => break,

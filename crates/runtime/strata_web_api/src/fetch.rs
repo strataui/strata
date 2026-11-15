@@ -129,7 +129,10 @@ impl Headers {
     }
 
     pub fn entries(&self) -> Vec<(&str, &str)> {
-        self.map.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
+        self.map
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect()
     }
 
     pub fn all_entries(&self) -> Vec<(&str, &str)> {
@@ -315,7 +318,10 @@ impl FormData {
     }
 
     pub fn get(&self, name: &str) -> Option<&str> {
-        self.fields.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str())
+        self.fields
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
     }
 
     /// Formats multipart form payload with boundary.
@@ -323,7 +329,9 @@ impl FormData {
         let mut out = Vec::new();
         for (name, val) in &self.fields {
             out.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-            out.extend_from_slice(format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes());
+            out.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+            );
             out.extend_from_slice(val.as_bytes());
             out.extend_from_slice(b"\r\n");
         }
@@ -370,9 +378,9 @@ impl ParsedUrl {
         };
 
         let (host, port) = if let Some((h, p)) = host_port.split_once(':') {
-            let parsed_port = p.parse::<u16>().map_err(|_| {
-                FetchError::InvalidUrl(format!("Invalid port: {p}"))
-            })?;
+            let parsed_port = p
+                .parse::<u16>()
+                .map_err(|_| FetchError::InvalidUrl(format!("Invalid port: {p}")))?;
             (h.to_string(), parsed_port)
         } else {
             let default_port = if scheme == "https" { 443 } else { 80 };
@@ -380,7 +388,9 @@ impl ParsedUrl {
         };
 
         if host.is_empty() {
-            return Err(FetchError::InvalidUrl(format!("Missing host in URL: {url}")));
+            return Err(FetchError::InvalidUrl(format!(
+                "Missing host in URL: {url}"
+            )));
         }
 
         // CWE-319 / Goal 27: Enforce strict TLS transport on HTTPS standard port 443.
@@ -421,14 +431,20 @@ pub fn resolve_redirect_url(base: &str, location: &str) -> Result<String, FetchE
     }
 
     if loc_trimmed.starts_with('/') {
-        return Ok(format!("{}://{}{}", parsed_base.scheme, host_part, loc_trimmed));
+        return Ok(format!(
+            "{}://{}{}",
+            parsed_base.scheme, host_part, loc_trimmed
+        ));
     }
 
     let base_dir = match parsed_base.path_and_query.rfind('/') {
         Some(idx) => &parsed_base.path_and_query[..=idx],
         None => "/",
     };
-    Ok(format!("{}://{}{}{}", parsed_base.scheme, host_part, base_dir, loc_trimmed))
+    Ok(format!(
+        "{}://{}{}{}",
+        parsed_base.scheme, host_part, base_dir, loc_trimmed
+    ))
 }
 
 /// Computes the serialized origin (scheme + host + port) for an HTTP/HTTPS URL per RFC 6454 / W3C Fetch.
@@ -439,7 +455,10 @@ pub fn compute_origin(url: &str) -> Result<String, FetchError> {
     if is_default_port {
         Ok(format!("{}://{}", parsed.scheme, parsed.host))
     } else {
-        Ok(format!("{}://{}:{}", parsed.scheme, parsed.host, parsed.port))
+        Ok(format!(
+            "{}://{}:{}",
+            parsed.scheme, parsed.host, parsed.port
+        ))
     }
 }
 
@@ -456,7 +475,12 @@ pub fn is_cors_simple_request(req: &RequestInit) -> (bool, Vec<String>) {
             "accept" | "accept-language" | "content-language" | "user-agent" | "host"
             | "connection" | "accept-encoding" | "origin" | "content-length" => {}
             "content-type" => {
-                let mime = v.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+                let mime = v
+                    .split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase();
                 if !matches!(
                     mime.as_str(),
                     "application/x-www-form-urlencoded" | "multipart/form-data" | "text/plain"
@@ -510,7 +534,8 @@ pub fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, FetchErro
             let (is_simple, custom_headers) = is_cors_simple_request(&current_req);
             if current_req.mode == RequestMode::NoCors && !is_simple {
                 return Err(FetchError::CorsError(
-                    "Invalid request in 'no-cors' mode: method or headers require CORS preflight".into(),
+                    "Invalid request in 'no-cors' mode: method or headers require CORS preflight"
+                        .into(),
                 ));
             }
 
@@ -524,9 +549,13 @@ pub fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, FetchErro
             if current_req.mode == RequestMode::Cors && !is_simple {
                 let mut preflight_headers = Headers::new();
                 preflight_headers.set("Origin", origin_str);
-                preflight_headers.set("Access-Control-Request-Method", &current_req.method.to_uppercase());
+                preflight_headers.set(
+                    "Access-Control-Request-Method",
+                    &current_req.method.to_uppercase(),
+                );
                 if !custom_headers.is_empty() {
-                    preflight_headers.set("Access-Control-Request-Headers", &custom_headers.join(", "));
+                    preflight_headers
+                        .set("Access-Control-Request-Headers", &custom_headers.join(", "));
                 }
 
                 let preflight_req = RequestInit {
@@ -556,7 +585,8 @@ pub fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, FetchErro
                     .map(|s| s.trim())
                     .ok_or_else(|| {
                         FetchError::CorsError(
-                            "CORS preflight failed: missing 'Access-Control-Allow-Origin' header".into(),
+                            "CORS preflight failed: missing 'Access-Control-Allow-Origin' header"
+                                .into(),
                         )
                     })?;
 
@@ -590,7 +620,10 @@ pub fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, FetchErro
                     .unwrap_or("");
                 let methods_list: Vec<&str> = allow_methods.split(',').map(|s| s.trim()).collect();
                 let req_method = current_req.method.to_uppercase();
-                if !methods_list.iter().any(|&m| m == "*" || m.eq_ignore_ascii_case(&req_method)) {
+                if !methods_list
+                    .iter()
+                    .any(|&m| m == "*" || m.eq_ignore_ascii_case(&req_method))
+                {
                     return Err(FetchError::CorsError(format!(
                         "CORS preflight failed: method '{req_method}' not permitted by Access-Control-Allow-Methods ('{allow_methods}')"
                     )));
@@ -601,7 +634,8 @@ pub fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, FetchErro
                         .headers
                         .get("access-control-allow-headers")
                         .unwrap_or("");
-                    let headers_list: Vec<&str> = allow_headers.split(',').map(|s| s.trim()).collect();
+                    let headers_list: Vec<&str> =
+                        allow_headers.split(',').map(|s| s.trim()).collect();
                     let wildcard = headers_list.contains(&"*");
                     if !wildcard {
                         for header in &custom_headers {
@@ -695,7 +729,9 @@ pub fn fetch(url: &str, init: Option<RequestInit>) -> Result<Response, FetchErro
         return Ok(resp);
     }
 
-    Err(FetchError::NetworkError("Too many redirects (exceeded 5 hops)".into()))
+    Err(FetchError::NetworkError(
+        "Too many redirects (exceeded 5 hops)".into(),
+    ))
 }
 
 /// Executes a single HTTP or HTTPS fetch request without following redirects.
@@ -711,15 +747,16 @@ pub fn fetch_single(url: &str, req: &RequestInit) -> Result<Response, FetchError
     let timeout = Duration::from_millis(req.timeout_ms.unwrap_or(15000));
 
     // Resolve DNS host and establish TCP connection
-    let addrs: Vec<std::net::SocketAddr> = match (parsed.host.as_str(), parsed.port).to_socket_addrs() {
-        Ok(iter) => iter.collect(),
-        Err(e) => {
-            return Err(FetchError::NetworkError(format!(
-                "DNS resolution failed for {}: {e}",
-                parsed.host
-            )));
-        }
-    };
+    let addrs: Vec<std::net::SocketAddr> =
+        match (parsed.host.as_str(), parsed.port).to_socket_addrs() {
+            Ok(iter) => iter.collect(),
+            Err(e) => {
+                return Err(FetchError::NetworkError(format!(
+                    "DNS resolution failed for {}: {e}",
+                    parsed.host
+                )));
+            }
+        };
 
     if addrs.is_empty() {
         return Err(FetchError::NetworkError(format!(
@@ -763,8 +800,7 @@ pub fn fetch_single(url: &str, req: &RequestInit) -> Result<Response, FetchError
 
     // Transparently multiplex between Plain TCP and TLS 1.2/1.3
     let mut transport: HttpTransportStream = if parsed.scheme == "https" {
-        crate::tls::create_tls_stream(tcp_stream, &parsed.host)
-            .map_err(FetchError::NetworkError)?
+        crate::tls::create_tls_stream(tcp_stream, &parsed.host).map_err(FetchError::NetworkError)?
     } else {
         HttpTransportStream::Plain(tcp_stream)
     };
@@ -794,9 +830,8 @@ pub fn fetch_single(url: &str, req: &RequestInit) -> Result<Response, FetchError
     // Build HTTP/1.1 request
     let mut request_bytes = Vec::new();
     let method = req_effective.method.to_uppercase();
-    request_bytes.extend_from_slice(
-        format!("{method} {} HTTP/1.1\r\n", parsed.path_and_query).as_bytes(),
-    );
+    request_bytes
+        .extend_from_slice(format!("{method} {} HTTP/1.1\r\n", parsed.path_and_query).as_bytes());
     request_bytes.extend_from_slice(format!("Host: {}\r\n", parsed.host).as_bytes());
     request_bytes.extend_from_slice(b"Connection: close\r\n");
 
@@ -810,7 +845,9 @@ pub fn fetch_single(url: &str, req: &RequestInit) -> Result<Response, FetchError
     }
 
     if !req_effective.headers.has("User-Agent") && !req_effective.headers.has("user-agent") {
-        request_bytes.extend_from_slice(b"User-Agent: Mozilla/5.0 (compatible; Onyx/1.0; +https://strataui.org)\r\n");
+        request_bytes.extend_from_slice(
+            b"User-Agent: Mozilla/5.0 (compatible; Onyx/1.0; +https://strataui.org)\r\n",
+        );
     }
 
     for (k, v) in req_effective.headers.entries() {
@@ -855,8 +892,9 @@ pub fn decode_chunked_body(raw_body: &[u8]) -> Result<Vec<u8>, FetchError> {
             .trim();
 
         let size_hex = size_str.split(';').next().unwrap_or(size_str).trim();
-        let chunk_size = usize::from_str_radix(size_hex, 16)
-            .map_err(|e| FetchError::NetworkError(format!("Invalid hex chunk size '{size_hex}': {e}")))?;
+        let chunk_size = usize::from_str_radix(size_hex, 16).map_err(|e| {
+            FetchError::NetworkError(format!("Invalid hex chunk size '{size_hex}': {e}"))
+        })?;
 
         cursor += newline_pos + 2;
 
@@ -865,7 +903,9 @@ pub fn decode_chunked_body(raw_body: &[u8]) -> Result<Vec<u8>, FetchError> {
         }
 
         if cursor + chunk_size > raw_body.len() {
-            return Err(FetchError::NetworkError("Truncated chunked HTTP payload".into()));
+            return Err(FetchError::NetworkError(
+                "Truncated chunked HTTP payload".into(),
+            ));
         }
 
         decoded.extend_from_slice(&raw_body[cursor..cursor + chunk_size]);
@@ -924,7 +964,9 @@ pub fn decompress_body(raw_body: &[u8], encoding: &str) -> Result<Vec<u8>, Fetch
                 let mut raw_limited = (&mut raw_decoder).take((MAX_DECOMPRESSED_SIZE + 1) as u64);
                 raw_limited
                     .read_to_end(&mut raw_decompressed)
-                    .map_err(|e| FetchError::NetworkError(format!("Deflate decompression failed: {e}")))?;
+                    .map_err(|e| {
+                        FetchError::NetworkError(format!("Deflate decompression failed: {e}"))
+                    })?;
                 if raw_decompressed.len() > MAX_DECOMPRESSED_SIZE {
                     return Err(FetchError::NetworkError(format!(
                         "Decompressed payload exceeded maximum limit of {MAX_DECOMPRESSED_SIZE} bytes (decompression bomb protection)"
@@ -937,9 +979,9 @@ pub fn decompress_body(raw_body: &[u8], encoding: &str) -> Result<Vec<u8>, Fetch
             let mut decompressor = brotli::Decompressor::new(raw_body, 4096);
             let mut decompressed = Vec::new();
             let mut limited = (&mut decompressor).take((MAX_DECOMPRESSED_SIZE + 1) as u64);
-            limited
-                .read_to_end(&mut decompressed)
-                .map_err(|e| FetchError::NetworkError(format!("Brotli decompression failed: {e:?}")))?;
+            limited.read_to_end(&mut decompressed).map_err(|e| {
+                FetchError::NetworkError(format!("Brotli decompression failed: {e:?}"))
+            })?;
             if decompressed.len() > MAX_DECOMPRESSED_SIZE {
                 return Err(FetchError::NetworkError(format!(
                     "Decompressed payload exceeded maximum limit of {MAX_DECOMPRESSED_SIZE} bytes (decompression bomb protection)"
@@ -978,15 +1020,17 @@ pub fn read_http_response<R: Read>(reader: &mut R) -> Result<Response, FetchErro
     }
 
     let Some(header_end_pos) = header_end else {
-        return Err(FetchError::NetworkError("Malformed HTTP response: no header delimiter".into()));
+        return Err(FetchError::NetworkError(
+            "Malformed HTTP response: no header delimiter".into(),
+        ));
     };
 
     let header_str = String::from_utf8_lossy(&buffer[..header_end_pos]);
     let mut lines = header_str.split("\r\n");
 
-    let status_line = lines.next().ok_or_else(|| {
-        FetchError::NetworkError("Missing HTTP status line".into())
-    })?;
+    let status_line = lines
+        .next()
+        .ok_or_else(|| FetchError::NetworkError("Missing HTTP status line".into()))?;
 
     let mut status_parts = status_line.splitn(3, ' ');
     let _version = status_parts.next();
@@ -1087,10 +1131,7 @@ fn read_fixed_length_body<R: Read>(
     Ok(initial)
 }
 
-fn read_chunked_stream<R: Read>(
-    reader: &mut R,
-    initial: Vec<u8>,
-) -> Result<Vec<u8>, FetchError> {
+fn read_chunked_stream<R: Read>(reader: &mut R, initial: Vec<u8>) -> Result<Vec<u8>, FetchError> {
     let mut decoded = Vec::new();
     let mut stream_buf = initial;
     let mut temp = [0u8; 4096];
@@ -1145,7 +1186,9 @@ fn read_chunked_stream<R: Read>(
             break;
         }
 
-        if chunk_size > MAX_RESPONSE_BODY_SIZE || decoded.len() + chunk_size > MAX_RESPONSE_BODY_SIZE {
+        if chunk_size > MAX_RESPONSE_BODY_SIZE
+            || decoded.len() + chunk_size > MAX_RESPONSE_BODY_SIZE
+        {
             return Err(FetchError::NetworkError(format!(
                 "Chunked response body exceeded maximum allowable size ({MAX_RESPONSE_BODY_SIZE} bytes)"
             )));

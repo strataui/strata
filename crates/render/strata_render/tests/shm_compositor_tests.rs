@@ -61,7 +61,9 @@ fn test_shm_ring_buffer_double_buffering() {
     );
 
     // Consumer reads Frame 2
-    let (seq2, slot2) = ring.acquire_latest(seq).expect("Frame 2 should be available");
+    let (seq2, slot2) = ring
+        .acquire_latest(seq)
+        .expect("Frame 2 should be available");
     assert_eq!(seq2, 2);
     assert_eq!(slot2.width, 1024);
     assert_eq!(slot2.height, 768);
@@ -85,10 +87,15 @@ fn test_shm_ring_buffer_dropped_frame_telemetry() {
     }
 
     // Consumer acquires latest: must receive frame 10
-    let (seq, slot) = ring.acquire_latest(0).expect("Latest frame should be available");
+    let (seq, slot) = ring
+        .acquire_latest(0)
+        .expect("Latest frame should be available");
     assert_eq!(seq, 10);
     assert_eq!(slot.display_list.len(), 1);
-    assert!(ring.dropped_frames() > 0, "Dropped frames counter should be non-zero");
+    assert!(
+        ring.dropped_frames() > 0,
+        "Dropped frames counter should be non-zero"
+    );
 }
 
 #[test]

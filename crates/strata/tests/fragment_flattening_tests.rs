@@ -37,19 +37,25 @@ fn test_node_blueprint_fragment_flattening() {
         ]),
     ]);
 
-    let parent_element = NodeBlueprint::element_simple(
-        Tag::Div,
-        "parent",
-        vec![nested_fragment],
-    );
+    let parent_element = NodeBlueprint::element_simple(Tag::Div, "parent", vec![nested_fragment]);
 
     let flattened = parent_element.flatten_fragments();
 
     if let NodeBlueprint::Element { children, .. } = flattened {
-        assert_eq!(children.len(), 3, "All nested fragments must flatten into 3 direct children");
-        assert!(matches!(&children[0], NodeBlueprint::Element { classes, .. } if classes.iter().any(|c| c == "item-1")));
-        assert!(matches!(&children[1], NodeBlueprint::Element { classes, .. } if classes.iter().any(|c| c == "item-2")));
-        assert!(matches!(&children[2], NodeBlueprint::Element { classes, .. } if classes.iter().any(|c| c == "item-3")));
+        assert_eq!(
+            children.len(),
+            3,
+            "All nested fragments must flatten into 3 direct children"
+        );
+        assert!(
+            matches!(&children[0], NodeBlueprint::Element { classes, .. } if classes.iter().any(|c| c == "item-1"))
+        );
+        assert!(
+            matches!(&children[1], NodeBlueprint::Element { classes, .. } if classes.iter().any(|c| c == "item-2"))
+        );
+        assert!(
+            matches!(&children[2], NodeBlueprint::Element { classes, .. } if classes.iter().any(|c| c == "item-3"))
+        );
     } else {
         panic!("Flattened blueprint must remain an Element");
     }
@@ -68,7 +74,10 @@ fn test_compile_to_ir_splicing_without_component_root_wrapper() {
     assert!(!root_id.is_null());
 
     let root_node = graph.get(root_id).unwrap();
-    assert_eq!(root_node.child_count, 2, "Parent IR node must have 2 direct children");
+    assert_eq!(
+        root_node.child_count, 2,
+        "Parent IR node must have 2 direct children"
+    );
 
     let first_child_id = root_node.first_child;
     assert!(!first_child_id.is_null());
@@ -112,7 +121,10 @@ fn test_app_runtime_grid_fragment_flattening() {
     // Verify IR graph synchronization
     let ir_root_id = runtime.ir_graph.root_id.expect("IR graph must have root");
     let ir_root = runtime.ir_graph.get(ir_root_id).unwrap();
-    assert_eq!(ir_root.child_count, 2, "IR graph must have 2 direct children matching layout");
+    assert_eq!(
+        ir_root.child_count, 2,
+        "IR graph must have 2 direct children matching layout"
+    );
 
     let ir_item1 = runtime.ir_graph.get(ir_root.first_child).unwrap();
     let (x1, _y1, w1, _h1) = ir_item1.layout_rect.to_f32();

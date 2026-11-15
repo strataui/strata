@@ -6,8 +6,8 @@
 use crate::compositor::{DamageTracker, DisplayList};
 use crate::rasterizer::FrameBuffer;
 use crate::swapchain::{PresentError, SoftwareSurfacePresenter, SurfacePresenter, SwapchainFormat};
-use strata_layout::Rect;
 use std::collections::HashMap;
+use strata_layout::Rect;
 
 /// State tracked per active window swapchain.
 pub struct WindowSwapchainState {
@@ -47,7 +47,8 @@ impl WindowSwapchainState {
         self.frame_buffer = FrameBuffer::new(width as usize, height as usize);
         self.presenter.resize(width, height)?;
         self.damage_tracker.reset();
-        self.damage_tracker.add_damage(Rect::new(0.0, 0.0, width as f32, height as f32));
+        self.damage_tracker
+            .add_damage(Rect::new(0.0, 0.0, width as f32, height as f32));
         Ok(())
     }
 }
@@ -90,7 +91,12 @@ impl MultiWindowCompositor {
     }
 
     /// Resizes a specific window's swapchain and damage tracking bounds.
-    pub fn resize_window(&mut self, window_id: u32, width: u32, height: u32) -> Result<(), PresentError> {
+    pub fn resize_window(
+        &mut self,
+        window_id: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<(), PresentError> {
         if let Some(win) = self.windows.get_mut(&window_id) {
             win.resize(width, height)?;
         }

@@ -1,10 +1,10 @@
 //! Hardware soundcard integration and real-time audio output stream via `cpal`.
 
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crate::ring_buffer::{Consumer, Producer, SpscRingBuffer};
 use crate::sample::AudioBuffer;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 /// Default capacity of the lock-free SPSC audio command ring buffer.
 pub const DEFAULT_COMMAND_QUEUE_CAPACITY: usize = 512;
@@ -234,12 +234,7 @@ impl AudioHardwareStream {
     ) -> Result<(Self, Producer<AudioCommand>), AudioError> {
         let (command_tx, command_rx) =
             SpscRingBuffer::<AudioCommand>::new(DEFAULT_COMMAND_QUEUE_CAPACITY).split();
-        let stream = Self::open_internal(
-            None,
-            command_rx,
-            None,
-            preferred_sample_rate,
-        )?;
+        let stream = Self::open_internal(None, command_rx, None, preferred_sample_rate)?;
         Ok((stream, command_tx))
     }
 

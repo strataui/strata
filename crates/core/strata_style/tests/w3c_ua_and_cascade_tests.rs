@@ -85,7 +85,8 @@ fn test_w3c_ua_stylesheet_defaults() {
         attributes: &[("hidden".to_string(), "".to_string())],
         children: &[],
     };
-    let hidden_style = CascadeSolver::resolve_with_hierarchy(&hidden_target, &[], &[], None, &[], None, &state);
+    let hidden_style =
+        CascadeSolver::resolve_with_hierarchy(&hidden_target, &[], &[], None, &[], None, &state);
     assert_eq!(hidden_style.display, Display::None);
 }
 
@@ -227,6 +228,7 @@ fn test_line_height_normal_and_unitless() {
     let fixed_style = CascadeSolver::resolve("p", &["fixed"], None, None, &[&sheet], None, &state);
     assert_eq!(fixed_style.line_height, 1.5); // 24 / 16 = 1.5
 
-    let standard_style = CascadeSolver::resolve("p", &["standard"], None, None, &[&sheet], None, &state);
+    let standard_style =
+        CascadeSolver::resolve("p", &["standard"], None, None, &[&sheet], None, &state);
     assert_eq!(standard_style.line_height, 1.2);
 }

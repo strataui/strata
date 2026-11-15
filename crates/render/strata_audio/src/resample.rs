@@ -155,7 +155,8 @@ pub fn resample_channel(
     }
 
     let ratio = source_rate as f64 / target_rate as f64;
-    let target_len = ((channel.len() as f64) * (target_rate as f64 / source_rate as f64)).round() as usize;
+    let target_len =
+        ((channel.len() as f64) * (target_rate as f64 / source_rate as f64)).round() as usize;
     if target_len == 0 {
         return Vec::new();
     }
@@ -209,13 +210,22 @@ mod tests {
         let resampled_cubic = resample_channel(&dc, 44100, 48000, ResampleQuality::Cubic);
         assert_eq!(resampled_cubic.len(), 109);
         for &s in &resampled_cubic[2..107] {
-            assert!((s - 0.75).abs() < 1e-3, "DC level must be preserved: got {}", s);
+            assert!(
+                (s - 0.75).abs() < 1e-3,
+                "DC level must be preserved: got {}",
+                s
+            );
         }
 
-        let resampled_sinc = resample_channel(&dc, 48000, 44100, ResampleQuality::Sinc { taps: 16 });
+        let resampled_sinc =
+            resample_channel(&dc, 48000, 44100, ResampleQuality::Sinc { taps: 16 });
         assert_eq!(resampled_sinc.len(), 92);
         for &s in &resampled_sinc[5..85] {
-            assert!((s - 0.75).abs() < 1e-3, "DC level must be preserved: got {}", s);
+            assert!(
+                (s - 0.75).abs() < 1e-3,
+                "DC level must be preserved: got {}",
+                s
+            );
         }
     }
 }

@@ -98,7 +98,6 @@ impl VfsPath {
         }
     }
 
-
     /// Serializes path into a universal VFS URI string (e.g. `vfs://app_data/settings.json`).
     pub fn to_uri(&self) -> String {
         let sub = self.subpath.to_string_lossy().replace('\\', "/");
@@ -148,9 +147,8 @@ impl VfsPath {
         let root_str = parts.next().unwrap_or("");
         let sub_str = parts.next().unwrap_or("");
 
-        let root = VfsRoot::parse(root_str).ok_or_else(|| {
-            FsError::InvalidPath(format!("Unknown VfsRoot in URI: {root_str}"))
-        })?;
+        let root = VfsRoot::parse(root_str)
+            .ok_or_else(|| FsError::InvalidPath(format!("Unknown VfsRoot in URI: {root_str}")))?;
 
         if Self::has_traversal_escape(sub_str) {
             return Err(FsError::SecurityViolation(format!(
@@ -169,7 +167,13 @@ impl VfsPath {
                 Component::Normal(c) => {
                     let s = c.to_string_lossy();
                     // Strip Windows drive letters (e.g., "C:", "D:")
-                    if s.len() == 2 && s.ends_with(':') && s.chars().next().map(|ch| ch.is_ascii_alphabetic()).unwrap_or(false) {
+                    if s.len() == 2
+                        && s.ends_with(':')
+                        && s.chars()
+                            .next()
+                            .map(|ch| ch.is_ascii_alphabetic())
+                            .unwrap_or(false)
+                    {
                         continue;
                     }
                     clean.push(c);

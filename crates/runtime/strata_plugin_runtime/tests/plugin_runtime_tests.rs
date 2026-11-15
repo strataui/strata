@@ -7,7 +7,9 @@ use strata_plugin_runtime::{
 #[test]
 fn test_plugin_manifest_and_security_sandbox() {
     let manifest = PluginManifest::new("com.strata.analytics", "Analytics Engine", "1.0.0")
-        .with_capability(PluginCapability::Network(vec!["api.strata.dev".to_string()]))
+        .with_capability(PluginCapability::Network(
+            vec!["api.strata.dev".to_string()],
+        ))
         .with_capability(PluginCapability::StorageRead);
 
     let sandbox = SecuritySandbox::new(manifest);
@@ -31,7 +33,10 @@ fn test_dynamic_component_registration() {
     registry.register_component("CustomMetricCard", |props, text| {
         let title = props.get("title").map(|s| s.as_str()).unwrap_or("Metric");
         let val = text.unwrap_or("0");
-        format!("<div class=\"metric-card\"><h3>{}</h3><span>{}</span></div>", title, val)
+        format!(
+            "<div class=\"metric-card\"><h3>{}</h3><span>{}</span></div>",
+            title, val
+        )
     });
 
     assert!(registry.has_component("CustomMetricCard"));
@@ -39,7 +44,9 @@ fn test_dynamic_component_registration() {
 
     let mut props = HashMap::new();
     props.insert("title".to_string(), "Active Telemetry".to_string());
-    let rendered = registry.render_component("CustomMetricCard", &props, Some("4200 RPM")).unwrap();
+    let rendered = registry
+        .render_component("CustomMetricCard", &props, Some("4200 RPM"))
+        .unwrap();
 
     assert!(rendered.contains("<h3>Active Telemetry</h3>"));
     assert!(rendered.contains("<span>4200 RPM</span>"));

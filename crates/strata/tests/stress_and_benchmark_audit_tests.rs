@@ -1,11 +1,11 @@
 //! Empirical Stress Testing, Resilience, and Microbenchmarking Audit Suite for Project Strata.
 
 use std::time::Instant;
+use strata::runtime::AppRuntime;
 use strata_dom::{Attribute, NodeBlueprint, Tag, View};
 use strata_layout::tree::LayoutNode;
 use strata_style::tailwind::TailwindEngine;
 use strata_style::types::{ComputedStyle, Dimension, Display, FlexDirection};
-use strata::runtime::AppRuntime;
 
 #[test]
 fn test_stress_deeply_nested_tree_recursion() {
@@ -84,7 +84,11 @@ fn test_stress_massive_dom_tree_layout_throughput() {
         per_node_ns
     );
 
-    assert!(per_node_ns < 1_000_000, "Layout throughput too slow: {} ns/node", per_node_ns);
+    assert!(
+        per_node_ns < 1_000_000,
+        "Layout throughput too slow: {} ns/node",
+        per_node_ns
+    );
 }
 
 #[test]
@@ -180,7 +184,10 @@ fn test_stress_web_reader_malformed_html_fuzzing() {
     "#;
 
     let nodes = HtmlParser::parse(broken_html);
-    assert!(!nodes.is_empty(), "Parser must gracefully recover from broken HTML");
+    assert!(
+        !nodes.is_empty(),
+        "Parser must gracefully recover from broken HTML"
+    );
 
     let theme = ReaderTheme::default();
     let transpiler = WebTranspiler::new(&theme);
@@ -190,7 +197,10 @@ fn test_stress_web_reader_malformed_html_fuzzing() {
     let view = View::new(blueprint);
     let mut runtime = AppRuntime::new(view, 1024.0, 768.0, 1.0);
     let redraw = runtime.tick_frame();
-    println!("[STRESS] Malformed HTML gracefully transpiled and mounted, DL Cmds: {}", redraw.len());
+    println!(
+        "[STRESS] Malformed HTML gracefully transpiled and mounted, DL Cmds: {}",
+        redraw.len()
+    );
 }
 
 #[test]

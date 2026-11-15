@@ -7,8 +7,7 @@ pub mod role;
 pub mod update;
 
 pub use accesskit::{
-    AccessKitActionRequest, AccessKitAdapter, AccessKitNode, AccessKitTreeMeta,
-    AccessKitTreeUpdate,
+    AccessKitActionRequest, AccessKitAdapter, AccessKitNode, AccessKitTreeMeta, AccessKitTreeUpdate,
 };
 pub use audit::{
     audit_tree, calculate_contrast_ratio, evaluate_large_text_contrast,
@@ -24,4 +23,3 @@ pub use node::{A11yAction, A11yLivePoliteness, A11yNode, A11yNodeId, A11yRect, A
 
 pub use role::A11yRole;
 pub use update::A11yTreeUpdate;
-

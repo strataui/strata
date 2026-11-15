@@ -200,13 +200,7 @@ fn build_scene_viewport(
                     let mut c = ctrl_move.borrow_mut();
                     let active = c.active_mode != strata_render::OrbitInteractionMode::None;
                     if active {
-                        c.on_pointer_move(
-                            ev.client_x as f32,
-                            ev.client_y as f32,
-                            vw,
-                            vh,
-                            fov_deg,
-                        );
+                        c.on_pointer_move(ev.client_x as f32, ev.client_y as f32, vw, vh, fov_deg);
                     }
                     active
                 };
@@ -243,18 +237,9 @@ fn build_scene_viewport(
 
     let canvas_backing = NodeBlueprint::element(
         Tag::Canvas,
-        ClassList::from("absolute inset-0 w-full h-full z-0 pointer-events-auto"),
+        ClassList::from("absolute inset-0 w-full h-full z-0"),
         canvas_attrs,
         Vec::new(),
-    );
-
-    let hud_overlay = NodeBlueprint::element(
-        Tag::Div,
-        ClassList::from(
-            "relative z-10 w-full h-full pointer-events-none p-4 flex flex-col justify-between",
-        ),
-        Vec::new(),
-        hud_children,
     );
 
     let mut root_attrs = Vec::new();
@@ -262,19 +247,23 @@ fn build_scene_viewport(
         root_attrs.push(Attribute::property("style", style_str.trim()));
     }
 
+    // Children are siblings of the canvas, not wrapped in an overlay layer, so
+    // no layer intercepts pointer input meant for the canvas. Hosts position
+    // them (for example `absolute` or `relative z-10`) to stack above it.
+    let mut children = Vec::with_capacity(1 + hud_children.len());
+    children.push(canvas_backing);
+    children.extend(hud_children);
+
     View::new(NodeBlueprint::element(
         Tag::Div,
         ClassList::from(
-            format!(
-                "relative w-full h-full overflow-hidden bg-neutral-950 rounded-2xl border border-neutral-800/80 shadow-2xl {}",
-                custom
-            )
-            .split_whitespace()
-            .map(String::from)
-            .collect::<Vec<String>>(),
+            format!("relative {}", custom)
+                .split_whitespace()
+                .map(String::from)
+                .collect::<Vec<String>>(),
         ),
         root_attrs,
-        vec![canvas_backing, hud_overlay],
+        children,
     ))
 }
 

@@ -208,13 +208,13 @@ impl TerminalScreen {
     /// Forces a full frame redraw by marking all lines dirty and resetting the back buffer.
     pub fn force_full_redraw(&mut self) {
         self.back.fill(CharCell {
-                ch: '\0',
-                fg: Color24::Default,
-                bg: Color24::Default,
-                style: 255,
-                is_wide_continuation: false,
-                z_index: -1,
-            });
+            ch: '\0',
+            fg: Color24::Default,
+            bg: Color24::Default,
+            style: 255,
+            is_wide_continuation: false,
+            z_index: -1,
+        });
         self.dirty_lines.fill(true);
     }
 }

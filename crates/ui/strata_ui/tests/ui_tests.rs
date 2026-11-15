@@ -28,7 +28,8 @@ fn test_headless_primitives() {
     // FloatingAnchor
     let anchor = Rect::from_xywh(100.0, 100.0, 80.0, 40.0);
     let floating_size = Size::new(120.0, 60.0);
-    let bottom_pos = FloatingAnchor::compute_position(anchor, floating_size, Placement::Bottom, 8.0);
+    let bottom_pos =
+        FloatingAnchor::compute_position(anchor, floating_size, Placement::Bottom, 8.0);
     assert_eq!(bottom_pos.y, 148.0); // 100 + 40 + 8
     assert_eq!(bottom_pos.x, 80.0); // 100 + (80 - 120)/2 = 80
 
@@ -63,7 +64,12 @@ fn test_button_variants_and_loading() {
         None,
     );
     match &btn_primary.root {
-        NodeBlueprint::Element { tag, classes, attributes, children } => {
+        NodeBlueprint::Element {
+            tag,
+            classes,
+            attributes,
+            children,
+        } => {
             assert_eq!(*tag, Tag::Button);
             assert!(classes.iter().any(|c| c.contains("bg-indigo-600")));
             assert!(classes.iter().any(|c| c.contains("shadow-lg")));
@@ -85,7 +91,11 @@ fn test_button_variants_and_loading() {
         None,
     );
     match &btn_loading.root {
-        NodeBlueprint::Element { classes, attributes, .. } => {
+        NodeBlueprint::Element {
+            classes,
+            attributes,
+            ..
+        } => {
             assert!(classes.iter().any(|c| c.contains("bg-rose-600")));
             assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "aria-disabled" && value == "true")));
         }
@@ -103,7 +113,11 @@ fn test_button_variants_and_loading() {
         None,
     );
     match &icon_btn.root {
-        NodeBlueprint::Element { classes, attributes, .. } => {
+        NodeBlueprint::Element {
+            classes,
+            attributes,
+            ..
+        } => {
             assert!(classes.iter().any(|c| c.contains("rounded-full")));
             assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "title" && value == "Settings")));
         }
@@ -169,12 +183,7 @@ fn test_form_controls_and_signals() {
     }
 
     let chk_sig = Signal::new(true);
-    let chk_view = Checkbox(
-        Some("Accept Terms"),
-        chk_sig.clone(),
-        None,
-        None,
-    );
+    let chk_view = Checkbox(Some("Accept Terms"), chk_sig.clone(), None, None);
     assert!(chk_sig.get());
     match &chk_view.root {
         NodeBlueprint::Element { tag, .. } => assert_eq!(*tag, Tag::Label),
@@ -206,13 +215,25 @@ fn test_form_controls_and_signals() {
 fn test_data_display_components() {
     let card = Card(
         Some(vec![
-            CardHeader(Some("Metrics Overview"), Some("Real-time telemetry"), None, None).root,
-            CardContent(Some(vec![
-                Stat("Cluster CPU", "84.2%", Some(12.5), Some("16 Cores"), None).root,
-            ]), None).root,
-            CardFooter(Some(vec![
-                Badge(Some(BadgeVariant::Success), None, None).root,
-            ]), None).root,
+            CardHeader(
+                Some("Metrics Overview"),
+                Some("Real-time telemetry"),
+                None,
+                None,
+            )
+            .root,
+            CardContent(
+                Some(vec![
+                    Stat("Cluster CPU", "84.2%", Some(12.5), Some("16 Cores"), None).root,
+                ]),
+                None,
+            )
+            .root,
+            CardFooter(
+                Some(vec![Badge(Some(BadgeVariant::Success), None, None).root]),
+                None,
+            )
+            .root,
         ]),
         None,
     );
@@ -225,7 +246,11 @@ fn test_data_display_components() {
     }
 
     let active_tab = Signal::new(1);
-    let tabs = Tabs(vec!["Overview", "Deployments", "Audit Logs"], active_tab.clone(), None);
+    let tabs = Tabs(
+        vec!["Overview", "Deployments", "Audit Logs"],
+        active_tab.clone(),
+        None,
+    );
     assert_eq!(active_tab.get(), 1);
     match &tabs.root {
         NodeBlueprint::Element { tag, children, .. } => {
@@ -280,7 +305,13 @@ fn test_feedback_and_toast_queue() {
     assert!(matches!(&closed_modal.root, NodeBlueprint::Fragment(children) if children.is_empty()));
 
     modal_open.set(true);
-    let open_modal = Modal(modal_open, "Confirm Action", Some("Are you sure?"), None, None);
+    let open_modal = Modal(
+        modal_open,
+        "Confirm Action",
+        Some("Are you sure?"),
+        None,
+        None,
+    );
     assert!(matches!(&open_modal.root, NodeBlueprint::Element { .. }));
 
     let alert = Alert(
@@ -323,9 +354,21 @@ fn test_navigation_and_composites() {
     }
 
     let breadcrumbs = vec![
-        BreadcrumbItemData { label: "Home", href: Some("/"), is_current: false },
-        BreadcrumbItemData { label: "Clusters", href: Some("/clusters"), is_current: false },
-        BreadcrumbItemData { label: "us-east-01", href: None, is_current: true },
+        BreadcrumbItemData {
+            label: "Home",
+            href: Some("/"),
+            is_current: false,
+        },
+        BreadcrumbItemData {
+            label: "Clusters",
+            href: Some("/clusters"),
+            is_current: false,
+        },
+        BreadcrumbItemData {
+            label: "us-east-01",
+            href: None,
+            is_current: true,
+        },
     ];
     let bc = Breadcrumb(breadcrumbs, None);
     match &bc.root {
@@ -357,14 +400,24 @@ fn test_navigation_and_composites() {
     }
 
     let nodes = vec![
-        ServerNode { name: "edge-01", cores: 32, status: "healthy" },
-        ServerNode { name: "edge-02", cores: 64, status: "degraded" },
+        ServerNode {
+            name: "edge-01",
+            cores: 32,
+            status: "healthy",
+        },
+        ServerNode {
+            name: "edge-02",
+            cores: 64,
+            status: "degraded",
+        },
     ];
 
     let columns = vec![
         TableColumnDef::new("name", "Node Name", |n: &ServerNode| n.name.to_string()),
         TableColumnDef::new("cores", "CPU Cores", |n: &ServerNode| n.cores.to_string()),
-        TableColumnDef::new("status", "Health Status", |n: &ServerNode| n.status.to_string()),
+        TableColumnDef::new("status", "Health Status", |n: &ServerNode| {
+            n.status.to_string()
+        }),
     ];
 
     let dt = DataTable(columns, &nodes, None);
@@ -394,7 +447,10 @@ fn test_canvas2d_and_scroll_view_components() {
         })),
     );
 
-    assert!(drawn.get(), "Canvas2D on_draw closure must have been executed");
+    assert!(
+        drawn.get(),
+        "Canvas2D on_draw closure must have been executed"
+    );
     match &canvas.root {
         NodeBlueprint::Element { tag, .. } => assert_eq!(*tag, Tag::Div),
         _ => panic!("Expected Element"),
@@ -414,11 +470,7 @@ fn test_canvas2d_and_scroll_view_components() {
     }
 
     // 3. ScrollView Container
-    let scroll_view = ScrollView(
-        Some(vec![canvas.root]),
-        Some("h-96 w-full"),
-        Some(true),
-    );
+    let scroll_view = ScrollView(Some(vec![canvas.root]), Some("h-96 w-full"), Some(true));
     match &scroll_view.root {
         NodeBlueprint::Element { tag, children, .. } => {
             assert_eq!(*tag, Tag::Div);
@@ -434,11 +486,7 @@ fn test_hybrid_3d_and_gpu_surface_components() {
     use strata_render::scene3d::Scene3D;
 
     // 1. HudCard Component
-    let hud_card = HudCard(
-        "Orbital Altitude",
-        Some("w-48"),
-        None,
-    );
+    let hud_card = HudCard("Orbital Altitude", Some("w-48"), None);
     match &hud_card.root {
         NodeBlueprint::Element { tag, classes, .. } => {
             assert_eq!(*tag, Tag::Div);
@@ -460,18 +508,16 @@ fn test_hybrid_3d_and_gpu_surface_components() {
     match &viewport.root {
         NodeBlueprint::Element { tag, children, .. } => {
             assert_eq!(*tag, Tag::Div);
-            assert!(children.len() >= 2, "Viewport must contain canvas backing and HUD overlay");
+            assert!(
+                children.len() >= 2,
+                "Viewport must contain canvas backing and HUD overlay"
+            );
         }
         _ => panic!("Expected Element"),
     }
 
     // 3. GpuSurface Component
-    let gpu_surface = GpuSurface(
-        Some(640.0),
-        Some(480.0),
-        Some("rounded-2xl"),
-        None,
-    );
+    let gpu_surface = GpuSurface(Some(640.0), Some(480.0), Some("rounded-2xl"), None);
     match &gpu_surface.root {
         NodeBlueprint::Element { tag, classes, .. } => {
             assert_eq!(*tag, Tag::Div);
@@ -582,7 +628,10 @@ fn test_modal_and_drawer_focus_trap_and_escape_dismissal() {
                     }
                 )
             });
-            assert!(keydown_attr.is_some(), "Modal must have keydown event listener");
+            assert!(
+                keydown_attr.is_some(),
+                "Modal must have keydown event listener"
+            );
 
             if let Some(Attribute::EventListener { handler, .. }) = keydown_attr {
                 // Test Tab key navigation (does not dismiss)
@@ -659,7 +708,10 @@ fn test_modal_and_drawer_focus_trap_and_escape_dismissal() {
                     }
                 )
             });
-            assert!(keydown_attr.is_some(), "Drawer must have keydown event listener");
+            assert!(
+                keydown_attr.is_some(),
+                "Drawer must have keydown event listener"
+            );
 
             if let Some(Attribute::EventListener { handler, .. }) = keydown_attr {
                 let esc_ev = strata_dom::Event {
@@ -674,5 +726,3 @@ fn test_modal_and_drawer_focus_trap_and_escape_dismissal() {
         _ => panic!("Expected Element root for open Drawer"),
     }
 }
-
-

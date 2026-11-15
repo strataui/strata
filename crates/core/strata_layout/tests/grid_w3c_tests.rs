@@ -80,7 +80,7 @@ fn test_w3c_grid_subgrid_track_inheritance() {
     let mut subgrid_style = ComputedStyle::default();
     subgrid_style.display = Display::Grid;
     subgrid_style.grid_column_start = Some(2); // line 2 = index 1
-    subgrid_style.grid_column_span = Some(2);  // spans index 1 and 2 (150px + 200px)
+    subgrid_style.grid_column_span = Some(2); // spans index 1 and 2 (150px + 200px)
     subgrid_style.grid_template_columns = vec![GridTrack::Subgrid];
 
     let sub_child1 = LayoutNode::new(ComputedStyle::default());
@@ -97,11 +97,17 @@ fn test_w3c_grid_subgrid_track_inheritance() {
 
     // Subgrid's child 1 inherits track 1: x = 100 + 0 = 100, width = 150
     assert_eq!(parent.children[0].children[0].geometry.border_box.x, 100.0);
-    assert_eq!(parent.children[0].children[0].geometry.border_box.width, 150.0);
+    assert_eq!(
+        parent.children[0].children[0].geometry.border_box.width,
+        150.0
+    );
 
     // Subgrid's child 2 inherits track 2: x = 100 + 150 = 250, width = 200
     assert_eq!(parent.children[0].children[1].geometry.border_box.x, 250.0);
-    assert_eq!(parent.children[0].children[1].geometry.border_box.width, 200.0);
+    assert_eq!(
+        parent.children[0].children[1].geometry.border_box.width,
+        200.0
+    );
 }
 
 #[test]
@@ -182,7 +188,7 @@ fn test_w3c_grid_implicit_column_track_expansion() {
 
     let mut placed_style = ComputedStyle::default();
     placed_style.grid_column_start = Some(4); // 1-based line 4 = 0-indexed column 3
-    placed_style.grid_column_span = Some(2);  // spans columns 3 and 4
+    placed_style.grid_column_span = Some(2); // spans columns 3 and 4
     placed_style.grid_row_start = Some(1);
     let item = LayoutNode::new(placed_style);
 
@@ -196,4 +202,3 @@ fn test_w3c_grid_implicit_column_track_expansion() {
     assert_eq!(grid.children[0].geometry.border_box.x, 300.0);
     assert_eq!(grid.children[0].geometry.border_box.width, 200.0);
 }
-

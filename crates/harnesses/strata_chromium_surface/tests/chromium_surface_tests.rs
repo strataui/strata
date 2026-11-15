@@ -1,8 +1,8 @@
 //! Integration Tests: Chromium Subprocess Harness, IPC Bridge & Shared Memory Surface.
 
+use strata_chromium_surface::prelude::*;
 use strata_dom::Tag;
 use strata_primitives::geom::Rect;
-use strata_chromium_surface::prelude::*;
 
 #[test]
 fn test_ipc_command_serialization_roundtrip() {
@@ -10,7 +10,10 @@ fn test_ipc_command_serialization_roundtrip() {
         url: "https://larvance.dev/cloud/telemetry".to_string(),
     };
     let serialized_nav = nav_cmd.serialize();
-    assert_eq!(serialized_nav, "NAVIGATE|https://larvance.dev/cloud/telemetry");
+    assert_eq!(
+        serialized_nav,
+        "NAVIGATE|https://larvance.dev/cloud/telemetry"
+    );
 
     let deserialized_nav = ChromiumCommand::deserialize(&serialized_nav).expect("Must deserialize");
     assert_eq!(deserialized_nav, nav_cmd);
@@ -23,14 +26,21 @@ fn test_ipc_command_serialization_roundtrip() {
     let serialized_resize = resize_cmd.serialize();
     assert_eq!(serialized_resize, "RESIZE|1920|1080|2");
 
-    let deserialized_resize = ChromiumCommand::deserialize(&serialized_resize).expect("Must deserialize");
+    let deserialized_resize =
+        ChromiumCommand::deserialize(&serialized_resize).expect("Must deserialize");
     assert_eq!(deserialized_resize, resize_cmd);
 
     let reload_cmd = ChromiumCommand::Reload;
-    assert_eq!(ChromiumCommand::deserialize(&reload_cmd.serialize()), Some(reload_cmd));
+    assert_eq!(
+        ChromiumCommand::deserialize(&reload_cmd.serialize()),
+        Some(reload_cmd)
+    );
 
     let term_cmd = ChromiumCommand::Terminate;
-    assert_eq!(ChromiumCommand::deserialize(&term_cmd.serialize()), Some(term_cmd));
+    assert_eq!(
+        ChromiumCommand::deserialize(&term_cmd.serialize()),
+        Some(term_cmd)
+    );
 }
 
 #[test]
@@ -57,7 +67,10 @@ fn test_shared_memory_surface_blit_and_sampling() {
     let outside_px = surface.sample_pixel(100, 100).expect("Must sample pixel");
     assert_eq!(outside_px, [255, 255, 255, 255]);
 
-    assert!(surface.frame_index() > 0, "Frame index must increment on fill");
+    assert!(
+        surface.frame_index() > 0,
+        "Frame index must increment on fill"
+    );
 
     // Test resize
     surface.resize(1024, 768);
@@ -85,7 +98,9 @@ fn test_process_manager_lazy_mount_and_unmount() {
 
     // Verify command history
     let history = manager.history();
-    assert!(history.iter().any(|cmd| matches!(cmd, ChromiumCommand::Navigate { url } if url == target_url)));
+    assert!(history
+        .iter()
+        .any(|cmd| matches!(cmd, ChromiumCommand::Navigate { url } if url == target_url)));
 
     // 2. Unmount and verify immediate cleanup
     manager.unmount();
@@ -93,7 +108,9 @@ fn test_process_manager_lazy_mount_and_unmount() {
     assert!(!manager.is_running());
 
     let final_history = manager.history();
-    assert!(final_history.iter().any(|cmd| matches!(cmd, ChromiumCommand::Terminate)));
+    assert!(final_history
+        .iter()
+        .any(|cmd| matches!(cmd, ChromiumCommand::Terminate)));
 }
 
 #[test]
@@ -137,19 +154,29 @@ fn test_webview_controller_and_event_forwarding() {
 
     let history = controller.manager().history();
     assert!(history.iter().any(|c| matches!(c, ChromiumCommand::Navigate { url } if url == "https://dashboard.larvance.dev")));
-    assert!(history.iter().any(|c| matches!(c, ChromiumCommand::MouseEvent { x, y, .. } if *x == 250.0 && *y == 180.0)));
-    assert!(history.iter().any(|c| matches!(c, ChromiumCommand::KeyEvent { key_code, .. } if *key_code == 13)));
+    assert!(history.iter().any(
+        |c| matches!(c, ChromiumCommand::MouseEvent { x, y, .. } if *x == 250.0 && *y == 180.0)
+    ));
+    assert!(history
+        .iter()
+        .any(|c| matches!(c, ChromiumCommand::KeyEvent { key_code, .. } if *key_code == 13)));
     assert!(history.iter().any(|c| matches!(c, ChromiumCommand::ExecuteJs { script, .. } if script.contains("Strata connected"))));
     assert!(history.iter().any(|c| matches!(c, ChromiumCommand::Reload)));
 
     // Render blueprint
     let blueprint = controller.render_blueprint("w-[800px] h-[500px]");
     match blueprint {
-        strata_dom::NodeBlueprint::Element { tag, classes, attributes, children } => {
+        strata_dom::NodeBlueprint::Element {
+            tag,
+            classes,
+            attributes,
+            children,
+        } => {
             assert_eq!(tag, Tag::Div);
             assert!(classes.iter().any(|c| c.contains("w-[800px]")));
             assert!(attributes.iter().any(|a| match a {
-                strata_dom::Attribute::Property { key, value } => key == "data-component" && value == "strata-webview",
+                strata_dom::Attribute::Property { key, value } =>
+                    key == "data-component" && value == "strata-webview",
                 _ => false,
             }));
             assert_eq!(children.len(), 1);
@@ -184,12 +211,17 @@ fn test_shm_binary_protocol_roundtrip() {
     assert!(shm_bytes.len() >= strata_chromium_surface::SHM_HEADER_SIZE);
 
     let surface_dst = ShmSurface::new(100, 100, PixelFormat::Bgra8);
-    surface_dst.deserialize_shm_buffer(&shm_bytes).expect("Deserialization failed");
+    surface_dst
+        .deserialize_shm_buffer(&shm_bytes)
+        .expect("Deserialization failed");
 
     assert_eq!(surface_dst.width(), 320);
     assert_eq!(surface_dst.height(), 240);
     assert_eq!(surface_dst.damage_rects().len(), 1);
-    assert_eq!(surface_dst.damage_rects()[0], Rect::from_xywh(10.0, 10.0, 50.0, 50.0));
+    assert_eq!(
+        surface_dst.damage_rects()[0],
+        Rect::from_xywh(10.0, 10.0, 50.0, 50.0)
+    );
     assert_eq!(surface_dst.sample_pixel(20, 20), Some([128, 128, 128, 128]));
 }
 
@@ -198,12 +230,7 @@ fn test_real_subprocess_execution_lifecycle() {
     // Launch a real Unix/Linux binary (e.g., cat or sh) that stays alive waiting for input
     #[cfg(unix)]
     {
-        let manager = ChromiumProcessManager::with_executable(
-            640,
-            480,
-            "/bin/cat",
-            Vec::new(),
-        );
+        let manager = ChromiumProcessManager::with_executable(640, 480, "/bin/cat", Vec::new());
         manager.mount("https://example.com");
 
         assert!(manager.is_running());

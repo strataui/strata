@@ -26,12 +26,7 @@ impl Default for SixelOptions {
 }
 
 /// Encodes an RGBA image buffer into an optimized DEC Sixel raster sequence.
-pub fn encode_sixel(
-    pixels: &[Rgba],
-    width: u32,
-    height: u32,
-    opts: &SixelOptions,
-) -> String {
+pub fn encode_sixel(pixels: &[Rgba], width: u32, height: u32, opts: &SixelOptions) -> String {
     if width == 0 || height == 0 || pixels.len() < (width * height) as usize {
         return String::new();
     }

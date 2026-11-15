@@ -117,7 +117,10 @@ impl StoreState {
 
     pub fn add_to_cart(&self, product: Product, color: &'static str) {
         self.cart.update(|items| {
-            if let Some(existing) = items.iter_mut().find(|i| i.product.id == product.id && i.selected_color == color) {
+            if let Some(existing) = items
+                .iter_mut()
+                .find(|i| i.product.id == product.id && i.selected_color == color)
+            {
                 existing.quantity += 1;
             } else {
                 items.push(CartItem {
@@ -135,6 +138,10 @@ impl StoreState {
     }
 
     pub fn subtotal(&self) -> f64 {
-        self.cart.get().iter().map(|item| item.product.price * item.quantity as f64).sum()
+        self.cart
+            .get()
+            .iter()
+            .map(|item| item.product.price * item.quantity as f64)
+            .sum()
     }
 }

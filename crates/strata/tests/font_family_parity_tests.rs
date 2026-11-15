@@ -200,4 +200,3 @@ fn continuous_fragment_advances_end_at_the_pango_line_width() {
         concatenated
     );
 }
-

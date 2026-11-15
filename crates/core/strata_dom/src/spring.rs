@@ -232,7 +232,10 @@ mod tests {
         }
 
         assert!(spring.is_at_rest(), "Spring must converge to rest");
-        assert!((spring.get() - 100.0).abs() < 1e-3, "Position must reach target 100.0");
+        assert!(
+            (spring.get() - 100.0).abs() < 1e-3,
+            "Position must reach target 100.0"
+        );
         assert_eq!(spring.velocity(), 0.0);
     }
 

@@ -190,10 +190,20 @@ impl Canvas2DContext {
         self.current_path.push(CanvasPathVerb::LineTo(tx, ty));
     }
 
-    pub fn arc(&mut self, cx: f32, cy: f32, radius: f32, start_angle: f32, end_angle: f32, ccw: bool) {
+    pub fn arc(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        start_angle: f32,
+        end_angle: f32,
+        ccw: bool,
+    ) {
         let (tcx, tcy) = self.current_state.transform.transform_xy(cx, cy);
         // Compute average scale factor for radius
-        let scale_x = (self.current_state.transform.a.powi(2) + self.current_state.transform.b.powi(2)).sqrt();
+        let scale_x = (self.current_state.transform.a.powi(2)
+            + self.current_state.transform.b.powi(2))
+        .sqrt();
         self.current_path.push(CanvasPathVerb::Arc {
             cx: tcx,
             cy: tcy,
@@ -298,7 +308,13 @@ impl Canvas2DContext {
     }
 
     /// Software analytical anti-aliased rasterization directly onto a FrameBuffer.
-    pub fn rasterize(&self, fb: &mut FrameBuffer, origin_x: f32, origin_y: f32, clip: Option<Rect>) {
+    pub fn rasterize(
+        &self,
+        fb: &mut FrameBuffer,
+        origin_x: f32,
+        origin_y: f32,
+        clip: Option<Rect>,
+    ) {
         rasterize_canvas_commands(fb, &self.commands, origin_x, origin_y, clip);
     }
 }
@@ -312,160 +328,241 @@ pub fn rasterize_canvas_commands(
     clip: Option<Rect>,
 ) {
     for cmd in commands {
-            match cmd {
-                CanvasCommand::FillRect { bounds, color } => {
-                    let translated = Rect::new(
-                        bounds.x + origin_x,
-                        bounds.y + origin_y,
-                        bounds.width,
-                        bounds.height,
-                    );
-                    fb.draw_rect(translated, *color, clip);
-                }
-                CanvasCommand::ClearRect { bounds } => {
-                    let translated = Rect::new(
-                        bounds.x + origin_x,
-                        bounds.y + origin_y,
-                        bounds.width,
-                        bounds.height,
-                    );
-                    fb.clear_rect(translated, Color::TRANSPARENT);
-                }
-                CanvasCommand::StrokeRect { bounds, color, line_width } => {
-                    let lw = *line_width;
-                    let translated = Rect::new(
-                        bounds.x + origin_x,
-                        bounds.y + origin_y,
-                        bounds.width,
-                        bounds.height,
-                    );
-                    // Top
-                    fb.draw_rect(Rect::new(translated.x, translated.y, translated.width, lw), *color, clip);
-                    // Bottom
-                    fb.draw_rect(Rect::new(translated.x, translated.max_y() - lw, translated.width, lw), *color, clip);
-                    // Left
-                    fb.draw_rect(Rect::new(translated.x, translated.y, lw, translated.height), *color, clip);
-                    // Right
-                    fb.draw_rect(Rect::new(translated.max_x() - lw, translated.y, lw, translated.height), *color, clip);
-                }
-                CanvasCommand::DrawLine { p0, p1, color, line_width } => {
-                    rasterize_line(
-                        fb,
-                        p0.0 + origin_x,
-                        p0.1 + origin_y,
-                        p1.0 + origin_x,
-                        p1.1 + origin_y,
-                        *color,
-                        *line_width,
-                        clip,
-                    );
-                }
-                CanvasCommand::DrawCircle { center, radius, fill_color, stroke_color, line_width } => {
-                    let cx = center.0 + origin_x;
-                    let cy = center.1 + origin_y;
-                    let r = *radius;
-                    let lw = *line_width;
+        match cmd {
+            CanvasCommand::FillRect { bounds, color } => {
+                let translated = Rect::new(
+                    bounds.x + origin_x,
+                    bounds.y + origin_y,
+                    bounds.width,
+                    bounds.height,
+                );
+                fb.draw_rect(translated, *color, clip);
+            }
+            CanvasCommand::ClearRect { bounds } => {
+                let translated = Rect::new(
+                    bounds.x + origin_x,
+                    bounds.y + origin_y,
+                    bounds.width,
+                    bounds.height,
+                );
+                fb.clear_rect(translated, Color::TRANSPARENT);
+            }
+            CanvasCommand::StrokeRect {
+                bounds,
+                color,
+                line_width,
+            } => {
+                let lw = *line_width;
+                let translated = Rect::new(
+                    bounds.x + origin_x,
+                    bounds.y + origin_y,
+                    bounds.width,
+                    bounds.height,
+                );
+                // Top
+                fb.draw_rect(
+                    Rect::new(translated.x, translated.y, translated.width, lw),
+                    *color,
+                    clip,
+                );
+                // Bottom
+                fb.draw_rect(
+                    Rect::new(translated.x, translated.max_y() - lw, translated.width, lw),
+                    *color,
+                    clip,
+                );
+                // Left
+                fb.draw_rect(
+                    Rect::new(translated.x, translated.y, lw, translated.height),
+                    *color,
+                    clip,
+                );
+                // Right
+                fb.draw_rect(
+                    Rect::new(translated.max_x() - lw, translated.y, lw, translated.height),
+                    *color,
+                    clip,
+                );
+            }
+            CanvasCommand::DrawLine {
+                p0,
+                p1,
+                color,
+                line_width,
+            } => {
+                rasterize_line(
+                    fb,
+                    p0.0 + origin_x,
+                    p0.1 + origin_y,
+                    p1.0 + origin_x,
+                    p1.1 + origin_y,
+                    *color,
+                    *line_width,
+                    clip,
+                );
+            }
+            CanvasCommand::DrawCircle {
+                center,
+                radius,
+                fill_color,
+                stroke_color,
+                line_width,
+            } => {
+                let cx = center.0 + origin_x;
+                let cy = center.1 + origin_y;
+                let r = *radius;
+                let lw = *line_width;
 
-                    let min_x = ((cx - r - lw).floor() as isize).max(0) as usize;
-                    let max_x = ((cx + r + lw).ceil() as usize).min(fb.width);
-                    let min_y = ((cy - r - lw).floor() as isize).max(0) as usize;
-                    let max_y = ((cy + r + lw).ceil() as usize).min(fb.height);
+                let min_x = ((cx - r - lw).floor() as isize).max(0) as usize;
+                let max_x = ((cx + r + lw).ceil() as usize).min(fb.width);
+                let min_y = ((cy - r - lw).floor() as isize).max(0) as usize;
+                let max_y = ((cy + r + lw).ceil() as usize).min(fb.height);
 
-                    for y in min_y..max_y {
-                        let dy = y as f32 + 0.5 - cy;
-                        for x in min_x..max_x {
-                            let dx = x as f32 + 0.5 - cx;
-                            let dist = (dx * dx + dy * dy).sqrt();
+                for y in min_y..max_y {
+                    let dy = y as f32 + 0.5 - cy;
+                    for x in min_x..max_x {
+                        let dx = x as f32 + 0.5 - cx;
+                        let dist = (dx * dx + dy * dy).sqrt();
 
-                            if let Some(fc) = fill_color {
-                                let coverage = (0.5 + r - dist).clamp(0.0, 1.0);
-                                if coverage > 0.005 {
-                                    fb.set_pixel(x, y, Color::rgba(fc.r, fc.g, fc.b, (fc.a() * coverage * 255.0) as u8));
-                                }
+                        if let Some(fc) = fill_color {
+                            let coverage = (0.5 + r - dist).clamp(0.0, 1.0);
+                            if coverage > 0.005 {
+                                fb.set_pixel(
+                                    x,
+                                    y,
+                                    Color::rgba(
+                                        fc.r,
+                                        fc.g,
+                                        fc.b,
+                                        (fc.a() * coverage * 255.0) as u8,
+                                    ),
+                                );
                             }
+                        }
 
-                            if let Some(sc) = stroke_color {
-                                let stroke_dist = (dist - r).abs();
-                                let coverage = (0.5 + lw * 0.5 - stroke_dist).clamp(0.0, 1.0);
-                                if coverage > 0.005 {
-                                    fb.set_pixel(x, y, Color::rgba(sc.r, sc.g, sc.b, (sc.a() * coverage * 255.0) as u8));
-                                }
+                        if let Some(sc) = stroke_color {
+                            let stroke_dist = (dist - r).abs();
+                            let coverage = (0.5 + lw * 0.5 - stroke_dist).clamp(0.0, 1.0);
+                            if coverage > 0.005 {
+                                fb.set_pixel(
+                                    x,
+                                    y,
+                                    Color::rgba(
+                                        sc.r,
+                                        sc.g,
+                                        sc.b,
+                                        (sc.a() * coverage * 255.0) as u8,
+                                    ),
+                                );
                             }
                         }
                     }
                 }
-                CanvasCommand::DrawPath { verbs, fill_color, stroke_color, line_width } => {
-                    if let Some(fc) = fill_color {
-                        for verb in verbs {
-                            if let CanvasPathVerb::Arc { cx, cy, radius, .. } = verb {
-                                let r = *radius;
-                                let acx = *cx + origin_x;
-                                let acy = *cy + origin_y;
-                                let min_x = ((acx - r).floor() as isize).max(0) as usize;
-                                let max_x = ((acx + r).ceil() as usize).min(fb.width);
-                                let min_y = ((acy - r).floor() as isize).max(0) as usize;
-                                let max_y = ((acy + r).ceil() as usize).min(fb.height);
+            }
+            CanvasCommand::DrawPath {
+                verbs,
+                fill_color,
+                stroke_color,
+                line_width,
+            } => {
+                if let Some(fc) = fill_color {
+                    for verb in verbs {
+                        if let CanvasPathVerb::Arc { cx, cy, radius, .. } = verb {
+                            let r = *radius;
+                            let acx = *cx + origin_x;
+                            let acy = *cy + origin_y;
+                            let min_x = ((acx - r).floor() as isize).max(0) as usize;
+                            let max_x = ((acx + r).ceil() as usize).min(fb.width);
+                            let min_y = ((acy - r).floor() as isize).max(0) as usize;
+                            let max_y = ((acy + r).ceil() as usize).min(fb.height);
 
-                                for y in min_y..max_y {
+                            for y in min_y..max_y {
+                                if let Some(c) = clip {
+                                    if (y as f32) < c.y || (y as f32) >= c.max_y() {
+                                        continue;
+                                    }
+                                }
+                                let dy = y as f32 + 0.5 - acy;
+                                for x in min_x..max_x {
                                     if let Some(c) = clip {
-                                        if (y as f32) < c.y || (y as f32) >= c.max_y() {
+                                        if (x as f32) < c.x || (x as f32) >= c.max_x() {
                                             continue;
                                         }
                                     }
-                                    let dy = y as f32 + 0.5 - acy;
-                                    for x in min_x..max_x {
-                                        if let Some(c) = clip {
-                                            if (x as f32) < c.x || (x as f32) >= c.max_x() {
-                                                continue;
-                                            }
-                                        }
-                                        let dx = x as f32 + 0.5 - acx;
-                                        let dist = (dx * dx + dy * dy).sqrt();
-                                        let coverage = (0.5 + r - dist).clamp(0.0, 1.0);
-                                        if coverage > 0.005 {
-                                            fb.set_pixel(x, y, Color::rgba(fc.r, fc.g, fc.b, (fc.a() * coverage * 255.0) as u8));
-                                        }
+                                    let dx = x as f32 + 0.5 - acx;
+                                    let dist = (dx * dx + dy * dy).sqrt();
+                                    let coverage = (0.5 + r - dist).clamp(0.0, 1.0);
+                                    if coverage > 0.005 {
+                                        fb.set_pixel(
+                                            x,
+                                            y,
+                                            Color::rgba(
+                                                fc.r,
+                                                fc.g,
+                                                fc.b,
+                                                (fc.a() * coverage * 255.0) as u8,
+                                            ),
+                                        );
                                     }
                                 }
                             }
                         }
                     }
+                }
 
-                    // Connect LineTo sequences with analytical lines
-                    let mut current = (origin_x, origin_y);
-                    let mut start = (origin_x, origin_y);
+                // Connect LineTo sequences with analytical lines
+                let mut current = (origin_x, origin_y);
+                let mut start = (origin_x, origin_y);
 
-                    for verb in verbs {
-                        match verb {
-                            CanvasPathVerb::MoveTo(x, y) => {
-                                current = (*x + origin_x, *y + origin_y);
-                                start = current;
+                for verb in verbs {
+                    match verb {
+                        CanvasPathVerb::MoveTo(x, y) => {
+                            current = (*x + origin_x, *y + origin_y);
+                            start = current;
+                        }
+                        CanvasPathVerb::LineTo(x, y) => {
+                            let next = (*x + origin_x, *y + origin_y);
+                            if let Some(color) = stroke_color {
+                                rasterize_line(
+                                    fb,
+                                    current.0,
+                                    current.1,
+                                    next.0,
+                                    next.1,
+                                    *color,
+                                    *line_width,
+                                    clip,
+                                );
                             }
-                            CanvasPathVerb::LineTo(x, y) => {
-                                let next = (*x + origin_x, *y + origin_y);
+                            current = next;
+                        }
+                        CanvasPathVerb::Close => {
+                            if current != start {
                                 if let Some(color) = stroke_color {
-                                    rasterize_line(fb, current.0, current.1, next.0, next.1, *color, *line_width, clip);
+                                    rasterize_line(
+                                        fb,
+                                        current.0,
+                                        current.1,
+                                        start.0,
+                                        start.1,
+                                        *color,
+                                        *line_width,
+                                        clip,
+                                    );
                                 }
-                                current = next;
+                                current = start;
                             }
-                            CanvasPathVerb::Close => {
-                                if current != start {
-                                    if let Some(color) = stroke_color {
-                                        rasterize_line(fb, current.0, current.1, start.0, start.1, *color, *line_width, clip);
-                                    }
-                                    current = start;
-                                }
-                            }
-                            CanvasPathVerb::Arc { cx, cy, radius, .. } => {
-                                // Draw arc center point
-                                current = (*cx + origin_x + *radius, *cy + origin_y);
-                            }
+                        }
+                        CanvasPathVerb::Arc { cx, cy, radius, .. } => {
+                            // Draw arc center point
+                            current = (*cx + origin_x + *radius, *cy + origin_y);
                         }
                     }
                 }
             }
         }
     }
+}
 
 /// Analytical Signed Distance Field 2D Line Segment Rasterizer with subpixel anti-aliasing.
 fn rasterize_line(

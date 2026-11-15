@@ -1,7 +1,7 @@
 //! Deployments Table with real-time status and search filtering for Strata SaaS Dashboard.
 
-use strata::prelude::*;
 use crate::state::DashboardState;
+use strata::prelude::*;
 
 #[component]
 pub fn DeploymentsTable(state: DashboardState) -> View {

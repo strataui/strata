@@ -1,7 +1,7 @@
 //! Digital biquad IIR filters for frequency domain equalization and shaping.
 
-use std::f32::consts::PI;
 use crate::sample::AudioBuffer;
+use std::f32::consts::PI;
 
 /// Type of biquad filter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,18 +61,42 @@ impl BiquadFilter {
         let (b0_raw, b1_raw, b2_raw, a0_raw, a1_raw, a2_raw) = match self.filter_type {
             BiquadFilterType::Lowpass => {
                 let b = (1.0 - cos_omega) / 2.0;
-                (b, 1.0 - cos_omega, b, 1.0 + alpha, -2.0 * cos_omega, 1.0 - alpha)
+                (
+                    b,
+                    1.0 - cos_omega,
+                    b,
+                    1.0 + alpha,
+                    -2.0 * cos_omega,
+                    1.0 - alpha,
+                )
             }
             BiquadFilterType::Highpass => {
                 let b = (1.0 + cos_omega) / 2.0;
-                (b, -(1.0 + cos_omega), b, 1.0 + alpha, -2.0 * cos_omega, 1.0 - alpha)
+                (
+                    b,
+                    -(1.0 + cos_omega),
+                    b,
+                    1.0 + alpha,
+                    -2.0 * cos_omega,
+                    1.0 - alpha,
+                )
             }
-            BiquadFilterType::Bandpass => {
-                (alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos_omega, 1.0 - alpha)
-            }
-            BiquadFilterType::Notch => {
-                (1.0, -2.0 * cos_omega, 1.0, 1.0 + alpha, -2.0 * cos_omega, 1.0 - alpha)
-            }
+            BiquadFilterType::Bandpass => (
+                alpha,
+                0.0,
+                -alpha,
+                1.0 + alpha,
+                -2.0 * cos_omega,
+                1.0 - alpha,
+            ),
+            BiquadFilterType::Notch => (
+                1.0,
+                -2.0 * cos_omega,
+                1.0,
+                1.0 + alpha,
+                -2.0 * cos_omega,
+                1.0 - alpha,
+            ),
         };
 
         let inv_a0 = 1.0 / a0_raw;
@@ -86,7 +110,8 @@ impl BiquadFilter {
     /// Processes a single audio sample through the filter.
     pub fn process_sample(&mut self, input: f32) -> f32 {
         let output = self.b0 * input + self.b1 * self.x1 + self.b2 * self.x2
-            - self.a1 * self.y1 - self.a2 * self.y2;
+            - self.a1 * self.y1
+            - self.a2 * self.y2;
 
         self.x2 = self.x1;
         self.x1 = input;

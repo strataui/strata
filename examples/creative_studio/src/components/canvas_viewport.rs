@@ -1,7 +1,7 @@
 //! Infinite Canvas Viewport for Strata Creative Studio.
 
-use strata::prelude::*;
 use crate::state::StudioState;
+use strata::prelude::*;
 
 #[component]
 pub fn CanvasViewport(state: StudioState) -> View {

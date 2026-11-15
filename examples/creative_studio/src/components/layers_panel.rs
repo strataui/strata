@@ -1,7 +1,7 @@
 //! Left Layers Tree Panel for Strata Creative Studio.
 
-use strata::prelude::*;
 use crate::state::StudioState;
+use strata::prelude::*;
 
 #[component]
 pub fn LayersPanel(state: StudioState) -> View {

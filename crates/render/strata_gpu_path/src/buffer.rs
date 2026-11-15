@@ -59,7 +59,8 @@ impl PathCommandBuffer {
         }
 
         for q in quads {
-            self.instances.push(GpuCurveInstance::from_bezier(&q, flags, z_index));
+            self.instances
+                .push(GpuCurveInstance::from_bezier(&q, flags, z_index));
         }
         self.total_draw_calls += 1;
     }

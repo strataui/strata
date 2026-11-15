@@ -102,5 +102,4 @@ impl AppRuntime {
         }
         changed
     }
-
 }

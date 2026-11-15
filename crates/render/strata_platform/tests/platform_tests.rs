@@ -70,8 +70,17 @@ fn test_mock_platform_window_lifecycle_and_events() {
 
     let polled = window.poll_events();
     assert_eq!(polled.len(), 6); // WindowResized, ScaleFactorChanged, WindowFocused, MouseMove, MouseDown, KeyDown
-    assert_eq!(polled[0], PlatformEvent::WindowResized { width: 1920, height: 1080 });
-    assert_eq!(polled[1], PlatformEvent::ScaleFactorChanged { scale_factor: 2.0 });
+    assert_eq!(
+        polled[0],
+        PlatformEvent::WindowResized {
+            width: 1920,
+            height: 1080
+        }
+    );
+    assert_eq!(
+        polled[1],
+        PlatformEvent::ScaleFactorChanged { scale_factor: 2.0 }
+    );
     assert_eq!(polled[2], PlatformEvent::WindowFocused(false));
     assert_eq!(polled[3], PlatformEvent::MouseMove { x: 100.0, y: 150.0 });
 
@@ -111,16 +120,34 @@ fn test_csd_hit_testing_right_aligned() {
     let h = 600.0;
 
     // Corners
-    assert_eq!(csd.hit_test(w, h, 2.0, 2.0), CsdHitZone::ResizeCornerTopLeft);
-    assert_eq!(csd.hit_test(w, h, 798.0, 2.0), CsdHitZone::ResizeCornerTopRight);
-    assert_eq!(csd.hit_test(w, h, 2.0, 598.0), CsdHitZone::ResizeCornerBottomLeft);
-    assert_eq!(csd.hit_test(w, h, 798.0, 598.0), CsdHitZone::ResizeCornerBottomRight);
+    assert_eq!(
+        csd.hit_test(w, h, 2.0, 2.0),
+        CsdHitZone::ResizeCornerTopLeft
+    );
+    assert_eq!(
+        csd.hit_test(w, h, 798.0, 2.0),
+        CsdHitZone::ResizeCornerTopRight
+    );
+    assert_eq!(
+        csd.hit_test(w, h, 2.0, 598.0),
+        CsdHitZone::ResizeCornerBottomLeft
+    );
+    assert_eq!(
+        csd.hit_test(w, h, 798.0, 598.0),
+        CsdHitZone::ResizeCornerBottomRight
+    );
 
     // Borders
     assert_eq!(csd.hit_test(w, h, 400.0, 2.0), CsdHitZone::ResizeBorderTop);
-    assert_eq!(csd.hit_test(w, h, 400.0, 598.0), CsdHitZone::ResizeBorderBottom);
+    assert_eq!(
+        csd.hit_test(w, h, 400.0, 598.0),
+        CsdHitZone::ResizeBorderBottom
+    );
     assert_eq!(csd.hit_test(w, h, 2.0, 300.0), CsdHitZone::ResizeBorderLeft);
-    assert_eq!(csd.hit_test(w, h, 798.0, 300.0), CsdHitZone::ResizeBorderRight);
+    assert_eq!(
+        csd.hit_test(w, h, 798.0, 300.0),
+        CsdHitZone::ResizeBorderRight
+    );
 
     // Titlebar & Control buttons (w=800, right buttons: 800 - 46 = 754..800 Close, 708..754 Max, 662..708 Min)
     assert_eq!(csd.hit_test(w, h, 780.0, 16.0), CsdHitZone::CloseButton);
@@ -137,9 +164,18 @@ fn test_csd_hit_testing_right_aligned() {
 
     // Cursor mapping checks
     assert_eq!(CsdHitZone::CloseButton.cursor_icon(), CursorIcon::Pointer);
-    assert_eq!(CsdHitZone::ResizeBorderTop.cursor_icon(), CursorIcon::ResizeN);
-    assert_eq!(CsdHitZone::ResizeCornerTopLeft.cursor_icon(), CursorIcon::ResizeNw);
-    assert_eq!(CsdHitZone::ResizeCornerTopRight.cursor_icon(), CursorIcon::ResizeNe);
+    assert_eq!(
+        CsdHitZone::ResizeBorderTop.cursor_icon(),
+        CursorIcon::ResizeN
+    );
+    assert_eq!(
+        CsdHitZone::ResizeCornerTopLeft.cursor_icon(),
+        CursorIcon::ResizeNw
+    );
+    assert_eq!(
+        CsdHitZone::ResizeCornerTopRight.cursor_icon(),
+        CursorIcon::ResizeNe
+    );
 }
 
 #[test]
@@ -226,5 +262,8 @@ fn test_pure_rust_headless_png_export_in_platform() {
         .expect("Pure-Rust headless PNG export failed");
 
     assert!(png_bytes.len() > 24);
-    assert_eq!(&png_bytes[0..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+    assert_eq!(
+        &png_bytes[0..8],
+        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]
+    );
 }

@@ -1,7 +1,7 @@
 //! Dynamic build plugin pipeline allowing custom Rust plugins to intercept and modify configuration and packaging.
 
-use std::path::PathBuf;
 use crate::config::ProjectConfig;
+use std::path::PathBuf;
 
 /// Build context passed to plugins before execution.
 #[derive(Debug, Clone)]
@@ -64,14 +64,20 @@ pub struct PluginRegistry {
 
 impl PluginRegistry {
     pub fn new() -> Self {
-        Self { plugins: Vec::new() }
+        Self {
+            plugins: Vec::new(),
+        }
     }
 
     pub fn register(&mut self, plugin: Box<dyn BuildPlugin>) {
         self.plugins.push(plugin);
     }
 
-    pub fn execute_on_load_config(&self, config: &mut ProjectConfig, env: &str) -> Result<(), String> {
+    pub fn execute_on_load_config(
+        &self,
+        config: &mut ProjectConfig,
+        env: &str,
+    ) -> Result<(), String> {
         for p in &self.plugins {
             p.on_load_config(config, env)?;
         }

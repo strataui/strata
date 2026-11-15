@@ -1,10 +1,10 @@
 //! W3C CSS Grid Level 2 Named Grid Areas & Line Synthesis Tests.
 
 use strata_layout::tree::LayoutNode;
-use strata_style::types::{ComputedStyle, Dimension, Display, GridTrack};
 use strata_style::cascade::CascadeSolver;
 use strata_style::parser::StyleSheet;
 use strata_style::selector::PseudoState;
+use strata_style::types::{ComputedStyle, Dimension, Display, GridTrack};
 
 #[test]
 fn test_classic_holy_grail_named_grid_areas() {
@@ -13,7 +13,11 @@ fn test_classic_holy_grail_named_grid_areas() {
         width: Dimension::Px(600.0),
         height: Dimension::Px(400.0),
         grid_template_columns: vec![GridTrack::Px(200.0), GridTrack::Px(400.0)],
-        grid_template_rows: vec![GridTrack::Px(80.0), GridTrack::Px(260.0), GridTrack::Px(60.0)],
+        grid_template_rows: vec![
+            GridTrack::Px(80.0),
+            GridTrack::Px(260.0),
+            GridTrack::Px(60.0),
+        ],
         grid_template_areas: vec![
             vec!["header".to_string(), "header".to_string()],
             vec!["sidebar".to_string(), "content".to_string()],
@@ -82,7 +86,11 @@ fn test_multi_row_and_multi_column_named_area_spanning() {
         display: Display::Grid,
         width: Dimension::Px(900.0),
         height: Dimension::Px(500.0),
-        grid_template_columns: vec![GridTrack::Px(300.0), GridTrack::Px(300.0), GridTrack::Px(300.0)],
+        grid_template_columns: vec![
+            GridTrack::Px(300.0),
+            GridTrack::Px(300.0),
+            GridTrack::Px(300.0),
+        ],
         grid_template_rows: vec![GridTrack::Px(250.0), GridTrack::Px(250.0)],
         grid_template_areas: vec![
             vec!["nav".to_string(), "main".to_string(), "main".to_string()],
@@ -139,15 +147,8 @@ fn test_css_cascade_grid_template_areas_and_grid_area_parsing() {
     let sheet = StyleSheet::parse(css).expect("valid CSS");
     let state = PseudoState::default();
 
-    let style_grid = CascadeSolver::resolve(
-        "div",
-        &["layout-grid"],
-        None,
-        None,
-        &[&sheet],
-        None,
-        &state,
-    );
+    let style_grid =
+        CascadeSolver::resolve("div", &["layout-grid"], None, None, &[&sheet], None, &state);
 
     assert_eq!(
         style_grid.grid_template_areas,
@@ -158,15 +159,8 @@ fn test_css_cascade_grid_template_areas_and_grid_area_parsing() {
         ]
     );
 
-    let style_item = CascadeSolver::resolve(
-        "div",
-        &["header-item"],
-        None,
-        None,
-        &[&sheet],
-        None,
-        &state,
-    );
+    let style_item =
+        CascadeSolver::resolve("div", &["header-item"], None, None, &[&sheet], None, &state);
     assert_eq!(style_item.grid_area, Some("head".to_string()));
 
     let style_shorthand = CascadeSolver::resolve(

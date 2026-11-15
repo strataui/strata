@@ -1,8 +1,8 @@
 //! Window, cursor, keyboard shortcut, and clipboard control hooks.
 
+use crate::reactive::Signal;
 use std::cell::RefCell;
 use std::rc::Rc;
-use crate::reactive::Signal;
 
 /// Standard pointer cursor icons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

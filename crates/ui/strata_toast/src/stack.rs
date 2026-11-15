@@ -38,7 +38,7 @@ pub fn compute_stack_layout(
         let offset_y = if is_bottom {
             -base_offset // Expands upwards from bottom
         } else {
-            base_offset  // Expands downwards from top
+            base_offset // Expands downwards from top
         };
 
         visuals.push(StackedToastVisual {

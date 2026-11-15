@@ -39,7 +39,9 @@ impl PartialOrd for LamportClock {
 
 impl Ord for LamportClock {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.counter.cmp(&other.counter).then_with(|| self.peer.cmp(&other.peer))
+        self.counter
+            .cmp(&other.counter)
+            .then_with(|| self.peer.cmp(&other.peer))
     }
 }
 

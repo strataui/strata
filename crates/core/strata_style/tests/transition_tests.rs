@@ -50,7 +50,10 @@ fn test_parse_transition_shorthand() {
 #[test]
 fn test_parse_steps_timing_function() {
     let t1 = parse_single_transition("opacity 100ms steps(4)").unwrap();
-    assert_eq!(t1.timing_function, TransitionEasing::Steps(4, StepPosition::End));
+    assert_eq!(
+        t1.timing_function,
+        TransitionEasing::Steps(4, StepPosition::End)
+    );
 
     let t2 = parse_single_transition("transform 250ms steps(5, jump-start)").unwrap();
     assert_eq!(
@@ -77,20 +80,33 @@ fn test_cascade_transition_longhands() {
     assert_eq!(style.transitions.len(), 2);
     assert_eq!(style.transitions[0].property, TransitionProperty::Opacity);
     assert_eq!(style.transitions[0].duration_ms, 250.0);
-    assert_eq!(style.transitions[0].timing_function, TransitionEasing::EaseInOut);
+    assert_eq!(
+        style.transitions[0].timing_function,
+        TransitionEasing::EaseInOut
+    );
     assert_eq!(style.transitions[0].delay_ms, 100.0);
-    assert_eq!(style.transitions[0].behavior, TransitionBehavior::AllowDiscrete);
+    assert_eq!(
+        style.transitions[0].behavior,
+        TransitionBehavior::AllowDiscrete
+    );
 
     assert_eq!(style.transitions[1].property, TransitionProperty::Width);
     assert_eq!(style.transitions[1].duration_ms, 250.0);
-    assert_eq!(style.transitions[1].timing_function, TransitionEasing::EaseInOut);
+    assert_eq!(
+        style.transitions[1].timing_function,
+        TransitionEasing::EaseInOut
+    );
     assert_eq!(style.transitions[1].delay_ms, 100.0);
-    assert_eq!(style.transitions[1].behavior, TransitionBehavior::AllowDiscrete);
+    assert_eq!(
+        style.transitions[1].behavior,
+        TransitionBehavior::AllowDiscrete
+    );
 }
 
 #[test]
 fn test_tailwind_transition_utilities() {
-    let style = TailwindEngine::resolve_classes("transition-all duration-300 ease-in-out delay-150");
+    let style =
+        TailwindEngine::resolve_classes("transition-all duration-300 ease-in-out delay-150");
 
     assert_eq!(style.transitions.len(), 1);
     let spec = &style.transitions[0];
@@ -104,7 +120,10 @@ fn test_tailwind_transition_utilities() {
 
     let style_colors = TailwindEngine::resolve_classes("transition-colors duration-200");
     assert_eq!(style_colors.transitions.len(), 3);
-    assert_eq!(style_colors.transitions[0].property, TransitionProperty::Color);
+    assert_eq!(
+        style_colors.transitions[0].property,
+        TransitionProperty::Color
+    );
     assert_eq!(style_colors.transitions[0].duration_ms, 200.0);
     assert_eq!(
         style_colors.transitions[1].property,
@@ -193,8 +212,12 @@ fn test_transition_manager_lifecycle_and_retargeting() {
 
     // 1. Initial trigger at t = 1000.0
     let events = manager.update_styles(node_id, &old_style, &new_style, 1000.0);
-    assert!(events.iter().any(|e| matches!(e, TransitionLifecycleEvent::Run { .. })));
-    assert!(!events.iter().any(|e| matches!(e, TransitionLifecycleEvent::Start { .. })));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, TransitionLifecycleEvent::Run { .. })));
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e, TransitionLifecycleEvent::Start { .. })));
     assert!(manager.has_active_transitions());
 
     // 2. Advance to t = 1030.0 (during delay)
@@ -206,7 +229,9 @@ fn test_transition_manager_lifecycle_and_retargeting() {
 
     // 3. Advance to t = 1050.0 (delay elapsed, transition starts)
     let events = manager.advance(1050.0);
-    assert!(events.iter().any(|e| matches!(e, TransitionLifecycleEvent::Start { .. })));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, TransitionLifecycleEvent::Start { .. })));
 
     // 4. Advance to t = 1150.0 (halfway through 200ms duration: active_time = 100ms)
     let _ = manager.advance(1150.0);
@@ -221,7 +246,9 @@ fn test_transition_manager_lifecycle_and_retargeting() {
 
     let events = manager.update_styles(node_id, &current_style, &retarget_style, 1150.0);
     // Cancellation of previous active transition
-    assert!(events.iter().any(|e| matches!(e, TransitionLifecycleEvent::Cancel { .. })));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, TransitionLifecycleEvent::Cancel { .. })));
 
     // New transition starts smoothly from 0.5 without popping!
     let mut check_style = retarget_style.clone();
@@ -230,7 +257,9 @@ fn test_transition_manager_lifecycle_and_retargeting() {
 
     // 6. Advance to completion
     let events = manager.advance(1350.0);
-    assert!(events.iter().any(|e| matches!(e, TransitionLifecycleEvent::End { .. })));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, TransitionLifecycleEvent::End { .. })));
 
     let mut final_style = retarget_style.clone();
     manager.apply_to_style(node_id, &mut final_style);

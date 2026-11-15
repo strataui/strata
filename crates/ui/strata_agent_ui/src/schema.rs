@@ -4,12 +4,38 @@ use std::collections::HashSet;
 
 /// Approved RSX/HTML component tags safe for AI agent generation.
 pub const ALLOWED_TAGS: &[&str] = &[
-    "div", "span", "p", "h1", "h2", "h3", "h4", "h5", "h6",
-    "button", "input", "textarea", "label", "form",
-    "table", "tr", "th", "td",
-    "ul", "ol", "li",
-    "card", "badge", "slider", "switch", "modal", "drawer", "datagrid",
-    "canvas3d", "mesh", "boxgeometry", "spheregeometry",
+    "div",
+    "span",
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "button",
+    "input",
+    "textarea",
+    "label",
+    "form",
+    "table",
+    "tr",
+    "th",
+    "td",
+    "ul",
+    "ol",
+    "li",
+    "card",
+    "badge",
+    "slider",
+    "switch",
+    "modal",
+    "drawer",
+    "datagrid",
+    "canvas3d",
+    "mesh",
+    "boxgeometry",
+    "spheregeometry",
 ];
 
 /// Prohibited tags that present security risks (code execution, unvetted resources).
@@ -77,7 +103,10 @@ pub fn decode_html_entities(input: &str) -> String {
 
 fn resolve_entity(entity: &str) -> Option<String> {
     if let Some(stripped) = entity.strip_prefix('#') {
-        if let Some(hex) = stripped.strip_prefix('x').or_else(|| stripped.strip_prefix('X')) {
+        if let Some(hex) = stripped
+            .strip_prefix('x')
+            .or_else(|| stripped.strip_prefix('X'))
+        {
             u32::from_str_radix(hex, 16)
                 .ok()
                 .and_then(char::from_u32)
@@ -189,11 +218,14 @@ impl AgentSchemaValidator {
         for &t in ALLOWED_TAGS {
             custom.insert(t.to_string());
         }
-        Self { custom_allowed_tags: custom }
+        Self {
+            custom_allowed_tags: custom,
+        }
     }
 
     pub fn allow_custom_component(&mut self, tag: impl Into<String>) {
-        self.custom_allowed_tags.insert(tag.into().to_ascii_lowercase());
+        self.custom_allowed_tags
+            .insert(tag.into().to_ascii_lowercase());
     }
 
     pub fn validate_tag(&self, tag: &str) -> Result<(), String> {
@@ -202,14 +234,20 @@ impl AgentSchemaValidator {
             return Err(format!("Prohibited dangerous tag '<{}>' rejected", tag));
         }
         if !self.custom_allowed_tags.contains(&lower) {
-            return Err(format!("Unrecognized/unauthorized component tag '<{}>'", tag));
+            return Err(format!(
+                "Unrecognized/unauthorized component tag '<{}>'",
+                tag
+            ));
         }
         Ok(())
     }
 
     pub fn validate_attribute(&self, name: &str, value: &str) -> Result<(), String> {
         if !is_attribute_safe(name, value) {
-            return Err(format!("Unsafe attribute '{}=\"{}\"' rejected", name, value));
+            return Err(format!(
+                "Unsafe attribute '{}=\"{}\"' rejected",
+                name, value
+            ));
         }
         Ok(())
     }

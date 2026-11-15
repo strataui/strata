@@ -152,7 +152,11 @@ impl FrameTimelineProfiler {
         if self.samples.is_empty() {
             return 0.0;
         }
-        let sum: u64 = self.samples.iter().map(|s| s.total_cpu_frame_us as u64).sum();
+        let sum: u64 = self
+            .samples
+            .iter()
+            .map(|s| s.total_cpu_frame_us as u64)
+            .sum();
         sum as f32 / self.samples.len() as f32
     }
 
@@ -195,11 +199,26 @@ impl TraceJsonExporter {
                 s.signal_drain_us,
                 start_ts + (s.input_dispatch_us + s.signal_drain_us) as u64,
                 s.parallel_reconcile_us,
-                start_ts + (s.input_dispatch_us + s.signal_drain_us + s.parallel_reconcile_us + s.style_cascade_us) as u64,
+                start_ts
+                    + (s.input_dispatch_us
+                        + s.signal_drain_us
+                        + s.parallel_reconcile_us
+                        + s.style_cascade_us) as u64,
                 s.layout_solve_us,
-                start_ts + (s.input_dispatch_us + s.signal_drain_us + s.parallel_reconcile_us + s.style_cascade_us + s.layout_solve_us) as u64,
+                start_ts
+                    + (s.input_dispatch_us
+                        + s.signal_drain_us
+                        + s.parallel_reconcile_us
+                        + s.style_cascade_us
+                        + s.layout_solve_us) as u64,
                 s.display_list_build_us,
-                start_ts + (s.input_dispatch_us + s.signal_drain_us + s.parallel_reconcile_us + s.style_cascade_us + s.layout_solve_us + s.display_list_build_us) as u64,
+                start_ts
+                    + (s.input_dispatch_us
+                        + s.signal_drain_us
+                        + s.parallel_reconcile_us
+                        + s.style_cascade_us
+                        + s.layout_solve_us
+                        + s.display_list_build_us) as u64,
                 s.gpu_submit_us
             ));
 

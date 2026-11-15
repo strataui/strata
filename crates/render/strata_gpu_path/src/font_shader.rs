@@ -255,7 +255,8 @@ impl Clone for SlugGlyphBuffer {
             instances: self.instances.clone(),
             curves: self.curves.clone(),
             current_fence: std::sync::atomic::AtomicU64::new(
-                self.current_fence.load(std::sync::atomic::Ordering::Relaxed),
+                self.current_fence
+                    .load(std::sync::atomic::Ordering::Relaxed),
             ),
         }
     }
@@ -275,7 +276,9 @@ impl SlugGlyphBuffer {
 
     /// Advances and returns the hardware synchronization fence.
     pub fn sync_barrier(&self) -> u64 {
-        self.current_fence.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+        self.current_fence
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1
     }
 
     /// Verifies whether the hardware fence has been signaled.
@@ -331,7 +334,6 @@ impl SlugGlyphBuffer {
         true
     }
 
-
     /// Returns byte slice of instance buffer for direct GPU upload.
     pub fn instances_as_bytes(&self) -> &[u8] {
         unsafe {
@@ -375,15 +377,27 @@ pub fn solve_quadratic_roots_f32(a: f32, b: f32, c: f32) -> (Option<f32>, Option
     let t1 = (-b - sqrt_d) / (2.0 * a);
     let t2 = (-b + sqrt_d) / (2.0 * a);
 
-    let r1 = if (0.0..=1.0).contains(&t1) { Some(t1) } else { None };
-    let r2 = if (0.0..=1.0).contains(&t2) { Some(t2) } else { None };
+    let r1 = if (0.0..=1.0).contains(&t1) {
+        Some(t1)
+    } else {
+        None
+    };
+    let r2 = if (0.0..=1.0).contains(&t2) {
+        Some(t2)
+    } else {
+        None
+    };
     (r1, r2)
 }
 
 /// Evaluates Slug-tier analytical subpixel glyph coverage at a given design/glyph point.
 ///
 /// Returns subpixel coverage alpha in [0.0, 1.0] without polygon tessellation at any zoom scale.
-pub fn evaluate_slug_analytical_coverage(glyph: &AnalyticGlyph, p: [f32; 2], pixel_scale: f32) -> f32 {
+pub fn evaluate_slug_analytical_coverage(
+    glyph: &AnalyticGlyph,
+    p: [f32; 2],
+    pixel_scale: f32,
+) -> f32 {
     let mut winding: i32 = 0;
     let mut min_dist: f32 = 1e6;
 
@@ -430,4 +444,3 @@ pub fn evaluate_slug_analytical_coverage(glyph: &AnalyticGlyph, p: [f32; 2], pix
         (0.5 - pixel_dist).clamp(0.0, 1.0)
     }
 }
-

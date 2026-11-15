@@ -1,7 +1,7 @@
 //! Slide-Over Deployment Modal for Strata SaaS Dashboard.
 
-use strata::prelude::*;
 use crate::state::DashboardState;
+use strata::prelude::*;
 
 #[component]
 pub fn DeployModal(state: DashboardState) -> View {

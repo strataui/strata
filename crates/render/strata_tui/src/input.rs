@@ -174,12 +174,10 @@ impl TuiEvent {
                     }),
                 }
             }
-            Self::Resize(cols, rows) => {
-                Some(strata_platform::PlatformEvent::WindowResized {
-                    width: *cols as u32,
-                    height: *rows as u32,
-                })
-            }
+            Self::Resize(cols, rows) => Some(strata_platform::PlatformEvent::WindowResized {
+                width: *cols as u32,
+                height: *rows as u32,
+            }),
             Self::FocusGained => Some(strata_platform::PlatformEvent::WindowFocused(true)),
             Self::FocusLost => Some(strata_platform::PlatformEvent::WindowFocused(false)),
             _ => None,
@@ -301,13 +299,22 @@ fn parse_single_byte(b: u8) -> Option<TuiEvent> {
     match b {
         0 => Some(TuiEvent::Key(KeyEvent::new(KeyCode::Null, Modifiers::NONE))),
         b'\t' => Some(TuiEvent::Key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE))),
-        b'\n' | b'\r' => Some(TuiEvent::Key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))),
-        8 | 127 => Some(TuiEvent::Key(KeyEvent::new(KeyCode::Backspace, Modifiers::NONE))),
+        b'\n' | b'\r' => Some(TuiEvent::Key(KeyEvent::new(
+            KeyCode::Enter,
+            Modifiers::NONE,
+        ))),
+        8 | 127 => Some(TuiEvent::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            Modifiers::NONE,
+        ))),
         27 => Some(TuiEvent::Key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE))),
         1..=26 => {
             // Ctrl+A through Ctrl+Z (except Tab, LF, CR, BS handled above)
             let ch = (b'a' + (b - 1)) as char;
-            Some(TuiEvent::Key(KeyEvent::new(KeyCode::Char(ch), Modifiers::CTRL)))
+            Some(TuiEvent::Key(KeyEvent::new(
+                KeyCode::Char(ch),
+                Modifiers::CTRL,
+            )))
         }
         32..=126 => Some(TuiEvent::Key(KeyEvent::char(b as char))),
         _ => None,
@@ -351,7 +358,10 @@ pub fn parse_next_event(buf: &[u8]) -> Option<(TuiEvent, usize)> {
     // Escape sequence (buf[0] == 0x1b)
     if buf.len() == 1 {
         // Just ESC
-        return Some((TuiEvent::Key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE)), 1));
+        return Some((
+            TuiEvent::Key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE)),
+            1,
+        ));
     }
 
     match buf[1] {
@@ -363,7 +373,10 @@ pub fn parse_next_event(buf: &[u8]) -> Option<(TuiEvent, usize)> {
                 k.modifiers.alt = true;
                 Some((TuiEvent::Key(k), len + 1))
             } else {
-                Some((TuiEvent::Key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE)), 1))
+                Some((
+                    TuiEvent::Key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE)),
+                    1,
+                ))
             }
         }
     }
@@ -375,10 +388,22 @@ fn parse_ss3_sequence(buf: &[u8]) -> Option<(TuiEvent, usize)> {
         return None;
     }
     match buf[0] {
-        b'P' => Some((TuiEvent::Key(KeyEvent::new(KeyCode::F(1), Modifiers::NONE)), 1)),
-        b'Q' => Some((TuiEvent::Key(KeyEvent::new(KeyCode::F(2), Modifiers::NONE)), 1)),
-        b'R' => Some((TuiEvent::Key(KeyEvent::new(KeyCode::F(3), Modifiers::NONE)), 1)),
-        b'S' => Some((TuiEvent::Key(KeyEvent::new(KeyCode::F(4), Modifiers::NONE)), 1)),
+        b'P' => Some((
+            TuiEvent::Key(KeyEvent::new(KeyCode::F(1), Modifiers::NONE)),
+            1,
+        )),
+        b'Q' => Some((
+            TuiEvent::Key(KeyEvent::new(KeyCode::F(2), Modifiers::NONE)),
+            1,
+        )),
+        b'R' => Some((
+            TuiEvent::Key(KeyEvent::new(KeyCode::F(3), Modifiers::NONE)),
+            1,
+        )),
+        b'S' => Some((
+            TuiEvent::Key(KeyEvent::new(KeyCode::F(4), Modifiers::NONE)),
+            1,
+        )),
         _ => None,
     }
 }
@@ -448,13 +473,48 @@ fn parse_csi_sequence(buf: &[u8]) -> Option<(TuiEvent, usize)> {
 
     // Arrows and Standard Navigation Keys
     match buf[0] {
-        b'A' => return Some((TuiEvent::Key(KeyEvent::new(KeyCode::Up, Modifiers::NONE)), 1)),
-        b'B' => return Some((TuiEvent::Key(KeyEvent::new(KeyCode::Down, Modifiers::NONE)), 1)),
-        b'C' => return Some((TuiEvent::Key(KeyEvent::new(KeyCode::Right, Modifiers::NONE)), 1)),
-        b'D' => return Some((TuiEvent::Key(KeyEvent::new(KeyCode::Left, Modifiers::NONE)), 1)),
-        b'H' => return Some((TuiEvent::Key(KeyEvent::new(KeyCode::Home, Modifiers::NONE)), 1)),
-        b'F' => return Some((TuiEvent::Key(KeyEvent::new(KeyCode::End, Modifiers::NONE)), 1)),
-        b'Z' => return Some((TuiEvent::Key(KeyEvent::new(KeyCode::BackTab, Modifiers::SHIFT)), 1)),
+        b'A' => {
+            return Some((
+                TuiEvent::Key(KeyEvent::new(KeyCode::Up, Modifiers::NONE)),
+                1,
+            ))
+        }
+        b'B' => {
+            return Some((
+                TuiEvent::Key(KeyEvent::new(KeyCode::Down, Modifiers::NONE)),
+                1,
+            ))
+        }
+        b'C' => {
+            return Some((
+                TuiEvent::Key(KeyEvent::new(KeyCode::Right, Modifiers::NONE)),
+                1,
+            ))
+        }
+        b'D' => {
+            return Some((
+                TuiEvent::Key(KeyEvent::new(KeyCode::Left, Modifiers::NONE)),
+                1,
+            ))
+        }
+        b'H' => {
+            return Some((
+                TuiEvent::Key(KeyEvent::new(KeyCode::Home, Modifiers::NONE)),
+                1,
+            ))
+        }
+        b'F' => {
+            return Some((
+                TuiEvent::Key(KeyEvent::new(KeyCode::End, Modifiers::NONE)),
+                1,
+            ))
+        }
+        b'Z' => {
+            return Some((
+                TuiEvent::Key(KeyEvent::new(KeyCode::BackTab, Modifiers::SHIFT)),
+                1,
+            ))
+        }
         _ => {}
     }
 
@@ -474,12 +534,30 @@ fn parse_csi_sequence(buf: &[u8]) -> Option<(TuiEvent, usize)> {
     };
 
     match terminator {
-        b'A' => Some((TuiEvent::Key(KeyEvent::new(KeyCode::Up, modifiers)), total_len)),
-        b'B' => Some((TuiEvent::Key(KeyEvent::new(KeyCode::Down, modifiers)), total_len)),
-        b'C' => Some((TuiEvent::Key(KeyEvent::new(KeyCode::Right, modifiers)), total_len)),
-        b'D' => Some((TuiEvent::Key(KeyEvent::new(KeyCode::Left, modifiers)), total_len)),
-        b'H' => Some((TuiEvent::Key(KeyEvent::new(KeyCode::Home, modifiers)), total_len)),
-        b'F' => Some((TuiEvent::Key(KeyEvent::new(KeyCode::End, modifiers)), total_len)),
+        b'A' => Some((
+            TuiEvent::Key(KeyEvent::new(KeyCode::Up, modifiers)),
+            total_len,
+        )),
+        b'B' => Some((
+            TuiEvent::Key(KeyEvent::new(KeyCode::Down, modifiers)),
+            total_len,
+        )),
+        b'C' => Some((
+            TuiEvent::Key(KeyEvent::new(KeyCode::Right, modifiers)),
+            total_len,
+        )),
+        b'D' => Some((
+            TuiEvent::Key(KeyEvent::new(KeyCode::Left, modifiers)),
+            total_len,
+        )),
+        b'H' => Some((
+            TuiEvent::Key(KeyEvent::new(KeyCode::Home, modifiers)),
+            total_len,
+        )),
+        b'F' => Some((
+            TuiEvent::Key(KeyEvent::new(KeyCode::End, modifiers)),
+            total_len,
+        )),
         b'~' => {
             let num = parts[0].parse::<u8>().unwrap_or(0);
             let code = match num {

@@ -4,8 +4,8 @@
 //! DirectX 12, and WebGPU backends with swapchains, command encoders, and VRAM buffers.
 
 use crate::swapchain::{PresentError, SwapchainFormat};
-use strata_layout::Rect;
 use std::sync::atomic::{AtomicU64, Ordering};
+use strata_layout::Rect;
 
 /// Active hardware graphics API backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -78,7 +78,12 @@ impl GpuBufferHandle {
         Self::with_location(id, size, usage, GpuMemoryLocation::DeviceLocal)
     }
 
-    pub fn with_location(id: u64, size: usize, usage: GpuBufferUsage, location: GpuMemoryLocation) -> Self {
+    pub fn with_location(
+        id: u64,
+        size: usize,
+        usage: GpuBufferUsage,
+        location: GpuMemoryLocation,
+    ) -> Self {
         let alignment = match usage {
             GpuBufferUsage::Uniform => 256,
             GpuBufferUsage::Storage => 256,
@@ -153,7 +158,11 @@ pub struct GpuTextureHandle {
 
 impl GpuTextureHandle {
     pub fn new(id: u64, width: u32, height: u32, format: SwapchainFormat, is_depth: bool) -> Self {
-        let bpp = if is_depth || format.is_depth() { 4 } else { format.bytes_per_pixel() };
+        let bpp = if is_depth || format.is_depth() {
+            4
+        } else {
+            format.bytes_per_pixel()
+        };
         let size = (width as usize) * (height as usize) * bpp;
         Self {
             id,
@@ -179,9 +188,19 @@ impl GpuTextureHandle {
         let idx = (y as usize * self.width as usize + x as usize) * bpp;
         if idx + 4 <= self.data.len() {
             if self.format == SwapchainFormat::Bgra8Unorm {
-                Some([self.data[idx + 2], self.data[idx + 1], self.data[idx], self.data[idx + 3]])
+                Some([
+                    self.data[idx + 2],
+                    self.data[idx + 1],
+                    self.data[idx],
+                    self.data[idx + 3],
+                ])
             } else {
-                Some([self.data[idx], self.data[idx + 1], self.data[idx + 2], self.data[idx + 3]])
+                Some([
+                    self.data[idx],
+                    self.data[idx + 1],
+                    self.data[idx + 2],
+                    self.data[idx + 3],
+                ])
             }
         } else {
             None
@@ -401,7 +420,8 @@ impl GpuDevice {
         let depth_id = NEXT_GPU_RESOURCE_ID.fetch_add(1, Ordering::Relaxed);
 
         let swapchain_texture = GpuTextureHandle::new(swapchain_id, width, height, format, false);
-        let depth_texture = GpuTextureHandle::new(depth_id, width, height, SwapchainFormat::Depth32Float, true);
+        let depth_texture =
+            GpuTextureHandle::new(depth_id, width, height, SwapchainFormat::Depth32Float, true);
 
         Self {
             backend,
@@ -471,7 +491,8 @@ impl GpuDevice {
         if src_offset + size > src.data.len() || dst_offset + size > dst.data.len() {
             return Err(PresentError::BufferTooSmall);
         }
-        dst.data[dst_offset..dst_offset + size].copy_from_slice(&src.data[src_offset..src_offset + size]);
+        dst.data[dst_offset..dst_offset + size]
+            .copy_from_slice(&src.data[src_offset..src_offset + size]);
         Ok(())
     }
 
@@ -482,11 +503,13 @@ impl GpuDevice {
         src_offset: usize,
         dst: &mut GpuTextureHandle,
     ) -> Result<(), PresentError> {
-        let required_bytes = (dst.width as usize) * (dst.height as usize) * dst.format.bytes_per_pixel();
+        let required_bytes =
+            (dst.width as usize) * (dst.height as usize) * dst.format.bytes_per_pixel();
         if src_offset + required_bytes > src.data.len() {
             return Err(PresentError::BufferTooSmall);
         }
-        dst.data[..required_bytes].copy_from_slice(&src.data[src_offset..src_offset + required_bytes]);
+        dst.data[..required_bytes]
+            .copy_from_slice(&src.data[src_offset..src_offset + required_bytes]);
         Ok(())
     }
 
@@ -548,7 +571,11 @@ impl GpuDevice {
     /// Submits recorded commands and advances the swapchain frame.
     pub fn submit(&mut self, encoder: GpuCommandEncoder) {
         self.frame_index += 1;
-        self.queue.submit(&encoder, &mut self.swapchain_texture, Some(&mut self.depth_texture));
+        self.queue.submit(
+            &encoder,
+            &mut self.swapchain_texture,
+            Some(&mut self.depth_texture),
+        );
     }
 }
 
@@ -614,11 +641,36 @@ impl GpuAdapter {
         let preferred = GpuBackend::detect_preferred();
 
         let (primary_name, vendor, dev_id, dev_type) = match preferred {
-            GpuBackend::Metal => ("Apple M-Series GPU (Metal 3)", 0x106B, 0x0001, GpuDeviceType::IntegratedGpu),
-            GpuBackend::Dx12 => ("Direct3D 12 High-Performance Graphics Device", 0x10DE, 0x2204, GpuDeviceType::DiscreteGpu),
-            GpuBackend::Vulkan => ("Vulkan 1.3 High-Performance Physical Device", 0x10DE, 0x2684, GpuDeviceType::DiscreteGpu),
-            GpuBackend::WebGpu => ("WebGPU Surface Canvas Adapter", 0x0000, 0x0001, GpuDeviceType::VirtualGpu),
-            GpuBackend::SoftwareFallback => ("Strata Software Rasterizer", 0x0000, 0x0000, GpuDeviceType::Cpu),
+            GpuBackend::Metal => (
+                "Apple M-Series GPU (Metal 3)",
+                0x106B,
+                0x0001,
+                GpuDeviceType::IntegratedGpu,
+            ),
+            GpuBackend::Dx12 => (
+                "Direct3D 12 High-Performance Graphics Device",
+                0x10DE,
+                0x2204,
+                GpuDeviceType::DiscreteGpu,
+            ),
+            GpuBackend::Vulkan => (
+                "Vulkan 1.3 High-Performance Physical Device",
+                0x10DE,
+                0x2684,
+                GpuDeviceType::DiscreteGpu,
+            ),
+            GpuBackend::WebGpu => (
+                "WebGPU Surface Canvas Adapter",
+                0x0000,
+                0x0001,
+                GpuDeviceType::VirtualGpu,
+            ),
+            GpuBackend::SoftwareFallback => (
+                "Strata Software Rasterizer",
+                0x0000,
+                0x0000,
+                GpuDeviceType::Cpu,
+            ),
         };
 
         adapters.push(Self {
@@ -695,7 +747,12 @@ pub struct GpuSwapchain {
 }
 
 impl GpuSwapchain {
-    pub fn new(width: u32, height: u32, format: SwapchainFormat, present_mode: GpuPresentMode) -> Self {
+    pub fn new(
+        width: u32,
+        height: u32,
+        format: SwapchainFormat,
+        present_mode: GpuPresentMode,
+    ) -> Self {
         let mut textures = Vec::with_capacity(3);
         for _ in 0..3 {
             let id = NEXT_GPU_RESOURCE_ID.fetch_add(1, Ordering::Relaxed);
@@ -748,7 +805,8 @@ impl GpuSurfacePresenter {
     pub fn new(width: u32, height: u32, format: SwapchainFormat) -> Self {
         let device = GpuDevice::new(width, height, format);
         let swapchain = GpuSwapchain::new(width, height, format, GpuPresentMode::Fifo);
-        let pipeline = crate::gpu_pipeline::GpuPresentationPipeline::new(width as f32, height as f32);
+        let pipeline =
+            crate::gpu_pipeline::GpuPresentationPipeline::new(width as f32, height as f32);
         let byte_size = (width as usize) * (height as usize) * format.bytes_per_pixel();
         Self {
             device,
@@ -760,10 +818,16 @@ impl GpuSurfacePresenter {
         }
     }
 
-    pub fn with_adapter(adapter: &GpuAdapter, width: u32, height: u32, format: SwapchainFormat) -> Result<Self, PresentError> {
+    pub fn with_adapter(
+        adapter: &GpuAdapter,
+        width: u32,
+        height: u32,
+        format: SwapchainFormat,
+    ) -> Result<Self, PresentError> {
         let device = adapter.request_device(width, height, format)?;
         let swapchain = GpuSwapchain::new(width, height, format, GpuPresentMode::Fifo);
-        let pipeline = crate::gpu_pipeline::GpuPresentationPipeline::new(width as f32, height as f32);
+        let pipeline =
+            crate::gpu_pipeline::GpuPresentationPipeline::new(width as f32, height as f32);
         let byte_size = (width as usize) * (height as usize) * format.bytes_per_pixel();
         Ok(Self {
             device,
@@ -808,8 +872,14 @@ impl GpuSurfacePresenter {
 }
 
 impl crate::swapchain::SurfacePresenter for GpuSurfacePresenter {
-    fn present(&mut self, buffer: &crate::rasterizer::FrameBuffer, damage: Option<Rect>) -> Result<(), PresentError> {
-        let expected_size = (self.swapchain.width as usize) * (self.swapchain.height as usize) * self.swapchain.format.bytes_per_pixel();
+    fn present(
+        &mut self,
+        buffer: &crate::rasterizer::FrameBuffer,
+        damage: Option<Rect>,
+    ) -> Result<(), PresentError> {
+        let expected_size = (self.swapchain.width as usize)
+            * (self.swapchain.height as usize)
+            * self.swapchain.format.bytes_per_pixel();
         if self.backing_buffer.len() < expected_size {
             return Err(PresentError::BufferTooSmall);
         }
@@ -821,13 +891,26 @@ impl crate::swapchain::SurfacePresenter for GpuSurfacePresenter {
         let (min_x, max_x, min_y, max_y) = if let Some(d) = damage {
             self.damage_clipped_frames += 1;
             (
-                (d.x.floor() as isize).max(0).min(self.swapchain.width as isize) as usize,
-                (d.max_x().ceil() as isize).max(0).min(self.swapchain.width as isize) as usize,
-                (d.y.floor() as isize).max(0).min(self.swapchain.height as isize) as usize,
-                (d.max_y().ceil() as isize).max(0).min(self.swapchain.height as isize) as usize,
+                (d.x.floor() as isize)
+                    .max(0)
+                    .min(self.swapchain.width as isize) as usize,
+                (d.max_x().ceil() as isize)
+                    .max(0)
+                    .min(self.swapchain.width as isize) as usize,
+                (d.y.floor() as isize)
+                    .max(0)
+                    .min(self.swapchain.height as isize) as usize,
+                (d.max_y().ceil() as isize)
+                    .max(0)
+                    .min(self.swapchain.height as isize) as usize,
             )
         } else {
-            (0, self.swapchain.width as usize, 0, self.swapchain.height as usize)
+            (
+                0,
+                self.swapchain.width as usize,
+                0,
+                self.swapchain.height as usize,
+            )
         };
 
         for y in min_y..max_y {
@@ -836,7 +919,8 @@ impl crate::swapchain::SurfacePresenter for GpuSurfacePresenter {
             for x in min_x..max_x {
                 let src_idx = src_row + x * 4;
                 let dst_idx = dst_row + x * bpp;
-                if src_idx + 4 <= buffer.pixels.len() && dst_idx + bpp <= self.backing_buffer.len() {
+                if src_idx + 4 <= buffer.pixels.len() && dst_idx + bpp <= self.backing_buffer.len()
+                {
                     let r = buffer.pixels[src_idx];
                     let g = buffer.pixels[src_idx + 1];
                     let b = buffer.pixels[src_idx + 2];
@@ -878,7 +962,8 @@ impl crate::swapchain::SurfacePresenter for GpuSurfacePresenter {
         self.device.resize(width, height)?;
         self.swapchain.resize(width, height);
         self.pipeline.resize(width as f32, height as f32);
-        let byte_size = (width as usize) * (height as usize) * self.swapchain.format.bytes_per_pixel();
+        let byte_size =
+            (width as usize) * (height as usize) * self.swapchain.format.bytes_per_pixel();
         self.backing_buffer.resize(byte_size, 0);
         Ok(())
     }
@@ -903,8 +988,10 @@ impl GpuOffscreenSurface {
     /// Creates a new offscreen GPU surface with color and 32-bit floating point depth attachments.
     pub fn new(device: &GpuDevice, width: u32, height: u32, format: SwapchainFormat) -> Self {
         let color_texture = device.create_texture(width, height, format, false);
-        let depth_texture = device.create_texture(width, height, SwapchainFormat::Depth32Float, true);
-        let pipeline = crate::gpu_pipeline::GpuPresentationPipeline::new(width as f32, height as f32);
+        let depth_texture =
+            device.create_texture(width, height, SwapchainFormat::Depth32Float, true);
+        let pipeline =
+            crate::gpu_pipeline::GpuPresentationPipeline::new(width as f32, height as f32);
         Self {
             width,
             height,
@@ -937,7 +1024,11 @@ impl GpuOffscreenSurface {
             encoder.draw_instanced(6, prim_count);
         }
         encoder.end_render_pass();
-        device.queue.submit(&encoder, &mut self.color_texture, Some(&mut self.depth_texture));
+        device.queue.submit(
+            &encoder,
+            &mut self.color_texture,
+            Some(&mut self.depth_texture),
+        );
         device.frame_index += 1;
 
         Ok(prim_count)
@@ -967,7 +1058,8 @@ impl GpuOffscreenSurface {
         self.width = width;
         self.height = height;
         self.color_texture = device.create_texture(width, height, self.format, false);
-        self.depth_texture = device.create_texture(width, height, SwapchainFormat::Depth32Float, true);
+        self.depth_texture =
+            device.create_texture(width, height, SwapchainFormat::Depth32Float, true);
         self.pipeline.resize(width as f32, height as f32);
     }
 }
@@ -982,13 +1074,21 @@ impl GpuContext {
     /// Discovers system GPU adapter and initializes logical device and presentation queue.
     pub fn new(width: u32, height: u32, format: SwapchainFormat) -> Result<Self, PresentError> {
         let adapters = GpuAdapter::enumerate_adapters();
-        let adapter = adapters.into_iter().next().ok_or(PresentError::SurfaceLost)?;
+        let adapter = adapters
+            .into_iter()
+            .next()
+            .ok_or(PresentError::SurfaceLost)?;
         let device = adapter.request_device(width, height, format)?;
         Ok(Self { adapter, device })
     }
 
     /// Creates an offscreen render surface for headless CI testing or server-side rendering.
-    pub fn create_offscreen_surface(&self, width: u32, height: u32, format: SwapchainFormat) -> GpuOffscreenSurface {
+    pub fn create_offscreen_surface(
+        &self,
+        width: u32,
+        height: u32,
+        format: SwapchainFormat,
+    ) -> GpuOffscreenSurface {
         GpuOffscreenSurface::new(&self.device, width, height, format)
     }
 
@@ -1010,10 +1110,10 @@ impl GpuContext {
         encoder.begin_render_pass(pass);
         encoder.draw_instanced(6, list.len().max(1));
         encoder.end_render_pass();
-        self.device.queue.submit(&encoder, target, Some(&mut self.device.depth_texture));
+        self.device
+            .queue
+            .submit(&encoder, target, Some(&mut self.device.depth_texture));
         self.device.frame_index += 1;
         Ok(target.data.clone())
     }
 }
-
-

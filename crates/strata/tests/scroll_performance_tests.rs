@@ -1,8 +1,8 @@
 //! High-scale stress test and performance benchmark for massive component groups (10,000+ nodes)
 //! and compositor-level scrolling latency.
 
-use strata::prelude::*;
 use std::time::Instant;
+use strata::prelude::*;
 
 fn build_massive_component_tree(section_count: usize) -> View {
     let mut sections = Vec::with_capacity(section_count);
@@ -60,13 +60,28 @@ fn test_massive_component_tree_scroll_performance() {
     let start_init = Instant::now();
     let mut runtime = AppRuntime::new(view, 1280.0, 800.0, 1.0);
     let init_duration = start_init.elapsed();
-    println!("Initial 10,000-node DOM layout initialized in: {:?}", init_duration);
+    println!(
+        "Initial 10,000-node DOM layout initialized in: {:?}",
+        init_duration
+    );
 
     // Verify scrollbar exists and content height is massive
-    assert_eq!(runtime.active_scrollbars.len(), 1, "Must detect exactly 1 scroll container");
+    assert_eq!(
+        runtime.active_scrollbars.len(),
+        1,
+        "Must detect exactly 1 scroll container"
+    );
     let initial_bar = runtime.active_scrollbars[0].clone();
-    assert!(initial_bar.content_h > 30_000.0, "Content height must exceed 30,000px (was {})", initial_bar.content_h);
-    assert!(initial_bar.max_scroll_y > 29_000.0, "Max scroll Y must exceed 29,000px (was {})", initial_bar.max_scroll_y);
+    assert!(
+        initial_bar.content_h > 30_000.0,
+        "Content height must exceed 30,000px (was {})",
+        initial_bar.content_h
+    );
+    assert!(
+        initial_bar.max_scroll_y > 29_000.0,
+        "Max scroll Y must exceed 29,000px (was {})",
+        initial_bar.max_scroll_y
+    );
 
     // Perform 200 sequential scroll ticks and profile dispatch latency
     let num_scroll_ticks = 200;
@@ -88,7 +103,11 @@ fn test_massive_component_tree_scroll_performance() {
 
     println!("200 Scroll Ticks on 10,000+ Node DOM:");
     println!("  Total Duration: {:?}", total_scroll_duration);
-    println!("  Avg Latency:    {:.2} µs ({:.4} ms)", avg_latency_us, avg_latency_us / 1000.0);
+    println!(
+        "  Avg Latency:    {:.2} µs ({:.4} ms)",
+        avg_latency_us,
+        avg_latency_us / 1000.0
+    );
     println!("  Min Latency:    {} µs", min_latency_us);
     println!("  Max Latency:    {} µs", max_latency_us);
 
@@ -128,7 +147,12 @@ fn test_massive_component_tree_scroll_performance() {
     );
 
     // Verify Cairo rendering with frustum culling on scrolled 10,000-node DOM
-    let surface = strata_platform::cairo::ImageSurface::create(strata_platform::cairo::Format::ARgb32, 1280, 800).unwrap();
+    let surface = strata_platform::cairo::ImageSurface::create(
+        strata_platform::cairo::Format::ARgb32,
+        1280,
+        800,
+    )
+    .unwrap();
     let cr = strata_platform::cairo::Context::new(&surface).unwrap();
 
     let t_compile_start = Instant::now();
@@ -139,9 +163,18 @@ fn test_massive_component_tree_scroll_performance() {
     strata_platform::render_display_list_to_cairo(&cr, &runtime.display_list);
     let cairo_render_duration = t_cairo_start.elapsed();
 
-    println!("Display list compilation (10,000+ nodes): {:?}", compile_duration);
-    println!("Cairo rasterization with Frustum Culling:    {:?}", cairo_render_duration);
-    println!("Compiled display list command count:        {}", runtime.display_list.commands.len());
+    println!(
+        "Display list compilation (10,000+ nodes): {:?}",
+        compile_duration
+    );
+    println!(
+        "Cairo rasterization with Frustum Culling:    {:?}",
+        cairo_render_duration
+    );
+    println!(
+        "Compiled display list command count:        {}",
+        runtime.display_list.commands.len()
+    );
 
     // Spatial display list culling must reduce command count from >20,000 to <1,500 commands!
     assert!(
@@ -149,7 +182,7 @@ fn test_massive_component_tree_scroll_performance() {
         "Culled display list command count must be < 1,500, was {}",
         runtime.display_list.commands.len()
     );
-    
+
     // Culled Cairo rendering of the visible viewport must complete in under 50 ms in debug mode (< 4 ms in release mode)!
     assert!(
         cairo_render_duration.as_millis() < 50,
@@ -185,11 +218,15 @@ fn test_hit_testing_spatial_clipping_outside_scroll_container() {
 
     // Hit test click at top bar (y=40, inside topbar, strictly outside scroll-content)
     let t0 = Instant::now();
-    let hit = AppRuntime::hit_test_click(&runtime.root_blueprint, &runtime.layout_root, 1260.0, 40.0);
+    let hit =
+        AppRuntime::hit_test_click(&runtime.root_blueprint, &runtime.layout_root, 1260.0, 40.0);
     let hit_duration = t0.elapsed();
 
     assert!(hit.is_some(), "Close button must be hit");
     // Hit testing at topbar must reject the 500-node scroll container in O(1) (< 200 µs in debug mode)
-    assert!(hit_duration.as_micros() < 200, "Hit test on topbar took too long: {:?}", hit_duration);
+    assert!(
+        hit_duration.as_micros() < 200,
+        "Hit test on topbar took too long: {:?}",
+        hit_duration
+    );
 }
-

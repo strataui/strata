@@ -124,7 +124,11 @@ fn test_declarative_scene3d_mesh_box_standard_material_compilation() {
     assert_eq!(mesh.transform.scale, [1.5, 1.5, 1.5]);
 
     match mesh.geometry {
-        Geometry3D::Box { width, height, depth } => {
+        Geometry3D::Box {
+            width,
+            height,
+            depth,
+        } => {
             assert_eq!(width, 2.0);
             assert_eq!(height, 4.0);
             assert_eq!(depth, 6.0);

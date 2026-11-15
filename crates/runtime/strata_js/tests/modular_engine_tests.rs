@@ -20,7 +20,11 @@ fn test_isolated_ast_construction_and_invariants() {
         init: Some(expr),
     };
 
-    if let Stmt::VarDecl { name, init: Some(Expr::Binary { op, .. }) } = &stmt {
+    if let Stmt::VarDecl {
+        name,
+        init: Some(Expr::Binary { op, .. }),
+    } = &stmt
+    {
         assert_eq!(name, "result");
         assert_eq!(*op, BinaryOp::Add);
     } else {
@@ -59,8 +63,18 @@ fn test_isolated_parser_statements_and_expressions() {
     }
 
     match &stmts[1] {
-        Stmt::If { cond, then_branch, else_branch } => {
-            assert!(matches!(cond, Expr::Binary { op: BinaryOp::Gt, .. }));
+        Stmt::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            assert!(matches!(
+                cond,
+                Expr::Binary {
+                    op: BinaryOp::Gt,
+                    ..
+                }
+            ));
             assert!(matches!(**then_branch, Stmt::Block(_)));
             assert!(else_branch.is_none());
         }
@@ -71,21 +85,33 @@ fn test_isolated_parser_statements_and_expressions() {
 #[test]
 fn test_isolated_scope_chain_lexical_resolution() {
     let root = Scope::new_root();
-    root.borrow_mut().declare("global_val", JsValue::Number(100.0));
-    root.borrow_mut().declare("shadowed", JsValue::String("outer".to_string()));
+    root.borrow_mut()
+        .declare("global_val", JsValue::Number(100.0));
+    root.borrow_mut()
+        .declare("shadowed", JsValue::String("outer".to_string()));
 
     let child = Scope::new_child(root.clone());
-    child.borrow_mut().declare("child_val", JsValue::Number(200.0));
-    child.borrow_mut().declare("shadowed", JsValue::String("inner".to_string()));
+    child
+        .borrow_mut()
+        .declare("child_val", JsValue::Number(200.0));
+    child
+        .borrow_mut()
+        .declare("shadowed", JsValue::String("inner".to_string()));
 
     // Child resolves child_val and shadowed as inner
-    assert_eq!(child.borrow().get("child_val"), Some(JsValue::Number(200.0)));
+    assert_eq!(
+        child.borrow().get("child_val"),
+        Some(JsValue::Number(200.0))
+    );
     assert_eq!(
         child.borrow().get("shadowed"),
         Some(JsValue::String("inner".to_string()))
     );
     // Child resolves root's global_val through parent pointer
-    assert_eq!(child.borrow().get("global_val"), Some(JsValue::Number(100.0)));
+    assert_eq!(
+        child.borrow().get("global_val"),
+        Some(JsValue::Number(100.0))
+    );
 
     // Root retains outer shadowed value
     assert_eq!(
@@ -117,8 +143,18 @@ fn test_isolated_scope_chain_lexical_resolution() {
 #[test]
 fn test_isolated_dom_tree_and_mutation_sink() {
     let doc = Document::new();
-    let container = DomNode::element("div", [("id".to_string(), "app".to_string())].into_iter().collect());
-    let paragraph = DomNode::element("p", [("class".to_string(), "lead".to_string())].into_iter().collect());
+    let container = DomNode::element(
+        "div",
+        [("id".to_string(), "app".to_string())]
+            .into_iter()
+            .collect(),
+    );
+    let paragraph = DomNode::element(
+        "p",
+        [("class".to_string(), "lead".to_string())]
+            .into_iter()
+            .collect(),
+    );
     paragraph.set_text_content("Hello Modular Strata!");
 
     container.append_child(paragraph.clone());

@@ -53,25 +53,26 @@ pub fn solve_grid_with_subgrid_guarded(
     let margin = container.style.margin;
 
     // 1. Resolve container dimensions
-    let resolved_width = match resolve_dimension_with_node(container.style.width, available_width, container) {
-        Some(w) => clamp_dimension_with_node(
-            w,
-            container.style.min_width,
-            container.style.max_width,
-            available_width,
-            container,
-        ),
-        None => {
-            let auto_w = (available_width - margin.left - margin.right).max(0.0);
-            clamp_dimension_with_node(
-                auto_w,
+    let resolved_width =
+        match resolve_dimension_with_node(container.style.width, available_width, container) {
+            Some(w) => clamp_dimension_with_node(
+                w,
                 container.style.min_width,
                 container.style.max_width,
                 available_width,
                 container,
-            )
-        }
-    };
+            ),
+            None => {
+                let auto_w = (available_width - margin.left - margin.right).max(0.0);
+                clamp_dimension_with_node(
+                    auto_w,
+                    container.style.min_width,
+                    container.style.max_width,
+                    available_width,
+                    container,
+                )
+            }
+        };
 
     let inner_width =
         (resolved_width - padding.left - padding.right - border.left - border.right).max(0.0);
@@ -91,7 +92,13 @@ pub fn solve_grid_with_subgrid_guarded(
 
     // 2. Pre-calculate Column Bounds and Grid Dimensions (supporting named areas and implicit tracks)
     let area_rows = container.style.grid_template_areas.len();
-    let area_cols = container.style.grid_template_areas.iter().map(|r| r.len()).max().unwrap_or(0);
+    let area_cols = container
+        .style
+        .grid_template_areas
+        .iter()
+        .map(|r| r.len())
+        .max()
+        .unwrap_or(0);
 
     // Synthesize named grid areas into row/column lines (W3C CSS Grid Level 2 §7.3)
     if !container.style.grid_template_areas.is_empty() {
@@ -112,7 +119,9 @@ pub fn solve_grid_with_subgrid_guarded(
                             }
                         }
                     }
-                    if let (Some(r_min), Some(r_max), Some(c_min), Some(c_max)) = (min_r, max_r, min_c, max_c) {
+                    if let (Some(r_min), Some(r_max), Some(c_min), Some(c_max)) =
+                        (min_r, max_r, min_c, max_c)
+                    {
                         child.style.grid_row_start = Some((r_min + 1) as i32);
                         child.style.grid_row_span = Some((r_max - r_min + 1) as u32);
                         child.style.grid_column_start = Some((c_min + 1) as i32);
@@ -123,13 +132,24 @@ pub fn solve_grid_with_subgrid_guarded(
         }
     }
 
-    let is_subgrid_cols = container.style.grid_template_columns.first() == Some(&GridTrack::Subgrid);
+    let is_subgrid_cols =
+        container.style.grid_template_columns.first() == Some(&GridTrack::Subgrid);
     let explicit_cols = if is_subgrid_cols {
         inherited_cols.map_or(1, |c| c.len().max(1))
     } else {
-        container.style.grid_template_columns.len().max(area_cols).max(1)
+        container
+            .style
+            .grid_template_columns
+            .len()
+            .max(area_cols)
+            .max(1)
     };
-    let explicit_rows = container.style.grid_template_rows.len().max(area_rows).max(1);
+    let explicit_rows = container
+        .style
+        .grid_template_rows
+        .len()
+        .max(area_rows)
+        .max(1);
     let mut num_cols = explicit_cols;
 
     for child in &container.children {
@@ -325,13 +345,15 @@ pub fn solve_grid_with_subgrid_guarded(
             if !is_dense {
                 if !is_col_flow {
                     if existing.row_start > cursor_row
-                        || (existing.row_start == cursor_row && existing.col_start + existing.col_span > cursor_col)
+                        || (existing.row_start == cursor_row
+                            && existing.col_start + existing.col_span > cursor_col)
                     {
                         cursor_row = existing.row_start;
                         cursor_col = existing.col_start + existing.col_span;
                     }
                 } else if existing.col_start > cursor_col
-                    || (existing.col_start == cursor_col && existing.row_start + existing.row_span > cursor_row)
+                    || (existing.col_start == cursor_col
+                        && existing.row_start + existing.row_span > cursor_row)
                 {
                     cursor_col = existing.col_start;
                     cursor_row = existing.row_start + existing.row_span;
@@ -404,7 +426,11 @@ pub fn solve_grid_with_subgrid_guarded(
                 if c + col_span > MAX_GRID_TRACKS {
                     break;
                 }
-                ensure_grid_dimensions(&mut grid_occupancy, max_rows.max(r + row_span), c + col_span);
+                ensure_grid_dimensions(
+                    &mut grid_occupancy,
+                    max_rows.max(r + row_span),
+                    c + col_span,
+                );
 
                 if r + row_span > max_rows && max_rows > 0 {
                     c += 1;
@@ -436,7 +462,9 @@ pub fn solve_grid_with_subgrid_guarded(
 
     let placed_items: Vec<PlacedItem> = placed.into_iter().flatten().collect();
 
-    let total_cols = num_cols.max(grid_occupancy.first().map_or(1, |row| row.len())).clamp(1, MAX_GRID_TRACKS);
+    let total_cols = num_cols
+        .max(grid_occupancy.first().map_or(1, |row| row.len()))
+        .clamp(1, MAX_GRID_TRACKS);
     let total_rows = grid_occupancy.len().clamp(1, MAX_GRID_TRACKS);
 
     // 4. Resolve Column Tracks (with Subgrid and implicit track expansion)
@@ -563,14 +591,7 @@ pub fn solve_grid_with_subgrid_guarded(
                     None
                 };
                 if let Some(cg) = child_guard {
-                    solve_grid_with_subgrid_guarded(
-                        child,
-                        item_w,
-                        item_h,
-                        sub_cols,
-                        sub_rows,
-                        cg,
-                    );
+                    solve_grid_with_subgrid_guarded(child, item_w, item_h, sub_cols, sub_rows, cg);
                 }
                 continue;
             }
@@ -611,13 +632,21 @@ fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f
     for (i, track) in tracks.iter().enumerate() {
         match *track {
             GridTrack::Px(px) => {
-                let val = if is_tui { px.round() } else { snap_subpixel_grid(px) };
+                let val = if is_tui {
+                    px.round()
+                } else {
+                    snap_subpixel_grid(px)
+                };
                 resolved[i] = val;
                 total_fixed += val;
             }
             GridTrack::Percent(pct) => {
                 let px = available_space * (pct / 100.0);
-                let val = if is_tui { px.round() } else { snap_subpixel_grid(px) };
+                let val = if is_tui {
+                    px.round()
+                } else {
+                    snap_subpixel_grid(px)
+                };
                 resolved[i] = val;
                 total_fixed += val;
             }
@@ -636,7 +665,11 @@ fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f
                     GridTrackBreadth::Percent(pct) => available_space * (pct / 100.0),
                     _ => 0.0,
                 };
-                let min_px = if is_tui { min_px.round() } else { snap_subpixel_grid(min_px) };
+                let min_px = if is_tui {
+                    min_px.round()
+                } else {
+                    snap_subpixel_grid(min_px)
+                };
                 match max_b {
                     GridTrackBreadth::Fr(fr) => {
                         resolved[i] = min_px;
@@ -645,13 +678,21 @@ fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f
                     }
                     GridTrackBreadth::Px(px) => {
                         let sz = px.max(min_px);
-                        let val = if is_tui { sz.round() } else { snap_subpixel_grid(sz) };
+                        let val = if is_tui {
+                            sz.round()
+                        } else {
+                            snap_subpixel_grid(sz)
+                        };
                         resolved[i] = val;
                         total_fixed += val;
                     }
                     GridTrackBreadth::Percent(pct) => {
                         let sz = (available_space * (pct / 100.0)).max(min_px);
-                        let val = if is_tui { sz.round() } else { snap_subpixel_grid(sz) };
+                        let val = if is_tui {
+                            sz.round()
+                        } else {
+                            snap_subpixel_grid(sz)
+                        };
                         resolved[i] = val;
                         total_fixed += val;
                     }
@@ -693,8 +734,7 @@ fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f
             let factors: Vec<f32> = fr_indices
                 .iter()
                 .map(|&i| match tracks[i] {
-                    GridTrack::Fr(fr)
-                    | GridTrack::MinMax(_, GridTrackBreadth::Fr(fr)) => fr,
+                    GridTrack::Fr(fr) | GridTrack::MinMax(_, GridTrackBreadth::Fr(fr)) => fr,
                     _ => 1.0,
                 })
                 .collect();
@@ -760,7 +800,11 @@ fn calculate_span_size(sizes: &[f32], start: usize, span: usize, gap: f32) -> f3
 fn ensure_grid_dimensions(grid: &mut Vec<Vec<bool>>, rows: usize, cols: usize) {
     let bounded_rows = rows.min(MAX_GRID_TRACKS);
     let bounded_cols = cols.min(MAX_GRID_TRACKS);
-    let current_cols = grid.first().map_or(bounded_cols, |r| r.len()).max(bounded_cols).min(MAX_GRID_TRACKS);
+    let current_cols = grid
+        .first()
+        .map_or(bounded_cols, |r| r.len())
+        .max(bounded_cols)
+        .min(MAX_GRID_TRACKS);
     if grid.len() < bounded_rows {
         grid.resize_with(bounded_rows, || vec![false; current_cols]);
     }
@@ -802,8 +846,16 @@ fn mark_cell_range_occupied(
     let r_end = (r_start + r_span).min(MAX_GRID_TRACKS);
     let c_end = (c_start + c_span).min(MAX_GRID_TRACKS);
     ensure_grid_dimensions(grid, r_end, c_end);
-    for row in grid.iter_mut().skip(r_start).take(r_end.saturating_sub(r_start)) {
-        for cell in row.iter_mut().skip(c_start).take(c_end.saturating_sub(c_start)) {
+    for row in grid
+        .iter_mut()
+        .skip(r_start)
+        .take(r_end.saturating_sub(r_start))
+    {
+        for cell in row
+            .iter_mut()
+            .skip(c_start)
+            .take(c_end.saturating_sub(c_start))
+        {
             *cell = true;
         }
     }
@@ -834,10 +886,12 @@ fn resolve_axis_placement(
             let s_track = resolve_grid_line(s, explicit_tracks);
             let e_track = resolve_grid_line(e, explicit_tracks);
             if e_track > s_track {
-                let track_span = (e_track - s_track).clamp(1, MAX_GRID_TRACKS.saturating_sub(s_track).max(1));
+                let track_span =
+                    (e_track - s_track).clamp(1, MAX_GRID_TRACKS.saturating_sub(s_track).max(1));
                 (Some(s_track), track_span)
             } else if s_track > e_track {
-                let track_span = (s_track - e_track).clamp(1, MAX_GRID_TRACKS.saturating_sub(e_track).max(1));
+                let track_span =
+                    (s_track - e_track).clamp(1, MAX_GRID_TRACKS.saturating_sub(e_track).max(1));
                 (Some(e_track), track_span)
             } else {
                 (Some(s_track), 1)
@@ -845,7 +899,8 @@ fn resolve_axis_placement(
         }
         (Some(s), None) => {
             let s_track = resolve_grid_line(s, explicit_tracks);
-            let s_span = (span.unwrap_or(1).max(1) as usize).min(MAX_GRID_TRACKS.saturating_sub(s_track).max(1));
+            let s_span = (span.unwrap_or(1).max(1) as usize)
+                .min(MAX_GRID_TRACKS.saturating_sub(s_track).max(1));
             (Some(s_track), s_span)
         }
         (None, Some(e)) => {
@@ -860,4 +915,3 @@ fn resolve_axis_placement(
         }
     }
 }
-

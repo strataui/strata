@@ -47,8 +47,16 @@ fn test_canvas3d_declarative_pipeline_in_runtime() {
 
     if let Some(DrawCommand::DrawViewport3D { bounds, scene }) = viewport_cmd {
         // Bounds should match computed layout (800 wide minus padding, h-96 is 384px)
-        assert!(bounds.width > 700.0, "Expected width > 700, got {}", bounds.width);
-        assert_eq!(bounds.height, 384.0, "Expected height 384px (h-96), got {}", bounds.height);
+        assert!(
+            bounds.width > 700.0,
+            "Expected width > 700, got {}",
+            bounds.width
+        );
+        assert_eq!(
+            bounds.height, 384.0,
+            "Expected height 384px (h-96), got {}",
+            bounds.height
+        );
 
         // Verify camera
         match &scene.camera {
@@ -70,7 +78,9 @@ fn test_canvas3d_declarative_pipeline_in_runtime() {
 
         // Verify lights
         assert_eq!(scene.lights.len(), 2, "Expected 2 lights in compiled scene");
-        let has_ambient = scene.lights.iter().any(|l| matches!(l, Light3D::Ambient { intensity, .. } if (*intensity - 0.5).abs() < 1e-4));
+        let has_ambient = scene.lights.iter().any(
+            |l| matches!(l, Light3D::Ambient { intensity, .. } if (*intensity - 0.5).abs() < 1e-4),
+        );
         assert!(has_ambient, "Expected ambient light with intensity 0.5");
 
         // Verify meshes
@@ -78,7 +88,11 @@ fn test_canvas3d_declarative_pipeline_in_runtime() {
         let mesh = &scene.meshes[0];
         assert_eq!(mesh.transform.position, [0.0, 1.0, 0.0]);
         match &mesh.geometry {
-            Geometry3D::Box { width, height, depth } => {
+            Geometry3D::Box {
+                width,
+                height,
+                depth,
+            } => {
                 assert_eq!(*width, 2.0);
                 assert_eq!(*height, 2.0);
                 assert_eq!(*depth, 2.0);
@@ -86,7 +100,11 @@ fn test_canvas3d_declarative_pipeline_in_runtime() {
             _ => panic!("Expected Box geometry on mesh"),
         }
         match &mesh.material {
-            Material3D::Standard { roughness, metalness, .. } => {
+            Material3D::Standard {
+                roughness,
+                metalness,
+                ..
+            } => {
                 assert!((roughness - 0.4).abs() < 1e-4);
                 assert!((metalness - 0.1).abs() < 1e-4);
             }
@@ -147,12 +165,13 @@ fn test_scene_viewport_programmatic_scene_textures_and_hud_stacking_order() {
     // 2. Render <SceneViewport scene={&shared_scene}> inside a flexbox dock with both:
     //    - an in-viewport 2D HUD bar at the top (bright red #ff2040, z-10)
     //    - a Top-Layer <Portal> context menu overlay
-    let hud_color_hex = "background-color: #ff2040; width: 200px; height: 60px;";
+    let hud_color_hex =
+        "position: relative; z-index: 10; background-color: #ff2040; width: 200px; height: 60px;";
     let view = rsx! {
         <div class="flex flex-row w-full h-full">
             <div class="w-48 h-full bg-slate-900">"Sidebar"</div>
             <div class="flex-1 h-full">
-                <SceneViewport scene={&shared_scene} class="rounded-none border-0">
+                <SceneViewport scene={&shared_scene} class="w-full h-full overflow-hidden">
                     <div style={hud_color_hex}>
                         <HudCard title="Noxus PFD">"ALT 1240m"</HudCard>
                     </div>
@@ -246,9 +265,9 @@ fn test_scene_viewport_programmatic_scene_textures_and_hud_stacking_order() {
         scene_px
     );
 
-    // HUD box has p-4 (16px) padding on hud_overlay: sidebar=192, so HUD #ff2040 spans x=[208..408], y=[16..76].
+    // HUD box is unpadded: sidebar=192, so HUD #ff2040 spans x=[192..392], y=[0..60].
     // Sample near right edge of HUD bar (x=395, y=30) away from inner HudCard so we hit pure #ff2040.
-    let hud_px = pixel_at(&fb, 395, 30);
+    let hud_px = pixel_at(&fb, 385, 30);
     assert!(
         hud_px[0] > hud_px[1] && hud_px[0] > hud_px[2] && hud_px[0] > 40,
         "2D HUD overlay (red bar, translucent card) must composite ON TOP of the 3D scene, got {:?}",
@@ -318,7 +337,10 @@ fn test_scene_viewport_on_camera_change_pointer_and_wheel_interaction() {
 
     // Wheel scroll over the 3D viewport to zoom in
     let wheel_handled = runtime.dispatch_scroll(300.0, 200.0, 0.0, 5.0);
-    assert!(wheel_handled, "SceneViewport wheel listener should handle scroll");
+    assert!(
+        wheel_handled,
+        "SceneViewport wheel listener should handle scroll"
+    );
     assert_eq!(
         observed.borrow().len(),
         2,
@@ -331,4 +353,3 @@ fn test_scene_viewport_on_camera_change_pointer_and_wheel_interaction() {
         radius_after_zoom
     );
 }
-

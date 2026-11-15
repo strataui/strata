@@ -1,6 +1,4 @@
-use strata_dom::{
-    InputKey, InputKeyResult, InputModifiers, TextInputState,
-};
+use strata_dom::{InputKey, InputKeyResult, InputModifiers, TextInputState};
 
 #[test]
 fn test_text_input_cursor_navigation_and_selection() {
@@ -16,7 +14,10 @@ fn test_text_input_cursor_navigation_and_selection() {
     assert!(!input.has_selection());
 
     // Select backwards 5 characters with Shift+Left
-    let shift = InputModifiers { shift: true, ..Default::default() };
+    let shift = InputModifiers {
+        shift: true,
+        ..Default::default()
+    };
     for _ in 0..5 {
         input.handle_key(InputKey::Left, shift, None);
     }
@@ -25,7 +26,10 @@ fn test_text_input_cursor_navigation_and_selection() {
     assert_eq!(input.selected_text(), Some("ello ".to_string()));
 
     // Select all with Ctrl+A
-    let ctrl = InputModifiers { ctrl: true, ..Default::default() };
+    let ctrl = InputModifiers {
+        ctrl: true,
+        ..Default::default()
+    };
     input.handle_key(InputKey::A, ctrl, None);
     assert_eq!(input.selection_range(), Some((0, 11)));
     assert_eq!(input.selected_text(), Some("Hello World".to_string()));
@@ -44,7 +48,10 @@ fn test_text_input_editing_and_undo_redo() {
     assert_eq!(input.text.get(), "Hello");
 
     // Undo
-    let ctrl = InputModifiers { ctrl: true, ..Default::default() };
+    let ctrl = InputModifiers {
+        ctrl: true,
+        ..Default::default()
+    };
     input.handle_key(InputKey::Z, ctrl, None);
     assert_eq!(input.text.get(), "Hello!");
 
@@ -67,7 +74,10 @@ fn test_text_input_clipboard_cut_copy_paste() {
     assert_eq!(input.selected_text(), Some("Browser".to_string()));
 
     // Copy (Ctrl+C)
-    let ctrl = InputModifiers { ctrl: true, ..Default::default() };
+    let ctrl = InputModifiers {
+        ctrl: true,
+        ..Default::default()
+    };
     let res = input.handle_key(InputKey::C, ctrl, None);
     assert_eq!(res, InputKeyResult::CopyToClipboard("Browser".to_string()));
     assert_eq!(input.text.get(), "Strata Browser");

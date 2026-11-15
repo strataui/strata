@@ -1,5 +1,5 @@
-use strata_form::prelude::*;
 use std::collections::HashMap;
+use strata_form::prelude::*;
 
 #[test]
 fn test_complex_registration_and_validation_schema() {
@@ -46,7 +46,10 @@ fn test_complex_registration_and_validation_schema() {
     assert!(!submitted);
     assert!(!submission_ran);
     assert_eq!(email.error.get().unwrap(), "Invalid email address");
-    assert_eq!(password.error.get().unwrap(), "Must be at least 8 characters");
+    assert_eq!(
+        password.error.get().unwrap(),
+        "Must be at least 8 characters"
+    );
     assert_eq!(age.error.get().unwrap(), "Must be at least 18");
 
     // Correct the inputs
@@ -63,7 +66,10 @@ fn test_complex_registration_and_validation_schema() {
     assert!(submitted2);
     assert!(submission_ran);
     assert_eq!(captured_values.get("email").unwrap(), "admin@larvance.com");
-    assert_eq!(captured_values.get("password").unwrap(), "super_secret_password");
+    assert_eq!(
+        captured_values.get("password").unwrap(),
+        "super_secret_password"
+    );
     assert_eq!(captured_values.get("age").unwrap(), "25");
 }
 

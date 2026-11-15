@@ -279,4 +279,3 @@ pub fn interpolate_clip_path(from: &ClipPath, to: &ClipPath, t: f32) -> ClipPath
         }
     }
 }
-

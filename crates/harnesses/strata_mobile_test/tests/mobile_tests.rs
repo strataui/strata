@@ -46,7 +46,8 @@ fn test_mock_adb_server_device_discovery_and_tunnels() {
     assert_eq!(server.forwarded_ports().get(&8080), Some(&8080));
 
     // Reverse tunnel: device:9222 -> host:9222
-    let rev_resp = server.handle_command("host-serial:emulator-5554:reverse:forward:tcp:9222;tcp:9222");
+    let rev_resp =
+        server.handle_command("host-serial:emulator-5554:reverse:forward:tcp:9222;tcp:9222");
     assert_eq!(rev_resp, b"OKAY");
     assert_eq!(server.reversed_ports().get(&9222), Some(&9222));
 
@@ -85,7 +86,10 @@ fn test_foldable_posture_profiles_and_command_emission() {
     assert_eq!(book.unfolded_resolution, (2208, 1840));
     assert!(book.crease.is_vertical);
     assert!(!book.crease.is_separating);
-    assert_eq!(book.resolution_for_posture(FoldPosture::Closed), (1080, 2092));
+    assert_eq!(
+        book.resolution_for_posture(FoldPosture::Closed),
+        (1080, 2092)
+    );
     assert_eq!(book.resolution_for_posture(FoldPosture::Flat), (2208, 1840));
 
     // 2. Clamshell flip (Galaxy Z Flip)
@@ -131,16 +135,21 @@ fn test_logcat_parsing_and_panic_trapping() {
     assert_eq!(trap.inspect_entry(&entry), None);
 
     // Panic message triggers trap
-    let panic_line = "10-31 14:22:05.456  1420  1420 E StrataNative: panicked at src/components/chart.rs:42:10";
+    let panic_line =
+        "10-31 14:22:05.456  1420  1420 E StrataNative: panicked at src/components/chart.rs:42:10";
     let panic_entry = LogcatParser::parse_line(panic_line).unwrap();
     let report = trap.inspect_entry(&panic_entry).unwrap();
     assert!(report.is_panic);
     assert!(!report.is_segfault);
-    assert_eq!(report.location.as_deref(), Some("src/components/chart.rs:42:10"));
+    assert_eq!(
+        report.location.as_deref(),
+        Some("src/components/chart.rs:42:10")
+    );
     assert!(trap.has_crashed());
 
     // Segfault line
-    let segfault_line = "10-31 14:22:06.789  1420  1420 F DEBUG: signal 11 (SIGSEGV), code 1 (SEGV_MAPERR)";
+    let segfault_line =
+        "10-31 14:22:06.789  1420  1420 F DEBUG: signal 11 (SIGSEGV), code 1 (SEGV_MAPERR)";
     let segfault_entry = LogcatParser::parse_line(segfault_line).unwrap();
     let seg_report = trap.inspect_entry(&segfault_entry).unwrap();
     assert!(seg_report.is_segfault);
@@ -174,7 +183,8 @@ fn test_ssim_visual_regression_and_damage_boxes() {
         }
     }
 
-    let diff_damaged = SsimEngine::compute_ssim(&buf_a, &buf_c, width, height, bytes_per_pixel).unwrap();
+    let diff_damaged =
+        SsimEngine::compute_ssim(&buf_a, &buf_c, width, height, bytes_per_pixel).unwrap();
     assert!(diff_damaged.ssim_score < 1.0);
     assert_eq!(diff_damaged.mismatched_pixels, 9);
     assert_eq!(diff_damaged.damage_rects.len(), 1);
@@ -285,9 +295,14 @@ fn test_real_tcp_adb_client_connection_and_protocol() {
     assert!(shell_out.contains('1'));
 
     // 8. Test screencap stream
-    let screencap_png = client.screencap("emulator-5554").expect("screencap over TCP");
+    let screencap_png = client
+        .screencap("emulator-5554")
+        .expect("screencap over TCP");
     assert!(screencap_png.len() > 8);
-    assert_eq!(&screencap_png[0..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    assert_eq!(
+        &screencap_png[0..8],
+        &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+    );
 
     // Clean shutdown
     running.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -355,7 +370,13 @@ fn test_simctl_driver_command_execution_handling() {
     );
     assert_eq!(
         SimCtlDriver::build_screenshot_cmd("DEV-99", "/tmp/shot.png"),
-        vec!["xcrun", "simctl", "io", "DEV-99", "screenshot", "/tmp/shot.png"]
+        vec![
+            "xcrun",
+            "simctl",
+            "io",
+            "DEV-99",
+            "screenshot",
+            "/tmp/shot.png"
+        ]
     );
 }
-

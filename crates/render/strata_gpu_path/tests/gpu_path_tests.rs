@@ -1,6 +1,6 @@
 use strata_gpu_path::{
-    distance_to_quadratic, is_point_inside_closed_path, AnalyticGlyphCache, CubicBezier,
-    FillRule, GpuCurveInstance, PathBuilder, PathCommandBuffer, Point2D, QuadraticBezier,
+    distance_to_quadratic, is_point_inside_closed_path, AnalyticGlyphCache, CubicBezier, FillRule,
+    GpuCurveInstance, PathBuilder, PathCommandBuffer, Point2D, QuadraticBezier,
 };
 
 #[test]
@@ -42,7 +42,10 @@ fn test_cubic_to_quadratic_subdivision() {
     let cubic = CubicBezier::new(p0, p1, p2, p3);
 
     let quads = cubic.to_quadratics(0.5);
-    assert!(!quads.is_empty(), "Subdivision must produce quadratic segments");
+    assert!(
+        !quads.is_empty(),
+        "Subdivision must produce quadratic segments"
+    );
 
     // The start of first quad must match p0 and end of last must match p3
     assert_eq!(quads.first().unwrap().p0, p0);
@@ -51,13 +54,22 @@ fn test_cubic_to_quadratic_subdivision() {
     // Midpoint check
     let cubic_mid = cubic.evaluate(0.5);
     let mid_quad = &quads[quads.len() / 2];
-    assert!(mid_quad.bounding_box().contains(cubic_mid) || quads.iter().any(|q| q.evaluate(0.5).distance(cubic_mid) < 2.0));
+    assert!(
+        mid_quad.bounding_box().contains(cubic_mid)
+            || quads
+                .iter()
+                .any(|q| q.evaluate(0.5).distance(cubic_mid) < 2.0)
+    );
 }
 
 #[test]
 fn test_analytical_distance_to_quadratic() {
     // Horizontal line segment as quadratic
-    let curve = QuadraticBezier::new(Point2D::new(0.0, 0.0), Point2D::new(50.0, 0.0), Point2D::new(100.0, 0.0));
+    let curve = QuadraticBezier::new(
+        Point2D::new(0.0, 0.0),
+        Point2D::new(50.0, 0.0),
+        Point2D::new(100.0, 0.0),
+    );
 
     // Point (50, 10) is exactly distance 10 away
     let d1 = distance_to_quadratic(Point2D::new(50.0, 10.0), &curve);
@@ -82,9 +94,15 @@ fn test_svg_path_parsing_and_winding_test() {
     assert_eq!(quads.len(), 4);
 
     // Point (50, 50) is inside box
-    assert!(is_point_inside_closed_path(Point2D::new(50.0, 50.0), &quads));
+    assert!(is_point_inside_closed_path(
+        Point2D::new(50.0, 50.0),
+        &quads
+    ));
     // Point (150, 50) is outside box
-    assert!(!is_point_inside_closed_path(Point2D::new(150.0, 50.0), &quads));
+    assert!(!is_point_inside_closed_path(
+        Point2D::new(150.0, 50.0),
+        &quads
+    ));
 }
 
 #[test]
@@ -95,7 +113,10 @@ fn test_gpu_command_buffer_and_font_cache() {
     cmd_buf.append_path(&path, 0.1, 1.0);
     assert_eq!(cmd_buf.total_draw_calls, 1);
     assert!(cmd_buf.total_curves() >= 1);
-    assert_eq!(cmd_buf.byte_size(), cmd_buf.total_curves() * std::mem::size_of::<GpuCurveInstance>());
+    assert_eq!(
+        cmd_buf.byte_size(),
+        cmd_buf.total_curves() * std::mem::size_of::<GpuCurveInstance>()
+    );
 
     // Font cache test
     let mut cache = AnalyticGlyphCache::new();
@@ -109,8 +130,8 @@ fn test_gpu_command_buffer_and_font_cache() {
 #[test]
 fn test_gpu_compute_memory_layout_and_alignment() {
     use strata_gpu_path::{
-        GpuPathSegment, GpuPathUniforms, RawCurveInput,
-        FLAG_CLOSED, FLAG_EVEN_ODD, FLAG_FILL, FLAG_STROKE,
+        GpuPathSegment, GpuPathUniforms, RawCurveInput, FLAG_CLOSED, FLAG_EVEN_ODD, FLAG_FILL,
+        FLAG_STROKE,
     };
 
     assert_eq!(std::mem::size_of::<RawCurveInput>(), 64);
@@ -156,8 +177,7 @@ fn test_gpu_compute_memory_layout_and_alignment() {
 #[test]
 fn test_curve_compute_dispatcher() {
     use strata_gpu_path::{
-        CubicBezier, CurveComputeDispatcher, Point2D, QuadraticBezier,
-        FLAG_FILL, FLAG_STROKE,
+        CubicBezier, CurveComputeDispatcher, Point2D, QuadraticBezier, FLAG_FILL, FLAG_STROKE,
     };
 
     let mut dispatcher = CurveComputeDispatcher::new(0.5);
@@ -193,7 +213,10 @@ fn test_curve_compute_dispatcher() {
     assert_eq!(dispatcher.input_bytes().len(), 3 * 64);
 
     let segments = dispatcher.dispatch_compute();
-    assert!(segments.len() >= 3, "Compute dispatch should produce flattened segments");
+    assert!(
+        segments.len() >= 3,
+        "Compute dispatch should produce flattened segments"
+    );
 
     // Start point of first segment must match start of cubic
     assert_eq!(segments[0].p0, [0.0, 0.0]);
@@ -218,7 +241,10 @@ fn test_analytical_stroke_expansion() {
         .with_join(LineJoin::Round);
 
     let expanded = expand_stroke_quadratics(&[curve], &options);
-    assert!(!expanded.is_empty(), "Expanded stroke must yield outline curves");
+    assert!(
+        !expanded.is_empty(),
+        "Expanded stroke must yield outline curves"
+    );
 
     // Should contain outer curve, end cap, inner curve, start cap
     assert!(expanded.len() >= 4);
@@ -255,8 +281,16 @@ fn test_slug_font_shader_and_glyph_buffer() {
         advance_width: 24.0,
         bounds: Rect2D::new(0.0, 0.0, 24.0, 32.0),
         curves: vec![
-            QuadraticBezier::new(Point2D::new(0.0, 0.0), Point2D::new(12.0, 32.0), Point2D::new(24.0, 0.0)),
-            QuadraticBezier::new(Point2D::new(4.0, 10.0), Point2D::new(12.0, 10.0), Point2D::new(20.0, 10.0)),
+            QuadraticBezier::new(
+                Point2D::new(0.0, 0.0),
+                Point2D::new(12.0, 32.0),
+                Point2D::new(24.0, 0.0),
+            ),
+            QuadraticBezier::new(
+                Point2D::new(4.0, 10.0),
+                Point2D::new(12.0, 10.0),
+                Point2D::new(20.0, 10.0),
+            ),
         ],
     };
 
@@ -280,7 +314,6 @@ fn test_slug_font_shader_and_glyph_buffer() {
     assert!(buffer.is_fence_synchronized(1));
     assert!(!buffer.is_fence_synchronized(2));
 }
-
 
 #[test]
 fn test_geometry_types_bidirectional_conversions() {
@@ -318,18 +351,24 @@ fn test_standard_ascii_analytical_glyph_cache() {
         let glyph = cache.get(c).expect("Every printable ASCII char must exist");
         assert!(glyph.advance_width > 0.0);
         if c != ' ' {
-            assert!(!glyph.curves.is_empty(), "Character '{}' must have curves", c);
+            assert!(
+                !glyph.curves.is_empty(),
+                "Character '{}' must have curves",
+                c
+            );
             assert!(glyph.bounds.width() > 0.0);
             assert!(glyph.bounds.height() > 0.0);
         }
     }
 
     // Verify analytical SDF queries for 'A' and 'O'
-    let sdf_a = cache.evaluate_glyph_sdf('A', Point2D::new(0.3, 0.4)).expect("SDF must evaluate");
+    let sdf_a = cache
+        .evaluate_glyph_sdf('A', Point2D::new(0.3, 0.4))
+        .expect("SDF must evaluate");
     assert!(sdf_a.is_finite());
 
-    let sdf_o = cache.evaluate_glyph_sdf('O', Point2D::new(0.32, 0.4)).expect("SDF must evaluate");
+    let sdf_o = cache
+        .evaluate_glyph_sdf('O', Point2D::new(0.32, 0.4))
+        .expect("SDF must evaluate");
     assert!(sdf_o.is_finite());
 }
-
-

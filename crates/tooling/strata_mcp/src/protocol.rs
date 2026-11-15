@@ -14,7 +14,11 @@ pub struct JsonRpcRequest {
 }
 
 impl JsonRpcRequest {
-    pub fn new(id: Option<serde_json::Value>, method: impl Into<String>, params: Option<serde_json::Value>) -> Self {
+    pub fn new(
+        id: Option<serde_json::Value>,
+        method: impl Into<String>,
+        params: Option<serde_json::Value>,
+    ) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
             id,
@@ -135,9 +139,7 @@ pub enum McpContent {
 impl ToolCallResult {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
-            content: vec![McpContent::Text {
-                text: text.into(),
-            }],
+            content: vec![McpContent::Text { text: text.into() }],
             is_error: None,
         }
     }
@@ -219,9 +221,7 @@ pub enum McpAction {
         y: Option<f32>,
     },
     /// Types a text string into the active focused input.
-    Type {
-        text: String,
-    },
+    Type { text: String },
     /// Sends a discrete keyboard press and release with modifiers.
     Key {
         key: String,
@@ -229,9 +229,7 @@ pub enum McpAction {
         modifiers: McpModifiers,
     },
     /// Pauses execution for a safe duration in milliseconds (clamped to max 5000ms).
-    Wait {
-        ms: u64,
-    },
+    Wait { ms: u64 },
 }
 
 fn default_true() -> bool {

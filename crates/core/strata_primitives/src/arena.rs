@@ -4,7 +4,7 @@ use std::alloc::{alloc, dealloc, Layout};
 use std::ptr::NonNull;
 
 pub const DEFAULT_ARENA_CAPACITY: usize = 1024 * 1024; // 1 MB contiguous memory block
-pub const SIMD_SENTRY_BYTES: usize = 32;               // 32-byte zero-tail for AVX2/NEON safety
+pub const SIMD_SENTRY_BYTES: usize = 32; // 32-byte zero-tail for AVX2/NEON safety
 
 /// Type-erased destructor cleanup entry.
 type DropFn = unsafe fn(*mut u8);
@@ -208,7 +208,8 @@ pub struct ThreadLocalArena {
 
 impl ThreadLocalArena {
     pub fn new(capacity: usize) -> Self {
-        let layout = Layout::from_size_align(capacity, 64).expect("Invalid layout for ThreadLocalArena");
+        let layout =
+            Layout::from_size_align(capacity, 64).expect("Invalid layout for ThreadLocalArena");
         let start = unsafe { alloc(layout) };
         assert!(!start.is_null(), "OOM: Failed to allocate ThreadLocalArena");
 
@@ -276,7 +277,10 @@ impl ThreadLocalArena {
         let aligned = (current + layout.align() - 1) & !(layout.align() - 1);
         let next = aligned + layout.size();
 
-        assert!(next <= self.end as usize, "ThreadLocalArena slice overflow!");
+        assert!(
+            next <= self.end as usize,
+            "ThreadLocalArena slice overflow!"
+        );
 
         self.ptr = next as *mut u8;
         unsafe {
@@ -320,4 +324,3 @@ impl Drop for ThreadLocalArena {
         }
     }
 }
-

@@ -10,14 +10,14 @@
 //! assert_eq!(storage.get("user"), Some("alice".to_string()));
 //! ```
 
-pub mod crc32;
 pub mod bitcask;
-pub mod storage;
+pub mod crc32;
 pub mod keystore;
+pub mod storage;
 
 pub use bitcask::{KeyDirEntry, StrataKV};
-pub use storage::{LocalStorage, SessionStorage};
 pub use keystore::{KeystoreError, SecureKeystore};
+pub use storage::{LocalStorage, SessionStorage};
 
 /// Returns the default global LocalStorage instance backed by WAL.
 pub fn local() -> LocalStorage {

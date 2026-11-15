@@ -103,8 +103,9 @@ impl SecureKeystore {
         // Generate 32 bytes of cryptographically secure randomness from system CSPRNG
         let rng = SystemRandom::new();
         let mut key = [0u8; 32];
-        rng.fill(&mut key)
-            .map_err(|_| KeystoreError::EncryptionError("Failed to generate secure random key".into()))?;
+        rng.fill(&mut key).map_err(|_| {
+            KeystoreError::EncryptionError("Failed to generate secure random key".into())
+        })?;
 
         if let Some(parent) = key_path.parent() {
             let _ = fs::create_dir_all(parent);
@@ -155,7 +156,8 @@ impl SecureKeystore {
             .open_in_place(Aad::empty(), &mut in_out)
             .map_err(|_| {
                 KeystoreError::DecryptionError(
-                    "Cryptographic authentication failed: ciphertext tampered or invalid key".into(),
+                    "Cryptographic authentication failed: ciphertext tampered or invalid key"
+                        .into(),
                 )
             })?;
 
@@ -175,8 +177,9 @@ impl SecureKeystore {
         // Generate 12-byte CSPRNG nonce
         let rng = SystemRandom::new();
         let mut nonce_bytes = [0u8; NONCE_LEN];
-        rng.fill(&mut nonce_bytes)
-            .map_err(|_| KeystoreError::EncryptionError("Failed to generate secure nonce".into()))?;
+        rng.fill(&mut nonce_bytes).map_err(|_| {
+            KeystoreError::EncryptionError("Failed to generate secure nonce".into())
+        })?;
 
         let unbound_key = UnboundKey::new(&CHACHA20_POLY1305, &master_key)
             .map_err(|_| KeystoreError::EncryptionError("Invalid master key length".into()))?;
@@ -275,6 +278,8 @@ impl SecureKeystore {
 
     /// Checks if a secret identifier exists in the enclave.
     pub fn has_secret(key: &str) -> bool {
-        Self::load_store().map(|m| m.contains_key(key)).unwrap_or(false)
+        Self::load_store()
+            .map(|m| m.contains_key(key))
+            .unwrap_or(false)
     }
 }

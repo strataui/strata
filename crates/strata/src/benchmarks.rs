@@ -6,11 +6,11 @@
 //! - 10,000-Node Layout Throughput < 50ms
 //! - Frame Reconcile Duration < 2ms
 
+use crate::runtime::AppRuntime;
 use std::time::Instant;
 use strata_dom::{NodeBlueprint, Tag, View};
 use strata_layout::prelude::*;
 use strata_style::types::{ComputedStyle, Dimension, Display, FlexDirection};
-use crate::runtime::AppRuntime;
 
 /// Performance benchmark report capturing telemetry across startup, memory, layout, and frame ticking.
 #[derive(Debug, Clone, PartialEq)]
@@ -24,7 +24,11 @@ pub struct BenchmarkReport {
 impl BenchmarkReport {
     /// Asserts whether the recorded metrics satisfy Strata's production performance criteria.
     pub fn is_passing(&self) -> bool {
-        let max_cold_start = if cfg!(debug_assertions) { 150_000 } else { 8_000 };
+        let max_cold_start = if cfg!(debug_assertions) {
+            150_000
+        } else {
+            8_000
+        };
         self.cold_start_duration_us < max_cold_start
             && self.layout_10k_nodes_duration_us < 50_000
             && self.frame_reconcile_duration_us < 2_000
@@ -74,7 +78,13 @@ impl BenchmarkHarness {
         let start = Instant::now();
         let view = View::new(NodeBlueprint::Element {
             tag: Tag::Div,
-            classes: vec!["flex".to_string(), "flex-col".to_string(), "w-full".to_string(), "h-full".to_string()].into(),
+            classes: vec![
+                "flex".to_string(),
+                "flex-col".to_string(),
+                "w-full".to_string(),
+                "h-full".to_string(),
+            ]
+            .into(),
             children: vec![
                 NodeBlueprint::Element {
                     tag: Tag::Header,
@@ -150,15 +160,18 @@ impl BenchmarkHarness {
     fn measure_frame_reconcile() -> u64 {
         let view = View::new(NodeBlueprint::Element {
             tag: Tag::Div,
-            classes: vec!["flex".to_string(), "w-full".to_string(), "h-full".to_string()].into(),
-            children: vec![
-                NodeBlueprint::Element {
-                    tag: Tag::Button,
-                    classes: vec!["flex".to_string()].into(),
-                    children: vec![NodeBlueprint::Text("Tick Frame".to_string())],
-                    attributes: Vec::new(),
-                }
-            ],
+            classes: vec![
+                "flex".to_string(),
+                "w-full".to_string(),
+                "h-full".to_string(),
+            ]
+            .into(),
+            children: vec![NodeBlueprint::Element {
+                tag: Tag::Button,
+                classes: vec!["flex".to_string()].into(),
+                children: vec![NodeBlueprint::Text("Tick Frame".to_string())],
+                attributes: Vec::new(),
+            }],
             attributes: Vec::new(),
         });
 

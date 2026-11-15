@@ -1,7 +1,7 @@
 //! Layout tree node definition and top-level formatting context dispatcher.
 
-use std::cell::{Cell, RefCell};
 use crate::geometry::LayoutGeometry;
+use std::cell::{Cell, RefCell};
 use strata_style::types::{ComputedStyle, Display};
 
 /// SVG stroke line cap.
@@ -175,7 +175,6 @@ pub fn set_on_layout_overflow<F: Fn(usize, usize) + Send + Sync + 'static>(cb: O
         *c.borrow_mut() = cb.map(|f| Box::new(f) as LayoutOverflowCallback);
     });
 }
-
 
 /// Returns the last recorded layout depth overflow as (depth, max_depth), if any.
 pub fn last_layout_overflow() -> Option<(usize, usize)> {
@@ -754,7 +753,8 @@ impl LayoutNode {
         parent_display: Option<Display>,
         is_root: bool,
     ) -> bool {
-        self.style.establishes_stacking_context_in(parent_display, is_root)
+        self.style
+            .establishes_stacking_context_in(parent_display, is_root)
     }
 
     /// Translates this node's geometry and all descendants by (dx, dy) using an iterative heap stack (O(1) call stack).
@@ -843,8 +843,7 @@ impl LayoutNode {
                 grid.translate(dx, dy);
             }
 
-            let child_fixed_cb =
-                fixed_cb_inside || node.style.establishes_fixed_containing_block();
+            let child_fixed_cb = fixed_cb_inside || node.style.establishes_fixed_containing_block();
             let child_abs_cb = abs_cb_inside
                 || node.style.position != strata_style::types::Position::Static
                 || child_fixed_cb;
@@ -928,7 +927,12 @@ impl LayoutNode {
                 crate::grid::solve_grid_guarded(self, container_avail_w, container_avail_h, guard);
             }
             Display::Table | Display::InlineTable => {
-                crate::table::solve_table_guarded(self, container_avail_w, container_avail_h, guard);
+                crate::table::solve_table_guarded(
+                    self,
+                    container_avail_w,
+                    container_avail_h,
+                    guard,
+                );
             }
             Display::Block
             | Display::ListItem
@@ -943,12 +947,7 @@ impl LayoutNode {
             | Display::TableColumnGroup
             | Display::TableColumn => {
                 let block_h = crate::box_model::solve_block_children_with_exclusions_guarded(
-                    self,
-                    content_w,
-                    content_h,
-                    None,
-                    0.0,
-                    guard,
+                    self, content_w, content_h, None, 0.0, guard,
                 );
                 if saved_h == strata_style::types::Dimension::Auto {
                     self.geometry.border_box.height = crate::box_model::clamp_dimension(
@@ -1032,7 +1031,13 @@ impl LayoutNode {
         bfc_offset_y: f32,
     ) {
         let guard = LayoutDepthGuard::root();
-        self.compute_layout_guarded(available_width, available_height, exclusions, bfc_offset_y, guard);
+        self.compute_layout_guarded(
+            available_width,
+            available_height,
+            exclusions,
+            bfc_offset_y,
+            guard,
+        );
     }
 
     /// Computes layout geometry passing an active exclusion space and depth guard.
@@ -1070,9 +1075,13 @@ impl LayoutNode {
             let border = self.style.border_width;
             let margin = self.style.margin;
 
-            let w = crate::box_model::resolve_dimension_with_node(self.style.width, available_width, self)
-                .unwrap_or(available_width)
-                .max(0.0);
+            let w = crate::box_model::resolve_dimension_with_node(
+                self.style.width,
+                available_width,
+                self,
+            )
+            .unwrap_or(available_width)
+            .max(0.0);
             let h = crate::box_model::resolve_dimension(self.style.height, available_height)
                 .unwrap_or_else(|| {
                     if self.text.is_some() {
@@ -1099,7 +1108,9 @@ impl LayoutNode {
             return;
         }
 
-        let is_unconstrained_root = exclusions.as_ref().is_none_or(|e| e.exclusions().is_empty());
+        let is_unconstrained_root = exclusions
+            .as_ref()
+            .is_none_or(|e| e.exclusions().is_empty());
 
         // Subtree layout cache hit: skip re-traversal if available dimensions are unchanged
         let height_independent = self.style.height == strata_style::types::Dimension::Auto
@@ -1116,8 +1127,13 @@ impl LayoutNode {
             && !(matches!(
                 self.style.position,
                 strata_style::types::Position::Absolute | strata_style::types::Position::Fixed
-            ) && (!matches!(self.style.insets.bottom, strata_style::types::Dimension::Auto)
-                || matches!(self.style.insets.top, strata_style::types::Dimension::Percent(_))))
+            ) && (!matches!(
+                self.style.insets.bottom,
+                strata_style::types::Dimension::Auto
+            ) || matches!(
+                self.style.insets.top,
+                strata_style::types::Dimension::Percent(_)
+            )))
             && !self.has_height_dependent_descendant();
         let height_matches = (available_height - self.layout_cache.available_h).abs() < 0.01
             || (height_independent
@@ -1157,7 +1173,12 @@ impl LayoutNode {
         // Dispatch according to container display formatting context
         match self.style.display {
             Display::Flex | Display::InlineFlex => {
-                crate::flexbox::solve_flexbox_guarded(self, available_width, available_height, guard);
+                crate::flexbox::solve_flexbox_guarded(
+                    self,
+                    available_width,
+                    available_height,
+                    guard,
+                );
             }
             Display::Grid | Display::InlineGrid => {
                 crate::grid::solve_grid_guarded(self, available_width, available_height, guard);
@@ -1190,7 +1211,12 @@ impl LayoutNode {
         }
 
         // Resolve relative and out-of-flow absolute/fixed positioned children
-        crate::positioning::solve_positioning_guarded(self, available_width, available_height, guard);
+        crate::positioning::solve_positioning_guarded(
+            self,
+            available_width,
+            available_height,
+            guard,
+        );
 
         // Subpixel snapping and geometry sanitization
         self.geometry.snap_to_pixel();
@@ -1390,7 +1416,10 @@ impl LayoutNode {
     }
 
     /// Recursively calculates the index path to the layout node with matching EntityId.
-    pub fn find_path_by_entity_id(&self, target_id: strata_primitives::EntityId) -> Option<Vec<usize>> {
+    pub fn find_path_by_entity_id(
+        &self,
+        target_id: strata_primitives::EntityId,
+    ) -> Option<Vec<usize>> {
         if !target_id.is_valid() {
             return None;
         }
@@ -1480,7 +1509,9 @@ impl LayoutNode {
             _ => false,
         };
         self.geometry.has_scroll = (has_scroll_x, has_scroll_y);
-        self.geometry.scroll_offset = self.geometry.clamp_scroll_offset(self.geometry.scroll_offset);
+        self.geometry.scroll_offset = self
+            .geometry
+            .clamp_scroll_offset(self.geometry.scroll_offset);
     }
 }
 

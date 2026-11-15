@@ -8,13 +8,14 @@ use strata_style::tailwind::TailwindEngine;
 use strata_style::transition::AnimatableValue;
 use strata_style::types::{
     AnimationDirection, AnimationFillMode, AnimationIterationCount, AnimationPlayState,
-    AnimationSpec, ComputedStyle, TransformOp, TransitionEasing,
-    TransitionProperty,
+    AnimationSpec, ComputedStyle, TransformOp, TransitionEasing, TransitionProperty,
 };
 
 #[test]
 fn test_parse_animation_shorthand_and_longhands() {
-    let anims = parse_animations("spin 1s linear infinite, pulse 2000ms ease-in-out 500ms alternate forwards");
+    let anims = parse_animations(
+        "spin 1s linear infinite, pulse 2000ms ease-in-out 500ms alternate forwards",
+    );
     assert_eq!(anims.len(), 2);
 
     assert_eq!(anims[0].name, "spin");
@@ -58,14 +59,20 @@ fn test_parse_animation_shorthand_and_longhands() {
     assert_eq!(style.animations.len(), 2);
     assert_eq!(style.animations[0].name, "custom-fade");
     assert_eq!(style.animations[0].duration_ms, 400.0);
-    assert_eq!(style.animations[0].iteration_count, AnimationIterationCount::Count(3.0));
+    assert_eq!(
+        style.animations[0].iteration_count,
+        AnimationIterationCount::Count(3.0)
+    );
     assert_eq!(style.animations[0].direction, AnimationDirection::Alternate);
     assert_eq!(style.animations[0].fill_mode, AnimationFillMode::Both);
     assert_eq!(style.animations[0].play_state, AnimationPlayState::Paused);
 
     assert_eq!(style.animations[1].name, "custom-slide");
     assert_eq!(style.animations[1].duration_ms, 800.0);
-    assert_eq!(style.animations[1].iteration_count, AnimationIterationCount::Infinite);
+    assert_eq!(
+        style.animations[1].iteration_count,
+        AnimationIterationCount::Infinite
+    );
     assert_eq!(style.animations[1].direction, AnimationDirection::Reverse);
     assert_eq!(style.animations[1].fill_mode, AnimationFillMode::Forwards);
     assert_eq!(style.animations[1].play_state, AnimationPlayState::Running);
@@ -140,20 +147,32 @@ fn test_tailwind_animation_utilities() {
     assert_eq!(spin_style.animations.len(), 1);
     assert_eq!(spin_style.animations[0].name, "spin");
     assert_eq!(spin_style.animations[0].duration_ms, 1000.0);
-    assert_eq!(spin_style.animations[0].timing_function, TransitionEasing::Linear);
-    assert_eq!(spin_style.animations[0].iteration_count, AnimationIterationCount::Infinite);
+    assert_eq!(
+        spin_style.animations[0].timing_function,
+        TransitionEasing::Linear
+    );
+    assert_eq!(
+        spin_style.animations[0].iteration_count,
+        AnimationIterationCount::Infinite
+    );
 
     let ping_style = TailwindEngine::resolve_classes("animate-ping");
     assert_eq!(ping_style.animations.len(), 1);
     assert_eq!(ping_style.animations[0].name, "ping");
     assert_eq!(ping_style.animations[0].duration_ms, 1000.0);
-    assert_eq!(ping_style.animations[0].iteration_count, AnimationIterationCount::Infinite);
+    assert_eq!(
+        ping_style.animations[0].iteration_count,
+        AnimationIterationCount::Infinite
+    );
 
     let pulse_style = TailwindEngine::resolve_classes("animate-pulse");
     assert_eq!(pulse_style.animations.len(), 1);
     assert_eq!(pulse_style.animations[0].name, "pulse");
     assert_eq!(pulse_style.animations[0].duration_ms, 2000.0);
-    assert_eq!(pulse_style.animations[0].iteration_count, AnimationIterationCount::Infinite);
+    assert_eq!(
+        pulse_style.animations[0].iteration_count,
+        AnimationIterationCount::Infinite
+    );
 
     let bounce_style = TailwindEngine::resolve_classes("animate-bounce");
     assert_eq!(bounce_style.animations.len(), 1);
@@ -162,18 +181,27 @@ fn test_tailwind_animation_utilities() {
     let none_style = TailwindEngine::resolve_classes("animate-none");
     assert!(none_style.animations.is_empty());
 
-    let custom_style = TailwindEngine::resolve_classes("animate-[custom_750ms_ease-in-out_infinite]");
+    let custom_style =
+        TailwindEngine::resolve_classes("animate-[custom_750ms_ease-in-out_infinite]");
     assert_eq!(custom_style.animations.len(), 1);
     assert_eq!(custom_style.animations[0].name, "custom");
     assert_eq!(custom_style.animations[0].duration_ms, 750.0);
-    assert_eq!(custom_style.animations[0].timing_function, TransitionEasing::EaseInOut);
-    assert_eq!(custom_style.animations[0].iteration_count, AnimationIterationCount::Infinite);
+    assert_eq!(
+        custom_style.animations[0].timing_function,
+        TransitionEasing::EaseInOut
+    );
+    assert_eq!(
+        custom_style.animations[0].iteration_count,
+        AnimationIterationCount::Infinite
+    );
 }
 
 #[test]
 fn test_keyframe_track_sampling_and_sub_segment_easing() {
     let registry = KeyframeRegistry::new();
-    let spin_track = registry.get("spin").expect("spin track missing from registry");
+    let spin_track = registry
+        .get("spin")
+        .expect("spin track missing from registry");
 
     let base_style = ComputedStyle::default();
 
@@ -258,7 +286,10 @@ fn test_animation_manager_lifecycle_iterations_and_directions() {
     // 4. Advance to t=1250ms (Active: 1050ms > 1000ms, iteration 1 boundary passed)
     let events = manager.advance(1250.0, &base_styles);
     assert_eq!(events.len(), 1);
-    assert!(matches!(events[0], AnimationLifecycleEvent::Iteration { .. }));
+    assert!(matches!(
+        events[0],
+        AnimationLifecycleEvent::Iteration { .. }
+    ));
 
     // 5. Advance to t=2300ms (Active: 2100ms >= 2 * 1000ms, completed!)
     let events = manager.advance(2300.0, &base_styles);

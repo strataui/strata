@@ -19,12 +19,7 @@ use strata_style::{
 
 #[test]
 fn test_runtime_starting_style_entrance_transition() {
-    let mut runtime = AppRuntime::new(
-        rsx! { <div></div> },
-        800.0,
-        600.0,
-        1.0,
-    );
+    let mut runtime = AppRuntime::new(rsx! { <div></div> }, 800.0, 600.0, 1.0);
 
     // Initial tick
     runtime.tick_frame();
@@ -141,22 +136,28 @@ fn test_view_transitions_manager_lifecycle() {
 
     // 1. Capture old state before DOM mutation
     let old_elements = vec![
-        ("hero-card".to_string(), Rect::from_xywh(10.0, 10.0, 100.0, 100.0)),
+        (
+            "hero-card".to_string(),
+            Rect::from_xywh(10.0, 10.0, 100.0, 100.0),
+        ),
         ("none".to_string(), Rect::from_xywh(0.0, 0.0, 50.0, 50.0)),
     ];
     vt.capture_old_state(&old_elements);
     assert_eq!(vt.pending_old_snapshots.len(), 1, "none must be ignored");
 
     // 2. Start transition after layout change
-    let new_elements = vec![
-        ("hero-card".to_string(), Rect::from_xywh(50.0, 50.0, 200.0, 200.0)),
-    ];
+    let new_elements = vec![(
+        "hero-card".to_string(),
+        Rect::from_xywh(50.0, 50.0, 200.0, 200.0),
+    )];
     vt.start_transition(&new_elements, 0.0, 200.0);
     assert!(vt.has_active_transitions());
     assert_eq!(vt.active_transitions.len(), 1);
 
     // 3. Sample at midpoint t = 100ms
-    let (mid_rect, progress) = vt.sample("hero-card", 100.0).expect("Active transition must sample");
+    let (mid_rect, progress) = vt
+        .sample("hero-card", 100.0)
+        .expect("Active transition must sample");
     assert!((progress - 0.5).abs() < 0.01);
     assert_eq!(mid_rect.origin.x, 30.0); // 10 + (50 - 10) * 0.5
     assert_eq!(mid_rect.origin.y, 30.0); // 10 + (50 - 10) * 0.5
@@ -165,6 +166,12 @@ fn test_view_transitions_manager_lifecycle() {
 
     // 4. Sample and step past duration t = 250ms
     let active = vt.step(250.0);
-    assert!(!active, "Transition must complete after duration has elapsed");
-    assert!(!vt.has_active_transitions(), "No active transitions remaining after completion");
+    assert!(
+        !active,
+        "Transition must complete after duration has elapsed"
+    );
+    assert!(
+        !vt.has_active_transitions(),
+        "No active transitions remaining after completion"
+    );
 }

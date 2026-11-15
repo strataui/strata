@@ -12,13 +12,15 @@ fn test_url_scheme_and_default_ports() {
     assert_eq!(http.port, 80);
     assert_eq!(http.path_and_query, "/api/v1/users");
 
-    let https = ParsedUrl::parse("https://secure.example.com/dashboard?view=grid").expect("Valid HTTPS URL");
+    let https = ParsedUrl::parse("https://secure.example.com/dashboard?view=grid")
+        .expect("Valid HTTPS URL");
     assert_eq!(https.scheme, "https");
     assert_eq!(https.host, "secure.example.com");
     assert_eq!(https.port, 443);
     assert_eq!(https.path_and_query, "/dashboard?view=grid");
 
-    let custom_port = ParsedUrl::parse("https://localhost:8443/ping").expect("Valid custom port URL");
+    let custom_port =
+        ParsedUrl::parse("https://localhost:8443/ping").expect("Valid custom port URL");
     assert_eq!(custom_port.scheme, "https");
     assert_eq!(custom_port.host, "localhost");
     assert_eq!(custom_port.port, 8443);
@@ -31,7 +33,8 @@ fn test_url_scheme_and_default_ports() {
 #[test]
 fn test_url_query_without_slash_and_fragment_isolation() {
     // 1. Host with query string directly without slash (RFC 3986 boundary isolation)
-    let url_no_slash = ParsedUrl::parse("https://api.example.com?query=1&page=2").expect("Valid URL");
+    let url_no_slash =
+        ParsedUrl::parse("https://api.example.com?query=1&page=2").expect("Valid URL");
     assert_eq!(url_no_slash.scheme, "https");
     assert_eq!(url_no_slash.host, "api.example.com");
     assert_eq!(url_no_slash.port, 443);
@@ -45,7 +48,8 @@ fn test_url_query_without_slash_and_fragment_isolation() {
     assert_eq!(url_port_query.path_and_query, "/?filter=true");
 
     // 3. URL with fragment: fragment must be stripped from path_and_query
-    let url_fragment = ParsedUrl::parse("https://example.com/docs/guide#installation").expect("Valid URL");
+    let url_fragment =
+        ParsedUrl::parse("https://example.com/docs/guide#installation").expect("Valid URL");
     assert_eq!(url_fragment.scheme, "https");
     assert_eq!(url_fragment.host, "example.com");
     assert_eq!(url_fragment.port, 443);
@@ -63,7 +67,10 @@ fn test_url_query_without_slash_and_fragment_isolation() {
 fn test_tls_config_singleton_and_mozilla_roots() {
     let config = get_or_init_tls_config();
     // Verify ALPN protocol negotiation preference (HTTP/2 prioritized, falling back to HTTP/1.1)
-    assert_eq!(config.alpn_protocols, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
+    assert_eq!(
+        config.alpn_protocols,
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+    );
 
     // Verify config is idempotent and shared across calls
     let config2 = get_or_init_tls_config();
@@ -76,7 +83,11 @@ fn test_live_rust_lang_org_fetch() {
         .expect("Live HTTP/2 fetch to rust-lang.org should succeed");
     assert_eq!(resp.status, 200);
     assert_eq!(resp.status_text, "OK");
-    assert!(resp.headers.get("content-type").unwrap_or("").contains("text/html"));
+    assert!(resp
+        .headers
+        .get("content-type")
+        .unwrap_or("")
+        .contains("text/html"));
     assert!(!resp.bytes().is_empty());
 }
 
@@ -87,7 +98,10 @@ fn test_invalid_dns_host_error_reporting() {
         ..Default::default()
     };
 
-    let result = fetch("https://non-existent-subdomain-strata-unresolvable.invalid/test", Some(init));
+    let result = fetch(
+        "https://non-existent-subdomain-strata-unresolvable.invalid/test",
+        Some(init),
+    );
     assert!(result.is_err(), "Expected DNS resolution failure");
     let err = result.unwrap_err();
     assert!(
@@ -108,7 +122,10 @@ fn test_https_fetch_connection_timeout_handling() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(err, FetchError::NetworkError(_) | FetchError::Timeout(_) | FetchError::IoError(_)),
+        matches!(
+            err,
+            FetchError::NetworkError(_) | FetchError::Timeout(_) | FetchError::IoError(_)
+        ),
         "Expected timeout/network error, got: {err:?}"
     );
 }
@@ -155,10 +172,10 @@ fn test_mock_loopback_plain_http_request() {
 
 #[test]
 fn test_mock_loopback_chunked_gzip_response() {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
     use flate2::write::GzEncoder;
     use flate2::Compression;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("Bind ephemeral loopback");
     let port = listener.local_addr().unwrap().port();
@@ -170,7 +187,9 @@ fn test_mock_loopback_chunked_gzip_response() {
 
             // Compress payload with Gzip
             let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-            encoder.write_all(b"{\"status\":\"success\",\"engine\":\"strata_pure_rust\"}").unwrap();
+            encoder
+                .write_all(b"{\"status\":\"success\",\"engine\":\"strata_pure_rust\"}")
+                .unwrap();
             let gzipped_payload = encoder.finish().unwrap();
 
             // Format as HTTP/1.1 Chunked Transfer
@@ -256,5 +275,3 @@ fn test_goal27_cleartext_http_on_port_443_rejected() {
         other => panic!("Expected FetchError::InvalidUrl, got: {other:?}"),
     }
 }
-
-

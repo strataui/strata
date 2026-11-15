@@ -11,15 +11,25 @@ fn test_entity_id_preservation_across_fragment_flattening() {
     let mut tree = NodeBlueprint::element_simple(
         Tag::Div,
         "flex flex-col w-[500px]",
-        vec![
+        vec![NodeBlueprint::fragment(vec![
+            NodeBlueprint::element_simple(
+                Tag::Button,
+                "px-4 py-2 bg-blue-500",
+                vec![NodeBlueprint::text("Button 1")],
+            ),
             NodeBlueprint::fragment(vec![
-                NodeBlueprint::element_simple(Tag::Button, "px-4 py-2 bg-blue-500", vec![NodeBlueprint::text("Button 1")]),
-                NodeBlueprint::fragment(vec![
-                    NodeBlueprint::element_simple(Tag::Button, "px-4 py-2 bg-green-500", vec![NodeBlueprint::text("Button 2")]),
-                    NodeBlueprint::element_simple(Tag::Span, "text-sm", vec![NodeBlueprint::text("Label")]),
-                ]),
+                NodeBlueprint::element_simple(
+                    Tag::Button,
+                    "px-4 py-2 bg-green-500",
+                    vec![NodeBlueprint::text("Button 2")],
+                ),
+                NodeBlueprint::element_simple(
+                    Tag::Span,
+                    "text-sm",
+                    vec![NodeBlueprint::text("Label")],
+                ),
             ]),
-        ],
+        ])],
     );
 
     tree.ensure_entity_ids();
@@ -107,16 +117,17 @@ fn test_spatial_index_coordinate_and_event_queries() {
         Tag::Div,
         "w-[800px] h-[600px] bg-white",
         vec![],
-        vec![
-            NodeBlueprint::element(
-                Tag::Button,
-                "w-[200px] h-[100px] bg-blue-500",
-                vec![Attribute::event_listener(EventType::Click, move |_e: Event| {
+        vec![NodeBlueprint::element(
+            Tag::Button,
+            "w-[200px] h-[100px] bg-blue-500",
+            vec![Attribute::event_listener(
+                EventType::Click,
+                move |_e: Event| {
                     clicked_clone.store(true, Ordering::SeqCst);
-                })],
-                vec![NodeBlueprint::text("Click Me")],
-            ),
-        ],
+                },
+            )],
+            vec![NodeBlueprint::text("Click Me")],
+        )],
     ));
 
     let runtime = AppRuntime::new(view, 800.0, 600.0, 1.0);
@@ -160,20 +171,18 @@ fn test_input_synchronization_with_fragment_flattening_and_entity_id() {
         Tag::Div,
         "flex flex-col w-[600px] h-[400px]",
         vec![],
-        vec![
-            NodeBlueprint::fragment(vec![
-                NodeBlueprint::element_simple(Tag::P, "text-base", vec![NodeBlueprint::text("Title")]),
-                NodeBlueprint::element(
-                    Tag::Input,
-                    "w-[300px] h-[40px] px-2 py-1",
-                    vec![
-                        Attribute::property("id", "test-search-input"),
-                        Attribute::property("value", "initial text"),
-                    ],
-                    vec![],
-                ),
-            ]),
-        ],
+        vec![NodeBlueprint::fragment(vec![
+            NodeBlueprint::element_simple(Tag::P, "text-base", vec![NodeBlueprint::text("Title")]),
+            NodeBlueprint::element(
+                Tag::Input,
+                "w-[300px] h-[40px] px-2 py-1",
+                vec![
+                    Attribute::property("id", "test-search-input"),
+                    Attribute::property("value", "initial text"),
+                ],
+                vec![],
+            ),
+        ])],
     ));
 
     let mut runtime = AppRuntime::new(view, 600.0, 400.0, 1.0);
@@ -190,7 +199,9 @@ fn test_input_synchronization_with_fragment_flattening_and_entity_id() {
 
     // Simulate focus with target_eid
     let state = strata_dom::text_input::TextInputState::new();
-    state.text.set("live updated content via entity id".to_string());
+    state
+        .text
+        .set("live updated content via entity id".to_string());
     state.cursor_index.set(12);
 
     runtime.active_focus = Some(strata::runtime::ActiveInput {
@@ -222,7 +233,10 @@ fn test_input_synchronization_with_fragment_flattening_and_entity_id() {
     let caret = caret_rect.unwrap();
     assert!(caret.width > 0.0);
     assert!(caret.height > 0.0);
-    assert!(input_layout.geometry.border_box.contains_point(caret.x, caret.y));
+    assert!(input_layout
+        .geometry
+        .border_box
+        .contains_point(caret.x, caret.y));
 }
 
 #[test]
@@ -232,10 +246,22 @@ fn test_bidirectional_lookup_consistency() {
         "flex flex-row w-[800px] h-[500px]",
         vec![
             NodeBlueprint::element_simple(Tag::Aside, "w-[200px] h-[500px]", vec![]),
-            NodeBlueprint::element_simple(Tag::Main, "flex-1 h-[500px]", vec![
-                NodeBlueprint::element_simple(Tag::H1, "text-2xl", vec![NodeBlueprint::text("Header")]),
-                NodeBlueprint::element_simple(Tag::Button, "px-4 py-2", vec![NodeBlueprint::text("Action")]),
-            ]),
+            NodeBlueprint::element_simple(
+                Tag::Main,
+                "flex-1 h-[500px]",
+                vec![
+                    NodeBlueprint::element_simple(
+                        Tag::H1,
+                        "text-2xl",
+                        vec![NodeBlueprint::text("Header")],
+                    ),
+                    NodeBlueprint::element_simple(
+                        Tag::Button,
+                        "px-4 py-2",
+                        vec![NodeBlueprint::text("Action")],
+                    ),
+                ],
+            ),
         ],
     ));
 
@@ -246,12 +272,18 @@ fn test_bidirectional_lookup_consistency() {
     for i in 0..runtime.spatial_index.len() {
         let eid = runtime.spatial_index.query_entity_at_point(
             // Sample point from bounds
-            runtime.spatial_index.get_bounds(EntityId::new((i + 1) as u64))
+            runtime
+                .spatial_index
+                .get_bounds(EntityId::new((i + 1) as u64))
                 .map(|b| (b.x + b.width / 2.0, b.y + b.height / 2.0))
-                .unwrap_or((0.0, 0.0)).0,
-            runtime.spatial_index.get_bounds(EntityId::new((i + 1) as u64))
+                .unwrap_or((0.0, 0.0))
+                .0,
+            runtime
+                .spatial_index
+                .get_bounds(EntityId::new((i + 1) as u64))
                 .map(|b| (b.x + b.width / 2.0, b.y + b.height / 2.0))
-                .unwrap_or((0.0, 0.0)).1,
+                .unwrap_or((0.0, 0.0))
+                .1,
         );
         if let Some(id) = eid {
             if !entity_ids.contains(&id) {
@@ -267,7 +299,11 @@ fn test_bidirectional_lookup_consistency() {
         assert_eq!(bp.unwrap().entity_id(), Some(eid));
 
         let layout = runtime.find_layout_by_entity(eid);
-        assert!(layout.is_some(), "Layout node for entity {:?} must exist", eid);
+        assert!(
+            layout.is_some(),
+            "Layout node for entity {:?} must exist",
+            eid
+        );
         assert_eq!(layout.unwrap().entity_id, eid);
     }
 }

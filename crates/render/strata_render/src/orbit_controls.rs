@@ -93,8 +93,12 @@ impl OrbitControls {
     /// Initializes OrbitControls from an existing Camera3D.
     pub fn from_camera(camera: &Camera3D) -> Self {
         match camera {
-            Camera3D::Perspective { position, target, .. }
-            | Camera3D::Orthographic { position, target, .. } => {
+            Camera3D::Perspective {
+                position, target, ..
+            }
+            | Camera3D::Orthographic {
+                position, target, ..
+            } => {
                 let eye = Vec3::new(position[0], position[1], position[2]);
                 let tgt = Vec3::new(target[0], target[1], target[2]);
                 Self::new_with_target_and_eye(tgt, eye)
@@ -132,8 +136,8 @@ impl OrbitControls {
     /// Zooms camera radius by multiplicative factor or wheel delta.
     pub fn zoom_delta(&mut self, delta: f32) {
         let factor = 1.0 - delta * 0.1 * self.zoom_speed;
-        self.target_radius = (self.target_radius * factor)
-            .clamp(self.min_distance, self.max_distance);
+        self.target_radius =
+            (self.target_radius * factor).clamp(self.min_distance, self.max_distance);
 
         if !self.enable_damping {
             self.radius = self.target_radius;
@@ -156,7 +160,10 @@ impl OrbitControls {
 
         let fov_rad = fov_degrees.to_radians();
         let factor = 2.0 * self.radius * (fov_rad * 0.5).tan();
-        let dx = (-delta_x / viewport_width.max(1.0)) * factor * (viewport_width / viewport_height.max(1.0)) * self.pan_speed;
+        let dx = (-delta_x / viewport_width.max(1.0))
+            * factor
+            * (viewport_width / viewport_height.max(1.0))
+            * self.pan_speed;
         let dy = (delta_y / viewport_height.max(1.0)) * factor * self.pan_speed;
 
         let pan_offset = right * dx + up * dy;
@@ -242,8 +249,12 @@ impl OrbitControls {
     pub fn update_camera(&self, camera: &mut Camera3D) {
         let eye = self.eye_position();
         match camera {
-            Camera3D::Perspective { position, target, .. }
-            | Camera3D::Orthographic { position, target, .. } => {
+            Camera3D::Perspective {
+                position, target, ..
+            }
+            | Camera3D::Orthographic {
+                position, target, ..
+            } => {
                 *position = [eye.x, eye.y, eye.z];
                 *target = [self.target.x, self.target.y, self.target.z];
             }

@@ -714,7 +714,9 @@ impl TailwindEngine {
             if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
                 let inner_trimmed = inner.trim();
                 let explicit_color = inner_trimmed.strip_prefix("color:");
-                let length_candidate = inner_trimmed.strip_prefix("length:").unwrap_or(inner_trimmed);
+                let length_candidate = inner_trimmed
+                    .strip_prefix("length:")
+                    .unwrap_or(inner_trimmed);
                 if explicit_color.is_none() {
                     if let Some(px_str) = length_candidate.strip_suffix("px") {
                         if let Ok(px) = px_str.trim().parse::<f32>() {
@@ -749,7 +751,9 @@ impl TailwindEngine {
             let mut color_rest = rest;
             for side in ["t-", "r-", "b-", "l-", "x-", "y-", "s-", "e-"] {
                 if let Some(stripped) = rest.strip_prefix(side) {
-                    if stripped.starts_with('[') || lookup_tailwind_color(split_opacity(stripped).0, None).is_some() {
+                    if stripped.starts_with('[')
+                        || lookup_tailwind_color(split_opacity(stripped).0, None).is_some()
+                    {
                         color_rest = stripped;
                     }
                     break;
@@ -758,7 +762,11 @@ impl TailwindEngine {
             if let Some(inner) = extract_bracket_content(color_rest) {
                 let inner_trimmed = inner.trim();
                 if !inner_trimmed.starts_with("color:") {
-                    if let Some(px) = resolve_arbitrary_px(inner_trimmed.strip_prefix("length:").unwrap_or(inner_trimmed)) {
+                    if let Some(px) = resolve_arbitrary_px(
+                        inner_trimmed
+                            .strip_prefix("length:")
+                            .unwrap_or(inner_trimmed),
+                    ) {
                         if rest.starts_with("t-[") {
                             style.border_width.top = px;
                         } else if rest.starts_with("r-[") {
@@ -2033,7 +2041,10 @@ impl TailwindEngine {
                 custom => {
                     let inner = extract_bracket_content(custom).unwrap_or(custom);
                     if let Some(pct) = inner.strip_suffix('%') {
-                        pct.parse::<f32>().map(|p| p / 100.0).ok().filter(|f| f.is_finite())
+                        pct.parse::<f32>()
+                            .map(|p| p / 100.0)
+                            .ok()
+                            .filter(|f| f.is_finite())
                     } else {
                         inner.parse::<f32>().ok().filter(|f| f.is_finite())
                     }
@@ -2084,7 +2095,9 @@ impl TailwindEngine {
                 "180" => Some(-180.0f32.to_radians()),
                 custom => {
                     let inner = extract_bracket_content(custom).unwrap_or(custom);
-                    crate::parser::parse_angle_rad(inner).filter(|f| f.is_finite()).map(|r| -r)
+                    crate::parser::parse_angle_rad(inner)
+                        .filter(|f| f.is_finite())
+                        .map(|r| -r)
                 }
             };
             if let Some(rad) = angle_rad {
@@ -2221,8 +2234,7 @@ impl TailwindEngine {
         }
 
         // 7. Visual Effects: Blend modes, Isolation, Filters, and Backdrop Filters
-        if resolve_visual_effects(class, style) {
-        }
+        if resolve_visual_effects(class, style) {}
     }
 }
 
@@ -2490,7 +2502,11 @@ fn resolve_pixel_length(val: &str) -> Option<f32> {
     if let Some(px) = val.strip_suffix("px") {
         px.trim().parse::<f32>().ok().filter(|f| f.is_finite())
     } else if let Some(rem) = val.strip_suffix("rem") {
-        rem.trim().parse::<f32>().ok().filter(|f| f.is_finite()).map(|r| r * 16.0)
+        rem.trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|f| f.is_finite())
+            .map(|r| r * 16.0)
     } else {
         val.trim().parse::<f32>().ok().filter(|f| f.is_finite())
     }
@@ -2835,7 +2851,12 @@ fn resolve_sizing_dimension(token: &str) -> Option<Dimension> {
             }
         }
         let calc_str = inner.replace('_', " ");
-        if calc_str.starts_with("calc(") || calc_str.contains('+') || calc_str.contains('-') || calc_str.contains('*') || calc_str.contains('/') {
+        if calc_str.starts_with("calc(")
+            || calc_str.contains('+')
+            || calc_str.contains('-')
+            || calc_str.contains('*')
+            || calc_str.contains('/')
+        {
             if let Ok(expr) = crate::calc::parse_calc(&calc_str) {
                 let id = crate::calc::intern_calc(expr);
                 return Some(Dimension::Calc(id));
@@ -2864,10 +2885,20 @@ fn resolve_arbitrary_px(val: &str) -> Option<f32> {
         return px_str.trim().parse::<f32>().ok().filter(|f| f.is_finite());
     }
     if let Some(rem_str) = clean.strip_suffix("rem") {
-        return rem_str.trim().parse::<f32>().ok().filter(|f| f.is_finite()).map(|r| r * 16.0);
+        return rem_str
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|f| f.is_finite())
+            .map(|r| r * 16.0);
     }
     if let Some(em_str) = clean.strip_suffix("em") {
-        return em_str.trim().parse::<f32>().ok().filter(|f| f.is_finite()).map(|e| e * 16.0);
+        return em_str
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|f| f.is_finite())
+            .map(|e| e * 16.0);
     }
     if let Ok(n) = clean.parse::<f32>() {
         if n.is_finite() {

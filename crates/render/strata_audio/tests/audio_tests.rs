@@ -56,13 +56,21 @@ fn test_biquad_lowpass_filter() {
     let initial_rms = buf.rms_level();
 
     // Apply lowpass filter at 1000 Hz
-    let mut lowpass = BiquadFilter::new(BiquadFilterType::Lowpass, 1000.0, std::f32::consts::FRAC_1_SQRT_2, 44100);
+    let mut lowpass = BiquadFilter::new(
+        BiquadFilterType::Lowpass,
+        1000.0,
+        std::f32::consts::FRAC_1_SQRT_2,
+        44100,
+    );
     lowpass.process_buffer(&mut buf);
 
     let filtered_rms = buf.rms_level();
 
     // High frequency signal must be heavily attenuated by 1000Hz lowpass filter
-    assert!(filtered_rms < initial_rms * 0.2, "8000 Hz tone must be attenuated by 1000 Hz lowpass filter");
+    assert!(
+        filtered_rms < initial_rms * 0.2,
+        "8000 Hz tone must be attenuated by 1000 Hz lowpass filter"
+    );
 }
 
 #[test]
@@ -113,7 +121,10 @@ fn test_cooley_tukey_fft_spectrum() {
         .map(|(idx, _)| idx)
         .unwrap();
 
-    assert!((peak_bin as i32 - 5).abs() <= 1, "Peak frequency bin must match 440 Hz tone");
+    assert!(
+        (peak_bin as i32 - 5).abs() <= 1,
+        "Peak frequency bin must match 440 Hz tone"
+    );
 }
 
 #[test]
@@ -168,7 +179,10 @@ fn test_audio_buffer_resampling_modes() {
         .map(|(idx, _)| idx)
         .unwrap();
 
-    assert!((peak_bin_48k as i32 - 9).abs() <= 1, "Resampled peak bin must match 440 Hz tone in 48kHz spectrum");
+    assert!(
+        (peak_bin_48k as i32 - 9).abs() <= 1,
+        "Resampled peak bin must match 440 Hz tone in 48kHz spectrum"
+    );
 }
 
 #[test]
@@ -196,8 +210,14 @@ fn test_audio_mixer_automatic_resampling() {
 
     // Verify samples rendered properly
     for i in 10..470 {
-        assert!((output[i * 2] - 0.6).abs() < 1e-2, "Left channel resampled level");
-        assert!((output[i * 2 + 1] - 0.4).abs() < 1e-2, "Right channel resampled level");
+        assert!(
+            (output[i * 2] - 0.6).abs() < 1e-2,
+            "Left channel resampled level"
+        );
+        assert!(
+            (output[i * 2 + 1] - 0.4).abs() < 1e-2,
+            "Right channel resampled level"
+        );
     }
 }
 
@@ -225,13 +245,22 @@ fn test_hrtf_spatial_binaural_convolution() {
     };
 
     // Right ear is ipsilateral, Left ear is shadowed by head (ILD)
-    assert!(right_rms > left_rms, "Ipsilateral ear must have higher RMS than shadowed ear: right={} left={}", right_rms, left_rms);
+    assert!(
+        right_rms > left_rms,
+        "Ipsilateral ear must have higher RMS than shadowed ear: right={} left={}",
+        right_rms,
+        left_rms
+    );
 
     // Check Woodworth ITD onset delay
-    assert_eq!(buf_right.channels[0][0], 0.0, "Contralateral left ear should experience initial ITD arrival delay");
+    assert_eq!(
+        buf_right.channels[0][0], 0.0,
+        "Contralateral left ear should experience initial ITD arrival delay"
+    );
 
     // Test EqualPower fallback mode
-    let panner_eq = Panner3D::new(Vec3::new(4.0, 0.0, 0.0)).with_mode(SpatializationMode::EqualPower);
+    let panner_eq =
+        Panner3D::new(Vec3::new(4.0, 0.0, 0.0)).with_mode(SpatializationMode::EqualPower);
     let buf_eq = ctx.render_spatial_source(&mut osc, None, &panner_eq, 512);
     assert_eq!(buf_eq.channel_count(), 2);
 }

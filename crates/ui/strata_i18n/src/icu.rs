@@ -394,7 +394,10 @@ fn format_nodes(
                 let matched = arms
                     .iter()
                     .find(|(sel, _)| sel == &exact_selector)
-                    .or_else(|| arms.iter().find(|(sel, _)| sel.eq_ignore_ascii_case(cat.as_str())))
+                    .or_else(|| {
+                        arms.iter()
+                            .find(|(sel, _)| sel.eq_ignore_ascii_case(cat.as_str()))
+                    })
                     .or_else(|| arms.iter().find(|(sel, _)| sel == "other"))
                     .or_else(|| arms.first());
 

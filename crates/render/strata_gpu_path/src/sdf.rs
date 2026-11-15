@@ -32,7 +32,9 @@ pub fn distance_to_quadratic(p: Point2D, curve: &QuadraticBezier) -> f32 {
     let k1 = 2.0 * dot_ac + dot_bb;
     let k0 = dot_bc;
 
-    let mut min_dist_sq = p.distance_squared(curve.p0).min(p.distance_squared(curve.p2));
+    let mut min_dist_sq = p
+        .distance_squared(curve.p0)
+        .min(p.distance_squared(curve.p2));
 
     let roots = solve_cubic_roots(k3, k2, k1, k0);
     for t in roots {
@@ -105,7 +107,11 @@ pub fn solve_cubic_roots(a: f32, b: f32, c: f32, d: f32) -> Vec<f32> {
 
 /// Evaluates whether point `p` is inside a closed path composed of quadratic Béziers
 /// according to the specified fill rule (NonZero or EvenOdd).
-pub fn is_point_inside_closed_path_rule(p: Point2D, curves: &[QuadraticBezier], rule: FillRule) -> bool {
+pub fn is_point_inside_closed_path_rule(
+    p: Point2D,
+    curves: &[QuadraticBezier],
+    rule: FillRule,
+) -> bool {
     let mut winding = 0;
     let mut ray_crossings = 0;
 

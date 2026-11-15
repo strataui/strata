@@ -21,6 +21,9 @@ mod tests {
     fn test_crc32_standard_vectors() {
         assert_eq!(crc32(b""), 0x00000000);
         assert_eq!(crc32(b"123456789"), 0xCBF43926);
-        assert_eq!(crc32(b"Strata Universal Framework"), crc32(b"Strata Universal Framework"));
+        assert_eq!(
+            crc32(b"Strata Universal Framework"),
+            crc32(b"Strata Universal Framework")
+        );
     }
 }

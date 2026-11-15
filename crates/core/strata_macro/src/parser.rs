@@ -83,8 +83,7 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
         path.push(next_id);
     }
 
-    let is_custom_component =
-        leading_colon || path.len() > 1 || segment_starts_uppercase(&path[0]);
+    let is_custom_component = leading_colon || path.len() > 1 || segment_starts_uppercase(&path[0]);
 
     // Parse attributes
     let attributes = parse_attributes(cursor)?;
@@ -231,8 +230,10 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
 fn push_child_node(children: &mut Vec<RsxNode>, next_node: RsxNode) {
     if let RsxNode::Text(next_text) = next_node {
         if let Some(RsxNode::Text(prev_text)) = children.last_mut() {
-            if matches!(next_text.as_str(), "." | "," | ":" | ";" | "!" | "?" | ")" | "]")
-                || prev_text.ends_with('(')
+            if matches!(
+                next_text.as_str(),
+                "." | "," | ":" | ";" | "!" | "?" | ")" | "]"
+            ) || prev_text.ends_with('(')
                 || prev_text.ends_with('[')
             {
                 prev_text.push_str(&next_text);

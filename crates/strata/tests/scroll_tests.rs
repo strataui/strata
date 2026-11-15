@@ -163,7 +163,10 @@ fn test_scroll_multiple_frames() {
     assert_eq!(runtime.active_scrollbars[0].scroll_y, 120.0);
     assert_eq!(runtime.active_scrollbars[0].content_h, 900.0);
     assert_eq!(runtime.active_scrollbars[0].max_scroll_y, 500.0);
-    assert_eq!(runtime.layout_root.children[0].geometry.border_box.y, -120.0);
+    assert_eq!(
+        runtime.layout_root.children[0].geometry.border_box.y,
+        -120.0
+    );
     assert!((runtime.active_scrollbars[0].thumb_bounds.height - initial_thumb_h).abs() < 0.01);
 
     // Run 25 consecutive frame ticks, asserting absolute metric invariance
@@ -210,7 +213,10 @@ fn test_smooth_scroll_critically_damped_convergence() {
     let start_t = std::time::Instant::now();
     let initiated = runtime.dispatch_smooth_scroll(400.0, 200.0, 0.0, 120.0);
     assert!(initiated, "Smooth scroll must initiate successfully");
-    assert!(runtime.active_smooth_scroll.is_some(), "Tracker must be active");
+    assert!(
+        runtime.active_smooth_scroll.is_some(),
+        "Tracker must be active"
+    );
 
     if let Some(ref mut tr) = runtime.active_smooth_scroll {
         tr.start_time = start_t;
@@ -224,7 +230,10 @@ fn test_smooth_scroll_critically_damped_convergence() {
         let updated = runtime.poll_smooth_scroll_at(tick_t);
         let cur_y = runtime.active_scrollbars[0].scroll_y;
         assert!(updated || cur_y >= 119.5);
-        assert!(cur_y >= prev_y, "Scroll offset must be monotonically non-decreasing: cur={cur_y}, prev={prev_y}");
+        assert!(
+            cur_y >= prev_y,
+            "Scroll offset must be monotonically non-decreasing: cur={cur_y}, prev={prev_y}"
+        );
         prev_y = cur_y;
     }
 
@@ -232,11 +241,18 @@ fn test_smooth_scroll_critically_damped_convergence() {
     let settle_t = start_t + std::time::Duration::from_millis(450);
     runtime.poll_smooth_scroll_at(settle_t);
 
-    assert_eq!(runtime.active_scrollbars[0].scroll_y, 120.0, "Must settle exactly at 120.0px target");
-    assert!(runtime.active_smooth_scroll.is_none(), "Tracker must be cleared on settle");
+    assert_eq!(
+        runtime.active_scrollbars[0].scroll_y, 120.0,
+        "Must settle exactly at 120.0px target"
+    );
+    assert!(
+        runtime.active_smooth_scroll.is_none(),
+        "Tracker must be cleared on settle"
+    );
 
     // Subsequent tick should report no update needed (idle at 0% CPU)
-    let idle_updated = runtime.poll_smooth_scroll_at(settle_t + std::time::Duration::from_millis(50));
+    let idle_updated =
+        runtime.poll_smooth_scroll_at(settle_t + std::time::Duration::from_millis(50));
     assert!(!idle_updated, "Idle tick must return false to sleep CPU");
 }
 
@@ -306,7 +322,10 @@ fn test_smooth_scroll_boundary_clamping() {
 
     // Settle at bottom
     runtime.poll_smooth_scroll_at(t0 + std::time::Duration::from_millis(500));
-    assert_eq!(runtime.active_scrollbars[0].scroll_y, 600.0, "Must clamp to max_scroll_y exactly");
+    assert_eq!(
+        runtime.active_scrollbars[0].scroll_y, 600.0,
+        "Must clamp to max_scroll_y exactly"
+    );
 
     // Scroll up way past top
     let t1 = t0 + std::time::Duration::from_millis(600);
@@ -318,7 +337,10 @@ fn test_smooth_scroll_boundary_clamping() {
 
     // Settle at top
     runtime.poll_smooth_scroll_at(t1 + std::time::Duration::from_millis(500));
-    assert_eq!(runtime.active_scrollbars[0].scroll_y, 0.0, "Must clamp to 0.0 exactly");
+    assert_eq!(
+        runtime.active_scrollbars[0].scroll_y, 0.0,
+        "Must clamp to 0.0 exactly"
+    );
 }
 
 #[test]
@@ -343,7 +365,10 @@ fn test_smooth_scroll_interrupted_by_manual_thumb_drag() {
 
     // Pressing thumb cancels active kinetic animation
     assert!(runtime.check_scrollbar_thumb_press(thumb_center_x, thumb_center_y));
-    assert!(runtime.active_smooth_scroll.is_none(), "Manual thumb press must immediately cancel kinetic scroll");
+    assert!(
+        runtime.active_smooth_scroll.is_none(),
+        "Manual thumb press must immediately cancel kinetic scroll"
+    );
     assert!(runtime.scrollbar_drag.is_some());
 }
 
@@ -365,15 +390,32 @@ fn test_scrollbar_right_edge_pixel_perfect_hit_testing() {
 
     // Verify track bounds and thumb bounds are flush with the container's right edge
     let expected_right = 800.0;
-    assert_eq!(bar.track_bounds.x + bar.track_bounds.width, expected_right, "Track right edge must be exactly at 800.0px");
-    assert_eq!(bar.thumb_bounds.x + bar.thumb_bounds.width, expected_right, "Thumb right edge must be exactly at 800.0px");
-    assert_eq!(bar.track_bounds.y, 0.0, "Track top edge must be exactly at 0.0px");
-    assert_eq!(bar.track_bounds.height, 400.0, "Track height must match container height 400.0px");
+    assert_eq!(
+        bar.track_bounds.x + bar.track_bounds.width,
+        expected_right,
+        "Track right edge must be exactly at 800.0px"
+    );
+    assert_eq!(
+        bar.thumb_bounds.x + bar.thumb_bounds.width,
+        expected_right,
+        "Thumb right edge must be exactly at 800.0px"
+    );
+    assert_eq!(
+        bar.track_bounds.y, 0.0,
+        "Track top edge must be exactly at 0.0px"
+    );
+    assert_eq!(
+        bar.track_bounds.height, 400.0,
+        "Track height must match container height 400.0px"
+    );
 
     let thumb_center_y = bar.thumb_bounds.y + bar.thumb_bounds.height / 2.0;
 
     // Slam mouse to the very edge right (x = 800.0): must pick the scrollbar thumb without moving left!
-    assert!(runtime.check_scrollbar_thumb_press(800.0, thumb_center_y), "Must pick scrollbar at x = 800.0px (very edge right)");
+    assert!(
+        runtime.check_scrollbar_thumb_press(800.0, thumb_center_y),
+        "Must pick scrollbar at x = 800.0px (very edge right)"
+    );
     assert!(runtime.scrollbar_drag.is_some());
     runtime.scrollbar_drag = None;
 
@@ -387,13 +429,21 @@ fn test_scrollbar_right_edge_pixel_perfect_hit_testing() {
     runtime.scrollbar_drag = None;
 
     // Clicking track gutter at the very right edge (x = 800.0, py = 350.0): must pick scrollbar and jump/drag
-    assert!(runtime.check_scrollbar_thumb_press(800.0, 350.0), "Must pick scrollbar track at x = 800.0px");
+    assert!(
+        runtime.check_scrollbar_thumb_press(800.0, 350.0),
+        "Must pick scrollbar track at x = 800.0px"
+    );
     assert!(runtime.scrollbar_drag.is_some());
-    assert!(runtime.active_scrollbars[0].scroll_y > 0.0, "Clicking track must scroll towards click point");
+    assert!(
+        runtime.active_scrollbars[0].scroll_y > 0.0,
+        "Clicking track must scroll towards click point"
+    );
     runtime.scrollbar_drag = None;
 
     // Coordinates to the left of the scrollbar track must not pick scrollbar
-    assert!(!runtime.check_scrollbar_thumb_press(780.0, thumb_center_y), "Coordinates left of track must return false");
+    assert!(
+        !runtime.check_scrollbar_thumb_press(780.0, thumb_center_y),
+        "Coordinates left of track must return false"
+    );
     assert!(runtime.scrollbar_drag.is_none());
 }
-

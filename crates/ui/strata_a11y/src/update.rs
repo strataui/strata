@@ -54,11 +54,7 @@ impl A11yTreeUpdate {
         }
 
         // Detect focused node
-        let focus = new_tree
-            .nodes
-            .values()
-            .find(|n| n.focused)
-            .map(|n| n.id);
+        let focus = new_tree.nodes.values().find(|n| n.focused).map(|n| n.id);
 
         Self {
             nodes: updated_nodes,

@@ -84,7 +84,10 @@ fn test_compute_min_max_sizes_clamping() {
     node.style.max_width = Dimension::Px(500.0);
 
     let sizes = compute_min_max_sizes(&node, None);
-    assert!(sizes.min_content >= 200.0, "Must be clamped to min-width 200.0");
+    assert!(
+        sizes.min_content >= 200.0,
+        "Must be clamped to min-width 200.0"
+    );
     assert!(sizes.max_content >= 200.0);
 }
 
@@ -153,4 +156,3 @@ fn test_compute_min_max_sizes_grid_container() {
     assert!(auto_sizes.min_content > 50.0);
     assert!(auto_sizes.max_content > auto_sizes.min_content);
 }
-

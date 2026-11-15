@@ -26,16 +26,25 @@ fn test_scrollbar_drag_pointer_capture_isolates_hover() {
     let mut runtime = AppRuntime::new(view, 600.0, 400.0, 1.0);
 
     // Verify active scrollbar exists for scroll-box
-    assert!(!runtime.active_scrollbars.is_empty(), "Active scrollbar must be discovered");
+    assert!(
+        !runtime.active_scrollbars.is_empty(),
+        "Active scrollbar must be discovered"
+    );
     let bar = runtime.active_scrollbars[0].clone();
-    assert!(bar.max_scroll_y > 10.0, "Container must have overflow travel");
+    assert!(
+        bar.max_scroll_y > 10.0,
+        "Container must have overflow travel"
+    );
 
     // Press down on scrollbar thumb
     let thumb_center_x = bar.thumb_bounds.x + (bar.thumb_bounds.width / 2.0);
     let thumb_center_y = bar.thumb_bounds.y + (bar.thumb_bounds.height / 2.0);
     let pressed = runtime.check_scrollbar_thumb_press(thumb_center_x, thumb_center_y);
     assert!(pressed, "Must start scrollbar drag on thumb press");
-    assert!(runtime.scrollbar_drag.is_some(), "Drag state must be active");
+    assert!(
+        runtime.scrollbar_drag.is_some(),
+        "Drag state must be active"
+    );
 
     // Hover path before drag
     let initial_hover = runtime.current_hover_path.clone();
@@ -44,7 +53,10 @@ fn test_scrollbar_drag_pointer_capture_isolates_hover() {
     // In our event handler contract: when scrollbar_drag is active, poll_scrollbar_drag handles motion
     // and update_hover is completely bypassed.
     let drag_moved = runtime.poll_scrollbar_drag(thumb_center_x, thumb_center_y + 30.0);
-    assert!(drag_moved, "Poll scrollbar drag must translate scroll offset");
+    assert!(
+        drag_moved,
+        "Poll scrollbar drag must translate scroll offset"
+    );
 
     // Verify hover path remained unchanged (isolated by pointer capture)
     assert_eq!(

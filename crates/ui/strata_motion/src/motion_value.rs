@@ -1,7 +1,7 @@
 //! Reactive Signal-Driven Motion Value.
 
-use strata_dom::Signal;
 use crate::spring::{SpringConfig, SpringState};
+use strata_dom::Signal;
 
 /// Reactive motion variable animated smoothly towards a moving target value.
 #[derive(Clone)]

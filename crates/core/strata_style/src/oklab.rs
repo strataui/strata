@@ -91,11 +91,7 @@ pub fn interpolate_color_oklab(from: Rgba, to: Rgba, t: f32) -> Rgba {
 
     // Premultiplied coordinate weighting prevents dark halos during opacity fades
     let (out_l, out_a, out_b) = if (alpha1 - 1.0).abs() < 1e-4 && (alpha2 - 1.0).abs() < 1e-4 {
-        (
-            l1 + (l2 - l1) * t,
-            a1 + (a2 - a1) * t,
-            b1 + (b2 - b1) * t,
-        )
+        (l1 + (l2 - l1) * t, a1 + (a2 - a1) * t, b1 + (b2 - b1) * t)
     } else {
         (
             (l1 * alpha1 * (1.0 - t) + l2 * alpha2 * t) / out_alpha,

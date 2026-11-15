@@ -1,10 +1,10 @@
 //! Filesystem Driver for VfsPath Operations.
 
+use crate::resolver::resolve_root_dir;
+use crate::types::{FsError, VfsMetadata, VfsPath};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
-use crate::resolver::resolve_root_dir;
-use crate::types::{FsError, VfsMetadata, VfsPath};
 
 /// Checks whether a path contains Windows UNC, NT device namespace, or extended prefix injections.
 pub fn is_windows_unc_device_namespace(name: &str) -> bool {
@@ -25,12 +25,30 @@ pub fn is_windows_reserved_device(name: &str) -> bool {
     let upper = stem.to_ascii_uppercase();
     matches!(
         upper.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL"
-            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
-            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
     ) || is_windows_unc_device_namespace(name)
 }
-
 
 /// Canonicalizes existing ancestors of a path and appends remaining non-existent components.
 fn canonicalize_ancestor(path: &Path) -> Result<PathBuf, FsError> {
@@ -48,7 +66,10 @@ fn canonicalize_ancestor(path: &Path) -> Result<PathBuf, FsError> {
     }
     let mut canonical = if ancestor.exists() {
         fs::canonicalize(ancestor).map_err(|e| {
-            FsError::IoError(format!("Failed to canonicalize ancestor {}: {e}", ancestor.display()))
+            FsError::IoError(format!(
+                "Failed to canonicalize ancestor {}: {e}",
+                ancestor.display()
+            ))
         })?
     } else {
         ancestor.to_path_buf()
@@ -61,13 +82,19 @@ fn canonicalize_ancestor(path: &Path) -> Result<PathBuf, FsError> {
 
 /// Resolves a `VfsPath` into a verified absolute physical path on the host filesystem,
 /// strictly enforcing that symlinks or path components never escape the virtual root sandbox.
-pub fn resolve_secure_physical_path(path: &VfsPath, create_root_if_missing: bool) -> Result<PathBuf, FsError> {
+pub fn resolve_secure_physical_path(
+    path: &VfsPath,
+    create_root_if_missing: bool,
+) -> Result<PathBuf, FsError> {
     let base = resolve_root_dir(path.root());
 
     if !base.exists() {
         if create_root_if_missing {
             fs::create_dir_all(&base).map_err(|e| {
-                FsError::IoError(format!("Failed to create sandbox root {}: {e}", base.display()))
+                FsError::IoError(format!(
+                    "Failed to create sandbox root {}: {e}",
+                    base.display()
+                ))
             })?;
         } else {
             return Err(FsError::NotFound(path.to_uri()));
@@ -75,7 +102,10 @@ pub fn resolve_secure_physical_path(path: &VfsPath, create_root_if_missing: bool
     }
 
     let canonical_base = fs::canonicalize(&base).map_err(|e| {
-        FsError::IoError(format!("Failed to canonicalize sandbox root {}: {e}", base.display()))
+        FsError::IoError(format!(
+            "Failed to canonicalize sandbox root {}: {e}",
+            base.display()
+        ))
     })?;
 
     let raw_subpath = path.subpath().to_string_lossy();
@@ -88,11 +118,13 @@ pub fn resolve_secure_physical_path(path: &VfsPath, create_root_if_missing: bool
 
     let mut current = canonical_base.clone();
     for comp in path.subpath().components() {
-
         match comp {
             Component::Normal(c) => {
                 let comp_str = c.to_string_lossy();
-                if comp_str.contains(':') || is_windows_reserved_device(&comp_str) || comp_str.contains('\0') {
+                if comp_str.contains(':')
+                    || is_windows_reserved_device(&comp_str)
+                    || comp_str.contains('\0')
+                {
                     return Err(FsError::SecurityViolation(format!(
                         "Illegal path component '{comp_str}' (Windows drive letter, ADS stream, or reserved DOS device) in sandboxed path: {}",
                         path.to_uri()
@@ -102,7 +134,10 @@ pub fn resolve_secure_physical_path(path: &VfsPath, create_root_if_missing: bool
                 if current.is_symlink() || current.exists() {
                     let real = if current.is_symlink() {
                         let target = fs::read_link(&current).map_err(|e| {
-                            FsError::IoError(format!("Failed to read symlink at {}: {e}", current.display()))
+                            FsError::IoError(format!(
+                                "Failed to read symlink at {}: {e}",
+                                current.display()
+                            ))
                         })?;
                         let resolved = if target.is_relative() {
                             let parent = current.parent().unwrap_or(&canonical_base);
@@ -112,14 +147,20 @@ pub fn resolve_secure_physical_path(path: &VfsPath, create_root_if_missing: bool
                         };
                         if resolved.exists() {
                             fs::canonicalize(&resolved).map_err(|e| {
-                                FsError::IoError(format!("Failed to canonicalize target {}: {e}", resolved.display()))
+                                FsError::IoError(format!(
+                                    "Failed to canonicalize target {}: {e}",
+                                    resolved.display()
+                                ))
                             })?
                         } else {
                             canonicalize_ancestor(&resolved)?
                         }
                     } else {
                         fs::canonicalize(&current).map_err(|e| {
-                            FsError::IoError(format!("Failed to canonicalize {}: {e}", current.display()))
+                            FsError::IoError(format!(
+                                "Failed to canonicalize {}: {e}",
+                                current.display()
+                            ))
                         })?
                     };
 
@@ -202,9 +243,8 @@ pub fn read_to_vec(path: &VfsPath) -> Result<Vec<u8>, FsError> {
 /// Reads the entire contents of a file into a UTF-8 string.
 pub fn read_to_string(path: &VfsPath) -> Result<String, FsError> {
     let bytes = read_to_vec(path)?;
-    String::from_utf8(bytes).map_err(|e| {
-        FsError::IoError(format!("File at {} is not valid UTF-8: {e}", path.to_uri()))
-    })
+    String::from_utf8(bytes)
+        .map_err(|e| FsError::IoError(format!("File at {} is not valid UTF-8: {e}", path.to_uri())))
 }
 
 /// Writes byte slice to file at `path`, automatically creating parent directories.
@@ -212,7 +252,10 @@ pub fn write_all(path: &VfsPath, data: &[u8]) -> Result<(), FsError> {
     let physical = resolve_secure_physical_path(path, true)?;
     if let Some(parent) = physical.parent() {
         fs::create_dir_all(parent).map_err(|e| {
-            FsError::IoError(format!("Failed to create parent directory for {}: {e}", path.to_uri()))
+            FsError::IoError(format!(
+                "Failed to create parent directory for {}: {e}",
+                path.to_uri()
+            ))
         })?;
     }
     fs::write(&physical, data).map_err(|e| match e.kind() {

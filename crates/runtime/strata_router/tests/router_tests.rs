@@ -1,10 +1,14 @@
-use strata_router::prelude::*;
 use strata_dom::*;
 use strata_macro::rsx;
+use strata_router::prelude::*;
 
 #[test]
 fn test_router_url_matching_and_params() {
-    let m = match_path("/teams/:team_id/projects/:project_id", "/teams/core/projects/99").unwrap();
+    let m = match_path(
+        "/teams/:team_id/projects/:project_id",
+        "/teams/core/projects/99",
+    )
+    .unwrap();
     assert_eq!(m.params.get("team_id").unwrap(), "core");
     assert_eq!(m.params.get("project_id").unwrap(), "99");
 

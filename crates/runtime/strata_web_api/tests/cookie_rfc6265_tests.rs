@@ -12,7 +12,8 @@ use strata_web_api::fetch::{fetch, RequestInit};
 
 #[test]
 fn test_parse_set_cookie_attributes() {
-    let header = "sessionId=38afes7a8; Domain=example.com; Path=/docs; Secure; HttpOnly; SameSite=Strict";
+    let header =
+        "sessionId=38afes7a8; Domain=example.com; Path=/docs; Secure; HttpOnly; SameSite=Strict";
     let url = "https://example.com/docs/index.html";
 
     let cookie = Cookie::parse(header, url).expect("Cookie parsing must succeed");
@@ -35,7 +36,10 @@ fn test_host_only_cookie_default() {
     assert_eq!(cookie.name, "user");
     assert_eq!(cookie.value, "alice");
     assert_eq!(cookie.domain, "my-service.internal");
-    assert!(cookie.host_only, "Cookie without Domain attribute must be host-only");
+    assert!(
+        cookie.host_only,
+        "Cookie without Domain attribute must be host-only"
+    );
     assert_eq!(cookie.path, "/");
     assert!(!cookie.secure);
     assert!(!cookie.http_only);
@@ -315,5 +319,7 @@ fn test_fetch_cookie_jar_lifecycle_and_injection() {
     let resp2 = fetch(&data_url, Some(init2)).expect("fetch data");
     assert_eq!(resp2.status, 200);
 
-    server_thread.join().expect("Server thread must finish cleanly");
+    server_thread
+        .join()
+        .expect("Server thread must finish cleanly");
 }

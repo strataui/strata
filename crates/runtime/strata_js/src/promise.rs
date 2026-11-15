@@ -1,12 +1,12 @@
 //! Pure-Rust, zero-dependency cooperative microtask queue and Promise runtime.
 
+use crate::JsValue;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
-use crate::JsValue;
 
 thread_local! {
     static MICROTASK_QUEUE: RefCell<VecDeque<Box<dyn FnOnce()>>> = RefCell::new(VecDeque::new());
@@ -169,7 +169,10 @@ impl<T: Clone + 'static> JsPromise<T> {
     }
 
     /// Attaches a fulfillment callback transforming value of type `T` into `U`.
-    pub fn then<U: Clone + 'static, F: FnOnce(T) -> U + 'static>(self, on_fulfilled: F) -> JsPromise<U> {
+    pub fn then<U: Clone + 'static, F: FnOnce(T) -> U + 'static>(
+        self,
+        on_fulfilled: F,
+    ) -> JsPromise<U> {
         let (next_promise, resolve, reject) = JsPromise::<U>::new_pending();
         let mut inner = self.inner.borrow_mut();
 
@@ -240,7 +243,9 @@ impl<T: Clone + 'static> JsPromise<T> {
             PromiseState::Pending => {
                 inner.fulfill_handlers.push(Box::new(chain_step));
                 let reject_clone = Rc::clone(&reject);
-                inner.reject_handlers.push(Box::new(move |err| reject_clone(err)));
+                inner
+                    .reject_handlers
+                    .push(Box::new(move |err| reject_clone(err)));
             }
         }
 
@@ -269,7 +274,9 @@ impl<T: Clone + 'static> JsPromise<T> {
             PromiseState::Pending => {
                 let resolve_fulfill = Rc::clone(&resolve);
                 let resolve_reject = Rc::clone(&resolve);
-                inner.fulfill_handlers.push(Box::new(move |val| resolve_fulfill(val)));
+                inner
+                    .fulfill_handlers
+                    .push(Box::new(move |val| resolve_fulfill(val)));
                 inner.reject_handlers.push(Box::new(move |err| {
                     let recovered = on_rejected(err);
                     resolve_reject(recovered);

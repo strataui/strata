@@ -3,44 +3,44 @@
 use strata_dom::{NodeBlueprint, Tag, View};
 use strata_layout::prelude::*;
 use strata_platform::{
-    EventLoop, EventLoopControl, LivePlatformWindow, NativeSurfaceWindow, PlatformEvent, PlatformWindow,
-    SoftwareSurfacePresenter, SwapchainCompositor, SwapchainFormat, WindowConfig,
+    EventLoop, EventLoopControl, LivePlatformWindow, NativeSurfaceWindow, PlatformEvent,
+    PlatformWindow, SoftwareSurfacePresenter, SwapchainCompositor, SwapchainFormat, WindowConfig,
 };
 use strata_render::compositor::DisplayList;
 use strata_render::swapchain::{PresentError, SurfacePresenter};
 use strata_style::types::{ComputedStyle, Dimension, Display, FlexDirection};
 
-pub mod types;
+pub mod app;
 pub mod edit;
 pub mod launch;
 pub mod platforms;
-pub mod app;
+pub mod types;
 
-mod image;
-mod mcp;
 mod a11y;
 mod animation;
-mod layout_tree;
-mod tailwind;
-mod hit_test;
-mod input_hit_test;
-mod selection;
+mod canvas3d;
+pub mod dom_hydration;
 mod events;
+mod hit_test;
 mod hover;
+mod image;
+mod input_hit_test;
+mod layout_tree;
+mod mcp;
 mod scroll;
 mod scrollbar;
-mod canvas3d;
+mod selection;
 pub mod spatial;
-pub mod dom_hydration;
+mod tailwind;
 
-pub use types::*;
+pub use app::*;
+pub use dom_hydration::*;
 pub use edit::*;
 pub(crate) use image::*;
 pub use launch::*;
 pub use platforms::*;
-pub use app::*;
 pub use spatial::*;
-pub use dom_hydration::*;
+pub use types::*;
 
 /// Live running application instance holding active state, layout tree, and display list.
 #[derive(Debug)]
@@ -218,7 +218,11 @@ impl AppRuntime {
 
         let mut dynamic_text_bindings = Vec::new();
         let mut path_buf = Vec::new();
-        Self::collect_dynamic_text_bindings(&root_blueprint, &mut path_buf, &mut dynamic_text_bindings);
+        Self::collect_dynamic_text_bindings(
+            &root_blueprint,
+            &mut path_buf,
+            &mut dynamic_text_bindings,
+        );
 
         let mut runtime = Self {
             root_blueprint,
@@ -353,7 +357,8 @@ impl AppRuntime {
 
     /// Clears and rebuilds the spatial acceleration index.
     pub fn rebuild_spatial_index(&mut self) {
-        self.spatial_index.rebuild(&self.root_blueprint, &self.layout_root);
+        self.spatial_index
+            .rebuild(&self.root_blueprint, &self.layout_root);
     }
 
     /// Queries the front-most EntityId at point (px, py).
@@ -376,7 +381,10 @@ impl AppRuntime {
     }
 
     /// Recursively locates a layout node by its EntityId.
-    pub fn find_layout_by_entity(&self, entity_id: strata_primitives::EntityId) -> Option<&LayoutNode> {
+    pub fn find_layout_by_entity(
+        &self,
+        entity_id: strata_primitives::EntityId,
+    ) -> Option<&LayoutNode> {
         self.layout_root.find_by_entity_id(entity_id)
     }
 
@@ -409,10 +417,7 @@ impl AppRuntime {
         }
         let build_start = std::time::Instant::now();
         let ctx = self.interaction_context();
-        self.layout_root = Self::build_layout_tree_with_interaction(
-            &self.root_blueprint,
-            &ctx,
-        );
+        self.layout_root = Self::build_layout_tree_with_interaction(&self.root_blueprint, &ctx);
         if perf_logging_enabled() {
             perf_log_ms(
                 "build_layout_tree_update",
@@ -427,7 +432,11 @@ impl AppRuntime {
         self.sync_active_input_layout();
         self.dynamic_text_bindings.clear();
         let mut path_buf = Vec::new();
-        Self::collect_dynamic_text_bindings(&self.root_blueprint, &mut path_buf, &mut self.dynamic_text_bindings);
+        Self::collect_dynamic_text_bindings(
+            &self.root_blueprint,
+            &mut path_buf,
+            &mut self.dynamic_text_bindings,
+        );
         let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
         let sync_start = std::time::Instant::now();
         self.sync_tree_animations(now_ms);
@@ -450,7 +459,8 @@ impl AppRuntime {
             let new_text = (binding.closure)();
             if new_text != binding.last_value {
                 binding.last_value = new_text.clone();
-                if let Some(node) = Self::find_layout_node_mut(&mut self.layout_root, &binding.path) {
+                if let Some(node) = Self::find_layout_node_mut(&mut self.layout_root, &binding.path)
+                {
                     let is_mono = strata_layout::is_monospace_family(node.style.font_family);
                     let (w, h) = strata_layout::measure_text_bounds_styled_with_family(
                         &new_text,
@@ -550,7 +560,8 @@ impl AppRuntime {
                 self.viewport_height = *height as f32;
                 #[cfg(feature = "devtools")]
                 if let Some(ref mut dt) = self.devtools {
-                    dt.hud.update_bounds(self.viewport_width, self.viewport_height);
+                    dt.hud
+                        .update_bounds(self.viewport_width, self.viewport_height);
                 }
                 self.tick_frame();
                 true
@@ -635,7 +646,8 @@ impl AppRuntime {
         #[cfg(feature = "devtools")]
         if let Some(ref mut dt) = self.devtools {
             if dt.hud.state.is_visible {
-                dt.hud.render_overlay(Some(&dt.profiler), &mut self.display_list);
+                dt.hud
+                    .render_overlay(Some(&dt.profiler), &mut self.display_list);
             }
         }
 
@@ -680,7 +692,8 @@ impl AppRuntime {
     pub fn enable_devtools(&mut self) -> &mut strata_devtools::DevTools {
         if self.devtools.is_none() {
             let mut dt = strata_devtools::DevTools::new();
-            dt.hud.update_bounds(self.viewport_width, self.viewport_height);
+            dt.hud
+                .update_bounds(self.viewport_width, self.viewport_height);
             self.devtools = Some(dt);
         }
         self.devtools.as_mut().unwrap()

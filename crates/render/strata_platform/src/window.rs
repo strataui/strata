@@ -335,7 +335,12 @@ pub trait PlatformWindow {
 /// Contract for platform windows supporting direct software/swapchain pixel blitting.
 pub trait NativeSurfaceWindow: PlatformWindow {
     /// Blits a 32-bit BGRA uncompressed buffer to the window client area.
-    fn present_surface(&mut self, pixels: &[u8], width: u32, height: u32) -> Result<(), crate::surface::PresentError>;
+    fn present_surface(
+        &mut self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<(), crate::surface::PresentError>;
 }
 
 /// Headless mock platform window for deterministic testing, CI automation, and headless rendering.
@@ -371,7 +376,6 @@ impl MockPlatformWindow {
             current_monitor_id: Some(1),
         }
     }
-
 
     /// Creates a mock window with default configuration.
     pub fn new_mock() -> Self {
@@ -442,7 +446,9 @@ impl PlatformWindow for MockPlatformWindow {
         let old = self.config.mode;
         self.config.mode = mode;
         if old != mode {
-            self.push_event(PlatformEvent::WindowMaximized(mode == WindowMode::Maximized));
+            self.push_event(PlatformEvent::WindowMaximized(
+                mode == WindowMode::Maximized,
+            ));
         }
     }
 
@@ -511,12 +517,16 @@ impl PlatformWindow for MockPlatformWindow {
 }
 
 impl NativeSurfaceWindow for MockPlatformWindow {
-    fn present_surface(&mut self, _pixels: &[u8], _width: u32, _height: u32) -> Result<(), crate::surface::PresentError> {
+    fn present_surface(
+        &mut self,
+        _pixels: &[u8],
+        _width: u32,
+        _height: u32,
+    ) -> Result<(), crate::surface::PresentError> {
         self.redraw_requested = false;
         Ok(())
     }
 }
-
 
 /// Live interactive platform window with surface configuration, frame pacing, and event queuing.
 #[derive(Debug, Clone)]
@@ -552,7 +562,7 @@ impl LivePlatformWindow {
                 if std::env::var_os("WAYLAND_DISPLAY").is_some() {
                     SurfaceHandle {
                         window_id: 1001,
-                        raw_window_ptr: 0x574C4E44, // "WLND"
+                        raw_window_ptr: 0x574C4E44,  // "WLND"
                         raw_display_ptr: 0x574C4453, // "WLDS"
                         width: config.width,
                         height: config.height,
@@ -561,7 +571,7 @@ impl LivePlatformWindow {
                 } else if std::env::var_os("DISPLAY").is_some() {
                     SurfaceHandle {
                         window_id: 1002,
-                        raw_window_ptr: 0x58313157, // "X11W"
+                        raw_window_ptr: 0x58313157,  // "X11W"
                         raw_display_ptr: 0x58313144, // "X11D"
                         width: config.width,
                         height: config.height,
@@ -575,7 +585,7 @@ impl LivePlatformWindow {
             {
                 SurfaceHandle {
                     window_id: 2001,
-                    raw_window_ptr: 0x57494E32, // "WIN2"
+                    raw_window_ptr: 0x57494E32,  // "WIN2"
                     raw_display_ptr: 0x47444931, // "GDI1"
                     width: config.width,
                     height: config.height,
@@ -586,7 +596,7 @@ impl LivePlatformWindow {
             {
                 SurfaceHandle {
                     window_id: 3001,
-                    raw_window_ptr: 0x434F4341, // "COCA"
+                    raw_window_ptr: 0x434F4341,  // "COCA"
                     raw_display_ptr: 0x4150504C, // "APPL"
                     width: config.width,
                     height: config.height,
@@ -750,14 +760,20 @@ impl PlatformWindow for LivePlatformWindow {
 }
 
 impl NativeSurfaceWindow for LivePlatformWindow {
-    fn present_surface(&mut self, pixels: &[u8], width: u32, height: u32) -> Result<(), crate::surface::PresentError> {
+    fn present_surface(
+        &mut self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<(), crate::surface::PresentError> {
         self.redraw_requested = false;
         let expected_bytes = (width as usize) * (height as usize) * 4;
         if pixels.len() < expected_bytes {
             return Err(crate::surface::PresentError::BufferTooSmall);
         }
         self.display_buffer.resize(expected_bytes, 0);
-        self.display_buffer.copy_from_slice(&pixels[..expected_bytes]);
+        self.display_buffer
+            .copy_from_slice(&pixels[..expected_bytes]);
         self.is_native_presented = true;
         Ok(())
     }

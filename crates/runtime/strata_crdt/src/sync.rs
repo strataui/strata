@@ -25,7 +25,11 @@ impl SyncMessage {
     pub fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         match self {
-            SyncMessage::RegisterDelta { clock, key, payload } => {
+            SyncMessage::RegisterDelta {
+                clock,
+                key,
+                payload,
+            } => {
                 buf.push(1); // Type 1
                 buf.extend_from_slice(&clock.counter.to_le_bytes());
                 buf.extend_from_slice(&clock.peer.to_le_bytes());
@@ -35,7 +39,11 @@ impl SyncMessage {
                 buf.extend_from_slice(&(payload.len() as u32).to_le_bytes());
                 buf.extend_from_slice(payload);
             }
-            SyncMessage::CounterDelta { peer, positive, negative } => {
+            SyncMessage::CounterDelta {
+                peer,
+                positive,
+                negative,
+            } => {
                 buf.push(2); // Type 2
                 buf.extend_from_slice(&peer.to_le_bytes());
                 buf.extend_from_slice(&positive.to_le_bytes());
@@ -67,14 +75,16 @@ impl SyncMessage {
                 offset += 8;
                 let peer = u64::from_le_bytes(bytes[offset..offset + 8].try_into().ok()?);
                 offset += 8;
-                let key_len = u16::from_le_bytes(bytes[offset..offset + 2].try_into().ok()?) as usize;
+                let key_len =
+                    u16::from_le_bytes(bytes[offset..offset + 2].try_into().ok()?) as usize;
                 offset += 2;
                 if bytes.len() < offset + key_len + 4 {
                     return None;
                 }
                 let key = String::from_utf8(bytes[offset..offset + key_len].to_vec()).ok()?;
                 offset += key_len;
-                let payload_len = u32::from_le_bytes(bytes[offset..offset + 4].try_into().ok()?) as usize;
+                let payload_len =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().ok()?) as usize;
                 offset += 4;
                 if bytes.len() < offset + payload_len {
                     return None;
@@ -95,7 +105,11 @@ impl SyncMessage {
                 let positive = u64::from_le_bytes(bytes[9..17].try_into().ok()?);
                 let negative = u64::from_le_bytes(bytes[17..25].try_into().ok()?);
 
-                Some(SyncMessage::CounterDelta { peer, positive, negative })
+                Some(SyncMessage::CounterDelta {
+                    peer,
+                    positive,
+                    negative,
+                })
             }
             3 => {
                 if bytes.len() < 1 + 8 + 8 {

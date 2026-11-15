@@ -1,10 +1,10 @@
 //! IPC Client communicating with active Strata development sessions over Unix domain sockets.
 
+use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
-use serde_json::Value;
 
 /// Client connection handle to a running Strata application dev instance.
 #[derive(Debug, Clone)]
@@ -157,7 +157,12 @@ impl StrataDevClient {
     }
 
     /// Emulates mouse button down.
-    pub fn mouse_down(&self, button: &str, x: Option<f32>, y: Option<f32>) -> Result<Value, String> {
+    pub fn mouse_down(
+        &self,
+        button: &str,
+        x: Option<f32>,
+        y: Option<f32>,
+    ) -> Result<Value, String> {
         self.call(
             "mouse_down",
             serde_json::json!({ "button": button, "x": x, "y": y }),

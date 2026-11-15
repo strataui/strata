@@ -81,7 +81,8 @@ impl FoldableState {
         match self.posture {
             DevicePosture::Closed => {
                 // Outer cover display active
-                self.viewport_segments.push(Rect::new(0.0, 0.0, width, height));
+                self.viewport_segments
+                    .push(Rect::new(0.0, 0.0, width, height));
             }
             DevicePosture::TabletopFlex => {
                 // Horizontal split: Upper presentation pane, Lower control pane
@@ -101,19 +102,26 @@ impl FoldableState {
             }
             DevicePosture::Flat | DevicePosture::Peeking | DevicePosture::Tent => {
                 // Single unified continuous surface
-                self.viewport_segments.push(Rect::new(0.0, 0.0, width, height));
+                self.viewport_segments
+                    .push(Rect::new(0.0, 0.0, width, height));
             }
         }
     }
 
     /// Query W3C CSS environment variable: `env(viewport-segment-width x y)`
     pub fn env_segment_width(&self, x: usize, _y: usize) -> f32 {
-        self.viewport_segments.get(x).map(|s| s.width).unwrap_or(0.0)
+        self.viewport_segments
+            .get(x)
+            .map(|s| s.width)
+            .unwrap_or(0.0)
     }
 
     /// Query W3C CSS environment variable: `env(viewport-segment-height x y)`
     pub fn env_segment_height(&self, _x: usize, y: usize) -> f32 {
-        self.viewport_segments.get(y).map(|s| s.height).unwrap_or(0.0)
+        self.viewport_segments
+            .get(y)
+            .map(|s| s.height)
+            .unwrap_or(0.0)
     }
 
     /// Query W3C CSS environment variable: `env(viewport-segment-top x y)`

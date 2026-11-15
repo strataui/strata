@@ -106,14 +106,20 @@ fn test_scroll_offset_clamping() {
     assert_eq!(max.y, 200.0);
 
     // Negative offset clamps to 0
-    let clamped_neg = container.geometry.clamp_scroll_offset(Point::new(-20.0, -50.0));
+    let clamped_neg = container
+        .geometry
+        .clamp_scroll_offset(Point::new(-20.0, -50.0));
     assert_eq!(clamped_neg, Point::new(0.0, 0.0));
 
     // Excessive offset clamps to max_scroll
-    let clamped_excess = container.geometry.clamp_scroll_offset(Point::new(100.0, 999.0));
+    let clamped_excess = container
+        .geometry
+        .clamp_scroll_offset(Point::new(100.0, 999.0));
     assert_eq!(clamped_excess, Point::new(0.0, 200.0));
 
     // In-range offset preserves value
-    let clamped_valid = container.geometry.clamp_scroll_offset(Point::new(0.0, 120.0));
+    let clamped_valid = container
+        .geometry
+        .clamp_scroll_offset(Point::new(0.0, 120.0));
     assert_eq!(clamped_valid, Point::new(0.0, 120.0));
 }

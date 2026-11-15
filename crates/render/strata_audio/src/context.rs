@@ -1,11 +1,13 @@
 //! AudioContext coordinator and master graph mixer connected to host soundcards.
 
-use std::sync::{Arc, Mutex};
-use crate::device::{ActiveBuffer, AudioCommand, AudioContextState, AudioError, AudioHardwareStream, AudioMixer};
+use crate::device::{
+    ActiveBuffer, AudioCommand, AudioContextState, AudioError, AudioHardwareStream, AudioMixer,
+};
 use crate::filter::BiquadFilter;
 use crate::sample::AudioBuffer;
 use crate::spatial::{AudioListener, Panner3D, Vec3};
 use crate::synth::{Oscillator, OscillatorType};
+use std::sync::{Arc, Mutex};
 
 /// The primary coordinator for audio graph synthesis, filtering, spatialization, and host soundcard output.
 pub struct AudioContext {
@@ -80,7 +82,11 @@ impl AudioContext {
 
     /// Returns the name of the active audio hardware output device, if present.
     pub fn device_name(&self) -> Option<String> {
-        self.hardware.lock().unwrap().as_ref().map(|hw| hw.device_name.clone())
+        self.hardware
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|hw| hw.device_name.clone())
     }
 
     /// Returns the current lifecycle state of the audio context.
@@ -244,7 +250,8 @@ impl AudioContext {
         // 4. Calculate spatialization: HRTF binaural synthesis or EqualPower stereo panning
         let (left_ch, right_ch) = match panner.spatialization_mode {
             crate::spatial::SpatializationMode::Hrtf => {
-                let (mut l, mut r) = panner.render_hrtf(&mono_samples, &self.listener, self.sample_rate);
+                let (mut l, mut r) =
+                    panner.render_hrtf(&mono_samples, &self.listener, self.sample_rate);
                 for s in &mut l {
                     *s *= self.master_gain;
                 }

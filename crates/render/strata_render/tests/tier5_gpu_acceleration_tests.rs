@@ -10,24 +10,24 @@
 //! - Goal 07: Instanced UI Draw Call Batching for Complex Layouts
 //! - Goal 08: Hardware Offscreen Framebuffer Surface & Headless Readback
 
+use strata_gpu_path::{
+    evaluate_slug_analytical_coverage, solve_quadratic_roots_f32, AnalyticGlyphCache, Rect2D,
+    SlugGlyphBuffer, WGSL_SLUG_FONT_SHADER,
+};
 use strata_layout::Rect;
 use strata_primitives::geom::EdgeInsets;
 use strata_render::compositor::{DisplayList, DrawCommand};
+use strata_render::gpu3d::{Gpu3DPipeline, WGSL_3D_RTE_SHADER, WGSL_3D_STANDARD_SHADER};
 use strata_render::gpu_context::{
-    GpuBufferUsage, GpuContext, GpuDevice, GpuMemoryLocation, GpuOffscreenSurface,
-    GpuPresentMode, GpuRenderPassDescriptor, GpuSwapchain,
+    GpuBufferUsage, GpuContext, GpuDevice, GpuMemoryLocation, GpuOffscreenSurface, GpuPresentMode,
+    GpuRenderPassDescriptor, GpuSwapchain,
 };
 use strata_render::gpu_pipeline::{
-    GpuBatchCollector, GpuCompareFunction, GpuDepthStencilState,
-    GpuRenderPipeline, GpuShaderCompiler, WGSL_ANALYTICAL_QUAD_SHADER,
+    GpuBatchCollector, GpuCompareFunction, GpuDepthStencilState, GpuRenderPipeline,
+    GpuShaderCompiler, WGSL_ANALYTICAL_QUAD_SHADER,
 };
-use strata_render::gpu3d::{Gpu3DPipeline, WGSL_3D_RTE_SHADER, WGSL_3D_STANDARD_SHADER};
 use strata_render::swapchain::SwapchainFormat;
 use strata_style::types::{BorderRadius, Color};
-use strata_gpu_path::{
-    evaluate_slug_analytical_coverage, solve_quadratic_roots_f32, AnalyticGlyphCache,
-    Rect2D, SlugGlyphBuffer, WGSL_SLUG_FONT_SHADER,
-};
 
 #[test]
 fn test_goal_01_gpu_device_and_queue_authentic_submission() {
@@ -61,7 +61,10 @@ fn test_goal_01_gpu_device_and_queue_authentic_submission() {
     assert_eq!(device.queue.submitted_passes, 1);
 
     // Verify clear color was written into the scissored target
-    let pixel_inside = device.swapchain_texture.read_pixel_rgba(100, 100).expect("pixel exists");
+    let pixel_inside = device
+        .swapchain_texture
+        .read_pixel_rgba(100, 100)
+        .expect("pixel exists");
     assert_eq!(pixel_inside[0], (0.2 * 255.0) as u8);
     assert_eq!(pixel_inside[1], (0.4 * 255.0) as u8);
     assert_eq!(pixel_inside[2], (0.8 * 255.0) as u8);
@@ -77,7 +80,12 @@ fn test_goal_01_gpu_device_and_queue_authentic_submission() {
 
 #[test]
 fn test_goal_02_native_hardware_swapchain_presentation_modes() {
-    let mut swapchain = GpuSwapchain::new(1920, 1080, SwapchainFormat::Bgra8Unorm, GpuPresentMode::Mailbox);
+    let mut swapchain = GpuSwapchain::new(
+        1920,
+        1080,
+        SwapchainFormat::Bgra8Unorm,
+        GpuPresentMode::Mailbox,
+    );
     assert_eq!(swapchain.width, 1920);
     assert_eq!(swapchain.height, 1080);
     assert_eq!(swapchain.present_mode, GpuPresentMode::Mailbox);
@@ -108,20 +116,28 @@ fn test_goal_03_live_wgsl_shader_compiler_and_instanced_render_pipeline() {
     let compiler = GpuShaderCompiler::new();
 
     // Compile WGSL quad shader
-    let quad_module = compiler.compile(WGSL_ANALYTICAL_QUAD_SHADER).expect("compile quad shader");
+    let quad_module = compiler
+        .compile(WGSL_ANALYTICAL_QUAD_SHADER)
+        .expect("compile quad shader");
     assert!(quad_module.has_vertex_entry);
     assert!(quad_module.has_fragment_entry);
     assert_eq!(quad_module.vertex_entry, "vs_main");
     assert_eq!(quad_module.fragment_entry, "fs_main");
-    assert!(quad_module.uniforms_declared.contains(&"uniforms".to_string()));
+    assert!(quad_module
+        .uniforms_declared
+        .contains(&"uniforms".to_string()));
 
     // Compile WGSL 3D standard shader
-    let standard_3d_module = compiler.compile(WGSL_3D_STANDARD_SHADER).expect("compile 3d shader");
+    let standard_3d_module = compiler
+        .compile(WGSL_3D_STANDARD_SHADER)
+        .expect("compile 3d shader");
     assert!(standard_3d_module.has_vertex_entry);
     assert!(standard_3d_module.has_fragment_entry);
 
     // Compile WGSL RTE shader
-    let rte_module = compiler.compile(WGSL_3D_RTE_SHADER).expect("compile rte shader");
+    let rte_module = compiler
+        .compile(WGSL_3D_RTE_SHADER)
+        .expect("compile rte shader");
     assert!(rte_module.has_vertex_entry);
     assert!(rte_module.has_fragment_entry);
 
@@ -130,7 +146,8 @@ fn test_goal_03_live_wgsl_shader_compiler_and_instanced_render_pipeline() {
     assert!(invalid_res.is_err());
 
     // Verify instanced render pipeline creation
-    let pipeline = GpuRenderPipeline::new_instanced_quad_pipeline(1024.0, 768.0).expect("pipeline creation");
+    let pipeline =
+        GpuRenderPipeline::new_instanced_quad_pipeline(1024.0, 768.0).expect("pipeline creation");
     assert_eq!(pipeline.vertex_layout.array_stride, 8);
     assert_eq!(pipeline.vertex_layout.attributes.len(), 1);
 
@@ -181,18 +198,24 @@ fn test_goal_04_authentic_gpu_vram_buffer_allocation_and_dma_copies() {
         GpuBufferUsage::Vertex,
         GpuMemoryLocation::DeviceLocal,
     );
-    device.copy_buffer_to_buffer(&staging, 0, &mut vbo, 0, 128).expect("buffer copy");
+    device
+        .copy_buffer_to_buffer(&staging, 0, &mut vbo, 0, 128)
+        .expect("buffer copy");
     assert_eq!(&vbo.data[..128], &staging.data[..128]);
 
     // 6. Buffer-to-texture and texture-to-buffer copy
     let mut tex = device.create_texture(4, 4, SwapchainFormat::Rgba8Unorm, false);
     let mut pixel_buffer = device.create_staging_buffer(64);
     pixel_buffer.write_bytes(0, &[255u8; 64]);
-    device.copy_buffer_to_texture(&pixel_buffer, 0, &mut tex).expect("buffer to tex");
+    device
+        .copy_buffer_to_texture(&pixel_buffer, 0, &mut tex)
+        .expect("buffer to tex");
     assert_eq!(tex.data[0..4], [255, 255, 255, 255]);
 
     let mut readback_buf = device.create_staging_buffer(64);
-    device.copy_texture_to_buffer(&tex, &mut readback_buf, 0).expect("tex to buffer");
+    device
+        .copy_texture_to_buffer(&tex, &mut readback_buf, 0)
+        .expect("tex to buffer");
     assert_eq!(&readback_buf.data[..64], &tex.data[..64]);
 }
 
@@ -357,7 +380,9 @@ fn test_goal_08_hardware_offscreen_framebuffer_surface_and_headless_readback() {
         color: Color::BLUE,
     });
 
-    let rendered_prims = surface.render_display_list(&mut device, &list, None).expect("render offscreen");
+    let rendered_prims = surface
+        .render_display_list(&mut device, &list, None)
+        .expect("render offscreen");
     assert_eq!(rendered_prims, 2);
 
     // Headless readback

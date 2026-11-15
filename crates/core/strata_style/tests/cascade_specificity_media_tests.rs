@@ -47,12 +47,22 @@ fn test_combinator_descendant_and_child_matching() {
     assert!(child_sel.matches_hierarchy(&p_target, &[div_anc], &[], &PseudoState::default()));
 
     // Grandparent is div, immediate parent is span -> Child must NOT match
-    assert!(!child_sel.matches_hierarchy(&p_target, &[div_anc, span_anc], &[], &PseudoState::default()));
+    assert!(!child_sel.matches_hierarchy(
+        &p_target,
+        &[div_anc, span_anc],
+        &[],
+        &PseudoState::default()
+    ));
 
     // 2. Descendant Combinator: div p
     let desc_sel = Selector::parse("div p").expect("Failed to parse 'div p'");
     // Grandparent is div -> Descendant matches!
-    assert!(desc_sel.matches_hierarchy(&p_target, &[div_anc, span_anc], &[], &PseudoState::default()));
+    assert!(desc_sel.matches_hierarchy(
+        &p_target,
+        &[div_anc, span_anc],
+        &[],
+        &PseudoState::default()
+    ));
 
     // No div ancestor -> Descendant fails
     assert!(!desc_sel.matches_hierarchy(&p_target, &[span_anc], &[], &PseudoState::default()));
@@ -91,7 +101,12 @@ fn test_combinator_sibling_matching() {
     assert!(adj_sel.matches_hierarchy(&p2_target, &[], &[h2_sib], &PseudoState::default()));
 
     // p preceded by h2 then p1 -> Adjacent must NOT match p2
-    assert!(!adj_sel.matches_hierarchy(&p2_target, &[], &[h2_sib, p1_sib], &PseudoState::default()));
+    assert!(!adj_sel.matches_hierarchy(
+        &p2_target,
+        &[],
+        &[h2_sib, p1_sib],
+        &PseudoState::default()
+    ));
 
     // 2. Subsequent Sibling: h2 ~ p
     let sub_sel = Selector::parse("h2 ~ p").expect("Failed to parse 'h2 ~ p'");
@@ -127,8 +142,14 @@ fn test_attribute_selector_matching_operators() {
 
     // Prefix: [href^="https://"]
     let sel_prefix = Selector::parse(r#"a[href^="https://"]"#).unwrap();
-    let attrs_https = vec![("href".to_string(), "https://en.wikipedia.org/wiki/Rust".to_string())];
-    let attrs_http = vec![("href".to_string(), "http://insecure.example.com".to_string())];
+    let attrs_https = vec![(
+        "href".to_string(),
+        "https://en.wikipedia.org/wiki/Rust".to_string(),
+    )];
+    let attrs_http = vec![(
+        "href".to_string(),
+        "http://insecure.example.com".to_string(),
+    )];
     let el_https = ElementRef {
         tag: "a",
         classes: &[],
@@ -277,7 +298,10 @@ fn test_cascade_specificity_tie_breaking_and_important() {
         None,
         &PseudoState::default(),
     );
-    assert_eq!(computed.color, strata_style::types::Color::new(0x44, 0x44, 0x44, 0xFF));
+    assert_eq!(
+        computed.color,
+        strata_style::types::Color::new(0x44, 0x44, 0x44, 0xFF)
+    );
 
     // Case 2: Inline style overrides non-important stylesheet ID, but loses to !important
     let computed_inline = CascadeSolver::resolve_with_hierarchy(
@@ -290,7 +314,10 @@ fn test_cascade_specificity_tie_breaking_and_important() {
         &PseudoState::default(),
     );
     // color is still #444444 because stylesheet has !important
-    assert_eq!(computed_inline.color, strata_style::types::Color::new(0x44, 0x44, 0x44, 0xFF));
+    assert_eq!(
+        computed_inline.color,
+        strata_style::types::Color::new(0x44, 0x44, 0x44, 0xFF)
+    );
     // font-size is 20px because inline style beat the p { font-size: 14px; } rule
     assert_eq!(computed_inline.font_size, 20.0);
 }
@@ -321,15 +348,30 @@ fn test_at_rules_charset_and_tachyons_parsing() {
     }
 
     if let Ok(vendor_css) = std::fs::read_to_string("/tmp/vendor.css") {
-        let vendor_sheet = StyleSheet::parse_with_context(&vendor_css, &ctx).expect("Failed to parse vendor.css");
+        let vendor_sheet =
+            StyleSheet::parse_with_context(&vendor_css, &ctx).expect("Failed to parse vendor.css");
         println!("Vendor sheet rules count: {}", vendor_sheet.rules.len());
-        let has_w_auto_l = vendor_sheet.rules.iter().any(|r| r.selectors.iter().any(|s| format!("{:?}", s).contains("w-auto-l")));
-        let has_flex_row_l = vendor_sheet.rules.iter().any(|r| r.selectors.iter().any(|s| format!("{:?}", s).contains("flex-row-l")));
-        println!("Vendor has w-auto-l: {}, flex-row-l: {}", has_w_auto_l, has_flex_row_l);
+        let has_w_auto_l = vendor_sheet.rules.iter().any(|r| {
+            r.selectors
+                .iter()
+                .any(|s| format!("{:?}", s).contains("w-auto-l"))
+        });
+        let has_flex_row_l = vendor_sheet.rules.iter().any(|r| {
+            r.selectors
+                .iter()
+                .any(|s| format!("{:?}", s).contains("flex-row-l"))
+        });
+        println!(
+            "Vendor has w-auto-l: {}, flex-row-l: {}",
+            has_w_auto_l, has_flex_row_l
+        );
     }
 
     assert!(
-        sheet.rules.iter().any(|r| r.selectors.iter().any(|s| format!("{:?}", s).contains("w-auto-l"))),
+        sheet.rules.iter().any(|r| r
+            .selectors
+            .iter()
+            .any(|s| format!("{:?}", s).contains("w-auto-l"))),
         "Must parse .w-auto-l from inside @media after @charset"
     );
 }
@@ -404,7 +446,8 @@ fn test_container_queries_evaluation() {
 
     // Evaluate with container width 250px -> matches max-width: 300px
     let ctx_narrow = MediaContext::default().with_container_size(250.0, 400.0);
-    let sheet_narrow = StyleSheet::parse_with_context(css, &ctx_narrow).expect("Parse narrow container");
+    let sheet_narrow =
+        StyleSheet::parse_with_context(css, &ctx_narrow).expect("Parse narrow container");
     let computed_narrow = CascadeSolver::resolve(
         "div",
         &["box"],
@@ -473,7 +516,8 @@ fn test_w3c_viewport_segments_and_device_posture_media_queries() {
     let ctx_tabletop = MediaContext::default()
         .with_device_posture(DevicePostureQuery::Folded)
         .with_viewport_segments(1, 2);
-    let sheet_tabletop = StyleSheet::parse_with_context(css, &ctx_tabletop).expect("Parse tabletop");
+    let sheet_tabletop =
+        StyleSheet::parse_with_context(css, &ctx_tabletop).expect("Parse tabletop");
     let comp_tabletop = CascadeSolver::resolve(
         "div",
         &["pane"],
@@ -735,7 +779,8 @@ fn test_w3c_media_queries_level_4_range_syntax() {
     assert!(!mq_max.matches(&ctx_desktop));
 
     // 3. Interval range: 768px <= width <= 1200px
-    let mq_interval = MediaQuery::parse("screen and (768px <= width <= 1200px)").expect("parse interval");
+    let mq_interval =
+        MediaQuery::parse("screen and (768px <= width <= 1200px)").expect("parse interval");
     assert!(!mq_interval.matches(&ctx_mobile));
     assert!(mq_interval.matches(&ctx_tablet));
     assert!(!mq_interval.matches(&ctx_desktop));
@@ -774,4 +819,3 @@ fn test_w3c_media_queries_level_4_range_syntax() {
     );
     assert_eq!(comp_desktop.width, Dimension::Px(1200.0));
 }
-

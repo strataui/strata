@@ -13,11 +13,17 @@ fn test_use_hover() {
 
     // Enter element
     (handlers.onmouseenter)();
-    assert!(is_hovered.get(), "Hover state should be true after mouseenter");
+    assert!(
+        is_hovered.get(),
+        "Hover state should be true after mouseenter"
+    );
 
     // Leave element
     (handlers.onmouseleave)();
-    assert!(!is_hovered.get(), "Hover state should be false after mouseleave");
+    assert!(
+        !is_hovered.get(),
+        "Hover state should be false after mouseleave"
+    );
 
     // Attributes verification
     let attrs = handlers.attributes();
@@ -33,7 +39,10 @@ fn test_use_focus_and_focus_within() {
     assert!(is_focused.get(), "Focus state should be true after onfocus");
 
     (handlers.onblur)();
-    assert!(!is_focused.get(), "Focus state should be false after onblur");
+    assert!(
+        !is_focused.get(),
+        "Focus state should be false after onblur"
+    );
 
     // Focus Within (nested subtree tracking)
     let (has_focus, within_handlers) = use_focus_within();
@@ -49,11 +58,17 @@ fn test_use_focus_and_focus_within() {
 
     // First child blurred (depth = 1)
     (within_handlers.onblur)();
-    assert!(has_focus.get(), "has_focus should stay true when nested child remains focused");
+    assert!(
+        has_focus.get(),
+        "has_focus should stay true when nested child remains focused"
+    );
 
     // Second child blurred (depth = 0)
     (within_handlers.onblur)();
-    assert!(!has_focus.get(), "has_focus should revert to false when all children blur");
+    assert!(
+        !has_focus.get(),
+        "has_focus should revert to false when all children blur"
+    );
 }
 
 #[test]
@@ -71,7 +86,10 @@ fn test_use_active_and_press() {
     (handlers.onmousedown)();
     assert!(is_active.get());
     (handlers.onmouseleave)();
-    assert!(!is_active.get(), "Active state should cancel when pointer leaves");
+    assert!(
+        !is_active.get(),
+        "Active state should cancel when pointer leaves"
+    );
 
     // Test use_press alias
     let (is_pressed, press_handlers) = use_press();
@@ -101,13 +119,20 @@ fn test_use_click_outside() {
     is_open.set(false);
     let triggered_closed = dispatch_click_outside();
     assert!(!triggered_closed);
-    assert_eq!(dismiss_count.get(), 1, "Should not trigger dismiss when closed");
+    assert_eq!(
+        dismiss_count.get(),
+        1,
+        "Should not trigger dismiss when closed"
+    );
 
     // Drop handle and verify deregistration
     drop(handle);
     is_open.set(true);
     let triggered_dropped = dispatch_click_outside();
-    assert!(!triggered_dropped, "Should not trigger dismiss after handle drop");
+    assert!(
+        !triggered_dropped,
+        "Should not trigger dismiss after handle drop"
+    );
 }
 
 #[test]

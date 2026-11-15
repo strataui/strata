@@ -438,7 +438,6 @@ impl GpuSlugTextPipeline {
 
     /// Compiles all DrawText commands in a DisplayList into the Slug GPU buffer.
     pub fn compile_display_list(
-
         &mut self,
         list: &DisplayList,
         viewport_width: f32,
@@ -481,8 +480,12 @@ impl GpuSlugTextPipeline {
                                 default_clip.y + default_clip.height,
                             );
 
-                            if default_clip.intersect(Rect::new(cursor_x, cursor_y, glyph_w, glyph_h)).is_some() {
-                                self.buffer.push_glyph(glyph, screen_bounds, color_f32, clip_r);
+                            if default_clip
+                                .intersect(Rect::new(cursor_x, cursor_y, glyph_w, glyph_h))
+                                .is_some()
+                            {
+                                self.buffer
+                                    .push_glyph(glyph, screen_bounds, color_f32, clip_r);
                                 self.total_glyphs += 1;
                             }
                             cursor_x += glyph_w;
@@ -517,8 +520,12 @@ impl GpuSlugTextPipeline {
                                     default_clip.y + default_clip.height,
                                 );
 
-                                if default_clip.intersect(Rect::new(cursor_x, cursor_y, glyph_w, glyph_h)).is_some() {
-                                    self.buffer.push_glyph(glyph, screen_bounds, color_f32, clip_r);
+                                if default_clip
+                                    .intersect(Rect::new(cursor_x, cursor_y, glyph_w, glyph_h))
+                                    .is_some()
+                                {
+                                    self.buffer
+                                        .push_glyph(glyph, screen_bounds, color_f32, clip_r);
                                     self.total_glyphs += 1;
                                 }
                                 cursor_x += glyph_w;
@@ -885,7 +892,9 @@ impl GpuShaderCompiler {
         let has_fragment_entry = source.contains("@fragment");
 
         if !has_vertex_entry && !has_fragment_entry && !source.contains("@compute") {
-            return Err("WGSL shader missing @vertex, @fragment, or @compute entry point".to_string());
+            return Err(
+                "WGSL shader missing @vertex, @fragment, or @compute entry point".to_string(),
+            );
         }
 
         let mut vertex_entry = "vs_main".to_string();
@@ -894,11 +903,20 @@ impl GpuShaderCompiler {
         for line in source.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with("fn ") {
-                let name = trimmed.trim_start_matches("fn ").split('(').next().unwrap_or("").trim();
-                if source.contains(&format!("@vertex\nfn {}", name)) || source.contains(&format!("@vertex fn {}", name)) {
+                let name = trimmed
+                    .trim_start_matches("fn ")
+                    .split('(')
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if source.contains(&format!("@vertex\nfn {}", name))
+                    || source.contains(&format!("@vertex fn {}", name))
+                {
                     vertex_entry = name.to_string();
                 }
-                if source.contains(&format!("@fragment\nfn {}", name)) || source.contains(&format!("@fragment fn {}", name)) {
+                if source.contains(&format!("@fragment\nfn {}", name))
+                    || source.contains(&format!("@fragment fn {}", name))
+                {
                     fragment_entry = name.to_string();
                 }
             }
@@ -1045,7 +1063,10 @@ pub struct GpuRenderPipeline {
 
 impl GpuRenderPipeline {
     /// Constructs an authentic instanced UI quad render pipeline binding WGSL_ANALYTICAL_QUAD_SHADER.
-    pub fn new_instanced_quad_pipeline(viewport_width: f32, viewport_height: f32) -> Result<Self, String> {
+    pub fn new_instanced_quad_pipeline(
+        viewport_width: f32,
+        viewport_height: f32,
+    ) -> Result<Self, String> {
         let _ = (viewport_width, viewport_height);
         let compiler = GpuShaderCompiler::new();
         let shader_module = compiler.compile(WGSL_ANALYTICAL_QUAD_SHADER)?;
@@ -1064,12 +1085,36 @@ impl GpuRenderPipeline {
             array_stride: 96,
             step_mode: GpuVertexStepMode::Instance,
             attributes: vec![
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 0, shader_location: 1 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 16, shader_location: 2 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 32, shader_location: 3 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 48, shader_location: 4 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 64, shader_location: 5 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 80, shader_location: 6 },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 0,
+                    shader_location: 1,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 16,
+                    shader_location: 2,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 32,
+                    shader_location: 3,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 48,
+                    shader_location: 4,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 64,
+                    shader_location: 5,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 80,
+                    shader_location: 6,
+                },
             ],
         };
 
@@ -1087,7 +1132,12 @@ impl GpuRenderPipeline {
     }
 
     /// Records an instanced draw command onto a command encoder.
-    pub fn draw_instanced(&self, encoder: &mut crate::gpu_context::GpuCommandEncoder, vertex_count: usize, instance_count: usize) {
+    pub fn draw_instanced(
+        &self,
+        encoder: &mut crate::gpu_context::GpuCommandEncoder,
+        vertex_count: usize,
+        instance_count: usize,
+    ) {
         encoder.draw_instanced(vertex_count, instance_count);
     }
 }

@@ -355,7 +355,12 @@ pub fn decode_frame(buf: &[u8]) -> Result<Option<(WsFrame, usize)>, WsError> {
         if buf.len() < cursor + 4 {
             return Ok(None);
         }
-        let key = [buf[cursor], buf[cursor + 1], buf[cursor + 2], buf[cursor + 3]];
+        let key = [
+            buf[cursor],
+            buf[cursor + 1],
+            buf[cursor + 2],
+            buf[cursor + 3],
+        ];
         cursor += 4;
         Some(key)
     } else {
@@ -479,7 +484,10 @@ impl WebSocket {
                         .map_err(std::io::Error::other)?
                         .next()
                         .ok_or_else(|| {
-                            std::io::Error::new(std::io::ErrorKind::NotFound, "Host resolution failed")
+                            std::io::Error::new(
+                                std::io::ErrorKind::NotFound,
+                                "Host resolution failed",
+                            )
                         })
                 })
                 .map_err(|e| WsError::NetworkError(format!("DNS/Socket resolution error: {e}")))?,
@@ -509,12 +517,12 @@ impl WebSocket {
             parsed.path, parsed.host, parsed.port, sec_key
         );
 
-        transport
-            .write_all(handshake_req.as_bytes())
-            .map_err(|e| WsError::NetworkError(format!("Failed to write handshake request: {e}")))?;
-        transport
-            .flush()
-            .map_err(|e| WsError::NetworkError(format!("Failed to flush handshake request: {e}")))?;
+        transport.write_all(handshake_req.as_bytes()).map_err(|e| {
+            WsError::NetworkError(format!("Failed to write handshake request: {e}"))
+        })?;
+        transport.flush().map_err(|e| {
+            WsError::NetworkError(format!("Failed to flush handshake request: {e}"))
+        })?;
 
         // Read handshake response
         let mut response_buf = Vec::new();
@@ -522,17 +530,21 @@ impl WebSocket {
         let mut accept_validated = false;
 
         let initial_data = loop {
-            let n = transport
-                .read(&mut temp_buf)
-                .map_err(|e| WsError::NetworkError(format!("Error reading handshake response: {e}")))?;
+            let n = transport.read(&mut temp_buf).map_err(|e| {
+                WsError::NetworkError(format!("Error reading handshake response: {e}"))
+            })?;
             if n == 0 {
-                return Err(WsError::HandshakeFailed("Connection closed by server during handshake".into()));
+                return Err(WsError::HandshakeFailed(
+                    "Connection closed by server during handshake".into(),
+                ));
             }
             response_buf.extend_from_slice(&temp_buf[..n]);
 
             if let Some(pos) = response_buf.windows(4).position(|w| w == b"\r\n\r\n") {
                 let header_str = String::from_utf8_lossy(&response_buf[..pos]);
-                if !header_str.starts_with("HTTP/1.1 101") && !header_str.starts_with("HTTP/1.0 101") {
+                if !header_str.starts_with("HTTP/1.1 101")
+                    && !header_str.starts_with("HTTP/1.0 101")
+                {
                     return Err(WsError::HandshakeFailed(format!(
                         "Server returned non-101 status: {}",
                         header_str.lines().next().unwrap_or("")
@@ -559,7 +571,9 @@ impl WebSocket {
         };
 
         if !accept_validated {
-            return Err(WsError::ProtocolError("Missing Sec-WebSocket-Accept header in response".into()));
+            return Err(WsError::ProtocolError(
+                "Missing Sec-WebSocket-Accept header in response".into(),
+            ));
         }
 
         let ws = Self {
@@ -612,7 +626,8 @@ impl WebSocket {
 
                     // 2. Send periodic RFC 6455 Ping heartbeat
                     if last_ping.elapsed() >= ping_interval {
-                        let ping = encode_frame(true, WsOpcode::Ping, b"strata-heartbeat", true, None);
+                        let ping =
+                            encode_frame(true, WsOpcode::Ping, b"strata-heartbeat", true, None);
                         if transport.write_all(&ping).is_err() || transport.flush().is_err() {
                             worker_closed.store(true, Ordering::Relaxed);
                             break;
@@ -686,12 +701,16 @@ impl WebSocket {
                                             let fragment_val = frag_guard.take().unwrap();
                                             match fragment_val.opcode {
                                                 WsOpcode::Text => {
-                                                    if let Ok(s) = String::from_utf8(fragment_val.buffer) {
+                                                    if let Ok(s) =
+                                                        String::from_utf8(fragment_val.buffer)
+                                                    {
                                                         completed_msg = Some(WsMessage::Text(s));
                                                     }
                                                 }
                                                 WsOpcode::Binary => {
-                                                    completed_msg = Some(WsMessage::Binary(fragment_val.buffer));
+                                                    completed_msg = Some(WsMessage::Binary(
+                                                        fragment_val.buffer,
+                                                    ));
                                                 }
                                                 _ => {}
                                             }
@@ -709,7 +728,8 @@ impl WebSocket {
                             }
                             WsOpcode::Ping => {
                                 // Auto-reply with Pong per RFC 6455 §5.5.3
-                                let pong = encode_frame(true, WsOpcode::Pong, &frame.payload, true, None);
+                                let pong =
+                                    encode_frame(true, WsOpcode::Pong, &frame.payload, true, None);
                                 let _ = transport.write_all(&pong);
                                 let _ = transport.flush();
                             }
@@ -720,13 +740,16 @@ impl WebSocket {
                             }
                             WsOpcode::Close => {
                                 // Echo close frame per RFC 6455 §5.5.1
-                                let echo = encode_frame(true, WsOpcode::Close, &frame.payload, true, None);
+                                let echo =
+                                    encode_frame(true, WsOpcode::Close, &frame.payload, true, None);
                                 let _ = transport.write_all(&echo);
                                 let _ = transport.flush();
 
                                 let (code, reason) = if frame.payload.len() >= 2 {
-                                    let code = u16::from_be_bytes([frame.payload[0], frame.payload[1]]);
-                                    let r = String::from_utf8_lossy(&frame.payload[2..]).to_string();
+                                    let code =
+                                        u16::from_be_bytes([frame.payload[0], frame.payload[1]]);
+                                    let r =
+                                        String::from_utf8_lossy(&frame.payload[2..]).to_string();
                                     (Some(code), r)
                                 } else {
                                     (None, String::new())
@@ -744,7 +767,8 @@ impl WebSocket {
                     }
 
                     if proto_violation {
-                        let close_frame = encode_frame(true, WsOpcode::Close, &1002u16.to_be_bytes(), true, None);
+                        let close_frame =
+                            encode_frame(true, WsOpcode::Close, &1002u16.to_be_bytes(), true, None);
                         let _ = transport.write_all(&close_frame);
                         let _ = transport.flush();
                         worker_closed.store(true, Ordering::Relaxed);
@@ -802,7 +826,9 @@ impl WebSocket {
         } else {
             let state = self.ready_state();
             if state != WsState::Open {
-                return Err(WsError::InvalidState(format!("Cannot send in state {state:?}")));
+                return Err(WsError::InvalidState(format!(
+                    "Cannot send in state {state:?}"
+                )));
             }
 
             let frame = encode_frame(true, WsOpcode::Text, text.as_bytes(), true, None);
@@ -820,7 +846,9 @@ impl WebSocket {
         } else {
             let state = self.ready_state();
             if state != WsState::Open {
-                return Err(WsError::InvalidState(format!("Cannot send in state {state:?}")));
+                return Err(WsError::InvalidState(format!(
+                    "Cannot send in state {state:?}"
+                )));
             }
 
             let frame = encode_frame(true, WsOpcode::Binary, data, true, None);
@@ -842,10 +870,17 @@ impl WebSocket {
     }
 
     /// Helper to send payload in fragmented RFC 6455 frames.
-    pub fn send_payload_fragmented(&self, opcode: WsOpcode, payload: &[u8], chunk_size: usize) -> Result<(), WsError> {
+    pub fn send_payload_fragmented(
+        &self,
+        opcode: WsOpcode,
+        payload: &[u8],
+        chunk_size: usize,
+    ) -> Result<(), WsError> {
         let state = self.ready_state();
         if state != WsState::Open {
-            return Err(WsError::InvalidState(format!("Cannot send in state {state:?}")));
+            return Err(WsError::InvalidState(format!(
+                "Cannot send in state {state:?}"
+            )));
         }
 
         let chunk_size = chunk_size.max(1);
@@ -861,7 +896,11 @@ impl WebSocket {
         let num_chunks = chunks.len();
         for (i, chunk) in chunks.iter().enumerate() {
             let fin = i == num_chunks - 1;
-            let op = if i == 0 { opcode } else { WsOpcode::Continuation };
+            let op = if i == 0 {
+                opcode
+            } else {
+                WsOpcode::Continuation
+            };
             let frame = encode_frame(fin, op, chunk, true, None);
             if let Ok(mut q) = self.outgoing_queue.lock() {
                 q.push(frame);
@@ -967,19 +1006,27 @@ impl WebSocket {
                                 let fragment_val = frag_guard.take().unwrap();
                                 match fragment_val.opcode {
                                     WsOpcode::Text => {
-                                        let s = String::from_utf8(fragment_val.buffer).map_err(|e| {
-                                            WsError::ProtocolError(format!("Invalid UTF-8 in continuation frame: {e}"))
-                                        })?;
+                                        let s = String::from_utf8(fragment_val.buffer).map_err(
+                                            |e| {
+                                                WsError::ProtocolError(format!(
+                                                    "Invalid UTF-8 in continuation frame: {e}"
+                                                ))
+                                            },
+                                        )?;
                                         completed_msg = Some(WsMessage::Text(s));
                                     }
                                     WsOpcode::Binary => {
-                                        completed_msg = Some(WsMessage::Binary(fragment_val.buffer));
+                                        completed_msg =
+                                            Some(WsMessage::Binary(fragment_val.buffer));
                                     }
                                     _ => {}
                                 }
                             }
                         } else {
-                            return Err(WsError::ProtocolError("Unexpected continuation frame without initial fragmented frame".into()));
+                            return Err(WsError::ProtocolError(
+                                "Unexpected continuation frame without initial fragmented frame"
+                                    .into(),
+                            ));
                         }
                     }
                     if let Some(msg) = completed_msg {

@@ -2,12 +2,12 @@
 
 #![allow(clippy::field_reassign_with_default)]
 
-use strata_layout::prelude::*;
 use strata_layout::box_model::collapse_margins;
+use strata_layout::prelude::*;
 use strata_primitives::geom::EdgeInsets;
 use strata_style::types::{
-    AlignItems, ComputedStyle, Dimension, Display, FlexDirection, FlexWrap,
-    GridTrack, JustifyContent, Position,
+    AlignItems, ComputedStyle, Dimension, Display, FlexDirection, FlexWrap, GridTrack,
+    JustifyContent, Position,
 };
 
 #[test]
@@ -129,7 +129,8 @@ fn test_flexbox_weighted_shrink_contraction() {
     assert_eq!(container.children[0].geometry.border_box.width, 350.0);
     assert_eq!(container.children[1].geometry.border_box.width, 150.0);
     assert_eq!(
-        container.children[0].geometry.border_box.width + container.children[1].geometry.border_box.width,
+        container.children[0].geometry.border_box.width
+            + container.children[1].geometry.border_box.width,
         500.0
     );
 }
@@ -162,7 +163,11 @@ fn test_flexbox_multi_line_wrapping() {
 
     let mut container = LayoutNode::with_children(
         container_style,
-        vec![LayoutNode::new(item1), LayoutNode::new(item2), LayoutNode::new(item3)],
+        vec![
+            LayoutNode::new(item1),
+            LayoutNode::new(item2),
+            LayoutNode::new(item3),
+        ],
     );
 
     container.compute_layout(200.0, 500.0);
@@ -194,10 +199,8 @@ fn test_flexbox_justification_and_alignment() {
     item_style.width = Dimension::Px(100.0);
     item_style.height = Dimension::Px(50.0);
 
-    let mut container = LayoutNode::with_children(
-        container_style,
-        vec![LayoutNode::new(item_style)],
-    );
+    let mut container =
+        LayoutNode::with_children(container_style, vec![LayoutNode::new(item_style)]);
 
     container.compute_layout(400.0, 200.0);
 
@@ -219,11 +222,8 @@ fn test_css_grid_fractional_tracks_and_span() {
     grid_style.width = Dimension::Px(400.0);
     grid_style.height = Dimension::Px(300.0);
     grid_style.gap = 10.0;
-    grid_style.grid_template_columns = vec![
-        GridTrack::Px(100.0),
-        GridTrack::Fr(1.0),
-        GridTrack::Fr(2.0),
-    ];
+    grid_style.grid_template_columns =
+        vec![GridTrack::Px(100.0), GridTrack::Fr(1.0), GridTrack::Fr(2.0)];
 
     let mut item1 = ComputedStyle::default();
     item1.height = Dimension::Px(50.0);
@@ -236,7 +236,11 @@ fn test_css_grid_fractional_tracks_and_span() {
 
     let mut container = LayoutNode::with_children(
         grid_style,
-        vec![LayoutNode::new(item1), LayoutNode::new(item2), LayoutNode::new(item3)],
+        vec![
+            LayoutNode::new(item1),
+            LayoutNode::new(item2),
+            LayoutNode::new(item3),
+        ],
     );
 
     container.compute_layout(400.0, 300.0);
@@ -279,7 +283,11 @@ fn test_css_grid_auto_placement_matrix() {
 
     let mut container = LayoutNode::with_children(
         grid_style,
-        vec![LayoutNode::new(item1), LayoutNode::new(item2), LayoutNode::new(item3)],
+        vec![
+            LayoutNode::new(item1),
+            LayoutNode::new(item2),
+            LayoutNode::new(item3),
+        ],
     );
 
     container.compute_layout(200.0, 400.0);
@@ -461,20 +469,29 @@ fn test_layout_boundary_containment_classification() {
     let mut strict_style = ComputedStyle::default();
     strict_style.contain = Containment::STRICT;
     let strict_node = LayoutNode::new(strict_style);
-    assert!(strict_node.is_layout_boundary(), "contain: strict must be a layout boundary");
+    assert!(
+        strict_node.is_layout_boundary(),
+        "contain: strict must be a layout boundary"
+    );
 
     // 2. contain: content is a layout boundary
     let mut content_style = ComputedStyle::default();
     content_style.contain = Containment::CONTENT;
     let content_node = LayoutNode::new(content_style);
-    assert!(content_node.is_layout_boundary(), "contain: content must be a layout boundary");
+    assert!(
+        content_node.is_layout_boundary(),
+        "contain: content must be a layout boundary"
+    );
 
     // 3. contain: layout + contain: size is a layout boundary
     let mut layout_size_style = ComputedStyle::default();
     layout_size_style.contain.layout = true;
     layout_size_style.contain.size = true;
     let layout_size_node = LayoutNode::new(layout_size_style);
-    assert!(layout_size_node.is_layout_boundary(), "contain: layout + size must be a layout boundary");
+    assert!(
+        layout_size_node.is_layout_boundary(),
+        "contain: layout + size must be a layout boundary"
+    );
 
     // 4. contain: layout with definite width and height is a layout boundary
     let mut layout_definite_style = ComputedStyle::default();
@@ -482,7 +499,10 @@ fn test_layout_boundary_containment_classification() {
     layout_definite_style.width = Dimension::Px(300.0);
     layout_definite_style.height = Dimension::Px(200.0);
     let layout_definite_node = LayoutNode::new(layout_definite_style);
-    assert!(layout_definite_node.is_layout_boundary(), "contain: layout with definite dimensions must be a layout boundary");
+    assert!(
+        layout_definite_node.is_layout_boundary(),
+        "contain: layout with definite dimensions must be a layout boundary"
+    );
 
     // 5. contain: layout with auto height is NOT a layout boundary (height depends on descendants)
     let mut layout_auto_style = ComputedStyle::default();
@@ -490,7 +510,10 @@ fn test_layout_boundary_containment_classification() {
     layout_auto_style.width = Dimension::Px(300.0);
     layout_auto_style.height = Dimension::Auto;
     let layout_auto_node = LayoutNode::new(layout_auto_style);
-    assert!(!layout_auto_node.is_layout_boundary(), "contain: layout with auto height must not be a layout boundary");
+    assert!(
+        !layout_auto_node.is_layout_boundary(),
+        "contain: layout with auto height must not be a layout boundary"
+    );
 
     // 6. Absolute positioned box with clipping and definite dimensions is a layout boundary
     let mut abs_style = ComputedStyle::default();
@@ -500,7 +523,10 @@ fn test_layout_boundary_containment_classification() {
     abs_style.width = Dimension::Px(150.0);
     abs_style.height = Dimension::Px(100.0);
     let abs_node = LayoutNode::new(abs_style);
-    assert!(abs_node.is_layout_boundary(), "clipped absolute box with definite dimensions must be a layout boundary");
+    assert!(
+        abs_node.is_layout_boundary(),
+        "clipped absolute box with definite dimensions must be a layout boundary"
+    );
 }
 
 #[test]
@@ -525,7 +551,10 @@ fn test_granular_subtree_layout_invalidation_and_preservation() {
 
     let sib_a = LayoutNode::with_children(
         a_style,
-        vec![LayoutNode::new(a_child_style.clone()), LayoutNode::new(a_child_style)],
+        vec![
+            LayoutNode::new(a_child_style.clone()),
+            LayoutNode::new(a_child_style),
+        ],
     );
 
     // Sibling B: Independent subtree
@@ -540,7 +569,10 @@ fn test_granular_subtree_layout_invalidation_and_preservation() {
 
     let sib_b = LayoutNode::with_children(
         b_style,
-        vec![LayoutNode::new(b_child_style.clone()), LayoutNode::new(b_child_style)],
+        vec![
+            LayoutNode::new(b_child_style.clone()),
+            LayoutNode::new(b_child_style),
+        ],
     );
 
     let mut root = LayoutNode::with_children(root_style, vec![sib_a, sib_b]);
@@ -574,5 +606,3 @@ fn test_granular_subtree_layout_invalidation_and_preservation() {
     assert!(root.children[1].layout_cache.is_valid);
     assert_eq!(root.children[1].geometry.border_box.width, 250.0);
 }
-
-

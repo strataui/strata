@@ -11,11 +11,11 @@ pub use dom::*;
 pub use parser::*;
 pub use scope::*;
 
+use crate::promise::{JsPromise, PromiseState, RejectFn, ResolveFn};
+use crate::{ClosureHandle, JsValue, SymbolId};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
-use crate::promise::{JsPromise, PromiseState, RejectFn, ResolveFn};
-use crate::{ClosureHandle, JsValue, SymbolId};
 
 pub type WeakObjectMap = HashMap<u64, std::rc::Weak<RefCell<BTreeMap<String, JsValue>>>>;
 
@@ -97,7 +97,10 @@ impl JsEngine {
 
         let mut promise_obj = BTreeMap::new();
         promise_obj.insert("__is_class__".to_string(), JsValue::Bool(true));
-        promise_obj.insert("__class_name__".to_string(), JsValue::String("Promise".to_string()));
+        promise_obj.insert(
+            "__class_name__".to_string(),
+            JsValue::String("Promise".to_string()),
+        );
         globals.insert("Promise".to_string(), JsValue::new_object(promise_obj));
 
         let mut regex_obj = BTreeMap::new();
@@ -109,22 +112,34 @@ impl JsEngine {
         globals.insert("fetch".to_string(), JsValue::new_object(fetch_obj));
 
         let mut set_timeout_obj = BTreeMap::new();
-        set_timeout_obj.insert("__fn__".to_string(), JsValue::String("setTimeout".to_string()));
+        set_timeout_obj.insert(
+            "__fn__".to_string(),
+            JsValue::String("setTimeout".to_string()),
+        );
         let set_timeout_val = JsValue::new_object(set_timeout_obj);
         globals.insert("setTimeout".to_string(), set_timeout_val.clone());
 
         let mut clear_timeout_obj = BTreeMap::new();
-        clear_timeout_obj.insert("__fn__".to_string(), JsValue::String("clearTimeout".to_string()));
+        clear_timeout_obj.insert(
+            "__fn__".to_string(),
+            JsValue::String("clearTimeout".to_string()),
+        );
         let clear_timeout_val = JsValue::new_object(clear_timeout_obj);
         globals.insert("clearTimeout".to_string(), clear_timeout_val.clone());
 
         let mut set_interval_obj = BTreeMap::new();
-        set_interval_obj.insert("__fn__".to_string(), JsValue::String("setInterval".to_string()));
+        set_interval_obj.insert(
+            "__fn__".to_string(),
+            JsValue::String("setInterval".to_string()),
+        );
         let set_interval_val = JsValue::new_object(set_interval_obj);
         globals.insert("setInterval".to_string(), set_interval_val.clone());
 
         let mut clear_interval_obj = BTreeMap::new();
-        clear_interval_obj.insert("__fn__".to_string(), JsValue::String("clearInterval".to_string()));
+        clear_interval_obj.insert(
+            "__fn__".to_string(),
+            JsValue::String("clearInterval".to_string()),
+        );
         let clear_interval_val = JsValue::new_object(clear_interval_obj);
         globals.insert("clearInterval".to_string(), clear_interval_val.clone());
 
@@ -152,45 +167,84 @@ impl JsEngine {
         );
 
         let mut array_prototype = BTreeMap::new();
-        array_prototype.insert("__proto__".to_string(), JsValue::new_object(object_prototype.clone()));
+        array_prototype.insert(
+            "__proto__".to_string(),
+            JsValue::new_object(object_prototype.clone()),
+        );
 
         let mut function_prototype = BTreeMap::new();
-        function_prototype.insert("__proto__".to_string(), JsValue::new_object(object_prototype.clone()));
+        function_prototype.insert(
+            "__proto__".to_string(),
+            JsValue::new_object(object_prototype.clone()),
+        );
 
         let mut string_prototype = BTreeMap::new();
-        string_prototype.insert("__proto__".to_string(), JsValue::new_object(object_prototype.clone()));
+        string_prototype.insert(
+            "__proto__".to_string(),
+            JsValue::new_object(object_prototype.clone()),
+        );
 
         let mut error_prototype = BTreeMap::new();
         error_prototype.insert("name".to_string(), JsValue::String("Error".to_string()));
         error_prototype.insert("message".to_string(), JsValue::String(String::new()));
-        error_prototype.insert("__proto__".to_string(), JsValue::new_object(object_prototype.clone()));
+        error_prototype.insert(
+            "__proto__".to_string(),
+            JsValue::new_object(object_prototype.clone()),
+        );
 
         // Constructors with .prototype linkage
         let mut obj_ctor = BTreeMap::new();
-        obj_ctor.insert("prototype".to_string(), JsValue::new_object(object_prototype.clone()));
+        obj_ctor.insert(
+            "prototype".to_string(),
+            JsValue::new_object(object_prototype.clone()),
+        );
         obj_ctor.insert("__fn__".to_string(), JsValue::String("Object".to_string()));
         globals.insert("Object".to_string(), JsValue::new_object(obj_ctor));
 
         let mut arr_ctor = BTreeMap::new();
-        arr_ctor.insert("prototype".to_string(), JsValue::new_object(array_prototype.clone()));
+        arr_ctor.insert(
+            "prototype".to_string(),
+            JsValue::new_object(array_prototype.clone()),
+        );
         arr_ctor.insert("__fn__".to_string(), JsValue::String("Array".to_string()));
         globals.insert("Array".to_string(), JsValue::new_object(arr_ctor));
 
         let mut fn_ctor = BTreeMap::new();
-        fn_ctor.insert("prototype".to_string(), JsValue::new_object(function_prototype.clone()));
-        fn_ctor.insert("__fn__".to_string(), JsValue::String("Function".to_string()));
+        fn_ctor.insert(
+            "prototype".to_string(),
+            JsValue::new_object(function_prototype.clone()),
+        );
+        fn_ctor.insert(
+            "__fn__".to_string(),
+            JsValue::String("Function".to_string()),
+        );
         globals.insert("Function".to_string(), JsValue::new_object(fn_ctor));
 
         let mut str_ctor = BTreeMap::new();
-        str_ctor.insert("prototype".to_string(), JsValue::new_object(string_prototype.clone()));
+        str_ctor.insert(
+            "prototype".to_string(),
+            JsValue::new_object(string_prototype.clone()),
+        );
         str_ctor.insert("__fn__".to_string(), JsValue::String("String".to_string()));
         globals.insert("String".to_string(), JsValue::new_object(str_ctor));
 
         let mut sym_ctor = BTreeMap::new();
-        sym_ctor.insert("iterator".to_string(), JsValue::Symbol(SymbolId::iterator()));
-        sym_ctor.insert("toStringTag".to_string(), JsValue::Symbol(SymbolId::to_string_tag()));
-        sym_ctor.insert("hasInstance".to_string(), JsValue::Symbol(SymbolId::has_instance()));
-        sym_ctor.insert("toPrimitive".to_string(), JsValue::Symbol(SymbolId::to_primitive()));
+        sym_ctor.insert(
+            "iterator".to_string(),
+            JsValue::Symbol(SymbolId::iterator()),
+        );
+        sym_ctor.insert(
+            "toStringTag".to_string(),
+            JsValue::Symbol(SymbolId::to_string_tag()),
+        );
+        sym_ctor.insert(
+            "hasInstance".to_string(),
+            JsValue::Symbol(SymbolId::has_instance()),
+        );
+        sym_ctor.insert(
+            "toPrimitive".to_string(),
+            JsValue::Symbol(SymbolId::to_primitive()),
+        );
         sym_ctor.insert("__fn__".to_string(), JsValue::String("Symbol".to_string()));
         globals.insert("Symbol".to_string(), JsValue::new_object(sym_ctor));
 
@@ -203,7 +257,10 @@ impl JsEngine {
         let mut proxy_obj = BTreeMap::new();
         proxy_obj.insert("__fn__".to_string(), JsValue::String("Proxy".to_string()));
         proxy_obj.insert("__is_class__".to_string(), JsValue::Bool(true));
-        proxy_obj.insert("__class_name__".to_string(), JsValue::String("Proxy".to_string()));
+        proxy_obj.insert(
+            "__class_name__".to_string(),
+            JsValue::String("Proxy".to_string()),
+        );
         globals.insert("Proxy".to_string(), JsValue::new_object(proxy_obj));
 
         let mut reflect_obj = BTreeMap::new();
@@ -215,11 +272,20 @@ impl JsEngine {
             let mut weak_ctor = BTreeMap::new();
             weak_ctor.insert("__fn__".to_string(), JsValue::String(weak_type.to_string()));
             weak_ctor.insert("__is_class__".to_string(), JsValue::Bool(true));
-            weak_ctor.insert("__class_name__".to_string(), JsValue::String(weak_type.to_string()));
+            weak_ctor.insert(
+                "__class_name__".to_string(),
+                JsValue::String(weak_type.to_string()),
+            );
             globals.insert(weak_type.to_string(), JsValue::new_object(weak_ctor));
         }
 
-        for err_type in &["Error", "TypeError", "ReferenceError", "SyntaxError", "RangeError"] {
+        for err_type in &[
+            "Error",
+            "TypeError",
+            "ReferenceError",
+            "SyntaxError",
+            "RangeError",
+        ] {
             let mut err_ctor = BTreeMap::new();
             let mut proto = error_prototype.clone();
             proto.insert("name".to_string(), JsValue::String(err_type.to_string()));
@@ -316,21 +382,45 @@ impl JsEngine {
         }
 
         // 2. Mark from root_scope and current_scope
-        self.mark_scope_for_closures(&self.root_scope, &mut visited_closure_ids, &mut visited_scopes);
-        self.mark_scope_for_closures(&self.current_scope, &mut visited_closure_ids, &mut visited_scopes);
+        self.mark_scope_for_closures(
+            &self.root_scope,
+            &mut visited_closure_ids,
+            &mut visited_scopes,
+        );
+        self.mark_scope_for_closures(
+            &self.current_scope,
+            &mut visited_closure_ids,
+            &mut visited_scopes,
+        );
 
         // 3. Mark from user_functions
         for closure in self.user_functions.values() {
             if closure.id != 0 {
                 visited_closure_ids.insert(closure.id);
             }
-            self.mark_scope_for_closures(&closure.env, &mut visited_closure_ids, &mut visited_scopes);
+            self.mark_scope_for_closures(
+                &closure.env,
+                &mut visited_closure_ids,
+                &mut visited_scopes,
+            );
         }
 
         // 4. Mark from document nodes and live_nodes
-        self.mark_dom_node_closures(&self.document.html, &mut visited_closure_ids, &mut visited_scopes);
-        self.mark_dom_node_closures(&self.document.head, &mut visited_closure_ids, &mut visited_scopes);
-        self.mark_dom_node_closures(&self.document.body, &mut visited_closure_ids, &mut visited_scopes);
+        self.mark_dom_node_closures(
+            &self.document.html,
+            &mut visited_closure_ids,
+            &mut visited_scopes,
+        );
+        self.mark_dom_node_closures(
+            &self.document.head,
+            &mut visited_closure_ids,
+            &mut visited_scopes,
+        );
+        self.mark_dom_node_closures(
+            &self.document.body,
+            &mut visited_closure_ids,
+            &mut visited_scopes,
+        );
         for node in self.live_nodes.borrow().values() {
             self.mark_dom_node_closures(node, &mut visited_closure_ids, &mut visited_scopes);
         }
@@ -347,7 +437,8 @@ impl JsEngine {
 
         // Retain only reachable closures (plus any newly allocated within a grace threshold of 8 IDs)
         let min_grace_id = self.next_closure_id.saturating_sub(8);
-        self.closures.retain(|id, _| *id >= min_grace_id || visited_closure_ids.contains(id));
+        self.closures
+            .retain(|id, _| *id >= min_grace_id || visited_closure_ids.contains(id));
     }
 
     fn mark_dom_node_closures(
@@ -441,7 +532,9 @@ impl JsEngine {
         if flags.contains('s') {
             builder.dot_matches_new_line(true);
         }
-        builder.build().map_err(|e| format!("SyntaxError: Invalid regular expression: /{pattern}/{flags}: {e}"))
+        builder.build().map_err(|e| {
+            format!("SyntaxError: Invalid regular expression: /{pattern}/{flags}: {e}")
+        })
     }
 
     pub fn create_regex_value(&self, pattern: &str, flags: &str) -> Result<JsValue, String> {
@@ -489,7 +582,10 @@ impl JsEngine {
         self.tick_engine_timers()
     }
 
-    pub fn resolve_constructor(&self, class_name: &str) -> Option<(Vec<String>, Vec<Stmt>, Option<String>)> {
+    pub fn resolve_constructor(
+        &self,
+        class_name: &str,
+    ) -> Option<(Vec<String>, Vec<Stmt>, Option<String>)> {
         let cls = self.classes.get(class_name)?;
         if let Some(ref ctor) = cls.constructor {
             Some((ctor.0.clone(), ctor.1.clone(), cls.super_class.clone()))
@@ -500,7 +596,11 @@ impl JsEngine {
         }
     }
 
-    pub fn resolve_method(&self, class_name: &str, method_name: &str) -> Option<(Vec<String>, Vec<Stmt>, Option<String>)> {
+    pub fn resolve_method(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<(Vec<String>, Vec<Stmt>, Option<String>)> {
         let mut curr_class = Some(class_name.to_string());
         while let Some(cls_name) = curr_class {
             if let Some(cls) = self.classes.get(&cls_name) {
@@ -562,7 +662,8 @@ impl JsEngine {
                     }
                 }
                 if let Some(JsValue::String(p_name)) = pb.get("name") {
-                    if p_name == class_name || (class_name == "Error" && p_name.ends_with("Error")) {
+                    if p_name == class_name || (class_name == "Error" && p_name.ends_with("Error"))
+                    {
                         return true;
                     }
                 }
@@ -572,22 +673,35 @@ impl JsEngine {
         false
     }
 
-    pub fn instantiate_class(&mut self, class_name: &str, args: Vec<JsValue>) -> Result<JsValue, String> {
-        let _cls = self.classes.get(class_name).cloned().ok_or_else(|| {
-            format!("ReferenceError: {class_name} is not defined")
-        })?;
+    pub fn instantiate_class(
+        &mut self,
+        class_name: &str,
+        args: Vec<JsValue>,
+    ) -> Result<JsValue, String> {
+        let _cls = self
+            .classes
+            .get(class_name)
+            .cloned()
+            .ok_or_else(|| format!("ReferenceError: {class_name} is not defined"))?;
 
         let mut instance_map = BTreeMap::new();
-        instance_map.insert("__class__".to_string(), JsValue::String(class_name.to_string()));
+        instance_map.insert(
+            "__class__".to_string(),
+            JsValue::String(class_name.to_string()),
+        );
         let instance_obj = JsValue::new_object(instance_map);
 
         if let Some((params, body, super_opt)) = self.resolve_constructor(class_name) {
             let ctor_scope = Scope::new_child(self.current_scope.clone());
             ctor_scope.borrow_mut().declare("this", instance_obj);
             if let Some(super_name) = super_opt {
-                ctor_scope.borrow_mut().declare("__super_class__", JsValue::String(super_name));
+                ctor_scope
+                    .borrow_mut()
+                    .declare("__super_class__", JsValue::String(super_name));
             }
-            ctor_scope.borrow_mut().declare("__current_class__", JsValue::String(class_name.to_string()));
+            ctor_scope
+                .borrow_mut()
+                .declare("__current_class__", JsValue::String(class_name.to_string()));
 
             bind_parameters(&params, args, &ctor_scope);
 
@@ -636,7 +750,10 @@ impl JsEngine {
                 return Ok(ret);
             }
 
-            let final_this = ctor_scope.borrow().get("this").unwrap_or(JsValue::Undefined);
+            let final_this = ctor_scope
+                .borrow()
+                .get("this")
+                .unwrap_or(JsValue::Undefined);
             Ok(final_this)
         } else {
             Ok(instance_obj)
@@ -682,12 +799,15 @@ impl JsEngine {
         Ok(result)
     }
 
-
     pub fn dom_node_to_js(&self, node: &DomNode) -> JsValue {
-        self.live_nodes.borrow_mut().insert(node.uid(), node.clone());
+        self.live_nodes
+            .borrow_mut()
+            .insert(node.uid(), node.clone());
         let mut map = BTreeMap::new();
         map.insert("__uid__".to_string(), JsValue::Number(node.uid() as f64));
-        let id_val = node.id().unwrap_or_else(|| format!("dom_node_{}", node.uid()));
+        let id_val = node
+            .id()
+            .unwrap_or_else(|| format!("dom_node_{}", node.uid()));
         map.insert("__dom_id__".to_string(), JsValue::String(id_val));
         map.insert(
             "id".to_string(),
@@ -697,14 +817,8 @@ impl JsEngine {
             "tagName".to_string(),
             JsValue::String(node.tag_name().unwrap_or_default()),
         );
-        map.insert(
-            "className".to_string(),
-            JsValue::String(node.class_name()),
-        );
-        map.insert(
-            "innerHTML".to_string(),
-            JsValue::String(node.inner_html()),
-        );
+        map.insert("className".to_string(), JsValue::String(node.class_name()));
+        map.insert("innerHTML".to_string(), JsValue::String(node.inner_html()));
         map.insert(
             "textContent".to_string(),
             JsValue::String(node.text_content()),
@@ -719,7 +833,10 @@ impl JsEngine {
     pub fn create_error_from_string(&self, err_msg: &str) -> JsValue {
         let (err_name, msg) = if let Some(idx) = err_msg.find(": ") {
             let prefix = &err_msg[..idx];
-            if matches!(prefix, "TypeError" | "ReferenceError" | "SyntaxError" | "RangeError" | "Error") {
+            if matches!(
+                prefix,
+                "TypeError" | "ReferenceError" | "SyntaxError" | "RangeError" | "Error"
+            ) {
                 (prefix.to_string(), err_msg[idx + 2..].to_string())
             } else {
                 ("Error".to_string(), err_msg.to_string())
@@ -732,8 +849,14 @@ impl JsEngine {
         map.insert("__is_error__".to_string(), JsValue::Bool(true));
         map.insert("name".to_string(), JsValue::String(err_name.clone()));
         map.insert("message".to_string(), JsValue::String(msg.clone()));
-        map.insert("stack".to_string(), JsValue::String(format!("{err_name}: {msg}\n    at strata_js")));
-        map.insert("__proto__".to_string(), JsValue::new_object(self.error_prototype.clone()));
+        map.insert(
+            "stack".to_string(),
+            JsValue::String(format!("{err_name}: {msg}\n    at strata_js")),
+        );
+        map.insert(
+            "__proto__".to_string(),
+            JsValue::new_object(self.error_prototype.clone()),
+        );
         JsValue::new_object(map)
     }
 }
@@ -783,7 +906,15 @@ pub fn ms_to_date(ms: f64) -> (i64, u64, u64, u64, u64, u64, u64) {
     (y, m.saturating_sub(1), d, hours, minutes, seconds, millis)
 }
 
-pub fn date_to_ms(year: f64, month: f64, day: f64, hours: f64, minutes: f64, seconds: f64, ms: f64) -> f64 {
+pub fn date_to_ms(
+    year: f64,
+    month: f64,
+    day: f64,
+    hours: f64,
+    minutes: f64,
+    seconds: f64,
+    ms: f64,
+) -> f64 {
     let y = year as i64;
     let m = (month as u64) + 1;
     let d = (day as u64).max(1);

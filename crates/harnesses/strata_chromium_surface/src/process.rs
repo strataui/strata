@@ -1,13 +1,12 @@
 //! Chromium subprocess manager, lifecycle watchdog, and IPC routing.
 
+use crate::ipc::{ChromiumCommand, ChromiumEvent, NavigationState};
+use crate::surface::{PixelFormat, ShmSurface};
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use strata_primitives::geom::Rect;
-use crate::ipc::{ChromiumCommand, ChromiumEvent, NavigationState};
-use crate::surface::{PixelFormat, ShmSurface};
-
 
 /// Subprocess lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,7 +54,12 @@ impl ChromiumProcessManager {
     }
 
     /// Creates a process manager configured to launch a genuine external Chromium/CEF plugin executable.
-    pub fn with_executable(width: u32, height: u32, executable: impl Into<PathBuf>, args: Vec<String>) -> Self {
+    pub fn with_executable(
+        width: u32,
+        height: u32,
+        executable: impl Into<PathBuf>,
+        args: Vec<String>,
+    ) -> Self {
         Self {
             state: Arc::new(RwLock::new(ProcessState::Uninitialized)),
             surface: ShmSurface::new(width, height, PixelFormat::Bgra8),
@@ -130,7 +134,12 @@ impl ChromiumProcessManager {
         // If mock mode, synthesize initial frame and title
         if !is_real {
             self.surface.fill_rect(
-                Rect::from_xywh(0.0, 0.0, self.surface.width() as f32, self.surface.height() as f32),
+                Rect::from_xywh(
+                    0.0,
+                    0.0,
+                    self.surface.width() as f32,
+                    self.surface.height() as f32,
+                ),
                 [240, 243, 246, 255],
             );
 
@@ -191,7 +200,10 @@ impl ChromiumProcessManager {
                 ChromiumCommand::Resize { width, height, .. } => {
                     self.surface.resize(width, height);
                 }
-                ChromiumCommand::ExecuteJs { request_id, script: _ } => {
+                ChromiumCommand::ExecuteJs {
+                    request_id,
+                    script: _,
+                } => {
                     self.emit_event(ChromiumEvent::JsResult {
                         request_id,
                         result: Err("JavaScript execution requires an active Chromium/CEF subprocess or Strata JS runtime engine".to_string()),

@@ -1,23 +1,25 @@
 //! Integration tests for Strata Render Hardware GPU pipelines:
 //! GPU Context, 3D Pipeline, Texture Atlas, Backdrop Filter Blur, and Multi-Window Swapchains.
 
-use strata_layout::Rect;
+use strata_gpu_path::curve::Point2D;
 use strata_layout::typography::inline_context::{InlineTextStyle, TextFragment};
+use strata_layout::Rect;
 use strata_render::blur::BackdropFilterPipeline;
 use strata_render::compositor::{DisplayList, DrawCommand};
+use strata_render::gpu3d::{Gpu3DPipeline, Gpu3DUniforms, WGSL_3D_STANDARD_SHADER};
 use strata_render::gpu_context::{
     GpuAdapter, GpuBufferUsage, GpuDevice, GpuPresentMode, GpuRenderPassDescriptor,
     GpuSurfacePresenter, GpuSwapchain,
 };
 use strata_render::gpu_pipeline::GpuSlugTextPipeline;
-use strata_render::gpu3d::{Gpu3DPipeline, Gpu3DUniforms, WGSL_3D_STANDARD_SHADER};
 use strata_render::multi_window_compositor::MultiWindowCompositor;
 use strata_render::rasterizer::FrameBuffer;
-use strata_render::scene3d::{Camera3D, Geometry3D, Light3D, Material3D, Mesh3D, Scene3D, Transform3D};
+use strata_render::scene3d::{
+    Camera3D, Geometry3D, Light3D, Material3D, Mesh3D, Scene3D, Transform3D,
+};
 use strata_render::swapchain::{SurfacePresenter, SwapchainFormat};
 use strata_render::texture_atlas::GpuTextureAtlas;
 use strata_style::types::Color;
-use strata_gpu_path::curve::Point2D;
 
 #[test]
 fn test_gpu_device_and_context_resource_allocation() {
@@ -136,12 +138,7 @@ fn test_gpu_3d_pipeline_and_uniforms() {
     scene.add_mesh(mesh);
 
     // Render scene with GPU pipeline
-    pipeline.render_scene(
-        &mut device,
-        &scene,
-        Rect::new(0.0, 0.0, 800.0, 600.0),
-        None,
-    );
+    pipeline.render_scene(&mut device, &scene, Rect::new(0.0, 0.0, 800.0, 600.0), None);
 
     assert_eq!(device.frame_index, 1);
 }
@@ -226,8 +223,14 @@ fn test_backdrop_filter_separable_gaussian_blur() {
 
     // Center pixel should be a blended mixture between red and green
     let center_pixel = fb.get_pixel(32, 32);
-    assert!(center_pixel.r > 50, "Red component should be blurred into center");
-    assert!(center_pixel.g > 50, "Green component should be blurred into center");
+    assert!(
+        center_pixel.r > 50,
+        "Red component should be blurred into center"
+    );
+    assert!(
+        center_pixel.g > 50,
+        "Green component should be blurred into center"
+    );
 }
 
 #[test]
@@ -280,7 +283,10 @@ fn test_multi_window_compositor_damage_and_swapchains() {
 #[test]
 fn test_gpu_adapter_enumeration_and_device_request() {
     let adapters = GpuAdapter::enumerate_adapters();
-    assert!(!adapters.is_empty(), "Must enumerate at least one GPU adapter or software fallback");
+    assert!(
+        !adapters.is_empty(),
+        "Must enumerate at least one GPU adapter or software fallback"
+    );
 
     let primary = &adapters[0];
     assert!(!primary.name.is_empty());
@@ -302,7 +308,12 @@ fn test_gpu_adapter_enumeration_and_device_request() {
 
 #[test]
 fn test_gpu_swapchain_modes_and_presentation_lifecycle() {
-    let mut swapchain = GpuSwapchain::new(1920, 1080, SwapchainFormat::Bgra8Unorm, GpuPresentMode::Fifo);
+    let mut swapchain = GpuSwapchain::new(
+        1920,
+        1080,
+        SwapchainFormat::Bgra8Unorm,
+        GpuPresentMode::Fifo,
+    );
     assert_eq!(swapchain.width, 1920);
     assert_eq!(swapchain.height, 1080);
     assert_eq!(swapchain.present_mode, GpuPresentMode::Fifo);
@@ -362,13 +373,17 @@ fn test_gpu_surface_presenter_display_list_and_damage_clipping() {
     });
 
     // Present full display list
-    presenter.present_display_list(&dl, None).expect("Full DL present must succeed");
+    presenter
+        .present_display_list(&dl, None)
+        .expect("Full DL present must succeed");
     assert_eq!(presenter.presented_frames, 1);
     assert_eq!(presenter.damage_clipped_frames, 0);
 
     // Present damaged display list
     let damage = Rect::new(50.0, 50.0, 200.0, 100.0);
-    presenter.present_display_list(&dl, Some(damage)).expect("Damaged DL present must succeed");
+    presenter
+        .present_display_list(&dl, Some(damage))
+        .expect("Damaged DL present must succeed");
     assert_eq!(presenter.presented_frames, 2);
     assert_eq!(presenter.damage_clipped_frames, 1);
 
@@ -386,10 +401,15 @@ fn test_gpu_surface_presenter_display_list_and_damage_clipping() {
     assert_eq!(presenter.backing_buffer[pixel_idx], 0, "Blue channel");
     assert_eq!(presenter.backing_buffer[pixel_idx + 1], 0, "Green channel");
     assert_eq!(presenter.backing_buffer[pixel_idx + 2], 255, "Red channel");
-    assert_eq!(presenter.backing_buffer[pixel_idx + 3], 255, "Alpha channel");
+    assert_eq!(
+        presenter.backing_buffer[pixel_idx + 3],
+        255,
+        "Alpha channel"
+    );
 
     // Present with damage
-    SurfacePresenter::present(&mut presenter, &fb, Some(damage)).expect("FB damaged present must succeed");
+    SurfacePresenter::present(&mut presenter, &fb, Some(damage))
+        .expect("FB damaged present must succeed");
     assert_eq!(presenter.presented_frames, 4);
     assert_eq!(presenter.damage_clipped_frames, 2);
 
@@ -410,10 +430,15 @@ fn test_gpu_slug_text_pipeline_compilation_and_bezier_evaluation() {
     assert!(glyph_a.is_some(), "Glyph cache must contain ASCII 'A'");
     let glyph_a = glyph_a.unwrap();
     assert!(glyph_a.advance_width > 0.0);
-    assert!(!glyph_a.curves.is_empty(), "Glyph 'A' must have analytical curves");
+    assert!(
+        !glyph_a.curves.is_empty(),
+        "Glyph 'A' must have analytical curves"
+    );
 
     // Evaluate signed distance field on glyph contour
-    let sdf_dist = text_pipeline.glyph_cache.evaluate_glyph_sdf('A', Point2D::new(0.5, 0.5));
+    let sdf_dist = text_pipeline
+        .glyph_cache
+        .evaluate_glyph_sdf('A', Point2D::new(0.5, 0.5));
     assert!(sdf_dist.is_some(), "Must evaluate SDF distance to contour");
 
     // Compile DisplayList with DrawText
@@ -436,11 +461,15 @@ fn test_gpu_slug_text_pipeline_compilation_and_bezier_evaluation() {
     assert_eq!(glyph_count, 22); // "Strata Analytical Slug" has 22 chars
     assert!(text_pipeline.total_curves > 0);
     assert_eq!(text_pipeline.buffer.instances.len(), 22);
-    assert_eq!(text_pipeline.buffer.curves.len(), text_pipeline.total_curves);
+    assert_eq!(
+        text_pipeline.buffer.curves.len(),
+        text_pipeline.total_curves
+    );
 
     // Damage scissoring: Damage rect outside the text bounds
     let outside_damage = Rect::new(500.0, 500.0, 100.0, 100.0);
-    let culled_count = text_pipeline.compile_display_list(&dl, 1920.0, 1080.0, Some(outside_damage));
+    let culled_count =
+        text_pipeline.compile_display_list(&dl, 1920.0, 1080.0, Some(outside_damage));
     assert_eq!(culled_count, 0, "Text outside damage rect must be culled");
 
     // Compile DrawTextFragments

@@ -9,15 +9,15 @@
 //! subprocess instantly on unmount to restore Strata's native sub-3MB baseline memory footprint.
 
 pub mod ipc;
-pub mod surface;
 pub mod process;
+pub mod surface;
 pub mod webview;
 
 pub use ipc::{
     ChromiumCommand, ChromiumEvent, KeyAction, Modifiers, MouseAction, MouseButton, NavigationState,
 };
-pub use surface::{PixelFormat, ShmBufferHeader, ShmError, ShmSurface, SHM_HEADER_SIZE, SHM_MAGIC};
 pub use process::{ChromiumProcessManager, ProcessState};
+pub use surface::{PixelFormat, ShmBufferHeader, ShmError, ShmSurface, SHM_HEADER_SIZE, SHM_MAGIC};
 pub use webview::{WebViewConfig, WebViewController};
 
 pub mod prelude {
@@ -25,9 +25,9 @@ pub mod prelude {
         ChromiumCommand, ChromiumEvent, KeyAction, Modifiers, MouseAction, MouseButton,
         NavigationState,
     };
+    pub use crate::process::{ChromiumProcessManager, ProcessState};
     pub use crate::surface::{
         PixelFormat, ShmBufferHeader, ShmError, ShmSurface, SHM_HEADER_SIZE, SHM_MAGIC,
     };
-    pub use crate::process::{ChromiumProcessManager, ProcessState};
     pub use crate::webview::{WebViewConfig, WebViewController};
 }

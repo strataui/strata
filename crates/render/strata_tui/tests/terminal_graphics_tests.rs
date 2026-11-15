@@ -1,7 +1,9 @@
 //! Comprehensive Tests for Kitty and Sixel Terminal Graphics Protocols.
 
 use strata_primitives::color::Rgba;
-use strata_tui::kitty::{base64_encode, delete_kitty_images, encode_kitty_png, encode_kitty_rgba, KittyImageOptions};
+use strata_tui::kitty::{
+    base64_encode, delete_kitty_images, encode_kitty_png, encode_kitty_rgba, KittyImageOptions,
+};
 use strata_tui::sixel::{encode_sixel, SixelOptions};
 
 #[test]
@@ -60,7 +62,10 @@ fn test_kitty_graphics_4096_byte_chunking() {
 
     // Count chunks (each ends with \x1b\)
     let chunk_count = escape_str.matches("\x1b\\").count();
-    assert!(chunk_count >= 5, "Expected at least 5 chunks for 16KB payload, got {chunk_count}");
+    assert!(
+        chunk_count >= 5,
+        "Expected at least 5 chunks for 16KB payload, got {chunk_count}"
+    );
 
     // First chunk must have m=1
     assert!(escape_str.contains("m=1;"));
@@ -110,7 +115,10 @@ fn test_sixel_raster_encoding_and_rle() {
 
     // Verify run-length encoding (!8~ for 8 consecutive vertical 6-pixel columns)
     // 6 bits all set (0x3F) + 0x3F = 0x7E ('~')
-    assert!(sixel_str.contains("!8~"), "Expected RLE '!8~' in Sixel output: {sixel_str}");
+    assert!(
+        sixel_str.contains("!8~"),
+        "Expected RLE '!8~' in Sixel output: {sixel_str}"
+    );
 
     // Verify DCS termination (\x1b\)
     assert!(sixel_str.ends_with("\x1b\\"));

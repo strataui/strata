@@ -27,7 +27,10 @@ pub fn area_path(points: &[(f32, f32)], baseline_y: f32) -> String {
     }
     let last_x = points.last().unwrap().0;
     let first_x = points[0].0;
-    path.push_str(&format!(" L {:.2} {:.2} L {:.2} {:.2} Z", last_x, baseline_y, first_x, baseline_y));
+    path.push_str(&format!(
+        " L {:.2} {:.2} L {:.2} {:.2} Z",
+        last_x, baseline_y, first_x, baseline_y
+    ));
     path
 }
 
@@ -65,6 +68,9 @@ mod tests {
         assert_eq!(line, "M 0.00 100.00 L 50.00 50.00 L 100.00 0.00");
 
         let area = area_path(&pts, 120.0);
-        assert_eq!(area, "M 0.00 100.00 L 50.00 50.00 L 100.00 0.00 L 100.00 120.00 L 0.00 120.00 Z");
+        assert_eq!(
+            area,
+            "M 0.00 100.00 L 50.00 50.00 L 100.00 0.00 L 100.00 120.00 L 0.00 120.00 Z"
+        );
     }
 }

@@ -18,7 +18,8 @@ fn test_unbounded_header_slowloris_dos_rejection() {
     let mut malicious = Vec::new();
     malicious.extend_from_slice(b"HTTP/1.1 200 OK\r\n");
     while malicious.len() < MAX_HEADER_SIZE + 2048 {
-        malicious.extend_from_slice(b"X-Malicious-Header-Padding: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\n");
+        malicious
+            .extend_from_slice(b"X-Malicious-Header-Padding: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\n");
     }
 
     let mut cursor = Cursor::new(malicious);
@@ -72,7 +73,8 @@ fn test_safe_content_length_streaming_does_not_preallocate_truncated() {
 #[test]
 fn test_chunked_size_overflow_rejection() {
     // Chunk size set to FFFFFFFFFFFFFFFF (exceeds 128 MB)
-    let chunked_data = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nFFFFFFFF\r\nmalicious-payload";
+    let chunked_data =
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nFFFFFFFF\r\nmalicious-payload";
     let mut cursor = Cursor::new(chunked_data.as_bytes());
     let result = read_http_response(&mut cursor);
 
@@ -169,7 +171,12 @@ fn test_redirect_strips_auth_on_downgrade() {
     t2.join().unwrap();
 
     assert!(resp.is_ok(), "Fetch should follow redirect successfully");
-    assert!(!auth_leaked.load(Ordering::SeqCst), "Authorization header must be stripped on cross-origin redirect");
-    assert!(!cookie_leaked.load(Ordering::SeqCst), "Cookie header must be stripped on cross-origin redirect");
+    assert!(
+        !auth_leaked.load(Ordering::SeqCst),
+        "Authorization header must be stripped on cross-origin redirect"
+    );
+    assert!(
+        !cookie_leaked.load(Ordering::SeqCst),
+        "Cookie header must be stripped on cross-origin redirect"
+    );
 }
-

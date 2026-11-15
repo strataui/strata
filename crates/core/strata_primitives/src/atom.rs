@@ -1,8 +1,8 @@
 //! Zero-dependency string interning atom table with pre-baked HTML/CSS static atoms.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::RwLock;
-use std::collections::HashMap;
 
 /// Compact 32-bit String Atom Identifier.
 /// Static pre-baked atoms occupy indices 0 ..= 1023.

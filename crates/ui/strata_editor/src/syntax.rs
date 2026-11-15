@@ -56,11 +56,15 @@ fn create_parser_for_lang(lang: Language) -> Option<Parser> {
     let mut parser = Parser::new();
     match lang {
         Language::Rust => {
-            parser.set_language(&tree_sitter_rust::LANGUAGE.into()).ok()?;
+            parser
+                .set_language(&tree_sitter_rust::LANGUAGE.into())
+                .ok()?;
             Some(parser)
         }
         Language::JavaScript | Language::TypeScript => {
-            parser.set_language(&tree_sitter_javascript::LANGUAGE.into()).ok()?;
+            parser
+                .set_language(&tree_sitter_javascript::LANGUAGE.into())
+                .ok()?;
             Some(parser)
         }
         _ => None,
@@ -71,8 +75,8 @@ fn classify_tree_sitter_kind(kind: &str, parent_kind: &str) -> TokenType {
     match kind {
         "line_comment" | "block_comment" | "comment" => TokenType::Comment,
 
-        "string_literal" | "raw_string_literal" | "char_literal" | "string"
-        | "template_string" | "string_content" | "escape_sequence" => TokenType::String,
+        "string_literal" | "raw_string_literal" | "char_literal" | "string" | "template_string"
+        | "string_content" | "escape_sequence" => TokenType::String,
 
         "integer_literal" | "float_literal" | "number" => TokenType::Number,
 
@@ -88,18 +92,17 @@ fn classify_tree_sitter_kind(kind: &str, parent_kind: &str) -> TokenType {
             TokenType::Function
         }
 
-        "fn" | "let" | "mut" | "pub" | "struct" | "enum" | "impl" | "trait" | "match"
-        | "if" | "else" | "return" | "for" | "in" | "while" | "loop" | "async" | "await"
-        | "use" | "mod" | "crate" | "const" | "static" | "type" | "where" | "as" | "ref"
-        | "move" | "unsafe" | "dyn" | "super" | "self" | "Self"
-        | "function" | "var" | "import" | "export" | "default" | "from" | "class"
-        | "interface" | "extends" | "new" | "this" | "try" | "catch" | "finally"
-        | "switch" | "case" | "break" | "continue" | "throw" | "typeof" | "instanceof"
-        | "yield" | "debugger" => TokenType::Keyword,
+        "fn" | "let" | "mut" | "pub" | "struct" | "enum" | "impl" | "trait" | "match" | "if"
+        | "else" | "return" | "for" | "in" | "while" | "loop" | "async" | "await" | "use"
+        | "mod" | "crate" | "const" | "static" | "type" | "where" | "as" | "ref" | "move"
+        | "unsafe" | "dyn" | "super" | "self" | "Self" | "function" | "var" | "import"
+        | "export" | "default" | "from" | "class" | "interface" | "extends" | "new" | "this"
+        | "try" | "catch" | "finally" | "switch" | "case" | "break" | "continue" | "throw"
+        | "typeof" | "instanceof" | "yield" | "debugger" => TokenType::Keyword,
 
-        "+" | "-" | "*" | "/" | "%" | "=" | "==" | "!=" | "<" | ">" | "<=" | ">="
-        | "&&" | "||" | "!" | "&" | "|" | "^" | "<<" | ">>" | "+=" | "-=" | "*="
-        | "/=" | "%=" | "&=" | "|=" | "^=" | "=>" | "->" => TokenType::Operator,
+        "+" | "-" | "*" | "/" | "%" | "=" | "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||"
+        | "!" | "&" | "|" | "^" | "<<" | ">>" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|="
+        | "^=" | "=>" | "->" => TokenType::Operator,
 
         "(" | ")" | "[" | "]" | "{" | "}" | ";" | ":" | "::" | "," | "." => TokenType::Punctuation,
 
@@ -122,8 +125,16 @@ fn collect_leaf_tokens(node: Node, line_idx: usize, out: &mut Vec<SyntaxToken>, 
         let start_pt = node.start_position();
         let end_pt = node.end_position();
 
-        let start_col = if start_pt.row == line_idx { start_pt.column } else { 0 };
-        let end_col = if end_pt.row == line_idx { end_pt.column } else { line_text.len() };
+        let start_col = if start_pt.row == line_idx {
+            start_pt.column
+        } else {
+            0
+        };
+        let end_col = if end_pt.row == line_idx {
+            end_pt.column
+        } else {
+            line_text.len()
+        };
 
         if start_col < end_col && start_col < line_text.len() {
             let clamped_end = end_col.min(line_text.len());
@@ -360,7 +371,9 @@ impl SyntaxHighlighter {
             // 4. Numeric literals
             if ch.is_ascii_digit() {
                 let start = idx;
-                while idx < chars.len() && (chars[idx].is_ascii_digit() || chars[idx] == '.' || chars[idx] == '_') {
+                while idx < chars.len()
+                    && (chars[idx].is_ascii_digit() || chars[idx] == '.' || chars[idx] == '_')
+                {
                     idx += 1;
                 }
                 let text: String = chars[start..idx].iter().collect();
@@ -425,21 +438,77 @@ impl SyntaxHighlighter {
         match lang {
             Language::Rust => matches!(
                 word,
-                "fn" | "let" | "mut" | "pub" | "struct" | "enum" | "impl" | "trait" | "match"
-                    | "if" | "else" | "return" | "for" | "in" | "while" | "loop" | "async"
-                    | "await" | "use" | "mod" | "crate" | "const" | "static" | "type"
+                "fn" | "let"
+                    | "mut"
+                    | "pub"
+                    | "struct"
+                    | "enum"
+                    | "impl"
+                    | "trait"
+                    | "match"
+                    | "if"
+                    | "else"
+                    | "return"
+                    | "for"
+                    | "in"
+                    | "while"
+                    | "loop"
+                    | "async"
+                    | "await"
+                    | "use"
+                    | "mod"
+                    | "crate"
+                    | "const"
+                    | "static"
+                    | "type"
             ),
             Language::TypeScript | Language::JavaScript => matches!(
                 word,
-                "function" | "const" | "let" | "var" | "return" | "if" | "else" | "import"
-                    | "export" | "default" | "from" | "class" | "interface" | "type" | "new"
-                    | "this" | "async" | "await" | "try" | "catch" | "switch" | "case"
+                "function"
+                    | "const"
+                    | "let"
+                    | "var"
+                    | "return"
+                    | "if"
+                    | "else"
+                    | "import"
+                    | "export"
+                    | "default"
+                    | "from"
+                    | "class"
+                    | "interface"
+                    | "type"
+                    | "new"
+                    | "this"
+                    | "async"
+                    | "await"
+                    | "try"
+                    | "catch"
+                    | "switch"
+                    | "case"
             ),
             Language::Python => matches!(
                 word,
-                "def" | "class" | "return" | "if" | "elif" | "else" | "for" | "while"
-                    | "import" | "from" | "as" | "try" | "except" | "finally" | "with"
-                    | "lambda" | "pass" | "None" | "True" | "False"
+                "def"
+                    | "class"
+                    | "return"
+                    | "if"
+                    | "elif"
+                    | "else"
+                    | "for"
+                    | "while"
+                    | "import"
+                    | "from"
+                    | "as"
+                    | "try"
+                    | "except"
+                    | "finally"
+                    | "with"
+                    | "lambda"
+                    | "pass"
+                    | "None"
+                    | "True"
+                    | "False"
             ),
             Language::Json => matches!(word, "true" | "false" | "null"),
             _ => false,
@@ -452,15 +521,42 @@ impl SyntaxHighlighter {
                 word.chars().next().is_some_and(|c| c.is_uppercase())
                     || matches!(
                         word,
-                        "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
-                            | "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
-                            | "f32" | "f64" | "bool" | "char" | "str" | "String" | "Vec" | "Option" | "Result"
+                        "u8" | "u16"
+                            | "u32"
+                            | "u64"
+                            | "u128"
+                            | "usize"
+                            | "i8"
+                            | "i16"
+                            | "i32"
+                            | "i64"
+                            | "i128"
+                            | "isize"
+                            | "f32"
+                            | "f64"
+                            | "bool"
+                            | "char"
+                            | "str"
+                            | "String"
+                            | "Vec"
+                            | "Option"
+                            | "Result"
                     )
             }
-            Language::TypeScript => matches!(
-                word,
-                "string" | "number" | "boolean" | "any" | "void" | "never" | "unknown" | "Record" | "Array"
-            ) || word.chars().next().is_some_and(|c| c.is_uppercase()),
+            Language::TypeScript => {
+                matches!(
+                    word,
+                    "string"
+                        | "number"
+                        | "boolean"
+                        | "any"
+                        | "void"
+                        | "never"
+                        | "unknown"
+                        | "Record"
+                        | "Array"
+                ) || word.chars().next().is_some_and(|c| c.is_uppercase())
+            }
             _ => false,
         }
     }
@@ -539,7 +635,11 @@ impl SyntaxHighlighter {
             for l in (0..=pos.line).rev() {
                 if let Some(text) = buffer.line(l) {
                     let chars: Vec<char> = text.chars().collect();
-                    let start_c = if l == pos.line { pos.col } else { chars.len().saturating_sub(1) };
+                    let start_c = if l == pos.line {
+                        pos.col
+                    } else {
+                        chars.len().saturating_sub(1)
+                    };
                     for c in (0..=start_c).rev() {
                         let cur = chars[c];
                         if cur == ch {
@@ -619,7 +719,11 @@ impl SyntaxHighlighter {
             }
         }
 
-        if trimmed.ends_with('{') || trimmed.ends_with(':') || trimmed.ends_with('(') || trimmed.ends_with('[') {
+        if trimmed.ends_with('{')
+            || trimmed.ends_with(':')
+            || trimmed.ends_with('(')
+            || trimmed.ends_with('[')
+        {
             current_indent + 4
         } else {
             current_indent

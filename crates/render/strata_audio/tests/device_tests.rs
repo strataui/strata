@@ -12,7 +12,10 @@ fn test_audio_mixer_interleaved_rendering() {
     // Render into empty mixer -> must output pure silence
     let mut output = [1.0f32; 8];
     mixer.render_interleaved_f32(&mut output);
-    assert!(output.iter().all(|&s| s == 0.0), "Empty mixer must output silence");
+    assert!(
+        output.iter().all(|&s| s == 0.0),
+        "Empty mixer must output silence"
+    );
 
     // Enqueue a stereo buffer
     let mut test_buf = AudioBuffer::new(2, 4, 44100);
@@ -91,7 +94,10 @@ fn test_audio_mixer_suspended_state() {
     let mut output = [99.0f32; 8];
     mixer.render_interleaved_f32(&mut output);
 
-    assert!(output.iter().all(|&s| s == 0.0), "Suspended mixer must output silence");
+    assert!(
+        output.iter().all(|&s| s == 0.0),
+        "Suspended mixer must output silence"
+    );
 }
 
 #[test]
@@ -112,8 +118,14 @@ fn test_audio_context_lifecycle_and_mixing() {
 
     // Render via mixer
     let mut output = vec![0.0f32; 128];
-    ctx.mixer().lock().unwrap().render_interleaved_f32(&mut output);
-    assert!(output.iter().any(|&s| s.abs() > 0.0), "Synthesized tone must produce non-zero samples");
+    ctx.mixer()
+        .lock()
+        .unwrap()
+        .render_interleaved_f32(&mut output);
+    assert!(
+        output.iter().any(|&s| s.abs() > 0.0),
+        "Synthesized tone must produce non-zero samples"
+    );
 
     // Suspend
     ctx.suspend().unwrap();
@@ -162,8 +174,8 @@ fn test_audio_host_and_device_enumeration() {
 
 #[test]
 fn test_lock_free_spsc_ring_buffer_concurrency() {
-    use strata_audio::SpscRingBuffer;
     use std::thread;
+    use strata_audio::SpscRingBuffer;
 
     const COUNT: usize = 100_000;
     let (mut producer, mut consumer) = SpscRingBuffer::<usize>::new(1024).split();

@@ -162,7 +162,8 @@ impl Panner3D {
     pub fn compute_gain(&self, listener: &AudioListener) -> f32 {
         let dist = self.position.sub(listener.position).length();
         let clamped_dist = dist.clamp(self.ref_distance, self.max_distance);
-        self.ref_distance / (self.ref_distance + self.rolloff_factor * (clamped_dist - self.ref_distance))
+        self.ref_distance
+            / (self.ref_distance + self.rolloff_factor * (clamped_dist - self.ref_distance))
     }
 
     /// Computes physical Doppler frequency shift factor with c = 343.3 m/s.
@@ -254,7 +255,8 @@ impl Panner3D {
 
         // Pinna spectral elevation notch filter: f_notch(phi) = 7000 + 3000 * sin(phi)
         let notch_freq = (7000.0 + 3000.0 * elevation.sin()).clamp(4000.0, 12000.0);
-        let mut pinna_notch = BiquadFilter::new(BiquadFilterType::Notch, notch_freq, 3.0, sample_rate);
+        let mut pinna_notch =
+            BiquadFilter::new(BiquadFilterType::Notch, notch_freq, 3.0, sample_rate);
 
         // Filter the input samples with the pinna elevation notch
         let mut pinna_filtered = Vec::with_capacity(mono_samples.len());
@@ -289,7 +291,8 @@ impl Panner3D {
             // Left ear is contralateral (shadowed by head + delayed by ITD)
             let mut shadow_filtered = Vec::with_capacity(pinna_filtered.len());
             for &s in &pinna_filtered {
-                shadow_filtered.push(head_shadow_filter.process_sample(s) * distance_gain * contra_gain);
+                shadow_filtered
+                    .push(head_shadow_filter.process_sample(s) * distance_gain * contra_gain);
             }
             left_ch = apply_fractional_delay(&shadow_filtered, itd_samples);
         } else {
@@ -303,7 +306,8 @@ impl Panner3D {
             // Right ear is contralateral (shadowed by head + delayed by ITD)
             let mut shadow_filtered = Vec::with_capacity(pinna_filtered.len());
             for &s in &pinna_filtered {
-                shadow_filtered.push(head_shadow_filter.process_sample(s) * distance_gain * contra_gain);
+                shadow_filtered
+                    .push(head_shadow_filter.process_sample(s) * distance_gain * contra_gain);
             }
             right_ch = apply_fractional_delay(&shadow_filtered, itd_samples);
         }
@@ -358,7 +362,11 @@ mod tests {
 
         // At 90 degrees (PI / 2), ITD is approx 655 microseconds
         let itd_90 = panner.compute_woodworth_itd(std::f32::consts::FRAC_PI_2);
-        assert!((itd_90 - 0.000655).abs() < 5e-5, "ITD at 90 deg: got {}", itd_90);
+        assert!(
+            (itd_90 - 0.000655).abs() < 5e-5,
+            "ITD at 90 deg: got {}",
+            itd_90
+        );
     }
 
     #[test]
@@ -368,7 +376,7 @@ mod tests {
         assert_eq!(delayed.len(), 5);
         assert_eq!(delayed[0], 0.0);
         assert_eq!(delayed[1], 0.0); // 1.0 - 1.5 = -0.5 -> 0.0
-        // At index 2: 2.0 - 1.5 = 0.5 -> (input[0] + input[1]) / 2 = 0.5
+                                     // At index 2: 2.0 - 1.5 = 0.5 -> (input[0] + input[1]) / 2 = 0.5
         assert!((delayed[2] - 0.5).abs() < 1e-6);
         // At index 3: 3.0 - 1.5 = 1.5 -> (input[1] + input[2]) / 2 = 1.5
         assert!((delayed[3] - 1.5).abs() < 1e-6);
@@ -390,6 +398,9 @@ mod tests {
         // The left ear (contralateral) is delayed by Woodworth ITD (~28 samples at 44.1k)
         assert_eq!(left[0], 0.0, "Contralateral ear must be delayed by ITD");
         assert_eq!(left[20], 0.0, "Contralateral ear must be delayed by ITD");
-        assert!(left[35] > 0.0, "Contralateral ear receives signal after ITD arrival");
+        assert!(
+            left[35] > 0.0,
+            "Contralateral ear receives signal after ITD arrival"
+        );
     }
 }

@@ -155,7 +155,8 @@ finally:
     proc.terminate()
     proc.wait()
     shutil.rmtree(user_dir, ignore_errors=True)
-"#.to_string();
+"#
+    .to_string();
 
     let output = Command::new("python3")
         .arg("-c")

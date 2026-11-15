@@ -100,10 +100,10 @@ pub fn enable_raw_mode() -> io::Result<RawModeGuard> {
     #[cfg(windows)]
     {
         use windows_sys::Win32::System::Console::{
-            GetConsoleMode, GetStdHandle, SetConsoleMode, ENABLE_ECHO_INPUT,
-            ENABLE_LINE_INPUT, ENABLE_MOUSE_INPUT, ENABLE_PROCESSED_INPUT,
-            ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
-            ENABLE_WINDOW_INPUT, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+            GetConsoleMode, GetStdHandle, SetConsoleMode, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT,
+            ENABLE_MOUSE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT,
+            ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT, STD_INPUT_HANDLE,
+            STD_OUTPUT_HANDLE,
         };
 
         unsafe {
@@ -125,7 +125,10 @@ pub fn enable_raw_mode() -> io::Result<RawModeGuard> {
                 *lock = Some((orig_in_mode, orig_out_mode));
             }
 
-            let raw_in = (orig_in_mode | ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT)
+            let raw_in = (orig_in_mode
+                | ENABLE_VIRTUAL_TERMINAL_INPUT
+                | ENABLE_WINDOW_INPUT
+                | ENABLE_MOUSE_INPUT)
                 & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
             let raw_out = orig_out_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
 
@@ -174,7 +177,8 @@ pub fn restore_terminal(
     // \x1b[?25h   : Show Cursor
     // \x1b[?1049l : Normal Screen Buffer
     // \x1b[0m     : Reset SGR Attributes
-    let _ = out.write_all(b"\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?25h\x1b[?1049l\x1b[0m");
+    let _ =
+        out.write_all(b"\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?25h\x1b[?1049l\x1b[0m");
     let _ = out.flush();
 
     #[cfg(unix)]
@@ -186,7 +190,9 @@ pub fn restore_terminal(
 
     #[cfg(windows)]
     if let Some((in_mode, out_mode)) = orig_mode {
-        use windows_sys::Win32::System::Console::{GetStdHandle, SetConsoleMode, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
+        use windows_sys::Win32::System::Console::{
+            GetStdHandle, SetConsoleMode, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        };
         unsafe {
             SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), in_mode);
             SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), out_mode);

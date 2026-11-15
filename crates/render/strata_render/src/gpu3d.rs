@@ -339,7 +339,10 @@ impl Gpu3DPipeline {
     pub fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
         let vb = device.create_buffer(1024 * 1024, GpuBufferUsage::Vertex);
         let ib = device.create_buffer(512 * 1024, GpuBufferUsage::Index);
-        let ub = device.create_buffer(std::mem::size_of::<Gpu3DUniforms>(), GpuBufferUsage::Uniform);
+        let ub = device.create_buffer(
+            std::mem::size_of::<Gpu3DUniforms>(),
+            GpuBufferUsage::Uniform,
+        );
 
         Self {
             vertex_buffer: vb,

@@ -9,10 +9,7 @@ use strata_macro::{component, rsx};
 
 /// Card container with subtle glassmorphic backdrop and border.
 #[component]
-pub fn Card(
-    children: Option<Vec<NodeBlueprint>>,
-    class: Option<&'static str>,
-) -> View {
+pub fn Card(children: Option<Vec<NodeBlueprint>>, class: Option<&'static str>) -> View {
     let custom = class.unwrap_or("");
     let base = "rounded-2xl bg-neutral-900/60 border border-neutral-800 shadow-xl overflow-hidden backdrop-blur-sm";
     let combined = format!("{base} {custom}");
@@ -54,10 +51,7 @@ pub fn CardHeader(
 
 /// Body content slot for Card containers.
 #[component]
-pub fn CardContent(
-    children: Option<Vec<NodeBlueprint>>,
-    class: Option<&'static str>,
-) -> View {
+pub fn CardContent(children: Option<Vec<NodeBlueprint>>, class: Option<&'static str>) -> View {
     let custom = class.unwrap_or("");
     rsx! {
         <div class={format!("p-6 {}", custom)}>
@@ -68,10 +62,7 @@ pub fn CardContent(
 
 /// Footer slot for Card containers with top border divider.
 #[component]
-pub fn CardFooter(
-    children: Option<Vec<NodeBlueprint>>,
-    class: Option<&'static str>,
-) -> View {
+pub fn CardFooter(children: Option<Vec<NodeBlueprint>>, class: Option<&'static str>) -> View {
     let custom = class.unwrap_or("");
     rsx! {
         <div class={format!("px-6 py-4 border-t border-neutral-800/80 flex items-center justify-between {}", custom)}>
@@ -297,10 +288,7 @@ pub fn AccordionItem(
 
 /// Semantic data Table container.
 #[component]
-pub fn Table(
-    children: Option<Vec<NodeBlueprint>>,
-    class: Option<&'static str>,
-) -> View {
+pub fn Table(children: Option<Vec<NodeBlueprint>>, class: Option<&'static str>) -> View {
     let custom = class.unwrap_or("");
     rsx! {
         <div class="w-full overflow-x-auto rounded-xl border border-neutral-800">
@@ -333,10 +321,7 @@ pub fn TableBody(children: Option<Vec<NodeBlueprint>>) -> View {
 
 /// Table row.
 #[component]
-pub fn TableRow(
-    children: Option<Vec<NodeBlueprint>>,
-    class: Option<&'static str>,
-) -> View {
+pub fn TableRow(children: Option<Vec<NodeBlueprint>>, class: Option<&'static str>) -> View {
     let custom = class.unwrap_or("");
     rsx! {
         <tr class={format!("hover:bg-neutral-800/30 transition-colors {}", custom)}>
@@ -347,10 +332,7 @@ pub fn TableRow(
 
 /// Table header cell.
 #[component]
-pub fn TableHead(
-    children: Option<Vec<NodeBlueprint>>,
-    class: Option<&'static str>,
-) -> View {
+pub fn TableHead(children: Option<Vec<NodeBlueprint>>, class: Option<&'static str>) -> View {
     let custom = class.unwrap_or("");
     rsx! {
         <th class={format!("px-4 py-3 font-semibold text-neutral-300 {}", custom)}>
@@ -361,10 +343,7 @@ pub fn TableHead(
 
 /// Table data cell.
 #[component]
-pub fn TableCell(
-    children: Option<Vec<NodeBlueprint>>,
-    class: Option<&'static str>,
-) -> View {
+pub fn TableCell(children: Option<Vec<NodeBlueprint>>, class: Option<&'static str>) -> View {
     let custom = class.unwrap_or("");
     rsx! {
         <td class={format!("px-4 py-3 text-neutral-300 {}", custom)}>
@@ -406,10 +385,7 @@ pub fn TimelineItem(
 
 /// Keyboard shortcut key badge (e.g. ⌘K, Shift+Enter).
 #[component]
-pub fn Kbd(
-    keys: &'static str,
-    class: Option<&'static str>,
-) -> View {
+pub fn Kbd(keys: &'static str, class: Option<&'static str>) -> View {
     let custom = class.unwrap_or("");
     rsx! {
         <kbd class={format!("inline-flex items-center px-1.5 py-0.5 rounded border border-neutral-700 bg-neutral-800 font-mono text-[10px] font-semibold text-neutral-300 shadow-sm select-none {}", custom)}>
@@ -420,13 +396,14 @@ pub fn Kbd(
 
 /// Visual horizontal or vertical separator divider.
 #[component]
-pub fn Separator(
-    vertical: Option<bool>,
-    class: Option<&'static str>,
-) -> View {
+pub fn Separator(vertical: Option<bool>, class: Option<&'static str>) -> View {
     let is_vert = vertical.unwrap_or(false);
     let custom = class.unwrap_or("");
-    let dim = if is_vert { "w-px h-full" } else { "h-px w-full" };
+    let dim = if is_vert {
+        "w-px h-full"
+    } else {
+        "h-px w-full"
+    };
 
     rsx! {
         <div class={format!("bg-neutral-800 {} {}", dim, custom)} />

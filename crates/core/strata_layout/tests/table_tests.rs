@@ -38,7 +38,10 @@ fn test_table_column_alignment_across_rows() {
     c2_style.display = Display::TableCell;
 
     let r0_c0 = LayoutNode::with_text(c0_style.clone(), "Col 1 Header".to_string());
-    let r0_c1 = LayoutNode::with_text(c1_style.clone(), "Col 2 Wide Column Header Text".to_string());
+    let r0_c1 = LayoutNode::with_text(
+        c1_style.clone(),
+        "Col 2 Wide Column Header Text".to_string(),
+    );
     let r0_c2 = LayoutNode::with_text(c2_style.clone(), "Col 3".to_string());
 
     let r1_c0 = LayoutNode::with_text(c0_style.clone(), "Short".to_string());
@@ -55,18 +58,42 @@ fn test_table_column_alignment_across_rows() {
     let r1 = &table.children[1];
 
     // Perfect column X position alignment across rows
-    assert_eq!(r0.children[0].geometry.border_box.x, r1.children[0].geometry.border_box.x);
-    assert_eq!(r0.children[1].geometry.border_box.x, r1.children[1].geometry.border_box.x);
-    assert_eq!(r0.children[2].geometry.border_box.x, r1.children[2].geometry.border_box.x);
+    assert_eq!(
+        r0.children[0].geometry.border_box.x,
+        r1.children[0].geometry.border_box.x
+    );
+    assert_eq!(
+        r0.children[1].geometry.border_box.x,
+        r1.children[1].geometry.border_box.x
+    );
+    assert_eq!(
+        r0.children[2].geometry.border_box.x,
+        r1.children[2].geometry.border_box.x
+    );
 
     // Perfect column width alignment across rows
-    assert_eq!(r0.children[0].geometry.border_box.width, r1.children[0].geometry.border_box.width);
-    assert_eq!(r0.children[1].geometry.border_box.width, r1.children[1].geometry.border_box.width);
-    assert_eq!(r0.children[2].geometry.border_box.width, r1.children[2].geometry.border_box.width);
+    assert_eq!(
+        r0.children[0].geometry.border_box.width,
+        r1.children[0].geometry.border_box.width
+    );
+    assert_eq!(
+        r0.children[1].geometry.border_box.width,
+        r1.children[1].geometry.border_box.width
+    );
+    assert_eq!(
+        r0.children[2].geometry.border_box.width,
+        r1.children[2].geometry.border_box.width
+    );
 
     // Left-to-right sequential layout with spacing
-    assert!(r0.children[0].geometry.border_box.x + r0.children[0].geometry.border_box.width <= r0.children[1].geometry.border_box.x);
-    assert!(r0.children[1].geometry.border_box.x + r0.children[1].geometry.border_box.width <= r0.children[2].geometry.border_box.x);
+    assert!(
+        r0.children[0].geometry.border_box.x + r0.children[0].geometry.border_box.width
+            <= r0.children[1].geometry.border_box.x
+    );
+    assert!(
+        r0.children[1].geometry.border_box.x + r0.children[1].geometry.border_box.width
+            <= r0.children[2].geometry.border_box.x
+    );
 }
 
 #[test]
@@ -118,8 +145,14 @@ fn test_table_colspan_spanning_multiple_tracks() {
     assert!((span_cell.geometry.border_box.width - expected_span_w).abs() < 0.01);
 
     // The cell following the span in row 0 must align with column 2 in row 1
-    assert_eq!(r0.children[1].geometry.border_box.x, c2.geometry.border_box.x);
-    assert_eq!(r0.children[1].geometry.border_box.width, c2.geometry.border_box.width);
+    assert_eq!(
+        r0.children[1].geometry.border_box.x,
+        c2.geometry.border_box.x
+    );
+    assert_eq!(
+        r0.children[1].geometry.border_box.width,
+        c2.geometry.border_box.width
+    );
 }
 
 #[test]
@@ -164,7 +197,10 @@ fn test_table_rowspan_spanning_multiple_tracks() {
     let r1_c0_cell = &r1.children[0];
 
     // Row 1's cell must be in column 1, aligning with Row 0's column 1
-    assert_eq!(r0_c1_cell.geometry.border_box.x, r1_c0_cell.geometry.border_box.x);
+    assert_eq!(
+        r0_c1_cell.geometry.border_box.x,
+        r1_c0_cell.geometry.border_box.x
+    );
 
     // Rowspan cell height must equal row0.height + row1.height + vertical border_spacing (6.0)
     let expected_h = r0.geometry.border_box.height + r1.geometry.border_box.height + 6.0;
@@ -328,7 +364,10 @@ fn test_fixed_table_layout_algorithm() {
     let row0 = LayoutNode::with_children(row_style.clone(), vec![r0_c0, r0_c1, r0_c2]);
 
     // Row 1 has huge content in column 0, but in fixed layout column 0 stays 150px
-    let r1_c0 = LayoutNode::with_text(c2_style.clone(), "Super extremely long text content that would expand auto tables".to_string());
+    let r1_c0 = LayoutNode::with_text(
+        c2_style.clone(),
+        "Super extremely long text content that would expand auto tables".to_string(),
+    );
     let r1_c1 = LayoutNode::with_text(c2_style.clone(), "Content 1".to_string());
     let r1_c2 = LayoutNode::with_text(c2_style, "Content 2".to_string());
 
@@ -361,13 +400,23 @@ fn test_table_caption_top_and_bottom_positioning() {
     top_cap_style.display = Display::TableCaption;
     top_cap_style.caption_side = CaptionSide::Top;
     top_cap_style.height = Dimension::Px(30.0);
-    top_cap_style.margin = EdgeInsets { top: 5.0, right: 0.0, bottom: 5.0, left: 0.0 };
+    top_cap_style.margin = EdgeInsets {
+        top: 5.0,
+        right: 0.0,
+        bottom: 5.0,
+        left: 0.0,
+    };
 
     let mut bot_cap_style = ComputedStyle::default();
     bot_cap_style.display = Display::TableCaption;
     bot_cap_style.caption_side = CaptionSide::Bottom;
     bot_cap_style.height = Dimension::Px(25.0);
-    bot_cap_style.margin = EdgeInsets { top: 4.0, right: 0.0, bottom: 6.0, left: 0.0 };
+    bot_cap_style.margin = EdgeInsets {
+        top: 4.0,
+        right: 0.0,
+        bottom: 6.0,
+        left: 0.0,
+    };
 
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
@@ -415,12 +464,22 @@ fn test_table_baseline_alignment() {
     let mut c0_style = ComputedStyle::default();
     c0_style.display = Display::TableCell;
     c0_style.vertical_align = VerticalAlign::Baseline;
-    c0_style.padding = EdgeInsets { top: 20.0, right: 10.0, bottom: 10.0, left: 10.0 };
+    c0_style.padding = EdgeInsets {
+        top: 20.0,
+        right: 10.0,
+        bottom: 10.0,
+        left: 10.0,
+    };
 
     let mut c1_style = ComputedStyle::default();
     c1_style.display = Display::TableCell;
     c1_style.vertical_align = VerticalAlign::Baseline;
-    c1_style.padding = EdgeInsets { top: 5.0, right: 10.0, bottom: 10.0, left: 10.0 };
+    c1_style.padding = EdgeInsets {
+        top: 5.0,
+        right: 10.0,
+        bottom: 10.0,
+        left: 10.0,
+    };
 
     let mut c0 = LayoutNode::new(c0_style);
     let mut span0 = LayoutNode::new(ComputedStyle {
@@ -456,7 +515,12 @@ fn test_table_baseline_alignment() {
     let base1 = cell1.line_boxes[0].bounds.y + cell1.line_boxes[0].baseline;
 
     // Baselines must align within 0.5px
-    assert!((base0 - base1).abs() < 0.5, "base0 ({}) should align with base1 ({})", base0, base1);
+    assert!(
+        (base0 - base1).abs() < 0.5,
+        "base0 ({}) should align with base1 ({})",
+        base0,
+        base1
+    );
 }
 
 #[test]
@@ -471,7 +535,12 @@ fn test_table_float_and_clearance_layout() {
     table_style.display = Display::Table;
     table_style.float = Float::Right;
     table_style.width = Dimension::Px(300.0);
-    table_style.margin = EdgeInsets { top: 0.0, right: 0.0, bottom: 20.0, left: 20.0 };
+    table_style.margin = EdgeInsets {
+        top: 0.0,
+        right: 0.0,
+        bottom: 20.0,
+        left: 20.0,
+    };
 
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
@@ -491,7 +560,9 @@ fn test_table_float_and_clearance_layout() {
         font_size: 16.0,
         ..Default::default()
     });
-    p_span.text = Some("This is paragraph text that wraps around the right-floated table infobox.".to_string());
+    p_span.text = Some(
+        "This is paragraph text that wraps around the right-floated table infobox.".to_string(),
+    );
     p.add_child(p_span);
 
     // Cleared block below the float
@@ -518,14 +589,16 @@ fn test_table_float_and_clearance_layout() {
     assert!(paragraph.line_boxes[0].bounds.width <= 500.0);
 
     // Cleared box must be placed strictly below the float's bottom margin (150 + 20 = 170.0)
-    assert!(clr.geometry.border_box.y >= 170.0, "Cleared box y ({}) must be >= 170.0", clr.geometry.border_box.y);
+    assert!(
+        clr.geometry.border_box.y >= 170.0,
+        "Cleared box y ({}) must be >= 170.0",
+        clr.geometry.border_box.y
+    );
 }
 
 #[test]
 fn test_table_collapsed_border_conflict_resolution_spec() {
-    use strata_layout::table::{
-        resolve_collapsed_border, CollapsedBorderEdge, ElementSource,
-    };
+    use strata_layout::table::{resolve_collapsed_border, CollapsedBorderEdge, ElementSource};
     use strata_style::types::{BorderStyle, Color};
 
     // 1. 'border-style: hidden' takes precedence over all other conflicting borders and sets width = 0
@@ -607,9 +680,18 @@ fn test_table_collapsed_border_conflict_resolution_spec() {
         source: ElementSource::Cell,
     };
 
-    assert_eq!(resolve_collapsed_border(solid_edge, double_edge).style, BorderStyle::Double);
-    assert_eq!(resolve_collapsed_border(dashed_edge, solid_edge).style, BorderStyle::Solid);
-    assert_eq!(resolve_collapsed_border(dotted_edge, dashed_edge).style, BorderStyle::Dashed);
+    assert_eq!(
+        resolve_collapsed_border(solid_edge, double_edge).style,
+        BorderStyle::Double
+    );
+    assert_eq!(
+        resolve_collapsed_border(dashed_edge, solid_edge).style,
+        BorderStyle::Solid
+    );
+    assert_eq!(
+        resolve_collapsed_border(dotted_edge, dashed_edge).style,
+        BorderStyle::Dashed
+    );
 
     // 5. If styles and widths are identical, element origin priority:
     // cell > row > row group > column > colgroup > table
@@ -631,8 +713,14 @@ fn test_table_collapsed_border_conflict_resolution_spec() {
         color: Some(Color::rgb(0, 0, 100)),
         source: ElementSource::Table,
     };
-    assert_eq!(resolve_collapsed_border(row_origin, cell_origin).source, ElementSource::Cell);
-    assert_eq!(resolve_collapsed_border(table_origin, row_origin).source, ElementSource::Row);
+    assert_eq!(
+        resolve_collapsed_border(row_origin, cell_origin).source,
+        ElementSource::Cell
+    );
+    assert_eq!(
+        resolve_collapsed_border(table_origin, row_origin).source,
+        ElementSource::Row
+    );
 
     // 6. When two elements of the same type have conflicting borders of the same
     // width and style, the top / left border wins
@@ -738,7 +826,10 @@ fn test_table_border_grid_layout_and_hidden_suppression() {
     table.compute_layout(400.0, 200.0);
 
     // Verify TableBorderGrid is populated
-    assert!(table.table_grid.is_some(), "table_grid must be populated on collapsed tables");
+    assert!(
+        table.table_grid.is_some(),
+        "table_grid must be populated on collapsed tables"
+    );
     let grid = table.table_grid.as_ref().unwrap();
     assert_eq!(grid.num_rows, 2);
     assert_eq!(grid.num_cols, 2);
@@ -751,5 +842,3 @@ fn test_table_border_grid_layout_and_hidden_suppression() {
     assert_eq!(grid.horizontal_edges[1][0].width, 3.0);
     assert_eq!(grid.horizontal_edges[1][0].style, BorderStyle::Double);
 }
-
-

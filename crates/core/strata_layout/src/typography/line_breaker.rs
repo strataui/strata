@@ -80,9 +80,9 @@ pub fn classify_line_break(c: char) -> LineBreakClass {
         '!' | '?' | '！' | '？' => LineBreakClass::EX,
 
         // Non-starter characters (Japanese Gyoto Kinsoku: small kana and prolonged sound marks)
-        'ぁ' | 'ぃ' | 'ぅ' | 'ぇ' | 'ぉ' | 'っ' | 'ゃ' | 'ゅ' | 'ょ' | 'ゎ'
-        | 'ァ' | 'ィ' | 'ゥ' | 'ェ' | 'ォ' | 'ッ' | 'ャ' | 'ュ' | 'ョ' | 'ヮ' | 'ヶ' | 'ヵ'
-        | 'ー' | '・' | '：' | '；' => LineBreakClass::NS,
+        'ぁ' | 'ぃ' | 'ぅ' | 'ぇ' | 'ぉ' | 'っ' | 'ゃ' | 'ゅ' | 'ょ' | 'ゎ' | 'ァ' | 'ィ'
+        | 'ゥ' | 'ェ' | 'ォ' | 'ッ' | 'ャ' | 'ュ' | 'ョ' | 'ヮ' | 'ヶ' | 'ヵ' | 'ー' | '・'
+        | '：' | '；' => LineBreakClass::NS,
 
         // Hyphens and break-after dashes
         '-' => LineBreakClass::HY,
@@ -125,7 +125,10 @@ pub fn is_prohibited_start(c: char) -> bool {
 /// Returns true if character is prohibited at the end of a line (Japanese Gyomatsu Kinsoku).
 #[inline]
 pub fn is_prohibited_end(c: char) -> bool {
-    matches!(classify_line_break(c), LineBreakClass::OP | LineBreakClass::PR)
+    matches!(
+        classify_line_break(c),
+        LineBreakClass::OP | LineBreakClass::PR
+    )
 }
 
 /// Determines whether a soft line break is permitted between two adjacent characters per UAX #14.
@@ -134,7 +137,10 @@ pub fn can_break_between_chars(prev: char, curr: char) -> bool {
     let c_class = classify_line_break(curr);
 
     // 1. Mandatory breaks
-    if matches!(p_class, LineBreakClass::BK | LineBreakClass::CR | LineBreakClass::LF) {
+    if matches!(
+        p_class,
+        LineBreakClass::BK | LineBreakClass::CR | LineBreakClass::LF
+    ) {
         return true;
     }
 
@@ -171,10 +177,14 @@ pub fn can_break_between_chars(prev: char, curr: char) -> bool {
     if p_class == LineBreakClass::ID && c_class == LineBreakClass::ID {
         return true;
     }
-    if p_class == LineBreakClass::ID && (c_class == LineBreakClass::AL || c_class == LineBreakClass::NU) {
+    if p_class == LineBreakClass::ID
+        && (c_class == LineBreakClass::AL || c_class == LineBreakClass::NU)
+    {
         return true;
     }
-    if (p_class == LineBreakClass::AL || p_class == LineBreakClass::NU) && c_class == LineBreakClass::ID {
+    if (p_class == LineBreakClass::AL || p_class == LineBreakClass::NU)
+        && c_class == LineBreakClass::ID
+    {
         return true;
     }
 
@@ -330,7 +340,8 @@ impl LineBreaker {
             if !fits && allows_soft_wrap && !current_glyphs.is_empty() {
                 if let Some(break_pos) = last_break_idx {
                     if break_pos > 0 && break_pos < current_glyphs.len() {
-                        let remainder: Vec<ShapedGlyph> = current_glyphs.drain(break_pos..).collect();
+                        let remainder: Vec<ShapedGlyph> =
+                            current_glyphs.drain(break_pos..).collect();
                         let (content_w, trailing_w) = Self::calculate_widths(&current_glyphs);
 
                         lines.push(TextLine {

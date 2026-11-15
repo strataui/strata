@@ -118,7 +118,10 @@ fn test_font_database_lookup_and_styled_measurement() {
 
     assert!(reg_w > 0.0);
     assert!(bold_w > 0.0);
-    assert!(bold_w > reg_w, "Bold text run must be wider than regular text run");
+    assert!(
+        bold_w > reg_w,
+        "Bold text run must be wider than regular text run"
+    );
 }
 
 #[test]
@@ -155,7 +158,10 @@ fn test_opentype_features_evaluator() {
     let default_glyphs = shaper.shape_with_font(code_text, &font, 16.0);
     let lig_count = default_glyphs.iter().filter(|g| g.is_ligature).count();
     // '===' (calt) and 'fi' (liga) must both be formed as ligatures
-    assert!(lig_count >= 2, "Expected at least 2 ligatures for '===' and 'fi'");
+    assert!(
+        lig_count >= 2,
+        "Expected at least 2 ligatures for '===' and 'fi'"
+    );
 
     // 2. Discretionary ligatures (dlig)
     let dlig_features = strata_layout::typography::OpenTypeFeatures {
@@ -163,16 +169,26 @@ fn test_opentype_features_evaluator() {
         ..Default::default()
     };
     let st_glyphs = shaper.shape_with_font_and_features("first", &font, 16.0, dlig_features);
-    let st_lig = st_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xFB06);
-    assert!(st_lig, "Expected 'st' discretionary ligature with glyph_id 0xFB06");
+    let st_lig = st_glyphs
+        .iter()
+        .any(|g| g.is_ligature && g.glyph_id == 0xFB06);
+    assert!(
+        st_lig,
+        "Expected 'st' discretionary ligature with glyph_id 0xFB06"
+    );
 
     let no_dlig = strata_layout::typography::OpenTypeFeatures {
         discretionary: false,
         ..Default::default()
     };
     let no_st_glyphs = shaper.shape_with_font_and_features("first", &font, 16.0, no_dlig);
-    let no_st = no_st_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xFB06);
-    assert!(!no_st, "'st' should not form a ligature when discretionary ligatures are disabled");
+    let no_st = no_st_glyphs
+        .iter()
+        .any(|g| g.is_ligature && g.glyph_id == 0xFB06);
+    assert!(
+        !no_st,
+        "'st' should not form a ligature when discretionary ligatures are disabled"
+    );
 
     // 3. Small capitals (smcp)
     let smcp_features = strata_layout::typography::OpenTypeFeatures {
@@ -220,4 +236,3 @@ fn test_subpixel_font_metrics_parity_with_chromium() {
     assert_eq!(strut.line_height, def_lh);
     assert_eq!(strut.metrics.line_height(), def_lh);
 }
-

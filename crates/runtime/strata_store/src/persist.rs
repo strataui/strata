@@ -1,9 +1,9 @@
 //! Bitcask WAL Persistence Middleware for Strata Store.
 
+use crate::store::Store;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use strata_storage::LocalStorage;
-use crate::store::Store;
 
 /// Configuration options for store persistence.
 #[derive(Clone)]
@@ -32,7 +32,9 @@ pub fn create_persistent_store<T>(options: PersistOptions, fallback: T) -> Store
 where
     T: Serialize + DeserializeOwned + Clone + PartialEq + 'static,
 {
-    let storage = options.storage.unwrap_or_else(LocalStorage::default_instance);
+    let storage = options
+        .storage
+        .unwrap_or_else(LocalStorage::default_instance);
     let key = options.key;
 
     // Attempt rehydration

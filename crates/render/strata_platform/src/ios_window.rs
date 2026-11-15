@@ -107,8 +107,11 @@ impl IosWindow {
             let window_inst = msg_alloc(window_cls, alloc_sel);
 
             let init_frame_sel = sel_registerName(b"initWithFrame:\0".as_ptr() as *const c_char);
-            let msg_init_frame: unsafe extern "C" fn(*mut c_void, *mut c_void, CGRect) -> *mut c_void =
-                std::mem::transmute(objc_msgSend as *const ());
+            let msg_init_frame: unsafe extern "C" fn(
+                *mut c_void,
+                *mut c_void,
+                CGRect,
+            ) -> *mut c_void = std::mem::transmute(objc_msgSend as *const ());
             let uiwindow = msg_init_frame(window_inst, init_frame_sel, screen_bounds);
 
             // 3. Create root UIViewController and UIView
@@ -151,8 +154,7 @@ impl IosWindow {
             msg_set_view(uiwindow, set_root_sel, uiviewcontroller);
 
             // Make key and visible
-            let make_key_sel =
-                sel_registerName(b"makeKeyAndVisible\0".as_ptr() as *const c_char);
+            let make_key_sel = sel_registerName(b"makeKeyAndVisible\0".as_ptr() as *const c_char);
             let msg_make_key: unsafe extern "C" fn(*mut c_void, *mut c_void) =
                 std::mem::transmute(objc_msgSend as *const ());
             msg_make_key(uiwindow, make_key_sel);
@@ -167,7 +169,11 @@ impl IosWindow {
                 uiview,
                 metal_layer,
                 config: actual_config,
-                scale_factor: if scale_factor > 0.0 { scale_factor } else { 3.0 },
+                scale_factor: if scale_factor > 0.0 {
+                    scale_factor
+                } else {
+                    3.0
+                },
                 safe_area_insets: UIEdgeInsets::default(),
                 is_focused: true,
                 cursor: CursorIcon::Default,
@@ -216,7 +222,8 @@ impl IosWindow {
                 });
             }
             TouchPhase::Moved => {
-                self.event_queue.push_back(PlatformEvent::MouseMove { x, y });
+                self.event_queue
+                    .push_back(PlatformEvent::MouseMove { x, y });
             }
             TouchPhase::Ended => {
                 self.event_queue.push_back(PlatformEvent::MouseUp {

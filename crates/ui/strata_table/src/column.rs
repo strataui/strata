@@ -40,7 +40,11 @@ pub struct ColumnDef<T> {
 }
 
 impl<T> ColumnDef<T> {
-    pub fn new(id: impl Into<String>, header: impl Into<String>, accessor: impl Fn(&T) -> String + 'static) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        header: impl Into<String>,
+        accessor: impl Fn(&T) -> String + 'static,
+    ) -> Self {
         Self {
             id: id.into(),
             header: header.into(),

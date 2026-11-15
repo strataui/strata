@@ -84,11 +84,14 @@ pub fn Button(
 
     let mut btn_children = Vec::new();
     if loading.unwrap_or(false) {
-        btn_children.push(rsx! {
-            <span class="inline-block animate-spin mr-1.5 text-current">
-                {Icon(IconName::Loader2, Some("w-4 h-4 animate-spin")).root}
-            </span>
-        }.root);
+        btn_children.push(
+            rsx! {
+                <span class="inline-block animate-spin mr-1.5 text-current">
+                    {Icon(IconName::Loader2, Some("w-4 h-4 animate-spin")).root}
+                </span>
+            }
+            .root,
+        );
     } else if let Some(icon) = prefix_icon {
         btn_children.push(Icon(icon, Some("w-4 h-4 text-current")).root);
     }
@@ -127,7 +130,11 @@ pub fn IconButton(
     let sz = size.unwrap_or(ButtonSize::Md);
     let is_rounded = rounded.unwrap_or(false);
 
-    let shape = if is_rounded { "rounded-full" } else { "rounded-lg" };
+    let shape = if is_rounded {
+        "rounded-full"
+    } else {
+        "rounded-lg"
+    };
     let dim = match sz {
         ButtonSize::Xs => "w-7 h-7 p-1",
         ButtonSize::Sm => "w-8 h-8 p-1.5",
@@ -150,7 +157,12 @@ pub fn IconButton(
         Some(vec![Icon(icon, Some("w-full h-full text-current")).root]),
     );
 
-    if let NodeBlueprint::Element { ref mut classes, ref mut attributes, .. } = btn.root {
+    if let NodeBlueprint::Element {
+        ref mut classes,
+        ref mut attributes,
+        ..
+    } = btn.root
+    {
         classes.push(shape.to_string());
         classes.push(dim.to_string());
         if let Some(custom) = class {
@@ -166,10 +178,7 @@ pub fn IconButton(
 
 /// Clustered button group visually merging adjacent action buttons.
 #[component]
-pub fn ButtonGroup(
-    children: Vec<NodeBlueprint>,
-    class: Option<&'static str>,
-) -> View {
+pub fn ButtonGroup(children: Vec<NodeBlueprint>, class: Option<&'static str>) -> View {
     let custom = class.unwrap_or("");
     let base = "inline-flex items-center rounded-lg shadow-sm [&>button:not(:first-child)]:-ml-px [&>button:not(:first-child)]:rounded-l-none [&>button:not(:last-child)]:rounded-r-none";
     let combined = format!("{base} {custom}");

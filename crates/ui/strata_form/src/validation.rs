@@ -14,9 +14,7 @@ pub enum ValidationRule<T> {
     Min { min: f64, message: String },
     Max { max: f64, message: String },
     Email { message: String },
-    Custom {
-        validator: ValidatorFn<T>,
-    },
+    Custom { validator: ValidatorFn<T> },
 }
 
 impl<T> std::fmt::Debug for ValidationRule<T> {
@@ -35,27 +33,43 @@ impl<T> std::fmt::Debug for ValidationRule<T> {
 
 impl ValidationRule<String> {
     pub fn required(msg: impl Into<String>) -> Self {
-        Self::Required { message: msg.into() }
+        Self::Required {
+            message: msg.into(),
+        }
     }
 
     pub fn min_length(min: usize, msg: impl Into<String>) -> Self {
-        Self::MinLength { min, message: msg.into() }
+        Self::MinLength {
+            min,
+            message: msg.into(),
+        }
     }
 
     pub fn max_length(max: usize, msg: impl Into<String>) -> Self {
-        Self::MaxLength { max, message: msg.into() }
+        Self::MaxLength {
+            max,
+            message: msg.into(),
+        }
     }
 
     pub fn email(msg: impl Into<String>) -> Self {
-        Self::Email { message: msg.into() }
+        Self::Email {
+            message: msg.into(),
+        }
     }
 
     pub fn min(min: f64, msg: impl Into<String>) -> Self {
-        Self::Min { min, message: msg.into() }
+        Self::Min {
+            min,
+            message: msg.into(),
+        }
     }
 
     pub fn max(max: f64, msg: impl Into<String>) -> Self {
-        Self::Max { max, message: msg.into() }
+        Self::Max {
+            max,
+            message: msg.into(),
+        }
     }
 
     pub fn custom(validator: impl Fn(&String) -> Result<(), String> + 'static) -> Self {
@@ -106,7 +120,11 @@ impl ValidationRule<String> {
             }
             Self::Email { message } => {
                 let clean = val.trim();
-                if !clean.contains('@') || !clean.contains('.') || clean.starts_with('@') || clean.ends_with('@') {
+                if !clean.contains('@')
+                    || !clean.contains('.')
+                    || clean.starts_with('@')
+                    || clean.ends_with('@')
+                {
                     Err(message.clone())
                 } else {
                     Ok(())

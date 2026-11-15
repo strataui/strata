@@ -13,11 +13,8 @@ fn test_font_metrics_and_css_half_leading() {
 
     // Target line-height = 32px
     let line_height = LayoutUnit::from_f32(32.0);
-    let (leading_above, leading_below) = compute_half_leading(
-        line_height,
-        metrics.ascent,
-        metrics.descent,
-    );
+    let (leading_above, leading_below) =
+        compute_half_leading(line_height, metrics.ascent, metrics.descent);
 
     // Half-leading invariant: ascent + descent + leading_above + leading_below == line_height
     let total_reconstructed = metrics.ascent + metrics.descent + leading_above + leading_below;
@@ -56,9 +53,15 @@ fn test_opentype_ligatures_and_pair_kerning() {
     // 2. Typographic ligatures
     let typo_text = "difficult coffee flow";
     let typo_glyphs = shaper.shape(typo_text, &metrics, false);
-    let has_ffi = typo_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xFB03);
-    let has_ff = typo_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xFB00);
-    let has_fl = typo_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xFB02);
+    let has_ffi = typo_glyphs
+        .iter()
+        .any(|g| g.is_ligature && g.glyph_id == 0xFB03);
+    let has_ff = typo_glyphs
+        .iter()
+        .any(|g| g.is_ligature && g.glyph_id == 0xFB00);
+    let has_fl = typo_glyphs
+        .iter()
+        .any(|g| g.is_ligature && g.glyph_id == 0xFB02);
 
     assert!(has_ffi, "Must identify 'ffi' ligature in difficult");
     assert!(has_ff, "Must identify 'ff' ligature in coffee");
@@ -67,7 +70,10 @@ fn test_opentype_ligatures_and_pair_kerning() {
     // 3. Monospace disables ligatures
     let mono_glyphs = shaper.shape(code_text, &metrics, true);
     let mono_has_lig = mono_glyphs.iter().any(|g| g.is_ligature);
-    assert!(!mono_has_lig, "Monospace code fonts must retain individual glyph clusters");
+    assert!(
+        !mono_has_lig,
+        "Monospace code fonts must retain individual glyph clusters"
+    );
 
     // 4. Optical pair kerning
     let pair_kerned = shaper.shape("AV", &metrics, false);
@@ -103,7 +109,10 @@ fn test_unicode_bidi_uax9_mixed_scripts() {
     // 3. Mixed LTR and RTL: "Cluster שלום Node"
     let mixed_text = "Cluster שלום Node";
     let mixed_runs = bidi.resolve_runs(mixed_text);
-    assert!(mixed_runs.len() >= 3, "Mixed text must decompose into distinct directional runs");
+    assert!(
+        mixed_runs.len() >= 3,
+        "Mixed text must decompose into distinct directional runs"
+    );
 
     let has_rtl = mixed_runs.iter().any(|r| r.is_rtl);
     let has_ltr = mixed_runs.iter().any(|r| !r.is_rtl);
@@ -151,7 +160,10 @@ fn test_unicode_line_breaking_and_whitespace_modes() {
         ..Default::default()
     };
     let zwsp_res = ifc.layout_text(zwsp_text, &zwsp_opt);
-    assert!(zwsp_res.line_count > 1, "Zero-width spaces must provide valid break points");
+    assert!(
+        zwsp_res.line_count > 1,
+        "Zero-width spaces must provide valid break points"
+    );
 }
 
 #[test]
@@ -201,21 +213,30 @@ fn test_multi_span_inline_stream_line_breaking() {
     let ifc = InlineFormattingContext::new();
 
     let items = vec![
-        InlineItem::text("The Rust programming language ", InlineTextStyle {
-            font_size: 16.0,
-            font_weight: strata_style::types::FontWeight::Normal,
-            ..Default::default()
-        }),
-        InlineItem::text("provides memory safety without a garbage collector ", InlineTextStyle {
-            font_size: 16.0,
-            font_weight: strata_style::types::FontWeight::Bold,
-            ..Default::default()
-        }),
-        InlineItem::text("and high performance concurrency.", InlineTextStyle {
-            font_size: 16.0,
-            font_style: strata_style::types::FontStyle::Italic,
-            ..Default::default()
-        }),
+        InlineItem::text(
+            "The Rust programming language ",
+            InlineTextStyle {
+                font_size: 16.0,
+                font_weight: strata_style::types::FontWeight::Normal,
+                ..Default::default()
+            },
+        ),
+        InlineItem::text(
+            "provides memory safety without a garbage collector ",
+            InlineTextStyle {
+                font_size: 16.0,
+                font_weight: strata_style::types::FontWeight::Bold,
+                ..Default::default()
+            },
+        ),
+        InlineItem::text(
+            "and high performance concurrency.",
+            InlineTextStyle {
+                font_size: 16.0,
+                font_style: strata_style::types::FontStyle::Italic,
+                ..Default::default()
+            },
+        ),
     ];
 
     let options = InlineLayoutOptions {
@@ -228,13 +249,29 @@ fn test_multi_span_inline_stream_line_breaking() {
 
     let result = ifc.layout_inline_stream(&items, &options);
 
-    assert!(result.line_count >= 2, "Prose stream must break into multiple lines");
-    assert!(result.total_width <= 300.0, "Total width must fit within container constraint 300.0");
-    assert!(result.total_height >= 48.0, "Total height must encompass all stacked line boxes");
+    assert!(
+        result.line_count >= 2,
+        "Prose stream must break into multiple lines"
+    );
+    assert!(
+        result.total_width <= 300.0,
+        "Total width must fit within container constraint 300.0"
+    );
+    assert!(
+        result.total_height >= 48.0,
+        "Total height must encompass all stacked line boxes"
+    );
 
     // Check that line boxes have text fragments
-    let all_frags: Vec<&TextFragment> = result.lines.iter().flat_map(|l| &l.text_fragments).collect();
-    assert!(all_frags.len() >= 3, "Must have visual fragments for each styling run");
+    let all_frags: Vec<&TextFragment> = result
+        .lines
+        .iter()
+        .flat_map(|l| &l.text_fragments)
+        .collect();
+    assert!(
+        all_frags.len() >= 3,
+        "Must have visual fragments for each styling run"
+    );
 }
 
 #[test]
@@ -263,7 +300,10 @@ fn test_multi_line_span_fragmentation() {
 
     let result = ifc.layout_inline_stream(&items, &options);
 
-    assert!(result.line_count >= 3, "Must fragment into at least 3 lines");
+    assert!(
+        result.line_count >= 3,
+        "Must fragment into at least 3 lines"
+    );
 
     // Check item 1 fragments: item_index 1 must appear on multiple lines
     let item1_frags: Vec<&TextFragment> = result
@@ -278,8 +318,14 @@ fn test_multi_line_span_fragmentation() {
         "Bold run (item 1) must be fragmented into at least 2 distinct visual fragments"
     );
     for frag in &item1_frags {
-        assert_eq!(frag.style.font_weight, strata_style::types::FontWeight::Bold);
-        assert_eq!(frag.style.color, strata_style::types::Color::new(255, 0, 0, 255));
+        assert_eq!(
+            frag.style.font_weight,
+            strata_style::types::FontWeight::Bold
+        );
+        assert_eq!(
+            frag.style.color,
+            strata_style::types::Color::new(255, 0, 0, 255)
+        );
     }
 }
 
@@ -317,9 +363,18 @@ fn test_block_container_ifc_auto_wrapping() {
 
     block.compute_layout(250.0, 1000.0);
 
-    assert!(!block.line_boxes.is_empty(), "Block container must establish an IFC and produce line boxes");
-    assert!(block.line_boxes.len() >= 2, "Prose must wrap into multiple line boxes");
-    assert!(block.geometry.border_box.height >= 40.0, "Height must encompass all lines");
+    assert!(
+        !block.line_boxes.is_empty(),
+        "Block container must establish an IFC and produce line boxes"
+    );
+    assert!(
+        block.line_boxes.len() >= 2,
+        "Prose must wrap into multiple line boxes"
+    );
+    assert!(
+        block.geometry.border_box.height >= 40.0,
+        "Height must encompass all lines"
+    );
 }
 
 #[test]
@@ -340,11 +395,24 @@ fn test_complex_script_shaping_arabic_indic_thai() {
     // Initial Seen (0xFEB3), Lam-Alef Final ligature (0xFEFC), Isolated Meem (0xFEE1)
     let salam = "سلام";
     let salam_glyphs = shaper.shape(salam, &metrics, false);
-    assert_eq!(salam_glyphs.len(), 3, "Lam + Alef must merge into a single ligature glyph");
+    assert_eq!(
+        salam_glyphs.len(),
+        3,
+        "Lam + Alef must merge into a single ligature glyph"
+    );
     assert_eq!(salam_glyphs[0].glyph_id, 0xFEB3, "Seen must be Initial");
-    assert_eq!(salam_glyphs[1].glyph_id, 0xFEFC, "Lam-Alef must be Final ligature form");
-    assert!(salam_glyphs[1].is_ligature, "Lam-Alef must be marked as ligature");
-    assert_eq!(salam_glyphs[2].glyph_id, 0xFEE1, "Meem must be Isolated form");
+    assert_eq!(
+        salam_glyphs[1].glyph_id, 0xFEFC,
+        "Lam-Alef must be Final ligature form"
+    );
+    assert!(
+        salam_glyphs[1].is_ligature,
+        "Lam-Alef must be marked as ligature"
+    );
+    assert_eq!(
+        salam_glyphs[2].glyph_id, 0xFEE1,
+        "Meem must be Isolated form"
+    );
 
     // 3. Arabic transparent Harakat / Tashkeel: كَتَبَ
     let kataba_vowels = "كَتَبَ";
@@ -353,15 +421,26 @@ fn test_complex_script_shaping_arabic_indic_thai() {
     let marks: Vec<&ShapedGlyph> = vowel_glyphs.iter().filter(|g| g.is_mark).collect();
     assert_eq!(marks.len(), 3);
     for mark in marks {
-        assert_eq!(mark.x_advance, LayoutUnit::ZERO, "Tashkeel vowel must have zero horizontal advance");
-        assert!(mark.y_offset > LayoutUnit::ZERO, "Fatha must have positive y_offset above baseline");
+        assert_eq!(
+            mark.x_advance,
+            LayoutUnit::ZERO,
+            "Tashkeel vowel must have zero horizontal advance"
+        );
+        assert!(
+            mark.y_offset > LayoutUnit::ZERO,
+            "Fatha must have positive y_offset above baseline"
+        );
     }
 
     // 4. Indic complex conjunct: क्ष (Ksha: Ka + Virama + Ssa) and त्र (Tra: Ta + Virama + Ra)
     let indic_text = "क्षेत्र";
     let indic_glyphs = shaper.shape(indic_text, &metrics, false);
-    let has_ksha = indic_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xF050);
-    let has_tra = indic_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xF051);
+    let has_ksha = indic_glyphs
+        .iter()
+        .any(|g| g.is_ligature && g.glyph_id == 0xF050);
+    let has_tra = indic_glyphs
+        .iter()
+        .any(|g| g.is_ligature && g.glyph_id == 0xF051);
     assert!(has_ksha, "Must shape Indic conjunct 'क्ष' (Ksha)");
     assert!(has_tra, "Must shape Indic conjunct 'त्र' (Tra)");
 
@@ -369,29 +448,71 @@ fn test_complex_script_shaping_arabic_indic_thai() {
     let thai_text = "น้ำ";
     let thai_glyphs = shaper.shape(thai_text, &metrics, false);
     let thai_mark = thai_glyphs.iter().find(|g| g.glyph_id == '\u{0E49}' as u32);
-    assert!(thai_mark.is_some(), "Thai tone mark Mai Tho must be present");
+    assert!(
+        thai_mark.is_some(),
+        "Thai tone mark Mai Tho must be present"
+    );
     let mark = thai_mark.unwrap();
     assert!(mark.is_mark);
-    assert_eq!(mark.x_advance, LayoutUnit::ZERO, "Thai tone mark must have zero advance for vertical stacking");
-    assert!(mark.y_offset > LayoutUnit::ZERO, "Thai tone mark must stack vertically above base");
+    assert_eq!(
+        mark.x_advance,
+        LayoutUnit::ZERO,
+        "Thai tone mark must have zero advance for vertical stacking"
+    );
+    assert!(
+        mark.y_offset > LayoutUnit::ZERO,
+        "Thai tone mark must stack vertically above base"
+    );
 
     // 6. Extended code operator ligatures
     let op_text = "a ||= b &&= c ??= d";
     let op_glyphs = shaper.shape(op_text, &metrics, false);
-    assert!(op_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xF010), "Must shape '||=' ligature");
-    assert!(op_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xF011), "Must shape '&&=' ligature");
-    assert!(op_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xF012), "Must shape '??=' ligature");
+    assert!(
+        op_glyphs
+            .iter()
+            .any(|g| g.is_ligature && g.glyph_id == 0xF010),
+        "Must shape '||=' ligature"
+    );
+    assert!(
+        op_glyphs
+            .iter()
+            .any(|g| g.is_ligature && g.glyph_id == 0xF011),
+        "Must shape '&&=' ligature"
+    );
+    assert!(
+        op_glyphs
+            .iter()
+            .any(|g| g.is_ligature && g.glyph_id == 0xF012),
+        "Must shape '??=' ligature"
+    );
 
     // 7. Multi-glyph Arabic ligatures: الله (Allah), محمد (Muhammad), أكبر (Akbar)
     let allah_text = "الله أكبر";
     let allah_glyphs = shaper.shape(allah_text, &metrics, false);
-    assert!(allah_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xFDF2), "Must shape Allah ligature (0xFDF2)");
-    assert!(allah_glyphs.iter().any(|g| g.is_ligature && g.glyph_id == 0xFDF3), "Must shape Akbar ligature (0xFDF3)");
+    assert!(
+        allah_glyphs
+            .iter()
+            .any(|g| g.is_ligature && g.glyph_id == 0xFDF2),
+        "Must shape Allah ligature (0xFDF2)"
+    );
+    assert!(
+        allah_glyphs
+            .iter()
+            .any(|g| g.is_ligature && g.glyph_id == 0xFDF3),
+        "Must shape Akbar ligature (0xFDF3)"
+    );
 
     let muhammad_text = "محمد";
     let muhammad_glyphs = shaper.shape(muhammad_text, &metrics, false);
-    assert_eq!(muhammad_glyphs.len(), 1, "Muhammad must shape to a single multi-glyph ligature");
-    assert_eq!(muhammad_glyphs[0].glyph_id, 0xFDF4, "Must shape Muhammad ligature (0xFDF4)");
+    assert_eq!(
+        muhammad_glyphs.len(),
+        1,
+        "Muhammad must shape to a single multi-glyph ligature"
+    );
+    assert_eq!(
+        muhammad_glyphs[0].glyph_id, 0xFDF4,
+        "Must shape Muhammad ligature (0xFDF4)"
+    );
 
     // 8. Indic Universal Shaping Engine (USE) pre-base vowel reordering
     // Input: "कि" (Ka \u{0915} + Short I matra \u{093F})
@@ -399,16 +520,30 @@ fn test_complex_script_shaping_arabic_indic_thai() {
     let ki_text = "कि";
     let ki_glyphs = shaper.shape(ki_text, &metrics, false);
     assert_eq!(ki_glyphs.len(), 2, "Must produce 2 glyphs for 'कि'");
-    assert_eq!(ki_glyphs[0].glyph_id, 0x093F, "Pre-base vowel sign 'ि' must be reordered before consonant");
-    assert_eq!(ki_glyphs[1].glyph_id, 0x0915, "Consonant 'क' must follow reordered pre-base vowel");
+    assert_eq!(
+        ki_glyphs[0].glyph_id, 0x093F,
+        "Pre-base vowel sign 'ि' must be reordered before consonant"
+    );
+    assert_eq!(
+        ki_glyphs[1].glyph_id, 0x0915,
+        "Consonant 'क' must follow reordered pre-base vowel"
+    );
 
     // 9. Indic Reph handling: "धर्म" (Dha \u{0927} + Ra \u{0930} + Virama \u{094D} + Ma \u{092E})
     let dharma_text = "धर्म";
     let dharma_glyphs = shaper.shape(dharma_text, &metrics, false);
-    assert!(dharma_glyphs.len() >= 3, "Must produce shaped cluster for 'धर्म'");
+    assert!(
+        dharma_glyphs.len() >= 3,
+        "Must produce shaped cluster for 'धर्म'"
+    );
     assert_eq!(dharma_glyphs[0].glyph_id, 0x0927, "Base consonant 'ध'");
     // Reph mark attaches above 'म'
-    assert!(dharma_glyphs.iter().any(|g| g.glyph_id == 0x094D && g.is_mark), "Reph mark must attach above base consonant");
+    assert!(
+        dharma_glyphs
+            .iter()
+            .any(|g| g.glyph_id == 0x094D && g.is_mark),
+        "Reph mark must attach above base consonant"
+    );
 }
 
 #[test]
@@ -435,7 +570,6 @@ fn test_parallel_multi_paragraph_text_shaping() {
     let full_document = [single_para.as_str(); 8].join("\n\n");
     assert!(full_document.len() > 8192);
 
-
     let ifc = InlineFormattingContext::new();
     let options = InlineLayoutOptions {
         font_size: 16.0,
@@ -446,19 +580,29 @@ fn test_parallel_multi_paragraph_text_shaping() {
 
     let result = ifc.layout_text(&full_document, &options);
 
-    assert!(result.line_count > 50, "Expected > 50 lines, got {}", result.line_count);
-    assert!(result.total_width <= 510.0, "Total width must roughly match max_width constraint");
-    assert!(result.total_height > 1000.0, "Total height must encompass all paragraph lines");
-
-
+    assert!(
+        result.line_count > 50,
+        "Expected > 50 lines, got {}",
+        result.line_count
+    );
+    assert!(
+        result.total_width <= 510.0,
+        "Total width must roughly match max_width constraint"
+    );
+    assert!(
+        result.total_height > 1000.0,
+        "Total height must encompass all paragraph lines"
+    );
 
     // Verify monotonic Y progression across line boxes
     let mut prev_y = -1.0f32;
     for line in &result.lines {
-        assert!(line.bounds.y >= prev_y, "Line boxes must have monotonic Y coordinates");
+        assert!(
+            line.bounds.y >= prev_y,
+            "Line boxes must have monotonic Y coordinates"
+        );
         assert!(line.bounds.width >= 0.0);
         assert_eq!(line.bounds.height, 24.0);
         prev_y = line.bounds.y;
     }
 }
-

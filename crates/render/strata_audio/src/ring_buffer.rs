@@ -53,18 +53,10 @@ impl<T> SpscRingBuffer<T> {
         }
     }
 
-
     /// Splits the ring buffer into independent Producer and Consumer handles.
     pub fn split(self) -> (Producer<T>, Consumer<T>) {
         let arc = Arc::new(self);
-        (
-            Producer {
-                ring: arc.clone(),
-            },
-            Consumer {
-                ring: arc,
-            },
-        )
+        (Producer { ring: arc.clone() }, Consumer { ring: arc })
     }
 
     #[inline]
@@ -241,4 +233,3 @@ mod tests {
         );
     }
 }
-

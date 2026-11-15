@@ -156,5 +156,4 @@ impl AppRuntime {
 
         false
     }
-
 }

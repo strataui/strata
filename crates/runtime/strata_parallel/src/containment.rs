@@ -39,7 +39,8 @@ impl ContainmentClassifier {
             || style.padding.bottom > 0.0
             || style.border_width.top > 0.0
             || style.border_width.bottom > 0.0;
-        let clips_overflow = style.overflow_x != Overflow::Visible || style.overflow_y != Overflow::Visible;
+        let clips_overflow =
+            style.overflow_x != Overflow::Visible || style.overflow_y != Overflow::Visible;
         let axiom2 = has_padding_or_border || clips_overflow;
 
         // Axiom 3: Spatial Reference & Coordinate Capture (Containing block for absolute descendants)

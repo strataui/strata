@@ -53,11 +53,15 @@ fn test_client_speaks_first_silent_server_no_deadlock() {
 
     let server = std::thread::spawn(move || {
         let mut socket = accept_and_handshake(&listener);
-        socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
 
         // Server sends NOTHING. It remains completely silent and waits for the client.
         let mut buf = [0u8; 1024];
-        let n = socket.read(&mut buf).expect("server must receive client payload without deadlock");
+        let n = socket
+            .read(&mut buf)
+            .expect("server must receive client payload without deadlock");
         assert!(n > 0, "Server must read non-zero bytes from client");
 
         let (frame, _) = decode_frame(&buf[..n]).unwrap().unwrap();
@@ -83,12 +87,18 @@ fn test_client_speaks_first_silent_server_no_deadlock() {
     client.send_text("client-speaks-first-query").unwrap();
 
     let reply = client.recv_message_timeout(Duration::from_secs(2));
-    assert!(reply.is_some(), "Client must receive reply without deadlocking");
+    assert!(
+        reply.is_some(),
+        "Client must receive reply without deadlocking"
+    );
     assert_eq!(
         reply.unwrap(),
         WsMessage::Text("server-acknowledgement".into())
     );
-    assert!(start.elapsed() < Duration::from_millis(500), "Transaction must complete within 500ms");
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "Transaction must complete within 500ms"
+    );
 
     server.join().unwrap();
 }
@@ -100,7 +110,9 @@ fn test_multiturn_bidirectional_request_response() {
 
     let server = std::thread::spawn(move || {
         let mut socket = accept_and_handshake(&listener);
-        socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
 
         for i in 0..20 {
             let mut buf = [0u8; 1024];
@@ -133,7 +145,9 @@ fn test_unsolicited_ping_immediate_pong() {
 
     let server = std::thread::spawn(move || {
         let mut socket = accept_and_handshake(&listener);
-        socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
 
         // Server sends unsolicited Ping frame
         let nonce = b"sec-token-994";
@@ -146,7 +160,10 @@ fn test_unsolicited_ping_immediate_pong() {
         let n = socket.read(&mut buf).expect("server read pong");
         let (frame, _) = decode_frame(&buf[..n]).unwrap().unwrap();
         assert_eq!(frame.opcode, WsOpcode::Pong);
-        assert_eq!(frame.payload, nonce, "Pong payload must match Ping nonce exactly");
+        assert_eq!(
+            frame.payload, nonce,
+            "Pong payload must match Ping nonce exactly"
+        );
     });
 
     let client = WebSocket::connect(&format!("ws://127.0.0.1:{port}/heartbeat")).unwrap();
@@ -164,7 +181,9 @@ fn test_clean_raii_teardown_no_thread_leak() {
 
     let server = std::thread::spawn(move || {
         let mut socket = accept_and_handshake(&listener);
-        socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
 
         let mut buf = [0u8; 1024];
         let n = socket.read(&mut buf).unwrap_or(0);
@@ -193,7 +212,9 @@ fn test_idle_timeout_resilience() {
 
     let server = std::thread::spawn(move || {
         let mut socket = accept_and_handshake(&listener);
-        socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
 
         // Idle for 200ms (multiple 15ms worker poll cycles)
         std::thread::sleep(Duration::from_millis(200));
@@ -201,7 +222,10 @@ fn test_idle_timeout_resilience() {
         let mut buf = [0u8; 1024];
         let n = socket.read(&mut buf).expect("read after idle");
         let (frame, _) = decode_frame(&buf[..n]).unwrap().unwrap();
-        assert_eq!(String::from_utf8(frame.payload).unwrap(), "post-idle-message");
+        assert_eq!(
+            String::from_utf8(frame.payload).unwrap(),
+            "post-idle-message"
+        );
 
         let reply = encode_frame(true, WsOpcode::Text, b"ack-post-idle", false, None);
         socket.write_all(&reply).unwrap();
@@ -222,17 +246,27 @@ fn test_idle_timeout_resilience() {
 
 #[test]
 fn test_cryptographic_nonce_and_dynamic_frame_masking() {
-    use strata_web_api::websocket::{decode_frame, encode_frame, generate_mask_key, generate_sec_websocket_key, WsOpcode};
     use std::collections::HashSet;
+    use strata_web_api::websocket::{
+        decode_frame, encode_frame, generate_mask_key, generate_sec_websocket_key, WsOpcode,
+    };
 
     // GOAL-32: Verify generate_sec_websocket_key() produces valid base64 nonces that are strictly unique
     let mut nonce_keys = HashSet::new();
     for _ in 0..100 {
         let key = generate_sec_websocket_key();
-        assert_eq!(key.len(), 24, "16 bytes encoded in base64 must be 24 characters");
+        assert_eq!(
+            key.len(),
+            24,
+            "16 bytes encoded in base64 must be 24 characters"
+        );
         nonce_keys.insert(key);
     }
-    assert_eq!(nonce_keys.len(), 100, "CSPRNG nonces must be strictly distinct across invocations");
+    assert_eq!(
+        nonce_keys.len(),
+        100,
+        "CSPRNG nonces must be strictly distinct across invocations"
+    );
 
     // GOAL-33: Verify dynamic frame masking key generation and decode parity
     let mut mask_keys = HashSet::new();
@@ -248,5 +282,8 @@ fn test_cryptographic_nonce_and_dynamic_frame_masking() {
         let (decoded, _) = decode_frame(&encoded).unwrap().unwrap();
         assert_eq!(String::from_utf8(decoded.payload).unwrap(), payload);
     }
-    assert!(mask_keys.len() > 95, "Mask keys must be unpredictable and dynamic per RFC 6455 §5.3");
+    assert!(
+        mask_keys.len() > 95,
+        "Mask keys must be unpredictable and dynamic per RFC 6455 §5.3"
+    );
 }

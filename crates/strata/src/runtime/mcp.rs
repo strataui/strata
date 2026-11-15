@@ -228,7 +228,8 @@ impl AppRuntime {
         strata_platform::window::CursorIcon,
     ) {
         let cursor_icon = Self::hit_test_cursor(&self.root_blueprint, &self.layout_root, x, y);
-        if let Some(path) = Self::hit_test_node_path(&self.root_blueprint, &self.layout_root, x, y) {
+        if let Some(path) = Self::hit_test_node_path(&self.root_blueprint, &self.layout_root, x, y)
+        {
             if let Some((bp, layout)) =
                 Self::find_node_by_path(&self.root_blueprint, &self.layout_root, &path)
             {
@@ -242,7 +243,13 @@ impl AppRuntime {
                     _ => ("div".to_string(), strata_dom::ClassList::Empty),
                 };
                 let text = Self::extract_text_content(bp);
-                return (tag_name, classes.to_vec(), layout.geometry.border_box, text, cursor_icon);
+                return (
+                    tag_name,
+                    classes.to_vec(),
+                    layout.geometry.border_box,
+                    text,
+                    cursor_icon,
+                );
             }
         }
 
@@ -259,5 +266,4 @@ impl AppRuntime {
             cursor_icon,
         )
     }
-
 }

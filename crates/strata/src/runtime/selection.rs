@@ -388,7 +388,10 @@ impl AppRuntime {
                 rect.height.round() as i32,
             );
             if let Some(ref active) = self.active_focus {
-                window.set_ime_surrounding_text(&active.state.text.get(), active.state.cursor_index.get() as i32);
+                window.set_ime_surrounding_text(
+                    &active.state.text.get(),
+                    active.state.cursor_index.get() as i32,
+                );
             }
         } else {
             window.reset_ime();

@@ -118,5 +118,7 @@ pub fn create_tls_stream(
             .map_err(|e| format!("TLS handshake failed: {e}"))?;
     }
 
-    Ok(HttpTransportStream::Tls(Box::new(StreamOwned::new(conn, tcp_stream))))
+    Ok(HttpTransportStream::Tls(Box::new(StreamOwned::new(
+        conn, tcp_stream,
+    ))))
 }

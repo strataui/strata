@@ -11,13 +11,19 @@ fn test_uax9_directional_embeddings_and_overrides() {
     let rle_runs = bidi.resolve_runs(text_with_rle);
     assert!(rle_runs.len() >= 3);
     let embedded_run = &rle_runs[1];
-    assert_eq!(embedded_run.level, 2, "Rule I2: L characters in odd embedding level resolve to level 2");
+    assert_eq!(
+        embedded_run.level, 2,
+        "Rule I2: L characters in odd embedding level resolve to level 2"
+    );
 
     // RLO (Right-to-Left Override): \u{202E} overrides characters to R, resolving to odd level 1 (RTL)
     let text_with_rlo = "English \u{202E}forced rtl\u{202C} English";
     let rlo_runs = bidi.resolve_runs(text_with_rlo);
     assert!(rlo_runs.len() >= 3);
-    let rlo_middle = rlo_runs.iter().find(|r| r.is_rtl).expect("RLO must produce RTL run");
+    let rlo_middle = rlo_runs
+        .iter()
+        .find(|r| r.is_rtl)
+        .expect("RLO must produce RTL run");
     assert_eq!(rlo_middle.level, 1);
     assert!(rlo_middle.is_rtl);
 
@@ -56,7 +62,11 @@ fn test_uax9_paired_brackets_rule_n0() {
     let runs = bidi.resolve_runs(text);
 
     // In pure RTL context with brackets, brackets should not create an isolated LTR run
-    assert_eq!(runs.len(), 1, "Uniform RTL paragraph with brackets should form a single RTL run");
+    assert_eq!(
+        runs.len(),
+        1,
+        "Uniform RTL paragraph with brackets should form a single RTL run"
+    );
     assert!(runs[0].is_rtl);
 }
 
@@ -107,25 +117,39 @@ fn test_uax9_directional_isolates_and_neutral_resolution() {
     let text_with_rli = "User \u{2067}שלום\u{2069} logged in";
     let runs = bidi.resolve_runs(text_with_rli);
     assert!(runs.len() >= 3);
-    let hebrew_run = runs.iter().find(|r| r.is_rtl).expect("RLI must isolate RTL run");
+    let hebrew_run = runs
+        .iter()
+        .find(|r| r.is_rtl)
+        .expect("RLI must isolate RTL run");
     assert_eq!(hebrew_run.level, 1);
     assert_eq!(&text_with_rli[hebrew_run.start..hebrew_run.end], "שלום");
 
     // 2. FSI (First Strong Isolate: \u{2068}) auto-detects direction based on first strong character
     let text_fsi_arabic = "Status: \u{2068}مكتمل\u{2069} done";
     let fsi_runs = bidi.resolve_runs(text_fsi_arabic);
-    let rtl_run = fsi_runs.iter().find(|r| r.is_rtl).expect("FSI with Arabic must isolate as RTL");
+    let rtl_run = fsi_runs
+        .iter()
+        .find(|r| r.is_rtl)
+        .expect("FSI with Arabic must isolate as RTL");
     assert_eq!(&text_fsi_arabic[rtl_run.start..rtl_run.end], "مكتمل");
 
     // 3. Rule N1: Neutral characters between matching numbers adopt direction
     // In LTR context: "a 10 / 20 b" -> "/" resolves to LTR
     let n1_ltr = "a 10 / 20 b";
     let n1_runs = bidi.resolve_runs(n1_ltr);
-    assert_eq!(n1_runs.len(), 1, "Uniform LTR with numbers and neutrals must stay a single LTR run");
+    assert_eq!(
+        n1_runs.len(),
+        1,
+        "Uniform LTR with numbers and neutrals must stay a single LTR run"
+    );
     assert!(!n1_runs[0].is_rtl);
 
     // 4. Delimiter search skipping BN under Rule N1/N2
     let text_with_bn = "Alpha\u{200B} - \u{200B}Beta";
     let bn_runs = bidi.resolve_runs(text_with_bn);
-    assert_eq!(bn_runs.len(), 1, "Neutrals surrounded by L (even with intervening BN) must resolve to L");
+    assert_eq!(
+        bn_runs.len(),
+        1,
+        "Neutrals surrounded by L (even with intervening BN) must resolve to L"
+    );
 }

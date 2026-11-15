@@ -36,7 +36,10 @@ fn test_framebuffer_png_binary_structure_and_chunks() {
     let total_len = png_bytes.len();
     assert_eq!(&png_bytes[total_len - 12..total_len - 8], &[0, 0, 0, 0]);
     assert_eq!(&png_bytes[total_len - 8..total_len - 4], b"IEND");
-    assert_eq!(&png_bytes[total_len - 4..total_len], &[0xAE, 0x42, 0x60, 0x82]);
+    assert_eq!(
+        &png_bytes[total_len - 4..total_len],
+        &[0xAE, 0x42, 0x60, 0x82]
+    );
 }
 
 #[test]
@@ -46,7 +49,11 @@ fn test_framebuffer_export_png_to_disk() {
 
     let tmp_path = std::env::temp_dir().join("strata_test_screenshot.png");
     let export_res = fb.export_png(&tmp_path);
-    assert!(export_res.is_ok(), "export_png must succeed: {:?}", export_res);
+    assert!(
+        export_res.is_ok(),
+        "export_png must succeed: {:?}",
+        export_res
+    );
 
     assert!(tmp_path.exists());
     let file_metadata = std::fs::metadata(&tmp_path).expect("File metadata must exist");
@@ -94,5 +101,9 @@ fn test_framebuffer_perceptual_hash_and_hamming_distance() {
 
     let hash_c = fb_c.compute_phash();
     let dist_ac = FrameBuffer::phash_distance(hash_a, hash_c);
-    assert!(dist_ac > 5, "Structural change must produce significant perceptual distance: got {}", dist_ac);
+    assert!(
+        dist_ac > 5,
+        "Structural change must produce significant perceptual distance: got {}",
+        dist_ac
+    );
 }

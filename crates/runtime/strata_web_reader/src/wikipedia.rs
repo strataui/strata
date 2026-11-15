@@ -6,11 +6,11 @@
 //! - Lead summary extraction
 //! - Distraction-free article sectioning and responsive layout compilation
 
-use strata_dom::{Attribute, NodeBlueprint, Tag};
 use crate::ast::SemanticNode;
 use crate::parser::HtmlParser;
 use crate::reader_theme::ReaderTheme;
 use crate::transpiler::WebTranspiler;
+use strata_dom::{Attribute, NodeBlueprint, Tag};
 
 /// Key-value metadata row extracted from a Wikipedia infobox.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,13 +99,10 @@ impl WikipediaEngine {
         let mut source_nodes: Vec<SemanticNode> = Vec::new();
         for node in &root_nodes {
             let parser_outputs = node.find_by_class("mw-parser-output");
-            if let Some(po) = parser_outputs
-                .into_iter()
-                .max_by_key(|n| match n {
-                    SemanticNode::Element { children, .. } => children.len(),
-                    _ => 0,
-                })
-            {
+            if let Some(po) = parser_outputs.into_iter().max_by_key(|n| match n {
+                SemanticNode::Element { children, .. } => children.len(),
+                _ => 0,
+            }) {
                 if let SemanticNode::Element { children, .. } = po {
                     if !children.is_empty() {
                         source_nodes = children.clone();
@@ -413,21 +410,25 @@ impl WikipediaEngine {
             Tag::Div,
             vec!["mb-5 pb-4 border-b ".to_string() + &theme.border_class],
             Vec::new(),
-            vec![
-                NodeBlueprint::element(
-                    Tag::H1,
-                    vec![format!("text-4xl sm:text-5xl font-black tracking-tight {}", theme.heading_class)],
-                    Vec::new(),
-                    vec![NodeBlueprint::text(article.title.clone())],
-                ),
-            ],
+            vec![NodeBlueprint::element(
+                Tag::H1,
+                vec![format!(
+                    "text-4xl sm:text-5xl font-black tracking-tight {}",
+                    theme.heading_class
+                )],
+                Vec::new(),
+                vec![NodeBlueprint::text(article.title.clone())],
+            )],
         ));
 
         // 2. Lead Summary Paragraph (if present)
         if !article.summary.is_empty() {
             root_children.push(NodeBlueprint::element(
                 Tag::P,
-                vec![format!("text-base leading-relaxed mb-6 {}", theme.text_class)],
+                vec![format!(
+                    "text-base leading-relaxed mb-6 {}",
+                    theme.text_class
+                )],
                 Vec::new(),
                 vec![NodeBlueprint::text(article.summary.clone())],
             ));
@@ -454,7 +455,10 @@ impl WikipediaEngine {
                     _ => Tag::H4,
                 };
                 let heading_class = match section.level {
-                    2 => format!("text-2xl font-bold tracking-tight mt-10 mb-4 pb-2 border-b {} {}", theme.border_class, theme.heading_class),
+                    2 => format!(
+                        "text-2xl font-bold tracking-tight mt-10 mb-4 pb-2 border-b {} {}",
+                        theme.border_class, theme.heading_class
+                    ),
                     3 => format!("text-xl font-semibold mt-8 mb-3 {}", theme.heading_class),
                     _ => format!("text-lg font-medium mt-6 mb-2 {}", theme.heading_class),
                 };
@@ -487,12 +491,7 @@ impl WikipediaEngine {
             theme.max_width_px, theme.bg_class, theme.text_class
         );
 
-        NodeBlueprint::element(
-            Tag::Div,
-            vec![container_style],
-            Vec::new(),
-            root_children,
-        )
+        NodeBlueprint::element(Tag::Div, vec![container_style], Vec::new(), root_children)
     }
 
     fn render_infobox_card(infobox: &WikipediaInfobox, theme: &ReaderTheme) -> NodeBlueprint {
@@ -500,7 +499,10 @@ impl WikipediaEngine {
 
         card_children.push(NodeBlueprint::element(
             Tag::H3,
-            vec![format!("text-lg font-bold pb-2 mb-2 border-b {} {}", theme.border_class, theme.heading_class)],
+            vec![format!(
+                "text-lg font-bold pb-2 mb-2 border-b {} {}",
+                theme.border_class, theme.heading_class
+            )],
             Vec::new(),
             vec![NodeBlueprint::text(infobox.title.clone())],
         ));
@@ -509,18 +511,27 @@ impl WikipediaEngine {
         for row in infobox.rows.iter().take(8) {
             row_nodes.push(NodeBlueprint::element(
                 Tag::Tr,
-                vec!["w-full flex flex-row items-baseline border-b last:border-b-0 ".to_string() + &theme.border_class],
+                vec![
+                    "w-full flex flex-row items-baseline border-b last:border-b-0 ".to_string()
+                        + &theme.border_class,
+                ],
                 Vec::new(),
                 vec![
                     NodeBlueprint::element(
                         Tag::Td,
-                        vec![format!("py-1.5 pr-4 text-xs font-semibold w-44 {}", theme.heading_class)],
+                        vec![format!(
+                            "py-1.5 pr-4 text-xs font-semibold w-44 {}",
+                            theme.heading_class
+                        )],
                         Vec::new(),
                         vec![NodeBlueprint::text(row.label.clone())],
                     ),
                     NodeBlueprint::element(
                         Tag::Td,
-                        vec![format!("py-1.5 text-xs leading-relaxed flex-1 {}", theme.text_class)],
+                        vec![format!(
+                            "py-1.5 text-xs leading-relaxed flex-1 {}",
+                            theme.text_class
+                        )],
                         Vec::new(),
                         vec![NodeBlueprint::text(row.value.clone())],
                     ),
@@ -567,7 +578,10 @@ impl WikipediaEngine {
                 Vec::new(),
                 vec![NodeBlueprint::element(
                     Tag::A,
-                    vec![format!("text-xs font-medium cursor-pointer {}", theme.link_class)],
+                    vec![format!(
+                        "text-xs font-medium cursor-pointer {}",
+                        theme.link_class
+                    )],
                     vec![Attribute::property("href", format!("#{}", item.anchor))],
                     vec![NodeBlueprint::text(label)],
                 )],
@@ -584,7 +598,10 @@ impl WikipediaEngine {
             vec![
                 NodeBlueprint::element(
                     Tag::H4,
-                    vec![format!("text-xs font-bold uppercase tracking-wider mb-2 {}", theme.heading_class)],
+                    vec![format!(
+                        "text-xs font-bold uppercase tracking-wider mb-2 {}",
+                        theme.heading_class
+                    )],
                     Vec::new(),
                     vec![NodeBlueprint::text("Contents")],
                 ),

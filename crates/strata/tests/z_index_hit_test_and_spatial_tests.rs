@@ -71,8 +71,16 @@ fn test_card1_absolute_z50_dropdown_over_card2_dispatches_to_dropdown_and_spatia
 
     // 1. Direct hit_test_click / dispatch_mouse_click must hit the z-50 dropdown button, NOT Card #2
     assert!(runtime.dispatch_mouse_click(ox, oy, 0, 1));
-    assert_eq!(menu_clicks.get(), 1, "Click on overlapping z-50 dropdown must trigger menu handler");
-    assert_eq!(card2_clicks.get(), 0, "Card #2 beneath z-50 dropdown must not steal click");
+    assert_eq!(
+        menu_clicks.get(),
+        1,
+        "Click on overlapping z-50 dropdown must trigger menu handler"
+    );
+    assert_eq!(
+        card2_clicks.get(),
+        0,
+        "Card #2 beneath z-50 dropdown must not steal click"
+    );
 
     // 2. Property, cursor, and hover node-path hit-testing must also resolve to the z-50 dropdown button
     let prop = AppRuntime::hit_test_property(
@@ -90,7 +98,10 @@ fn test_card1_absolute_z50_dropdown_over_card2_dispatches_to_dropdown_and_spatia
     let hover_path =
         AppRuntime::hit_test_node_path(&runtime.root_blueprint, &runtime.layout_root, ox, oy);
     // Path [0, 1, 0, 0] is inside Card #1 -> Dropdown -> Panel -> Button (not Card #2 at [1, ...])
-    assert_eq!(hover_path.as_deref().and_then(|p| p.first().copied()), Some(0));
+    assert_eq!(
+        hover_path.as_deref().and_then(|p| p.first().copied()),
+        Some(0)
+    );
 
     // 3. SpatialIndex::query_event_at_point & query_entity_at_point must also hit the z-50 dropdown button
     let (_, spatial_handler, spatial_bounds) = runtime

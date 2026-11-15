@@ -52,7 +52,9 @@ fn test_window_manager_modal_modality_and_cascade() {
         height: 320,
         ..Default::default()
     };
-    let modal = wm.create_modal(parent, modal_cfg).expect("Modal creation should succeed");
+    let modal = wm
+        .create_modal(parent, modal_cfg)
+        .expect("Modal creation should succeed");
 
     // Parent is now modal-blocked
     assert!(wm.is_modal_blocked(parent));
@@ -97,7 +99,10 @@ fn test_menu_accelerators_and_roles() {
     assert_eq!(acc1.to_display_string(false), "Ctrl+S");
 
     let acc2 = MenuAccelerator::parse("Ctrl+Shift+P").expect("Parsing Ctrl+Shift+P should succeed");
-    assert_eq!(acc2.modifiers, vec![AcceleratorModifier::Ctrl, AcceleratorModifier::Shift]);
+    assert_eq!(
+        acc2.modifiers,
+        vec![AcceleratorModifier::Ctrl, AcceleratorModifier::Shift]
+    );
     assert_eq!(acc2.key, KeyCode::KeyP);
     assert_eq!(acc2.to_display_string(false), "Ctrl+Shift+P");
 

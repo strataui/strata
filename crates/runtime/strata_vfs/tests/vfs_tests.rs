@@ -140,7 +140,9 @@ fn test_vfs_symlink_traversal_prevention_exploit_3a() {
     let write_res = write_all(&vfs_symlink, b"OVERWRITTEN");
     match write_res {
         Err(FsError::SecurityViolation(_)) => {}
-        other => panic!("Expected SecurityViolation when writing to escaping symlink, got: {other:?}"),
+        other => {
+            panic!("Expected SecurityViolation when writing to escaping symlink, got: {other:?}")
+        }
     }
     // Verify outside file was NOT modified
     let secret_content = std::fs::read_to_string(&secret_file).unwrap();
@@ -150,7 +152,9 @@ fn test_vfs_symlink_traversal_prevention_exploit_3a() {
     let remove_res = remove_file(&vfs_symlink);
     match remove_res {
         Err(FsError::SecurityViolation(_)) => {}
-        other => panic!("Expected SecurityViolation when removing escaping symlink, got: {other:?}"),
+        other => {
+            panic!("Expected SecurityViolation when removing escaping symlink, got: {other:?}")
+        }
     }
 
     // 2. Directory symlink pointing outside
@@ -233,10 +237,15 @@ fn test_vfs_windows_drive_letters_ads_and_dos_devices_rejected() {
 
     // 1. Windows drive prefix stripping in sanitize_subpath
     let drive_path = app_data().join("C:/Windows/System32");
-    assert_eq!(drive_path.subpath(), std::path::Path::new("Windows/System32"));
+    assert_eq!(
+        drive_path.subpath(),
+        std::path::Path::new("Windows/System32")
+    );
 
     // 2. DOS reserved devices rejected
-    for device in &["CON", "PRN", "AUX", "NUL", "COM1", "LPT1", "con.txt", "nul.json"] {
+    for device in &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "LPT1", "con.txt", "nul.json",
+    ] {
         let dev_path = VfsPath::new(VfsRoot::AppData, std::path::PathBuf::from(device));
         let res = strata_vfs::driver::to_physical_path(&dev_path);
         assert!(
@@ -246,7 +255,10 @@ fn test_vfs_windows_drive_letters_ads_and_dos_devices_rejected() {
     }
 
     // 3. Alternate Data Streams (ADS) containing colon rejected
-    let ads_path = VfsPath::new(VfsRoot::AppData, std::path::PathBuf::from("payload.exe::$DATA"));
+    let ads_path = VfsPath::new(
+        VfsRoot::AppData,
+        std::path::PathBuf::from("payload.exe::$DATA"),
+    );
     let res = strata_vfs::driver::to_physical_path(&ads_path);
     assert!(
         matches!(res, Err(FsError::SecurityViolation(_))),
@@ -272,7 +284,6 @@ fn test_vfs_windows_drive_letters_ads_and_dos_devices_rejected() {
     let _ = std::fs::remove_dir_all(&test_dir);
     clear_test_overrides();
 }
-
 
 #[test]
 fn test_app_id_validation_and_path_traversal_prevention() {
@@ -306,5 +317,3 @@ fn test_app_id_validation_and_path_traversal_prevention() {
     // Reset back to default
     assert!(set_app_id("strata_app"));
 }
-
-

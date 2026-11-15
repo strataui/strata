@@ -37,7 +37,12 @@ impl ViewTransitionManager {
     }
 
     /// Starts view transitions by pairing previously captured old bounds with newly computed layout rects.
-    pub fn start_transition(&mut self, new_elements: &[(String, Rect)], now_ms: f64, duration_ms: f32) {
+    pub fn start_transition(
+        &mut self,
+        new_elements: &[(String, Rect)],
+        now_ms: f64,
+        duration_ms: f32,
+    ) {
         for (name, new_rect) in new_elements {
             if let Some(old_rect) = self.pending_old_snapshots.remove(name) {
                 self.active_transitions.insert(

@@ -11,8 +11,7 @@ use crate::geometry::{LayoutGeometry, Rect};
 use crate::intrinsic::compute_min_max_sizes;
 use crate::tree::LayoutNode;
 use strata_style::types::{
-    BorderCollapse, BorderStyle, CaptionSide, Color, Display, Position, TableLayout,
-    VerticalAlign,
+    BorderCollapse, BorderStyle, CaptionSide, Color, Display, Position, TableLayout, VerticalAlign,
 };
 
 /// Origin element type of a border edge in the collapsing border model.
@@ -170,7 +169,6 @@ impl TableBorderGrid {
         }
     }
 }
-
 
 /// Location of a table cell within the container's hierarchy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

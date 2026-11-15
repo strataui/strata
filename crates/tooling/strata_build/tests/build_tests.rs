@@ -104,7 +104,10 @@ fn test_dynamic_branding_plugin_hook() {
         .expect("Plugin execution failed");
 
     assert_eq!(config.app.name, "enterprise-flight-controller-v2");
-    assert_eq!(config.window.title, "enterprise-flight-controller-v2 (PROD)");
+    assert_eq!(
+        config.window.title,
+        "enterprise-flight-controller-v2 (PROD)"
+    );
 
     // Modify packaging manifest
     let mut manifest = PackageManifest {
@@ -174,7 +177,10 @@ fn test_action_registry_dispatch() {
 
     // Register custom action
     actions.register("deploy-dry-run", |ctx| {
-        Ok(format!("Ready to deploy {} to {}", ctx.config.app.name, ctx.environment))
+        Ok(format!(
+            "Ready to deploy {} to {}",
+            ctx.config.app.name, ctx.environment
+        ))
     });
 
     let deploy_ctx = ActionContext {
@@ -183,6 +189,8 @@ fn test_action_registry_dispatch() {
         arguments: vec!["--force".to_string()],
         config: ProjectConfig::default(),
     };
-    let deploy_res = actions.dispatch(&deploy_ctx).expect("custom deploy action failed");
+    let deploy_res = actions
+        .dispatch(&deploy_ctx)
+        .expect("custom deploy action failed");
     assert_eq!(deploy_res, "Ready to deploy strata-app to us-west-2");
 }

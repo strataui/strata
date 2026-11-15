@@ -19,7 +19,11 @@ pub struct AccordionState {
 
 impl AccordionState {
     /// Creates a new accordion state.
-    pub fn new(accordion_type: AccordionType, collapsible: bool, default_value: Vec<String>) -> Self {
+    pub fn new(
+        accordion_type: AccordionType,
+        collapsible: bool,
+        default_value: Vec<String>,
+    ) -> Self {
         Self {
             accordion_type,
             collapsible,
@@ -79,7 +83,11 @@ impl AccordionState {
 }
 
 /// Convenience hook to create an accordion state controller.
-pub fn use_accordion(accordion_type: AccordionType, collapsible: bool, default_value: Vec<String>) -> AccordionState {
+pub fn use_accordion(
+    accordion_type: AccordionType,
+    collapsible: bool,
+    default_value: Vec<String>,
+) -> AccordionState {
     AccordionState::new(accordion_type, collapsible, default_value)
 }
 

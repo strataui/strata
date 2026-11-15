@@ -117,15 +117,16 @@ impl JsBigInt {
             return Err("SyntaxError: Invalid BigInt literal".to_string());
         }
 
-        let (radix, digits) = if let Some(hex) = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
-            (16u32, hex)
-        } else if let Some(bin) = body.strip_prefix("0b").or_else(|| body.strip_prefix("0B")) {
-            (2u32, bin)
-        } else if let Some(oct) = body.strip_prefix("0o").or_else(|| body.strip_prefix("0O")) {
-            (8u32, oct)
-        } else {
-            (10u32, body)
-        };
+        let (radix, digits) =
+            if let Some(hex) = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
+                (16u32, hex)
+            } else if let Some(bin) = body.strip_prefix("0b").or_else(|| body.strip_prefix("0B")) {
+                (2u32, bin)
+            } else if let Some(oct) = body.strip_prefix("0o").or_else(|| body.strip_prefix("0O")) {
+                (8u32, oct)
+            } else {
+                (10u32, body)
+            };
 
         if digits.is_empty() {
             return Err("SyntaxError: Invalid BigInt literal".to_string());

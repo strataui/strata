@@ -83,7 +83,9 @@ pub fn bind_parameters(params: &[String], args: Vec<JsValue>, scope: &Rc<RefCell
     for param in params {
         if let Some(rest_name) = param.strip_prefix("...") {
             let rest_vals: Vec<JsValue> = arg_iter.by_ref().collect();
-            scope.borrow_mut().declare(rest_name, JsValue::new_array(rest_vals));
+            scope
+                .borrow_mut()
+                .declare(rest_name, JsValue::new_array(rest_vals));
             break;
         } else {
             let val = arg_iter.next().unwrap_or(JsValue::Undefined);

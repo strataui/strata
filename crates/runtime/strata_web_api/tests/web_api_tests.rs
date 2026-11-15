@@ -40,7 +40,9 @@ fn test_form_data_payload_generation() {
 
     let payload = form.to_multipart_payload("boundary123");
     let payload_str = String::from_utf8(payload).unwrap();
-    assert!(payload_str.contains("--boundary123\r\nContent-Disposition: form-data; name=\"username\"\r\n\r\nalice\r\n"));
+    assert!(payload_str.contains(
+        "--boundary123\r\nContent-Disposition: form-data; name=\"username\"\r\n\r\nalice\r\n"
+    ));
     assert!(payload_str.contains("--boundary123--\r\n"));
 }
 
@@ -111,7 +113,8 @@ fn test_clipboard_operations() {
     clip.write_text("Copied to Strata Clipboard").unwrap();
     assert_eq!(clip.read_text().unwrap(), "Copied to Strata Clipboard");
 
-    clip.write_data("application/json", b"{\"key\":\"val\"}").unwrap();
+    clip.write_data("application/json", b"{\"key\":\"val\"}")
+        .unwrap();
     assert_eq!(
         clip.read_data("application/json").unwrap(),
         Some(b"{\"key\":\"val\"}".to_vec())
@@ -160,7 +163,8 @@ fn test_gzip_deflate_brotli_decompression() {
     assert_eq!(String::from_utf8(decomp_gz).unwrap(), original);
 
     // 2. Deflate
-    let mut def_encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut def_encoder =
+        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     def_encoder.write_all(original.as_bytes()).unwrap();
     let def_bytes = def_encoder.finish().unwrap();
 
@@ -186,18 +190,25 @@ fn test_w3c_cache_storage_and_cache_control() {
     headers.set("ETag", "\"123456\"");
     let response = Response::new(200, "OK", headers, b"Cached stylesheet content".to_vec());
 
-    let stored = cache.put("https://cdn.strata.dev/style.css", response).unwrap();
+    let stored = cache
+        .put("https://cdn.strata.dev/style.css", response)
+        .unwrap();
     assert!(stored);
 
-    let matched = cache.match_url("https://cdn.strata.dev/style.css").expect("Cache hit expected");
+    let matched = cache
+        .match_url("https://cdn.strata.dev/style.css")
+        .expect("Cache hit expected");
     assert_eq!(matched.text().unwrap(), "Cached stylesheet content");
 
     // no-store must NOT be stored in cache
     let mut no_store_headers = Headers::new();
     no_store_headers.set("Cache-Control", "no-store");
     let no_store_res = Response::new(200, "OK", no_store_headers, b"Private user data".to_vec());
-    let stored_no_store = cache.put("https://api.strata.dev/user/private", no_store_res).unwrap();
+    let stored_no_store = cache
+        .put("https://api.strata.dev/user/private", no_store_res)
+        .unwrap();
     assert!(!stored_no_store);
-    assert!(cache.match_url("https://api.strata.dev/user/private").is_none());
+    assert!(cache
+        .match_url("https://api.strata.dev/user/private")
+        .is_none());
 }
-
