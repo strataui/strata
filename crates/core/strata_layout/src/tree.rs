@@ -456,7 +456,15 @@ impl LayoutNode {
 
     /// Formats the children of this node with an active depth guard.
     pub fn layout_children_guarded(&mut self, guard: LayoutDepthGuard) {
-        if self.children.is_empty() || guard.is_exhausted() {
+        self.layout_children_inner_guarded(guard, true);
+    }
+
+    pub(crate) fn layout_children_inner_guarded(
+        &mut self,
+        guard: LayoutDepthGuard,
+        resolve_positioned: bool,
+    ) {
+        if (self.children.is_empty() && self.inline_items.is_empty()) || guard.is_exhausted() {
             return;
         }
 
@@ -464,25 +472,40 @@ impl LayoutNode {
         let content_h = self.geometry.content_box.height;
         let preserved_geom = self.geometry;
 
-        let container_avail_w =
-            preserved_geom.border_box.width + self.style.margin.left + self.style.margin.right;
-        let container_avail_h =
-            preserved_geom.border_box.height + self.style.margin.top + self.style.margin.bottom;
+        let saved_w = self.style.width;
+        let saved_h = self.style.height;
+        let saved_min_w = self.style.min_width;
+        let saved_max_w = self.style.max_width;
+        let saved_min_h = self.style.min_height;
+        let saved_max_h = self.style.max_height;
+
+        let pin_w = preserved_geom.border_box.width > 0.0
+            || matches!(saved_w, strata_style::types::Dimension::Percent(_));
+        let pin_h = preserved_geom.border_box.height > 0.0
+            || matches!(saved_h, strata_style::types::Dimension::Percent(_));
+
+        let container_avail_w = if pin_w {
+            self.style.width = strata_style::types::Dimension::Px(preserved_geom.border_box.width);
+            self.style.min_width = strata_style::types::Dimension::Auto;
+            self.style.max_width = strata_style::types::Dimension::Auto;
+            preserved_geom.border_box.width
+        } else {
+            preserved_geom.border_box.width + self.style.margin.left + self.style.margin.right
+        };
+
+        let container_avail_h = if pin_h {
+            self.style.height =
+                strata_style::types::Dimension::Px(preserved_geom.border_box.height);
+            self.style.min_height = strata_style::types::Dimension::Auto;
+            self.style.max_height = strata_style::types::Dimension::Auto;
+            preserved_geom.border_box.height
+        } else {
+            preserved_geom.border_box.height + self.style.margin.top + self.style.margin.bottom
+        };
 
         match self.style.display {
             Display::Flex | Display::InlineFlex => {
-                let inset_stretched = matches!(
-                    self.style.position,
-                    strata_style::types::Position::Absolute | strata_style::types::Position::Fixed
-                ) && self.style.height
-                    == strata_style::types::Dimension::Auto
-                    && !matches!(self.style.insets.top, strata_style::types::Dimension::Auto)
-                    && !matches!(
-                        self.style.insets.bottom,
-                        strata_style::types::Dimension::Auto
-                    )
-                    && content_h > 0.0;
-                let definite_cross = if inset_stretched {
+                let definite_cross = if content_h > 0.0 && !pin_h {
                     Some(content_h)
                 } else {
                     None
@@ -513,7 +536,7 @@ impl LayoutNode {
             | Display::TableCaption
             | Display::TableColumnGroup
             | Display::TableColumn => {
-                crate::box_model::solve_block_children_with_exclusions_guarded(
+                let block_h = crate::box_model::solve_block_children_with_exclusions_guarded(
                     self,
                     content_w,
                     content_h,
@@ -521,9 +544,24 @@ impl LayoutNode {
                     0.0,
                     guard,
                 );
+                if saved_h == strata_style::types::Dimension::Auto {
+                    self.geometry.border_box.height = crate::box_model::clamp_dimension(
+                        block_h,
+                        saved_min_h,
+                        saved_max_h,
+                        content_h,
+                    );
+                }
             }
             Display::None => {}
         }
+
+        self.style.width = saved_w;
+        self.style.height = saved_h;
+        self.style.min_width = saved_min_w;
+        self.style.max_width = saved_max_w;
+        self.style.min_height = saved_min_h;
+        self.style.max_height = saved_max_h;
 
         let clips_y = self.style.overflow_y != strata_style::types::Overflow::Visible;
         let final_h = if self.style.height == strata_style::types::Dimension::Auto && !clips_y {
@@ -561,10 +599,11 @@ impl LayoutNode {
             self.style.margin,
         );
 
-        if self.style.position != strata_style::types::Position::Static {
+        if resolve_positioned && self.style.position != strata_style::types::Position::Static {
             crate::positioning::solve_positioning_guarded(self, content_w, content_h, guard);
         }
         self.geometry.snap_to_pixel();
+        self.update_scroll_metrics();
         self.last_child_layout_content = Some((content_w, content_h));
         self.layout_cache.is_valid = false;
     }
@@ -658,6 +697,8 @@ impl LayoutNode {
 
         // Subtree layout cache hit: skip re-traversal if available dimensions are unchanged
         let height_independent = self.style.height == strata_style::types::Dimension::Auto
+            && self.style.flex_basis == strata_style::types::Dimension::Auto
+            && self.style.flex_grow == 0.0
             && !matches!(
                 self.style.min_height,
                 strata_style::types::Dimension::Percent(_)
@@ -665,7 +706,13 @@ impl LayoutNode {
             && !matches!(
                 self.style.max_height,
                 strata_style::types::Dimension::Percent(_)
-            );
+            )
+            && !(matches!(
+                self.style.position,
+                strata_style::types::Position::Absolute | strata_style::types::Position::Fixed
+            ) && (!matches!(self.style.insets.bottom, strata_style::types::Dimension::Auto)
+                || matches!(self.style.insets.top, strata_style::types::Dimension::Percent(_))))
+            && !self.has_height_dependent_descendant();
         let height_matches = (available_height - self.layout_cache.available_h).abs() < 0.01
             || (height_independent
                 && (self.style.content_visibility == strata_style::types::ContentVisibility::Auto
@@ -765,6 +812,33 @@ impl LayoutNode {
                 is_valid: true,
             };
         }
+    }
+
+    /// Returns true if any descendant (up to an explicit pixel-height boundary) depends on parent height.
+    fn has_height_dependent_descendant(&self) -> bool {
+        use strata_style::types::{Dimension, Position};
+        let mut stack: Vec<&LayoutNode> = self.children.iter().collect();
+        while let Some(node) = stack.pop() {
+            if matches!(node.style.height, Dimension::Percent(_))
+                || matches!(node.style.min_height, Dimension::Percent(_))
+                || matches!(node.style.max_height, Dimension::Percent(_))
+                || matches!(node.style.flex_basis, Dimension::Percent(_))
+            {
+                return true;
+            }
+            if matches!(node.style.position, Position::Absolute | Position::Fixed)
+                && (!matches!(node.style.insets.bottom, Dimension::Auto)
+                    || matches!(node.style.insets.top, Dimension::Percent(_)))
+            {
+                return true;
+            }
+            if !matches!(node.style.height, Dimension::Px(_)) {
+                for grand in &node.children {
+                    stack.push(grand);
+                }
+            }
+        }
+        false
     }
 
     /// Invalidates layout cache on this node and all descendants using an iterative heap stack.

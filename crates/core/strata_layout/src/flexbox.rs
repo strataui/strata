@@ -287,7 +287,7 @@ pub fn solve_flexbox_with_definite_cross_guarded(
     });
 
     let inner_height = match resolved_height {
-        Some(h) => Some((h - padding.top - padding.bottom).max(0.0)),
+        Some(h) => Some((h - padding.top - padding.bottom - border.top - border.bottom).max(0.0)),
         None => definite_inner_cross,
     };
 
@@ -326,20 +326,8 @@ pub fn solve_flexbox_with_definite_cross_guarded(
             AlignSelf::Baseline => AlignItems::Baseline,
         };
 
-        let should_shrink_child = if is_row {
-            child.style.width == Dimension::Auto
-                && child.style.flex_basis == Dimension::Auto
-                && child.style.flex_grow == 0.0
-        } else {
-            child.style.width == Dimension::Auto && effective_align != AlignItems::Stretch
-        };
-
-        if should_shrink_child && child.style.display == strata_style::types::Display::Flex {
-            child.style.display = strata_style::types::Display::InlineFlex;
-        }
-
         let item_w_opt = resolve_dimension_with_node(child.style.width, inner_width, child).or_else(|| {
-            if child.style.flex_basis != Dimension::Auto {
+            if is_row && child.style.flex_basis != Dimension::Auto {
                 let basis = resolve_dimension_with_node(child.style.flex_basis, inner_width, child)?;
                 if basis > 0.0 {
                     Some(basis)
@@ -348,7 +336,7 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                     // For measuring its cross size, give it the available inner_width so text doesn't wrap to 0px.
                     None
                 }
-            } else if is_row {
+            } else if is_row || effective_align != AlignItems::Stretch {
                 let min_max = crate::intrinsic::compute_min_max_sizes(child, Some(inner_width));
                 Some(min_max.max_content.min(inner_width))
             } else {
@@ -373,20 +361,70 @@ pub fn solve_flexbox_with_definite_cross_guarded(
         }
 
         let cg = guard.enter().unwrap_or(guard);
-        let (mut child_w, mut child_h) = match (
-            item_w_opt,
-            resolve_dimension(child.style.height, target_avail_h),
-        ) {
+        let clamped_item_w = item_w_opt.map(|w| {
+            clamp_dimension_with_node(
+                w,
+                child.style.min_width,
+                child.style.max_width,
+                inner_width,
+                child,
+            )
+        });
+        let resolved_item_h = resolve_dimension(child.style.height, target_avail_h).map(|h| {
+            clamp_dimension(
+                h,
+                child.style.min_height,
+                child.style.max_height,
+                target_avail_h,
+            )
+        });
+        let (mut child_w, mut child_h) = match (clamped_item_w, resolved_item_h) {
             (Some(w), Some(h)) => {
+                let saved_w = child.style.width;
+                let saved_min_w = child.style.min_width;
+                let saved_max_w = child.style.max_width;
+                let saved_h = child.style.height;
+                let saved_min_h = child.style.min_height;
+                let saved_max_h = child.style.max_height;
+                child.style.width = Dimension::Px(w);
+                child.style.min_width = Dimension::Auto;
+                child.style.max_width = Dimension::Auto;
+                child.style.height = Dimension::Px(h);
+                child.style.min_height = Dimension::Auto;
+                child.style.max_height = Dimension::Auto;
                 child.compute_layout_guarded(w, h, None, 0.0, cg);
+                child.style.width = saved_w;
+                child.style.min_width = saved_min_w;
+                child.style.max_width = saved_max_w;
+                child.style.height = saved_h;
+                child.style.min_height = saved_min_h;
+                child.style.max_height = saved_max_h;
                 (w, h)
             }
             (Some(w), None) => {
+                let saved_w = child.style.width;
+                let saved_min_w = child.style.min_width;
+                let saved_max_w = child.style.max_width;
+                child.style.width = Dimension::Px(w);
+                child.style.min_width = Dimension::Auto;
+                child.style.max_width = Dimension::Auto;
                 child.compute_layout_guarded(w, target_avail_h, None, 0.0, cg);
+                child.style.width = saved_w;
+                child.style.min_width = saved_min_w;
+                child.style.max_width = saved_max_w;
                 (w, child.geometry.border_box.height)
             }
             (None, Some(h)) => {
+                let saved_h = child.style.height;
+                let saved_min_h = child.style.min_height;
+                let saved_max_h = child.style.max_height;
+                child.style.height = Dimension::Px(h);
+                child.style.min_height = Dimension::Auto;
+                child.style.max_height = Dimension::Auto;
                 child.compute_layout_guarded(inner_width, h, None, 0.0, cg);
+                child.style.height = saved_h;
+                child.style.min_height = saved_min_h;
+                child.style.max_height = saved_max_h;
                 (child.geometry.border_box.width, h)
             }
             (None, None) => {
@@ -436,13 +474,14 @@ pub fn solve_flexbox_with_definite_cross_guarded(
         // Per W3C Flexbox Level 1 §9.2: If container main size is indefinite (column with height: auto),
         // percentage or 0 flex-basis falls back to content size.
         let mut has_explicit_basis = false;
-        if child.style.flex_basis != Dimension::Auto
-            && (is_row || resolved_height.is_some()) {
-                if let Some(basis_px) = resolve_dimension_with_node(child.style.flex_basis, container_main, child) {
-                    main_size = basis_px;
-                    has_explicit_basis = true;
-                }
+        if child.style.flex_basis != Dimension::Auto && (is_row || inner_height.is_some()) {
+            if let Some(basis_px) =
+                resolve_dimension_with_node(child.style.flex_basis, container_main, child)
+            {
+                main_size = basis_px;
+                has_explicit_basis = true;
             }
+        }
 
         // Automatic minimum size per W3C Flexbox Section 4.5:
         // For a flex item with min-size: auto (the initial value) and visible overflow,
@@ -623,7 +662,7 @@ pub fn solve_flexbox_with_definite_cross_guarded(
     let is_main_definite = if is_row {
         true
     } else {
-        resolved_height.is_some()
+        inner_height.is_some()
     };
 
     for line in &mut lines {
@@ -875,12 +914,31 @@ pub fn solve_flexbox_with_definite_cross_guarded(
         for it in &mut line.items {
             if (it.resolved_main - it.hypothetical_main).abs() > 0.5 {
                 let child = &mut container.children[it.index];
+                child.layout_cache.is_valid = false;
                 if is_row {
+                    let saved_w = child.style.width;
+                    let saved_min_w = child.style.min_width;
+                    let saved_max_w = child.style.max_width;
+                    child.style.width = Dimension::Px(it.resolved_main);
+                    child.style.min_width = Dimension::Auto;
+                    child.style.max_width = Dimension::Auto;
                     child.compute_layout_guarded(it.resolved_main, target_avail_h, None, 0.0, cg);
+                    child.style.width = saved_w;
+                    child.style.min_width = saved_min_w;
+                    child.style.max_width = saved_max_w;
                     it.resolved_cross = child.geometry.border_box.height;
                     it.baseline_offset = compute_first_baseline(child);
                 } else {
+                    let saved_h = child.style.height;
+                    let saved_min_h = child.style.min_height;
+                    let saved_max_h = child.style.max_height;
+                    child.style.height = Dimension::Px(it.resolved_main);
+                    child.style.min_height = Dimension::Auto;
+                    child.style.max_height = Dimension::Auto;
                     child.compute_layout_guarded(inner_width, it.resolved_main, None, 0.0, cg);
+                    child.style.height = saved_h;
+                    child.style.min_height = saved_min_h;
+                    child.style.max_height = saved_max_h;
                     it.resolved_cross = child.geometry.border_box.width;
                     it.baseline_offset = compute_first_baseline(child);
                 }

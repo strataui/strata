@@ -510,7 +510,7 @@ fn truncate_inline_overflow(
             }
             let frag_start = fragment.bounds.x;
             let frag_end = frag_start + fragment.bounds.width;
-            if frag_end <= content_width + 0.01 {
+            if frag_end <= content_width + 1.0 {
                 new_fragments.push(fragment);
                 continue;
             }

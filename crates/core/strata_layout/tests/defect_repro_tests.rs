@@ -515,3 +515,209 @@ fn s1_cross_stretch_relayouts_children_at_final_content_size() {
         panel.children[0].geometry.border_box.width
     );
 }
+
+#[test]
+fn bug1_nested_percentage_flex_grid_and_table_do_not_square_percentages() {
+    use strata_style::types::GridTrack;
+
+    // 1440px row: [24% left pane] + [4px resizer] + [76% right split: 70% + 4px + 30%]
+    let mut root_style = ComputedStyle::default();
+    root_style.display = Display::Flex;
+    root_style.flex_direction = FlexDirection::Row;
+    root_style.width = Dimension::Px(1440.0);
+    root_style.height = Dimension::Px(900.0);
+
+    let mut left_pane_style = ComputedStyle::default();
+    left_pane_style.display = Display::Flex;
+    left_pane_style.flex_direction = FlexDirection::Column;
+    left_pane_style.width = Dimension::Percent(24.0);
+    left_pane_style.height = Dimension::Percent(100.0);
+
+    let mut full_child_style = ComputedStyle::default();
+    full_child_style.display = Display::Block;
+    full_child_style.width = Dimension::Percent(100.0);
+    full_child_style.height = Dimension::Px(40.0);
+
+    let mut resizer_style = ComputedStyle::default();
+    resizer_style.width = Dimension::Px(4.0);
+    resizer_style.flex_shrink = 0.0;
+    resizer_style.height = Dimension::Percent(100.0);
+
+    let mut right_split_style = ComputedStyle::default();
+    right_split_style.display = Display::Flex;
+    right_split_style.flex_direction = FlexDirection::Row;
+    right_split_style.width = Dimension::Percent(76.0);
+    right_split_style.height = Dimension::Percent(100.0);
+
+    let mut center_pane_style = ComputedStyle::default();
+    center_pane_style.display = Display::Grid;
+    center_pane_style.grid_template_columns = vec![GridTrack::Fr(1.0)];
+    center_pane_style.width = Dimension::Percent(70.0);
+    center_pane_style.height = Dimension::Percent(100.0);
+
+    let mut inspector_pane_style = ComputedStyle::default();
+    inspector_pane_style.display = Display::Flex;
+    inspector_pane_style.flex_direction = FlexDirection::Column;
+    inspector_pane_style.width = Dimension::Percent(30.0);
+    inspector_pane_style.height = Dimension::Percent(100.0);
+
+    let left_pane = LayoutNode::with_children(left_pane_style, vec![LayoutNode::new(full_child_style.clone())]);
+    let center_pane = LayoutNode::with_children(center_pane_style, vec![LayoutNode::new(full_child_style.clone())]);
+    let inspector_pane = LayoutNode::with_children(inspector_pane_style, vec![LayoutNode::new(full_child_style)]);
+
+    let right_split = LayoutNode::with_children(
+        right_split_style,
+        vec![
+            center_pane,
+            LayoutNode::new(resizer_style.clone()),
+            inspector_pane,
+        ],
+    );
+
+    let mut root = LayoutNode::with_children(
+        root_style,
+        vec![left_pane, LayoutNode::new(resizer_style), right_split],
+    );
+    root.compute_layout(1440.0, 900.0);
+
+    let left = &root.children[0];
+    let right = &root.children[2];
+    let center = &right.children[0];
+    let inspector = &right.children[2];
+
+    // Left pane is ~344.6px (rounded to 345px); its 100%-width child must match left pane width (not 82.7px)
+    assert!((left.geometry.border_box.width - 345.0).abs() <= 2.0);
+    assert!(
+        (left.children[0].geometry.border_box.width - left.geometry.border_box.width).abs() <= 1.0,
+        "left child width {} != left pane width {}",
+        left.children[0].geometry.border_box.width,
+        left.geometry.border_box.width
+    );
+    assert_eq!(left.style.width, Dimension::Percent(24.0));
+
+    // Nested 76% -> 70% Grid pane (~764px) and 76% -> 30% Flex pane (~327px) must lay out children at full pane width
+    assert!((center.geometry.border_box.width - 764.0).abs() <= 3.0);
+    assert!(
+        (center.children[0].geometry.border_box.width - center.geometry.border_box.width).abs() <= 1.0,
+        "center grid child width {} != center pane width {}",
+        center.children[0].geometry.border_box.width,
+        center.geometry.border_box.width
+    );
+    assert!((inspector.geometry.border_box.width - 327.0).abs() <= 3.0);
+    assert!(
+        (inspector.children[0].geometry.border_box.width - inspector.geometry.border_box.width).abs() <= 1.0,
+        "inspector child width {} != inspector pane width {}",
+        inspector.children[0].geometry.border_box.width,
+        inspector.geometry.border_box.width
+    );
+}
+
+#[test]
+fn bug2_column_flex1_propagates_grown_height_and_invalidates_zero_height_cache() {
+    let mut outer_style = ComputedStyle::default();
+    outer_style.display = Display::Flex;
+    outer_style.flex_direction = FlexDirection::Column;
+    outer_style.width = Dimension::Px(1440.0);
+    outer_style.height = Dimension::Percent(100.0);
+
+    let mut header_style = ComputedStyle::default();
+    header_style.width = Dimension::Percent(100.0);
+    header_style.height = Dimension::Px(30.0);
+    header_style.flex_shrink = 0.0;
+
+    // Middle container uses flex-1 (height: Auto, flex_grow: 1, flex_basis: 0%) WITHOUT h-full
+    let mut middle_style = ComputedStyle::default();
+    middle_style.display = Display::Flex;
+    middle_style.flex_direction = FlexDirection::Column;
+    middle_style.width = Dimension::Percent(100.0);
+    middle_style.height = Dimension::Auto;
+    middle_style.flex_grow = 1.0;
+    middle_style.flex_shrink = 1.0;
+    middle_style.flex_basis = Dimension::Percent(0.0);
+
+    let mut inner_flex1_style = ComputedStyle::default();
+    inner_flex1_style.display = Display::Block;
+    inner_flex1_style.width = Dimension::Percent(100.0);
+    inner_flex1_style.height = Dimension::Auto;
+    inner_flex1_style.flex_grow = 1.0;
+    inner_flex1_style.flex_shrink = 1.0;
+    inner_flex1_style.flex_basis = Dimension::Percent(0.0);
+
+    let middle = LayoutNode::with_children(middle_style, vec![LayoutNode::new(inner_flex1_style)]);
+    let mut outer = LayoutNode::with_children(
+        outer_style,
+        vec![LayoutNode::new(header_style), middle],
+    );
+
+    outer.compute_layout(1440.0, 900.0);
+    assert!((outer.children[1].geometry.border_box.height - 870.0).abs() <= 1.0);
+    assert!(
+        (outer.children[1].children[0].geometry.border_box.height - 870.0).abs() <= 1.0,
+        "inner flex-1 child height {} did not expand to 870px",
+        outer.children[1].children[0].geometry.border_box.height
+    );
+
+    // Resize vertically from 900 -> 700: cache must not serve stale 870px height
+    outer.compute_layout(1440.0, 700.0);
+    assert!((outer.children[1].geometry.border_box.height - 670.0).abs() <= 1.0);
+    assert!(
+        (outer.children[1].children[0].geometry.border_box.height - 670.0).abs() <= 1.0,
+        "inner flex-1 child height {} did not update to 670px on resize",
+        outer.children[1].children[0].geometry.border_box.height
+    );
+}
+
+#[test]
+fn bug4_flex_children_never_permanently_mutate_to_inline_flex() {
+    // Card inside a non-stretching flex-col (items-start) has a 400px header and an auto-width
+    // `display: flex; justify-content: space-between` footer row without `w-full`.
+    let mut outer_col = ComputedStyle::default();
+    outer_col.display = Display::Flex;
+    outer_col.flex_direction = FlexDirection::Column;
+    outer_col.align_items = AlignItems::FlexStart;
+    outer_col.width = Dimension::Px(800.0);
+    outer_col.height = Dimension::Px(400.0);
+
+    let mut card_style = ComputedStyle::default();
+    card_style.display = Display::Flex;
+    card_style.flex_direction = FlexDirection::Column;
+    card_style.width = Dimension::Auto;
+
+    let mut header_style = ComputedStyle::default();
+    header_style.width = Dimension::Px(400.0);
+    header_style.height = Dimension::Px(32.0);
+
+    let mut footer_row_style = ComputedStyle::default();
+    footer_row_style.display = Display::Flex;
+    footer_row_style.flex_direction = FlexDirection::Row;
+    footer_row_style.justify_content = JustifyContent::SpaceBetween;
+    footer_row_style.width = Dimension::Auto;
+    footer_row_style.height = Dimension::Px(28.0);
+
+    let mut pill = ComputedStyle::default();
+    pill.width = Dimension::Px(60.0);
+    pill.height = Dimension::Px(20.0);
+
+    let footer_row = LayoutNode::with_children(
+        footer_row_style,
+        vec![LayoutNode::new(pill.clone()), LayoutNode::new(pill)],
+    );
+    let card = LayoutNode::with_children(card_style, vec![LayoutNode::new(header_style), footer_row]);
+    let mut root = LayoutNode::with_children(outer_col, vec![card]);
+
+    root.compute_layout(800.0, 400.0);
+
+    let card_node = &root.children[0];
+    let footer_node = &card_node.children[1];
+    assert_eq!(card_node.style.display, Display::Flex);
+    assert_eq!(footer_node.style.display, Display::Flex);
+    assert!((card_node.geometry.border_box.width - 400.0).abs() <= 1.0);
+    assert!((footer_node.geometry.border_box.width - 400.0).abs() <= 1.0);
+    // Right pill in justify-between footer must sit at 400 - 60 = 340px (not collapsed to 60px)
+    assert!(
+        (footer_node.children[1].geometry.border_box.x - 340.0).abs() <= 1.0,
+        "justify-between right child x {} collapsed instead of reaching 340",
+        footer_node.children[1].geometry.border_box.x
+    );
+}
+

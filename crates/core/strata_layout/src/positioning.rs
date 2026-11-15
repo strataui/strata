@@ -91,15 +91,6 @@ pub fn solve_positioning_guarded(
     );
 
     solve_positioning_children_guarded(container, initial_cb, guard);
-
-    // W3C CSS Flexbox Level 1 §4.1: the static position of an absolutely
-    // positioned child of a flex container is resolved as if the child were
-    // the sole flex item, honoring `justify-content` on the main axis and
-    // `align-self`/`align-items` on the cross axis. Only axes whose insets
-    // are `auto` use the static position.
-    if matches!(container.style.display, Display::Flex | Display::InlineFlex) {
-        apply_flex_static_positions(container);
-    }
 }
 
 /// Repositions absolutely positioned flex children that rely on the static
@@ -122,7 +113,9 @@ fn apply_flex_static_positions(container: &mut LayoutNode) {
         let right_auto = matches!(child.style.insets.right, Dimension::Auto);
         let top_auto = matches!(child.style.insets.top, Dimension::Auto);
         let bottom_auto = matches!(child.style.insets.bottom, Dimension::Auto);
-        if !(left_auto || right_auto || top_auto || bottom_auto) {
+        let horiz_static = left_auto && right_auto;
+        let vert_static = top_auto && bottom_auto;
+        if !(horiz_static || vert_static) {
             continue;
         }
 
@@ -162,14 +155,15 @@ fn apply_flex_static_positions(container: &mut LayoutNode) {
             content.y + main_offset + child.style.margin.top
         };
 
-        // A specified inset wins; only `auto` insets fall back to the
-        // flex-derived static position.
-        let dx = if left_auto {
+        // W3C CSS Flexbox Level 1 §4.1: static position on an axis applies only
+        // when BOTH insets on that axis are `auto`. Any specified inset (`left`
+        // OR `right`, `top` OR `bottom`) anchors to the containing block.
+        let dx = if horiz_static {
             static_x - child.geometry.border_box.x
         } else {
             0.0
         };
-        let dy = if top_auto {
+        let dy = if vert_static {
             static_y - child.geometry.border_box.y
         } else {
             0.0
@@ -329,6 +323,12 @@ pub fn solve_positioning_children_guarded(
             }
         }
     }
+
+    // W3C CSS Flexbox Level 1 §4.1: apply flex static positions to direct
+    // absolutely positioned children whose horizontal or vertical inset pair is `auto`.
+    if matches!(container.style.display, Display::Flex | Display::InlineFlex) {
+        apply_flex_static_positions(container);
+    }
 }
 
 /// Solves out-of-flow geometry for an absolute or fixed element according to W3C CSS 2.1 §10.3.7 & §10.6.4.
@@ -360,50 +360,170 @@ pub fn solve_out_of_flow_box_guarded(
     let top = resolve_dimension(child.style.insets.top, cb_rect.height);
     let bottom = resolve_dimension(child.style.insets.bottom, cb_rect.height);
 
-    // 1. Horizontal Sizing & Inset Resolution (W3C CSS 2.1 §10.3.7)
-    let item_w = match (left, right, child.style.width) {
+    let prev_x = child.geometry.border_box.x;
+    let prev_y = child.geometry.border_box.y;
+    let pre_existing_w = child.geometry.border_box.width;
+    let pre_existing_h = child.geometry.border_box.height;
+
+    if prev_x != 0.0 || prev_y != 0.0 {
+        child.translate(-prev_x, -prev_y);
+    }
+
+    // 1. Horizontal Sizing & Intrinsic Shrink-to-Fit Resolution (W3C CSS 2.1 §10.3.7)
+    let (tentative_w, width_is_auto) = match (left, right, child.style.width) {
         (Some(l), Some(r), Dimension::Auto) => {
             let available =
                 (cb_rect.width - l - r - child.style.margin.left - child.style.margin.right)
                     .max(0.0);
-            clamp_dimension(
-                available,
-                child.style.min_width,
-                child.style.max_width,
-                cb_rect.width,
+            (
+                clamp_dimension_with_node(
+                    available,
+                    child.style.min_width,
+                    child.style.max_width,
+                    cb_rect.width,
+                    child,
+                ),
+                false,
+            )
+        }
+        (_, _, Dimension::Auto) => {
+            let inset_sum_x = left.unwrap_or(0.0)
+                + right.unwrap_or(0.0)
+                + child.style.margin.left
+                + child.style.margin.right;
+            let avail_for_stf = (cb_rect.width - inset_sum_x).max(0.0);
+            let stf_w = crate::intrinsic::compute_min_max_sizes(child, Some(cb_rect.width))
+                .shrink_to_fit(avail_for_stf);
+            let w = if stf_w > 0.0 { stf_w } else { pre_existing_w };
+            (
+                clamp_dimension_with_node(
+                    w,
+                    child.style.min_width,
+                    child.style.max_width,
+                    cb_rect.width,
+                    child,
+                ),
+                true,
             )
         }
         _ => {
             let w = resolve_dimension_with_node(child.style.width, cb_rect.width, child)
-                .unwrap_or(child.geometry.border_box.width);
-            clamp_dimension_with_node(
-                w,
-                child.style.min_width,
-                child.style.max_width,
-                cb_rect.width,
-                child,
+                .unwrap_or(pre_existing_w);
+            (
+                clamp_dimension_with_node(
+                    w,
+                    child.style.min_width,
+                    child.style.max_width,
+                    cb_rect.width,
+                    child,
+                ),
+                false,
             )
         }
     };
 
-    // 2. Vertical Sizing & Inset Resolution (W3C CSS 2.1 §10.6.4)
-    let item_h = match (top, bottom, child.style.height) {
+    // 2. Vertical Definite vs Auto Height Pre-Resolution (W3C CSS 2.1 §10.6.4)
+    let definite_h = match (top, bottom, child.style.height) {
         (Some(t), Some(b), Dimension::Auto) => {
             let available =
                 (cb_rect.height - t - b - child.style.margin.top - child.style.margin.bottom)
                     .max(0.0);
-            clamp_dimension(
+            Some(clamp_dimension(
                 available,
                 child.style.min_height,
                 child.style.max_height,
                 cb_rect.height,
-            )
+            ))
         }
+        (_, _, Dimension::Auto) => None,
         _ => {
-            let h = resolve_dimension(child.style.height, cb_rect.height)
-                .unwrap_or(child.geometry.border_box.height);
-            clamp_dimension(
+            let h = resolve_dimension(child.style.height, cb_rect.height).unwrap_or(pre_existing_h);
+            Some(clamp_dimension(
                 h,
+                child.style.min_height,
+                child.style.max_height,
+                cb_rect.height,
+            ))
+        }
+    };
+
+    // 3. Format child subtree at origin (0, 0) BEFORE computing right/bottom inset coordinates
+    // so auto width and auto height reflect the laid-out content dimensions.
+    child.geometry = LayoutGeometry::from_border_box(
+        Rect::new(0.0, 0.0, tentative_w, definite_h.unwrap_or(0.0)),
+        child.style.padding,
+        child.style.border_width,
+        child.style.margin,
+    );
+
+    if !child.children.is_empty() || !child.inline_items.is_empty() {
+        child.layout_children_inner_guarded(guard, false);
+    } else if let Some(ref text_str) = child.text {
+        let content_w = child.geometry.content_box.width.max(0.0);
+        let wrap_w = if matches!(
+            child.style.white_space,
+            strata_style::types::WhiteSpace::NoWrap | strata_style::types::WhiteSpace::Pre
+        ) {
+            None
+        } else {
+            Some(content_w)
+        };
+        let (_, text_h) = crate::text::measure_text_bounds_styled_with_family(
+            text_str,
+            child.style.font_size,
+            child.style.line_height,
+            wrap_w,
+            crate::text::is_monospace_family(child.style.font_family),
+            child.style.font_family,
+            child.style.font_weight,
+            child.style.font_style,
+        );
+        if definite_h.is_none() {
+            child.geometry.border_box.height = text_h
+                + child.style.padding.top
+                + child.style.padding.bottom
+                + child.style.border_width.top
+                + child.style.border_width.bottom;
+        }
+    } else if let Some(ref img) = child.image {
+        if definite_h.is_none() && img.height > 0 {
+            let content_w = child.geometry.content_box.width.max(0.0);
+            let img_h = if img.width > 0 && content_w > 0.0 {
+                content_w * (img.height as f32 / img.width as f32)
+            } else {
+                img.height as f32
+            };
+            child.geometry.border_box.height = img_h
+                + child.style.padding.top
+                + child.style.padding.bottom
+                + child.style.border_width.top
+                + child.style.border_width.bottom;
+        }
+    }
+
+    let raw_w = if width_is_auto {
+        child.geometry.border_box.width.max(tentative_w)
+    } else {
+        tentative_w
+    };
+    let item_w = clamp_dimension_with_node(
+        raw_w,
+        child.style.min_width,
+        child.style.max_width,
+        cb_rect.width,
+        child,
+    );
+
+    let item_h = match definite_h {
+        Some(h) => h,
+        None => {
+            let auto_h = if child.geometry.border_box.height > 0.0 {
+                child.geometry.border_box.height
+            } else {
+                pre_existing_h
+            };
+            clamp_dimension(
+                auto_h,
                 child.style.min_height,
                 child.style.max_height,
                 cb_rect.height,
@@ -411,7 +531,7 @@ pub fn solve_out_of_flow_box_guarded(
         }
     };
 
-    // 3. Horizontal Position & Auto-Margin Centering (mx-auto / m-auto)
+    // 4. Horizontal Position & Auto-Margin Centering (mx-auto / m-auto)
     let item_x = match (left, right) {
         (Some(l), Some(r)) if child.style.margin_auto_left && child.style.margin_auto_right => {
             let free_space = (cb_rect.width - l - r) - item_w;
@@ -427,7 +547,7 @@ pub fn solve_out_of_flow_box_guarded(
         (None, None) => cb_rect.x + child.style.margin.left,
     };
 
-    // 4. Vertical Position & Auto-Margin Centering (my-auto / m-auto)
+    // 5. Vertical Position & Auto-Margin Centering (my-auto / m-auto)
     let item_y = match (top, bottom) {
         (Some(t), Some(b)) if child.style.margin_auto_top && child.style.margin_auto_bottom => {
             let free_space = (cb_rect.height - t - b) - item_h;
@@ -443,16 +563,17 @@ pub fn solve_out_of_flow_box_guarded(
         (None, None) => cb_rect.y + child.style.margin.top,
     };
 
+    // 6. Finalize child box at origin and translate entire subtree to (item_x, item_y)
     child.geometry = LayoutGeometry::from_border_box(
-        Rect::new(item_x, item_y, item_w, item_h),
+        Rect::new(0.0, 0.0, item_w, item_h),
         child.style.padding,
         child.style.border_width,
         child.style.margin,
     );
-
-    if !child.children.is_empty() {
-        child.layout_children_guarded(guard);
+    if item_x != 0.0 || item_y != 0.0 {
+        child.translate(item_x, item_y);
     }
+    child.geometry.snap_to_pixel();
 }
 
 /// Solves sticky positioning by evaluating insets against scroll offset and clamping to parent bounds.
