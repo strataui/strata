@@ -392,28 +392,17 @@ impl Compositor {
                 vp.height + buffer_y * 2.0,
             )
         });
-        Self::paint_stacking_context_culled(root, &mut list, cull_rect);
+        Self::paint_stacking_context_inner(root, &mut list, cull_rect, cull_rect, &[], true, 0);
         list
     }
 
-    /// Determines if an element establishes a new Stacking Context.
+    /// Determines if an element establishes a new Stacking Context (without parent display context).
+    ///
+    /// For flex/grid item `z-index` awareness, tree traversals use
+    /// [`LayoutNode::establishes_stacking_context_in`].
+    #[inline]
     pub fn establishes_stacking_context(node: &LayoutNode, is_root: bool) -> bool {
-        if is_root {
-            return true;
-        }
-        let is_positioned = node.style.position != Position::Static;
-        let has_z_index = node.style.z_index.is_some();
-        let has_opacity = node.style.opacity < 0.999;
-        let clips_overflow = node.style.overflow_x != Overflow::Visible
-            || node.style.overflow_y != Overflow::Visible;
-        let has_transform = node.style.has_transform();
-        let has_effects = node.style.has_visual_effects();
-
-        (is_positioned && has_z_index)
-            || has_opacity
-            || clips_overflow
-            || has_transform
-            || has_effects
+        node.establishes_stacking_context_in(None, is_root)
     }
 
     /// Collects the border boxes of every cell in a table subtree.
@@ -604,15 +593,233 @@ impl Compositor {
         cull: Option<Rect>,
         depth: usize,
     ) {
+        Self::paint_stacking_context_inner(node, list, cull, cull, &[], depth == 0, depth);
+    }
+
+    fn node_clip_scroll_step(node: &LayoutNode) -> Option<ClipScrollStep> {
+        let bounds = node.geometry.border_box;
+        let border_radius = node.style.border_radius;
+        let has_any_radius = border_radius.top_left > 0.0
+            || border_radius.top_right > 0.0
+            || border_radius.bottom_left > 0.0
+            || border_radius.bottom_right > 0.0;
+        let clips_overflow = node.style.overflow_x != Overflow::Visible
+            || node.style.overflow_y != Overflow::Visible;
+        let should_clip = clips_overflow || (has_any_radius && node.image.is_some());
+        let clip = if should_clip {
+            let clip_bounds = if clips_overflow
+                && node.geometry.padding_box.width > 0.0
+                && node.geometry.padding_box.height > 0.0
+            {
+                node.geometry.padding_box
+            } else {
+                bounds
+            };
+            Some((clip_bounds, border_radius))
+        } else {
+            None
+        };
+        let scroll_offset = (node.geometry.scroll_offset.x, node.geometry.scroll_offset.y);
+        let is_fixed_cb = node.style.establishes_fixed_containing_block();
+        let is_abs_cb = node.style.position != Position::Static || is_fixed_cb;
+
+        if clip.is_some()
+            || scroll_offset.0 != 0.0
+            || scroll_offset.1 != 0.0
+            || is_abs_cb
+            || is_fixed_cb
+        {
+            Some(ClipScrollStep {
+                clip,
+                scroll_offset,
+                is_abs_cb,
+                is_fixed_cb,
+            })
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn effective_steps(position: Position, steps: &[ClipScrollStep]) -> &[ClipScrollStep] {
+        match position {
+            Position::Fixed => match steps.iter().rposition(|s| s.is_fixed_cb) {
+                Some(idx) => &steps[..=idx],
+                None => &[],
+            },
+            Position::Absolute => match steps.iter().rposition(|s| s.is_abs_cb) {
+                Some(idx) => &steps[..=idx],
+                None => &[],
+            },
+            Position::Static | Position::Relative | Position::Sticky => steps,
+        }
+    }
+
+    fn push_clip_scroll_steps(steps: &[ClipScrollStep], list: &mut DisplayList) {
+        for step in steps {
+            if let Some((bounds, radius)) = step.clip {
+                list.push(DrawCommand::PushClip { bounds, radius });
+            }
+            if step.scroll_offset.0 != 0.0 || step.scroll_offset.1 != 0.0 {
+                let mat = strata_primitives::geom::Matrix4x4::translation(
+                    -step.scroll_offset.0,
+                    -step.scroll_offset.1,
+                    0.0,
+                );
+                list.push(DrawCommand::PushTransform { matrix: mat });
+            }
+        }
+    }
+
+    fn pop_clip_scroll_steps(steps: &[ClipScrollStep], list: &mut DisplayList) {
+        for step in steps.iter().rev() {
+            if step.scroll_offset.0 != 0.0 || step.scroll_offset.1 != 0.0 {
+                list.push(DrawCommand::PopTransform);
+            }
+            if step.clip.is_some() {
+                list.push(DrawCommand::PopClip);
+            }
+        }
+    }
+
+    fn cull_with_steps(base_cull: Option<Rect>, steps: &[ClipScrollStep]) -> Option<Rect> {
+        let mut current = base_cull;
+        for step in steps {
+            if let Some((clip_bounds, _)) = step.clip {
+                if clip_bounds.width > 0.0 && clip_bounds.height > 0.0 {
+                    if let Some(c) = current {
+                        current = Some(
+                            clip_bounds
+                                .intersect(c)
+                                .unwrap_or_else(|| Rect::new(0.0, 0.0, -1.0, -1.0)),
+                        );
+                    }
+                }
+            }
+        }
+        current
+    }
+
+    fn subtree_has_fixed_escape(node: &LayoutNode, depth: usize) -> bool {
+        if depth >= Self::MAX_COMPOSITOR_DEPTH || node.style.display == Display::None {
+            return false;
+        }
+        if node.style.position == Position::Fixed {
+            return true;
+        }
+        if node.style.establishes_fixed_containing_block() {
+            return false;
+        }
+        node.children
+            .iter()
+            .any(|c| Self::subtree_has_fixed_escape(c, depth + 1))
+    }
+
+    fn collect_hoisted_participants<'a>(
+        parent: &'a LayoutNode,
+        current_steps: &mut Vec<ClipScrollStep>,
+        negative_z: &mut Vec<HoistedParticipant<'a>>,
+        auto_or_zero_z: &mut Vec<HoistedParticipant<'a>>,
+        positive_z: &mut Vec<HoistedParticipant<'a>>,
+        depth: usize,
+    ) {
+        if depth >= Self::MAX_COMPOSITOR_DEPTH {
+            return;
+        }
+        let has_line_boxes = !parent.line_boxes.is_empty();
+        let parent_display = parent.style.display;
+
+        for child in &parent.children {
+            if child.style.display == Display::None
+                || child.style.content_visibility == strata_style::types::ContentVisibility::Hidden
+            {
+                continue;
+            }
+            if has_line_boxes
+                && (child.text.is_some()
+                    || (matches!(child.style.display, Display::Inline)
+                        && !Self::inline_has_paintable_non_text_content(child)))
+            {
+                continue;
+            }
+
+            if child.establishes_stacking_context_in(Some(parent_display), false) {
+                let z = child.style.z_index.unwrap_or(0);
+                let entry = HoistedParticipant {
+                    node: child,
+                    is_sc: true,
+                    steps: current_steps.clone(),
+                };
+                if z < 0 {
+                    negative_z.push(entry);
+                } else if z > 0 {
+                    positive_z.push(entry);
+                } else {
+                    auto_or_zero_z.push(entry);
+                }
+            } else {
+                if child.style.position != Position::Static {
+                    auto_or_zero_z.push(HoistedParticipant {
+                        node: child,
+                        is_sc: false,
+                        steps: current_steps.clone(),
+                    });
+                }
+                if !child.children.is_empty() {
+                    let step = Self::node_clip_scroll_step(child);
+                    let pushed = step.is_some();
+                    if let Some(s) = step {
+                        current_steps.push(s);
+                    }
+                    Self::collect_hoisted_participants(
+                        child,
+                        current_steps,
+                        negative_z,
+                        auto_or_zero_z,
+                        positive_z,
+                        depth + 1,
+                    );
+                    if pushed {
+                        current_steps.pop();
+                    }
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint_stacking_context_inner(
+        node: &LayoutNode,
+        list: &mut DisplayList,
+        cull: Option<Rect>,
+        root_cull: Option<Rect>,
+        inherited_steps: &[ClipScrollStep],
+        is_root: bool,
+        depth: usize,
+    ) {
         if depth >= Self::MAX_COMPOSITOR_DEPTH {
             return;
         }
         if node.style.display == Display::None {
             return;
         }
-
         if node.style.content_visibility == strata_style::types::ContentVisibility::Hidden {
             return;
+        }
+
+        let node_eff_steps = Self::effective_steps(node.style.position, inherited_steps);
+        let base_cull = if node.style.position == Position::Fixed
+            && !inherited_steps.iter().any(|s| s.is_fixed_cb)
+        {
+            root_cull
+        } else {
+            Self::cull_with_steps(cull, node_eff_steps)
+        };
+
+        if let Some(c) = base_cull {
+            if (c.width < 0.0 || c.height < 0.0) && !Self::subtree_has_fixed_escape(node, depth) {
+                return;
+            }
         }
 
         let bounds = node.geometry.border_box;
@@ -625,37 +832,94 @@ impl Compositor {
             || node.style.overflow_y != Overflow::Visible;
         let should_clip = clips_overflow || (has_any_radius && node.image.is_some());
 
-        // Resolve the child cull rect before emitting any stack push commands so
-        // that an early return never leaves an unbalanced push on the display
-        // list (Cairo groups, blend modes, filters, transforms).
+        let mut static_cull_empty =
+            base_cull.is_some_and(|c| c.width < 0.0 || c.height < 0.0);
+
         let child_cull = if clips_overflow
             && bounds.width > 0.0
             && bounds.height > 0.0
             && node.style.position != Position::Fixed
         {
-            match cull {
-                Some(c) => match bounds.intersect(c) {
-                    Some(ic) => Some(ic),
-                    None => return,
-                },
+            match base_cull {
+                Some(c) => {
+                    if c.width < 0.0 || c.height < 0.0 {
+                        Some(c)
+                    } else {
+                        match bounds.intersect(c) {
+                            Some(ic) => Some(ic),
+                            None => {
+                                if !Self::subtree_has_fixed_escape(node, depth) {
+                                    return;
+                                }
+                                static_cull_empty = true;
+                                Some(Rect::new(0.0, 0.0, -1.0, -1.0))
+                            }
+                        }
+                    }
+                }
                 None => None,
             }
         } else {
-            cull
+            base_cull
         };
 
+        let is_visible = !static_cull_empty
+            && match base_cull {
+                Some(c) => {
+                    if node.style.position == Position::Fixed {
+                        true
+                    } else if bounds.width > 0.0 && bounds.height > 0.0 {
+                        bounds.intersect(c).is_some()
+                    } else {
+                        true
+                    }
+                }
+                None => true,
+            };
+
         let has_isolation = node.style.isolation == Isolation::Isolate;
+        let has_blend_mode = node.style.mix_blend_mode != BlendMode::Normal;
+        let has_filter_cfg = node.style.filter.as_ref().is_some_and(|f| !f.is_empty());
+        let has_clip_path_cfg = node.style.clip_path.as_ref().is_some_and(|cp| !cp.is_none());
+        let transform_matrix = if node.style.has_transform() {
+            Some(
+                node.style
+                    .compute_transform_matrix(bounds.width, bounds.height),
+            )
+        } else {
+            None
+        };
+        let has_opacity = node.style.opacity < 0.999;
+        let has_backdrop_cfg = node
+            .style
+            .backdrop_filter
+            .as_ref()
+            .is_some_and(|bf| !bf.is_empty());
+
+        let has_group_effect = has_isolation
+            || has_blend_mode
+            || has_filter_cfg
+            || has_clip_path_cfg
+            || transform_matrix.is_some()
+            || has_opacity
+            || has_backdrop_cfg;
+
+        let wrap_inherited_outside_group = has_group_effect
+            && (node.style.establishes_fixed_containing_block()
+                || !Self::subtree_has_fixed_escape(node, depth));
+
+        if wrap_inherited_outside_group {
+            Self::push_clip_scroll_steps(node_eff_steps, list);
+        }
+
         if has_isolation {
             list.push(DrawCommand::PushIsolation { isolate: true });
         }
-
-        let has_blend_mode = node.style.mix_blend_mode != BlendMode::Normal;
         if has_blend_mode {
             list.push(DrawCommand::PushBlendMode {
                 mode: node.style.mix_blend_mode,
             });
         }
-
         let has_filter = if let Some(ref f) = node.style.filter {
             if !f.is_empty() {
                 list.push(DrawCommand::PushFilter {
@@ -669,7 +933,6 @@ impl Compositor {
         } else {
             false
         };
-
         let has_clip_path = if let Some(ref cp) = node.style.clip_path {
             if !cp.is_none() {
                 list.push(DrawCommand::PushClipPath {
@@ -683,41 +946,14 @@ impl Compositor {
         } else {
             false
         };
-
-        let transform_matrix = if node.style.has_transform() {
-            Some(
-                node.style
-                    .compute_transform_matrix(bounds.width, bounds.height),
-            )
-        } else {
-            None
-        };
-
         if let Some(mat) = transform_matrix {
             list.push(DrawCommand::PushTransform { matrix: mat });
         }
-
-        let is_visible = match cull {
-            Some(c) => {
-                if node.style.position == Position::Fixed {
-                    true
-                } else if bounds.width > 0.0 && bounds.height > 0.0 {
-                    bounds.intersect(c).is_some()
-                } else {
-                    true
-                }
-            }
-            None => true,
-        };
-
-        let has_opacity = node.style.opacity < 0.999;
         if has_opacity {
             list.push(DrawCommand::PushOpacity {
                 alpha: node.style.opacity,
             });
         }
-
-        // Backdrop filter effect on pixels underneath this stacking context
         let has_backdrop_filter = if let Some(ref bf) = node.style.backdrop_filter {
             if !bf.is_empty() {
                 list.push(DrawCommand::PushBackdropFilter {
@@ -733,294 +969,83 @@ impl Compositor {
             false
         };
 
-        // Layer 1: Background and borders of the element establishing the context
-        if is_visible {
-            let has_any_border_width = node.style.border_width.top > 0.0
-                || node.style.border_width.right > 0.0
-                || node.style.border_width.bottom > 0.0
-                || node.style.border_width.left > 0.0;
-            let draw_border_separately = node.style.border_style != BorderStyle::None
-                && node.style.border_style != BorderStyle::Hidden
-                && has_any_border_width
-                && node.style.border_color.is_some()
-                && !(node.style.display == Display::TableCell
-                    && node.style.border_collapse == BorderCollapse::Collapse);
-            let rounded_border_color =
-                if draw_border_separately
-                    || node.style.border_style == BorderStyle::None
-                    || node.style.border_style == BorderStyle::Hidden
-                {
-                    None
-                } else {
-                    node.style.border_color
-                };
+        // Build base clip/scroll step chain for hoisted descendants of this stacking context.
+        let mut hoisted_base_steps: Vec<ClipScrollStep> = if wrap_inherited_outside_group {
+            Vec::new()
+        } else {
+            node_eff_steps.to_vec()
+        };
+        let own_clip_bounds = if clips_overflow
+            && node.geometry.padding_box.width > 0.0
+            && node.geometry.padding_box.height > 0.0
+        {
+            node.geometry.padding_box
+        } else {
+            bounds
+        };
+        let own_is_fixed_cb = node.style.establishes_fixed_containing_block();
+        let own_is_abs_cb = node.style.position != Position::Static || own_is_fixed_cb || is_root;
+        let has_scroll_offset =
+            node.geometry.scroll_offset.x != 0.0 || node.geometry.scroll_offset.y != 0.0;
+        let own_clip_opt = if should_clip {
+            Some((own_clip_bounds, border_radius))
+        } else {
+            None
+        };
+        if own_clip_opt.is_some() || has_scroll_offset || own_is_abs_cb || own_is_fixed_cb {
+            hoisted_base_steps.push(ClipScrollStep {
+                clip: own_clip_opt,
+                scroll_offset: (node.geometry.scroll_offset.x, node.geometry.scroll_offset.y),
+                is_abs_cb: own_is_abs_cb,
+                is_fixed_cb: own_is_fixed_cb,
+            });
+        }
 
-            // Outer Box Shadows (rendered behind background)
-            for shadow in &node.style.box_shadow {
-                if !shadow.inset {
-                    list.push(DrawCommand::DrawShadow {
-                        bounds,
-                        shadow: shadow.clone(),
-                        border_radius,
-                    });
-                }
-            }
+        // Collect hoisted stacking participants across non-stacking-context descendants (CSS 2.1 Appendix E)
+        let mut negative_z: Vec<HoistedParticipant<'_>> = Vec::new();
+        let mut auto_or_zero_z: Vec<HoistedParticipant<'_>> = Vec::new();
+        let mut positive_z: Vec<HoistedParticipant<'_>> = Vec::new();
+        Self::collect_hoisted_participants(
+            node,
+            &mut hoisted_base_steps,
+            &mut negative_z,
+            &mut auto_or_zero_z,
+            &mut positive_z,
+            depth + 1,
+        );
 
-            // Solid / Rounded Background
-            if let Some(bg_color) = node.style.background_color {
-                if has_any_radius {
-                    list.push(DrawCommand::DrawRoundedRect {
-                        bounds,
-                        color: bg_color,
-                        border_radius,
-                        border_width: node.style.border_width,
-                        border_color: rounded_border_color,
-                    });
-                } else if bg_color.a > 0 {
-                    list.push(DrawCommand::DrawRect {
-                        bounds,
-                        color: bg_color,
-                    });
-                }
-            }
+        // Stable ascending z-index sort preserves DOM order on ties
+        negative_z.sort_by_key(|p| p.node.style.z_index.unwrap_or(0));
+        positive_z.sort_by_key(|p| p.node.style.z_index.unwrap_or(0));
 
-            // Gradient Background
-            if let Some(ref grad) = node.style.background_gradient {
-                match grad {
-                    strata_style::types::Gradient::Linear { angle_deg, stops } => {
-                        list.push(DrawCommand::DrawLinearGradient {
-                            bounds,
-                            angle_deg: *angle_deg,
-                            stops: stops.clone(),
-                            border_radius,
-                        });
-                    }
-                    strata_style::types::Gradient::Radial { center, stops } => {
-                        list.push(DrawCommand::DrawRadialGradient {
-                            bounds,
-                            center: *center,
-                            stops: stops.clone(),
-                            border_radius,
-                        });
-                    }
-                    strata_style::types::Gradient::Conic {
-                        angle_deg,
-                        center: _,
-                        stops,
-                    } => {
-                        list.push(DrawCommand::DrawLinearGradient {
-                            bounds,
-                            angle_deg: *angle_deg,
-                            stops: stops.clone(),
-                            border_radius,
-                        });
-                    }
-                }
-            }
-
-            // Inset Box Shadows (rendered over background)
-            for shadow in &node.style.box_shadow {
-                if shadow.inset {
-                    list.push(DrawCommand::DrawInsetShadow {
-                        bounds,
-                        shadow: shadow.clone(),
-                        border_radius,
-                    });
-                }
-            }
-
-            // Borders emitted independently so the style parser can resolve
-            // solid, dashed, dotted, and double strokes.
-            if draw_border_separately {
-                if let Some(border_color) = node.style.border_color {
-                    list.push(DrawCommand::DrawBorder {
-                        bounds,
-                        widths: node.style.border_width,
-                        color: border_color,
-                        border_radius,
-                        style: node.style.border_style,
-                    });
-                }
-            }
-
-            // CSS outlines sit at the outside edge of the border box.
-            if node.style.outline_width > 0.0 && node.style.outline_style != BorderStyle::None {
-                if let Some(outline_color) = node.style.outline_color {
-                    let offset = node.style.outline_offset;
-                    let outline_radius = BorderRadius {
-                        top_left: (border_radius.top_left + offset).max(0.0),
-                        top_right: (border_radius.top_right + offset).max(0.0),
-                        bottom_left: (border_radius.bottom_left + offset).max(0.0),
-                        bottom_right: (border_radius.bottom_right + offset).max(0.0),
-                    };
-                    list.push(DrawCommand::DrawBorder {
-                        bounds: Rect::new(
-                            bounds.x - offset,
-                            bounds.y - offset,
-                            bounds.width + offset * 2.0,
-                            bounds.height + offset * 2.0,
-                        ),
-                        widths: EdgeInsets::all(node.style.outline_width),
-                        color: outline_color,
-                        border_radius: outline_radius,
-                        style: node.style.outline_style,
-                    });
-                }
-            }
-
-            // Apply clip for content and children if border radius or overflow clipping is active
-            if should_clip {
-                let clip_bounds = if clips_overflow
-                    && node.geometry.padding_box.width > 0.0
-                    && node.geometry.padding_box.height > 0.0
-                {
-                    node.geometry.padding_box
-                } else {
-                    bounds
-                };
-                list.push(DrawCommand::PushClip {
-                    bounds: clip_bounds,
-                    radius: border_radius,
-                });
-            }
-
-            // Replaced raster content paints inside the content box.
-            if let Some(ref image) = node.image {
-                let image_bounds = if node.geometry.content_box.width > 0.0
-                    && node.geometry.content_box.height > 0.0
-                {
-                    node.geometry.content_box
-                } else {
-                    bounds
-                };
-                list.push(DrawCommand::DrawImage {
-                    bounds: image_bounds,
-                    image: image.clone(),
-                });
-            }
-
-            // Text content on this node
-            if !node.line_boxes.is_empty() {
-                let mut fragments = Vec::new();
-                for line in &node.line_boxes {
-                    if let Some(c) = cull {
-                        if line.bounds.height > 0.0
-                            && (line.bounds.y > c.y + c.height
-                                || line.bounds.y + line.bounds.height < c.y)
-                        {
-                            continue;
-                        }
-                    }
-                    fragments.extend(line.text_fragments.clone());
-                }
-                if !fragments.is_empty() {
-                    list.push(DrawCommand::DrawTextFragments { fragments });
-                }
-            } else if let Some(ref text) = node.text {
-                let font_size = node.style.font_size;
-                let line_height = node.style.line_height;
-                let font_weight = node.style.font_weight;
-                let color = node.style.color;
-                let bounds_width = if node.geometry.content_box.width > 0.0 {
-                    Some(node.geometry.content_box.width)
-                } else {
-                    None
-                };
-                let bounds_height = if node.geometry.content_box.height > 0.0 {
-                    Some(node.geometry.content_box.height)
-                } else {
-                    None
-                };
-                let text_align = node.style.text_align;
-                let is_monospace = strata_layout::is_monospace_family(node.style.font_family);
-                list.push(DrawCommand::DrawText {
-                    origin: (node.geometry.content_box.x, node.geometry.content_box.y),
-                    bounds_width,
-                    bounds_height,
-                    text_align,
-                    text: text.clone(),
-                    font_size,
-                    line_height,
-                    font_weight,
-                    color,
-                    is_monospace,
-                    font_family: node.style.font_family,
-                });
-            }
-
-            // SVG Vector Path content on this node
-            if !node.svg_items.is_empty() {
-                for item in &node.svg_items {
-                    let fill = if item.fill_is_current_color {
-                        Some(node.style.color)
-                    } else {
-                        item.fill_color
-                    };
-                    let stroke = if item.stroke_is_current_color {
-                        Some(node.style.color)
-                    } else {
-                        item.stroke_color.or_else(|| {
-                            if fill.is_none() {
-                                Some(node.style.color)
-                            } else {
-                                None
-                            }
-                        })
-                    };
-                    list.push(DrawCommand::DrawSvgPath {
-                        bounds,
-                        path_data: item.path_data.clone(),
-                        stroke_color: stroke,
-                        fill_color: fill,
-                        stroke_width: item.stroke_width,
-                        stroke_linecap: item.stroke_linecap,
-                        stroke_linejoin: item.stroke_linejoin,
-                        stroke_dasharray: item.stroke_dasharray.clone(),
-                        fill_rule: item.fill_rule,
-                        view_box: item.view_box,
-                    });
-                }
-            } else if let Some(ref path_data) = node.svg_path {
-                list.push(DrawCommand::DrawSvgPath {
-                    bounds,
-                    path_data: path_data.clone(),
-                    stroke_color: Some(node.style.color),
-                    fill_color: None,
-                    stroke_width: 2.0,
-                    stroke_linecap: strata_layout::StrokeLineCap::Round,
-                    stroke_linejoin: strata_layout::StrokeLineJoin::Round,
-                    stroke_dasharray: Vec::new(),
-                    fill_rule: strata_layout::FillRule::NonZero,
-                    view_box: (24.0, 24.0),
-                });
-            }
-        } // end if is_visible
-
-        // Separate child nodes into the 7 layers
-        let mut negative_z: Vec<&LayoutNode> = Vec::new();
+        // Direct in-flow static non-stacking-context children (Layers 3, 4, 5)
         let mut in_flow_blocks: Vec<&LayoutNode> = Vec::new();
         let mut floats: Vec<&LayoutNode> = Vec::new();
         let mut in_flow_inlines: Vec<&LayoutNode> = Vec::new();
-        let mut auto_or_zero_z: Vec<&LayoutNode> = Vec::new();
-        let mut positive_z: Vec<&LayoutNode> = Vec::new();
 
-        let has_line_boxes = !node.line_boxes.is_empty();
-        for child in &node.children {
-            if child.style.display == Display::None {
-                continue;
-            }
-
-            if has_line_boxes
-                && (child.text.is_some()
-                    || (matches!(child.style.display, Display::Inline)
-                        && !Self::inline_has_paintable_non_text_content(child)))
-            {
-                continue;
-            }
-
-            // Spatial culling optimization: if in-flow child is strictly outside the viewport buffer, skip it
-            if let Some(c) = child_cull {
-                if child.style.position == Position::Static {
+        if !static_cull_empty {
+            let has_line_boxes = !node.line_boxes.is_empty();
+            let parent_display = node.style.display;
+            for child in &node.children {
+                if child.style.display == Display::None
+                    || child.style.content_visibility
+                        == strata_style::types::ContentVisibility::Hidden
+                {
+                    continue;
+                }
+                if has_line_boxes
+                    && (child.text.is_some()
+                        || (matches!(child.style.display, Display::Inline)
+                            && !Self::inline_has_paintable_non_text_content(child)))
+                {
+                    continue;
+                }
+                if child.establishes_stacking_context_in(Some(parent_display), false)
+                    || child.style.position != Position::Static
+                {
+                    continue;
+                }
+                if let Some(c) = child_cull {
                     if child.geometry.border_box.y > c.y + c.height {
                         continue;
                     }
@@ -1030,47 +1055,75 @@ impl Compositor {
                         continue;
                     }
                 }
-            }
-
-            if Self::establishes_stacking_context(child, false) {
-                let z = child.style.z_index.unwrap_or(0);
-                if z < 0 {
-                    negative_z.push(child);
-                } else if z > 0 {
-                    positive_z.push(child);
+                if child.style.float != strata_style::types::Float::None {
+                    floats.push(child);
                 } else {
-                    auto_or_zero_z.push(child);
-                }
-            } else if child.style.float != strata_style::types::Float::None {
-                floats.push(child);
-            } else {
-                // In-flow children without independent stacking context
-                match child.style.display {
-                    Display::Inline
-                    | Display::InlineBlock
-                    | Display::InlineFlex
-                    | Display::InlineGrid => {
-                        in_flow_inlines.push(child);
-                    }
-                    _ => {
-                        if child.style.position == Position::Static {
+                    match child.style.display {
+                        Display::Inline
+                        | Display::InlineBlock
+                        | Display::InlineFlex
+                        | Display::InlineGrid => {
+                            in_flow_inlines.push(child);
+                        }
+                        _ => {
                             in_flow_blocks.push(child);
-                        } else {
-                            auto_or_zero_z.push(child);
                         }
                     }
                 }
             }
         }
 
-        // Sort negative z-index ascending (e.g. -10, then -5)
-        negative_z.sort_by_key(|n| n.style.z_index.unwrap_or(0));
+        let inner_inherited_steps: &[ClipScrollStep] = if wrap_inherited_outside_group {
+            &[]
+        } else {
+            node_eff_steps
+        };
 
-        // Sort positive z-index ascending (e.g. 1, then 10)
-        positive_z.sort_by_key(|n| n.style.z_index.unwrap_or(0));
+        // Layer 1: Background and borders of the element establishing the stacking context
+        if !inner_inherited_steps.is_empty() {
+            Self::push_clip_scroll_steps(inner_inherited_steps, list);
+        }
+        if is_visible {
+            Self::paint_node_box_decorations(node, list);
+        }
+        if !negative_z.is_empty() && !inner_inherited_steps.is_empty() {
+            Self::pop_clip_scroll_steps(inner_inherited_steps, list);
+        }
 
-        let has_scroll_offset = node.geometry.scroll_offset.x != 0.0 || node.geometry.scroll_offset.y != 0.0;
-        if has_scroll_offset {
+        // Layer 2: Child stacking contexts with negative z-index
+        let child_root_cull = if own_is_fixed_cb {
+            child_cull
+        } else {
+            root_cull
+        };
+        for entry in &negative_z {
+            Self::paint_stacking_context_inner(
+                entry.node,
+                list,
+                root_cull,
+                child_root_cull,
+                &entry.steps,
+                false,
+                depth + 1,
+            );
+        }
+
+        if !negative_z.is_empty() && !inner_inherited_steps.is_empty() {
+            Self::push_clip_scroll_steps(inner_inherited_steps, list);
+        }
+
+        // Own content clip + replaced/text/SVG content + Layers 3..5 (static in-flow descendants)
+        if should_clip && is_visible {
+            list.push(DrawCommand::PushClip {
+                bounds: own_clip_bounds,
+                radius: border_radius,
+            });
+        }
+        if is_visible {
+            Self::paint_node_foreground_content(node, list, base_cull);
+        }
+
+        if has_scroll_offset && !static_cull_empty {
             let mat = strata_primitives::geom::Matrix4x4::translation(
                 -node.geometry.scroll_offset.x,
                 -node.geometry.scroll_offset.y,
@@ -1079,73 +1132,354 @@ impl Compositor {
             list.push(DrawCommand::PushTransform { matrix: mat });
         }
 
-        // Layer 2: Child stacking contexts with negative z-index
-        for child in negative_z {
-            Self::paint_stacking_context_guarded(child, list, child_cull, depth + 1);
-        }
-
         // Layer 3: In-flow, non-inline, non-positioned block descendants
         for child in in_flow_blocks {
-            Self::paint_node_content_guarded(child, list, child_cull, depth + 1);
+            Self::paint_node_content_inner(child, list, child_cull, true, depth + 1);
         }
 
         // Layer 4: Non-positioned floating descendants
         for child in floats {
-            Self::paint_node_content_guarded(child, list, child_cull, depth + 1);
+            Self::paint_node_content_inner(child, list, child_cull, true, depth + 1);
         }
 
         // Layer 5: In-flow inline-level descendants
         for child in in_flow_inlines {
-            Self::paint_node_content_guarded(child, list, child_cull, depth + 1);
-        }
-
-        // Layer 6: Positioned descendants with z-index: auto or 0
-        for child in auto_or_zero_z {
-            Self::paint_stacking_context_guarded(child, list, child_cull, depth + 1);
-        }
-
-        // Layer 7: Child stacking contexts with positive z-index
-        for child in positive_z {
-            Self::paint_stacking_context_guarded(child, list, child_cull, depth + 1);
+            Self::paint_node_content_inner(child, list, child_cull, true, depth + 1);
         }
 
         // Collapsed table boundaries paint once above cell content.
-        Self::paint_collapsed_table_grid(node, list);
-
-        if has_scroll_offset {
-            list.push(DrawCommand::PopTransform);
+        if !static_cull_empty {
+            Self::paint_collapsed_table_grid(node, list);
         }
 
+        if has_scroll_offset && !static_cull_empty {
+            list.push(DrawCommand::PopTransform);
+        }
         if should_clip && is_visible {
             list.push(DrawCommand::PopClip);
+        }
+        if !inner_inherited_steps.is_empty() {
+            Self::pop_clip_scroll_steps(inner_inherited_steps, list);
+        }
+
+        // Layer 6: Positioned descendants with z-index: auto and child stacking contexts with z-index: 0
+        for entry in &auto_or_zero_z {
+            if entry.is_sc {
+                Self::paint_stacking_context_inner(
+                    entry.node,
+                    list,
+                    root_cull,
+                    child_root_cull,
+                    &entry.steps,
+                    false,
+                    depth + 1,
+                );
+            } else {
+                let eff = Self::effective_steps(entry.node.style.position, &entry.steps);
+                let entry_cull = Self::cull_with_steps(child_root_cull, eff);
+                if entry_cull.is_none_or(|c| c.width >= 0.0 && c.height >= 0.0) {
+                    Self::push_clip_scroll_steps(eff, list);
+                    Self::paint_node_content_inner(entry.node, list, entry_cull, true, depth + 1);
+                    Self::pop_clip_scroll_steps(eff, list);
+                }
+            }
+        }
+
+        // Layer 7: Child stacking contexts with positive z-index
+        for entry in &positive_z {
+            Self::paint_stacking_context_inner(
+                entry.node,
+                list,
+                root_cull,
+                child_root_cull,
+                &entry.steps,
+                false,
+                depth + 1,
+            );
         }
 
         if has_backdrop_filter {
             list.push(DrawCommand::PopBackdropFilter);
         }
-
         if transform_matrix.is_some() {
             list.push(DrawCommand::PopTransform);
         }
-
         if has_clip_path {
             list.push(DrawCommand::PopClipPath);
         }
-
         if has_filter {
             list.push(DrawCommand::PopFilter);
         }
-
         if has_blend_mode {
             list.push(DrawCommand::PopBlendMode);
         }
-
         if has_isolation {
             list.push(DrawCommand::PopIsolation);
         }
-
         if has_opacity {
             list.push(DrawCommand::PopOpacity);
+        }
+        if wrap_inherited_outside_group {
+            Self::pop_clip_scroll_steps(node_eff_steps, list);
+        }
+    }
+
+    fn paint_node_box_decorations(node: &LayoutNode, list: &mut DisplayList) {
+        let bounds = node.geometry.border_box;
+        let border_radius = node.style.border_radius;
+        let has_any_radius = border_radius.top_left > 0.0
+            || border_radius.top_right > 0.0
+            || border_radius.bottom_left > 0.0
+            || border_radius.bottom_right > 0.0;
+        let has_any_border_width = node.style.border_width.top > 0.0
+            || node.style.border_width.right > 0.0
+            || node.style.border_width.bottom > 0.0
+            || node.style.border_width.left > 0.0;
+        let draw_border_separately = node.style.border_style != BorderStyle::None
+            && node.style.border_style != BorderStyle::Hidden
+            && has_any_border_width
+            && node.style.border_color.is_some()
+            && !(node.style.display == Display::TableCell
+                && node.style.border_collapse == BorderCollapse::Collapse);
+        let rounded_border_color = if draw_border_separately
+            || node.style.border_style == BorderStyle::None
+            || node.style.border_style == BorderStyle::Hidden
+        {
+            None
+        } else {
+            node.style.border_color
+        };
+
+        // Outer Box Shadows (rendered behind background)
+        for shadow in &node.style.box_shadow {
+            if !shadow.inset {
+                list.push(DrawCommand::DrawShadow {
+                    bounds,
+                    shadow: shadow.clone(),
+                    border_radius,
+                });
+            }
+        }
+
+        // Solid / Rounded Background
+        if let Some(bg_color) = node.style.background_color {
+            if has_any_radius {
+                list.push(DrawCommand::DrawRoundedRect {
+                    bounds,
+                    color: bg_color,
+                    border_radius,
+                    border_width: node.style.border_width,
+                    border_color: rounded_border_color,
+                });
+            } else if bg_color.a > 0 {
+                list.push(DrawCommand::DrawRect {
+                    bounds,
+                    color: bg_color,
+                });
+            }
+        }
+
+        // Gradient Background
+        if let Some(ref grad) = node.style.background_gradient {
+            match grad {
+                strata_style::types::Gradient::Linear { angle_deg, stops } => {
+                    list.push(DrawCommand::DrawLinearGradient {
+                        bounds,
+                        angle_deg: *angle_deg,
+                        stops: stops.clone(),
+                        border_radius,
+                    });
+                }
+                strata_style::types::Gradient::Radial { center, stops } => {
+                    list.push(DrawCommand::DrawRadialGradient {
+                        bounds,
+                        center: *center,
+                        stops: stops.clone(),
+                        border_radius,
+                    });
+                }
+                strata_style::types::Gradient::Conic {
+                    angle_deg,
+                    center: _,
+                    stops,
+                } => {
+                    list.push(DrawCommand::DrawLinearGradient {
+                        bounds,
+                        angle_deg: *angle_deg,
+                        stops: stops.clone(),
+                        border_radius,
+                    });
+                }
+            }
+        }
+
+        // Inset Box Shadows (rendered over background)
+        for shadow in &node.style.box_shadow {
+            if shadow.inset {
+                list.push(DrawCommand::DrawInsetShadow {
+                    bounds,
+                    shadow: shadow.clone(),
+                    border_radius,
+                });
+            }
+        }
+
+        // Borders emitted independently so the style parser can resolve
+        // solid, dashed, dotted, and double strokes.
+        if draw_border_separately {
+            if let Some(border_color) = node.style.border_color {
+                list.push(DrawCommand::DrawBorder {
+                    bounds,
+                    widths: node.style.border_width,
+                    color: border_color,
+                    border_radius,
+                    style: node.style.border_style,
+                });
+            }
+        }
+
+        // CSS outlines sit at the outside edge of the border box.
+        if node.style.outline_width > 0.0 && node.style.outline_style != BorderStyle::None {
+            if let Some(outline_color) = node.style.outline_color {
+                let offset = node.style.outline_offset;
+                let outline_radius = BorderRadius {
+                    top_left: (border_radius.top_left + offset).max(0.0),
+                    top_right: (border_radius.top_right + offset).max(0.0),
+                    bottom_left: (border_radius.bottom_left + offset).max(0.0),
+                    bottom_right: (border_radius.bottom_right + offset).max(0.0),
+                };
+                list.push(DrawCommand::DrawBorder {
+                    bounds: Rect::new(
+                        bounds.x - offset,
+                        bounds.y - offset,
+                        bounds.width + offset * 2.0,
+                        bounds.height + offset * 2.0,
+                    ),
+                    widths: EdgeInsets::all(node.style.outline_width),
+                    color: outline_color,
+                    border_radius: outline_radius,
+                    style: node.style.outline_style,
+                });
+            }
+        }
+    }
+
+    fn paint_node_foreground_content(
+        node: &LayoutNode,
+        list: &mut DisplayList,
+        cull: Option<Rect>,
+    ) {
+        let bounds = node.geometry.border_box;
+
+        // Replaced raster content paints inside the content box.
+        if let Some(ref image) = node.image {
+            let image_bounds = if node.geometry.content_box.width > 0.0
+                && node.geometry.content_box.height > 0.0
+            {
+                node.geometry.content_box
+            } else {
+                bounds
+            };
+            list.push(DrawCommand::DrawImage {
+                bounds: image_bounds,
+                image: image.clone(),
+            });
+        }
+
+        // Text content on this node
+        if !node.line_boxes.is_empty() {
+            let mut fragments = Vec::new();
+            for line in &node.line_boxes {
+                if let Some(c) = cull {
+                    if line.bounds.height > 0.0
+                        && (line.bounds.y > c.y + c.height
+                            || line.bounds.y + line.bounds.height < c.y)
+                    {
+                        continue;
+                    }
+                }
+                fragments.extend(line.text_fragments.clone());
+            }
+            if !fragments.is_empty() {
+                list.push(DrawCommand::DrawTextFragments { fragments });
+            }
+        } else if let Some(ref text) = node.text {
+            let font_size = node.style.font_size;
+            let line_height = node.style.line_height;
+            let font_weight = node.style.font_weight;
+            let color = node.style.color;
+            let bounds_width = if node.geometry.content_box.width > 0.0 {
+                Some(node.geometry.content_box.width)
+            } else {
+                None
+            };
+            let bounds_height = if node.geometry.content_box.height > 0.0 {
+                Some(node.geometry.content_box.height)
+            } else {
+                None
+            };
+            let text_align = node.style.text_align;
+            let is_monospace = strata_layout::is_monospace_family(node.style.font_family);
+            list.push(DrawCommand::DrawText {
+                origin: (node.geometry.content_box.x, node.geometry.content_box.y),
+                bounds_width,
+                bounds_height,
+                text_align,
+                text: text.clone(),
+                font_size,
+                line_height,
+                font_weight,
+                color,
+                is_monospace,
+                font_family: node.style.font_family,
+            });
+        }
+
+        // SVG Vector Path content on this node
+        if !node.svg_items.is_empty() {
+            for item in &node.svg_items {
+                let fill = if item.fill_is_current_color {
+                    Some(node.style.color)
+                } else {
+                    item.fill_color
+                };
+                let stroke = if item.stroke_is_current_color {
+                    Some(node.style.color)
+                } else {
+                    item.stroke_color.or_else(|| {
+                        if fill.is_none() {
+                            Some(node.style.color)
+                        } else {
+                            None
+                        }
+                    })
+                };
+                list.push(DrawCommand::DrawSvgPath {
+                    bounds,
+                    path_data: item.path_data.clone(),
+                    stroke_color: stroke,
+                    fill_color: fill,
+                    stroke_width: item.stroke_width,
+                    stroke_linecap: item.stroke_linecap,
+                    stroke_linejoin: item.stroke_linejoin,
+                    stroke_dasharray: item.stroke_dasharray.clone(),
+                    fill_rule: item.fill_rule,
+                    view_box: item.view_box,
+                });
+            }
+        } else if let Some(ref path_data) = node.svg_path {
+            list.push(DrawCommand::DrawSvgPath {
+                bounds,
+                path_data: path_data.clone(),
+                stroke_color: Some(node.style.color),
+                fill_color: None,
+                stroke_width: 2.0,
+                stroke_linecap: strata_layout::StrokeLineCap::Round,
+                stroke_linejoin: strata_layout::StrokeLineJoin::Round,
+                stroke_dasharray: Vec::new(),
+                fill_rule: strata_layout::FillRule::NonZero,
+                view_box: (24.0, 24.0),
+            });
         }
     }
 
@@ -1170,14 +1504,22 @@ impl Compositor {
         cull: Option<Rect>,
         depth: usize,
     ) {
+        Self::paint_node_content_inner(node, list, cull, false, depth);
+    }
+
+    fn paint_node_content_inner(
+        node: &LayoutNode,
+        list: &mut DisplayList,
+        cull: Option<Rect>,
+        skip_hoisted: bool,
+        depth: usize,
+    ) {
         if depth >= Self::MAX_COMPOSITOR_DEPTH {
             return;
         }
-
         if node.style.display == Display::None {
             return;
         }
-
         if node.style.content_visibility == strata_style::types::ContentVisibility::Hidden {
             return;
         }
@@ -1222,137 +1564,7 @@ impl Compositor {
         };
 
         if is_visible {
-            let has_any_border_width = node.style.border_width.top > 0.0
-                || node.style.border_width.right > 0.0
-                || node.style.border_width.bottom > 0.0
-                || node.style.border_width.left > 0.0;
-            let draw_border_separately = node.style.border_style != BorderStyle::None
-                && node.style.border_style != BorderStyle::Hidden
-                && has_any_border_width
-                && node.style.border_color.is_some()
-                && !(node.style.display == Display::TableCell
-                    && node.style.border_collapse == BorderCollapse::Collapse);
-            let rounded_border_color =
-                if draw_border_separately
-                    || node.style.border_style == BorderStyle::None
-                    || node.style.border_style == BorderStyle::Hidden
-                {
-                    None
-                } else {
-                    node.style.border_color
-                };
-
-            // Outer Box Shadows (rendered behind background)
-            for shadow in &node.style.box_shadow {
-                if !shadow.inset {
-                    list.push(DrawCommand::DrawShadow {
-                        bounds,
-                        shadow: shadow.clone(),
-                        border_radius,
-                    });
-                }
-            }
-
-            // Solid / Rounded Background
-            if let Some(bg_color) = node.style.background_color {
-                if has_any_radius {
-                    list.push(DrawCommand::DrawRoundedRect {
-                        bounds,
-                        color: bg_color,
-                        border_radius,
-                        border_width: node.style.border_width,
-                        border_color: rounded_border_color,
-                    });
-                } else if bg_color.a > 0 {
-                    list.push(DrawCommand::DrawRect {
-                        bounds,
-                        color: bg_color,
-                    });
-                }
-            }
-
-            // Gradient Background
-            if let Some(ref grad) = node.style.background_gradient {
-                match grad {
-                    strata_style::types::Gradient::Linear { angle_deg, stops } => {
-                        list.push(DrawCommand::DrawLinearGradient {
-                            bounds,
-                            angle_deg: *angle_deg,
-                            stops: stops.clone(),
-                            border_radius,
-                        });
-                    }
-                    strata_style::types::Gradient::Radial { center, stops } => {
-                        list.push(DrawCommand::DrawRadialGradient {
-                            bounds,
-                            center: *center,
-                            stops: stops.clone(),
-                            border_radius,
-                        });
-                    }
-                    strata_style::types::Gradient::Conic {
-                        angle_deg,
-                        center: _,
-                        stops,
-                    } => {
-                        list.push(DrawCommand::DrawLinearGradient {
-                            bounds,
-                            angle_deg: *angle_deg,
-                            stops: stops.clone(),
-                            border_radius,
-                        });
-                    }
-                }
-            }
-
-            // Inset Box Shadows (rendered over background)
-            for shadow in &node.style.box_shadow {
-                if shadow.inset {
-                    list.push(DrawCommand::DrawInsetShadow {
-                        bounds,
-                        shadow: shadow.clone(),
-                        border_radius,
-                    });
-                }
-            }
-
-            // Border
-            if draw_border_separately {
-                if let Some(border_color) = node.style.border_color {
-                    list.push(DrawCommand::DrawBorder {
-                        bounds,
-                        widths: node.style.border_width,
-                        color: border_color,
-                        border_radius,
-                        style: node.style.border_style,
-                    });
-                }
-            }
-
-            // CSS outlines sit at the outside edge of the border box.
-            if node.style.outline_width > 0.0 && node.style.outline_style != BorderStyle::None {
-                if let Some(outline_color) = node.style.outline_color {
-                    let offset = node.style.outline_offset;
-                    let outline_radius = BorderRadius {
-                        top_left: (border_radius.top_left + offset).max(0.0),
-                        top_right: (border_radius.top_right + offset).max(0.0),
-                        bottom_left: (border_radius.bottom_left + offset).max(0.0),
-                        bottom_right: (border_radius.bottom_right + offset).max(0.0),
-                    };
-                    list.push(DrawCommand::DrawBorder {
-                        bounds: Rect::new(
-                            bounds.x - offset,
-                            bounds.y - offset,
-                            bounds.width + offset * 2.0,
-                            bounds.height + offset * 2.0,
-                        ),
-                        widths: EdgeInsets::all(node.style.outline_width),
-                        color: outline_color,
-                        border_radius: outline_radius,
-                        style: node.style.outline_style,
-                    });
-                }
-            }
+            Self::paint_node_box_decorations(node, list);
 
             if should_clip {
                 let clip_bounds = if clips_overflow
@@ -1369,120 +1581,11 @@ impl Compositor {
                 });
             }
 
-            // Replaced raster content paints inside the content box.
-            if let Some(ref image) = node.image {
-                let image_bounds = if node.geometry.content_box.width > 0.0
-                    && node.geometry.content_box.height > 0.0
-                {
-                    node.geometry.content_box
-                } else {
-                    bounds
-                };
-                list.push(DrawCommand::DrawImage {
-                    bounds: image_bounds,
-                    image: image.clone(),
-                });
-            }
-
-            // Text content
-            if !node.line_boxes.is_empty() {
-                let mut fragments = Vec::new();
-                for line in &node.line_boxes {
-                    if let Some(c) = cull {
-                        if line.bounds.height > 0.0
-                            && (line.bounds.y > c.y + c.height
-                                || line.bounds.y + line.bounds.height < c.y)
-                        {
-                            continue;
-                        }
-                    }
-                    fragments.extend(line.text_fragments.clone());
-                }
-                if !fragments.is_empty() {
-                    list.push(DrawCommand::DrawTextFragments { fragments });
-                }
-            } else if let Some(ref text) = node.text {
-                let font_size = node.style.font_size;
-                let line_height = node.style.line_height;
-                let font_weight = node.style.font_weight;
-                let color = node.style.color;
-                let bounds_width = if node.geometry.content_box.width > 0.0 {
-                    Some(node.geometry.content_box.width)
-                } else {
-                    None
-                };
-                let bounds_height = if node.geometry.content_box.height > 0.0 {
-                    Some(node.geometry.content_box.height)
-                } else {
-                    None
-                };
-                let text_align = node.style.text_align;
-                let is_monospace = strata_layout::is_monospace_family(node.style.font_family);
-                list.push(DrawCommand::DrawText {
-                    origin: (node.geometry.content_box.x, node.geometry.content_box.y),
-                    bounds_width,
-                    bounds_height,
-                    text_align,
-                    text: text.clone(),
-                    font_size,
-                    line_height,
-                    font_weight,
-                    color,
-                    is_monospace,
-                    font_family: node.style.font_family,
-                });
-            }
-
-            // SVG Vector Path content
-            if !node.svg_items.is_empty() {
-                for item in &node.svg_items {
-                    let fill = if item.fill_is_current_color {
-                        Some(node.style.color)
-                    } else {
-                        item.fill_color
-                    };
-                    let stroke = if item.stroke_is_current_color {
-                        Some(node.style.color)
-                    } else {
-                        item.stroke_color.or_else(|| {
-                            if fill.is_none() {
-                                Some(node.style.color)
-                            } else {
-                                None
-                            }
-                        })
-                    };
-                    list.push(DrawCommand::DrawSvgPath {
-                        bounds,
-                        path_data: item.path_data.clone(),
-                        stroke_color: stroke,
-                        fill_color: fill,
-                        stroke_width: item.stroke_width,
-                        stroke_linecap: item.stroke_linecap,
-                        stroke_linejoin: item.stroke_linejoin,
-                        stroke_dasharray: item.stroke_dasharray.clone(),
-                        fill_rule: item.fill_rule,
-                        view_box: item.view_box,
-                    });
-                }
-            } else if let Some(ref path_data) = node.svg_path {
-                list.push(DrawCommand::DrawSvgPath {
-                    bounds,
-                    path_data: path_data.clone(),
-                    stroke_color: Some(node.style.color),
-                    fill_color: None,
-                    stroke_width: 2.0,
-                    stroke_linecap: strata_layout::StrokeLineCap::Round,
-                    stroke_linejoin: strata_layout::StrokeLineJoin::Round,
-                    stroke_dasharray: Vec::new(),
-                    fill_rule: strata_layout::FillRule::NonZero,
-                    view_box: (24.0, 24.0),
-                });
-            }
+            Self::paint_node_foreground_content(node, list, cull);
         }
 
-        // Children
-        let has_scroll_offset = node.geometry.scroll_offset.x != 0.0 || node.geometry.scroll_offset.y != 0.0;
+        let has_scroll_offset =
+            node.geometry.scroll_offset.x != 0.0 || node.geometry.scroll_offset.y != 0.0;
         if has_scroll_offset {
             let mat = strata_primitives::geom::Matrix4x4::translation(
                 -node.geometry.scroll_offset.x,
@@ -1493,6 +1596,7 @@ impl Compositor {
         }
 
         let has_line_boxes = !node.line_boxes.is_empty();
+        let parent_display = node.style.display;
         for child in &node.children {
             if child.style.display == Display::None {
                 continue;
@@ -1502,6 +1606,11 @@ impl Compositor {
                     || (matches!(child.style.display, Display::Inline)
                         && !Self::inline_has_paintable_non_text_content(child)))
             {
+                continue;
+            }
+
+            let child_is_sc = child.establishes_stacking_context_in(Some(parent_display), false);
+            if skip_hoisted && (child_is_sc || child.style.position != Position::Static) {
                 continue;
             }
 
@@ -1519,10 +1628,10 @@ impl Compositor {
                 }
             }
 
-            if Self::establishes_stacking_context(child, false) {
+            if child_is_sc {
                 Self::paint_stacking_context_guarded(child, list, child_cull, depth + 1);
             } else {
-                Self::paint_node_content_guarded(child, list, child_cull, depth + 1);
+                Self::paint_node_content_inner(child, list, child_cull, skip_hoisted, depth + 1);
             }
         }
 
@@ -1537,4 +1646,18 @@ impl Compositor {
             list.push(DrawCommand::PopClip);
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct ClipScrollStep {
+    clip: Option<(Rect, BorderRadius)>,
+    scroll_offset: (f32, f32),
+    is_abs_cb: bool,
+    is_fixed_cb: bool,
+}
+
+struct HoistedParticipant<'a> {
+    node: &'a LayoutNode,
+    is_sc: bool,
+    steps: Vec<ClipScrollStep>,
 }

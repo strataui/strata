@@ -84,8 +84,17 @@ impl AppRuntime {
         for (path, &(applied_x, applied_y)) in &self.applied_scroll_offsets {
             if applied_x.abs() > 0.0001 || applied_y.abs() > 0.0001 {
                 if let Some(target) = Self::get_layout_node_mut(&mut self.layout_root, path) {
+                    let target_fixed_cb = target.style.establishes_fixed_containing_block();
+                    let target_abs_cb = target.style.position
+                        != strata_style::types::Position::Static
+                        || target_fixed_cb;
                     for child in &mut target.children {
-                        child.translate(applied_x, applied_y);
+                        child.translate_scrolled(
+                            applied_x,
+                            applied_y,
+                            target_abs_cb,
+                            target_fixed_cb,
+                        );
                     }
                     for line in &mut target.line_boxes {
                         line.bounds.x += applied_x;
@@ -204,8 +213,17 @@ impl AppRuntime {
             let clamped_y = stored_y.clamp(0.0, max_scroll_y);
 
             if clamped_x > 0.0 || clamped_y > 0.0 {
+                let target_fixed_cb = layout.style.establishes_fixed_containing_block();
+                let target_abs_cb = layout.style.position
+                    != strata_style::types::Position::Static
+                    || target_fixed_cb;
                 for child in &mut layout.children {
-                    child.translate(-clamped_x, -clamped_y);
+                    child.translate_scrolled(
+                        -clamped_x,
+                        -clamped_y,
+                        target_abs_cb,
+                        target_fixed_cb,
+                    );
                 }
                 for line in &mut layout.line_boxes {
                     line.bounds.x -= clamped_x;
@@ -336,8 +354,11 @@ impl AppRuntime {
         }
 
         if let Some(target) = Self::get_layout_node_mut(&mut self.layout_root, path) {
+            let target_fixed_cb = target.style.establishes_fixed_containing_block();
+            let target_abs_cb = target.style.position != strata_style::types::Position::Static
+                || target_fixed_cb;
             for child in &mut target.children {
-                child.translate(0.0, -dy);
+                child.translate_scrolled(0.0, -dy, target_abs_cb, target_fixed_cb);
             }
             for line in &mut target.line_boxes {
                 line.bounds.y -= dy;
@@ -350,6 +371,7 @@ impl AppRuntime {
                 }
             }
         }
+        self.spatial_index.sync_bounds(&self.layout_root);
     }
 
     /// Dispatches an immediate synchronous scroll wheel delta to the innermost scrollable container under (px, py).

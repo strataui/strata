@@ -439,6 +439,16 @@ impl LayoutNode {
         self.children.push(child);
     }
 
+    /// Evaluates if this layout node establishes an atomic CSS stacking context within `parent_display`.
+    #[inline]
+    pub fn establishes_stacking_context_in(
+        &self,
+        parent_display: Option<Display>,
+        is_root: bool,
+    ) -> bool {
+        self.style.establishes_stacking_context_in(parent_display, is_root)
+    }
+
     /// Translates this node's geometry and all descendants by (dx, dy) using an iterative heap stack (O(1) call stack).
     pub fn translate(&mut self, dx: f32, dy: f32) {
         if dx == 0.0 && dy == 0.0 {
@@ -468,6 +478,68 @@ impl LayoutNode {
             }
             for child in &mut node.children {
                 stack.push(child);
+            }
+        }
+    }
+
+    /// Translates descendants of a scroll container by `(dx, dy)` while honoring CSS containing-block
+    /// escape semantics:
+    /// - `Position::Fixed` subtrees do not scroll unless an ancestor at or inside the scroll container
+    ///   established a fixed containing block (`transform`, `filter`, `backdrop-filter`).
+    /// - `Position::Absolute` subtrees do not scroll unless an ancestor at or inside the scroll container
+    ///   established an absolute containing block (`position != Static` or fixed CB).
+    pub fn translate_scrolled(
+        &mut self,
+        dx: f32,
+        dy: f32,
+        parent_is_abs_cb: bool,
+        parent_is_fixed_cb: bool,
+    ) {
+        if dx == 0.0 && dy == 0.0 {
+            return;
+        }
+
+        let mut stack: Vec<(&mut LayoutNode, bool, bool)> =
+            vec![(self, parent_is_abs_cb, parent_is_fixed_cb)];
+        while let Some((node, abs_cb_inside, fixed_cb_inside)) = stack.pop() {
+            match node.style.position {
+                strata_style::types::Position::Fixed if !fixed_cb_inside => {
+                    continue;
+                }
+                strata_style::types::Position::Absolute if !abs_cb_inside => {
+                    continue;
+                }
+                _ => {}
+            }
+
+            node.geometry.translate(dx, dy);
+            node.layout_cache.origin_x += dx;
+            node.layout_cache.origin_y += dy;
+            for line in &mut node.line_boxes {
+                line.bounds.x += dx;
+                line.bounds.y += dy;
+                for frag in &mut line.text_fragments {
+                    frag.bounds.x += dx;
+                    frag.bounds.y += dy;
+                    frag.baseline_y += dy;
+                }
+                for atomic in &mut line.atomic_fragments {
+                    atomic.bounds.x += dx;
+                    atomic.bounds.y += dy;
+                }
+            }
+            if let Some(ref mut grid) = node.table_grid {
+                grid.translate(dx, dy);
+            }
+
+            let child_fixed_cb =
+                fixed_cb_inside || node.style.establishes_fixed_containing_block();
+            let child_abs_cb = abs_cb_inside
+                || node.style.position != strata_style::types::Position::Static
+                || child_fixed_cb;
+
+            for child in &mut node.children {
+                stack.push((child, child_abs_cb, child_fixed_cb));
             }
         }
     }

@@ -1642,16 +1642,50 @@ impl ComputedStyle {
         compute_transform_matrix(&self.transform, width, height, &self.transform_origin)
     }
 
-    /// Evaluates if this element establishes an isolated stacking context per W3C CSS 2.1 Appendix E and CSS Compositing Level 1.
-    pub fn establishes_stacking_context(&self) -> bool {
+    /// Evaluates if this element establishes a containing block for `position: fixed`
+    /// (and `position: absolute`) descendants per CSS Transforms Level 1 §2 and Filter Effects Level 1 §5.
+    #[inline(always)]
+    pub fn establishes_fixed_containing_block(&self) -> bool {
         self.has_transform()
-            || self.opacity < 1.0
-            || self.z_index.is_some()
-            || self.filter.is_some()
-            || self.backdrop_filter.is_some()
-            || self.clip_path.is_some()
-            || self.mix_blend_mode != BlendMode::Normal
-            || self.isolation == Isolation::Isolate
+            || self.filter.as_ref().is_some_and(|f| !f.is_empty())
+            || self.backdrop_filter.as_ref().is_some_and(|b| !b.is_empty())
+    }
+
+    /// Evaluates if this element establishes an isolated stacking context per
+    /// W3C CSS 2.1 Appendix E, CSS Flexbox §4.3, CSS Grid §5.4, CSS Positioned Layout Level 3 §3.1,
+    /// and CSS Compositing Level 1.
+    ///
+    /// Note: Per CSS 2.1 Appendix E / CSS Overflow Level 3, `overflow != Visible` clips scrollable
+    /// content without establishing an atomic stacking context.
+    #[inline]
+    pub fn establishes_stacking_context_in(
+        &self,
+        parent_display: Option<Display>,
+        is_root: bool,
+    ) -> bool {
+        if is_root {
+            return true;
+        }
+        let is_positioned = self.position != Position::Static;
+        let is_flex_or_grid_item = matches!(
+            parent_display,
+            Some(Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid)
+        );
+        let z_index_triggers =
+            self.z_index.is_some() && (is_positioned || is_flex_or_grid_item);
+        let fixed_or_sticky = matches!(self.position, Position::Fixed | Position::Sticky);
+
+        z_index_triggers
+            || fixed_or_sticky
+            || self.opacity < 0.999
+            || self.has_transform()
+            || self.has_visual_effects()
+    }
+
+    /// Evaluates if this element establishes an isolated stacking context without parent display context.
+    #[inline]
+    pub fn establishes_stacking_context(&self) -> bool {
+        self.establishes_stacking_context_in(None, false)
     }
     /// Constructs an unstyled node inheriting inheritable properties from parent with zero heap allocations.
     pub fn inherit_from(parent: &Self) -> Self {

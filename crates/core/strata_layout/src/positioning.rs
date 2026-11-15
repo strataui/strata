@@ -217,10 +217,19 @@ pub fn solve_positioning_children_guarded(
     for child in &mut container.children {
         match child.style.position {
             Position::Static => {
-                // Static elements do not establish a containing block for absolute descendants.
-                // Descendants continue using the ancestor containing block `cb`.
+                // Static elements do not establish a containing block unless they have a
+                // transform, filter, or backdrop-filter (CSS Transforms §2 / Filter Effects §5).
                 if !child.children.is_empty() {
-                    solve_positioning_children_guarded(child, cb, child_guard);
+                    let child_cb = if child.style.establishes_fixed_containing_block() {
+                        ContainingBlock {
+                            padding_box: child.geometry.padding_box,
+                            viewport: child.geometry.padding_box,
+                            scroll_offset: cb.scroll_offset,
+                        }
+                    } else {
+                        cb
+                    };
+                    solve_positioning_children_guarded(child, child_cb, child_guard);
                 }
             }
             Position::Relative => {
@@ -253,9 +262,14 @@ pub fn solve_positioning_children_guarded(
                 }
 
                 // 2. Relative elements establish a containing block for absolute descendants
+                let child_vp = if child.style.establishes_fixed_containing_block() {
+                    child.geometry.padding_box
+                } else {
+                    cb.viewport
+                };
                 let child_cb = ContainingBlock {
                     padding_box: child.geometry.padding_box,
-                    viewport: cb.viewport,
+                    viewport: child_vp,
                     scroll_offset: cb.scroll_offset,
                 };
 
@@ -268,9 +282,14 @@ pub fn solve_positioning_children_guarded(
                 solve_out_of_flow_box_guarded(child, cb.padding_box, cb.viewport, false, child_guard);
 
                 // Absolute elements establish a containing block for descendants
+                let child_vp = if child.style.establishes_fixed_containing_block() {
+                    child.geometry.padding_box
+                } else {
+                    cb.viewport
+                };
                 let child_cb = ContainingBlock {
                     padding_box: child.geometry.padding_box,
-                    viewport: cb.viewport,
+                    viewport: child_vp,
                     scroll_offset: cb.scroll_offset,
                 };
 
@@ -279,13 +298,18 @@ pub fn solve_positioning_children_guarded(
                 }
             }
             Position::Fixed => {
-                // Out-of-flow positioning relative to the viewport
+                // Out-of-flow positioning relative to the viewport (or nearest transformed/filtered ancestor)
                 solve_out_of_flow_box_guarded(child, cb.viewport, cb.viewport, true, child_guard);
 
                 // Fixed elements establish a containing block for descendants
+                let child_vp = if child.style.establishes_fixed_containing_block() {
+                    child.geometry.padding_box
+                } else {
+                    cb.viewport
+                };
                 let child_cb = ContainingBlock {
                     padding_box: child.geometry.padding_box,
-                    viewport: cb.viewport,
+                    viewport: child_vp,
                     scroll_offset: (0.0, 0.0),
                 };
 
@@ -311,9 +335,14 @@ pub fn solve_positioning_children_guarded(
                 };
                 solve_sticky_box(child, sticky_cb);
 
+                let child_vp = if child.style.establishes_fixed_containing_block() {
+                    child.geometry.padding_box
+                } else {
+                    cb.viewport
+                };
                 let child_cb = ContainingBlock {
                     padding_box: child.geometry.padding_box,
-                    viewport: cb.viewport,
+                    viewport: child_vp,
                     scroll_offset: cb.scroll_offset,
                 };
 
