@@ -1307,6 +1307,100 @@ pub fn blend_mode_to_cairo_operator(mode: strata_style::types::BlendMode) -> cai
     }
 }
 
+/// One rasterized 3D viewport frame, keyed by scene identity and pixel size.
+struct Viewport3DCacheEntry {
+    /// Held so the allocation, and therefore the pointer identity, stays valid.
+    scene: std::sync::Arc<strata_render::scene3d::Scene3D>,
+    width: usize,
+    height: usize,
+    surface: cairo::ImageSurface,
+}
+
+thread_local! {
+    static VIEWPORT_3D_CACHE: std::cell::RefCell<Vec<Viewport3DCacheEntry>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Maximum number of rasterized viewport frames kept alive.
+const VIEWPORT_3D_CACHE_CAPACITY: usize = 4;
+
+/// Returns the cairo surface for a 3D viewport, software-rasterizing it only
+/// when this exact `Arc<Scene3D>` has not been drawn at this size before.
+///
+/// Scenes are immutable behind the `Arc`, so pointer identity covers camera,
+/// meshes, overlay and texture changes: any change produces a new `Arc`.
+fn viewport_3d_surface(
+    scene: &std::sync::Arc<strata_render::scene3d::Scene3D>,
+    w: usize,
+    h: usize,
+) -> Option<cairo::ImageSurface> {
+    let hit = VIEWPORT_3D_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let idx = cache.iter().position(|e| {
+            std::sync::Arc::ptr_eq(&e.scene, scene) && e.width == w && e.height == h
+        })?;
+        // Move to the back so the front is always least recently used.
+        let entry = cache.remove(idx);
+        let surface = entry.surface.clone();
+        cache.push(entry);
+        Some(surface)
+    });
+    if hit.is_some() {
+        return hit;
+    }
+
+    let mut fb = strata_render::rasterizer::FrameBuffer::new(w, h);
+    strata_render::rasterizer3d::render_scene_3d_with_textures(
+        &mut fb,
+        strata_layout::Rect::new(0.0, 0.0, w as f32, h as f32),
+        scene,
+        None,
+        scene.textures_deref(),
+    );
+
+    let mut surface =
+        cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32).ok()?;
+    {
+        let mut data = surface.data().ok()?;
+        for (src, dst) in fb.pixels.chunks_exact(4).zip(data.chunks_exact_mut(4)) {
+            let r = src[0] as u32;
+            let g = src[1] as u32;
+            let b = src[2] as u32;
+            let a = src[3] as u32;
+            if a == 255 {
+                dst[0] = b as u8;
+                dst[1] = g as u8;
+                dst[2] = r as u8;
+                dst[3] = 255;
+            } else if a == 0 {
+                dst[0] = 0;
+                dst[1] = 0;
+                dst[2] = 0;
+                dst[3] = 0;
+            } else {
+                dst[0] = ((b * a + 127) / 255) as u8;
+                dst[1] = ((g * a + 127) / 255) as u8;
+                dst[2] = ((r * a + 127) / 255) as u8;
+                dst[3] = a as u8;
+            }
+        }
+    }
+
+    VIEWPORT_3D_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= VIEWPORT_3D_CACHE_CAPACITY {
+            cache.remove(0);
+        }
+        cache.push(Viewport3DCacheEntry {
+            scene: std::sync::Arc::clone(scene),
+            width: w,
+            height: h,
+            surface: surface.clone(),
+        });
+    });
+    Some(surface)
+}
+
 /// Executes a Strata DisplayList into a Cairo graphics context with full typography and vector support.
 pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
     let perf_start = std::time::Instant::now();
@@ -2027,42 +2121,7 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
             {
                 let w = bounds.width.max(1.0).round() as usize;
                 let h = bounds.height.max(1.0).round() as usize;
-                let mut fb = strata_render::rasterizer::FrameBuffer::new(w, h);
-                strata_render::rasterizer3d::render_scene_3d_with_textures(
-                    &mut fb,
-                    strata_layout::Rect::new(0.0, 0.0, bounds.width, bounds.height),
-                    scene,
-                    None,
-                    scene.textures_deref(),
-                );
-
-                if let Ok(mut surface) =
-                    cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32)
-                {
-                    if let Ok(mut data) = surface.data() {
-                        for (src, dst) in fb.pixels.chunks_exact(4).zip(data.chunks_exact_mut(4)) {
-                            let r = src[0] as u32;
-                            let g = src[1] as u32;
-                            let b = src[2] as u32;
-                            let a = src[3] as u32;
-                            if a == 255 {
-                                dst[0] = b as u8;
-                                dst[1] = g as u8;
-                                dst[2] = r as u8;
-                                dst[3] = 255;
-                            } else if a == 0 {
-                                dst[0] = 0;
-                                dst[1] = 0;
-                                dst[2] = 0;
-                                dst[3] = 0;
-                            } else {
-                                dst[0] = ((b * a + 127) / 255) as u8;
-                                dst[1] = ((g * a + 127) / 255) as u8;
-                                dst[2] = ((r * a + 127) / 255) as u8;
-                                dst[3] = a as u8;
-                            }
-                        }
-                    }
+                if let Some(surface) = viewport_3d_surface(scene, w, h) {
                     let _ = cr.save();
                     let _ = cr.set_source_surface(&surface, bounds.x as f64, bounds.y as f64);
                     let _ = cr.paint();
@@ -2857,6 +2916,17 @@ where
         gtk::glib::Propagation::Proceed
     });
 
+    // Any non-tick event marks the UI active so the animation clock runs at
+    // full rate; the tick source drops to a slow poll while nothing happens.
+    let last_activity = std::rc::Rc::new(std::cell::Cell::new(std::time::Instant::now()));
+    let activity_marker = last_activity.clone();
+    let mut on_event = on_event;
+    let on_event = move |event: &crate::events::PlatformEvent| -> bool {
+        if !matches!(event, crate::events::PlatformEvent::AnimationTick) {
+            activity_marker.set(std::time::Instant::now());
+        }
+        on_event(event)
+    };
     let on_event_rc = std::rc::Rc::new(std::cell::RefCell::new(on_event));
 
     DRAWING_AREA_HANDLE.with(|da| {
@@ -3284,40 +3354,49 @@ where
     drawing_area.grab_focus();
     gtk_set_cursor(crate::window::CursorIcon::Default);
 
-    // Hardware VSync frame tick callback plus 16ms (60 FPS) timer fallback so CSS transitions
-    // and animations advance smoothly to completion even when pointer input is stationary
-    // or the compositor pauses idle widget frame clocks.
-    let last_frame_tick = std::rc::Rc::new(std::cell::Cell::new(std::time::Instant::now()));
-    let last_tick_vsync = last_frame_tick.clone();
-    let on_event_tick = on_event_rc.clone();
-    drawing_area.add_tick_callback(move |widget, _frame_clock| {
-        if IS_CLOSING.with(|c| c.get()) {
-            return gtk::glib::ControlFlow::Break;
-        }
-        last_tick_vsync.set(std::time::Instant::now());
-        let tick_ev = crate::events::PlatformEvent::AnimationTick;
-        if (on_event_tick.borrow_mut())(&tick_ev) {
-            widget.queue_draw();
-        }
-        gtk::glib::ControlFlow::Continue
-    });
+    // Single adaptive tick source. The previous vsync tick callback plus 16 ms
+    // timer woke the process twice per frame and the frame clock never slept.
+    // Now one timer runs at ~60 Hz while input or animation is recent and
+    // backs off to a slow poll when idle, which still lets caret blink and
+    // externally started transitions advance.
+    const ACTIVE_INTERVAL_MS: u64 = 16;
+    const IDLE_INTERVAL_MS: u64 = 100;
+    const ACTIVE_WINDOW: std::time::Duration = std::time::Duration::from_millis(1000);
 
-    let last_tick_timer = last_frame_tick;
-    let on_event_timer = on_event_rc.clone();
-    let da_timer = drawing_area.clone();
-    gtk::glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
-        if IS_CLOSING.with(|c| c.get()) {
-            return gtk::glib::ControlFlow::Break;
-        }
-        if last_tick_timer.get().elapsed() >= std::time::Duration::from_millis(14) {
-            last_tick_timer.set(std::time::Instant::now());
-            let tick_ev = crate::events::PlatformEvent::AnimationTick;
-            if (on_event_timer.borrow_mut())(&tick_ev) {
-                da_timer.queue_draw();
+    fn schedule_tick(
+        da: gtk::DrawingArea,
+        on_event: std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::events::PlatformEvent) -> bool>>,
+        activity: std::rc::Rc<std::cell::Cell<std::time::Instant>>,
+        delay_ms: u64,
+    ) {
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(delay_ms), move || {
+            if IS_CLOSING.with(|c| c.get()) {
+                return;
             }
-        }
-        gtk::glib::ControlFlow::Continue
-    });
+            let tick_ev = crate::events::PlatformEvent::AnimationTick;
+            let changed = (on_event.borrow_mut())(&tick_ev);
+            if changed {
+                use gtk::prelude::WidgetExt;
+                da.queue_draw();
+                activity.set(std::time::Instant::now());
+            }
+            let next = if activity.get().elapsed() < ACTIVE_WINDOW {
+                ACTIVE_INTERVAL_MS
+            } else {
+                IDLE_INTERVAL_MS
+            };
+            schedule_tick(da, on_event, activity, next);
+        });
+    }
+    let tick_target: std::rc::Rc<
+        std::cell::RefCell<dyn FnMut(&crate::events::PlatformEvent) -> bool>,
+    > = on_event_rc.clone();
+    schedule_tick(
+        drawing_area.clone(),
+        tick_target,
+        last_activity,
+        ACTIVE_INTERVAL_MS,
+    );
 
     gtk::main();
 

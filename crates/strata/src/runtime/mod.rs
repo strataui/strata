@@ -27,6 +27,7 @@ mod image;
 mod input_hit_test;
 mod layout_tree;
 mod mcp;
+mod profile;
 mod scroll;
 mod scrollbar;
 mod selection;
@@ -39,6 +40,7 @@ pub use edit::*;
 pub(crate) use image::*;
 pub use launch::*;
 pub use platforms::*;
+pub use profile::{FrameProfile, FrameProfileHook};
 pub use spatial::*;
 pub use types::*;
 
@@ -134,6 +136,10 @@ pub struct AppRuntime {
     pub devtools: Option<strata_devtools::DevTools>,
     /// Client-Side Decorations (CSD) controller managing titlebar geometry and drag tracking.
     pub csd_controller: strata_platform::CsdController,
+    /// Phase timings accumulated since the last presented frame.
+    pub(crate) frame_profile: FrameProfile,
+    /// Optional observer invoked with the completed profile after each present.
+    pub(crate) frame_profile_hook: Option<FrameProfileHook>,
 }
 
 /// Whether opt-in `[perf]` timing output is enabled through `STRATA_PERF_LOG`.
@@ -278,6 +284,8 @@ impl AppRuntime {
             #[cfg(feature = "devtools")]
             devtools: None,
             csd_controller: strata_platform::CsdController::default(),
+            frame_profile: FrameProfile::default(),
+            frame_profile_hook: None,
         };
 
         let initial_sheets = Self::collect_stylesheets_from_blueprint(&runtime.root_blueprint);
@@ -304,6 +312,7 @@ impl AppRuntime {
             .compute_layout(self.viewport_width, self.viewport_height);
         Self::sync_layout_to_ir(&self.layout_root, &mut self.ir_graph);
         self.layout_computations += 1;
+        self.frame_profile.layout += compute_start.elapsed();
         if perf_logging_enabled() {
             perf_log_ms(
                 "compute_layout_tick",
@@ -514,6 +523,7 @@ impl AppRuntime {
             .resize(self.viewport_width, self.viewport_height);
         self.gpu_path_pipeline
             .compile_frame(&self.display_list, None);
+        self.frame_profile.compile += compile_start.elapsed();
 
         static COMPILE_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let frame = COMPILE_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -598,14 +608,27 @@ impl AppRuntime {
                 let action = self.dispatch_pointer_down_action(*x, *y);
                 let click_invoked = self.dispatch_mouse_click(*x, *y, 0, 1);
                 let dynamic_updated = self.sync_dynamic_text();
-                self.rebuild_layout_tree();
-                action.needs_redraw() || click_invoked || dynamic_updated || true
+                if action.needs_rebuild() || click_invoked || dynamic_updated {
+                    self.rebuild_layout_tree();
+                } else {
+                    // Pressed/active state is paint-only: restyle, no rebuild.
+                    self.restyle_for_hover_paint();
+                }
+                true
             }
             PlatformEvent::MouseUp { x, y, .. } => {
+                let was_mouse_down = self.is_mouse_down;
                 self.is_mouse_down = false;
-                let redraw = self.dispatch_pointer_up_action(*x, *y).needs_redraw();
-                self.rebuild_layout_tree();
-                redraw || true
+                let action = self.dispatch_pointer_up_action(*x, *y);
+                if action.needs_rebuild() {
+                    self.rebuild_layout_tree();
+                    true
+                } else if was_mouse_down {
+                    self.restyle_for_hover_paint();
+                    true
+                } else {
+                    action.needs_redraw()
+                }
             }
             PlatformEvent::CursorLeft => {
                 self.is_mouse_down = false;
@@ -631,6 +654,36 @@ impl AppRuntime {
         needs_redraw
     }
 
+    /// Phase timings accumulated since the last presented frame.
+    pub fn frame_profile(&self) -> FrameProfile {
+        self.frame_profile
+    }
+
+    /// Registers an observer called with each completed [`FrameProfile`].
+    pub fn set_frame_profile_hook(&mut self, hook: Option<Box<dyn FnMut(&FrameProfile)>>) {
+        self.frame_profile_hook = hook.map(FrameProfileHook);
+    }
+
+    /// Adds time spent rasterizing, for presenting backends that rasterize outside the runtime.
+    pub fn record_raster_time(&mut self, elapsed: std::time::Duration) {
+        self.frame_profile.raster += elapsed;
+    }
+
+    /// Adds time spent presenting, for backends that present outside the runtime.
+    pub fn record_present_time(&mut self, elapsed: std::time::Duration) {
+        self.frame_profile.present += elapsed;
+    }
+
+    /// Publishes the accumulated profile to the hook and starts a fresh frame.
+    /// Returns the profile that was completed.
+    pub fn finish_frame_profile(&mut self) -> FrameProfile {
+        let done = std::mem::take(&mut self.frame_profile);
+        if let Some(hook) = self.frame_profile_hook.as_mut() {
+            (hook.0)(&done);
+        }
+        done
+    }
+
     /// Renders the current frame and presents it to the given surface presenter via the swapchain compositor.
     pub fn render_frame<P: SurfacePresenter>(
         &mut self,
@@ -654,7 +707,10 @@ impl AppRuntime {
         #[cfg(feature = "devtools")]
         let submit_start = std::time::Instant::now();
 
+        let present_start = std::time::Instant::now();
         let res = compositor.render_and_present(&self.display_list, presenter, force_redraw);
+        self.frame_profile.present += present_start.elapsed();
+        self.finish_frame_profile();
 
         #[cfg(feature = "devtools")]
         if let Some(ref mut dt) = self.devtools {

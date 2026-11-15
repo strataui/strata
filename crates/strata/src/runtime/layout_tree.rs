@@ -1055,16 +1055,19 @@ impl AppRuntime {
         for sheet in &stylesheets {
             self.register_keyframes_stylesheet(sheet);
         }
+        let rebuild_start = std::time::Instant::now();
         let ctx = self.interaction_context();
         self.layout_root = Self::build_layout_tree_with_interaction(&self.root_blueprint, &ctx);
         self.sync_active_input_layout();
         let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
         self.sync_tree_animations(now_ms);
         let compute_start = std::time::Instant::now();
+        self.frame_profile.rebuild += compute_start.duration_since(rebuild_start);
         self.layout_root
             .compute_layout(self.viewport_width, self.viewport_height);
         Self::sync_layout_to_ir(&self.layout_root, &mut self.ir_graph);
         self.layout_computations += 1;
+        self.frame_profile.layout += compute_start.elapsed();
         if perf_logging_enabled() {
             perf_log_ms(
                 "compute_layout_rebuild",

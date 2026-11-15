@@ -52,7 +52,7 @@ fn test_draw_viewport_3d_cairo_presentation_renders_cube() {
     let mut dl = DisplayList::new();
     dl.push(DrawCommand::DrawViewport3D {
         bounds: Rect::new(0.0, 0.0, 160.0, 160.0),
-        scene,
+        scene: scene.into(),
     });
 
     // 5. Render directly to Cairo PNG bytes
