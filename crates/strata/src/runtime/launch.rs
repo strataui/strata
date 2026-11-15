@@ -364,7 +364,11 @@ where
             rt.spatial_index
                 .rebuild(&rt.root_blueprint, &rt.layout_root);
         }
-        rt.compile_display_list();
+        if size_changed {
+            rt.mark_paint_dirty();
+        }
+        // Repaints with no state change (expose, focus) reuse the compiled list.
+        rt.compile_display_list_if_dirty();
 
         // Clear or fill window background
         if transparent_bg {
@@ -397,7 +401,8 @@ where
     let runtime_event = runtime.clone();
     let root_fn_event = root_fn_rc.clone();
     let event_handler_event = event_handler_rc.clone();
-    let on_event = move |event: &strata_platform::PlatformEvent| -> bool {
+    let runtime_dirty = runtime.clone();
+    let on_event_inner = move |event: &strata_platform::PlatformEvent| -> bool {
         let mut needs_rebuild = false;
         let mut needs_redraw = false;
         {
@@ -626,6 +631,16 @@ where
         } else {
             false
         }
+    };
+
+    // Any event that requests a redraw invalidates the compiled display list.
+    let on_event_inner = on_event_inner;
+    let on_event = move |event: &strata_platform::PlatformEvent| -> bool {
+        let redraw = on_event_inner(event);
+        if redraw {
+            runtime_dirty.borrow_mut().mark_paint_dirty();
+        }
+        redraw
     };
 
     let _ = crate::mcp_bridge::start_mcp_dev_listener(None);

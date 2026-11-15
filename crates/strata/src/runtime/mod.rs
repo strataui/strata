@@ -138,6 +138,10 @@ pub struct AppRuntime {
     pub csd_controller: strata_platform::CsdController,
     /// Phase timings accumulated since the last presented frame.
     pub(crate) frame_profile: FrameProfile,
+    /// True when anything that affects painting changed since the display list was compiled.
+    pub(crate) paint_dirty: bool,
+    /// Number of display-list compilations skipped because nothing changed.
+    pub(crate) compiles_skipped: u64,
     /// Optional observer invoked with the completed profile after each present.
     pub(crate) frame_profile_hook: Option<FrameProfileHook>,
 }
@@ -285,6 +289,8 @@ impl AppRuntime {
             devtools: None,
             csd_controller: strata_platform::CsdController::default(),
             frame_profile: FrameProfile::default(),
+            paint_dirty: true,
+            compiles_skipped: 0,
             frame_profile_hook: None,
         };
 
@@ -500,6 +506,32 @@ impl AppRuntime {
         }
     }
 
+    /// Marks the compiled display list stale so the next dirty-gated compile rebuilds it.
+    pub fn mark_paint_dirty(&mut self) {
+        self.paint_dirty = true;
+    }
+
+    /// Whether the display list is stale relative to runtime state.
+    pub fn is_paint_dirty(&self) -> bool {
+        self.paint_dirty
+    }
+
+    /// Number of dirty-gated compiles that were skipped as unchanged.
+    pub fn compiles_skipped(&self) -> u64 {
+        self.compiles_skipped
+    }
+
+    /// Compiles the display list only when something changed since the last compile.
+    /// Returns true when a compile ran.
+    pub fn compile_display_list_if_dirty(&mut self) -> bool {
+        if !self.paint_dirty {
+            self.compiles_skipped += 1;
+            return false;
+        }
+        self.compile_display_list();
+        true
+    }
+
     /// Generates draw commands for all computed layout rectangles using the 7-layer CSS compositor with spatial viewport scissoring.
     pub fn compile_display_list(&mut self) {
         let compile_start = std::time::Instant::now();
@@ -524,6 +556,7 @@ impl AppRuntime {
         self.gpu_path_pipeline
             .compile_frame(&self.display_list, None);
         self.frame_profile.compile += compile_start.elapsed();
+        self.paint_dirty = false;
 
         static COMPILE_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let frame = COMPILE_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -651,6 +684,9 @@ impl AppRuntime {
             needs_redraw = true;
         }
 
+        if needs_redraw {
+            self.paint_dirty = true;
+        }
         needs_redraw
     }
 
@@ -694,7 +730,11 @@ impl AppRuntime {
         #[cfg(feature = "devtools")]
         let frame_start = std::time::Instant::now();
 
-        self.tick_frame();
+        if self.paint_dirty || self.frame_count == 0 || force_redraw {
+            self.tick_frame();
+        } else {
+            self.compiles_skipped += 1;
+        }
 
         #[cfg(feature = "devtools")]
         if let Some(ref mut dt) = self.devtools {

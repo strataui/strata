@@ -120,3 +120,35 @@ fn path_batch_is_skipped_when_the_frame_has_no_paths() {
     );
     assert!(runtime.gpu_path_segments().is_empty());
 }
+
+#[test]
+fn dirty_gated_compile_skips_unchanged_frames_and_recompiles_on_change() {
+    let view = rsx! { <div class="w-full h-full bg-slate-900">"static"</div> };
+    let mut runtime = AppRuntime::new(view, 400.0, 300.0, 1.0);
+    runtime.tick_frame();
+    assert!(!runtime.is_paint_dirty());
+
+    let skipped = runtime.compiles_skipped();
+    assert!(!runtime.compile_display_list_if_dirty());
+    assert!(!runtime.compile_display_list_if_dirty());
+    assert_eq!(runtime.compiles_skipped(), skipped + 2);
+
+    runtime.mark_paint_dirty();
+    assert!(runtime.compile_display_list_if_dirty());
+    assert!(!runtime.is_paint_dirty());
+}
+
+#[test]
+fn input_that_requests_a_redraw_marks_the_list_dirty() {
+    let view = rsx! { <div class="w-full h-full">"x"</div> };
+    let mut runtime = AppRuntime::new(view, 400.0, 300.0, 1.0);
+    runtime.tick_frame();
+    assert!(!runtime.is_paint_dirty());
+    let redraw = runtime.step_event(&PlatformEvent::MouseDown {
+        button: strata_platform::MouseButton::Left,
+        x: 5.0,
+        y: 5.0,
+    });
+    assert!(redraw);
+    assert!(runtime.is_paint_dirty());
+}
