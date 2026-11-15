@@ -154,6 +154,10 @@ pub struct AppRuntime {
     pub(crate) has_resize_listeners: bool,
     /// Last observed `(width, height)` for elements with `onresize` listeners, keyed by node ID.
     pub observed_element_sizes: std::collections::HashMap<u64, (f32, f32)>,
+    /// Last pointer position `(x, y)` for computing `movement_x` / `movement_y`.
+    pub(crate) last_pointer_pos: Option<(f32, f32)>,
+    /// Target `(x, y)` of an in-flight cursor warp so synthetic warp deltas are filtered.
+    pub(crate) pending_cursor_warp: Option<(f32, f32)>,
 }
 
 /// Whether opt-in `[perf]` timing output is enabled through `STRATA_PERF_LOG`.
@@ -307,6 +311,8 @@ impl AppRuntime {
             pointer_capture_target: None,
             has_resize_listeners: false,
             observed_element_sizes: std::collections::HashMap::new(),
+            last_pointer_pos: None,
+            pending_cursor_warp: None,
         };
 
         runtime.has_resize_listeners =
@@ -455,6 +461,98 @@ impl AppRuntime {
         find_rec(&self.layout_root, element_id)
     }
 
+    /// Warps the OS pointer to window-local `(x, y)` and records the target so the
+    /// resulting synthetic motion delta is filtered from `movement_x` / `movement_y`.
+    pub fn warp_cursor(&mut self, x: f32, y: f32) {
+        self.last_pointer_pos = Some((x, y));
+        self.pending_cursor_warp = Some((x, y));
+        #[cfg(target_os = "linux")]
+        strata_platform::gtk_warp_cursor(x as f64, y as f64);
+    }
+
+    /// Alias for [`AppRuntime::warp_cursor`].
+    pub fn set_cursor_position(&mut self, x: f32, y: f32) {
+        self.warp_cursor(x, y);
+    }
+
+    /// Updates `flex_grow`, `flex_shrink`, and optional `flex_basis` on the layout node
+    /// matching `element_id` in-place, invalidating only its ancestor chain's layout cache.
+    pub fn update_element_flex(
+        &mut self,
+        element_id: &str,
+        flex_grow: f32,
+        flex_shrink: f32,
+        flex_basis: Option<strata_style::types::Dimension>,
+    ) -> bool {
+        fn update_rec(
+            node: &mut LayoutNode,
+            target_id: &str,
+            flex_grow: f32,
+            flex_shrink: f32,
+            flex_basis: Option<strata_style::types::Dimension>,
+        ) -> bool {
+            if node.element_id.as_deref() == Some(target_id) {
+                node.style.flex_grow = flex_grow;
+                node.style.flex_shrink = flex_shrink;
+                if let Some(basis) = flex_basis {
+                    node.style.flex_basis = basis;
+                }
+                node.layout_cache = strata_layout::tree::LayoutCacheEntry::invalid();
+                return true;
+            }
+            let mut changed = false;
+            for child in &mut node.children {
+                if update_rec(child, target_id, flex_grow, flex_shrink, flex_basis) {
+                    changed = true;
+                }
+            }
+            if changed {
+                node.layout_cache = strata_layout::tree::LayoutCacheEntry::invalid();
+            }
+            changed
+        }
+        update_rec(
+            &mut self.layout_root,
+            element_id,
+            flex_grow,
+            flex_shrink,
+            flex_basis,
+        )
+    }
+
+    /// Updates `flex_grow` ratios for multiple `element_id`s in-place and runs an isolated
+    /// layout-only pass without rebuilding the DOM, stylesheets, or IR graph.
+    pub fn update_split_ratios(&mut self, updates: &[(&str, f32)]) -> bool {
+        let mut any_changed = false;
+        for &(id, ratio) in updates {
+            if self.update_element_flex(id, ratio, 1.0, None) {
+                any_changed = true;
+            }
+        }
+        if any_changed {
+            self.relayout_in_place();
+        }
+        any_changed
+    }
+
+    /// Recomputes layout, scroll/viewport clamps, resize observers, spatial index, and
+    /// display list in-place without rebuilding `layout_root` or `ir_graph`.
+    pub fn relayout_in_place(&mut self) {
+        self.unapply_scroll_offsets();
+        let compute_start = std::time::Instant::now();
+        self.layout_root
+            .compute_layout(self.viewport_width, self.viewport_height);
+        self.layout_computations += 1;
+        self.frame_profile.layout += compute_start.elapsed();
+        self.apply_viewport_clamps();
+        self.apply_scroll_offsets();
+        self.dispatch_resize_observers();
+        self.spatial_index
+            .rebuild(&self.root_blueprint, &self.layout_root);
+        self.paint_dirty = true;
+        self.compile_display_list();
+    }
+
     /// Returns true if any element in `bp` registers an `EventType::Resize` listener.
     pub(crate) fn blueprint_has_resize_listeners(bp: &NodeBlueprint) -> bool {
         match bp {
@@ -582,30 +680,192 @@ impl AppRuntime {
         true
     }
 
-    /// Updates the application root view, reconstructing the layout tree and compiling a new display list.
+    fn element_attr_value<'a>(
+        attrs: &'a [strata_dom::Attribute],
+        key_name: &str,
+    ) -> Option<&'a str> {
+        attrs.iter().find_map(|a| match a {
+            strata_dom::Attribute::Property { key, value } if key == key_name => {
+                Some(value.as_str())
+            }
+            _ => None,
+        })
+    }
+
+    fn attributes_visually_equal(a: &[strata_dom::Attribute], b: &[strata_dom::Attribute]) -> bool {
+        let mut iter_a = a.iter().filter(|attr| {
+            !matches!(
+                attr,
+                strata_dom::Attribute::EventListener { .. } | strata_dom::Attribute::Entity(_)
+            )
+        });
+        let mut iter_b = b.iter().filter(|attr| {
+            !matches!(
+                attr,
+                strata_dom::Attribute::EventListener { .. } | strata_dom::Attribute::Entity(_)
+            )
+        });
+        loop {
+            match (iter_a.next(), iter_b.next()) {
+                (None, None) => return true,
+                (Some(x), Some(y)) => match (x, y) {
+                    (
+                        strata_dom::Attribute::Property { key: k1, value: v1 },
+                        strata_dom::Attribute::Property { key: k2, value: v2 },
+                    ) if k1 == k2 && v1 == v2 => {}
+                    (
+                        strata_dom::Attribute::DirectStyle(d1),
+                        strata_dom::Attribute::DirectStyle(d2),
+                    ) if std::rc::Rc::ptr_eq(d1, d2) => {}
+                    (
+                        strata_dom::Attribute::ScenePayload(s1),
+                        strata_dom::Attribute::ScenePayload(s2),
+                    ) if std::sync::Arc::ptr_eq(s1, s2) => {}
+                    _ => return false,
+                },
+                _ => return false,
+            }
+        }
+    }
+
+    /// Reconciles `layout_node` in-place from `old_bp` to `new_bp`.
+    /// Returns `None` if a structural mismatch requires a full subtree rebuild,
+    /// `Some(true)` if any layout cache in this subtree was invalidated, or
+    /// `Some(false)` if this entire subtree is visually and structurally identical.
+    fn reconcile_layout_subtree(
+        old_bp: &NodeBlueprint,
+        new_bp: &NodeBlueprint,
+        layout_node: &mut LayoutNode,
+        ctx: &crate::runtime::InteractionContext,
+    ) -> Option<bool> {
+        match (old_bp, new_bp) {
+            (NodeBlueprint::Text(t1), NodeBlueprint::Text(t2)) => {
+                if t1 == t2 {
+                    Some(false)
+                } else {
+                    layout_node.text = Some(t2.clone());
+                    layout_node.inline_items.clear();
+                    layout_node.line_boxes.clear();
+                    layout_node.layout_cache = strata_layout::tree::LayoutCacheEntry::invalid();
+                    Some(true)
+                }
+            }
+            (
+                NodeBlueprint::Element {
+                    tag: t1,
+                    classes: cls1,
+                    attributes: a1,
+                    children: c1,
+                },
+                NodeBlueprint::Element {
+                    tag: t2,
+                    classes: cls2,
+                    attributes: a2,
+                    children: c2,
+                },
+            ) if t1 == t2
+                && *t1 != strata_dom::Tag::Svg
+                && !layout_node.is_top_layer
+                && c1.len() == c2.len()
+                && layout_node.children.len() == c2.len()
+                && Self::element_attr_value(a1, "key") == Self::element_attr_value(a2, "key")
+                && Self::element_attr_value(a1, "id") == Self::element_attr_value(a2, "id") =>
+            {
+                let mut children_changed = false;
+                for (i, (oc, nc)) in c1.iter().zip(c2.iter()).enumerate() {
+                    match Self::reconcile_layout_subtree(oc, nc, &mut layout_node.children[i], ctx)
+                    {
+                        Some(false) => {}
+                        Some(true) => children_changed = true,
+                        None => {
+                            layout_node.children[i] =
+                                Self::build_layout_tree_with_interaction(nc, ctx);
+                            children_changed = true;
+                        }
+                    }
+                }
+
+                if cls1 == cls2 && Self::attributes_visually_equal(a1, a2) {
+                    if let Some(eid) = new_bp.entity_id() {
+                        layout_node.entity_id = eid;
+                    }
+                    if children_changed {
+                        layout_node.layout_cache = strata_layout::tree::LayoutCacheEntry::invalid();
+                    }
+                    Some(children_changed)
+                } else {
+                    // Only this element's own classes/attributes changed (e.g. SplitPane flex ratio):
+                    // rebuild only this node's style/props and preserve all reconciled children.
+                    let shallow_bp = NodeBlueprint::Element {
+                        tag: *t2,
+                        classes: cls2.clone(),
+                        attributes: a2.clone(),
+                        children: Vec::new(),
+                    };
+                    let mut updated = Self::build_layout_tree_with_interaction(&shallow_bp, ctx);
+                    updated.children = std::mem::take(&mut layout_node.children);
+                    *layout_node = updated;
+                    Some(true)
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Updates the application root view, incrementally reconciling unchanged subtrees
+    /// and compiling a new display list.
     pub fn update_view(&mut self, new_view: View) {
+        self.unapply_scroll_offsets();
         self.applied_scroll_offsets.clear();
         self.applied_portal_offsets.clear();
-        self.root_blueprint = new_view.root.flatten_fragments();
-        self.root_blueprint.ensure_entity_ids();
+        let mut next_blueprint = new_view.root.flatten_fragments();
+        next_blueprint.ensure_entity_ids();
+        let old_blueprint = std::mem::replace(&mut self.root_blueprint, next_blueprint);
         self.has_resize_listeners = Self::blueprint_has_resize_listeners(&self.root_blueprint);
         self.ir_graph = Self::build_ir_graph(&self.root_blueprint);
         let sheets = Self::collect_stylesheets_from_blueprint(&self.root_blueprint);
-        for sheet in &sheets {
-            self.register_keyframes_stylesheet(sheet);
+        let sheets_unchanged = self.cached_stylesheets == sheets;
+        if !sheets_unchanged {
+            for sheet in &sheets {
+                self.register_keyframes_stylesheet(sheet);
+            }
+            self.cached_stylesheets = sheets;
         }
-        self.cached_stylesheets = sheets;
         let build_start = std::time::Instant::now();
-        let ctx = self.interaction_context();
-        self.layout_root = Self::build_layout_tree_with_interaction(&self.root_blueprint, &ctx);
+        let reconciled = if sheets_unchanged
+            && !self.has_resize_listeners
+            && self.current_hover_path.is_none()
+            && self.current_focus_path.is_none()
+        {
+            let ctx = crate::runtime::InteractionContext {
+                hovered_path: None,
+                focused_path: None,
+                is_mouse_down: self.is_mouse_down,
+                is_dark_mode: self.is_dark_mode,
+            };
+            Self::reconcile_layout_subtree(
+                &old_blueprint,
+                &self.root_blueprint,
+                &mut self.layout_root,
+                &ctx,
+            )
+            .is_some()
+        } else {
+            false
+        };
+        if !reconciled {
+            let ctx = self.interaction_context();
+            self.layout_root = Self::build_layout_tree_with_interaction(&self.root_blueprint, &ctx);
+        }
         if perf_logging_enabled() {
             perf_log_ms(
                 "build_layout_tree_update",
                 build_start,
                 format!(
-                    "{} blueprint nodes -> {} layout nodes",
+                    "{} blueprint nodes -> {} layout nodes (reconciled={})",
                     perf_count_blueprint_nodes(&self.root_blueprint),
-                    perf_count_layout_nodes(&self.layout_root)
+                    perf_count_layout_nodes(&self.layout_root),
+                    reconciled
                 ),
             );
         }
