@@ -2,10 +2,9 @@
 
 #![allow(non_snake_case)]
 
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use strata_dom::{Attribute, ClassList, Event, EventType, NodeBlueprint, Tag, View};
+use strata_dom::{Attribute, ClassList, NodeBlueprint, Tag, View};
 use strata_macro::{component, rsx};
 use strata_render::orbit_controls::OrbitControls;
 pub use strata_render::scene3d::{
@@ -15,29 +14,7 @@ pub use strata_render::scene3d::{
     ShaderSource, SphereGeometry, StandardMaterial, Transform3D,
 };
 
-/// Conversion trait allowing `on_camera_change` on [`SceneViewport`] to accept closures,
-/// `Rc<dyn Fn(&OrbitControls)>`, or `Option<Rc<dyn Fn(&OrbitControls)>>`.
-pub trait IntoCameraChangeProp {
-    fn into_camera_change_prop(self) -> Option<Rc<dyn Fn(&OrbitControls)>>;
-}
-
-impl IntoCameraChangeProp for Option<Rc<dyn Fn(&OrbitControls)>> {
-    fn into_camera_change_prop(self) -> Option<Rc<dyn Fn(&OrbitControls)>> {
-        self
-    }
-}
-
-impl IntoCameraChangeProp for Rc<dyn Fn(&OrbitControls)> {
-    fn into_camera_change_prop(self) -> Option<Rc<dyn Fn(&OrbitControls)>> {
-        Some(self)
-    }
-}
-
-impl<F: Fn(&OrbitControls) + 'static> IntoCameraChangeProp for F {
-    fn into_camera_change_prop(self) -> Option<Rc<dyn Fn(&OrbitControls)>> {
-        Some(Rc::new(self))
-    }
-}
+pub use strata_render::scene3d::IntoCameraChangeProp;
 
 /// High-Level Hybrid 3D Scene Viewport Component with 2D HUD Overlay.
 ///
@@ -165,74 +142,13 @@ fn build_scene_viewport(
     }
 
     if let Some(cb) = on_camera_change {
-        let mut initial_controls = match scene.as_deref() {
-            Some(s) => OrbitControls::from_camera(&s.camera),
-            None => OrbitControls::default(),
-        };
-        initial_controls.enable_damping = false;
-        let fov_deg = match scene.as_deref().map(|s| &s.camera) {
-            Some(Camera3D::Perspective {
-                fov_horizontal_deg, ..
-            }) => *fov_horizontal_deg,
-            _ => 60.0,
-        };
-        let vw = width.unwrap_or(800.0).max(1.0);
-        let vh = height.unwrap_or(600.0).max(1.0);
-        let controls = Rc::new(RefCell::new(initial_controls));
-
-        let ctrl_down = Rc::clone(&controls);
-        canvas_attrs.push(Attribute::event_listener(
-            EventType::PointerDown,
-            move |ev: Event| {
-                let btn = ev.button.max(0) as u8;
-                ctrl_down
-                    .borrow_mut()
-                    .on_pointer_down(ev.client_x as f32, ev.client_y as f32, btn);
-            },
-        ));
-
-        let ctrl_move = Rc::clone(&controls);
-        let cb_move = Rc::clone(&cb);
-        canvas_attrs.push(Attribute::event_listener(
-            EventType::PointerMove,
-            move |ev: Event| {
-                let changed = {
-                    let mut c = ctrl_move.borrow_mut();
-                    let active = c.active_mode != strata_render::OrbitInteractionMode::None;
-                    if active {
-                        c.on_pointer_move(ev.client_x as f32, ev.client_y as f32, vw, vh, fov_deg);
-                    }
-                    active
-                };
-                if changed {
-                    let c = ctrl_move.borrow();
-                    cb_move(&c);
-                }
-            },
-        ));
-
-        let ctrl_up = Rc::clone(&controls);
-        canvas_attrs.push(Attribute::event_listener(
-            EventType::PointerUp,
-            move |_ev: Event| {
-                ctrl_up.borrow_mut().on_pointer_up();
-            },
-        ));
-
-        let ctrl_wheel = Rc::clone(&controls);
-        let cb_wheel = Rc::clone(&cb);
-        canvas_attrs.push(Attribute::event_listener(
-            EventType::Wheel,
-            move |ev: Event| {
-                ev.default_prevented.set(true);
-                {
-                    let mut c = ctrl_wheel.borrow_mut();
-                    c.on_wheel(ev.delta_y as f32);
-                }
-                let c = ctrl_wheel.borrow();
-                cb_wheel(&c);
-            },
-        ));
+        strata_render::scene3d::attach_orbit_controls_listeners(
+            &mut canvas_attrs,
+            scene.as_deref(),
+            width,
+            height,
+            cb,
+        );
     }
 
     let canvas_backing = NodeBlueprint::element(

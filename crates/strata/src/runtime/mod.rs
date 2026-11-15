@@ -630,12 +630,20 @@ impl AppRuntime {
             PlatformEvent::WindowCloseRequested => false,
             PlatformEvent::Scroll {
                 delta_x, delta_y, ..
-            } => self.dispatch_smooth_scroll(
-                self.last_mouse_pos.0,
-                self.last_mouse_pos.1,
-                *delta_x,
-                *delta_y,
-            ),
+            } => {
+                let (wheel_handled, scroll_changed) = self.dispatch_smooth_scroll_action(
+                    self.last_mouse_pos.0,
+                    self.last_mouse_pos.1,
+                    *delta_x,
+                    *delta_y,
+                );
+                if wheel_handled {
+                    self.rebuild_layout_tree();
+                    true
+                } else {
+                    scroll_changed
+                }
+            }
             PlatformEvent::AnimationTick => {
                 let scroll_changed = self.poll_smooth_scroll();
                 let anim_changed = self.poll_animations();
