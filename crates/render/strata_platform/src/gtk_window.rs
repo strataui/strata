@@ -24,14 +24,95 @@ pub fn cairo_rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r
     cr.close_path();
 }
 
-/// Strokes a uniform border edge using the requested CSS border style.
+/// Draws a per-corner CSS rounded rectangle path into a Cairo graphics context.
+pub fn cairo_rounded_rect_radii(
+    cr: &cairo::Context,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    radius: strata_style::types::BorderRadius,
+) {
+    let w = w.max(0.0);
+    let h = h.max(0.0);
+    let mut tl = (radius.top_left as f64).max(0.0);
+    let mut tr = (radius.top_right as f64).max(0.0);
+    let mut br = (radius.bottom_right as f64).max(0.0);
+    let mut bl = (radius.bottom_left as f64).max(0.0);
+
+    if tl <= 0.001 && tr <= 0.001 && br <= 0.001 && bl <= 0.001 {
+        cr.rectangle(x, y, w, h);
+        return;
+    }
+
+    // CSS Backgrounds and Borders Level 3 proportional corner clamping
+    let mut scale = 1.0_f64;
+    if tl + tr > w && tl + tr > 0.0 {
+        scale = scale.min(w / (tl + tr));
+    }
+    if bl + br > w && bl + br > 0.0 {
+        scale = scale.min(w / (bl + br));
+    }
+    if tl + bl > h && tl + bl > 0.0 {
+        scale = scale.min(h / (tl + bl));
+    }
+    if tr + br > h && tr + br > 0.0 {
+        scale = scale.min(h / (tr + br));
+    }
+    tl *= scale;
+    tr *= scale;
+    br *= scale;
+    bl *= scale;
+
+    let half_pi = std::f64::consts::FRAC_PI_2;
+    let pi = std::f64::consts::PI;
+
+    cr.new_sub_path();
+    cr.move_to(x + tl, y);
+    if tr > 0.001 {
+        cr.arc(x + w - tr, y + tr, tr, -half_pi, 0.0);
+    } else {
+        cr.line_to(x + w, y);
+    }
+    if br > 0.001 {
+        cr.arc(x + w - br, y + h - br, br, 0.0, half_pi);
+    } else {
+        cr.line_to(x + w, y + h);
+    }
+    if bl > 0.001 {
+        cr.arc(x + bl, y + h - bl, bl, half_pi, pi);
+    } else {
+        cr.line_to(x, y + h);
+    }
+    if tl > 0.001 {
+        cr.arc(x + tl, y + tl, tl, pi, 3.0 * half_pi);
+    } else {
+        cr.line_to(x, y);
+    }
+    cr.close_path();
+}
+
+#[inline]
+fn inset_border_radius(
+    radius: strata_style::types::BorderRadius,
+    inset: f32,
+) -> strata_style::types::BorderRadius {
+    strata_style::types::BorderRadius::new(
+        (radius.top_left - inset).max(0.0),
+        (radius.top_right - inset).max(0.0),
+        (radius.bottom_right - inset).max(0.0),
+        (radius.bottom_left - inset).max(0.0),
+    )
+}
+
+/// Strokes a uniform border edge using the requested CSS border style and per-corner radii.
 fn stroke_uniform_border(
     cr: &cairo::Context,
     x: f64,
     y: f64,
     width: f64,
     height: f64,
-    radius: f64,
+    radius: strata_style::types::BorderRadius,
     border_width: f64,
     style: BorderStyle,
 ) {
@@ -42,8 +123,8 @@ fn stroke_uniform_border(
         BorderStyle::None | BorderStyle::Hidden => {}
         BorderStyle::Solid => {
             let half = border_width / 2.0;
-            let r = (radius - half).max(0.0);
-            cairo_rounded_rect(
+            let r = inset_border_radius(radius, half as f32);
+            cairo_rounded_rect_radii(
                 cr,
                 x + half,
                 y + half,
@@ -58,8 +139,8 @@ fn stroke_uniform_border(
         }
         BorderStyle::Dashed => {
             let half = border_width / 2.0;
-            let r = (radius - half).max(0.0);
-            cairo_rounded_rect(
+            let r = inset_border_radius(radius, half as f32);
+            cairo_rounded_rect_radii(
                 cr,
                 x + half,
                 y + half,
@@ -75,8 +156,8 @@ fn stroke_uniform_border(
         }
         BorderStyle::Dotted => {
             let half = border_width / 2.0;
-            let r = (radius - half).max(0.0);
-            cairo_rounded_rect(
+            let r = inset_border_radius(radius, half as f32);
+            cairo_rounded_rect_radii(
                 cr,
                 x + half,
                 y + half,
@@ -94,8 +175,8 @@ fn stroke_uniform_border(
         BorderStyle::Double => {
             let stroke_width = border_width / 3.0;
             for inset in [border_width / 6.0, 5.0 * border_width / 6.0] {
-                let r = (radius - inset).max(0.0);
-                cairo_rounded_rect(
+                let r = inset_border_radius(radius, inset as f32);
+                cairo_rounded_rect_radii(
                     cr,
                     x + inset,
                     y + inset,
@@ -204,13 +285,13 @@ pub fn cairo_draw_inset_shadow(
         return;
     }
     let _ = cr.save();
-    cairo_rounded_rect(
+    cairo_rounded_rect_radii(
         cr,
         bounds.x as f64,
         bounds.y as f64,
         bounds.width as f64,
         bounds.height as f64,
-        border_radius.top_left as f64,
+        border_radius,
     );
     cr.clip();
 
@@ -233,14 +314,7 @@ pub fn cairo_draw_inset_shadow(
         let inset_w = bounds.width as f64;
         let inset_h = bounds.height as f64;
 
-        cairo_rounded_rect(
-            cr,
-            inset_x,
-            inset_y,
-            inset_w,
-            inset_h,
-            border_radius.top_left as f64,
-        );
+        cairo_rounded_rect_radii(cr, inset_x, inset_y, inset_w, inset_h, border_radius);
         cr.set_source_rgba(r, g, b, alpha);
         cr.set_line_width(stroke_w);
         let _ = cr.stroke();
@@ -298,18 +372,7 @@ pub fn cairo_draw_linear_gradient(
         );
     }
 
-    if border_radius.top_left > 0.0 || border_radius.top_right > 0.0 {
-        cairo_rounded_rect(
-            cr,
-            bounds.x as f64,
-            bounds.y as f64,
-            w,
-            h,
-            border_radius.top_left as f64,
-        );
-    } else {
-        cr.rectangle(bounds.x as f64, bounds.y as f64, w, h);
-    }
+    cairo_rounded_rect_radii(cr, bounds.x as f64, bounds.y as f64, w, h, border_radius);
 
     let _ = cr.set_source(&pattern);
     let _ = cr.fill();
@@ -355,18 +418,7 @@ pub fn cairo_draw_radial_gradient(
         );
     }
 
-    if border_radius.top_left > 0.0 || border_radius.top_right > 0.0 {
-        cairo_rounded_rect(
-            cr,
-            bounds.x as f64,
-            bounds.y as f64,
-            w,
-            h,
-            border_radius.top_left as f64,
-        );
-    } else {
-        cr.rectangle(bounds.x as f64, bounds.y as f64, w, h);
-    }
+    cairo_rounded_rect_radii(cr, bounds.x as f64, bounds.y as f64, w, h, border_radius);
 
     let _ = cr.set_source(&pattern);
     let _ = cr.fill();
@@ -907,7 +959,7 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                     bounds.y as f64,
                     bounds.width as f64,
                     bounds.height as f64,
-                    border_radius.top_left as f64,
+                    *border_radius,
                 );
                 cr.set_source_rgba(
                     color.r() as f64,
@@ -921,8 +973,8 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                     let w = border_width.top as f64;
                     if w > 0.0 {
                         let half_w = w / 2.0;
-                        let r = (border_radius.top_left as f64 - half_w).max(0.0);
-                        cairo_rounded_rect(
+                        let r = inset_border_radius(*border_radius, half_w as f32);
+                        cairo_rounded_rect_radii(
                             cr,
                             bounds.x as f64 + half_w,
                             bounds.y as f64 + half_w,
@@ -973,7 +1025,7 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                 filter,
             } => {
                 let _ = cr.save();
-                cairo_rounded_rect(
+                cairo_rounded_rect_radii(
                     cr,
                     bounds.x as f64,
                     bounds.y as f64,
@@ -1019,7 +1071,7 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
                         bounds.y as f64,
                         bounds.width as f64,
                         bounds.height as f64,
-                        border_radius.top_left as f64,
+                        *border_radius,
                         widths.top as f64,
                         *style,
                     );
@@ -1404,27 +1456,14 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
             }
             DrawCommand::PushClip { bounds, radius } => {
                 let _ = cr.save();
-                if radius.top_left > 0.0
-                    || radius.top_right > 0.0
-                    || radius.bottom_left > 0.0
-                    || radius.bottom_right > 0.0
-                {
-                    cairo_rounded_rect(
-                        cr,
-                        bounds.x as f64,
-                        bounds.y as f64,
-                        bounds.width as f64,
-                        bounds.height as f64,
-                        radius.top_left as f64,
-                    );
-                } else {
-                    cr.rectangle(
-                        bounds.x as f64,
-                        bounds.y as f64,
-                        bounds.width as f64,
-                        bounds.height as f64,
-                    );
-                }
+                cairo_rounded_rect_radii(
+                    cr,
+                    bounds.x as f64,
+                    bounds.y as f64,
+                    bounds.width as f64,
+                    bounds.height as f64,
+                    *radius,
+                );
                 cr.clip();
                 current_clip = cr
                     .clip_extents()
@@ -2123,6 +2162,7 @@ fn map_key_name_to_keycode(key_name: &str) -> crate::events::KeyCode {
         "b" | "B" => crate::events::KeyCode::KeyB,
         "c" | "C" => crate::events::KeyCode::KeyC,
         "d" | "D" => crate::events::KeyCode::KeyD,
+    static IS_WINDOW_DOCKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         "e" | "E" => crate::events::KeyCode::KeyE,
         "f" | "F" => crate::events::KeyCode::KeyF,
         "g" | "G" => crate::events::KeyCode::KeyG,
@@ -2152,6 +2192,9 @@ fn map_key_name_to_keycode(key_name: &str) -> crate::events::KeyCode {
         "4" => crate::events::KeyCode::Digit4,
         "5" => crate::events::KeyCode::Digit5,
         "6" => crate::events::KeyCode::Digit6,
+    if IS_WINDOW_DOCKED.with(|d| d.get()) {
+        return false;
+    }
         "7" => crate::events::KeyCode::Digit7,
         "8" => crate::events::KeyCode::Digit8,
         "9" => crate::events::KeyCode::Digit9,
@@ -2205,10 +2248,16 @@ where
     }
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
-    window.set_title(title);
-    window.set_default_size(width as i32, height as i32);
-    window.set_size_request(width as i32, height as i32);
-    window.resize(width as i32, height as i32);
+    window.set_title(&config.title);
+    window.set_default_size(win_w, win_h);
+    if resizable {
+        let min_w = config.min_width.unwrap_or(1).max(1) as i32;
+        let min_h = config.min_height.unwrap_or(1).max(1) as i32;
+        window.set_size_request(min_w, min_h);
+    } else {
+        window.set_size_request(win_w, win_h);
+    }
+    window.resize(win_w, win_h);
     window.set_decorated(decorated);
 
     CURRENT_GTK_WINDOW.with(|w| {
@@ -2232,7 +2281,13 @@ where
     drawing_area.set_can_focus(true);
     drawing_area.set_hexpand(true);
     drawing_area.set_vexpand(true);
-    drawing_area.set_size_request(width as i32, height as i32);
+    if resizable {
+        let min_w = config.min_width.unwrap_or(1).max(1) as i32;
+        let min_h = config.min_height.unwrap_or(1).max(1) as i32;
+        drawing_area.set_size_request(min_w, min_h);
+    } else {
+        drawing_area.set_size_request(win_w, win_h);
+    }
 
     // Initialize OS Input Method Editor (IME) context for CJK and international text entry
     let im_context = gtk::IMMulticontext::new();
@@ -2271,6 +2326,9 @@ where
     let on_draw_rc = std::rc::Rc::new(std::cell::RefCell::new(on_draw));
     let on_draw_cb = on_draw_rc.clone();
     drawing_area.connect_draw(move |widget, cr| {
+    if IS_WINDOW_DOCKED.with(|d| d.get()) {
+        return;
+    }
         let w = widget.allocated_width() as f32;
         let h = widget.allocated_height() as f32;
         // Live paint must use the same font options as measurement.
@@ -2386,21 +2444,23 @@ where
         };
         CURRENT_MODIFIERS.with(|m| m.set(modifiers));
 
-        // If manual window drag fallback is active, update window position
-        DRAG_STATE.with(|d| {
-            if let Some(ds) = d.get() {
-                if ds.active {
-                    CURRENT_GTK_WINDOW.with(|w| {
-                        use gtk::prelude::*;
-                        if let Some(win) = w.borrow().as_ref() {
-                            let dx = (root_x - ds.start_root_x) as i32;
-                            let dy = (root_y - ds.start_root_y) as i32;
-                            win.move_(ds.start_win_x + dx, (ds.start_win_y + dy).max(0));
-                        }
-                    });
+        // If manual window drag fallback is active, update window position (unless docked)
+        if !IS_WINDOW_DOCKED.with(|d| d.get()) {
+            DRAG_STATE.with(|d| {
+                if let Some(ds) = d.get() {
+                    if ds.active {
+                        CURRENT_GTK_WINDOW.with(|w| {
+                            use gtk::prelude::*;
+                            if let Some(win) = w.borrow().as_ref() {
+                                let dx = (root_x - ds.start_root_x) as i32;
+                                let dy = (root_y - ds.start_root_y) as i32;
+                                win.move_(ds.start_win_x + dx, (ds.start_win_y + dy).max(0));
+                            }
+                        });
+                    }
                 }
-            }
-        });
+            });
+        }
 
         if IS_CLOSING.with(|c| c.get()) {
             return gtk::glib::Propagation::Proceed;
@@ -2564,6 +2624,46 @@ where
                     if (on_event_key.borrow_mut())(&char_event) {
                         redraw = true;
                     }
+fn query_primary_workarea() -> Option<(i32, i32, i32, i32)> {
+    use gtk::gdk::prelude::MonitorExt;
+    let display = gtk::gdk::Display::default()?;
+    let monitor = display.primary_monitor().or_else(|| display.monitor(0))?;
+    let workarea = monitor.workarea();
+    Some((
+        workarea.x(),
+        workarea.y(),
+        workarea.width(),
+        workarea.height(),
+    ))
+}
+
+fn snap_window_to_anchor(
+    win: &gtk::Window,
+    anchor: crate::window::WindowAnchor,
+    fallback_w: i32,
+    fallback_h: i32,
+) {
+    use gtk::prelude::*;
+    if let Some((wx, wy, ww, wh)) = query_primary_workarea() {
+        let (sw, sh) = win.size();
+        let w = if sw > 0 { sw } else { fallback_w };
+        let h = if sh > 0 { sh } else { fallback_h };
+        let (tx, ty) = anchor.compute_position(wx, wy, ww, wh, w, h);
+        if win.position() != (tx, ty) {
+            win.move_(tx, ty);
+        }
+    }
+}
+
+fn attach_rgba_visual(win: &gtk::Window) {
+    use gtk::prelude::*;
+    if let Some(screen) = gtk::prelude::WidgetExt::screen(win) {
+        if let Some(visual) = screen.rgba_visual() {
+            win.set_visual(Some(&visual));
+        }
+    }
+}
+
                 }
             }
         }
@@ -2573,6 +2673,31 @@ where
         }
 
         gtk::glib::Propagation::Proceed
+where
+    F: FnMut(f32, f32, &cairo::Context) + 'static,
+    E: FnMut(&crate::events::PlatformEvent) -> bool + 'static,
+{
+    let config = crate::window::WindowConfig {
+        title: title.to_string(),
+        width,
+        height,
+        decoration: if decorated {
+            crate::window::WindowDecoration::NativeOs
+        } else {
+            crate::window::WindowDecoration::ClientSideDecorations
+        },
+        ..Default::default()
+    };
+    launch_gtk_window_with_config(&config, on_draw, on_event)
+}
+
+/// Launches a live native GTK3 desktop window honoring the full [`crate::window::WindowConfig`]
+/// (resizability, always-on-top, RGBA visual transparency, window mode, and monitor workarea docking).
+pub fn launch_gtk_window_with_config<F, E>(
+    config: &crate::window::WindowConfig,
+    on_draw: F,
+    on_event: E,
+) -> Result<(), String>
     });
 
     let im_key_release = im_context.clone();
@@ -2583,18 +2708,82 @@ where
         if im_key_release.filter_keypress(event) {
             return gtk::glib::Propagation::Stop;
         }
+    IS_CLOSING.with(|c| c.set(false));
+
+    let width = config.width.max(1);
+    let height = config.height.max(1);
+    let win_w = width as i32;
+    let win_h = height as i32;
+    let effective_anchor = config.effective_anchor();
+    let docked = config.is_docked();
+    let decorated = config.decoration == crate::window::WindowDecoration::NativeOs;
+    let transparent = config.transparent
+        || config.decoration == crate::window::WindowDecoration::FramelessTransparent;
+    let resizable = if docked { false } else { config.resizable };
+    let always_on_top = docked || config.always_on_top;
+
+    IS_WINDOW_DOCKED.with(|d| d.set(docked));
+
 
         let state = event.state();
         let modifiers = crate::events::Modifiers {
             shift: state.contains(gtk::gdk::ModifierType::SHIFT_MASK),
             ctrl: state.contains(gtk::gdk::ModifierType::CONTROL_MASK),
             alt: state.contains(gtk::gdk::ModifierType::MOD1_MASK),
+    window.set_resizable(resizable);
+    window.set_keep_above(always_on_top);
+    window.add_events(gtk::gdk::EventMask::STRUCTURE_MASK);
+
+    if transparent {
+        window.set_app_paintable(true);
+        attach_rgba_visual(&window);
+        window.connect_screen_changed(|win, _prev_screen| {
+            attach_rgba_visual(win);
+        });
+    }
+
+    match effective_anchor {
+        Some(crate::window::WindowAnchor::Center) | None => {
+            window.set_position(gtk::WindowPosition::Center);
+        }
+        Some(anchor) => {
+            let gravity = match anchor {
+                crate::window::WindowAnchor::TopLeft => gtk::gdk::Gravity::NorthWest,
+                crate::window::WindowAnchor::TopRight => gtk::gdk::Gravity::NorthEast,
+                crate::window::WindowAnchor::BottomLeft => gtk::gdk::Gravity::SouthWest,
+                crate::window::WindowAnchor::BottomRight => gtk::gdk::Gravity::SouthEast,
+                crate::window::WindowAnchor::Center => gtk::gdk::Gravity::Center,
+            };
+            window.set_gravity(gravity);
+            snap_window_to_anchor(&window, anchor, win_w, win_h);
+        }
+    }
+
+    if !docked {
+        match config.mode {
+            crate::window::WindowMode::Maximized => {
+                IS_MAXIMIZED_TRACKER.with(|t| t.set(true));
+                window.maximize();
+            }
+            crate::window::WindowMode::Minimized => {
+                window.iconify();
+            }
+            crate::window::WindowMode::BorderlessFullscreen
+            | crate::window::WindowMode::ExclusiveFullscreen => {
+                window.fullscreen();
+            }
+            crate::window::WindowMode::Windowed => {}
+        }
+    }
             meta: state.contains(gtk::gdk::ModifierType::META_MASK)
                 || state.contains(gtk::gdk::ModifierType::SUPER_MASK),
         };
 
         let keyval = event.keyval();
         let key_name = keyval.name().unwrap_or_default();
+    if transparent {
+        drawing_area.set_app_paintable(true);
+    }
         let key_code = map_key_name_to_keycode(key_name.as_str());
 
         let plat_event = crate::events::PlatformEvent::KeyUp {
@@ -2961,3 +3150,52 @@ pub fn init_pango_text_measurement() {
     strata_layout::text::register_family_styled_text_measurer(pango_measure_styled_text_family);
     strata_layout::text::register_font_metrics(pango_font_metrics);
 }
+    if let Some(anchor) = effective_anchor {
+        if anchor.is_sticky_dock() {
+            window.connect_realize(move |win| {
+                snap_window_to_anchor(win, anchor, win_w, win_h);
+            });
+            window.connect_map_event(move |win, _event| {
+                snap_window_to_anchor(win, anchor, win_w, win_h);
+                gtk::glib::Propagation::Proceed
+            });
+            window.connect_size_allocate(move |win, alloc| {
+                if let Some((wx, wy, ww, wh)) = query_primary_workarea() {
+                    let aw = if alloc.width() > 0 {
+                        alloc.width()
+                    } else {
+                        win_w
+                    };
+                    let ah = if alloc.height() > 0 {
+                        alloc.height()
+                    } else {
+                        win_h
+                    };
+                    let (tx, ty) = anchor.compute_position(wx, wy, ww, wh, aw, ah);
+                    if win.position() != (tx, ty) {
+                        win.move_(tx, ty);
+                    }
+                }
+            });
+            window.connect_configure_event(move |win, event| {
+                if let Some((wx, wy, ww, wh)) = query_primary_workarea() {
+                    let (ew, eh) = event.size();
+                    let cw = if ew > 0 { ew as i32 } else { win_w };
+                    let ch = if eh > 0 { eh as i32 } else { win_h };
+                    let (tx, ty) = anchor.compute_position(wx, wy, ww, wh, cw, ch);
+                    if event.position() != (tx, ty) {
+                        win.move_(tx, ty);
+                    }
+                }
+                false
+            });
+        }
+    }
+
+        IS_WINDOW_DOCKED.with(|d| d.set(false));
+        DRAG_STATE.with(|d| d.set(None));
+    if let Some(anchor) = effective_anchor {
+        if anchor.is_sticky_dock() {
+            snap_window_to_anchor(&window, anchor, win_w, win_h);
+        }
+    }

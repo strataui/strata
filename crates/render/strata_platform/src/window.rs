@@ -61,6 +61,51 @@ pub enum CursorIcon {
     None,
 }
 
+/// Monitor workarea placement and sticky docking anchor for a platform window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WindowAnchor {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    Center,
+}
+
+impl WindowAnchor {
+    /// Returns true if this anchor pins ("sticks") the window to a monitor workarea corner.
+    pub const fn is_sticky_dock(self) -> bool {
+        matches!(
+            self,
+            Self::TopLeft | Self::TopRight | Self::BottomLeft | Self::BottomRight
+        )
+    }
+
+    /// Computes target `(x, y)` coordinates within a monitor workarea for a window of `(win_w, win_h)`.
+    pub const fn compute_position(
+        self,
+        workarea_x: i32,
+        workarea_y: i32,
+        workarea_w: i32,
+        workarea_h: i32,
+        win_w: i32,
+        win_h: i32,
+    ) -> (i32, i32) {
+        match self {
+            Self::TopLeft => (workarea_x, workarea_y),
+            Self::TopRight => (workarea_x + workarea_w - win_w, workarea_y),
+            Self::BottomLeft => (workarea_x, workarea_y + workarea_h - win_h),
+            Self::BottomRight => (
+                workarea_x + workarea_w - win_w,
+                workarea_y + workarea_h - win_h,
+            ),
+            Self::Center => (
+                workarea_x + (workarea_w - win_w) / 2,
+                workarea_y + (workarea_h - win_h) / 2,
+            ),
+        }
+    }
+}
+
 /// Configuration used when creating or reconfiguring a platform window.
 #[derive(Debug, Clone)]
 pub struct WindowConfig {
@@ -77,6 +122,8 @@ pub struct WindowConfig {
     pub theme: ThemeMode,
     pub transparent: bool,
     pub always_on_top: bool,
+    pub anchor: Option<WindowAnchor>,
+    pub dock_bottom_right: bool,
     pub single_instance_id: Option<String>,
     pub vibrancy: crate::vibrancy::VibrancyEffect,
 }
@@ -92,6 +139,66 @@ impl WindowConfig {
     pub fn with_vibrancy(mut self, vibrancy: crate::vibrancy::VibrancyEffect) -> Self {
         self.vibrancy = vibrancy;
         self
+    }
+
+    /// Configures monitor workarea placement or corner docking for this window.
+    pub fn with_anchor(mut self, anchor: WindowAnchor) -> Self {
+        self.anchor = Some(anchor);
+        if anchor == WindowAnchor::BottomRight {
+            self.dock_bottom_right = true;
+        }
+        self
+    }
+
+    /// Pins the window to the bottom-right corner of the primary monitor's workarea ("stuck" mode).
+    pub fn with_dock_bottom_right(mut self, dock_bottom_right: bool) -> Self {
+        self.dock_bottom_right = dock_bottom_right;
+        if dock_bottom_right && self.anchor.is_none() {
+            self.anchor = Some(WindowAnchor::BottomRight);
+        } else if !dock_bottom_right && self.anchor == Some(WindowAnchor::BottomRight) {
+            self.anchor = None;
+        }
+        self
+    }
+
+    /// Resolves the effective window anchor, honoring both `anchor` and `dock_bottom_right`.
+    pub const fn effective_anchor(&self) -> Option<WindowAnchor> {
+        if let Some(anchor) = self.anchor {
+            Some(anchor)
+        } else if self.dock_bottom_right {
+            Some(WindowAnchor::BottomRight)
+        } else {
+            None
+        }
+    }
+
+    /// Returns true when the window is docked ("stuck") to a monitor workarea corner.
+    pub const fn is_docked(&self) -> bool {
+        match self.effective_anchor() {
+            Some(anchor) => anchor.is_sticky_dock(),
+            None => false,
+        }
+    }
+
+    /// Computes target `(x, y)` coordinates in the given monitor workarea if an anchor is configured.
+    pub const fn compute_anchored_position(
+        &self,
+        workarea_x: i32,
+        workarea_y: i32,
+        workarea_w: i32,
+        workarea_h: i32,
+    ) -> Option<(i32, i32)> {
+        match self.effective_anchor() {
+            Some(anchor) => Some(anchor.compute_position(
+                workarea_x,
+                workarea_y,
+                workarea_w,
+                workarea_h,
+                self.width as i32,
+                self.height as i32,
+            )),
+            None => None,
+        }
     }
 }
 
@@ -111,6 +218,8 @@ impl Default for WindowConfig {
             theme: ThemeMode::System,
             transparent: false,
             always_on_top: false,
+            anchor: None,
+            dock_bottom_right: false,
             single_instance_id: None,
             vibrancy: crate::vibrancy::VibrancyEffect::None,
         }

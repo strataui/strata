@@ -236,7 +236,7 @@ pub mod prelude {
         ScreenProfile, ThreeButtonNavBar, VirtualHalBus,
     };
 
-    pub use strata_platform::WindowConfig;
+    pub use strata_platform::{WindowAnchor, WindowConfig};
     pub use crate::runtime::{
         app, AppFrameInfo, AppLifecycleHooks, AppRuntime, launch, launch_headless, launch_window,
         launch_with_config, launch_with_events, launch_auto, launch_headless_pump,

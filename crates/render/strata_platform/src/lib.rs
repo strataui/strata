@@ -68,13 +68,15 @@ pub use mcp_cursor::McpCursorState;
 pub use gtk;
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 pub use gtk_window::{
-    cairo_rounded_rect, gtk_begin_window_drag, gtk_close, gtk_current_modifiers, gtk_focus_window,
+    cairo_rounded_rect, cairo_rounded_rect_radii, gtk_begin_window_drag, gtk_close,
+    gtk_current_modifiers, gtk_focus_window,
     gtk_get_clipboard_text, gtk_is_closing, gtk_is_maximized, gtk_minimize, gtk_reset_ime,
     gtk_set_clipboard_text, gtk_set_cursor, gtk_set_ime_cursor_location, gtk_set_ime_surrounding_text,
     gtk_toggle_maximize, init_pango_text_measurement, launch_gtk_window,
-    pango_font_metrics, pango_measure_styled_text, pango_measure_styled_text_family,
-    pango_measure_text, pango_measure_text_family, post_platform_event,
-    render_display_list_to_cairo, render_to_png, render_to_png_bytes, resolved_font_family,
+    launch_gtk_window_with_config, pango_font_metrics, pango_measure_styled_text,
+    pango_measure_styled_text_family, pango_measure_text, pango_measure_text_family,
+    post_platform_event, render_display_list_to_cairo, render_to_png, render_to_png_bytes,
+    resolved_font_family,
 };
 /// Pure-Rust headless software rasterization and PNG byte export.
 ///
@@ -165,7 +167,8 @@ pub use vibrancy::{
 };
 pub use window::{
     CursorIcon, EventLoop, EventLoopControl, LivePlatformWindow, MockEventLoop, MockPlatformWindow,
-    MonitorInfo, NativeSurfaceWindow, PlatformWindow, ThemeMode, WindowConfig, WindowDecoration, WindowMode,
+    MonitorInfo, NativeSurfaceWindow, PlatformWindow, ThemeMode, WindowAnchor, WindowConfig,
+    WindowDecoration, WindowMode,
 };
 pub use window_manager::{WindowId, WindowManager};
 #[cfg(target_os = "linux")]
@@ -250,7 +253,8 @@ pub mod prelude {
     pub use super::tray::{DesktopNotification, TrayIcon, TrayMenu, TrayMenuItem};
     pub use super::window::{
         CursorIcon, EventLoop, EventLoopControl, LivePlatformWindow, MockEventLoop,
-        MockPlatformWindow, MonitorInfo, NativeSurfaceWindow, PlatformWindow, ThemeMode, WindowConfig, WindowDecoration, WindowMode,
+        MockPlatformWindow, MonitorInfo, NativeSurfaceWindow, PlatformWindow, ThemeMode,
+        WindowAnchor, WindowConfig, WindowDecoration, WindowMode,
     };
     #[cfg(target_os = "linux")]
     pub use super::x11_window::{PureX11Window, X11EventLoop, X11Window};
