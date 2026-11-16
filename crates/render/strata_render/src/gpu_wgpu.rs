@@ -686,44 +686,39 @@ fn fs_terrain(in: TerrainVsOut) -> @location(0) vec4<f32> {
     // Uniform daylight lighting (used when day/night shading is toggled off OR in 2.5D near ground)
     let flat_lit = vec3<f32>(0.90) + vec3<f32>(0.12) * max(ndotl, 0.0);
 
-    // Physical orbital solar terminator + sunset scatter + Rayleigh blue atmospheric rim
+    let d = normalize(in.ecef_pos);
+    let lon = atan2(d.y, d.x);
+    let sin_lat = clamp(d.z, -1.0, 1.0);
+    let u = fract(lon / 6.28318530718 + 0.5);
+    let v = clamp(0.5 - asin(sin_lat) / 3.14159265359, 0.001, 0.999);
+    let env_mask = textureSampleLevel(land_mask_tex, terrain_sampler, vec2<f32>(u, v), 0.0);
+    let on_land = smoothstep(0.18, 0.55, env_mask.r);
+
+    // Physical orbital solar terminator + gentle Google Earth moonlight over continents & oceans
     let terminator = smoothstep(-0.14, 0.16, ndotl);
     let twilight = exp(-pow(ndotl * 7.5, 2.0)) * vec3<f32>(0.42, 0.18, 0.06);
     let fresnel = pow(1.0 - max(dot(n, view_dir), 0.0), 3.2);
     let atmo_rim = vec3<f32>(0.28, 0.56, 1.0) * fresnel * smoothstep(-0.18, 0.32, ndotl) * 0.45 * (1.0 - blend_25d);
-    let night_fill = vec3<f32>(0.032, 0.044, 0.072);
+    let ocean_night = vec3<f32>(0.048, 0.068, 0.108);
+    let land_night = vec3<f32>(0.095, 0.120, 0.174);
+    let night_fill = mix(ocean_night, land_night, on_land);
     let day_lit = night_fill + cam.sun_color.rgb * terminator + twilight;
 
     let lit = mix(flat_lit, day_lit, dn_strength);
     var rgb = base.rgb * lit + atmo_rim * dn_strength;
 
-    // Deterministic smooth isotropic 3D noise city lights masked strictly to landmass on the night side
-    if (city_strength > 0.001 && dn_strength > 0.001) {
-        let night_mask = smoothstep(0.06, -0.14, ndotl) * dn_strength * city_strength;
+    // Authentic NASA VIIRS Black Marble city lights masked cleanly to landmasses on the night side
+    if (city_strength > 0.001 && dn_strength > 0.001 && on_land > 0.001) {
+        let night_mask = smoothstep(0.06, -0.14, ndotl) * dn_strength * city_strength * on_land;
         if (night_mask > 0.001) {
-            let d = normalize(in.ecef_pos);
-            let lon = atan2(d.y, d.x);
-            let sin_lat = clamp(d.z, -1.0, 1.0);
-            let u = fract(lon / 6.28318530718 + 0.5);
-            let v = clamp(0.5 - asin(sin_lat) / 3.14159265359, 0.001, 0.999);
-            let land = textureSampleLevel(land_mask_tex, terrain_sampler, vec2<f32>(u, v), 0.0).r;
-            let on_land = smoothstep(0.45, 0.72, land);
-            if (on_land > 0.001) {
-                // Keep all inhabited latitudes up to ~74 deg at equal luminous weight
-                let polar_taper = smoothstep(0.992, 0.96, abs(sin_lat));
-                // Smooth multi-scale 3D noise creating fine, natural metropolitan web & equal-luminance filaments
-                let region = smoothstep(0.46, 0.74, vnoise3(d * 62.0));
-                let arterial = smoothstep(0.42, 0.72, vnoise3(d * 175.0));
-                let micro_web = smoothstep(0.44, 0.76, vnoise3(d * 460.0));
-                let fine_dust = smoothstep(0.48, 0.84, vnoise3(d * 1080.0));
-                let raw_noise = region * (0.42 * arterial + 0.38 * micro_web + 0.28 * fine_dust)
-                    + 0.14 * arterial * fine_dust;
-                let uniform_glow = smoothstep(0.14, 0.56, raw_noise);
-                let city_luma = uniform_glow * polar_taper * on_land * night_mask;
-                let warm_gold = vec3<f32>(1.0, 0.72, 0.30);
-                let warm_core = vec3<f32>(1.0, 0.88, 0.58);
-                rgb += mix(warm_gold, warm_core, fine_dust) * city_luma * 1.15;
-            }
+            let black_marble = env_mask.g;
+            let city_core = smoothstep(0.015, 0.45, black_marble);
+            let subtle_scatter = smoothstep(0.002, 0.12, black_marble) * 0.16;
+            let fine_twinkle = 0.85 + 0.15 * vnoise3(d * 680.0);
+            let city_luma = (city_core * fine_twinkle + subtle_scatter) * night_mask;
+            let warm_amber = vec3<f32>(0.96, 0.72, 0.36);
+            let warm_white = vec3<f32>(1.0, 0.90, 0.68);
+            rgb += mix(warm_amber, warm_white, city_core) * city_luma * 0.92;
         }
     }
 
