@@ -11,13 +11,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Default maximum new tile textures uploaded to the GPU atlas per frame during continuous flight.
-pub const DEFAULT_TEXTURE_UPLOAD_BUDGET: usize = 16;
+pub const DEFAULT_TEXTURE_UPLOAD_BUDGET: usize = 256;
 /// Default maximum new tile meshes copied to the GPU storage slab per frame.
-pub const DEFAULT_MESH_UPLOAD_BUDGET: usize = 32;
+pub const DEFAULT_MESH_UPLOAD_BUDGET: usize = 256;
 /// Standard terrain imagery tile dimension in the GPU `Texture2DArray` atlas.
 pub const ATLAS_TILE_SIZE: u32 = 256;
 /// Maximum imagery layers pre-allocated in the GPU `Texture2DArray` atlas.
-pub const MAX_ATLAS_LAYERS: u32 = 256;
+pub const MAX_ATLAS_LAYERS: u32 = 512;
 
 /// Splits a 64-bit float into `(hi, lo)` 32-bit floats for GPU double-single emulation.
 #[inline]
@@ -636,22 +636,31 @@ fn vs_terrain(
     return out;
 }
 
-fn hash22(p: vec2<f32>) -> vec2<f32> {
-    let q = vec2<f32>(
-        dot(p, vec2<f32>(127.1, 311.7)),
-        dot(p, vec2<f32>(269.5, 183.3)),
-    );
-    return fract(sin(q) * 43758.5453123);
+fn hash31(p: vec3<f32>) -> f32 {
+    var q = fract(p * vec3<f32>(0.1031, 0.1030, 0.0973));
+    q += dot(q, q.yxz + 33.33);
+    return fract((q.x + q.y) * q.z);
 }
 
-fn city_layer(coord: vec2<f32>, threshold: f32, sharpness: f32) -> f32 {
-    let cell = floor(coord);
-    let f = fract(coord);
-    let rnd = hash22(cell);
-    let lit_cell = step(threshold, rnd.x);
-    let jitter = vec2<f32>(0.25) + 0.5 * vec2<f32>(rnd.y, fract(rnd.x * 17.3));
-    let d = f - jitter;
-    return lit_cell * exp(-dot(d, d) * sharpness) * (0.55 + 0.45 * fract(rnd.y * 23.7));
+fn vnoise3(x: vec3<f32>) -> f32 {
+    let i = floor(x);
+    let f = fract(x);
+    let u = f * f * (3.0 - 2.0 * f);
+    let n000 = hash31(i + vec3<f32>(0.0, 0.0, 0.0));
+    let n100 = hash31(i + vec3<f32>(1.0, 0.0, 0.0));
+    let n010 = hash31(i + vec3<f32>(0.0, 1.0, 0.0));
+    let n110 = hash31(i + vec3<f32>(1.0, 1.0, 0.0));
+    let n001 = hash31(i + vec3<f32>(0.0, 0.0, 1.0));
+    let n101 = hash31(i + vec3<f32>(1.0, 0.0, 1.0));
+    let n011 = hash31(i + vec3<f32>(0.0, 1.0, 1.0));
+    let n111 = hash31(i + vec3<f32>(1.0, 1.0, 1.0));
+    let nx00 = mix(n000, n100, u.x);
+    let nx10 = mix(n010, n110, u.x);
+    let nx01 = mix(n001, n101, u.x);
+    let nx11 = mix(n011, n111, u.x);
+    let nxy0 = mix(nx00, nx10, u.y);
+    let nxy1 = mix(nx01, nx11, u.y);
+    return mix(nxy0, nxy1, u.z);
 }
 
 @fragment
@@ -688,9 +697,9 @@ fn fs_terrain(in: TerrainVsOut) -> @location(0) vec4<f32> {
     let lit = mix(flat_lit, day_lit, dn_strength);
     var rgb = base.rgb * lit + atmo_rim * dn_strength;
 
-    // Deterministic equal-area city lights masked strictly to landmass on the night side
+    // Deterministic smooth isotropic 3D noise city lights masked strictly to landmass on the night side
     if (city_strength > 0.001 && dn_strength > 0.001) {
-        let night_mask = smoothstep(0.08, -0.12, ndotl) * dn_strength * city_strength;
+        let night_mask = smoothstep(0.06, -0.14, ndotl) * dn_strength * city_strength;
         if (night_mask > 0.001) {
             let d = normalize(in.ecef_pos);
             let lon = atan2(d.y, d.x);
@@ -700,16 +709,20 @@ fn fs_terrain(in: TerrainVsOut) -> @location(0) vec4<f32> {
             let land = textureSampleLevel(land_mask_tex, terrain_sampler, vec2<f32>(u, v), 0.0).r;
             let on_land = smoothstep(0.45, 0.72, land);
             if (on_land > 0.001) {
-                // Equal-area (lon, sin_lat) grid keeps spacing uniform from equator to high latitudes
-                let polar_taper = smoothstep(0.955, 0.84, abs(sin_lat));
-                let ea = vec2<f32>(lon, sin_lat);
-                let clusters = city_layer(ea * vec2<f32>(58.0, 88.0), 0.72, 10.0);
-                let towns = city_layer(ea * vec2<f32>(165.0, 250.0), 0.62, 18.0);
-                let sparks = city_layer(ea * vec2<f32>(420.0, 640.0), 0.56, 26.0);
-                let city_luma = (clusters * 0.65 + towns * 0.55 + sparks * 0.45) * polar_taper * on_land * night_mask;
-                let warm_gold = vec3<f32>(1.0, 0.78, 0.36);
-                let warm_core = vec3<f32>(1.0, 0.93, 0.74);
-                rgb += mix(warm_gold, warm_core, clamp(sparks, 0.0, 1.0)) * city_luma * 2.15;
+                // Keep all inhabited latitudes up to ~74 deg at equal luminous weight
+                let polar_taper = smoothstep(0.992, 0.96, abs(sin_lat));
+                // Smooth multi-scale 3D noise creating fine, natural metropolitan web & equal-luminance filaments
+                let region = smoothstep(0.46, 0.74, vnoise3(d * 62.0));
+                let arterial = smoothstep(0.42, 0.72, vnoise3(d * 175.0));
+                let micro_web = smoothstep(0.44, 0.76, vnoise3(d * 460.0));
+                let fine_dust = smoothstep(0.48, 0.84, vnoise3(d * 1080.0));
+                let raw_noise = region * (0.42 * arterial + 0.38 * micro_web + 0.28 * fine_dust)
+                    + 0.14 * arterial * fine_dust;
+                let uniform_glow = smoothstep(0.14, 0.56, raw_noise);
+                let city_luma = uniform_glow * polar_taper * on_land * night_mask;
+                let warm_gold = vec3<f32>(1.0, 0.72, 0.30);
+                let warm_core = vec3<f32>(1.0, 0.88, 0.58);
+                rgb += mix(warm_gold, warm_core, fine_dust) * city_luma * 1.15;
             }
         }
     }
@@ -771,17 +784,20 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
     let s = textureSampleLevel(cloud_tex, cloud_sampler, vec2<f32>(u, v), 0.0);
     // Support both RGBA alpha cloudmaps (matteason clouds-alpha.png) and grayscale cloudmaps
     let density = select(s.a, s.r, s.a > 0.995 && s.r < 0.99);
-    let alpha = smoothstep(0.08, 0.85, density) * opacity;
+
+    let ndotl = dot(d, normalize(cam.sun_dir.xyz));
+    let dn_strength = clamp(cam.env_params.x, 0.0, 1.0);
+    let term = smoothstep(-0.14, 0.18, ndotl);
+    // Keep night-side clouds subtle so polar/northern cloud decks do not cast an extra dark veil above city lights
+    let night_fade = mix(0.14, 1.0, mix(1.0, term, dn_strength));
+    let alpha = smoothstep(0.08, 0.85, density) * opacity * night_fade;
     if (alpha <= 0.003) {
         discard;
     }
 
-    let ndotl = dot(d, normalize(cam.sun_dir.xyz));
-    let dn_strength = clamp(cam.env_params.x, 0.0, 1.0);
     let flat_cloud = vec3<f32>(0.96, 0.97, 0.99);
-    let term = smoothstep(-0.12, 0.20, ndotl);
     let sunset = exp(-pow(ndotl * 7.5, 2.0)) * vec3<f32>(0.48, 0.22, 0.08);
-    let day_cloud = vec3<f32>(0.04, 0.055, 0.09) + cam.sun_color.rgb * term + sunset;
+    let day_cloud = vec3<f32>(0.05, 0.07, 0.11) + cam.sun_color.rgb * term + sunset;
     let rgb = mix(flat_cloud, day_cloud, dn_strength);
     return vec4<f32>(rgb, alpha);
 }
@@ -2729,28 +2745,37 @@ impl Wgpu3DRenderer {
                 if dm.vertices.is_empty() || dm.indices.is_empty() {
                     continue;
                 }
-                let needs_upload = self
-                    .dynamic_meshes
-                    .get(&dm.id)
-                    .map(|c| c.revision != dm.revision)
-                    .unwrap_or(true);
-                if needs_upload {
+                let vb_bytes: &[u8] = bytemuck::cast_slice(&dm.vertices);
+                let ib_bytes: &[u8] = bytemuck::cast_slice(&dm.indices);
+                let mut need_recreate = true;
+                if let Some(existing) = self.dynamic_meshes.get_mut(&dm.id) {
+                    if existing.revision == dm.revision {
+                        need_recreate = false;
+                    } else if existing.vbuf.size() >= vb_bytes.len() as u64
+                        && existing.ibuf.size() >= ib_bytes.len() as u64
+                    {
+                        self.queue.write_buffer(&existing.vbuf, 0, vb_bytes);
+                        self.queue.write_buffer(&existing.ibuf, 0, ib_bytes);
+                        existing.revision = dm.revision;
+                        existing.index_count = dm.indices.len() as u32;
+                        need_recreate = false;
+                    }
+                }
+                if need_recreate {
                     let vbuf = self.device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("strata_3d_dyn_vb"),
-                        size: (dm.vertices.len() * std::mem::size_of::<RteTileVertex>()) as u64,
+                        size: (vb_bytes.len() as u64).next_power_of_two().max(256),
                         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                         mapped_at_creation: false,
                     });
-                    self.queue
-                        .write_buffer(&vbuf, 0, bytemuck::cast_slice(&dm.vertices));
+                    self.queue.write_buffer(&vbuf, 0, vb_bytes);
                     let ibuf = self.device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("strata_3d_dyn_ib"),
-                        size: (dm.indices.len() * 4) as u64,
+                        size: (ib_bytes.len() as u64).next_power_of_two().max(64),
                         usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
                         mapped_at_creation: false,
                     });
-                    self.queue
-                        .write_buffer(&ibuf, 0, bytemuck::cast_slice(&dm.indices));
+                    self.queue.write_buffer(&ibuf, 0, ib_bytes);
                     self.dynamic_meshes.insert(
                         dm.id,
                         CachedDynamicGpuMesh {
