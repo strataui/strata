@@ -478,6 +478,31 @@ pub struct RetainedDynamicMesh {
     pub unlit: bool,
 }
 
+/// One real catalog star in J2000 ICRF celestial coordinates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RetainedStar {
+    /// Unit direction vector in J2000 ICRF equatorial coordinates.
+    pub icrf_dir: [f32; 3],
+    /// Apparent visual magnitude (Vmag; lower = brighter).
+    pub vmag: f32,
+    /// Linear sRGB Planck blackbody color `(r, g, b)` + `1.0` alpha.
+    pub color: [f32; 4],
+}
+
+/// Persistent GPU-uploadable planetary & space environment assets (land mask, cloud map, Moon, star catalog).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetainedEnvironmentAssets {
+    pub revision: u64,
+    /// Equirectangular land mask (land=255, ocean=0 in red/alpha channels) for deterministic land-only city lights.
+    pub land_mask: Option<std::sync::Arc<RetainedTileTexture>>,
+    /// Global 3D equirectangular cloud map texture (alpha or luminance channel).
+    pub cloud_map: Option<std::sync::Arc<RetainedTileTexture>>,
+    /// Equirectangular Moon surface albedo texture (NASA LRO).
+    pub moon_texture: Option<std::sync::Arc<RetainedTileTexture>>,
+    /// Real bright star catalog (e.g. Yale BSC5 in J2000 ICRF).
+    pub stars: Option<std::sync::Arc<Vec<RetainedStar>>>,
+}
+
 /// Camera and lighting uniforms needed for O(1) RTE GPU frame presentation without scene rebuilds.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RetainedCameraUniforms {
@@ -496,6 +521,34 @@ pub struct RetainedCameraUniforms {
     pub background: Background3D,
     pub near: f32,
     pub far: f32,
+    /// Column-major J2000 ICRF -> ECEF rotation matrix (GMST sidereal rotation).
+    pub ecef_from_icrf: [[f32; 4]; 4],
+    /// Normalized ECEF direction toward the Moon.
+    pub moon_dir: [f32; 3],
+    /// Physical day/night terminator strength (`0.0` = flat daylight, `1.0` = full terminator, fades to 0 in 2.5D).
+    pub day_night_strength: f32,
+    /// Deterministic land-masked night city-lights intensity (`0.0` = off, auto-fades out in 2.5D).
+    pub city_lights_intensity: f32,
+    /// Seamless 3D -> 2.5D ground morph factor (`0.0` = 3D space globe, `1.0` = 2.5D local ground).
+    pub local_25d_blend: f32,
+    /// Render physical limb-darkened Sun disc & corona (`true` by default).
+    pub sun_visible: bool,
+    /// Visual Sun angular radius in radians (default ~`0.018` rad).
+    pub sun_angular_radius_rad: f32,
+    /// Render NASA textured Moon with real orbital lunar phase (`true` by default).
+    pub moon_visible: bool,
+    /// Visual Moon angular radius in radians (default ~`0.022` rad).
+    pub moon_angular_radius_rad: f32,
+    /// Render scientific deep-space starfield skybox (`true` by default).
+    pub stars_visible: bool,
+    /// Brightness multiplier for starfield & Milky Way band.
+    pub stars_intensity: f32,
+    /// Opacity of global 3D cloud-map shell (`0.0` = off; auto-fades out in 2.5D).
+    pub cloud_layer_opacity: f32,
+    /// Global cloud-map longitudinal scroll offset in radians.
+    pub cloud_lon_offset_rad: f32,
+    /// Simulation / animation time in seconds.
+    pub time_s: f32,
 }
 
 impl Default for RetainedCameraUniforms {
@@ -517,6 +570,20 @@ impl Default for RetainedCameraUniforms {
             background: Background3D::Transparent,
             near: 0.1,
             far: 100_000_000.0,
+            ecef_from_icrf: ident,
+            moon_dir: [-0.577_350_26, 0.577_350_26, 0.577_350_26],
+            day_night_strength: 1.0,
+            city_lights_intensity: 0.0,
+            local_25d_blend: 0.0,
+            sun_visible: false,
+            sun_angular_radius_rad: 0.018,
+            moon_visible: false,
+            moon_angular_radius_rad: 0.022,
+            stars_visible: false,
+            stars_intensity: 1.0,
+            cloud_layer_opacity: 0.0,
+            cloud_lon_offset_rad: 0.0,
+            time_s: 0.0,
         }
     }
 }
@@ -530,6 +597,7 @@ pub struct RetainedTerrainFrame {
     pub instances: Vec<RetainedTileInstance>,
     pub textures: Vec<std::sync::Arc<RetainedTileTexture>>,
     pub dynamic_meshes: Vec<RetainedDynamicMesh>,
+    pub environment: Option<std::sync::Arc<RetainedEnvironmentAssets>>,
 }
 
 #[derive(Debug)]

@@ -3,8 +3,8 @@
 
 use crate::scene3d::{
     Background3D, Camera3D, Geometry3D, Light3D, Material3D, Mesh3D, RetainedCameraUniforms,
-    RetainedDynamicMesh, RetainedTerrainFrame, RetainedTileMesh, RetainedTileTexture,
-    RteTileVertex, Scene3D, TileKeyId,
+    RetainedDynamicMesh, RetainedEnvironmentAssets, RetainedStar, RetainedTerrainFrame,
+    RetainedTileMesh, RetainedTileTexture, RteTileVertex, Scene3D, TileKeyId,
 };
 use bytemuck::{Pod, Zeroable};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -27,21 +27,141 @@ pub fn split_f64_to_f32(v: f64) -> (f32, f32) {
     (hi, lo)
 }
 
+fn transpose_mat4(m: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
+    [
+        [m[0][0], m[1][0], m[2][0], m[3][0]],
+        [m[0][1], m[1][1], m[2][1], m[3][1]],
+        [m[0][2], m[1][2], m[2][2], m[3][2]],
+        [m[0][3], m[1][3], m[2][3], m[3][3]],
+    ]
+}
+
+fn invert_mat4(m: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
+    let a = [
+        m[0][0] as f64,
+        m[0][1] as f64,
+        m[0][2] as f64,
+        m[0][3] as f64,
+        m[1][0] as f64,
+        m[1][1] as f64,
+        m[1][2] as f64,
+        m[1][3] as f64,
+        m[2][0] as f64,
+        m[2][1] as f64,
+        m[2][2] as f64,
+        m[2][3] as f64,
+        m[3][0] as f64,
+        m[3][1] as f64,
+        m[3][2] as f64,
+        m[3][3] as f64,
+    ];
+    let mut inv = [0.0f64; 16];
+    inv[0] = a[5] * a[10] * a[15] - a[5] * a[11] * a[14] - a[9] * a[6] * a[15]
+        + a[9] * a[7] * a[14]
+        + a[13] * a[6] * a[11]
+        - a[13] * a[7] * a[10];
+    inv[4] = -a[4] * a[10] * a[15] + a[4] * a[11] * a[14] + a[8] * a[6] * a[15]
+        - a[8] * a[7] * a[14]
+        - a[12] * a[6] * a[11]
+        + a[12] * a[7] * a[10];
+    inv[8] = a[4] * a[9] * a[15] - a[4] * a[11] * a[13] - a[8] * a[5] * a[15]
+        + a[8] * a[7] * a[13]
+        + a[12] * a[5] * a[11]
+        - a[12] * a[7] * a[9];
+    inv[12] = -a[4] * a[9] * a[14] + a[4] * a[10] * a[13] + a[8] * a[5] * a[14]
+        - a[8] * a[6] * a[13]
+        - a[12] * a[5] * a[10]
+        + a[12] * a[6] * a[9];
+    inv[1] = -a[1] * a[10] * a[15] + a[1] * a[11] * a[14] + a[9] * a[2] * a[15]
+        - a[9] * a[3] * a[14]
+        - a[13] * a[2] * a[11]
+        + a[13] * a[3] * a[10];
+    inv[5] = a[0] * a[10] * a[15] - a[0] * a[11] * a[14] - a[8] * a[2] * a[15]
+        + a[8] * a[3] * a[14]
+        + a[12] * a[2] * a[11]
+        - a[12] * a[3] * a[10];
+    inv[9] = -a[0] * a[9] * a[15] + a[0] * a[11] * a[13] + a[8] * a[1] * a[15]
+        - a[8] * a[3] * a[13]
+        - a[12] * a[1] * a[11]
+        + a[12] * a[3] * a[9];
+    inv[13] = a[0] * a[9] * a[14] - a[0] * a[10] * a[13] - a[8] * a[1] * a[14]
+        + a[8] * a[2] * a[13]
+        + a[12] * a[1] * a[10]
+        - a[12] * a[2] * a[9];
+    inv[2] = a[1] * a[6] * a[15] - a[1] * a[7] * a[14] - a[5] * a[2] * a[15]
+        + a[5] * a[3] * a[14]
+        + a[13] * a[2] * a[7]
+        - a[13] * a[3] * a[6];
+    inv[6] = -a[0] * a[6] * a[15] + a[0] * a[7] * a[14] + a[4] * a[2] * a[15]
+        - a[4] * a[3] * a[14]
+        - a[12] * a[2] * a[7]
+        + a[12] * a[3] * a[6];
+    inv[10] = a[0] * a[5] * a[15] - a[0] * a[7] * a[13] - a[4] * a[1] * a[15]
+        + a[4] * a[3] * a[13]
+        + a[12] * a[1] * a[7]
+        - a[12] * a[3] * a[5];
+    inv[14] = -a[0] * a[5] * a[14] + a[0] * a[6] * a[13] + a[4] * a[1] * a[14]
+        - a[4] * a[2] * a[13]
+        - a[12] * a[1] * a[6]
+        + a[12] * a[2] * a[5];
+    inv[3] = -a[1] * a[6] * a[11] + a[1] * a[7] * a[10] + a[5] * a[2] * a[11]
+        - a[5] * a[3] * a[10]
+        - a[9] * a[2] * a[7]
+        + a[9] * a[3] * a[6];
+    inv[7] = a[0] * a[6] * a[11] - a[0] * a[7] * a[10] - a[4] * a[2] * a[11]
+        + a[4] * a[3] * a[10]
+        + a[8] * a[2] * a[7]
+        - a[8] * a[3] * a[6];
+    inv[11] = -a[0] * a[5] * a[11] + a[0] * a[7] * a[9] + a[4] * a[1] * a[11]
+        - a[4] * a[3] * a[9]
+        - a[8] * a[1] * a[7]
+        + a[8] * a[3] * a[5];
+    inv[15] = a[0] * a[5] * a[10] - a[0] * a[6] * a[9] - a[4] * a[1] * a[10]
+        + a[4] * a[2] * a[9]
+        + a[8] * a[1] * a[6]
+        - a[8] * a[2] * a[5];
+
+    let det = a[0] * inv[0] + a[1] * inv[4] + a[2] * inv[8] + a[3] * inv[12];
+    if det.abs() < 1e-24 {
+        return [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+    }
+    let inv_det = 1.0 / det;
+    let mut out = [[0.0f32; 4]; 4];
+    for c in 0..4 {
+        for r in 0..4 {
+            out[c][r] = (inv[c * 4 + r] * inv_det) as f32;
+        }
+    }
+    out
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuCameraUniforms {
     view_proj_rte: [[f32; 4]; 4],
+    inv_view_proj_rte: [[f32; 4]; 4],
+    ecef_from_icrf: [[f32; 4]; 4],
+    icrf_from_ecef: [[f32; 4]; 4],
     eye_high: [f32; 4],
     eye_low: [f32; 4],
-    sun_dir: [f32; 4],
-    sun_color: [f32; 4],
-    ambient_color: [f32; 4],
+    sun_dir: [f32; 4],       // xyz = sun dir, w = sun_visible (0/1)
+    sun_color: [f32; 4],     // rgb = color, w = sun_angular_radius_rad
+    ambient_color: [f32; 4], // rgb = ambient, w = stars_intensity (0 when off)
     sky_top: [f32; 4],
     sky_bottom: [f32; 4],
+    moon_dir: [f32; 4],     // xyz = moon dir, w = moon_visible (0/1)
+    env_params: [f32; 4], // x = day_night_strength, y = city_lights_intensity, z = local_25d_blend, w = moon_angular_radius_rad
+    cloud_params: [f32; 4], // x = cloud_layer_opacity, y = cloud_lon_offset_rad, z = time_s, w = space_sky_enabled (0/1)
+    viewport_wh: [f32; 4],  // x = w, y = h, z = 0, w = 0
 }
 
 impl GpuCameraUniforms {
-    fn from_retained(cam: &RetainedCameraUniforms) -> Self {
+    fn from_retained(cam: &RetainedCameraUniforms, viewport_w: f32, viewport_h: f32) -> Self {
         let (ex_hi, ex_lo) = split_f64_to_f32(cam.eye_ecef[0]);
         let (ey_hi, ey_lo) = split_f64_to_f32(cam.eye_ecef[1]);
         let (ez_hi, ez_lo) = split_f64_to_f32(cam.eye_ecef[2]);
@@ -56,22 +176,73 @@ impl GpuCameraUniforms {
                 [bottom.r(), bottom.g(), bottom.b(), bottom.a()],
             ),
         };
+        let inv_vp = invert_mat4(cam.view_proj_rte);
+        let icrf_from_ecef = transpose_mat4(cam.ecef_from_icrf);
+        let space_sky = if cam.stars_visible || cam.sun_visible || cam.moon_visible {
+            1.0
+        } else {
+            0.0
+        };
+        let stars_eff = if cam.stars_visible {
+            cam.stars_intensity.max(0.0)
+        } else {
+            0.0
+        };
         Self {
             view_proj_rte: cam.view_proj_rte,
+            inv_view_proj_rte: inv_vp,
+            ecef_from_icrf: cam.ecef_from_icrf,
+            icrf_from_ecef,
             eye_high: [ex_hi, ey_hi, ez_hi, 0.0],
             eye_low: [ex_lo, ey_lo, ez_lo, 0.0],
-            sun_dir: [cam.sun_dir[0], cam.sun_dir[1], cam.sun_dir[2], 0.0],
-            sun_color: [cam.sun_color[0], cam.sun_color[1], cam.sun_color[2], 1.0],
+            sun_dir: [
+                cam.sun_dir[0],
+                cam.sun_dir[1],
+                cam.sun_dir[2],
+                if cam.sun_visible { 1.0 } else { 0.0 },
+            ],
+            sun_color: [
+                cam.sun_color[0],
+                cam.sun_color[1],
+                cam.sun_color[2],
+                cam.sun_angular_radius_rad,
+            ],
             ambient_color: [
                 cam.ambient_color[0],
                 cam.ambient_color[1],
                 cam.ambient_color[2],
-                1.0,
+                stars_eff,
             ],
             sky_top,
             sky_bottom,
+            moon_dir: [
+                cam.moon_dir[0],
+                cam.moon_dir[1],
+                cam.moon_dir[2],
+                if cam.moon_visible { 1.0 } else { 0.0 },
+            ],
+            env_params: [
+                cam.day_night_strength,
+                cam.city_lights_intensity,
+                cam.local_25d_blend,
+                cam.moon_angular_radius_rad,
+            ],
+            cloud_params: [
+                cam.cloud_layer_opacity,
+                cam.cloud_lon_offset_rad,
+                cam.time_s,
+                space_sky,
+            ],
+            viewport_wh: [viewport_w.max(1.0), viewport_h.max(1.0), 0.0, 0.0],
         }
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuStar {
+    icrf_dir_mag: [f32; 4], // xyz = J2000 ICRF unit dir, w = vmag
+    color: [f32; 4],        // rgba
 }
 
 #[repr(C)]
@@ -155,6 +326,9 @@ pub fn build_terrain_grid_indices(grid_res: u32, has_skirts: bool) -> Vec<u32> {
 const SKY_WGSL: &str = r#"
 struct GpuCameraUniforms {
     view_proj_rte: mat4x4<f32>,
+    inv_view_proj_rte: mat4x4<f32>,
+    ecef_from_icrf: mat4x4<f32>,
+    icrf_from_ecef: mat4x4<f32>,
     eye_high: vec4<f32>,
     eye_low: vec4<f32>,
     sun_dir: vec4<f32>,
@@ -162,13 +336,20 @@ struct GpuCameraUniforms {
     ambient_color: vec4<f32>,
     sky_top: vec4<f32>,
     sky_bottom: vec4<f32>,
+    moon_dir: vec4<f32>,
+    env_params: vec4<f32>,
+    cloud_params: vec4<f32>,
+    viewport_wh: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> cam: GpuCameraUniforms;
+@group(0) @binding(1) var moon_tex: texture_2d<f32>;
+@group(0) @binding(2) var env_sampler: sampler;
 
 struct SkyOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv_y: f32,
+    @location(1) ndc: vec2<f32>,
 }
 
 @vertex
@@ -181,20 +362,128 @@ fn vs_sky(@builtin(vertex_index) vid: u32) -> SkyOut {
     let p = positions[vid];
     var out: SkyOut;
     out.pos = vec4<f32>(p, 0.9999, 1.0);
-    // NDC y = +1 is top (t = 0.0), y = -1 is bottom (t = 1.0)
     out.uv_y = clamp((1.0 - p.y) * 0.5, 0.0, 1.0);
+    out.ndc = p;
     return out;
+}
+
+fn hash31(p: vec3<f32>) -> f32 {
+    let q = fract(p * 0.1031);
+    let r = q + vec3<f32>(dot(q, q.yzx + vec3<f32>(33.33)));
+    return fract((r.x + r.y) * r.z);
+}
+
+fn noise3(p: vec3<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (vec3<f32>(3.0) - 2.0 * f);
+    let a = hash31(i);
+    let b = hash31(i + vec3<f32>(1.0, 0.0, 0.0));
+    let c = hash31(i + vec3<f32>(0.0, 1.0, 0.0));
+    let d = hash31(i + vec3<f32>(1.0, 1.0, 0.0));
+    let e = hash31(i + vec3<f32>(0.0, 0.0, 1.0));
+    let f1 = hash31(i + vec3<f32>(1.0, 0.0, 1.0));
+    let g = hash31(i + vec3<f32>(0.0, 1.0, 1.0));
+    let h = hash31(i + vec3<f32>(1.0, 1.0, 1.0));
+    return mix(
+        mix(mix(a, b, u.x), mix(c, d, u.x), u.y),
+        mix(mix(e, f1, u.x), mix(g, h, u.x), u.y),
+        u.z,
+    );
 }
 
 @fragment
 fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
-    return mix(cam.sky_top, cam.sky_bottom, clamp(in.uv_y, 0.0, 1.0));
+    let sky_grad = mix(cam.sky_top, cam.sky_bottom, clamp(in.uv_y, 0.0, 1.0));
+    if (cam.cloud_params.w < 0.5) {
+        return sky_grad;
+    }
+
+    let p4 = cam.inv_view_proj_rte * vec4<f32>(in.ndc, 0.5, 1.0);
+    let w_safe = select(p4.w, select(-1e-6, 1e-6, p4.w >= 0.0), abs(p4.w) < 1e-6);
+    let rd = normalize(p4.xyz / w_safe);
+    let space_t = 1.0 - smoothstep(0.0, 0.85, cam.env_params.z);
+
+    // 1. Pitch-black deep space + scientifically aligned Milky Way band in J2000 ICRF
+    var col = vec3<f32>(0.0);
+    if (cam.ambient_color.w > 0.001 && space_t > 0.001) {
+        let rd_icrf = normalize((cam.icrf_from_ecef * vec4<f32>(rd, 0.0)).xyz);
+        // Galactic North Pole & Galactic Center unit vectors (J2000)
+        let gnp = vec3<f32>(-0.867666, -0.198076, 0.455984);
+        let gc = vec3<f32>(-0.054876, -0.873437, -0.483835);
+        let sin_b = dot(rd_icrf, gnp);
+        let core_w = 0.35 + 0.65 * max(dot(rd_icrf, gc), 0.0);
+        let dust_n = noise3(rd_icrf * 7.5) * 0.65 + noise3(rd_icrf * 17.0) * 0.35;
+        let rift = smoothstep(0.015, 0.14, abs(sin_b) + (dust_n - 0.5) * 0.09);
+        let mw = exp(-pow(abs(sin_b) * 8.0, 1.5)) * core_w * (0.45 + 0.55 * dust_n) * mix(0.45, 1.0, rift);
+        col += vec3<f32>(0.055, 0.072, 0.125) * mw * min(cam.ambient_color.w, 1.8) * space_t;
+    }
+
+    // Blend pitch-black space to daytime sky when morphing down into 2.5D
+    col = mix(sky_grad.rgb, col, space_t);
+
+    // 2. Realistic Sun (photosphere limb darkening + solar corona + halo)
+    let sun_dir = normalize(cam.sun_dir.xyz);
+    if (cam.sun_dir.w > 0.5) {
+        let sun_cos = clamp(dot(rd, sun_dir), -1.0, 1.0);
+        let sun_ang = acos(sun_cos);
+        let r_sun = max(cam.sun_color.w, 0.004);
+        if (sun_ang < r_sun * 1.08) {
+            let mu = sqrt(max(1.0 - (sun_ang / r_sun) * (sun_ang / r_sun), 0.0));
+            let aa = 1.0 - smoothstep(r_sun * 0.94, r_sun * 1.06, sun_ang);
+            let limb = mix(0.48, 1.0, pow(mu, 0.45));
+            col = mix(col, cam.sun_color.rgb * (3.6 * limb), aa);
+        }
+        let corona = exp(-sun_ang / (r_sun * 2.4)) * 0.85 + exp(-sun_ang / (r_sun * 12.0)) * 0.13;
+        col += cam.sun_color.rgb * vec3<f32>(1.0, 0.90, 0.72) * corona * mix(0.45, 1.0, space_t);
+    }
+
+    // 3. Realistic Moon (NASA LRO albedo + Lommel-Seeliger phase from Sun vector + Earthshine)
+    if (cam.moon_dir.w > 0.5) {
+        let m_dir = normalize(cam.moon_dir.xyz);
+        let b_cos = dot(rd, m_dir);
+        if (b_cos > 0.0) {
+            let r_moon = max(cam.env_params.w, 0.004);
+            let sin_r = sin(r_moon);
+            let r2 = sin_r * sin_r;
+            let d2 = max(1.0 - b_cos * b_cos, 0.0);
+            if (d2 < r2) {
+                let z_m = sqrt(max(r2 - d2, 0.0));
+                let n_perp = rd - m_dir * b_cos;
+                let n_moon = normalize(n_perp / sin_r - m_dir * (z_m / sin_r));
+
+                let up_icrf = normalize((cam.ecef_from_icrf * vec4<f32>(0.0, 0.0, 1.0, 0.0)).xyz);
+                let ref_up = select(vec3<f32>(0.0, 1.0, 0.0), up_icrf, abs(dot(up_icrf, m_dir)) < 0.98);
+                let m_right = normalize(cross(m_dir, ref_up));
+                let m_up = normalize(cross(m_right, m_dir));
+                let lx = dot(n_moon, m_right);
+                let ly = dot(n_moon, m_up);
+                let lz = dot(n_moon, -m_dir);
+                let u = atan2(lx, lz) / 6.28318530718 + 0.5;
+                let v = clamp(0.5 - asin(clamp(ly, -1.0, 1.0)) / 3.14159265359, 0.001, 0.999);
+                let albedo = textureSampleLevel(moon_tex, env_sampler, vec2<f32>(u, v), 0.0).rgb;
+
+                let ndotl_m = max(dot(n_moon, sun_dir), 0.0);
+                let ndotv_m = max(dot(n_moon, -rd), 0.02);
+                let lommel = ndotl_m / (ndotl_m + 0.36 * ndotv_m + 0.06);
+                let earthshine = vec3<f32>(0.024, 0.032, 0.048);
+                let lit_moon = albedo * (cam.sun_color.rgb * lommel * 1.45 + earthshine);
+                let aa_m = 1.0 - smoothstep(r2 * 0.90, r2, d2);
+                col = mix(col, lit_moon, aa_m * mix(0.75, 1.0, space_t));
+            }
+        }
+    }
+
+    return vec4<f32>(col, 1.0);
 }
 "#;
 
-const TERRAIN_PULL_WGSL: &str = r#"
+const STARS_WGSL: &str = r#"
 struct GpuCameraUniforms {
     view_proj_rte: mat4x4<f32>,
+    inv_view_proj_rte: mat4x4<f32>,
+    ecef_from_icrf: mat4x4<f32>,
+    icrf_from_ecef: mat4x4<f32>,
     eye_high: vec4<f32>,
     eye_low: vec4<f32>,
     sun_dir: vec4<f32>,
@@ -202,6 +491,94 @@ struct GpuCameraUniforms {
     ambient_color: vec4<f32>,
     sky_top: vec4<f32>,
     sky_bottom: vec4<f32>,
+    moon_dir: vec4<f32>,
+    env_params: vec4<f32>,
+    cloud_params: vec4<f32>,
+    viewport_wh: vec4<f32>,
+}
+
+struct GpuStar {
+    icrf_dir_mag: vec4<f32>,
+    color: vec4<f32>,
+}
+
+@group(0) @binding(0) var<uniform> cam: GpuCameraUniforms;
+@group(0) @binding(1) var<storage, read> stars: array<GpuStar>;
+
+struct StarVsOut {
+    @builtin(position) clip_pos: vec4<f32>,
+    @location(0) local_uv: vec2<f32>,
+    @location(1) color_flux: vec4<f32>,
+}
+
+@vertex
+fn vs_star(
+    @builtin(vertex_index) vid: u32,
+    @builtin(instance_index) inst_id: u32,
+) -> StarVsOut {
+    var offsets = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(1.0, -1.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(-1.0, 1.0),
+    );
+    let q = offsets[vid];
+    let s = stars[inst_id];
+    let dir_ecef = normalize((cam.ecef_from_icrf * vec4<f32>(s.icrf_dir_mag.xyz, 0.0)).xyz);
+    var clip = cam.view_proj_rte * vec4<f32>(dir_ecef, 0.0);
+
+    var out: StarVsOut;
+    out.local_uv = q;
+    let space_t = 1.0 - smoothstep(0.0, 0.80, cam.env_params.z);
+    if (clip.w <= 0.001 || space_t <= 0.005 || cam.ambient_color.w <= 0.001) {
+        out.clip_pos = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+        out.color_flux = vec4<f32>(0.0);
+        return out;
+    }
+
+    let vmag = s.icrf_dir_mag.w;
+    let flux = clamp(pow(10.0, -0.32 * (vmag - 2.6)), 0.14, 3.2) * cam.ambient_color.w * space_t;
+    let size_px = clamp(1.55 + (5.0 - vmag) * 0.55, 1.4, 4.6);
+    clip.z = clip.w * 0.99985;
+    let px_ndc = (q * size_px / max(cam.viewport_wh.xy, vec2<f32>(1.0, 1.0))) * 2.0;
+    clip.x += px_ndc.x * clip.w;
+    clip.y += px_ndc.y * clip.w;
+
+    out.clip_pos = clip;
+    out.color_flux = vec4<f32>(s.color.rgb, flux);
+    return out;
+}
+
+@fragment
+fn fs_star(in: StarVsOut) -> @location(0) vec4<f32> {
+    let r2 = dot(in.local_uv, in.local_uv);
+    if (r2 > 1.0) {
+        discard;
+    }
+    let airy = exp(-r2 * 4.8);
+    return vec4<f32>(in.color_flux.rgb * (in.color_flux.a * airy), airy);
+}
+"#;
+
+const TERRAIN_PULL_WGSL: &str = r#"
+struct GpuCameraUniforms {
+    view_proj_rte: mat4x4<f32>,
+    inv_view_proj_rte: mat4x4<f32>,
+    ecef_from_icrf: mat4x4<f32>,
+    icrf_from_ecef: mat4x4<f32>,
+    eye_high: vec4<f32>,
+    eye_low: vec4<f32>,
+    sun_dir: vec4<f32>,
+    sun_color: vec4<f32>,
+    ambient_color: vec4<f32>,
+    sky_top: vec4<f32>,
+    sky_bottom: vec4<f32>,
+    moon_dir: vec4<f32>,
+    env_params: vec4<f32>,
+    cloud_params: vec4<f32>,
+    viewport_wh: vec4<f32>,
 }
 
 struct GpuTileVertex {
@@ -222,6 +599,7 @@ struct GpuTileInstance {
 @group(0) @binding(2) var<storage, read> instances: array<GpuTileInstance>;
 @group(0) @binding(3) var terrain_atlas: texture_2d_array<f32>;
 @group(0) @binding(4) var terrain_sampler: sampler;
+@group(0) @binding(5) var land_mask_tex: texture_2d<f32>;
 
 struct TerrainVsOut {
     @builtin(position) clip_pos: vec4<f32>,
@@ -230,6 +608,8 @@ struct TerrainVsOut {
     @location(2) tint: vec4<f32>,
     @location(3) @interpolate(flat) tex_layer: u32,
     @location(4) @interpolate(flat) unlit: u32,
+    @location(5) ecef_pos: vec3<f32>,
+    @location(6) view_rel: vec3<f32>,
 }
 
 @vertex
@@ -251,7 +631,27 @@ fn vs_terrain(
     out.tint = inst.tint;
     out.tex_layer = inst.tile_meta.y;
     out.unlit = inst.tile_meta.z;
+    out.ecef_pos = (inst.center_high.xyz + inst.center_low.xyz) + v.pos_u.xyz;
+    out.view_rel = world_rel;
     return out;
+}
+
+fn hash22(p: vec2<f32>) -> vec2<f32> {
+    let q = vec2<f32>(
+        dot(p, vec2<f32>(127.1, 311.7)),
+        dot(p, vec2<f32>(269.5, 183.3)),
+    );
+    return fract(sin(q) * 43758.5453123);
+}
+
+fn city_layer(coord: vec2<f32>, threshold: f32, sharpness: f32) -> f32 {
+    let cell = floor(coord);
+    let f = fract(coord);
+    let rnd = hash22(cell);
+    let lit_cell = step(threshold, rnd.x);
+    let jitter = vec2<f32>(0.25) + 0.5 * vec2<f32>(rnd.y, fract(rnd.x * 17.3));
+    let d = f - jitter;
+    return lit_cell * exp(-dot(d, d) * sharpness) * (0.55 + 0.45 * fract(rnd.y * 23.7));
 }
 
 @fragment
@@ -264,16 +664,66 @@ fn fs_terrain(in: TerrainVsOut) -> @location(0) vec4<f32> {
     if (in.unlit != 0u) {
         return base;
     }
+
     let n = normalize(in.normal);
-    let ndotl = max(dot(n, normalize(cam.sun_dir.xyz)), 0.0);
-    let lit = cam.ambient_color.rgb + cam.sun_color.rgb * ndotl;
-    return vec4<f32>(base.rgb * lit, base.a);
+    let sun_dir = normalize(cam.sun_dir.xyz);
+    let view_dir = normalize(-in.view_rel);
+    let ndotl = dot(n, sun_dir);
+
+    let dn_strength = clamp(cam.env_params.x, 0.0, 1.0);
+    let city_strength = max(cam.env_params.y, 0.0);
+    let blend_25d = clamp(cam.env_params.z, 0.0, 1.0);
+
+    // Uniform daylight lighting (used when day/night shading is toggled off OR in 2.5D near ground)
+    let flat_lit = vec3<f32>(0.90) + vec3<f32>(0.12) * max(ndotl, 0.0);
+
+    // Physical orbital solar terminator + sunset scatter + Rayleigh blue atmospheric rim
+    let terminator = smoothstep(-0.14, 0.16, ndotl);
+    let twilight = exp(-pow(ndotl * 7.5, 2.0)) * vec3<f32>(0.42, 0.18, 0.06);
+    let fresnel = pow(1.0 - max(dot(n, view_dir), 0.0), 3.2);
+    let atmo_rim = vec3<f32>(0.28, 0.56, 1.0) * fresnel * smoothstep(-0.18, 0.32, ndotl) * 0.45 * (1.0 - blend_25d);
+    let night_fill = vec3<f32>(0.032, 0.044, 0.072);
+    let day_lit = night_fill + cam.sun_color.rgb * terminator + twilight;
+
+    let lit = mix(flat_lit, day_lit, dn_strength);
+    var rgb = base.rgb * lit + atmo_rim * dn_strength;
+
+    // Deterministic equal-area city lights masked strictly to landmass on the night side
+    if (city_strength > 0.001 && dn_strength > 0.001) {
+        let night_mask = smoothstep(0.08, -0.12, ndotl) * dn_strength * city_strength;
+        if (night_mask > 0.001) {
+            let d = normalize(in.ecef_pos);
+            let lon = atan2(d.y, d.x);
+            let sin_lat = clamp(d.z, -1.0, 1.0);
+            let u = fract(lon / 6.28318530718 + 0.5);
+            let v = clamp(0.5 - asin(sin_lat) / 3.14159265359, 0.001, 0.999);
+            let land = textureSampleLevel(land_mask_tex, terrain_sampler, vec2<f32>(u, v), 0.0).r;
+            let on_land = smoothstep(0.45, 0.72, land);
+            if (on_land > 0.001) {
+                // Equal-area (lon, sin_lat) grid keeps spacing uniform from equator to high latitudes
+                let polar_taper = smoothstep(0.955, 0.84, abs(sin_lat));
+                let ea = vec2<f32>(lon, sin_lat);
+                let clusters = city_layer(ea * vec2<f32>(58.0, 88.0), 0.72, 10.0);
+                let towns = city_layer(ea * vec2<f32>(165.0, 250.0), 0.62, 18.0);
+                let sparks = city_layer(ea * vec2<f32>(420.0, 640.0), 0.56, 26.0);
+                let city_luma = (clusters * 0.65 + towns * 0.55 + sparks * 0.45) * polar_taper * on_land * night_mask;
+                let warm_gold = vec3<f32>(1.0, 0.78, 0.36);
+                let warm_core = vec3<f32>(1.0, 0.93, 0.74);
+                rgb += mix(warm_gold, warm_core, clamp(sparks, 0.0, 1.0)) * city_luma * 2.15;
+            }
+        }
+    }
+
+    return vec4<f32>(rgb, base.a);
 }
 "#;
 
-const DYNAMIC_MESH_WGSL: &str = r#"
+const CLOUD_SHELL_WGSL: &str = r#"
 struct GpuCameraUniforms {
     view_proj_rte: mat4x4<f32>,
+    inv_view_proj_rte: mat4x4<f32>,
+    ecef_from_icrf: mat4x4<f32>,
+    icrf_from_ecef: mat4x4<f32>,
     eye_high: vec4<f32>,
     eye_low: vec4<f32>,
     sun_dir: vec4<f32>,
@@ -281,6 +731,79 @@ struct GpuCameraUniforms {
     ambient_color: vec4<f32>,
     sky_top: vec4<f32>,
     sky_bottom: vec4<f32>,
+    moon_dir: vec4<f32>,
+    env_params: vec4<f32>,
+    cloud_params: vec4<f32>,
+    viewport_wh: vec4<f32>,
+}
+
+@group(0) @binding(0) var<uniform> cam: GpuCameraUniforms;
+@group(0) @binding(1) var cloud_tex: texture_2d<f32>;
+@group(0) @binding(2) var cloud_sampler: sampler;
+
+struct CloudOut {
+    @builtin(position) clip_pos: vec4<f32>,
+    @location(0) unit_pos: vec3<f32>,
+}
+
+@vertex
+fn vs_cloud(@location(0) pos_u: vec4<f32>, @location(1) norm_v: vec4<f32>) -> CloudOut {
+    let cloud_r = 6402000.0;
+    let world_pos = pos_u.xyz * cloud_r;
+    let world_rel = (world_pos - cam.eye_high.xyz) - cam.eye_low.xyz;
+    var out: CloudOut;
+    out.clip_pos = cam.view_proj_rte * vec4<f32>(world_rel, 1.0);
+    out.unit_pos = normalize(pos_u.xyz);
+    return out;
+}
+
+@fragment
+fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
+    let space_fade = 1.0 - smoothstep(0.0, 0.72, cam.env_params.z);
+    let opacity = cam.cloud_params.x * space_fade;
+    if (opacity <= 0.004) {
+        discard;
+    }
+
+    let d = normalize(in.unit_pos);
+    let u = fract((atan2(d.y, d.x) + cam.cloud_params.y) / 6.28318530718 + 0.5);
+    let v = clamp(0.5 - asin(clamp(d.z, -1.0, 1.0)) / 3.14159265359, 0.001, 0.999);
+    let s = textureSampleLevel(cloud_tex, cloud_sampler, vec2<f32>(u, v), 0.0);
+    // Support both RGBA alpha cloudmaps (matteason clouds-alpha.png) and grayscale cloudmaps
+    let density = select(s.a, s.r, s.a > 0.995 && s.r < 0.99);
+    let alpha = smoothstep(0.08, 0.85, density) * opacity;
+    if (alpha <= 0.003) {
+        discard;
+    }
+
+    let ndotl = dot(d, normalize(cam.sun_dir.xyz));
+    let dn_strength = clamp(cam.env_params.x, 0.0, 1.0);
+    let flat_cloud = vec3<f32>(0.96, 0.97, 0.99);
+    let term = smoothstep(-0.12, 0.20, ndotl);
+    let sunset = exp(-pow(ndotl * 7.5, 2.0)) * vec3<f32>(0.48, 0.22, 0.08);
+    let day_cloud = vec3<f32>(0.04, 0.055, 0.09) + cam.sun_color.rgb * term + sunset;
+    let rgb = mix(flat_cloud, day_cloud, dn_strength);
+    return vec4<f32>(rgb, alpha);
+}
+"#;
+
+const DYNAMIC_MESH_WGSL: &str = r#"
+struct GpuCameraUniforms {
+    view_proj_rte: mat4x4<f32>,
+    inv_view_proj_rte: mat4x4<f32>,
+    ecef_from_icrf: mat4x4<f32>,
+    icrf_from_ecef: mat4x4<f32>,
+    eye_high: vec4<f32>,
+    eye_low: vec4<f32>,
+    sun_dir: vec4<f32>,
+    sun_color: vec4<f32>,
+    ambient_color: vec4<f32>,
+    sky_top: vec4<f32>,
+    sky_bottom: vec4<f32>,
+    moon_dir: vec4<f32>,
+    env_params: vec4<f32>,
+    cloud_params: vec4<f32>,
+    viewport_wh: vec4<f32>,
 }
 
 struct GpuDynamicUniforms {
@@ -324,7 +847,10 @@ fn fs_dynamic(in: DynVsOut) -> @location(0) vec4<f32> {
     let len_sq = dot(in.normal, in.normal);
     let n = select(vec3<f32>(0.0, 1.0, 0.0), normalize(in.normal), len_sq > 0.0001);
     let ndotl = max(dot(n, normalize(cam.sun_dir.xyz)), 0.0);
-    let lit = cam.ambient_color.rgb + cam.sun_color.rgb * ndotl;
+    let dn = clamp(cam.env_params.x, 0.0, 1.0);
+    let flat_lit = vec3<f32>(0.85) + vec3<f32>(0.22) * ndotl;
+    let day_lit = cam.ambient_color.rgb + cam.sun_color.rgb * ndotl;
+    let lit = mix(flat_lit, day_lit, dn);
     return vec4<f32>(in.color.rgb * lit, in.color.a);
 }
 "#;
@@ -815,6 +1341,159 @@ struct OffscreenTarget {
     padded_bytes_per_row: u32,
 }
 
+struct GpuEnvironmentState {
+    land_mask_id_rev: Option<(u64, u64)>,
+    cloud_map_id_rev: Option<(u64, u64)>,
+    moon_tex_id_rev: Option<(u64, u64)>,
+    stars_ptr: usize,
+    stars_len: usize,
+    land_mask_view: wgpu::TextureView,
+    cloud_map_view: wgpu::TextureView,
+    moon_view: wgpu::TextureView,
+    env_sampler: wgpu::Sampler,
+    star_buffer: wgpu::Buffer,
+    star_capacity: usize,
+    star_count: u32,
+}
+
+fn create_rgba8_2d_view(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> wgpu::TextureView {
+    let w = width.max(1);
+    let h = height.max(1);
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let expected = (w as usize) * (h as usize) * 4;
+    if rgba.len() >= expected {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba[..expected],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    tex.create_view(&Default::default())
+}
+
+fn build_unit_icosphere(subdivisions: u32) -> (Vec<RteTileVertex>, Vec<u32>) {
+    let t = (1.0f32 + 5.0f32.sqrt()) * 0.5;
+    let raw = [
+        [-1.0, t, 0.0],
+        [1.0, t, 0.0],
+        [-1.0, -t, 0.0],
+        [1.0, -t, 0.0],
+        [0.0, -1.0, t],
+        [0.0, 1.0, t],
+        [0.0, -1.0, -t],
+        [0.0, 1.0, -t],
+        [t, 0.0, -1.0],
+        [t, 0.0, 1.0],
+        [-t, 0.0, -1.0],
+        [-t, 0.0, 1.0],
+    ];
+    let norm = |p: [f32; 3]| -> [f32; 3] {
+        let l = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt().max(1e-6);
+        [p[0] / l, p[1] / l, p[2] / l]
+    };
+    let mut verts: Vec<[f32; 3]> = raw.iter().map(|p| norm(*p)).collect();
+    let mut tris: Vec<[u32; 3]> = vec![
+        [0, 11, 5],
+        [0, 5, 1],
+        [0, 1, 7],
+        [0, 7, 10],
+        [0, 10, 11],
+        [1, 5, 9],
+        [5, 11, 4],
+        [11, 10, 2],
+        [10, 7, 6],
+        [7, 1, 8],
+        [3, 9, 4],
+        [3, 4, 2],
+        [3, 2, 6],
+        [3, 6, 8],
+        [3, 8, 9],
+        [4, 9, 5],
+        [2, 4, 11],
+        [6, 2, 10],
+        [8, 6, 7],
+        [9, 8, 1],
+    ];
+
+    for _ in 0..subdivisions {
+        let mut mid_cache: HashMap<(u32, u32), u32> = HashMap::new();
+        let mut get_mid = |a: u32, b: u32, vs: &mut Vec<[f32; 3]>| -> u32 {
+            let key = if a < b { (a, b) } else { (b, a) };
+            if let Some(&idx) = mid_cache.get(&key) {
+                return idx;
+            }
+            let pa = vs[a as usize];
+            let pb = vs[b as usize];
+            let m = norm([
+                (pa[0] + pb[0]) * 0.5,
+                (pa[1] + pb[1]) * 0.5,
+                (pa[2] + pb[2]) * 0.5,
+            ]);
+            let idx = vs.len() as u32;
+            vs.push(m);
+            mid_cache.insert(key, idx);
+            idx
+        };
+        let mut next_tris = Vec::with_capacity(tris.len() * 4);
+        for [a, b, c] in tris {
+            let ab = get_mid(a, b, &mut verts);
+            let bc = get_mid(b, c, &mut verts);
+            let ca = get_mid(c, a, &mut verts);
+            next_tris.push([a, ab, ca]);
+            next_tris.push([b, bc, ab]);
+            next_tris.push([c, ca, bc]);
+            next_tris.push([ab, bc, ca]);
+        }
+        tris = next_tris;
+    }
+
+    let rte_verts: Vec<RteTileVertex> = verts
+        .into_iter()
+        .map(|p| RteTileVertex::new(p, p, [0.0, 0.0]))
+        .collect();
+    let mut indices = Vec::with_capacity(tris.len() * 3);
+    for [a, b, c] in tris {
+        indices.push(a);
+        indices.push(b);
+        indices.push(c);
+    }
+    (rte_verts, indices)
+}
+
 /// Hardware-accelerated `wgpu` 3D renderer capable of rendering directly into any `TextureView`
 /// (swapchain surface) or offscreen RGBA target.
 pub struct Wgpu3DRenderer {
@@ -823,7 +1502,18 @@ pub struct Wgpu3DRenderer {
     color_format: wgpu::TextureFormat,
     camera_buffer: wgpu::Buffer,
     sky_pipeline: wgpu::RenderPipeline,
+    sky_bind_group_layout: wgpu::BindGroupLayout,
     sky_bind_group: wgpu::BindGroup,
+    star_pipeline: wgpu::RenderPipeline,
+    star_bind_group_layout: wgpu::BindGroupLayout,
+    star_bind_group: wgpu::BindGroup,
+    cloud_pipeline: wgpu::RenderPipeline,
+    cloud_bind_group_layout: wgpu::BindGroupLayout,
+    cloud_bind_group: wgpu::BindGroup,
+    cloud_vbuf: wgpu::Buffer,
+    cloud_ibuf: wgpu::Buffer,
+    cloud_index_count: u32,
+    env_state: GpuEnvironmentState,
     terrain_pipeline: wgpu::RenderPipeline,
     terrain_bind_group_layout: wgpu::BindGroupLayout,
     terrain_bind_group: wgpu::BindGroup,
@@ -914,35 +1604,109 @@ impl Wgpu3DRenderer {
             ..Default::default()
         });
 
-        // Sky pass
+        let env_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("strata_3d_env_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+        let land_mask_view = create_rgba8_2d_view(
+            &device,
+            &queue,
+            "strata_env_land_fallback",
+            1,
+            1,
+            &[255, 255, 255, 255],
+        );
+        let cloud_map_view = create_rgba8_2d_view(
+            &device,
+            &queue,
+            "strata_env_cloud_fallback",
+            1,
+            1,
+            &[255, 255, 255, 0],
+        );
+        let moon_view = create_rgba8_2d_view(
+            &device,
+            &queue,
+            "strata_env_moon_fallback",
+            1,
+            1,
+            &[190, 190, 190, 255],
+        );
+        let star_capacity = 64usize;
+        let star_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("strata_3d_stars"),
+            size: (star_capacity * std::mem::size_of::<GpuStar>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let env_state = GpuEnvironmentState {
+            land_mask_id_rev: None,
+            cloud_map_id_rev: None,
+            moon_tex_id_rev: None,
+            stars_ptr: 0,
+            stars_len: 0,
+            land_mask_view,
+            cloud_map_view,
+            moon_view,
+            env_sampler,
+            star_buffer,
+            star_capacity,
+            star_count: 0,
+        };
+
+        // Sky + Moon + Sun + Milky Way pass
         let sky_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("strata_3d_sky_wgsl"),
             source: wgpu::ShaderSource::Wgsl(SKY_WGSL.into()),
         });
-        let sky_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("strata_3d_sky_bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let sky_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("strata_3d_sky_bg"),
-            layout: &sky_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-        });
+        let sky_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("strata_3d_sky_bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+        let sky_bind_group = Self::create_tex2d_bind_group(
+            &device,
+            &sky_bind_group_layout,
+            "strata_3d_sky_bg",
+            &camera_buffer,
+            &env_state.moon_view,
+            &env_state.env_sampler,
+        );
         let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("strata_3d_sky_pl"),
-            bind_group_layouts: &[&sky_bgl],
+            bind_group_layouts: &[&sky_bind_group_layout],
             push_constant_ranges: &[],
         });
         let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -976,6 +1740,209 @@ impl Wgpu3DRenderer {
             multiview: None,
             cache: None,
         });
+
+        // Scientific J2000 starfield pass
+        let star_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("strata_3d_stars_wgsl"),
+            source: wgpu::ShaderSource::Wgsl(STARS_WGSL.into()),
+        });
+        let star_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("strata_3d_stars_bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let star_bind_group = Self::create_star_bind_group(
+            &device,
+            &star_bind_group_layout,
+            &camera_buffer,
+            &env_state.star_buffer,
+        );
+        let star_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("strata_3d_stars_pl"),
+            bind_group_layouts: &[&star_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let star_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("strata_3d_star_pipeline"),
+            layout: Some(&star_layout),
+            vertex: wgpu::VertexState {
+                module: &star_shader,
+                entry_point: Some("vs_star"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &star_shader,
+                entry_point: Some("fs_star"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // 3D global cloud shell pipeline + static icosphere
+        let cloud_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("strata_3d_cloud_shell_wgsl"),
+            source: wgpu::ShaderSource::Wgsl(CLOUD_SHELL_WGSL.into()),
+        });
+        let cloud_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("strata_3d_cloud_bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+        let cloud_bind_group = Self::create_tex2d_bind_group(
+            &device,
+            &cloud_bind_group_layout,
+            "strata_3d_cloud_bg",
+            &camera_buffer,
+            &env_state.cloud_map_view,
+            &env_state.env_sampler,
+        );
+        let cloud_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("strata_3d_cloud_pl"),
+            bind_group_layouts: &[&cloud_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let cloud_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("strata_3d_cloud_pipeline"),
+            layout: Some(&cloud_layout),
+            vertex: wgpu::VertexState {
+                module: &cloud_shader,
+                entry_point: Some("vs_cloud"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<RteTileVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 16,
+                            shader_location: 1,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &cloud_shader,
+                entry_point: Some("fs_cloud"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Back),
+                front_face: wgpu::FrontFace::Ccw,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let (ico_v, ico_i) = build_unit_icosphere(4);
+        let cloud_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("strata_3d_cloud_vb"),
+            size: (ico_v.len() * std::mem::size_of::<RteTileVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&cloud_vbuf, 0, bytemuck::cast_slice(&ico_v));
+        let cloud_ibuf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("strata_3d_cloud_ib"),
+            size: (ico_i.len() * 4) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&cloud_ibuf, 0, bytemuck::cast_slice(&ico_i));
+        let cloud_index_count = ico_i.len() as u32;
 
         // Terrain vertex-pulling pipeline
         let terrain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1032,6 +1999,16 @@ impl Wgpu3DRenderer {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
         let terrain_bind_group = Self::create_terrain_bind_group(
@@ -1042,6 +2019,7 @@ impl Wgpu3DRenderer {
             &instance_buffer,
             &atlas.view,
             &terrain_sampler,
+            &env_state.land_mask_view,
         );
         let terrain_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("strata_3d_terrain_pl"),
@@ -1277,7 +2255,18 @@ impl Wgpu3DRenderer {
             color_format,
             camera_buffer,
             sky_pipeline,
+            sky_bind_group_layout,
             sky_bind_group,
+            star_pipeline,
+            star_bind_group_layout,
+            star_bind_group,
+            cloud_pipeline,
+            cloud_bind_group_layout,
+            cloud_bind_group,
+            cloud_vbuf,
+            cloud_ibuf,
+            cloud_index_count,
+            env_state,
             terrain_pipeline,
             terrain_bind_group_layout,
             terrain_bind_group,
@@ -1319,6 +2308,56 @@ impl Wgpu3DRenderer {
         self.color_format
     }
 
+    fn create_tex2d_bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        label: &str,
+        camera_buffer: &wgpu::Buffer,
+        tex_view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(tex_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        })
+    }
+
+    fn create_star_bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        camera_buffer: &wgpu::Buffer,
+        star_buffer: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("strata_3d_stars_bg"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: star_buffer.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
     fn create_terrain_bind_group(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
@@ -1327,6 +2366,7 @@ impl Wgpu3DRenderer {
         instance_buffer: &wgpu::Buffer,
         atlas_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
+        land_mask_view: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("strata_3d_terrain_bg"),
@@ -1352,8 +2392,121 @@ impl Wgpu3DRenderer {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(land_mask_view),
+                },
             ],
         })
+    }
+
+    fn upload_environment_assets(&mut self, env: &RetainedEnvironmentAssets) -> bool {
+        let mut terrain_rebind = false;
+
+        if let Some(ref land) = env.land_mask {
+            let key = Some((land.id, land.revision));
+            if self.env_state.land_mask_id_rev != key {
+                self.env_state.land_mask_view = create_rgba8_2d_view(
+                    &self.device,
+                    &self.queue,
+                    "strata_env_land_mask",
+                    land.width,
+                    land.height,
+                    &land.rgba8,
+                );
+                self.env_state.land_mask_id_rev = key;
+                terrain_rebind = true;
+            }
+        }
+
+        if let Some(ref clouds) = env.cloud_map {
+            let key = Some((clouds.id, clouds.revision));
+            if self.env_state.cloud_map_id_rev != key {
+                self.env_state.cloud_map_view = create_rgba8_2d_view(
+                    &self.device,
+                    &self.queue,
+                    "strata_env_cloud_map",
+                    clouds.width,
+                    clouds.height,
+                    &clouds.rgba8,
+                );
+                self.env_state.cloud_map_id_rev = key;
+                self.cloud_bind_group = Self::create_tex2d_bind_group(
+                    &self.device,
+                    &self.cloud_bind_group_layout,
+                    "strata_3d_cloud_bg",
+                    &self.camera_buffer,
+                    &self.env_state.cloud_map_view,
+                    &self.env_state.env_sampler,
+                );
+            }
+        }
+
+        if let Some(ref moon) = env.moon_texture {
+            let key = Some((moon.id, moon.revision));
+            if self.env_state.moon_tex_id_rev != key {
+                self.env_state.moon_view = create_rgba8_2d_view(
+                    &self.device,
+                    &self.queue,
+                    "strata_env_moon_tex",
+                    moon.width,
+                    moon.height,
+                    &moon.rgba8,
+                );
+                self.env_state.moon_tex_id_rev = key;
+                self.sky_bind_group = Self::create_tex2d_bind_group(
+                    &self.device,
+                    &self.sky_bind_group_layout,
+                    "strata_3d_sky_bg",
+                    &self.camera_buffer,
+                    &self.env_state.moon_view,
+                    &self.env_state.env_sampler,
+                );
+            }
+        }
+
+        if let Some(ref stars) = env.stars {
+            let ptr = Arc::as_ptr(stars) as usize;
+            let len = stars.len();
+            if self.env_state.stars_ptr != ptr || self.env_state.stars_len != len {
+                let gpu_stars: Vec<GpuStar> = stars
+                    .iter()
+                    .map(|s: &RetainedStar| GpuStar {
+                        icrf_dir_mag: [s.icrf_dir[0], s.icrf_dir[1], s.icrf_dir[2], s.vmag],
+                        color: s.color,
+                    })
+                    .collect();
+                if gpu_stars.len() > self.env_state.star_capacity {
+                    let new_cap = gpu_stars.len().next_power_of_two().max(64);
+                    self.env_state.star_buffer =
+                        self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("strata_3d_stars_grown"),
+                            size: (new_cap * std::mem::size_of::<GpuStar>()) as u64,
+                            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                    self.env_state.star_capacity = new_cap;
+                    self.star_bind_group = Self::create_star_bind_group(
+                        &self.device,
+                        &self.star_bind_group_layout,
+                        &self.camera_buffer,
+                        &self.env_state.star_buffer,
+                    );
+                }
+                if !gpu_stars.is_empty() {
+                    self.queue.write_buffer(
+                        &self.env_state.star_buffer,
+                        0,
+                        bytemuck::cast_slice(&gpu_stars),
+                    );
+                }
+                self.env_state.stars_ptr = ptr;
+                self.env_state.stars_len = len;
+                self.env_state.star_count = gpu_stars.len() as u32;
+            }
+        }
+
+        terrain_rebind
     }
 
     fn ensure_topology(&mut self, grid_res: u32, has_skirts: bool) -> (wgpu::Buffer, u32) {
@@ -1471,12 +2624,20 @@ impl Wgpu3DRenderer {
             (frame.camera, Some(frame))
         };
 
-        // 1. Update camera uniform buffer unconditionally (O(1) tiny 256-byte write).
-        let gpu_cam = GpuCameraUniforms::from_retained(&cam);
+        // 1. Update camera uniform buffer unconditionally (O(1) tiny uniform write).
+        let vp_w = viewport
+            .map(|v| v[2])
+            .unwrap_or_else(|| target_width.max(1) as f32)
+            .max(1.0);
+        let vp_h = viewport
+            .map(|v| v[3])
+            .unwrap_or_else(|| target_height.max(1) as f32)
+            .max(1.0);
+        let gpu_cam = GpuCameraUniforms::from_retained(&cam, vp_w, vp_h);
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&gpu_cam));
 
-        // 2. Upload incremental tile meshes/textures and prepare draw instances.
+        // 2. Upload incremental tile meshes/textures, environment assets, and prepare draw instances.
         let mut draw_count = 0usize;
         let mut grid_topology: Option<(u32, bool)> = None;
         let mut dynamic_draws: Vec<(u64, [f64; 3], [f32; 4], bool)> = Vec::new();
@@ -1491,6 +2652,12 @@ impl Wgpu3DRenderer {
             let _ = frame_changed;
             self.last_geometry_rev = frame.geometry_revision;
             self.last_terrain_frame = Some(Arc::clone(frame));
+
+            let env_dirty = if let Some(ref env) = frame.environment {
+                self.upload_environment_assets(env)
+            } else {
+                false
+            };
 
             let bg_dirty = self.slab.upload_meshes(
                 &self.device,
@@ -1537,7 +2704,7 @@ impl Wgpu3DRenderer {
                 self.instance_capacity = new_cap;
                 instance_resized = true;
             }
-            if bg_dirty || instance_resized {
+            if bg_dirty || instance_resized || env_dirty {
                 self.terrain_bind_group = Self::create_terrain_bind_group(
                     &self.device,
                     &self.terrain_bind_group_layout,
@@ -1546,6 +2713,7 @@ impl Wgpu3DRenderer {
                     &self.instance_buffer,
                     &self.atlas.view,
                     &self.terrain_sampler,
+                    &self.env_state.land_mask_view,
                 );
             }
             if !instances_gpu.is_empty() {
@@ -1711,10 +2879,24 @@ impl Wgpu3DRenderer {
                 pass.set_scissor_rect(xi, yi, wi, hi);
             }
 
-            if matches!(cam.background, Background3D::VerticalGradient { .. }) {
+            if matches!(cam.background, Background3D::VerticalGradient { .. })
+                || cam.stars_visible
+                || cam.sun_visible
+                || cam.moon_visible
+            {
                 pass.set_pipeline(&self.sky_pipeline);
                 pass.set_bind_group(0, &self.sky_bind_group, &[]);
                 pass.draw(0..3, 0..1);
+            }
+
+            if cam.stars_visible
+                && cam.stars_intensity > 0.001
+                && self.env_state.star_count > 0
+                && cam.local_25d_blend < 0.85
+            {
+                pass.set_pipeline(&self.star_pipeline);
+                pass.set_bind_group(0, &self.star_bind_group, &[]);
+                pass.draw(0..6, 0..self.env_state.star_count);
             }
 
             if draw_count > 0 {
@@ -1726,6 +2908,17 @@ impl Wgpu3DRenderer {
                         pass.draw_indexed(0..idx_count, 0, 0..draw_count as u32);
                     }
                 }
+            }
+
+            if cam.cloud_layer_opacity > 0.004
+                && cam.local_25d_blend < 0.72
+                && self.cloud_index_count > 0
+            {
+                pass.set_pipeline(&self.cloud_pipeline);
+                pass.set_bind_group(0, &self.cloud_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.cloud_vbuf.slice(..));
+                pass.set_index_buffer(self.cloud_ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..self.cloud_index_count, 0, 0..1);
             }
 
             if !dynamic_draws.is_empty() {
@@ -1944,6 +3137,7 @@ pub fn fallback_frame_from_scene3d(
         instances: Vec::new(),
         textures: Vec::new(),
         dynamic_meshes,
+        environment: None,
     }
 }
 
@@ -2035,6 +3229,7 @@ fn retained_camera_from_scene3d(
         background: scene.background(),
         near: 0.1,
         far: 100_000_000.0,
+        ..Default::default()
     }
 }
 
