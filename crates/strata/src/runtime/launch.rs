@@ -493,7 +493,42 @@ where
         }
         let mut rt = runtime_draw.borrow_mut();
         // Repaints with no state change (expose, focus) reuse the compiled list.
-        rt.compile_display_list_if_dirty();
+        let dl_recompiled = rt.compile_display_list_if_dirty();
+        let mcp_overlay_active = rt
+            .mcp_cursor
+            .as_ref()
+            .is_some_and(|c| c.fade_opacity > 0.001);
+        let overlay_dirty = dl_recompiled || resize_fired || mcp_overlay_active;
+
+        let cursor_tuple = rt
+            .mcp_cursor
+            .as_ref()
+            .map(|c| c as *const strata_platform::McpCursorState);
+        let theme_ref = if cursor_tuple.is_some() {
+            Some(rt.cursor_theme() as *const strata_platform::CursorTheme)
+        } else {
+            None
+        };
+        let gpu_presented = {
+            let cursor_pair = match (cursor_tuple, theme_ref) {
+                // SAFETY: Both pointers borrow disjoint fields of `rt` for the duration of the call.
+                (Some(c), Some(t)) => Some(unsafe { (&*c, &*t) }),
+                _ => None,
+            };
+            strata_platform::try_present_display_list_gpu(
+                &rt.display_list,
+                width,
+                height,
+                overlay_dirty,
+                transparent_bg,
+                cursor_pair,
+            )
+        };
+
+        if gpu_presented {
+            rt.acknowledge_retained_3d_presented();
+            return;
+        }
 
         // Clear or fill window background
         if transparent_bg {
@@ -810,6 +845,16 @@ where
         let (redraw, paint_dirty) = on_event_inner(event);
         if paint_dirty {
             runtime_dirty.borrow_mut().mark_paint_dirty();
+            return redraw;
+        }
+        if redraw
+            && !runtime_dirty.borrow().is_paint_dirty()
+            && strata_platform::gtk_present_active_gpu_surface_now()
+        {
+            runtime_dirty
+                .borrow_mut()
+                .acknowledge_retained_3d_presented();
+            return false;
         }
         redraw
     };

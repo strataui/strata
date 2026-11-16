@@ -70,14 +70,15 @@ pub use gtk;
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 pub use gtk_window::{
     cairo_rounded_rect, cairo_rounded_rect_radii, gtk_begin_window_drag, gtk_close,
-    gtk_current_modifiers, gtk_focus_window, gtk_get_clipboard_text, gtk_is_closing,
-    gtk_is_maximized, gtk_minimize, gtk_reset_ime, gtk_set_clipboard_text, gtk_set_cursor,
-    gtk_set_ime_cursor_location, gtk_set_ime_surrounding_text, gtk_toggle_maximize,
-    gtk_warp_cursor, init_pango_text_measurement, launch_gtk_window, launch_gtk_window_with_config,
+    gtk_current_modifiers, gtk_focus_window, gtk_get_clipboard_text, gtk_gpu_surface_is_active,
+    gtk_is_closing, gtk_is_maximized, gtk_minimize, gtk_present_active_gpu_surface_now,
+    gtk_reset_ime, gtk_set_clipboard_text, gtk_set_cursor, gtk_set_ime_cursor_location,
+    gtk_set_ime_surrounding_text, gtk_toggle_maximize, gtk_warp_cursor,
+    init_pango_text_measurement, launch_gtk_window, launch_gtk_window_with_config,
     launch_gtk_window_with_scheduler, pango_font_metrics, pango_measure_styled_text,
     pango_measure_styled_text_family, pango_measure_text, pango_measure_text_family,
     post_platform_event, render_display_list_to_cairo, render_to_png, render_to_png_bytes,
-    resolved_font_family, set_cursor_position, warp_cursor,
+    resolved_font_family, set_cursor_position, try_present_display_list_gpu, warp_cursor,
 };
 pub use mcp_cursor::McpCursorState;
 /// Pure-Rust headless software rasterization and PNG byte export.

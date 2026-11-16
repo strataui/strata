@@ -11,9 +11,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Default maximum new tile textures uploaded to the GPU atlas per frame during continuous flight.
-pub const DEFAULT_TEXTURE_UPLOAD_BUDGET: usize = 8;
+pub const DEFAULT_TEXTURE_UPLOAD_BUDGET: usize = 16;
 /// Default maximum new tile meshes copied to the GPU storage slab per frame.
-pub const DEFAULT_MESH_UPLOAD_BUDGET: usize = 24;
+pub const DEFAULT_MESH_UPLOAD_BUDGET: usize = 32;
 /// Standard terrain imagery tile dimension in the GPU `Texture2DArray` atlas.
 pub const ATLAS_TILE_SIZE: u32 = 256;
 /// Maximum imagery layers pre-allocated in the GPU `Texture2DArray` atlas.
@@ -901,7 +901,8 @@ impl Wgpu3DRenderer {
         });
 
         let slab = GpuTileSlabAllocator::new(&device, 262_144);
-        let atlas = GpuImageryAtlas::new(&device, &queue, MAX_ATLAS_LAYERS);
+        let atlas_layers = MAX_ATLAS_LAYERS.min(device.limits().max_texture_array_layers.max(1));
+        let atlas = GpuImageryAtlas::new(&device, &queue, atlas_layers);
 
         let terrain_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("strata_3d_terrain_sampler"),
@@ -1258,7 +1259,7 @@ impl Wgpu3DRenderer {
                 entry_point: Some("fs_overlay"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: color_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -1692,12 +1693,22 @@ impl Wgpu3DRenderer {
             });
 
             if let Some([vx, vy, vw, vh]) = viewport {
-                let x = vx.max(0.0).min(target_width as f32);
-                let y = vy.max(0.0).min(target_height as f32);
-                let w = vw.max(1.0).min((target_width as f32 - x).max(1.0));
-                let h = vh.max(1.0).min((target_height as f32 - y).max(1.0));
+                let x = vx.max(0.0).min((target_width.saturating_sub(1)) as f32);
+                let y = vy.max(0.0).min((target_height.saturating_sub(1)) as f32);
+                let max_w = (target_width as f32 - x).max(1.0);
+                let max_h = (target_height as f32 - y).max(1.0);
+                let w = vw.max(1.0).min(max_w);
+                let h = vh.max(1.0).min(max_h);
+                let xi = (x.floor() as u32).min(target_width.saturating_sub(1));
+                let yi = (y.floor() as u32).min(target_height.saturating_sub(1));
+                let wi = (w.round() as u32)
+                    .max(1)
+                    .min(target_width.saturating_sub(xi).max(1));
+                let hi = (h.round() as u32)
+                    .max(1)
+                    .min(target_height.saturating_sub(yi).max(1));
                 pass.set_viewport(x, y, w, h, 0.0, 1.0);
-                pass.set_scissor_rect(x as u32, y as u32, w as u32, h as u32);
+                pass.set_scissor_rect(xi, yi, wi, hi);
             }
 
             if matches!(cam.background, Background3D::VerticalGradient { .. }) {

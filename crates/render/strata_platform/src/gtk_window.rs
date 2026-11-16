@@ -1592,6 +1592,14 @@ fn viewport_3d_surface(
 
 /// Executes a Strata DisplayList into a Cairo graphics context with full typography and vector support.
 pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
+    render_display_list_to_cairo_impl(cr, list, false);
+}
+
+fn render_display_list_to_cairo_impl(
+    cr: &cairo::Context,
+    list: &DisplayList,
+    punch_viewport_hole: bool,
+) {
     let perf_start = std::time::Instant::now();
     let mut current_clip = cr
         .clip_extents()
@@ -2308,23 +2316,36 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
             DrawCommand::DrawViewport3D { bounds, scene }
                 if bounds.width > 0.0 && bounds.height > 0.0 =>
             {
-                let w = bounds.width.max(1.0).round() as usize;
-                let h = bounds.height.max(1.0).round() as usize;
-                let interactive = IN_LIVE_GTK_DRAW.with(|live| live.get());
-                if let Some(res) = viewport_3d_surface_with_fallback(scene, w, h, interactive) {
+                if punch_viewport_hole {
                     let _ = cr.save();
-                    cr.translate(bounds.x as f64, bounds.y as f64);
-                    if res.src_width != w || res.src_height != h {
-                        cr.scale(
-                            bounds.width as f64 / res.src_width.max(1) as f64,
-                            bounds.height as f64 / res.src_height.max(1) as f64,
-                        );
-                    }
-                    let _ = cr.set_source_surface(&res.surface, 0.0, 0.0);
-                    let _ = cr.paint();
+                    cr.rectangle(
+                        bounds.x as f64,
+                        bounds.y as f64,
+                        bounds.width as f64,
+                        bounds.height as f64,
+                    );
+                    cr.set_operator(cairo::Operator::Clear);
+                    let _ = cr.fill();
                     let _ = cr.restore();
-                    if res.needs_debounced_full_res && interactive {
-                        schedule_viewport_3d_debounced_redraw();
+                } else {
+                    let w = bounds.width.max(1.0).round() as usize;
+                    let h = bounds.height.max(1.0).round() as usize;
+                    let interactive = IN_LIVE_GTK_DRAW.with(|live| live.get());
+                    if let Some(res) = viewport_3d_surface_with_fallback(scene, w, h, interactive) {
+                        let _ = cr.save();
+                        cr.translate(bounds.x as f64, bounds.y as f64);
+                        if res.src_width != w || res.src_height != h {
+                            cr.scale(
+                                bounds.width as f64 / res.src_width.max(1) as f64,
+                                bounds.height as f64 / res.src_height.max(1) as f64,
+                            );
+                        }
+                        let _ = cr.set_source_surface(&res.surface, 0.0, 0.0);
+                        let _ = cr.paint();
+                        let _ = cr.restore();
+                        if res.needs_debounced_full_res && interactive {
+                            schedule_viewport_3d_debounced_redraw();
+                        }
                     }
                 }
             }
@@ -2522,6 +2543,422 @@ pub fn gtk_focus_window() {
 thread_local! {
     static EVENT_DISPATCH_CALLBACK: std::cell::RefCell<Option<Box<dyn Fn(crate::events::PlatformEvent) -> bool>>> = const { std::cell::RefCell::new(None) };
     static DRAWING_AREA_HANDLE: std::cell::RefCell<Option<gtk::DrawingArea>> = const { std::cell::RefCell::new(None) };
+    static ACTIVE_PRESENT_MODE: std::cell::Cell<crate::surface::PresentMode> = const { std::cell::Cell::new(crate::surface::PresentMode::Fifo) };
+}
+
+#[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+mod gtk_gpu_x11 {
+    use gtk::glib::translate::FromGlib;
+    use gtk::prelude::*;
+    use std::ffi::c_void;
+    use std::ptr::NonNull;
+    use std::sync::Arc;
+    use strata_render::compositor::{DisplayList, DrawCommand};
+    use strata_render::scene3d::Scene3D;
+    use x11::xlib;
+
+    #[link(name = "gdk-3")]
+    extern "C" {
+        fn gdk_x11_display_get_type() -> gtk::glib::ffi::GType;
+        fn gdk_x11_window_get_xid(window: *mut gtk::gdk::ffi::GdkWindow) -> libc::c_ulong;
+        fn gdk_x11_display_get_xdisplay(
+            display: *mut gtk::gdk::ffi::GdkDisplay,
+        ) -> *mut xlib::Display;
+    }
+
+    pub(super) struct GtkGpuSurfaceState {
+        xdisplay: *mut xlib::Display,
+        child_xid: xlib::Window,
+        presenter: crate::wgpu_surface::WgpuWindowPresenter,
+        width: u32,
+        height: u32,
+        mapped: bool,
+        overlay_uploaded: bool,
+        last_scene: Option<Arc<Scene3D>>,
+        last_viewport: Option<[f32; 4]>,
+    }
+
+    impl GtkGpuSurfaceState {
+        fn set_mapped(&mut self, want_mapped: bool) {
+            if self.mapped == want_mapped {
+                return;
+            }
+            unsafe {
+                if want_mapped {
+                    xlib::XMapWindow(self.xdisplay, self.child_xid);
+                } else {
+                    xlib::XUnmapWindow(self.xdisplay, self.child_xid);
+                }
+                xlib::XFlush(self.xdisplay);
+            }
+            self.mapped = want_mapped;
+        }
+
+        fn resize(&mut self, w: u32, h: u32) {
+            let w = w.max(1);
+            let h = h.max(1);
+            if self.width == w && self.height == h {
+                return;
+            }
+            unsafe {
+                xlib::XResizeWindow(self.xdisplay, self.child_xid, w, h);
+                xlib::XSync(self.xdisplay, 0);
+            }
+            self.width = w;
+            self.height = h;
+            self.presenter.resize(w, h);
+            self.overlay_uploaded = false;
+        }
+
+        fn destroy(self) {
+            let xdisplay = self.xdisplay;
+            let child_xid = self.child_xid;
+            // Drop wgpu::Surface before destroying the underlying X11 child window.
+            drop(self.presenter);
+            unsafe {
+                xlib::XDestroyWindow(xdisplay, child_xid);
+                xlib::XFlush(xdisplay);
+            }
+        }
+    }
+
+    thread_local! {
+        static GPU_SURFACE_STATE: std::cell::RefCell<Option<GtkGpuSurfaceState>> =
+            const { std::cell::RefCell::new(None) };
+        static GPU_SURFACE_INIT_FAILED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    fn init_state_from_drawing_area(
+        da: &gtk::DrawingArea,
+        width: u32,
+        height: u32,
+        present_mode: crate::surface::PresentMode,
+    ) -> Result<GtkGpuSurfaceState, String> {
+        let gdk_win = da
+            .window()
+            .ok_or_else(|| "GTK drawing area not yet realized".to_string())?;
+        let display = da.display();
+        let x11_disp_type = unsafe { gtk::glib::Type::from_glib(gdk_x11_display_get_type()) };
+        if display.type_() != x11_disp_type {
+            return Err("active GDK display is not X11".to_string());
+        }
+
+        let xdisplay = unsafe {
+            gdk_x11_display_get_xdisplay(gtk::glib::translate::ToGlibPtr::to_glib_none(&display).0)
+        };
+        let parent_xid = unsafe {
+            gdk_x11_window_get_xid(gtk::glib::translate::ToGlibPtr::to_glib_none(&gdk_win).0)
+        };
+        if xdisplay.is_null() || parent_xid == 0 {
+            return Err("invalid X11 display or parent window handle".to_string());
+        }
+
+        let w = width.max(1);
+        let h = height.max(1);
+        let (child_xid, screen, visual_id) = unsafe {
+            let mut attrs: xlib::XWindowAttributes = std::mem::zeroed();
+            xlib::XGetWindowAttributes(xdisplay, parent_xid, &mut attrs);
+            let child = xlib::XCreateSimpleWindow(xdisplay, parent_xid, 0, 0, w, h, 0, 0, 0);
+            // Zero event mask lets all pointer, scroll, and keyboard input bubble to GTK.
+            xlib::XSelectInput(xdisplay, child, 0);
+            xlib::XMapWindow(xdisplay, child);
+            xlib::XSync(xdisplay, 0);
+            let scr = xlib::XDefaultScreen(xdisplay);
+            let vid = if !attrs.visual.is_null() {
+                (*attrs.visual).visualid
+            } else {
+                0
+            };
+            (child, scr, vid)
+        };
+
+        let mut win_handle = raw_window_handle::XlibWindowHandle::new(child_xid);
+        win_handle.visual_id = visual_id;
+        let disp_handle = raw_window_handle::XlibDisplayHandle::new(
+            NonNull::new(xdisplay as *mut c_void),
+            screen,
+        );
+
+        let presenter = unsafe {
+            crate::wgpu_surface::WgpuWindowPresenter::from_raw_handles(
+                raw_window_handle::RawWindowHandle::Xlib(win_handle),
+                raw_window_handle::RawDisplayHandle::Xlib(disp_handle),
+                w,
+                h,
+                present_mode,
+            )
+        };
+        let presenter = match presenter {
+            Ok(p) => p,
+            Err(e) => {
+                unsafe {
+                    xlib::XDestroyWindow(xdisplay, child_xid);
+                    xlib::XFlush(xdisplay);
+                }
+                return Err(e);
+            }
+        };
+
+        if std::env::var_os("STRATA_PERF_LOG").is_some() {
+            eprintln!(
+                "[perf] wgpu direct X11 swapchain ready ({}x{}, requested={:?}, active={:?})",
+                w,
+                h,
+                present_mode,
+                presenter.active_wgpu_present_mode()
+            );
+        }
+
+        Ok(GtkGpuSurfaceState {
+            xdisplay,
+            child_xid,
+            presenter,
+            width: w,
+            height: h,
+            mapped: true,
+            overlay_uploaded: false,
+            last_scene: None,
+            last_viewport: None,
+        })
+    }
+
+    fn rasterize_overlay_bgra(
+        list: &DisplayList,
+        w: u32,
+        h: u32,
+        transparent_bg: bool,
+        cursor_overlay: Option<(&crate::McpCursorState, &crate::CursorTheme)>,
+    ) -> Option<Vec<u8>> {
+        let mut surf =
+            cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32).ok()?;
+        {
+            let cr = cairo::Context::new(&surf).ok()?;
+            cr.set_font_options(&super::parity_font_options());
+            if transparent_bg {
+                cr.set_operator(cairo::Operator::Clear);
+                let _ = cr.paint();
+            } else {
+                cr.set_operator(cairo::Operator::Source);
+                cr.set_source_rgb(0.035, 0.035, 0.043);
+                let _ = cr.paint();
+            }
+            cr.set_operator(cairo::Operator::Over);
+            super::render_display_list_to_cairo_impl(&cr, list, true);
+            if let Some((mcp_cursor, theme)) = cursor_overlay {
+                if mcp_cursor.fade_opacity > 0.001 {
+                    theme.render_cairo(
+                        &cr,
+                        mcp_cursor.cursor_icon,
+                        mcp_cursor.current_x,
+                        mcp_cursor.current_y,
+                        mcp_cursor.fade_opacity,
+                        mcp_cursor.is_down,
+                    );
+                }
+            }
+        }
+        surf.flush();
+        let stride = surf.stride() as usize;
+        let row_bytes = (w as usize) * 4;
+        let data = surf.data().ok()?;
+        if stride == row_bytes {
+            Some(data[..row_bytes * (h as usize)].to_vec())
+        } else {
+            let mut out = vec![0u8; row_bytes * (h as usize)];
+            for row in 0..(h as usize) {
+                let src_off = row * stride;
+                let dst_off = row * row_bytes;
+                out[dst_off..dst_off + row_bytes]
+                    .copy_from_slice(&data[src_off..src_off + row_bytes]);
+            }
+            Some(out)
+        }
+    }
+
+    pub(super) fn try_present_display_list(
+        list: &DisplayList,
+        width: f32,
+        height: f32,
+        overlay_dirty: bool,
+        transparent_bg: bool,
+        cursor_overlay: Option<(&crate::McpCursorState, &crate::CursorTheme)>,
+    ) -> bool {
+        let mut viewport_entry: Option<([f32; 4], Arc<Scene3D>)> = None;
+        let mut viewport_count = 0usize;
+        for cmd in list.commands() {
+            if let DrawCommand::DrawViewport3D { bounds, scene } = cmd {
+                if bounds.width > 0.0 && bounds.height > 0.0 {
+                    viewport_count += 1;
+                    if viewport_count == 1 {
+                        viewport_entry = Some((
+                            [bounds.x, bounds.y, bounds.width, bounds.height],
+                            Arc::clone(scene),
+                        ));
+                    }
+                }
+            }
+        }
+
+        if viewport_count != 1 {
+            GPU_SURFACE_STATE.with(|slot| {
+                if let Some(ref mut state) = *slot.borrow_mut() {
+                    state.set_mapped(false);
+                }
+            });
+            return false;
+        }
+        let Some((vp_rect, scene)) = viewport_entry else {
+            return false;
+        };
+
+        let w = width.max(1.0).round() as u32;
+        let h = height.max(1.0).round() as u32;
+        if GPU_SURFACE_INIT_FAILED.with(|f| f.get()) {
+            return false;
+        }
+
+        let present_mode = super::ACTIVE_PRESENT_MODE.with(|m| m.get());
+        GPU_SURFACE_STATE.with(|slot| {
+            let mut cell = slot.borrow_mut();
+            if cell.is_none() {
+                let da_opt = super::DRAWING_AREA_HANDLE.with(|da| da.borrow().clone());
+                let Some(da) = da_opt else {
+                    return false;
+                };
+                match init_state_from_drawing_area(&da, w, h, present_mode) {
+                    Ok(state) => *cell = Some(state),
+                    Err(_) => {
+                        GPU_SURFACE_INIT_FAILED.with(|f| f.set(true));
+                        return false;
+                    }
+                }
+            }
+
+            let Some(ref mut state) = *cell else {
+                return false;
+            };
+            state.resize(w, h);
+            state.set_mapped(true);
+
+            if overlay_dirty || !state.overlay_uploaded {
+                if let Some(bgra) =
+                    rasterize_overlay_bgra(list, w, h, transparent_bg, cursor_overlay)
+                {
+                    state.presenter.upload_ui_overlay_bgra(w, h, &bgra);
+                    state.overlay_uploaded = true;
+                }
+            }
+
+            state.last_viewport = Some(vp_rect);
+            state.last_scene = Some(Arc::clone(&scene));
+            state
+                .presenter
+                .present_to_surface(&scene, Some(vp_rect), state.overlay_uploaded)
+                .is_ok()
+        })
+    }
+
+    pub(super) fn present_active_now() -> bool {
+        GPU_SURFACE_STATE.with(|slot| {
+            let mut cell = slot.borrow_mut();
+            let Some(ref mut state) = *cell else {
+                return false;
+            };
+            if !state.mapped {
+                return false;
+            }
+            let (Some(ref scene), Some(vp)) = (&state.last_scene, state.last_viewport) else {
+                return false;
+            };
+            state
+                .presenter
+                .present_to_surface(scene, Some(vp), state.overlay_uploaded)
+                .is_ok()
+        })
+    }
+
+    pub(super) fn is_active() -> bool {
+        GPU_SURFACE_STATE.with(|slot| slot.borrow().as_ref().is_some_and(|s| s.mapped))
+    }
+
+    pub(super) fn resize_active(w: u32, h: u32) {
+        GPU_SURFACE_STATE.with(|slot| {
+            if let Some(ref mut state) = *slot.borrow_mut() {
+                state.resize(w, h);
+            }
+        });
+    }
+
+    pub(super) fn destroy_active() {
+        GPU_SURFACE_INIT_FAILED.with(|f| f.set(false));
+        GPU_SURFACE_STATE.with(|slot| {
+            if let Some(state) = slot.borrow_mut().take() {
+                state.destroy();
+            }
+        });
+    }
+}
+
+/// Attempts direct zero-readback GPU swapchain presentation for `list` on the live GTK window.
+///
+/// Returns `true` when the active native GPU swapchain rendered and presented the 3D viewport plus
+/// cached 2D HUD overlay (`ui_overlay_texture`), allowing the caller to skip Cairo window painting.
+pub fn try_present_display_list_gpu(
+    list: &DisplayList,
+    width: f32,
+    height: f32,
+    overlay_dirty: bool,
+    transparent_bg: bool,
+    cursor_overlay: Option<(&crate::McpCursorState, &crate::CursorTheme)>,
+) -> bool {
+    #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+    {
+        gtk_gpu_x11::try_present_display_list(
+            list,
+            width,
+            height,
+            overlay_dirty,
+            transparent_bg,
+            cursor_overlay,
+        )
+    }
+    #[cfg(not(all(feature = "wgpu-backend", feature = "xlib")))]
+    {
+        let _ = (
+            list,
+            width,
+            height,
+            overlay_dirty,
+            transparent_bg,
+            cursor_overlay,
+        );
+        false
+    }
+}
+
+/// Immediately re-presents the currently mapped 3D scene and cached 2D overlay on the live GPU
+/// swapchain without invoking GTK's Cairo draw pass or waiting for GDK's VSync frame clock.
+pub fn gtk_present_active_gpu_surface_now() -> bool {
+    #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+    {
+        gtk_gpu_x11::present_active_now()
+    }
+    #[cfg(not(all(feature = "wgpu-backend", feature = "xlib")))]
+    {
+        false
+    }
+}
+
+/// Returns `true` when the live GTK window currently has a mapped zero-readback GPU swapchain.
+pub fn gtk_gpu_surface_is_active() -> bool {
+    #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+    {
+        gtk_gpu_x11::is_active()
+    }
+    #[cfg(not(all(feature = "wgpu-backend", feature = "xlib")))]
+    {
+        false
+    }
 }
 
 /// Posts a platform event to the running GTK application event loop from any background thread.
@@ -3076,6 +3513,7 @@ where
     }
 
     IS_CLOSING.with(|c| c.set(false));
+    ACTIVE_PRESENT_MODE.with(|m| m.set(config.present_mode));
 
     let width = config.width.max(1);
     let height = config.height.max(1);
@@ -3198,7 +3636,14 @@ where
     let im_unrealize = im_context.clone();
     drawing_area.connect_unrealize(move |_widget| {
         use gtk::prelude::*;
+        #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+        gtk_gpu_x11::destroy_active();
         im_unrealize.set_client_window(None::<&gtk::gdk::Window>);
+    });
+
+    drawing_area.connect_size_allocate(|_widget, alloc| {
+        #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+        gtk_gpu_x11::resize_active(alloc.width().max(1) as u32, alloc.height().max(1) as u32);
     });
 
     let im_focus_in = im_context.clone();
@@ -3746,6 +4191,8 @@ where
     });
 
     window.connect_destroy(|_| {
+        #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+        gtk_gpu_x11::destroy_active();
         IS_CLOSING.with(|c| c.set(true));
         IS_MAXIMIZED_TRACKER.with(|t| t.set(false));
         IS_WINDOW_DOCKED.with(|d| d.set(false));

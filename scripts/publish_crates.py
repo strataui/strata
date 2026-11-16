@@ -71,6 +71,79 @@ def collect_publishable_crates(repo_root: Path) -> list[tuple[str, str]]:
     return crates
 
 
+def collect_dirty_crates(repo_root: Path) -> set[str]:
+    """Return crate names that have uncommitted changes or transitively depend on one."""
+    res = subprocess.run(
+        ["git", "-C", str(repo_root), "status", "--porcelain", "--untracked-files=all"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if res.returncode != 0 or not res.stdout.strip():
+        return set()
+
+    dirty_roots: set[str] = set()
+    for line in res.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        raw_path = line[3:].strip()
+        if " -> " in raw_path:
+            raw_path = raw_path.split(" -> ", 1)[1].strip()
+        raw_path = raw_path.strip('"')
+        p = (repo_root / raw_path).resolve()
+        cur = p if p.is_dir() else p.parent
+        while cur != repo_root and cur != cur.parent:
+            manifest = cur / "Cargo.toml"
+            if manifest.is_file():
+                try:
+                    with manifest.open("rb") as f:
+                        name = tomllib.load(f).get("package", {}).get("name")
+                    if isinstance(name, str) and name:
+                        dirty_roots.add(name)
+                except Exception:
+                    pass
+                break
+            cur = cur.parent
+
+    if not dirty_roots:
+        return set()
+
+    # Expand to transitive workspace dependents so clean crates that depend on dirty ones are also deferred.
+    meta = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        cwd=str(repo_root),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if meta.returncode != 0:
+        return dirty_roots
+
+    try:
+        packages = json.loads(meta.stdout).get("packages", [])
+        rev_deps: dict[str, set[str]] = {}
+        for pkg in packages:
+            pkg_name = pkg.get("name")
+            if not pkg_name:
+                continue
+            for dep in pkg.get("dependencies", []):
+                dep_name = dep.get("name")
+                if dep_name:
+                    rev_deps.setdefault(dep_name, set()).add(pkg_name)
+
+        all_dirty = set(dirty_roots)
+        queue = list(dirty_roots)
+        while queue:
+            cur_pkg = queue.pop()
+            for dependent in rev_deps.get(cur_pkg, ()):
+                if dependent not in all_dirty:
+                    all_dirty.add(dependent)
+                    queue.append(dependent)
+        return all_dirty
+    except Exception:
+        return dirty_roots
+
+
 def is_published_on_crates_io(name: str, version: str) -> bool:
     """Return True if `name` at `version` is already published under a `strataui` repository on crates.io."""
     url = f"https://crates.io/api/v1/crates/{name}"
@@ -215,25 +288,56 @@ def publish_workspace(
             print(f"[{label}] All {len(all_crates)} crate(s) are already published on crates.io.", flush=True)
             return 0
 
+        dirty_names = set() if "--allow-dirty" in extra_args else collect_dirty_crates(repo_root)
+        ready = [(n, v) for n, v in unpublished if n not in dirty_names]
+        deferred = [(n, v) for n, v in unpublished if n in dirty_names]
+
+        if not ready and deferred:
+            print(
+                f"[{label}] Waiting 15s for {len(deferred)} crate(s) with uncommitted changes to be committed: "
+                f"{', '.join(f'{n}@{v}' for n, v in deferred[:8])}"
+                + ("..." if len(deferred) > 8 else ""),
+                flush=True,
+            )
+            if dry_run:
+                return 0
+            time.sleep(15.0)
+            continue
+
+        skip_msg = f"skipping {len(published)} already published"
+        if deferred:
+            skip_msg += f", deferring {len(deferred)} uncommitted"
         print(
-            f"[{label}] Attempt {attempt}: {len(unpublished)} crate(s) remaining "
-            f"(skipping {len(published)} already published): "
-            f"{', '.join(f'{n}@{v}' for n, v in unpublished[:8])}"
-            + ("..." if len(unpublished) > 8 else ""),
+            f"[{label}] Attempt {attempt}: {len(ready)} crate(s) ready ({skip_msg}): "
+            f"{', '.join(f'{n}@{v}' for n, v in ready[:8])}"
+            + ("..." if len(ready) > 8 else ""),
             flush=True,
         )
 
+        run_args = list(extra_args)
+        if deferred and "--allow-dirty" not in run_args:
+            # Workspace-wide git dirty check would otherwise block clean crates when unrelated crates are dirty.
+            run_args.append("--allow-dirty")
+
         if single_package is not None:
-            cmd = ["cargo", "publish", "-p", single_package, *extra_args]
+            cmd = ["cargo", "publish", "-p", single_package, *run_args]
         else:
             excludes: list[str] = []
             for name, _ in published:
                 excludes.extend(["--exclude", name])
-            cmd = ["cargo", "publish", "--workspace", *excludes, *extra_args]
+            for name, _ in deferred:
+                excludes.extend(["--exclude", name])
+            cmd = ["cargo", "publish", "--workspace", *excludes, *run_args]
 
         rc, output = stream_command(cmd, repo_root)
         if rc == 0:
-            return 0
+            if not deferred:
+                return 0
+            print(
+                f"[{label}] Clean crates published; revisiting {len(deferred)} deferred crate(s)...",
+                flush=True,
+            )
+            continue
 
         limited, wait_secs, summary = parse_rate_limit(output)
         if limited and not dry_run:
