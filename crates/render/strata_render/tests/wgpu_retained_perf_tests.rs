@@ -87,6 +87,7 @@ fn camera_uniforms(
         },
         near: near as f32,
         far: far as f32,
+        ..Default::default()
     }
 }
 
@@ -155,6 +156,7 @@ fn build_retained_grid_frame(width: u32, height: u32) -> RetainedTerrainFrame {
         instances,
         textures,
         dynamic_meshes: Vec::new(),
+        environment: None,
     }
 }
 
@@ -237,5 +239,69 @@ fn wgpu_3d_renderer_retained_render_and_1000_frame_1440x900_throughput() {
         avg,
         p50,
         p99
+    );
+}
+
+#[test]
+fn wgpu_25d_shadowless_daylight_with_below_horizon_sun() {
+    let mut renderer = match Wgpu3DRenderer::new_headless(wgpu::TextureFormat::Bgra8UnormSrgb) {
+        Ok(r) => r,
+        Err(reason) => {
+            eprintln!("[skip] {}", reason);
+            return;
+        }
+    };
+    let w = 320u32;
+    let h = 200u32;
+    let mut frame = build_retained_grid_frame(w, h);
+    frame.camera.sun_dir = [0.0, -0.4, -0.9];
+    frame.camera.day_night_strength = 0.0;
+    frame.camera.city_lights_intensity = 0.0;
+    frame.camera.local_25d_blend = 1.0;
+
+    let retained = RetainedScene3D::new(frame.camera);
+    retained.update_terrain(Arc::new(frame));
+    let scene = Scene3D::new().with_retained_handle(retained);
+    let bgra = renderer
+        .render_offscreen(&scene, w, h, true, true)
+        .expect("offscreen");
+    let center_idx = (((h / 2) * w + (w / 2)) * 4) as usize;
+    let b = bgra[center_idx];
+    let g = bgra[center_idx + 1];
+    let r = bgra[center_idx + 2];
+    assert!(
+        g > 60 && g > b && g > r,
+        "expected shadowless bright green 2.5D terrain even with sun below horizon (got BGRA={:?})",
+        &bgra[center_idx..center_idx + 4]
+    );
+
+    // Check high texture count (>64 distinct textures) with limited budget renders bright cleanly
+    let mut hi_frame = build_retained_grid_frame(w, h);
+    let mut extra_textures = Vec::new();
+    for tid in 10u64..110u64 {
+        extra_textures.push(Arc::new(RetainedTileTexture {
+            id: tid,
+            revision: 1,
+            width: 4,
+            height: 4,
+            rgba8: Arc::new([40, 210, 60, 255].repeat(16)),
+        }));
+    }
+    hi_frame.textures = extra_textures;
+    hi_frame.instances[0].texture_id = Some(109);
+    hi_frame.instances[0].texture_revision = 1;
+    let hi_ret = RetainedScene3D::new(hi_frame.camera);
+    hi_ret.update_terrain(Arc::new(hi_frame));
+    let hi_scene = Scene3D::new().with_retained_handle(hi_ret.clone());
+    for _ in 0..3 {
+        let _ = renderer.render_offscreen(&scene, w, h, false, false);
+    }
+    let hi_bgra = renderer
+        .render_offscreen(&hi_scene, w, h, true, false)
+        .expect("hi offscreen");
+    assert!(
+        hi_bgra[center_idx + 1] > 60,
+        "expected high texture count tile to upload cleanly (got BGRA={:?})",
+        &hi_bgra[center_idx..center_idx + 4]
     );
 }
