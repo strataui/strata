@@ -36,3 +36,7 @@ docs/.vitepress/cache/
 **/target/browser-artifacts/
 **/target/parity_viewport/
 
+# Python bytecode
+__pycache__/
+*.pyc
+
