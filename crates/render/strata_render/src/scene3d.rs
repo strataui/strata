@@ -699,6 +699,32 @@ impl RetainedScene3D {
             .fetch_add(1, std::sync::atomic::Ordering::Release);
     }
 
+    /// Updates camera uniforms and replaces only dynamic 3D overlays (e.g. 2.5D weather or orbital satellites)
+    /// without rebuilding or re-allocating cached terrain tiles, textures, or environment assets.
+    pub fn update_camera_and_dynamic_meshes(
+        &self,
+        camera: RetainedCameraUniforms,
+        dynamic_meshes: Vec<RetainedDynamicMesh>,
+    ) {
+        if let Ok(mut guard) = self.inner.state.write() {
+            guard.camera = camera;
+            if let Some(ref existing) = guard.terrain {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: existing.geometry_revision,
+                    meshes: existing.meshes.clone(),
+                    instances: existing.instances.clone(),
+                    textures: existing.textures.clone(),
+                    dynamic_meshes,
+                    environment: existing.environment.clone(),
+                }));
+            }
+        }
+        self.inner
+            .camera_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
     pub fn set_fallback_scene(&self, scene: std::sync::Arc<Scene3D>) {
         if let Ok(mut guard) = self.inner.state.write() {
             guard.fallback_scene = Some(scene);
