@@ -398,3 +398,117 @@ fn wgpu_skybox_cubemap_renders_faces_and_fades_in_25d() {
     }
 }
 
+#[test]
+fn wgpu_lod_zoom_burst_renders_all_100_new_chunks_without_holes() {
+    let Ok(mut renderer) = Wgpu3DRenderer::new_headless(wgpu::TextureFormat::Bgra8Unorm) else {
+        return;
+    };
+    let (w, h) = (256u32, 256u32);
+
+    // Advance past initial unlimited warm-up frames (frame_index <= 2).
+    let warmup = build_retained_grid_frame(w, h);
+    let retained = RetainedScene3D::new(warmup.camera);
+    retained.update_terrain(Arc::new(warmup));
+    let scene = Scene3D::new().with_retained_handle(retained.clone());
+    for _ in 0..4 {
+        let _ = renderer
+            .render_offscreen(&scene, w, h, true, false)
+            .expect("warmup");
+    }
+
+    // Build a sudden 10x10 = 100-tile LOD zoom burst over a pure magenta clear background.
+    // Under the old 16-mesh/frame cap, 84 of the 100 chunks were skipped (`continue`), leaving magenta holes.
+    let mut cam = camera_uniforms([0.0, 0.0, 120.0], [0.0, 0.0, 0.0], w, h);
+    cam.background = Background3D::Solid(Color::rgba(255, 0, 255, 255));
+    cam.local_25d_blend = 1.0;
+
+    let grid_res = 5u32;
+    let tile_span = 16.0f32;
+    let mut meshes = Vec::with_capacity(100);
+    let mut textures = Vec::with_capacity(100);
+    let mut instances = Vec::with_capacity(100);
+
+    for ty in 0..10u32 {
+        for tx in 0..10u32 {
+            let id = 10_000 + (ty * 10 + tx) as u64;
+            let key = TileKeyId::new(6, tx, ty, 0);
+            let cx = ((tx as f64) - 4.5) * (tile_span as f64);
+            let cy = ((ty as f64) - 4.5) * (tile_span as f64);
+            let mut verts = Vec::with_capacity((grid_res * grid_res) as usize);
+            for r in 0..grid_res {
+                let v = r as f32 / (grid_res - 1) as f32;
+                let y = (v - 0.5) * tile_span;
+                for c in 0..grid_res {
+                    let u = c as f32 / (grid_res - 1) as f32;
+                    let x = (u - 0.5) * tile_span;
+                    verts.push(RteTileVertex::new([x, y, 0.0], [0.0, 0.0, 1.0], [u, v]));
+                }
+            }
+            meshes.push(Arc::new(RetainedTileMesh {
+                key,
+                revision: 1,
+                center_ecef: [cx, cy, 0.0],
+                grid_res,
+                has_skirts: false,
+                vertices: Arc::new(verts),
+                bounding_radius: tile_span,
+            }));
+            textures.push(Arc::new(RetainedTileTexture {
+                id,
+                revision: 1,
+                width: 4,
+                height: 4,
+                rgba8: Arc::new([40, 190, 90, 255].repeat(16)),
+            }));
+            instances.push(RetainedTileInstance {
+                key,
+                mesh_revision: 1,
+                center_ecef: [cx, cy, 0.0],
+                texture_id: Some(id),
+                texture_revision: 1,
+                uv_rect: [0.0, 0.0, 1.0, 1.0],
+                tint: [1.0, 1.0, 1.0, 1.0],
+                unlit: true,
+                night_texture_id: None,
+                night_texture_revision: 0,
+                night_uv_rect: [0.0, 0.0, 1.0, 1.0],
+            });
+        }
+    }
+
+    retained.update_terrain(Arc::new(RetainedTerrainFrame {
+        camera: cam,
+        geometry_revision: 99,
+        meshes,
+        instances,
+        textures,
+        dynamic_meshes: Vec::new(),
+        environment: None,
+    }));
+
+    // Render single flight frame (`unlimited_upload_budget = false`).
+    let bgra = renderer
+        .render_offscreen(&scene, w, h, true, false)
+        .expect("zoom burst frame 1");
+
+    // Every pixel in the central covered region must have both its mesh AND its green texture ([40, 190, 90])
+    // uploaded and rendered on frame 1 (zero magenta holes and zero dark-slate [0.14, 0.19, 0.27] untextured tiles).
+    let mut bad_pixels = 0usize;
+    for py in 32..(h - 32) {
+        for px in 32..(w - 32) {
+            let idx = ((py * w + px) * 4) as usize;
+            let b = bgra[idx];
+            let g = bgra[idx + 1];
+            let r = bgra[idx + 2];
+            if g < 120 || r > 120 || b > 150 {
+                bad_pixels += 1;
+            }
+        }
+    }
+    assert_eq!(
+        bad_pixels, 0,
+        "LOD zoom burst left missing or untextured chunks on frame 1 ({bad_pixels} non-green pixels)"
+    );
+}
+
+

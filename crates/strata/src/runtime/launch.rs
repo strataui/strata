@@ -230,8 +230,7 @@ pub(crate) fn compute_next_wakeup(
     };
     if let Some(d) = frame_hook_due_in {
         consider(d);
-    }
-    if rt.poll_retained_3d_dirty() {
+    } else if rt.poll_retained_3d_dirty() {
         consider(std::time::Duration::ZERO);
     }
     let uncapped = uncapped_present || rt.has_uncapped_canvas3d();
@@ -462,6 +461,7 @@ where
     let root_fn_rc = std::rc::Rc::new(std::cell::RefCell::new(root_fn));
     let event_handler_rc = std::rc::Rc::new(std::cell::RefCell::new(event_handler));
 
+    let _ = strata_dom::reactive::take_dirty_signals();
     let initial_view = (root_fn_rc.borrow_mut())();
     let runtime = std::rc::Rc::new(std::cell::RefCell::new(AppRuntime::new(
         initial_view,
@@ -469,6 +469,7 @@ where
         config.height as f32,
         1.0,
     )));
+    let _ = strata_dom::reactive::take_dirty_signals();
 
     let transparent_bg = config.transparent
         || config.decoration == strata_platform::WindowDecoration::FramelessTransparent;
@@ -500,6 +501,7 @@ where
             }
         }
         if resize_fired {
+            let _ = strata_dom::reactive::take_dirty_signals();
             let new_view = (root_fn_draw.borrow_mut())();
             runtime_draw.borrow_mut().update_view(new_view);
         }
@@ -669,7 +671,7 @@ where
                     let interval = explicit_interval.unwrap_or_else(primary_refresh_interval);
                     let now = std::time::Instant::now();
                     let deadline = *next_deadline_opt.get_or_insert_with(|| *last_called + interval);
-                    let tolerance = std::time::Duration::from_micros(1200).min(interval / 3);
+                    let tolerance = std::time::Duration::from_micros(600).min(interval / 3);
                     if now + tolerance >= deadline {
                         let elapsed = now.saturating_duration_since(*last_called);
                         *last_called = now;
@@ -901,8 +903,16 @@ where
             eprintln!("[perf] rebuild_trigger: {:?}", event);
         }
 
-        let retained_3d_dirty =
-            !needs_rebuild && !needs_redraw && runtime_event.borrow().poll_retained_3d_dirty();
+        let defer_3d_to_frame_hook = frame_hook_tick.borrow().is_some()
+            && matches!(
+                event,
+                strata_platform::PlatformEvent::MouseMove { .. }
+                    | strata_platform::PlatformEvent::Scroll { .. }
+            );
+        let retained_3d_dirty = !needs_rebuild
+            && !needs_redraw
+            && !defer_3d_to_frame_hook
+            && runtime_event.borrow().poll_retained_3d_dirty();
 
         let refresh_pointer_cursor = |rt: &mut AppRuntime| {
             let (px, py) = rt.last_mouse_pos;
@@ -929,6 +939,7 @@ where
                 }
                 (true, true)
             } else {
+                let _ = strata_dom::reactive::take_dirty_signals();
                 let new_view = (root_fn_event.borrow_mut())();
                 let mut rt = runtime_event.borrow_mut();
                 rt.update_view(new_view);
@@ -982,19 +993,31 @@ where
         }
     };
 
+    let perf_launch = perf_logging_enabled();
+    let mut last_present_instant = std::time::Instant::now();
     // Only 2D/UI updates invalidate the compiled display list; 3D-only retained updates keep it cached.
     let on_event = move |event: &strata_platform::PlatformEvent| -> bool {
+        let t_ev_start = if perf_launch {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
         let (redraw, paint_dirty) = on_event_inner(event);
+        let t_after_inner = t_ev_start.map(|_| std::time::Instant::now());
         if paint_dirty {
             let mut rt = runtime_dirty.borrow_mut();
-            rt.mark_paint_dirty();
+            let rebuild_done = matches!(event, strata_platform::PlatformEvent::AnimationTick)
+                && !rt.is_paint_dirty();
+            if !rebuild_done {
+                rt.mark_paint_dirty();
+            }
             if redraw && strata_platform::gtk_gpu_surface_is_active() {
                 let dl_recompiled = rt.compile_display_list_if_dirty();
                 let mcp_active = rt
                     .mcp_cursor
                     .as_ref()
                     .is_some_and(|c| c.fade_opacity > 0.001);
-                let overlay_dirty = dl_recompiled || mcp_active;
+                let overlay_dirty = dl_recompiled || rebuild_done || mcp_active;
                 let (w, h) = (rt.viewport_width, rt.viewport_height);
                 let cursor_tuple = rt
                     .mcp_cursor
@@ -1015,6 +1038,19 @@ where
                     cursor_pair,
                 ) {
                     rt.acknowledge_retained_3d_presented();
+                    if let (Some(t0), Some(t1)) = (t_ev_start, t_after_inner) {
+                        let now = std::time::Instant::now();
+                        let gap_ms = now.duration_since(last_present_instant).as_secs_f64() * 1000.0;
+                        last_present_instant = now;
+                        let inner_ms = t1.duration_since(t0).as_secs_f64() * 1000.0;
+                        let pres_ms = now.duration_since(t1).as_secs_f64() * 1000.0;
+                        if gap_ms > 10.5 || inner_ms > 3.5 || pres_ms > 5.0 {
+                            eprintln!(
+                                "[perf] slow_frame({:?}, ov={}) gap={:.2}ms inner={:.2}ms gpu_ov_pres={:.2}ms",
+                                event, overlay_dirty, gap_ms, inner_ms, pres_ms
+                            );
+                        }
+                    }
                     return false;
                 }
             }
@@ -1027,6 +1063,19 @@ where
             runtime_dirty
                 .borrow_mut()
                 .acknowledge_retained_3d_presented();
+            if let (Some(t0), Some(t1)) = (t_ev_start, t_after_inner) {
+                let now = std::time::Instant::now();
+                let gap_ms = now.duration_since(last_present_instant).as_secs_f64() * 1000.0;
+                last_present_instant = now;
+                let inner_ms = t1.duration_since(t0).as_secs_f64() * 1000.0;
+                let pres_ms = now.duration_since(t1).as_secs_f64() * 1000.0;
+                if gap_ms > 10.5 || inner_ms > 3.5 || pres_ms > 5.0 {
+                    eprintln!(
+                        "[perf] slow_frame({:?}, active_3d) gap={:.2}ms inner={:.2}ms pres={:.2}ms",
+                        event, gap_ms, inner_ms, pres_ms
+                    );
+                }
+            }
             return false;
         }
         redraw

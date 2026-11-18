@@ -341,3 +341,87 @@ fn test_float_and_clear_resolution() {
     TailwindEngine::apply_class(&mut tw_style, "clear-both");
     assert_eq!(tw_style.clear, Clear::Both);
 }
+
+#[test]
+fn test_pointer_events_tailwind_and_inheritance() {
+    let mut tw_none = ComputedStyle::default();
+    TailwindEngine::apply_class(&mut tw_none, "pointer-events-none");
+    assert_eq!(tw_none.pointer_events, PointerEvents::None);
+    assert_eq!(
+        TailwindEngine::resolve_classes("pointer-events-none").pointer_events,
+        PointerEvents::None
+    );
+
+    let mut tw_auto = tw_none.clone();
+    TailwindEngine::apply_class(&mut tw_auto, "pointer-events-auto");
+    assert_eq!(tw_auto.pointer_events, PointerEvents::Auto);
+    assert_eq!(
+        TailwindEngine::resolve_classes("pointer-events-none pointer-events-auto").pointer_events,
+        PointerEvents::Auto
+    );
+
+    let css = r#"
+        .overlay {
+            pointer-events: none;
+        }
+        .interactive {
+            pointer-events: auto;
+        }
+        .explicit-inherit {
+            pointer-events: inherit;
+        }
+        .explicit-initial {
+            pointer-events: initial;
+        }
+    "#;
+    let sheet = StyleSheet::parse(css).expect("Failed to parse pointer-events stylesheet");
+    let state = PseudoState::default();
+
+    let overlay = CascadeSolver::resolve("div", &["overlay"], None, None, &[&sheet], None, &state);
+    assert_eq!(overlay.pointer_events, PointerEvents::None);
+
+    let inherited_child = CascadeSolver::resolve(
+        "div",
+        &[],
+        None,
+        None,
+        &[&sheet],
+        Some(&overlay),
+        &state,
+    );
+    assert_eq!(inherited_child.pointer_events, PointerEvents::None);
+
+    let explicit_inherit = CascadeSolver::resolve(
+        "div",
+        &["explicit-inherit"],
+        None,
+        None,
+        &[&sheet],
+        Some(&overlay),
+        &state,
+    );
+    assert_eq!(explicit_inherit.pointer_events, PointerEvents::None);
+
+    let interactive_child = CascadeSolver::resolve(
+        "button",
+        &["interactive"],
+        None,
+        None,
+        &[&sheet],
+        Some(&overlay),
+        &state,
+    );
+    assert_eq!(interactive_child.pointer_events, PointerEvents::Auto);
+
+    let reset_initial = CascadeSolver::resolve(
+        "div",
+        &["explicit-initial"],
+        None,
+        None,
+        &[&sheet],
+        Some(&overlay),
+        &state,
+    );
+    assert_eq!(reset_initial.pointer_events, PointerEvents::Auto);
+}
+

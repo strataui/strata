@@ -7,6 +7,12 @@ use strata_render::compositor::{DisplayList, DrawCommand};
 use strata_render::{FillRule, StrokeLineCap, StrokeLineJoin};
 use strata_style::types::{BorderStyle, FontStyle, FontWeight, TextDecoration};
 
+#[inline]
+fn gtk_perf_logging_enabled() -> bool {
+    static PERF_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PERF_ENABLED.get_or_init(|| std::env::var_os("STRATA_PERF_LOG").is_some())
+}
+
 /// Draws a rounded rectangle path into a Cairo graphics context.
 pub fn cairo_rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
     let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
@@ -1614,6 +1620,48 @@ pub fn render_display_list_to_cairo(cr: &cairo::Context, list: &DisplayList) {
     render_display_list_to_cairo_impl(cr, list, false);
 }
 
+fn compute_opacity_group_clip(rest: &[DrawCommand]) -> Option<(f64, f64, f64, f64)> {
+    let mut depth = 1usize;
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    for cmd in rest {
+        match cmd {
+            DrawCommand::PushOpacity { .. } => depth += 1,
+            DrawCommand::PopOpacity => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            DrawCommand::PushTransform { .. } | DrawCommand::DrawViewport3D { .. } => {
+                return None;
+            }
+            _ => {
+                if let Some(b) = cmd.bounds() {
+                    if b.width > 0.0 && b.height > 0.0 {
+                        min_x = min_x.min(b.x);
+                        min_y = min_y.min(b.y);
+                        max_x = max_x.max(b.x + b.width);
+                        max_y = max_y.max(b.y + b.height);
+                    }
+                }
+            }
+        }
+    }
+    if min_x < max_x && min_y < max_y {
+        let pad = 8.0f64;
+        let x = (min_x as f64 - pad).floor();
+        let y = (min_y as f64 - pad).floor();
+        let w = ((max_x as f64 + pad).ceil() - x).max(1.0);
+        let h = ((max_y as f64 + pad).ceil() - y).max(1.0);
+        Some((x, y, w, h))
+    } else {
+        None
+    }
+}
+
 fn render_display_list_to_cairo_impl(
     cr: &cairo::Context,
     list: &DisplayList,
@@ -1625,8 +1673,10 @@ fn render_display_list_to_cairo_impl(
         .unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
     let mut operator_stack: Vec<cairo::Operator> = Vec::new();
     let mut opacity_stack: Vec<f64> = Vec::new();
+    let mut shared_layout: Option<pango::Layout> = None;
+    let cmds = list.commands();
 
-    for cmd in list.commands() {
+    for (cmd_idx, cmd) in cmds.iter().enumerate() {
         if !cmd.is_clip() && !cmd.is_state_command() {
             let (cx1, cy1, cx2, cy2) = current_clip;
             if let Some(b) = cmd.bounds() {
@@ -1831,7 +1881,11 @@ fn render_display_list_to_cairo_impl(
                 is_monospace,
                 font_family,
             } => {
-                let layout = create_parity_layout(cr);
+                let layout = shared_layout.get_or_insert_with(|| create_parity_layout(cr));
+                layout.set_width(-1);
+                layout.set_wrap(pango::WrapMode::Word);
+                layout.set_alignment(pango::Alignment::Left);
+                layout.set_justify(false);
                 let mut font_desc = pango::FontDescription::new();
                 let family = resolved_font_family(*font_family, *is_monospace);
                 font_desc.set_family(&family);
@@ -1876,10 +1930,15 @@ fn render_display_list_to_cairo_impl(
                     .max(*font_size * *line_height) as f64;
                 let vert_offset = ((target_h - pango_h_px) / 2.0).max(0.0);
                 cr.move_to(origin.0 as f64, origin.1 as f64 + vert_offset);
-                pangocairo::functions::show_layout(cr, &layout);
+                pangocairo::functions::show_layout(cr, layout);
             }
             DrawCommand::DrawTextFragments { fragments } => {
                 let clip_opt = cr.clip_extents().ok();
+                let layout = shared_layout.get_or_insert_with(|| create_parity_layout(cr));
+                layout.set_width(-1);
+                layout.set_wrap(pango::WrapMode::Word);
+                layout.set_alignment(pango::Alignment::Left);
+                layout.set_justify(false);
                 for frag in fragments {
                     if frag.text.is_empty() && frag.style.background_color.is_none() {
                         continue;
@@ -1913,7 +1972,6 @@ fn render_display_list_to_cairo_impl(
 
                     // 2. Fragment text rendering with exact font weight and style
                     if !frag.text.is_empty() {
-                        let layout = create_parity_layout(cr);
                         let mut font_desc = pango::FontDescription::new();
                         let family =
                             resolved_font_family(frag.font_family, frag.style.is_monospace);
@@ -1940,7 +1998,7 @@ fn render_display_list_to_cairo_impl(
                         );
 
                         cr.move_to(frag.bounds.x as f64, frag.bounds.y as f64);
-                        pangocairo::functions::show_layout(cr, &layout);
+                        pangocairo::functions::show_layout(cr, layout);
 
                         // 3. Text decorations (Underline, LineThrough)
                         let pango_baseline = {
@@ -2190,6 +2248,14 @@ fn render_display_list_to_cairo_impl(
                 let _ = cr.paint();
             }
             DrawCommand::PushOpacity { alpha } => {
+                let _ = cr.save();
+                if let Some((bx, by, bw, bh)) = compute_opacity_group_clip(&cmds[cmd_idx + 1..]) {
+                    cr.rectangle(bx, by, bw, bh);
+                    cr.clip();
+                    current_clip = cr
+                        .clip_extents()
+                        .unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
+                }
                 cr.push_group();
                 opacity_stack.push(*alpha as f64);
             }
@@ -2197,6 +2263,10 @@ fn render_display_list_to_cairo_impl(
                 if let Some(alpha) = opacity_stack.pop() {
                     let _ = cr.pop_group_to_source();
                     let _ = cr.paint_with_alpha(alpha);
+                    let _ = cr.restore();
+                    current_clip = cr
+                        .clip_extents()
+                        .unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
                 }
             }
             DrawCommand::PushFilter { .. } => {
@@ -2374,9 +2444,8 @@ fn render_display_list_to_cairo_impl(
         }
     }
 
-    static PERF_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     static RENDER_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    if *PERF_ENABLED.get_or_init(|| std::env::var_os("STRATA_PERF_LOG").is_some()) {
+    if gtk_perf_logging_enabled() {
         let frame = RENDER_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if frame < 6 || frame.is_multiple_of(120) {
             let (w, h) = cr
@@ -2611,6 +2680,8 @@ mod gtk_gpu_x11 {
         mapped: bool,
         overlay_uploaded: bool,
         last_overlay_hash: Option<u64>,
+        overlay_surface: Option<(u32, u32, cairo::ImageSurface)>,
+        last_overlay_painted_rects: Vec<(f64, f64, f64, f64)>,
         last_scene: Option<Arc<Scene3D>>,
         last_viewport: Option<[f32; 4]>,
     }
@@ -2646,6 +2717,8 @@ mod gtk_gpu_x11 {
             self.presenter.resize(w, h);
             self.overlay_uploaded = false;
             self.last_overlay_hash = None;
+            self.overlay_surface = None;
+            self.last_overlay_painted_rects.clear();
             self.last_viewport = None;
         }
 
@@ -2716,6 +2789,79 @@ mod gtk_gpu_x11 {
                     h_acc.push_u64(bounds.width.to_bits() as u64);
                     h_acc.push_u64(bounds.height.to_bits() as u64);
                 }
+                DrawCommand::DrawRoundedRect {
+                    bounds,
+                    color,
+                    border_radius,
+                    border_width,
+                    border_color,
+                } => {
+                    let rgba_u64 = |c: strata_primitives::Rgba| -> u64 {
+                        ((c.r as u64) << 24)
+                            | ((c.g as u64) << 16)
+                            | ((c.b as u64) << 8)
+                            | (c.a as u64)
+                    };
+                    h_acc.push_u64(0x11);
+                    h_acc.push_u64(bounds.x.to_bits() as u64);
+                    h_acc.push_u64(bounds.y.to_bits() as u64);
+                    h_acc.push_u64(bounds.width.to_bits() as u64);
+                    h_acc.push_u64(bounds.height.to_bits() as u64);
+                    h_acc.push_u64(rgba_u64(*color));
+                    h_acc.push_u64(border_radius.top_left.to_bits() as u64);
+                    h_acc.push_u64(border_radius.top_right.to_bits() as u64);
+                    h_acc.push_u64(border_radius.bottom_right.to_bits() as u64);
+                    h_acc.push_u64(border_radius.bottom_left.to_bits() as u64);
+                    h_acc.push_u64(border_width.top.to_bits() as u64);
+                    h_acc.push_u64(border_width.right.to_bits() as u64);
+                    h_acc.push_u64(border_width.bottom.to_bits() as u64);
+                    h_acc.push_u64(border_width.left.to_bits() as u64);
+                    if let Some(bc) = border_color {
+                        h_acc.push_u64(rgba_u64(*bc));
+                    }
+                }
+                DrawCommand::DrawTextFragments { fragments } => {
+                    let rgba_u64 = |c: strata_primitives::Rgba| -> u64 {
+                        ((c.r as u64) << 24)
+                            | ((c.g as u64) << 16)
+                            | ((c.b as u64) << 8)
+                            | (c.a as u64)
+                    };
+                    h_acc.push_u64(0x22);
+                    h_acc.push_u64(fragments.len() as u64);
+                    for f in fragments {
+                        let _ = h_acc.write_str(&f.text);
+                        h_acc.push_u64(f.bounds.x.to_bits() as u64);
+                        h_acc.push_u64(f.bounds.y.to_bits() as u64);
+                        h_acc.push_u64(f.bounds.width.to_bits() as u64);
+                        h_acc.push_u64(f.bounds.height.to_bits() as u64);
+                        h_acc.push_u64(rgba_u64(f.style.color));
+                        h_acc.push_u64(
+                            f.style
+                                .background_color
+                                .map(rgba_u64)
+                                .unwrap_or(0xdead_beef),
+                        );
+                        h_acc.push_u64(f.style.font_size.to_bits() as u64);
+                        h_acc.push_u64(f.style.font_weight as u64);
+                        h_acc.push_u64(f.style.font_style as u64);
+                        h_acc.push_u64(f.style.text_decoration as u64);
+                    }
+                }
+                DrawCommand::PushOpacity { alpha } => {
+                    h_acc.push_u64(0x33);
+                    h_acc.push_u64(alpha.to_bits() as u64);
+                }
+                DrawCommand::PopOpacity => h_acc.push_u64(0x34),
+                DrawCommand::PushClip { bounds, .. } => {
+                    h_acc.push_u64(0x35);
+                    h_acc.push_u64(bounds.x.to_bits() as u64);
+                    h_acc.push_u64(bounds.y.to_bits() as u64);
+                    h_acc.push_u64(bounds.width.to_bits() as u64);
+                    h_acc.push_u64(bounds.height.to_bits() as u64);
+                }
+                DrawCommand::PopClip => h_acc.push_u64(0x36),
+                DrawCommand::PushBackdropFilter { .. } | DrawCommand::PopBackdropFilter => {}
                 other => {
                     let _ = write!(h_acc, "{:?}", other);
                 }
@@ -2806,7 +2952,7 @@ mod gtk_gpu_x11 {
             }
         };
 
-        if std::env::var_os("STRATA_PERF_LOG").is_some() {
+        if super::gtk_perf_logging_enabled() {
             eprintln!(
                 "[perf] wgpu direct X11 swapchain ready ({}x{}, requested={:?}, active={:?})",
                 w,
@@ -2825,26 +2971,52 @@ mod gtk_gpu_x11 {
             mapped: true,
             overlay_uploaded: false,
             last_overlay_hash: None,
+            overlay_surface: None,
+            last_overlay_painted_rects: Vec::new(),
             last_scene: None,
             last_viewport: None,
         })
     }
 
-    fn rasterize_overlay_bgra(
+    fn rasterize_and_upload_overlay(
+        state: &mut GtkGpuSurfaceState,
         list: &DisplayList,
         w: u32,
         h: u32,
         transparent_bg: bool,
         cursor_overlay: Option<(&crate::McpCursorState, &crate::CursorTheme)>,
-    ) -> Option<Vec<u8>> {
-        let mut surf =
-            cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32).ok()?;
+    ) -> bool {
+        let needs_new_surf = state
+            .overlay_surface
+            .as_ref()
+            .map(|(sw, sh, _)| *sw != w || *sh != h)
+            .unwrap_or(true);
+        if needs_new_surf {
+            let Ok(surf) = cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32)
+            else {
+                return false;
+            };
+            state.overlay_surface = Some((w, h, surf));
+            state.last_overlay_painted_rects.clear();
+        }
+        let Some((_, _, ref mut surf)) = state.overlay_surface else {
+            return false;
+        };
         {
-            let cr = cairo::Context::new(&surf).ok()?;
+            let Ok(cr) = cairo::Context::new(&*surf) else {
+                return false;
+            };
             cr.set_font_options(&super::parity_font_options());
             if transparent_bg {
                 cr.set_operator(cairo::Operator::Clear);
-                let _ = cr.paint();
+                if state.last_overlay_painted_rects.is_empty() {
+                    let _ = cr.paint();
+                } else {
+                    for &(rx, ry, rw, rh) in &state.last_overlay_painted_rects {
+                        cr.rectangle(rx, ry, rw, rh);
+                    }
+                    let _ = cr.fill();
+                }
             } else {
                 cr.set_operator(cairo::Operator::Source);
                 cr.set_source_rgb(0.035, 0.035, 0.043);
@@ -2865,12 +3037,48 @@ mod gtk_gpu_x11 {
                 }
             }
         }
+        state.last_overlay_painted_rects.clear();
+        let has_unbounded = list
+            .commands()
+            .iter()
+            .any(|c| matches!(c, DrawCommand::PushTransform { .. }));
+        if transparent_bg && !has_unbounded {
+            let pad = 12.0f64;
+            for cmd in list.commands() {
+                if matches!(cmd, DrawCommand::DrawViewport3D { .. }) || cmd.is_clip() {
+                    continue;
+                }
+                if let Some(b) = cmd.bounds() {
+                    if b.width > 0.0 && b.height > 0.0 {
+                        let rx = (b.x as f64 - pad).floor().max(0.0);
+                        let ry = (b.y as f64 - pad).floor().max(0.0);
+                        let rw = ((b.x + b.width) as f64 + pad).ceil() - rx;
+                        let rh = ((b.y + b.height) as f64 + pad).ceil() - ry;
+                        state.last_overlay_painted_rects.push((rx, ry, rw, rh));
+                    }
+                }
+            }
+            if let Some((mc, _)) = cursor_overlay {
+                if mc.fade_opacity > 0.001 {
+                    state.last_overlay_painted_rects.push((
+                        ((mc.current_x as f64) - 32.0).max(0.0),
+                        ((mc.current_y as f64) - 32.0).max(0.0),
+                        64.0,
+                        64.0,
+                    ));
+                }
+            }
+        }
         surf.flush();
         let stride = surf.stride() as usize;
         let row_bytes = (w as usize) * 4;
-        let data = surf.data().ok()?;
+        let Ok(data) = surf.data() else {
+            return false;
+        };
         if stride == row_bytes {
-            Some(data[..row_bytes * (h as usize)].to_vec())
+            state
+                .presenter
+                .upload_ui_overlay_bgra(w, h, &data[..row_bytes * (h as usize)]);
         } else {
             let mut out = vec![0u8; row_bytes * (h as usize)];
             for row in 0..(h as usize) {
@@ -2879,8 +3087,9 @@ mod gtk_gpu_x11 {
                 out[dst_off..dst_off + row_bytes]
                     .copy_from_slice(&data[src_off..src_off + row_bytes]);
             }
-            Some(out)
+            state.presenter.upload_ui_overlay_bgra(w, h, &out);
         }
+        true
     }
 
     pub(super) fn try_present_display_list(
@@ -2936,7 +3145,7 @@ mod gtk_gpu_x11 {
                 match init_state_from_drawing_area(&da, w, h, present_mode) {
                     Ok(state) => *cell = Some(state),
                     Err(e) => {
-                        if std::env::var_os("STRATA_PERF_LOG").is_some() {
+                        if super::gtk_perf_logging_enabled() {
                             eprintln!("[perf] wgpu X11 swapchain init failed: {e}");
                         }
                         GPU_SURFACE_INIT_FAILED.with(|f| f.set(true));
@@ -2952,15 +3161,29 @@ mod gtk_gpu_x11 {
             state.set_mapped(true);
 
             if overlay_dirty || !state.overlay_uploaded {
+                let t_ov0 = std::time::Instant::now();
                 let overlay_hash =
                     compute_overlay_hash(list, w, h, transparent_bg, cursor_overlay);
+                let t_hash = t_ov0.elapsed().as_secs_f64() * 1000.0;
                 if !state.overlay_uploaded || state.last_overlay_hash != Some(overlay_hash) {
-                    if let Some(bgra) =
-                        rasterize_overlay_bgra(list, w, h, transparent_bg, cursor_overlay)
-                    {
-                        state.presenter.upload_ui_overlay_bgra(w, h, &bgra);
+                    let t_r0 = std::time::Instant::now();
+                    if rasterize_and_upload_overlay(
+                        state,
+                        list,
+                        w,
+                        h,
+                        transparent_bg,
+                        cursor_overlay,
+                    ) {
                         state.overlay_uploaded = true;
                         state.last_overlay_hash = Some(overlay_hash);
+                    }
+                    let t_rast = t_r0.elapsed().as_secs_f64() * 1000.0;
+                    if super::gtk_perf_logging_enabled() && (t_hash + t_rast) > 1.2 {
+                        eprintln!(
+                            "[perf] overlay_upload hash={:.2}ms rast_up={:.2}ms",
+                            t_hash, t_rast
+                        );
                     }
                 }
             }
@@ -3896,8 +4119,11 @@ where
                 },
             );
         } else {
-            let clamped = delay.max(std::time::Duration::from_millis(1));
-            gtk::glib::timeout_add_local_once(clamped, run_tick);
+            let rounded_ms = ((delay.as_micros() + 500) / 1000).max(1) as u64;
+            gtk::glib::timeout_add_local_once(
+                std::time::Duration::from_millis(rounded_ms),
+                run_tick,
+            );
         }
     }
 
@@ -4468,14 +4694,17 @@ fn compute_tick_rearm_decision(
 }
 
 thread_local! {
-    static MEASURE_SURFACE_AND_CR: (cairo::ImageSurface, cairo::Context) = {
+    static MEASURE_SURFACE_AND_CR: (cairo::ImageSurface, cairo::Context, pango::Context, pango::Layout) = {
         let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 1, 1)
             .expect("failed to create cairo measurement surface");
         let cr = cairo::Context::new(&surface)
             .expect("failed to create cairo measurement context");
         // Measurement must use the same unhinted, grayscale font options as paint.
         cr.set_font_options(&parity_font_options());
-        (surface, cr)
+        let pango_ctx = pangocairo::functions::create_context(&cr);
+        pango_ctx.set_round_glyph_positions(false);
+        let layout = pango::Layout::new(&pango_ctx);
+        (surface, cr, pango_ctx, layout)
     };
 }
 
@@ -4573,8 +4802,7 @@ pub fn pango_measure_text(
         return (0.0, font_size * line_height_multiplier);
     }
 
-    MEASURE_SURFACE_AND_CR.with(|(_, cr)| {
-        let layout = create_parity_layout(cr);
+    MEASURE_SURFACE_AND_CR.with(|(_, _, _, layout)| {
         let mut font_desc = pango::FontDescription::new();
         // Must match the family used by the DrawTextFragments rasterizer exactly,
         // otherwise layout widths diverge from painted glyph widths.
@@ -4590,6 +4818,8 @@ pub fn pango_measure_text(
         if let Some(mw) = max_width {
             layout.set_width((mw * pango::SCALE as f32) as i32);
             layout.set_wrap(pango::WrapMode::WordChar);
+        } else {
+            layout.set_width(-1);
         }
 
         let (p_w, p_h) = layout.size();
@@ -4613,8 +4843,7 @@ pub fn pango_measure_styled_text(
         return (0.0, font_size * line_height_multiplier);
     }
 
-    MEASURE_SURFACE_AND_CR.with(|(_, cr)| {
-        let layout = create_parity_layout(cr);
+    MEASURE_SURFACE_AND_CR.with(|(_, _, _, layout)| {
         let mut font_desc = pango::FontDescription::new();
         if is_monospace {
             font_desc.set_family(MONO_FONT_FAMILY);
@@ -4637,6 +4866,8 @@ pub fn pango_measure_styled_text(
         if let Some(mw) = max_width {
             layout.set_width((mw * pango::SCALE as f32) as i32);
             layout.set_wrap(pango::WrapMode::WordChar);
+        } else {
+            layout.set_width(-1);
         }
 
         let (p_w, p_h) = layout.size();
@@ -4659,8 +4890,7 @@ pub fn pango_measure_text_family(
         return (0.0, font_size * line_height_multiplier);
     }
 
-    MEASURE_SURFACE_AND_CR.with(|(_, cr)| {
-        let layout = create_parity_layout(cr);
+    MEASURE_SURFACE_AND_CR.with(|(_, _, _, layout)| {
         let mut font_desc = pango::FontDescription::new();
         let family = resolved_font_family(font_family, is_monospace);
         font_desc.set_family(&family);
@@ -4671,6 +4901,8 @@ pub fn pango_measure_text_family(
         if let Some(mw) = max_width {
             layout.set_width((mw * pango::SCALE as f32) as i32);
             layout.set_wrap(pango::WrapMode::WordChar);
+        } else {
+            layout.set_width(-1);
         }
 
         let (p_w, p_h) = layout.size();
@@ -4695,8 +4927,7 @@ pub fn pango_measure_styled_text_family(
         return (0.0, font_size * line_height_multiplier);
     }
 
-    MEASURE_SURFACE_AND_CR.with(|(_, cr)| {
-        let layout = create_parity_layout(cr);
+    MEASURE_SURFACE_AND_CR.with(|(_, _, _, layout)| {
         let mut font_desc = pango::FontDescription::new();
         let family = resolved_font_family(font_family, is_monospace);
         font_desc.set_family(&family);
@@ -4716,6 +4947,8 @@ pub fn pango_measure_styled_text_family(
         if let Some(mw) = max_width {
             layout.set_width((mw * pango::SCALE as f32) as i32);
             layout.set_wrap(pango::WrapMode::WordChar);
+        } else {
+            layout.set_width(-1);
         }
 
         let (p_w, p_h) = layout.size();
@@ -4731,9 +4964,7 @@ pub fn pango_font_metrics(
     font_size: f32,
     is_monospace: bool,
 ) -> (f32, f32, f32) {
-    MEASURE_SURFACE_AND_CR.with(|(_, cr)| {
-        let context = pangocairo::functions::create_context(cr);
-        context.set_round_glyph_positions(false);
+    MEASURE_SURFACE_AND_CR.with(|(_, _, context, _)| {
         let mut font_desc = pango::FontDescription::new();
         let family = resolved_font_family(font_family, is_monospace);
         font_desc.set_family(&family);
