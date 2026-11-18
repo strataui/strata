@@ -141,7 +141,7 @@ impl WgpuWindowPresenter {
             present_mode: selected_mode,
             alpha_mode,
             view_formats: vec![],
-            desired_maximum_frame_latency: 1,
+            desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &cfg);
 
