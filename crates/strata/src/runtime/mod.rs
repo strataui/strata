@@ -772,22 +772,35 @@ impl AppRuntime {
             ) if t1 == t2
                 && *t1 != strata_dom::Tag::Svg
                 && !layout_node.is_top_layer
-                && c1.len() == c2.len()
-                && layout_node.children.len() == c2.len()
+                && layout_node.children.len() == c1.len()
                 && Self::element_attr_value(a1, "key") == Self::element_attr_value(a2, "key")
                 && Self::element_attr_value(a1, "id") == Self::element_attr_value(a2, "id") =>
             {
-                let mut children_changed = false;
-                for (i, (oc, nc)) in c1.iter().zip(c2.iter()).enumerate() {
-                    match Self::reconcile_layout_subtree(oc, nc, &mut layout_node.children[i], ctx)
-                    {
+                let mut children_changed = c1.len() != c2.len();
+                let common = c1.len().min(c2.len());
+                for i in 0..common {
+                    match Self::reconcile_layout_subtree(
+                        &c1[i],
+                        &c2[i],
+                        &mut layout_node.children[i],
+                        ctx,
+                    ) {
                         Some(false) => {}
                         Some(true) => children_changed = true,
                         None => {
                             layout_node.children[i] =
-                                Self::build_layout_tree_with_interaction(nc, ctx);
+                                Self::build_layout_tree_with_interaction(&c2[i], ctx);
                             children_changed = true;
                         }
+                    }
+                }
+                if c2.len() < c1.len() {
+                    layout_node.children.truncate(c2.len());
+                } else if c2.len() > c1.len() {
+                    for nc in &c2[common..] {
+                        layout_node
+                            .children
+                            .push(Self::build_layout_tree_with_interaction(nc, ctx));
                     }
                 }
 
@@ -839,8 +852,7 @@ impl AppRuntime {
         }
         let build_start = std::time::Instant::now();
         let reconciled = if sheets_unchanged
-            && !self.has_resize_listeners
-            && self.current_hover_path.is_none()
+            && (self.current_hover_path.is_none() || self.hover_is_paint_only())
             && self.current_focus_path.is_none()
         {
             let ctx = crate::runtime::InteractionContext {

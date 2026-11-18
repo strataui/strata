@@ -930,35 +930,27 @@ fn cloud_density_to_height(d: f32) -> f32 {
     return dome * (0.62 + 0.38 * sqrt(x));
 }
 
-fn sample_cloud_filtered_density(uv: vec2<f32>, dims: vec2<f32>, uv_lod: f32, detail_w: f32) -> f32 {
-    let d_lod = sample_cloud_density(uv, uv_lod);
-    if (detail_w <= 0.01) {
-        return d_lod;
-    }
-    let d_bic = cloud_rgba_to_density(sample_cloud_bicubic_rgba(uv, dims));
-    return mix(d_lod, d_bic, detail_w);
-}
-
 @vertex
 fn vs_cloud(@location(0) pos_u: vec4<f32>, @location(1) norm_v: vec4<f32>) -> CloudOut {
     let d = normalize(pos_u.xyz);
     let eye_pos = cam.eye_high.xyz + cam.eye_low.xyz;
     let eye_r = max(length(eye_pos), 1.0);
-    let u_v = fract((atan2(d.y, d.x) + cam.cloud_params.y) / 6.28318530718 + 0.5);
-    let v_v = clamp(0.5 - asin(clamp(d.z, -1.0, 1.0)) / 3.14159265359, 0.001, 0.999);
-    // Smooth 5-tap mip-filtered heightmap displacement from orbit/high altitude; smoothly levels out
-    // onto the lifting condensation base when below the cloud deck so 120-km icosphere edges never
-    // tilt near the horizon (while fs_cloud applies full per-pixel parallax & 3D heightmap normals).
-    let eps = vec2<f32>(0.0018, 0.0018);
-    let c0 = sample_cloud_density(vec2<f32>(u_v, v_v), 1.5);
-    let ce = sample_cloud_density(vec2<f32>(fract(u_v + eps.x), v_v), 1.5);
-    let cw = sample_cloud_density(vec2<f32>(fract(u_v - eps.x), v_v), 1.5);
-    let cn = sample_cloud_density(vec2<f32>(u_v, clamp(v_v - eps.y, 0.001, 0.999)), 1.5);
-    let cs = sample_cloud_density(vec2<f32>(u_v, clamp(v_v + eps.y, 0.001, 0.999)), 1.5);
-    let h_vert = cloud_density_to_height(c0 * 0.40 + (ce + cw + cn + cs) * 0.15);
     let vert_disp_w = smoothstep(18000.0, 160000.0, max(eye_r - 6391500.0, 0.0));
 
-    let cloud_r = mix(6391500.0, 6390200.0 + h_vert * 4200.0, vert_disp_w);
+    var cloud_r = 6391500.0;
+    if (vert_disp_w > 0.001) {
+        let u_v = fract((atan2(d.y, d.x) + cam.cloud_params.y) / 6.28318530718 + 0.5);
+        let v_v = clamp(0.5 - asin(clamp(d.z, -1.0, 1.0)) / 3.14159265359, 0.001, 0.999);
+        let eps = vec2<f32>(0.0018, 0.0018);
+        let c0 = sample_cloud_density(vec2<f32>(u_v, v_v), 1.5);
+        let ce = sample_cloud_density(vec2<f32>(fract(u_v + eps.x), v_v), 1.5);
+        let cw = sample_cloud_density(vec2<f32>(fract(u_v - eps.x), v_v), 1.5);
+        let cn = sample_cloud_density(vec2<f32>(u_v, clamp(v_v - eps.y, 0.001, 0.999)), 1.5);
+        let cs = sample_cloud_density(vec2<f32>(u_v, clamp(v_v + eps.y, 0.001, 0.999)), 1.5);
+        let h_vert = cloud_density_to_height(c0 * 0.40 + (ce + cw + cn + cs) * 0.15);
+        cloud_r = mix(6391500.0, 6390200.0 + h_vert * 4200.0, vert_disp_w);
+    }
+
     let world_pos = d * cloud_r;
     let world_rel = (world_pos - cam.eye_high.xyz) - cam.eye_low.xyz;
     var clip = cam.view_proj_rte * vec4<f32>(world_rel, 1.0);
@@ -1044,31 +1036,40 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
         v = clamp(v_base + wv * dv * warp_amp, 0.001, 0.999);
     }
 
-    // Smooth 2-step view-ray heightmap parallax derived from cloud transparency/density
+    // Smooth view-ray heightmap parallax derived from cloud transparency/density
+    let d_pre = sample_cloud_density(vec2<f32>(u, v), uv_lod + 0.5);
+    if (d_pre <= 0.004 && detail_w <= 0.01) {
+        discard;
+    }
     let v_east = dot(view_dir, t_east);
     let v_north = dot(view_dir, t_north);
     let v_rad = max(abs(dot(view_dir, d)), 0.25);
-    let h_pre = cloud_density_to_height(sample_cloud_density(vec2<f32>(u, v), uv_lod + 0.6));
+    let h_pre = cloud_density_to_height(d_pre);
     let par_amp = mix(0.0015, 0.00075, mode_25d);
     let par1 = (h_pre - 0.22) * par_amp / v_rad;
     let u_p1 = fract(u - v_east * par1 * clamp(east_len, 0.25, 1.0));
     let v_p1 = clamp(v + v_north * par1, 0.001, 0.999);
-    let h_mid = 0.5 * (h_pre + cloud_density_to_height(sample_cloud_filtered_density(vec2<f32>(u_p1, v_p1), dims, uv_lod, detail_w)));
+    let h_mid = 0.5 * (h_pre + cloud_density_to_height(sample_cloud_density(vec2<f32>(u_p1, v_p1), uv_lod)));
     let par2 = (h_mid - 0.22) * par_amp / v_rad;
     u = fract(u - v_east * par2 * clamp(east_len, 0.25, 1.0));
     v = clamp(v + v_north * par2, 0.001, 0.999);
 
-    let s_lod = sample_cloud_rgba_raw(vec2<f32>(u, v), uv_lod);
-    let s_c = select(s_lod, mix(s_lod, sample_cloud_bicubic_rgba(vec2<f32>(u, v), dims), detail_w), detail_w > 0.01);
+    var s_c = sample_cloud_rgba_raw(vec2<f32>(u, v), uv_lod);
+    if (detail_w > 0.01) {
+        s_c = mix(s_c, sample_cloud_bicubic_rgba(vec2<f32>(u, v), dims), detail_w);
+    }
     let d_c = cloud_rgba_to_density(s_c);
+    if (d_c <= 0.004) {
+        discard;
+    }
 
     // Sample smoothed heightmap neighborhood for C1-continuous 3D cloud normals & self-shadowing
     let grad_step_u = du * mix(1.75, 1.35, detail_w);
     let grad_step_v = dv * mix(1.75, 1.35, detail_w);
-    let d_e = sample_cloud_filtered_density(vec2<f32>(fract(u + grad_step_u), v), dims, uv_lod, detail_w);
-    let d_w = sample_cloud_filtered_density(vec2<f32>(fract(u - grad_step_u), v), dims, uv_lod, detail_w);
-    let d_n = sample_cloud_filtered_density(vec2<f32>(u, clamp(v - grad_step_v, 0.001, 0.999)), dims, uv_lod, detail_w);
-    let d_s = sample_cloud_filtered_density(vec2<f32>(u, clamp(v + grad_step_v, 0.001, 0.999)), dims, uv_lod, detail_w);
+    let d_e = sample_cloud_density(vec2<f32>(fract(u + grad_step_u), v), uv_lod);
+    let d_w = sample_cloud_density(vec2<f32>(fract(u - grad_step_u), v), uv_lod);
+    let d_n = sample_cloud_density(vec2<f32>(u, clamp(v - grad_step_v, 0.001, 0.999)), uv_lod);
+    let d_s = sample_cloud_density(vec2<f32>(u, clamp(v + grad_step_v, 0.001, 0.999)), uv_lod);
 
     var fbm_billow = 0.0;
     let base_density = 0.44 * d_c + 0.14 * (d_e + d_w + d_n + d_s);
@@ -1127,7 +1128,7 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
         fract(u + l_east * du * 2.2),
         clamp(v - l_north * dv * 2.2, 0.001, 0.999),
     );
-    let h_sun = cloud_density_to_height(sample_cloud_filtered_density(sun_uv, dims, uv_lod, detail_w));
+    let h_sun = cloud_density_to_height(sample_cloud_density(sun_uv, uv_lod));
 
     let slope_lit = clamp(dot(n_cloud, relief_light), 0.0, 1.0);
     let horizon_shadow = clamp((h_c - h_sun) * 2.1, -0.28, 0.28);
