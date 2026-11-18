@@ -401,7 +401,7 @@ fn noise3(p: vec3<f32>) -> f32 {
 
 @fragment
 fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
-    let sky_grad = mix(cam.sky_top, cam.sky_bottom, clamp(in.uv_y, 0.0, 1.0));
+    let sky_grad_2d = mix(cam.sky_top, cam.sky_bottom, clamp(in.uv_y, 0.0, 1.0));
     let p4 = cam.inv_view_proj_rte * vec4<f32>(in.ndc, 0.5, 1.0);
     let w_safe = select(p4.w, select(-1e-6, 1e-6, p4.w >= 0.0), abs(p4.w) < 1e-6);
     let rd = normalize(p4.xyz / w_safe);
@@ -410,8 +410,38 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let texel_px = (cube_dim * 0.5) * length(fwidth(rd_icrf));
     let sky_lod = max(log2(max(texel_px, 1.0)), 0.0);
 
+    let sun_dir = normalize(cam.sun_dir.xyz);
+    let eye_pos = cam.eye_high.xyz + cam.eye_low.xyz;
+    let eye_r = length(eye_pos);
+    var atmo_sky = sky_grad_2d.rgb;
+    if (eye_r > 1000000.0) {
+        let eye_up = eye_pos / eye_r;
+        let r_earth = 6378137.0;
+        let horiz_sin = -sqrt(max(eye_r * eye_r - r_earth * r_earth, 0.0)) / max(eye_r, r_earth);
+        let mu = dot(rd, eye_up);
+        let elev = mu - horiz_sin;
+        let h_elev = clamp(max(elev, 0.0), 0.0, 1.0);
+
+        let day_scale = clamp(max(cam.sky_bottom.b, max(cam.sky_bottom.r, cam.sky_bottom.g)), 0.0, 1.0);
+        let zenith_col = vec3<f32>(0.10, 0.25, 0.55) * day_scale;
+        let mid_col = vec3<f32>(0.27, 0.53, 0.86) * day_scale;
+        let horizon_mist = vec3<f32>(0.75, 0.86, 0.96) * day_scale;
+
+        let zenith_t = pow(clamp(h_elev * 1.85, 0.0, 1.0), 0.58);
+        let base_dome = mix(mid_col, zenith_col, zenith_t);
+        let optical_haze = exp(-h_elev * 10.5);
+        let mie_sun = pow(max(dot(rd, sun_dir), 0.0), 5.0) * (1.0 - smoothstep(0.0, 0.45, h_elev));
+        let warm_mist = horizon_mist + vec3<f32>(0.12, 0.09, 0.04) * mie_sun * day_scale;
+        let above_sky = mix(base_dome, warm_mist, clamp(optical_haze * 0.90, 0.0, 1.0));
+        // Below the mathematical horizon, hold the soft horizon mist so valleys between distant
+        // terrain tiles never expose a dark or hard-edged gap.
+        let below_t = smoothstep(0.0, -0.06, elev);
+        let ground_mist = vec3<f32>(0.64, 0.77, 0.90) * day_scale;
+        atmo_sky = mix(above_sky, ground_mist, below_t);
+    }
+
     if (cam.cloud_params.w < 0.5) {
-        return sky_grad;
+        return vec4<f32>(atmo_sky, sky_grad_2d.a);
     }
 
     let space_t = 1.0 - smoothstep(0.0, 0.85, cam.env_params.z);
@@ -436,11 +466,10 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
         }
     }
 
-    // Blend pitch-black space to daytime sky when morphing down into 2.5D
-    col = mix(sky_grad.rgb, col, space_t);
+    // Blend pitch-black space to 3D horizon-anchored daytime atmospheric sky when morphing down into 2.5D
+    col = mix(atmo_sky, col, space_t);
 
     // 2. Realistic Sun (photosphere limb darkening + solar corona + halo)
-    let sun_dir = normalize(cam.sun_dir.xyz);
     if (cam.sun_dir.w > 0.5) {
         let sun_cos = clamp(dot(rd, sun_dir), -1.0, 1.0);
         let sun_ang = acos(sun_cos);
@@ -780,6 +809,17 @@ fn fs_terrain(in: TerrainVsOut) -> @location(0) vec4<f32> {
         }
     }
 
+    // Tropospheric aerial perspective: smoothly blends distant terrain & water near the horizon
+    // into the lower atmospheric horizon mist when viewing from low altitudes / 2.5D.
+    if (blend_25d > 0.01) {
+        let view_dist = length(in.view_rel);
+        let haze_start = smoothstep(3500.0, 52000.0, view_dist);
+        let aerial_haze = clamp((1.0 - exp(-view_dist * 0.000018)) * haze_start * blend_25d * 0.68, 0.0, 0.72);
+        let day_scale = clamp(max(cam.sky_bottom.b, max(cam.sky_bottom.r, cam.sky_bottom.g)), 0.0, 1.0);
+        let horizon_haze_col = vec3<f32>(0.73, 0.85, 0.96) * day_scale * mix(vec3<f32>(1.0), clamp(lit * 1.15, vec3<f32>(0.35), vec3<f32>(1.0)), dn_strength);
+        rgb = mix(rgb, horizon_haze_col, aerial_haze);
+    }
+
     return vec4<f32>(rgb, base.a);
 }
 "#;
@@ -902,9 +942,13 @@ fn sample_cloud_filtered_density(uv: vec2<f32>, dims: vec2<f32>, uv_lod: f32, de
 @vertex
 fn vs_cloud(@location(0) pos_u: vec4<f32>, @location(1) norm_v: vec4<f32>) -> CloudOut {
     let d = normalize(pos_u.xyz);
+    let eye_pos = cam.eye_high.xyz + cam.eye_low.xyz;
+    let eye_r = max(length(eye_pos), 1.0);
     let u_v = fract((atan2(d.y, d.x) + cam.cloud_params.y) / 6.28318530718 + 0.5);
     let v_v = clamp(0.5 - asin(clamp(d.z, -1.0, 1.0)) / 3.14159265359, 0.001, 0.999);
-    // Smooth 5-tap mip-filtered heightmap displacement so cloud banks have physical 3D altitude relief.
+    // Smooth 5-tap mip-filtered heightmap displacement from orbit/high altitude; smoothly levels out
+    // onto the lifting condensation base when below the cloud deck so 120-km icosphere edges never
+    // tilt near the horizon (while fs_cloud applies full per-pixel parallax & 3D heightmap normals).
     let eps = vec2<f32>(0.0018, 0.0018);
     let c0 = sample_cloud_density(vec2<f32>(u_v, v_v), 1.5);
     let ce = sample_cloud_density(vec2<f32>(fract(u_v + eps.x), v_v), 1.5);
@@ -912,12 +956,19 @@ fn vs_cloud(@location(0) pos_u: vec4<f32>, @location(1) norm_v: vec4<f32>) -> Cl
     let cn = sample_cloud_density(vec2<f32>(u_v, clamp(v_v - eps.y, 0.001, 0.999)), 1.5);
     let cs = sample_cloud_density(vec2<f32>(u_v, clamp(v_v + eps.y, 0.001, 0.999)), 1.5);
     let h_vert = cloud_density_to_height(c0 * 0.40 + (ce + cw + cn + cs) * 0.15);
+    let vert_disp_w = smoothstep(18000.0, 160000.0, max(eye_r - 6391500.0, 0.0));
 
-    let cloud_r = 6390200.0 + h_vert * 4200.0;
+    let cloud_r = mix(6391500.0, 6390200.0 + h_vert * 4200.0, vert_disp_w);
     let world_pos = d * cloud_r;
     let world_rel = (world_pos - cam.eye_high.xyz) - cam.eye_low.xyz;
+    var clip = cam.view_proj_rte * vec4<f32>(world_rel, 1.0);
+    // Prevent low-altitude camera far-clip plane (~100 km) from slicing the cloud dome (~410 km horizon)
+    // in half across the upper sky, while preserving accurate depth occlusion against closer terrain.
+    if (clip.w > 0.0) {
+        clip.z = min(clip.z, clip.w * 0.9995);
+    }
     var out: CloudOut;
-    out.clip_pos = cam.view_proj_rte * vec4<f32>(world_rel, 1.0);
+    out.clip_pos = clip;
     out.unit_pos = d;
     return out;
 }
@@ -949,16 +1000,20 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
     let plane_alt_fade = mix(0.24, 1.0, mix(above_fade, below_fade, below_clouds));
     let ray_prox_fade = mix(0.78, 1.0, smoothstep(600.0, 10000.0, view_dist));
     let eye_up = eye_pos / eye_r;
-    let sky_hemi_fade = mix(1.0, max(0.22, smoothstep(-0.22, 0.02, dot(view_dir, eye_up))), below_clouds);
+    let r_earth = 6378137.0;
+    let horiz_sin = -sqrt(max(eye_r * eye_r - r_earth * r_earth, 0.0)) / max(eye_r, r_earth);
+    let ray_elev = dot(view_dir, eye_up) - horiz_sin;
+    let sky_hemi_fade = mix(1.0, smoothstep(-0.015, 0.035, ray_elev), below_clouds);
     let cross_fade = plane_alt_fade * ray_prox_fade * sky_hemi_fade;
     if (cross_fade <= 0.004) {
         discard;
     }
 
-    // Soften low-altitude oblique horizon limb so the cloud shell never ends in a hard polygonal bar.
+    // Extend clouds all the way down to the distant horizon and fade gracefully into horizon mist.
     let low_alt_factor = 1.0 - smoothstep(40000.0, 350000.0, eye_alt);
     let horizon_graze = abs(dot(view_dir, d));
-    let horizon_fade = mix(1.0, smoothstep(0.010, 0.14, horizon_graze), low_alt_factor);
+    let dist_persp_fade = 1.0 - 0.58 * smoothstep(55000.0, 260000.0, view_dist) * below_clouds;
+    let horizon_fade = mix(1.0, smoothstep(0.004, 0.055, horizon_graze), low_alt_factor) * dist_persp_fade;
     if (horizon_fade <= 0.004) {
         discard;
     }
@@ -1099,7 +1154,16 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
     let sunset = exp(-pow(ndotl * 7.5, 2.0)) * vec3<f32>(0.48, 0.22, 0.08);
     let sun_slope = smoothstep(-0.10, 0.65, dot(n_cloud, sun_dir));
     let day_cloud = (vec3<f32>(0.04, 0.06, 0.10) + cam.sun_color.rgb * term * mix(0.76, 1.12, sun_slope) + sunset) * tex_tint;
-    let rgb = mix(flat_cloud, day_cloud, dn_strength * (1.0 - below_clouds));
+    var rgb = mix(flat_cloud, day_cloud, dn_strength * (1.0 - below_clouds));
+
+    // Distant horizon clouds smoothly pick up tropospheric Rayleigh/Mie horizon haze
+    if (below_clouds > 0.5) {
+        let day_scale = clamp(max(cam.sky_bottom.b, max(cam.sky_bottom.r, cam.sky_bottom.g)), 0.0, 1.0);
+        let cloud_haze_t = smoothstep(25000.0, 180000.0, view_dist) * 0.65;
+        let horizon_mist_col = vec3<f32>(0.75, 0.86, 0.96) * day_scale;
+        rgb = mix(rgb, horizon_mist_col, cloud_haze_t);
+    }
+
     return vec4<f32>(rgb, alpha);
 }
 "#;
