@@ -884,20 +884,47 @@ fn sample_cloud_bicubic_rgba(uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {
     return mix(bot, top, g0.y);
 }
 
+fn cloud_density_to_height(d: f32) -> f32 {
+    let x = clamp(d, 0.0, 1.0);
+    let dome = smoothstep(0.06, 0.88, x);
+    return dome * (0.62 + 0.38 * sqrt(x));
+}
+
+fn sample_cloud_filtered_density(uv: vec2<f32>, dims: vec2<f32>, uv_lod: f32, detail_w: f32) -> f32 {
+    let d_lod = sample_cloud_density(uv, uv_lod);
+    if (detail_w <= 0.01) {
+        return d_lod;
+    }
+    let d_bic = cloud_rgba_to_density(sample_cloud_bicubic_rgba(uv, dims));
+    return mix(d_lod, d_bic, detail_w);
+}
+
 @vertex
 fn vs_cloud(@location(0) pos_u: vec4<f32>, @location(1) norm_v: vec4<f32>) -> CloudOut {
-    let cloud_r = 6391500.0;
-    let world_pos = pos_u.xyz * cloud_r;
+    let d = normalize(pos_u.xyz);
+    let u_v = fract((atan2(d.y, d.x) + cam.cloud_params.y) / 6.28318530718 + 0.5);
+    let v_v = clamp(0.5 - asin(clamp(d.z, -1.0, 1.0)) / 3.14159265359, 0.001, 0.999);
+    // Smooth 5-tap mip-filtered heightmap displacement so cloud banks have physical 3D altitude relief.
+    let eps = vec2<f32>(0.0018, 0.0018);
+    let c0 = sample_cloud_density(vec2<f32>(u_v, v_v), 1.5);
+    let ce = sample_cloud_density(vec2<f32>(fract(u_v + eps.x), v_v), 1.5);
+    let cw = sample_cloud_density(vec2<f32>(fract(u_v - eps.x), v_v), 1.5);
+    let cn = sample_cloud_density(vec2<f32>(u_v, clamp(v_v - eps.y, 0.001, 0.999)), 1.5);
+    let cs = sample_cloud_density(vec2<f32>(u_v, clamp(v_v + eps.y, 0.001, 0.999)), 1.5);
+    let h_vert = cloud_density_to_height(c0 * 0.40 + (ce + cw + cn + cs) * 0.15);
+
+    let cloud_r = 6390200.0 + h_vert * 4200.0;
+    let world_pos = d * cloud_r;
     let world_rel = (world_pos - cam.eye_high.xyz) - cam.eye_low.xyz;
     var out: CloudOut;
     out.clip_pos = cam.view_proj_rte * vec4<f32>(world_rel, 1.0);
-    out.unit_pos = normalize(pos_u.xyz);
+    out.unit_pos = d;
     return out;
 }
 
 @fragment
 fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
-    let cloud_r = 6391500.0;
+    let base_cloud_r = 6391500.0;
     let opacity = clamp(cam.cloud_params.x + cam.viewport_wh.w, 0.0, 1.0);
     if (opacity <= 0.004) {
         discard;
@@ -906,23 +933,23 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
     let eye_pos = cam.eye_high.xyz + cam.eye_low.xyz;
     let eye_r = max(length(eye_pos), 1.0);
     let eye_alt = max(eye_r - 6378137.0, 0.0);
-    let below_clouds = select(0.0, 1.0, eye_r < cloud_r);
+    let below_clouds = select(0.0, 1.0, eye_r < base_cloud_r);
 
     let d = normalize(in.unit_pos);
-    let shell_pos = d * cloud_r;
+    let shell_pos = d * base_cloud_r;
     let view_vec = shell_pos - eye_pos;
     let view_dist = max(length(view_vec), 1.0);
     let view_dir = view_vec / view_dist;
 
-    // Physical plane-proximity transparency: stays at X in orbit, fades cleanly toward transparent
-    // as the camera approaches the cloud deck (~13.4 km), then recovers opacity X as the camera
-    // descends further below the deck toward the ground.
-    let above_fade = smoothstep(2500.0, 180000.0, max(eye_r - cloud_r, 0.0));
-    let below_fade = smoothstep(1800.0, 9500.0, max(cloud_r - eye_r, 0.0));
-    let plane_alt_fade = mix(above_fade, below_fade, below_clouds);
-    let ray_prox_fade = smoothstep(1500.0, 12000.0, view_dist);
+    // Physical plane-proximity transparency: fades smoothly as the camera approaches the cloud deck
+    // (~13.4 km), but retains a non-zero translucent floor (~20-24%) so clouds never become 100%
+    // transparent when flying close to or through them.
+    let above_fade = smoothstep(1500.0, 160000.0, max(eye_r - base_cloud_r, 0.0));
+    let below_fade = smoothstep(1200.0, 9000.0, max(base_cloud_r - eye_r, 0.0));
+    let plane_alt_fade = mix(0.24, 1.0, mix(above_fade, below_fade, below_clouds));
+    let ray_prox_fade = mix(0.78, 1.0, smoothstep(600.0, 10000.0, view_dist));
     let eye_up = eye_pos / eye_r;
-    let sky_hemi_fade = mix(1.0, smoothstep(-0.18, 0.02, dot(view_dir, eye_up)), below_clouds);
+    let sky_hemi_fade = mix(1.0, max(0.22, smoothstep(-0.22, 0.02, dot(view_dir, eye_up))), below_clouds);
     let cross_fade = plane_alt_fade * ray_prox_fade * sky_hemi_fade;
     if (cross_fade <= 0.004) {
         discard;
@@ -931,10 +958,15 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
     // Soften low-altitude oblique horizon limb so the cloud shell never ends in a hard polygonal bar.
     let low_alt_factor = 1.0 - smoothstep(40000.0, 350000.0, eye_alt);
     let horizon_graze = abs(dot(view_dir, d));
-    let horizon_fade = mix(1.0, smoothstep(0.015, 0.16, horizon_graze), low_alt_factor);
+    let horizon_fade = mix(1.0, smoothstep(0.010, 0.14, horizon_graze), low_alt_factor);
     if (horizon_fade <= 0.004) {
         discard;
     }
+
+    let east_raw = vec3<f32>(-d.y, d.x, 0.0);
+    let east_len = length(east_raw);
+    let t_east = select(vec3<f32>(1.0, 0.0, 0.0), east_raw / max(east_len, 1e-5), east_len > 1e-4);
+    let t_north = normalize(cross(d, t_east));
 
     let u_base = fract((atan2(d.y, d.x) + cam.cloud_params.y) / 6.28318530718 + 0.5);
     let v_base = clamp(0.5 - asin(clamp(d.z, -1.0, 1.0)) / 3.14159265359, 0.001, 0.999);
@@ -957,22 +989,35 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
         v = clamp(v_base + wv * dv * warp_amp, 0.001, 0.999);
     }
 
+    // Smooth 2-step view-ray heightmap parallax derived from cloud transparency/density
+    let v_east = dot(view_dir, t_east);
+    let v_north = dot(view_dir, t_north);
+    let v_rad = max(abs(dot(view_dir, d)), 0.25);
+    let h_pre = cloud_density_to_height(sample_cloud_density(vec2<f32>(u, v), uv_lod + 0.6));
+    let par_amp = mix(0.0015, 0.00075, mode_25d);
+    let par1 = (h_pre - 0.22) * par_amp / v_rad;
+    let u_p1 = fract(u - v_east * par1 * clamp(east_len, 0.25, 1.0));
+    let v_p1 = clamp(v + v_north * par1, 0.001, 0.999);
+    let h_mid = 0.5 * (h_pre + cloud_density_to_height(sample_cloud_filtered_density(vec2<f32>(u_p1, v_p1), dims, uv_lod, detail_w)));
+    let par2 = (h_mid - 0.22) * par_amp / v_rad;
+    u = fract(u - v_east * par2 * clamp(east_len, 0.25, 1.0));
+    v = clamp(v + v_north * par2, 0.001, 0.999);
+
     let s_lod = sample_cloud_rgba_raw(vec2<f32>(u, v), uv_lod);
     let s_c = select(s_lod, mix(s_lod, sample_cloud_bicubic_rgba(vec2<f32>(u, v), dims), detail_w), detail_w > 0.01);
     let d_c = cloud_rgba_to_density(s_c);
 
-    let sun_uv = vec2<f32>(fract(u + du * 1.5), clamp(v - dv * 1.5, 0.001, 0.999));
-    let d_sun = select(
-        sample_cloud_density(sun_uv, uv_lod),
-        mix(sample_cloud_density(sun_uv, uv_lod), cloud_rgba_to_density(sample_cloud_bicubic_rgba(sun_uv, dims)), detail_w),
-        detail_w > 0.01,
-    );
+    // Sample smoothed heightmap neighborhood for C1-continuous 3D cloud normals & self-shadowing
+    let grad_step_u = du * mix(1.75, 1.35, detail_w);
+    let grad_step_v = dv * mix(1.75, 1.35, detail_w);
+    let d_e = sample_cloud_filtered_density(vec2<f32>(fract(u + grad_step_u), v), dims, uv_lod, detail_w);
+    let d_w = sample_cloud_filtered_density(vec2<f32>(fract(u - grad_step_u), v), dims, uv_lod, detail_w);
+    let d_n = sample_cloud_filtered_density(vec2<f32>(u, clamp(v - grad_step_v, 0.001, 0.999)), dims, uv_lod, detail_w);
+    let d_s = sample_cloud_filtered_density(vec2<f32>(u, clamp(v + grad_step_v, 0.001, 0.999)), dims, uv_lod, detail_w);
 
-    // Full 3D space uses rich sculpted optical contrast; 2.5D below clouds applies wispy FBM + steep sigmoid cutout
-    let crisp_3d = pow(clamp(d_c, 0.0, 1.0), 1.75);
-
-    let base_density = d_c;
-    let clear_cut = smoothstep(0.16, 0.54, base_density);
+    var fbm_billow = 0.0;
+    let base_density = 0.44 * d_c + 0.14 * (d_e + d_w + d_n + d_s);
+    let clear_cut = smoothstep(0.14, 0.54, base_density);
     var refined = clear_cut;
     if (detail_w > 0.005 && clear_cut > 0.004) {
         let wind = vec3<f32>(cam.cloud_params.z * 0.00018, 0.0, 0.0);
@@ -980,16 +1025,27 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
         let n2 = cloud_noise(d * 2400.0 + wind * 1.4);
         let n3 = cloud_noise(d * 6800.0 - wind * 0.8);
         let fbm = n1 * 0.55 + n2 * 0.30 + n3 * 0.15;
-        let eroded = clamp(clear_cut * (0.42 + fbm * 1.18) - 0.14, 0.0, 1.0);
-        refined = mix(clear_cut, eroded, detail_w * 0.90);
+        fbm_billow = (fbm - 0.5) * 0.16 * detail_w;
+        let eroded = clamp(clear_cut * (0.44 + fbm * 1.16) - 0.13, 0.0, 1.0);
+        refined = mix(clear_cut, eroded, detail_w * 0.88);
     }
 
-    let sigmoid_curve = 1.0 / (1.0 + exp(-(refined - 0.44) * 11.5));
-    let hard_zero_gate = smoothstep(0.14, 0.32, refined);
+    let h_c = clamp(cloud_density_to_height(d_c) + fbm_billow, 0.0, 1.0);
+    let h_e = cloud_density_to_height(d_e);
+    let h_w = cloud_density_to_height(d_w);
+    let h_n = cloud_density_to_height(d_n);
+    let h_s = cloud_density_to_height(d_s);
+    let h_smooth = clamp(0.40 * h_c + 0.15 * (h_e + h_w + h_n + h_s), 0.0, 1.0);
+
+    // Full 3D space uses rich sculpted optical contrast; 2.5D below clouds applies wispy FBM + steep sigmoid cutout
+    let crisp_3d = pow(clamp(d_c, 0.0, 1.0), 1.68);
+    let sigmoid_curve = 1.0 / (1.0 + exp(-(refined - 0.43) * 11.0));
+    let hard_zero_gate = smoothstep(0.13, 0.31, refined);
     let mask_25d = clamp(sigmoid_curve * hard_zero_gate * 1.04, 0.0, 1.0);
     let mask_density = mix(crisp_3d, mask_25d, mode_25d);
 
-    let ndotl = dot(d, normalize(cam.sun_dir.xyz));
+    let sun_dir = normalize(cam.sun_dir.xyz);
+    let ndotl = dot(d, sun_dir);
     let dn_strength = clamp(cam.env_params.x, 0.0, 1.0);
     let term = smoothstep(-0.14, 0.18, ndotl);
     let night_fade = mix(0.14, 1.0, mix(1.0, term, dn_strength));
@@ -1000,17 +1056,49 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
         discard;
     }
 
-    let bump_scale = 1.65 * (1.0 - 0.45 * detail_w);
-    let ridge_bump = clamp((d_c - d_sun) * bump_scale, -0.22, 0.22);
-    let tex_tint = clamp(0.84 + (d_c - 0.55) * 0.30 + ridge_bump * 0.75, 0.72, 1.05);
-    let shade_base = mix(vec3<f32>(0.68, 0.74, 0.82), vec3<f32>(0.99, 0.995, 1.0), clamp(d_c * 0.95 + ridge_bump, 0.0, 1.0)) * tex_tint;
-    let flat_cloud = mix(
-        shade_base,
-        mix(vec3<f32>(0.76, 0.81, 0.88), vec3<f32>(0.98, 0.99, 1.0), mask_density),
-        below_clouds,
+    // Construct 3D heightmap surface normal in ECEF from height gradients
+    let normal_amp = mix(3.4, 2.2, detail_w);
+    let grad_east = (h_e - h_w) * normal_amp;
+    let grad_north = (h_n - h_s) * normal_amp;
+    let n_cloud = normalize(d - t_east * grad_east - t_north * grad_north);
+
+    // Effective directional light for heightmap relief (uses solar direction when day/night is on,
+    // and blends a grazing northwest sky key-light so heightmap relief is always visible in unlit mode).
+    let unlit_key = normalize(d * 0.52 + t_north * 0.62 - t_east * 0.58);
+    let relief_light = normalize(mix(unlit_key, normalize(sun_dir + d * 0.28), dn_strength * 0.75));
+    let l_east = dot(relief_light, t_east);
+    let l_north = dot(relief_light, t_north);
+    let sun_uv = vec2<f32>(
+        fract(u + l_east * du * 2.2),
+        clamp(v - l_north * dv * 2.2, 0.001, 0.999),
     );
+    let h_sun = cloud_density_to_height(sample_cloud_filtered_density(sun_uv, dims, uv_lod, detail_w));
+
+    let slope_lit = clamp(dot(n_cloud, relief_light), 0.0, 1.0);
+    let horizon_shadow = clamp((h_c - h_sun) * 2.1, -0.28, 0.28);
+    let height_ao = mix(0.68, 1.06, smoothstep(0.05, 0.85, h_smooth));
+    let silver_rim = pow(1.0 - clamp(abs(dot(view_dir, n_cloud)), 0.0, 1.0), 2.4)
+        * smoothstep(0.12, 0.52, d_c)
+        * (1.0 - smoothstep(0.58, 0.92, d_c))
+        * 0.18;
+
+    let relief_factor = clamp(0.55 + slope_lit * 0.45 + horizon_shadow * 0.65, 0.0, 1.0);
+    let tex_tint = clamp(height_ao * (0.86 + horizon_shadow * 0.45) + silver_rim, 0.68, 1.08);
+    let shade_base = mix(
+        vec3<f32>(0.62, 0.69, 0.79),
+        vec3<f32>(0.995, 0.998, 1.0),
+        clamp(h_smooth * 0.62 + relief_factor * 0.46, 0.0, 1.0),
+    ) * tex_tint;
+    let below_shade = mix(
+        vec3<f32>(0.70, 0.76, 0.85),
+        vec3<f32>(0.99, 0.995, 1.0),
+        clamp((1.0 - h_smooth * 0.35) * 0.45 + relief_factor * 0.55, 0.0, 1.0),
+    ) * clamp(tex_tint * 1.03, 0.74, 1.06);
+    let flat_cloud = mix(shade_base, below_shade, below_clouds);
+
     let sunset = exp(-pow(ndotl * 7.5, 2.0)) * vec3<f32>(0.48, 0.22, 0.08);
-    let day_cloud = (vec3<f32>(0.05, 0.07, 0.11) + cam.sun_color.rgb * term + sunset) * tex_tint;
+    let sun_slope = smoothstep(-0.10, 0.65, dot(n_cloud, sun_dir));
+    let day_cloud = (vec3<f32>(0.04, 0.06, 0.10) + cam.sun_color.rgb * term * mix(0.76, 1.12, sun_slope) + sunset) * tex_tint;
     let rgb = mix(flat_cloud, day_cloud, dn_strength * (1.0 - below_clouds));
     return vec4<f32>(rgb, alpha);
 }
@@ -2383,7 +2471,7 @@ impl Wgpu3DRenderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: true },
                             view_dimension: wgpu::TextureViewDimension::D2,
@@ -2393,7 +2481,7 @@ impl Wgpu3DRenderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
