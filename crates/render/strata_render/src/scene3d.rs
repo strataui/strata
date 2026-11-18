@@ -1273,6 +1273,10 @@ impl Canvas3DBuilder {
         self.push_event(strata_dom::EventType::Click, handler)
     }
 
+    pub fn onresize(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.push_event(strata_dom::EventType::Resize, handler)
+    }
+
     /// Binds a persistent [`RetainedScene3D`] handle for out-of-band zero-rebuild GPU updates.
     pub fn retained(mut self, handle: impl Into<Option<RetainedScene3D>>) -> Self {
         self.retained = handle.into();
