@@ -696,10 +696,9 @@ fn fs_terrain(in: TerrainVsOut) -> @location(0) vec4<f32> {
         return base;
     }
 
-    let n = normalize(in.normal);
+    let n_mesh = normalize(in.normal);
     let sun_dir = normalize(cam.sun_dir.xyz);
     let view_dir = normalize(-in.view_rel);
-    let ndotl = dot(n, sun_dir);
 
     let dn_strength = clamp(cam.env_params.x, 0.0, 1.0);
     let city_strength = max(cam.env_params.y, 0.0);
@@ -708,7 +707,12 @@ fn fs_terrain(in: TerrainVsOut) -> @location(0) vec4<f32> {
     // Unified shadowless daylight lighting (used when sun lighting is toggled off OR in 2.5D near ground)
     let flat_lit = vec3<f32>(0.98);
 
+    // Per-pixel continuous planetary normal `d` ensures day/night terminator, twilight,
+    // and atmosphere rim are 100% smooth and unified across tile boundaries and LOD levels.
     let d = normalize(in.ecef_pos);
+    let ndotl = dot(d, sun_dir);
+    let slope_shade = clamp(1.0 + (dot(n_mesh, sun_dir) - ndotl) * 0.35 * blend_25d, 0.82, 1.18);
+
     let px_m = max(length(fwidth(d)) * 6378137.0, 6.0);
     let lon = atan2(d.y, d.x);
     let sin_lat = clamp(d.z, -1.0, 1.0);
@@ -720,22 +724,26 @@ fn fs_terrain(in: TerrainVsOut) -> @location(0) vec4<f32> {
     // Physical orbital solar terminator + gentle Google Earth moonlight over continents & oceans
     let terminator = smoothstep(-0.14, 0.16, ndotl);
     let twilight = exp(-pow(ndotl * 7.5, 2.0)) * vec3<f32>(0.42, 0.18, 0.06);
-    let fresnel = pow(1.0 - max(dot(n, view_dir), 0.0), 3.2);
+    let fresnel = pow(1.0 - max(dot(d, view_dir), 0.0), 3.2);
     let atmo_rim = vec3<f32>(0.28, 0.56, 1.0) * fresnel * smoothstep(-0.18, 0.32, ndotl) * 0.45 * (1.0 - blend_25d);
     let ocean_night = vec3<f32>(0.048, 0.068, 0.108);
     let land_night = vec3<f32>(0.095, 0.120, 0.174);
     let night_fill = mix(ocean_night, land_night, on_land);
-    let day_lit = night_fill + cam.sun_color.rgb * terminator + twilight;
+    let day_lit = (night_fill + cam.sun_color.rgb * terminator + twilight) * slope_shade;
 
     let lit = mix(flat_lit, day_lit, dn_strength);
     var rgb = base.rgb * lit + atmo_rim * dn_strength;
 
-    // Multi-resolution NASA Black Marble (streamed z=5..8 pyramid + 4K base) with vector-scale street/bulb synthesis
+    // Multi-resolution NASA Black Marble (streamed z=5..8 pyramid + 4K base) in unified linear space
     if (city_strength > 0.001 && dn_strength > 0.001 && on_land > 0.001) {
         let night_mask = smoothstep(0.06, -0.14, ndotl) * dn_strength * city_strength * on_land;
         if (night_mask > 0.001) {
-            var black_marble = env_mask.g;
-            if (in.night_layer != 0u) {
+            // `land_mask_tex` is Rgba8Unorm (sRGB-encoded bytes), whereas `terrain_atlas` is Rgba8UnormSrgb
+            // (linear-decoded). Convert both to the same linear scale and strip NASA's non-city desert floor.
+            let base_lin = max(pow(max(env_mask.g, 0.0), 2.2) - 0.022, 0.0) / 0.978;
+            var black_marble = base_lin;
+            let detail_night_w = 1.0 - smoothstep(350.0, 1100.0, px_m);
+            if (in.night_layer != 0u && detail_night_w > 0.005) {
                 let duv = 1.0 / 256.0;
                 let nl = i32(in.night_layer);
                 let luma_w = vec3<f32>(0.299, 0.587, 0.114);
@@ -744,10 +752,13 @@ fn fs_terrain(in: TerrainVsOut) -> @location(0) vec4<f32> {
                 let cx1 = dot(textureSampleLevel(terrain_atlas, terrain_sampler, clamp(in.night_uv + vec2<f32>(duv, 0.0), vec2<f32>(0.0), vec2<f32>(1.0)), nl, 0.0).rgb, luma_w);
                 let cy0 = dot(textureSampleLevel(terrain_atlas, terrain_sampler, clamp(in.night_uv - vec2<f32>(0.0, duv), vec2<f32>(0.0), vec2<f32>(1.0)), nl, 0.0).rgb, luma_w);
                 let cy1 = dot(textureSampleLevel(terrain_atlas, terrain_sampler, clamp(in.night_uv + vec2<f32>(0.0, duv), vec2<f32>(0.0), vec2<f32>(1.0)), nl, 0.0).rgb, luma_w);
-                black_marble = (c0 * 2.0 + cx0 + cx1 + cy0 + cy1) * (1.0 / 6.0);
+                let raw_tile = (c0 * 2.0 + cx0 + cx1 + cy0 + cy1) * (1.0 / 6.0);
+                let tile_lin = max(raw_tile - 0.022, 0.0) / 0.978;
+                black_marble = mix(base_lin, tile_lin, detail_night_w);
             }
-            let city_core = smoothstep(0.015, 0.42, black_marble);
-            let corridor = smoothstep(0.003, 0.14, black_marble) * 0.22;
+            let bm_srgb = pow(clamp(black_marble, 0.0, 1.0), 0.45454545);
+            let city_core = smoothstep(0.08, 0.48, bm_srgb);
+            let corridor = smoothstep(0.02, 0.22, bm_srgb) * 0.22;
             let n_block = vnoise3(d * 2800.0);
             let n_street = vnoise3(d * 9200.0);
             let n_bulb = vnoise3(d * 26000.0);
