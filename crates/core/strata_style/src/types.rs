@@ -1697,6 +1697,7 @@ impl ComputedStyle {
             white_space: parent.white_space,
             cursor: parent.cursor,
             user_select: parent.user_select,
+            pointer_events: parent.pointer_events,
             visibility: parent.visibility,
             caret_color: parent.caret_color,
             border_collapse: parent.border_collapse,

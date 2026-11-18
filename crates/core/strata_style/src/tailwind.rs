@@ -1029,6 +1029,14 @@ impl TailwindEngine {
                 style.cursor = Cursor::None;
                 return;
             }
+            "pointer-events-none" => {
+                style.pointer_events = PointerEvents::None;
+                return;
+            }
+            "pointer-events-auto" => {
+                style.pointer_events = PointerEvents::Auto;
+                return;
+            }
             _ => {}
         }
 

@@ -21,6 +21,22 @@ pub(crate) fn resolved_cursor_at(
     }
 }
 
+#[inline]
+fn try_retained_canvas3d_redraw_only(
+    runtime: &mut AppRuntime,
+    x: f32,
+    y: f32,
+    needs_rebuild: &mut bool,
+    needs_redraw: &mut bool,
+) {
+    if runtime.target_is_retained_canvas3d(x, y) && !strata_dom::reactive::has_dirty_signals() {
+        runtime.mark_viewport_3d_dirty();
+        *needs_redraw = true;
+    } else {
+        *needs_rebuild = true;
+    }
+}
+
 /// Dispatches a native platform event into the AppRuntime, updating geometry, focus, input, and styling.
 /// Returns `(needs_rebuild, needs_redraw, should_exit)`.
 pub fn dispatch_native_platform_event<E>(
@@ -93,7 +109,13 @@ where
             let (wheel_handled, scroll_changed) =
                 runtime.dispatch_smooth_scroll_action(px, py, *delta_x, *delta_y);
             if wheel_handled {
-                needs_rebuild = true;
+                try_retained_canvas3d_redraw_only(
+                    runtime,
+                    px,
+                    py,
+                    &mut needs_rebuild,
+                    &mut needs_redraw,
+                );
             }
             if scroll_changed {
                 needs_redraw = true;
@@ -231,7 +253,13 @@ where
                 }
                 let action = runtime.dispatch_pointer_move_action(*x, *y);
                 if action.needs_rebuild() {
-                    needs_rebuild = true;
+                    try_retained_canvas3d_redraw_only(
+                        runtime,
+                        *x,
+                        *y,
+                        &mut needs_rebuild,
+                        &mut needs_redraw,
+                    );
                 } else if action.needs_redraw() {
                     needs_redraw = true;
                 }
@@ -461,6 +489,7 @@ where
                     presenter.height,
                 );
             } else if let Some(ref mut f) = root_fn {
+                let _ = strata_dom::reactive::take_dirty_signals();
                 let new_view = f();
                 runtime.update_view(new_view);
                 let _ = runtime.render_frame(&mut compositor, &mut presenter, true);

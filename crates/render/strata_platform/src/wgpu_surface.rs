@@ -9,6 +9,12 @@ use std::sync::Arc;
 use strata_render::gpu_wgpu::Wgpu3DRenderer;
 use strata_render::scene3d::Scene3D;
 
+#[inline]
+fn surface_perf_logging_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("STRATA_PERF_LOG").is_some())
+}
+
 /// Maps platform [`PresentMode`] to the best supported [`wgpu::PresentMode`].
 pub fn select_wgpu_present_mode(
     desired: PresentMode,
@@ -119,6 +125,13 @@ impl WgpuWindowPresenter {
         )?;
 
         let caps = surface.get_capabilities(&adapter);
+        if surface_perf_logging_enabled() {
+            let info = adapter.get_info();
+            eprintln!(
+                "[perf] wgpu adapter: {} ({:?}/{:?}), caps present_modes={:?}",
+                info.name, info.backend, info.device_type, caps.present_modes
+            );
+        }
         let format = caps
             .formats
             .iter()
@@ -259,6 +272,8 @@ impl WgpuWindowPresenter {
         let Some(ref cfg) = self.surface_config else {
             return Err("surface not configured".to_string());
         };
+        let perf = surface_perf_logging_enabled();
+        let t0 = std::time::Instant::now();
         let output = match surface.get_current_texture() {
             Ok(frame) => frame,
             Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
@@ -269,16 +284,64 @@ impl WgpuWindowPresenter {
             }
             Err(e) => return Err(format!("acquire surface texture failed: {e}")),
         };
+        let t_acq = std::time::Instant::now();
         let view = output.texture.create_view(&Default::default());
-        self.renderer
-            .render_scene_to_view(scene, &view, cfg.width, cfg.height, viewport, false);
-        if draw_overlay {
-            if let Some(ref ov) = self.ui_overlay {
-                self.renderer
-                    .composite_overlay_to_view(&view, &ov.bind_group);
+        let ov_bg = if draw_overlay {
+            self.ui_overlay.as_ref().map(|ov| &ov.bind_group)
+        } else {
+            None
+        };
+        self.renderer.render_scene_and_overlay_to_view(
+            scene,
+            &view,
+            cfg.width,
+            cfg.height,
+            viewport,
+            false,
+            ov_bg,
+        );
+        let t_3d = std::time::Instant::now();
+        let t_ov = t_3d;
+        output.present();
+        let t_end = std::time::Instant::now();
+        if perf {
+            let acq_ms = t_acq.duration_since(t0).as_secs_f64() * 1000.0;
+            let r3d_ms = t_3d.duration_since(t_acq).as_secs_f64() * 1000.0;
+            let pres_ms = t_end.duration_since(t_ov).as_secs_f64() * 1000.0;
+            let total_ms = t_end.duration_since(t0).as_secs_f64() * 1000.0;
+            thread_local! {
+                static WIN_STATS: std::cell::Cell<(u32, f64, f64, f64, f64, f64, f64)> =
+                    const { std::cell::Cell::new((0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)) };
+            }
+            WIN_STATS.with(|c| {
+                let (n, sum_a, max_a, sum_r, max_r, sum_p, max_p) = c.get();
+                let next = (
+                    n + 1,
+                    sum_a + acq_ms,
+                    max_a.max(acq_ms),
+                    sum_r + r3d_ms,
+                    max_r.max(r3d_ms),
+                    sum_p + pres_ms,
+                    max_p.max(pres_ms),
+                );
+                if next.0 >= 65 {
+                    let nf = next.0 as f64;
+                    eprintln!(
+                        "[perf] present65 acq_avg={:.2} max={:.2} | r3d_avg={:.2} max={:.2} | pres_avg={:.2} max={:.2}",
+                        next.1 / nf, next.2, next.3 / nf, next.4, next.5 / nf, next.6
+                    );
+                    c.set((0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0));
+                } else {
+                    c.set(next);
+                }
+            });
+            if total_ms > 7.5 {
+                eprintln!(
+                    "[perf] present_to_surface SPIKE total={:.2}ms (acq={:.2} render3d={:.2} present={:.2})",
+                    total_ms, acq_ms, r3d_ms, pres_ms
+                );
             }
         }
-        output.present();
         Ok(())
     }
 

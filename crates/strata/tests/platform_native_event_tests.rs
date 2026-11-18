@@ -542,4 +542,94 @@ fn test_right_click_dispatches_onmousedown_and_onmouseup_with_button_and_size() 
     assert!((events[1].5 - 400.0).abs() < 1e-3);
 }
 
+#[test]
+fn test_canvas3d_pointer_events_none_overlay_fast_path_and_hover_reconcile() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use strata::render::scene3d::{RetainedCameraUniforms, RetainedScene3D};
+
+    let move_hits = Rc::new(Cell::new(0usize));
+    let wheel_hits = Rc::new(Cell::new(0usize));
+    let retained = RetainedScene3D::new(RetainedCameraUniforms::default());
+    let shared_scene = std::sync::Arc::new(Scene3D::default().with_retained_handle(retained));
+
+    let make_view = {
+        let move_hits = Rc::clone(&move_hits);
+        let wheel_hits = Rc::clone(&wheel_hits);
+        let shared_scene = std::sync::Arc::clone(&shared_scene);
+        move || {
+            let move_cb = Rc::clone(&move_hits);
+            let wheel_cb = Rc::clone(&wheel_hits);
+            let canvas = Canvas3D::builder()
+                .width(1280.0)
+                .height(800.0)
+                .scene(&shared_scene)
+                .onmousemove(move |_| {
+                    move_cb.set(move_cb.get() + 1);
+                })
+                .onwheel(move |_| {
+                    wheel_cb.set(wheel_cb.get() + 1);
+                })
+                .build();
+
+            rsx! {
+                <div class="relative w-full h-full">
+                    {canvas}
+                    <div class="absolute inset-0 z-10 pointer-events-none overflow-hidden">
+                        <div class="w-40 h-12 pointer-events-auto">
+                            <span>"144 FPS"</span>
+                        </div>
+                    </div>
+                </div>
+            }
+        }
+    };
+
+    let mut runtime = AppRuntime::new(make_view(), 1280.0, 800.0, 1.0);
+    runtime.tick_frame();
+    let mut compositor = SwapchainCompositor::new(1280, 800, 1.0);
+    let mut presenter = SoftwareSurfacePresenter::new(1280, 800, SwapchainFormat::Bgra8Unorm);
+    let mut hook = |_: &PlatformEvent, _: &mut AppRuntime| false;
+
+    assert!(runtime.target_is_retained_canvas3d(640.0, 400.0));
+    assert!(!runtime.target_is_retained_canvas3d(20.0, 20.0));
+
+    let _ = strata_dom::reactive::take_dirty_signals();
+    let sig = strata_dom::reactive::Signal::new(0u64);
+    sig.set(1);
+    assert!(strata_dom::reactive::has_dirty_signals());
+    let _ = strata_dom::reactive::take_dirty_signals();
+    assert!(!strata_dom::reactive::has_dirty_signals());
+
+    let (rebuild, _redraw, exit) = dispatch_native_platform_event(
+        &PlatformEvent::MouseMove { x: 640.0, y: 400.0 },
+        &mut runtime,
+        &mut compositor,
+        &mut presenter,
+        &mut hook,
+    );
+    assert!(!exit);
+    assert!(!rebuild);
+    assert_eq!(move_hits.get(), 1);
+    assert!(runtime.current_hover_path.is_some());
+
+    let (rebuild, _redraw, exit) = dispatch_native_platform_event(
+        &PlatformEvent::Scroll {
+            delta_x: 0.0,
+            delta_y: -120.0,
+            is_momentum: false,
+        },
+        &mut runtime,
+        &mut compositor,
+        &mut presenter,
+        &mut hook,
+    );
+    assert!(!exit);
+    assert!(!rebuild);
+    assert_eq!(wheel_hits.get(), 1);
+
+    assert!(!runtime.compile_display_list_if_dirty() || !runtime.is_paint_dirty());
+    runtime.update_view(make_view());
+    assert!(runtime.last_update_reconciled());
+}
 

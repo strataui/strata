@@ -144,10 +144,6 @@ impl AppRuntime {
                     child_layout.style.visibility,
                     strata_style::types::Visibility::Hidden
                 )
-                || matches!(
-                    child_layout.style.pointer_events,
-                    strata_style::types::PointerEvents::None
-                )
             {
                 continue;
             }
@@ -213,10 +209,6 @@ impl AppRuntime {
                 layout.style.visibility,
                 strata_style::types::Visibility::Hidden
             )
-            || matches!(
-                layout.style.pointer_events,
-                strata_style::types::PointerEvents::None
-            )
         {
             return None;
         }
@@ -254,18 +246,22 @@ impl AppRuntime {
             current_path.pop();
         }
 
-        match blueprint {
-            NodeBlueprint::Element { .. }
-            | NodeBlueprint::Text(_)
-            | NodeBlueprint::DynamicText(_) => {
-                if layout.geometry.border_box.contains_point(px, py) {
-                    Some(current_path.clone())
-                } else {
-                    None
+        if !matches!(
+            layout.style.pointer_events,
+            strata_style::types::PointerEvents::None
+        ) {
+            match blueprint {
+                NodeBlueprint::Element { .. }
+                | NodeBlueprint::Text(_)
+                | NodeBlueprint::DynamicText(_) => {
+                    if layout.geometry.border_box.contains_point(px, py) {
+                        return Some(current_path.clone());
+                    }
                 }
+                _ => {}
             }
-            _ => None,
         }
+        None
     }
 
     fn hit_test_node_path_sc(
@@ -281,10 +277,6 @@ impl AppRuntime {
             || matches!(
                 layout.style.visibility,
                 strata_style::types::Visibility::Hidden
-            )
-            || matches!(
-                layout.style.pointer_events,
-                strata_style::types::PointerEvents::None
             )
         {
             return None;
@@ -386,7 +378,12 @@ impl AppRuntime {
         }
 
         // Layer 1: stacking context root itself
-        if inherited_allows {
+        if inherited_allows
+            && !matches!(
+                layout.style.pointer_events,
+                strata_style::types::PointerEvents::None
+            )
+        {
             match blueprint {
                 NodeBlueprint::Element { .. }
                 | NodeBlueprint::Text(_)

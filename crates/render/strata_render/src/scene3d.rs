@@ -739,6 +739,13 @@ impl RetainedScene3D {
             .fetch_add(1, std::sync::atomic::Ordering::Release);
     }
 
+    /// Marks the retained 3D scene dirty for one more frame when per-frame GPU texture/mesh upload budgets deferred remaining work.
+    pub fn request_gpu_continuation(&self) {
+        self.inner
+            .camera_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
     /// Updates camera uniforms and replaces only dynamic 3D overlays (e.g. 2.5D weather or orbital satellites)
     /// without rebuilding or re-allocating cached terrain tiles, textures, or environment assets.
     pub fn update_camera_and_dynamic_meshes(

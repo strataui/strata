@@ -162,6 +162,8 @@ pub struct AppRuntime {
     pub(crate) last_pointer_pos: Option<(f32, f32)>,
     /// Target `(x, y)` of an in-flight cursor warp so synthetic warp deltas are filtered.
     pub(crate) pending_cursor_warp: Option<(f32, f32)>,
+    /// True when the most recent `update_view` call reconciled the existing layout tree in place.
+    pub(crate) last_update_reconciled: bool,
 }
 
 /// Whether opt-in `[perf]` timing output is enabled through `STRATA_PERF_LOG`.
@@ -319,6 +321,7 @@ impl AppRuntime {
             observed_element_sizes: std::collections::HashMap::new(),
             last_pointer_pos: None,
             pending_cursor_warp: None,
+            last_update_reconciled: false,
         };
 
         runtime.has_resize_listeners =
@@ -851,10 +854,19 @@ impl AppRuntime {
             self.cached_stylesheets = sheets;
         }
         let build_start = std::time::Instant::now();
-        let reconciled = if sheets_unchanged
-            && (self.current_hover_path.is_none() || self.hover_is_paint_only())
-            && self.current_focus_path.is_none()
-        {
+        let hover_safe = self.hover_is_paint_only()
+            || self.current_hover_path.as_deref().is_none_or(|p| {
+                !Self::node_path_has_hover_effects_with_sheets(
+                    &old_blueprint,
+                    p,
+                    &self.cached_stylesheets,
+                ) && !Self::node_path_has_hover_effects_with_sheets(
+                    &self.root_blueprint,
+                    p,
+                    &self.cached_stylesheets,
+                )
+            });
+        let reconciled = if sheets_unchanged && hover_safe && self.current_focus_path.is_none() {
             let ctx = crate::runtime::InteractionContext {
                 hovered_path: None,
                 focused_path: None,
@@ -875,6 +887,7 @@ impl AppRuntime {
             let ctx = self.interaction_context();
             self.layout_root = Self::build_layout_tree_with_interaction(&self.root_blueprint, &ctx);
         }
+        self.last_update_reconciled = reconciled;
         if perf_logging_enabled() {
             perf_log_ms(
                 "build_layout_tree_update",
@@ -1220,6 +1233,16 @@ impl AppRuntime {
             self.paint_dirty = true;
         }
         needs_redraw
+    }
+
+    /// Number of full layout computations performed by this runtime.
+    pub fn layout_computations(&self) -> u64 {
+        self.layout_computations
+    }
+
+    /// True when the most recent `update_view` reconciled the existing layout tree in place.
+    pub fn last_update_reconciled(&self) -> bool {
+        self.last_update_reconciled
     }
 
     /// Phase timings accumulated since the last presented frame.
