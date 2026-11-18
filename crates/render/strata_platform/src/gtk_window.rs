@@ -1737,7 +1737,9 @@ fn render_display_list_to_cairo_impl(
                 radius,
                 filter,
             } => {
-                cairo_apply_backdrop_filter(cr, bounds, *radius, filter);
+                if !punch_viewport_hole {
+                    cairo_apply_backdrop_filter(cr, bounds, *radius, filter);
+                }
             }
             DrawCommand::PopBackdropFilter => {}
             DrawCommand::DrawBorder {
