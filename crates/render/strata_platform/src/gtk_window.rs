@@ -778,26 +778,45 @@ pub fn cairo_apply_backdrop_filter(
     let w_us = sw as usize;
     let h_us = sh as usize;
     let stride = snapshot.stride() as usize;
-    if let Ok(mut data) = snapshot.data() {
-        let mut buf = vec![0u8; w_us * h_us * 4];
+    let mut buf = vec![0u8; w_us * h_us * 4];
+    if let Ok(data) = snapshot.data() {
         for row in 0..h_us {
             let src_off = row * stride;
             let dst_off = row * w_us * 4;
             buf[dst_off..dst_off + w_us * 4].copy_from_slice(&data[src_off..src_off + w_us * 4]);
         }
+    } else {
+        return;
+    }
 
-        for op in &filter.operations {
-            match *op {
-                strata_style::effects::FilterOp::Blur(radius_px) => {
+    let first_px = [buf[0], buf[1], buf[2], buf[3]];
+    let is_uniform = buf.chunks_exact(4).all(|px| px == first_px);
+    let has_color_ops = filter
+        .operations
+        .iter()
+        .any(|op| !matches!(*op, strata_style::effects::FilterOp::Blur(_)));
+
+    // A uniform or transparent backdrop (e.g. HUD panels floating over a cleared <Canvas3D> hole)
+    // blurs identically to itself, so skip the expensive 3-pass CPU box blur cleanly.
+    if is_uniform && !has_color_ops {
+        return;
+    }
+
+    for op in &filter.operations {
+        match *op {
+            strata_style::effects::FilterOp::Blur(radius_px) => {
+                if !is_uniform {
                     let blur_r = ((radius_px as f64 * dev_scale).round() as usize).min(128);
                     if blur_r >= 1 {
                         box_blur_3pass(&mut buf, w_us, h_us, blur_r);
                     }
                 }
-                other => apply_color_filter_op_premul(&mut buf, other),
             }
+            other => apply_color_filter_op_premul(&mut buf, other),
         }
+    }
 
+    if let Ok(mut data) = snapshot.data() {
         for row in 0..h_us {
             let src_off = row * w_us * 4;
             let dst_off = row * stride;
@@ -2566,6 +2585,21 @@ mod gtk_gpu_x11 {
         ) -> *mut xlib::Display;
     }
 
+    #[link(name = "Xext")]
+    extern "C" {
+        fn XShapeCombineRectangles(
+            display: *mut xlib::Display,
+            dest: xlib::Window,
+            dest_kind: libc::c_int,
+            x_off: libc::c_int,
+            y_off: libc::c_int,
+            rectangles: *const c_void,
+            n_rects: libc::c_int,
+            op: libc::c_int,
+            ordering: libc::c_int,
+        );
+    }
+
     pub(super) struct GtkGpuSurfaceState {
         xdisplay: *mut xlib::Display,
         child_xid: xlib::Window,
@@ -2574,6 +2608,7 @@ mod gtk_gpu_x11 {
         height: u32,
         mapped: bool,
         overlay_uploaded: bool,
+        last_overlay_hash: Option<u64>,
         last_scene: Option<Arc<Scene3D>>,
         last_viewport: Option<[f32; 4]>,
     }
@@ -2608,6 +2643,7 @@ mod gtk_gpu_x11 {
             self.height = h;
             self.presenter.resize(w, h);
             self.overlay_uploaded = false;
+            self.last_overlay_hash = None;
         }
 
         fn destroy(self) {
@@ -2620,6 +2656,69 @@ mod gtk_gpu_x11 {
                 xlib::XFlush(xdisplay);
             }
         }
+    }
+
+    struct FnvFmtHasher(u64);
+
+    impl std::fmt::Write for FnvFmtHasher {
+        #[inline]
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            for &b in s.as_bytes() {
+                self.0 ^= b as u64;
+                self.0 = self.0.wrapping_mul(0x100_0000_01b3);
+            }
+            Ok(())
+        }
+    }
+
+    impl FnvFmtHasher {
+        #[inline]
+        fn push_u64(&mut self, v: u64) {
+            for b in v.to_le_bytes() {
+                self.0 ^= b as u64;
+                self.0 = self.0.wrapping_mul(0x100_0000_01b3);
+            }
+        }
+    }
+
+    fn compute_overlay_hash(
+        list: &DisplayList,
+        w: u32,
+        h: u32,
+        transparent_bg: bool,
+        cursor_overlay: Option<(&crate::McpCursorState, &crate::CursorTheme)>,
+    ) -> u64 {
+        use std::fmt::Write as _;
+        let mut h_acc = FnvFmtHasher(0xcbf2_9ce4_8422_2325);
+        h_acc.push_u64(w as u64);
+        h_acc.push_u64(h as u64);
+        h_acc.push_u64(transparent_bg as u64);
+        if let Some((mc, _)) = cursor_overlay {
+            if mc.fade_opacity > 0.001 {
+                h_acc.push_u64(1);
+                h_acc.push_u64(mc.current_x.to_bits() as u64);
+                h_acc.push_u64(mc.current_y.to_bits() as u64);
+                h_acc.push_u64(mc.fade_opacity.to_bits() as u64);
+                h_acc.push_u64(mc.is_down as u64);
+                let _ = write!(h_acc, "{:?}", mc.cursor_icon);
+            }
+        }
+        h_acc.push_u64(list.commands().len() as u64);
+        for cmd in list.commands() {
+            match cmd {
+                DrawCommand::DrawViewport3D { bounds, .. } => {
+                    h_acc.push_u64(0x3D);
+                    h_acc.push_u64(bounds.x.to_bits() as u64);
+                    h_acc.push_u64(bounds.y.to_bits() as u64);
+                    h_acc.push_u64(bounds.width.to_bits() as u64);
+                    h_acc.push_u64(bounds.height.to_bits() as u64);
+                }
+                other => {
+                    let _ = write!(h_acc, "{:?}", other);
+                }
+            }
+        }
+        h_acc.0
     }
 
     thread_local! {
@@ -2659,8 +2758,9 @@ mod gtk_gpu_x11 {
             let mut attrs: xlib::XWindowAttributes = std::mem::zeroed();
             xlib::XGetWindowAttributes(xdisplay, parent_xid, &mut attrs);
             let child = xlib::XCreateSimpleWindow(xdisplay, parent_xid, 0, 0, w, h, 0, 0, 0);
-            // Zero event mask lets all pointer, scroll, and keyboard input bubble to GTK.
+            // Zero event mask and empty input shape let all pointer/cursor events stay cleanly on GTK DrawingArea.
             xlib::XSelectInput(xdisplay, child, 0);
+            XShapeCombineRectangles(xdisplay, child, 2, 0, 0, std::ptr::null(), 0, 0, 0);
             xlib::XMapWindow(xdisplay, child);
             xlib::XSync(xdisplay, 0);
             let scr = xlib::XDefaultScreen(xdisplay);
@@ -2717,6 +2817,7 @@ mod gtk_gpu_x11 {
             height: h,
             mapped: true,
             overlay_uploaded: false,
+            last_overlay_hash: None,
             last_scene: None,
             last_viewport: None,
         })
@@ -2827,7 +2928,10 @@ mod gtk_gpu_x11 {
                 };
                 match init_state_from_drawing_area(&da, w, h, present_mode) {
                     Ok(state) => *cell = Some(state),
-                    Err(_) => {
+                    Err(e) => {
+                        if std::env::var_os("STRATA_PERF_LOG").is_some() {
+                            eprintln!("[perf] wgpu X11 swapchain init failed: {e}");
+                        }
                         GPU_SURFACE_INIT_FAILED.with(|f| f.set(true));
                         return false;
                     }
@@ -2841,11 +2945,16 @@ mod gtk_gpu_x11 {
             state.set_mapped(true);
 
             if overlay_dirty || !state.overlay_uploaded {
-                if let Some(bgra) =
-                    rasterize_overlay_bgra(list, w, h, transparent_bg, cursor_overlay)
-                {
-                    state.presenter.upload_ui_overlay_bgra(w, h, &bgra);
-                    state.overlay_uploaded = true;
+                let overlay_hash =
+                    compute_overlay_hash(list, w, h, transparent_bg, cursor_overlay);
+                if !state.overlay_uploaded || state.last_overlay_hash != Some(overlay_hash) {
+                    if let Some(bgra) =
+                        rasterize_overlay_bgra(list, w, h, transparent_bg, cursor_overlay)
+                    {
+                        state.presenter.upload_ui_overlay_bgra(w, h, &bgra);
+                        state.overlay_uploaded = true;
+                        state.last_overlay_hash = Some(overlay_hash);
+                    }
                 }
             }
 
@@ -3294,6 +3403,14 @@ pub fn gtk_set_cursor(cursor_icon: crate::window::CursorIcon) {
                     }
                 };
                 gdk_win.set_cursor(cursor.as_ref());
+                DRAWING_AREA_HANDLE.with(|da| {
+                    if let Some(area) = da.borrow().as_ref() {
+                        if let Some(da_win) = area.window() {
+                            da_win.set_cursor(cursor.as_ref());
+                        }
+                    }
+                });
+                display.flush();
                 CURRENT_CURSOR.with(|c| c.set(Some(cursor_icon)));
             }
         }
@@ -3681,6 +3798,8 @@ where
     });
 
     let tick_gen = std::rc::Rc::new(std::cell::Cell::new(0u64));
+    let armed_deadline: std::rc::Rc<std::cell::Cell<Option<std::time::Instant>>> =
+        std::rc::Rc::new(std::cell::Cell::new(None));
     let next_wakeup_rc: std::rc::Rc<
         std::cell::RefCell<dyn FnMut() -> Option<std::time::Duration>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(next_wakeup));
@@ -3692,17 +3811,33 @@ where
         >,
         next_wakeup: std::rc::Rc<std::cell::RefCell<dyn FnMut() -> Option<std::time::Duration>>>,
         tick_gen: std::rc::Rc<std::cell::Cell<u64>>,
+        armed_deadline: std::rc::Rc<std::cell::Cell<Option<std::time::Instant>>>,
     ) {
         let delay = (next_wakeup.borrow_mut())();
-        let next_gen = tick_gen.get().wrapping_add(1);
-        tick_gen.set(next_gen);
-        let Some(delay) = delay else {
-            return;
-        };
-        let run_tick = move || {
-            if IS_CLOSING.with(|c| c.get()) || tick_gen.get() != next_gen {
+        let now = std::time::Instant::now();
+        let (target_deadline, delay) = match compute_tick_rearm_decision(
+            armed_deadline.get(),
+            now,
+            delay,
+        ) {
+            TickRearmDecision::KeepPending => return,
+            TickRearmDecision::CancelPending => {
+                armed_deadline.set(None);
+                tick_gen.set(tick_gen.get().wrapping_add(1));
                 return;
             }
+            TickRearmDecision::ArmAt(target, d) => (target, d),
+        };
+        let next_gen = tick_gen.get().wrapping_add(1);
+        tick_gen.set(next_gen);
+        armed_deadline.set(Some(target_deadline));
+        let armed_tick = armed_deadline.clone();
+        let tick_gen_run = tick_gen.clone();
+        let run_tick = move || {
+            if IS_CLOSING.with(|c| c.get()) || tick_gen_run.get() != next_gen {
+                return;
+            }
+            armed_tick.set(None);
             let Some(on_event_strong) = on_event.upgrade() else {
                 return;
             };
@@ -3712,10 +3847,23 @@ where
                 use gtk::prelude::WidgetExt;
                 da.queue_draw();
             }
-            arm_next_tick(da, on_event, next_wakeup, tick_gen);
+            arm_next_tick(da, on_event, next_wakeup, tick_gen_run, armed_tick);
         };
         if delay.is_zero() {
-            gtk::glib::idle_add_local_once(run_tick);
+            let mut run_opt = Some(run_tick);
+            // Must be strictly greater (lower priority) than GTK_PRIORITY_RESIZE (110)
+            // and GDK_PRIORITY_REDRAW (120) so continuous 0ms wakeups cannot starve
+            // initial/pending layout or connect_draw, while still beating DEFAULT_IDLE (200).
+            const ZERO_DELAY_TICK_PRIORITY: i32 = 130;
+            gtk::glib::idle_add_local_full(
+                gtk::glib::Priority::from(ZERO_DELAY_TICK_PRIORITY),
+                move || {
+                    if let Some(f) = run_opt.take() {
+                        f();
+                    }
+                    gtk::glib::ControlFlow::Break
+                },
+            );
         } else {
             let clamped = delay.max(std::time::Duration::from_millis(1));
             gtk::glib::timeout_add_local_once(clamped, run_tick);
@@ -3726,12 +3874,12 @@ where
         std::cell::RefCell<dyn FnMut(&crate::events::PlatformEvent) -> bool>,
     > = std::rc::Rc::new(std::cell::RefCell::new(on_event));
 
-    // Re-arm the single wakeup timer whenever a non-tick event arrives so
-    // newly started animations, timers, or caret focus wake promptly.
+    // Only re-arm when no AnimationTick is currently pending or the newly requested wakeup is strictly earlier.
     let rearm_da = drawing_area.clone();
     let rearm_weak = std::rc::Rc::downgrade(&on_event_rc);
     let rearm_wakeup = next_wakeup_rc.clone();
     let rearm_gen = tick_gen.clone();
+    let rearm_deadline = armed_deadline.clone();
     let inner_rc = on_event_rc.clone();
     let inner_weak = std::rc::Rc::downgrade(&inner_rc);
     let on_event_rc: std::rc::Rc<
@@ -3745,6 +3893,7 @@ where
                     rearm_weak.clone(),
                     rearm_wakeup.clone(),
                     rearm_gen.clone(),
+                    rearm_deadline.clone(),
                 );
             }
             changed
@@ -3932,7 +4081,10 @@ where
     });
 
     let on_event_leave = on_event_rc.clone();
-    drawing_area.connect_leave_notify_event(move |widget, _event| {
+    drawing_area.connect_leave_notify_event(move |widget, event| {
+        if event.mode() != gtk::gdk::CrossingMode::Normal {
+            return gtk::glib::Propagation::Proceed;
+        }
         let plat_event = crate::events::PlatformEvent::CursorLeft;
         if (on_event_leave.borrow_mut())(&plat_event) {
             widget.queue_draw();
@@ -4222,11 +4374,45 @@ where
     // Single unified wakeup scheduler: arms one timer for the minimum of any
     // active animation, caret blink, JS/native timer, or periodic on_frame hook.
     // When nothing is pending (next_wakeup returns None), no timer is armed.
-    arm_next_tick(drawing_area.clone(), inner_weak, next_wakeup_rc, tick_gen);
+    arm_next_tick(
+        drawing_area.clone(),
+        inner_weak,
+        next_wakeup_rc,
+        tick_gen,
+        armed_deadline,
+    );
 
     gtk::main();
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TickRearmDecision {
+    KeepPending,
+    CancelPending,
+    ArmAt(std::time::Instant, std::time::Duration),
+}
+
+fn compute_tick_rearm_decision(
+    armed_deadline: Option<std::time::Instant>,
+    now: std::time::Instant,
+    next_delay: Option<std::time::Duration>,
+) -> TickRearmDecision {
+    let Some(delay) = next_delay else {
+        return if armed_deadline.is_some() {
+            TickRearmDecision::CancelPending
+        } else {
+            TickRearmDecision::KeepPending
+        };
+    };
+    let target = now.checked_add(delay).unwrap_or(now);
+    if let Some(existing) = armed_deadline {
+        if target >= existing {
+            return TickRearmDecision::KeepPending;
+        }
+    }
+    TickRearmDecision::ArmAt(target, delay)
 }
 
 thread_local! {
@@ -4666,5 +4852,48 @@ mod frameless_resize_tests {
             None
         );
         assert!(super::DRAG_STATE.with(|d| d.get().is_none()));
+    }
+
+    #[test]
+    fn test_tick_rearm_preserves_pending_unless_strictly_earlier() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let d16 = Duration::from_millis(16);
+        let d4 = Duration::from_millis(4);
+
+        // No tick pending -> arms at t0 + 16ms.
+        assert_eq!(
+            super::compute_tick_rearm_decision(None, t0, Some(d16)),
+            super::TickRearmDecision::ArmAt(t0 + d16, d16)
+        );
+
+        // MouseMove 5ms later requesting another 16ms wakeup (t0 + 21ms >= t0 + 16ms)
+        // must keep existing pending tick instead of cancelling/postponing it.
+        let armed = Some(t0 + d16);
+        let t_move = t0 + Duration::from_millis(5);
+        assert_eq!(
+            super::compute_tick_rearm_decision(armed, t_move, Some(d16)),
+            super::TickRearmDecision::KeepPending
+        );
+
+        // Immediate wakeup (0ms) or strictly earlier wakeup (t_move + 4ms < t0 + 16ms) re-arms earlier.
+        assert_eq!(
+            super::compute_tick_rearm_decision(armed, t_move, Some(d4)),
+            super::TickRearmDecision::ArmAt(t_move + d4, d4)
+        );
+        assert_eq!(
+            super::compute_tick_rearm_decision(armed, t_move, Some(Duration::ZERO)),
+            super::TickRearmDecision::ArmAt(t_move, Duration::ZERO)
+        );
+
+        // No future wakeup needed -> cancels armed tick cleanly.
+        assert_eq!(
+            super::compute_tick_rearm_decision(armed, t_move, None),
+            super::TickRearmDecision::CancelPending
+        );
+        assert_eq!(
+            super::compute_tick_rearm_decision(None, t_move, None),
+            super::TickRearmDecision::KeepPending
+        );
     }
 }

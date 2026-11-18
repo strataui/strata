@@ -2,6 +2,25 @@
 
 use super::*;
 
+pub(crate) fn resolved_cursor_at(
+    runtime: &AppRuntime,
+    x: f32,
+    y: f32,
+) -> strata_platform::window::CursorIcon {
+    let is_over_scrollbar = runtime.active_scrollbars.iter().any(|bar| {
+        bar.max_scroll_y > 1.0
+            && (x >= bar.track_bounds.x
+                && x <= bar.bounds.x + bar.bounds.width + 1.0
+                && y >= bar.track_bounds.y
+                && y <= bar.track_bounds.y + bar.track_bounds.height)
+    });
+    if is_over_scrollbar {
+        strata_platform::window::CursorIcon::Default
+    } else {
+        AppRuntime::hit_test_cursor(&runtime.root_blueprint, &runtime.layout_root, x, y)
+    }
+}
+
 /// Dispatches a native platform event into the AppRuntime, updating geometry, focus, input, and styling.
 /// Returns `(needs_rebuild, needs_redraw, should_exit)`.
 pub fn dispatch_native_platform_event<E>(
@@ -90,6 +109,7 @@ where
             }
         }
         strata_platform::PlatformEvent::MouseDown { button, x, y } => {
+            runtime.last_mouse_pos = (*x, *y);
             let btn_idx = button.to_button_index();
             if *button == strata_platform::MouseButton::Left {
                 runtime.is_mouse_down = true;
@@ -97,7 +117,12 @@ where
                     needs_redraw = true;
                 } else {
                     runtime.begin_window_drag_candidate(*x, *y);
-                    let action = runtime.dispatch_pointer_down_action(*x, *y);
+                    let action = runtime.dispatch_pointer_down_action_with_button_and_modifiers(
+                        *x,
+                        *y,
+                        btn_idx,
+                        Default::default(),
+                    );
                     if action.needs_rebuild() {
                         needs_rebuild = true;
                     } else if action.needs_redraw() {
@@ -114,7 +139,12 @@ where
                     }
                 }
             } else if *button == strata_platform::MouseButton::Middle {
-                let action = runtime.dispatch_pointer_down_action(*x, *y);
+                let action = runtime.dispatch_pointer_down_action_with_button_and_modifiers(
+                    *x,
+                    *y,
+                    btn_idx,
+                    Default::default(),
+                );
                 if action.needs_rebuild() {
                     needs_rebuild = true;
                 } else if action.needs_redraw() {
@@ -124,6 +154,17 @@ where
                     needs_rebuild = true;
                 }
             } else if *button == strata_platform::MouseButton::Right {
+                let action = runtime.dispatch_pointer_down_action_with_button_and_modifiers(
+                    *x,
+                    *y,
+                    btn_idx,
+                    Default::default(),
+                );
+                if action.needs_rebuild() {
+                    needs_rebuild = true;
+                } else if action.needs_redraw() {
+                    needs_redraw = true;
+                }
                 if runtime.dispatch_context_menu(*x, *y) {
                     needs_rebuild = true;
                 }
@@ -131,8 +172,11 @@ where
                     needs_rebuild = true;
                 }
             }
+            runtime.current_cursor = resolved_cursor_at(runtime, *x, *y);
         }
         strata_platform::PlatformEvent::MouseUp { button, x, y } => {
+            runtime.last_mouse_pos = (*x, *y);
+            let btn_idx = button.to_button_index();
             let was_mouse_down = runtime.is_mouse_down;
             if *button == strata_platform::MouseButton::Left {
                 runtime.is_mouse_down = false;
@@ -142,7 +186,7 @@ where
                 needs_redraw = true;
             }
             runtime.pending_window_drag = None;
-            let action = runtime.dispatch_pointer_up_action(*x, *y);
+            let action = runtime.dispatch_pointer_up_action_with_button(*x, *y, btn_idx);
             if action.needs_rebuild() {
                 needs_rebuild = true;
             } else if action.needs_redraw() {
@@ -151,6 +195,7 @@ where
             if was_mouse_down && !needs_rebuild && runtime.restyle_for_active_change() {
                 needs_redraw = true;
             }
+            runtime.current_cursor = resolved_cursor_at(runtime, *x, *y);
         }
         strata_platform::PlatformEvent::MouseMove { x, y } => {
             runtime.last_mouse_pos = (*x, *y);
@@ -175,24 +220,7 @@ where
                         needs_rebuild = true;
                     }
                 }
-                let is_over_scrollbar = runtime.active_scrollbars.iter().any(|bar| {
-                    bar.max_scroll_y > 1.0
-                        && (*x >= bar.track_bounds.x
-                            && *x <= bar.bounds.x + bar.bounds.width + 1.0
-                            && *y >= bar.track_bounds.y
-                            && *y <= bar.track_bounds.y + bar.track_bounds.height)
-                });
-                let cur = if is_over_scrollbar {
-                    strata_platform::window::CursorIcon::Default
-                } else {
-                    AppRuntime::hit_test_cursor(
-                        &runtime.root_blueprint,
-                        &runtime.layout_root,
-                        *x,
-                        *y,
-                    )
-                };
-                runtime.current_cursor = cur;
+                runtime.current_cursor = resolved_cursor_at(runtime, *x, *y);
             }
         }
         strata_platform::PlatformEvent::CursorLeft => {

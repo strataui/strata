@@ -11,13 +11,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Default maximum new tile textures uploaded to the GPU atlas per frame during continuous flight.
-pub const DEFAULT_TEXTURE_UPLOAD_BUDGET: usize = 256;
+pub const DEFAULT_TEXTURE_UPLOAD_BUDGET: usize = 1024;
 /// Default maximum new tile meshes copied to the GPU storage slab per frame.
-pub const DEFAULT_MESH_UPLOAD_BUDGET: usize = 256;
+pub const DEFAULT_MESH_UPLOAD_BUDGET: usize = 512;
 /// Standard terrain imagery tile dimension in the GPU `Texture2DArray` atlas.
 pub const ATLAS_TILE_SIZE: u32 = 256;
 /// Maximum imagery layers pre-allocated in the GPU `Texture2DArray` atlas.
-pub const MAX_ATLAS_LAYERS: u32 = 512;
+pub const MAX_ATLAS_LAYERS: u32 = 1024;
 
 /// Splits a 64-bit float into `(hi, lo)` 32-bit floats for GPU double-single emulation.
 #[inline]
@@ -233,7 +233,12 @@ impl GpuCameraUniforms {
                 cam.time_s,
                 space_sky,
             ],
-            viewport_wh: [viewport_w.max(1.0), viewport_h.max(1.0), 0.0, 0.0],
+            viewport_wh: [
+                viewport_w.max(1.0),
+                viewport_h.max(1.0),
+                cam.skybox_intensity.max(0.0),
+                cam.local_cloud_opacity.max(0.0),
+            ],
         }
     }
 }
@@ -251,8 +256,9 @@ struct GpuTileInstance {
     center_high: [f32; 4],
     center_low: [f32; 4],
     uv_rect: [f32; 4],
+    night_uv_rect: [f32; 4],
     tint: [f32; 4],
-    tile_meta: [u32; 4], // x = base_vertex, y = atlas_layer, z = unlit (0/1), w = reserved
+    tile_meta: [u32; 4], // x = base_vertex, y = atlas_layer, z = unlit (0/1), w = night_atlas_layer
 }
 
 #[repr(C)]
@@ -345,6 +351,7 @@ struct GpuCameraUniforms {
 @group(0) @binding(0) var<uniform> cam: GpuCameraUniforms;
 @group(0) @binding(1) var moon_tex: texture_2d<f32>;
 @group(0) @binding(2) var env_sampler: sampler;
+@group(0) @binding(3) var skybox_cube: texture_cube<f32>;
 
 struct SkyOut {
     @builtin(position) pos: vec4<f32>,
@@ -395,28 +402,38 @@ fn noise3(p: vec3<f32>) -> f32 {
 @fragment
 fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let sky_grad = mix(cam.sky_top, cam.sky_bottom, clamp(in.uv_y, 0.0, 1.0));
+    let p4 = cam.inv_view_proj_rte * vec4<f32>(in.ndc, 0.5, 1.0);
+    let w_safe = select(p4.w, select(-1e-6, 1e-6, p4.w >= 0.0), abs(p4.w) < 1e-6);
+    let rd = normalize(p4.xyz / w_safe);
+    let rd_icrf = normalize((cam.icrf_from_ecef * vec4<f32>(rd, 0.0)).xyz);
+    let cube_dim = max(f32(textureDimensions(skybox_cube, 0).x), 1.0);
+    let texel_px = (cube_dim * 0.5) * length(fwidth(rd_icrf));
+    let sky_lod = max(log2(max(texel_px, 1.0)), 0.0);
+
     if (cam.cloud_params.w < 0.5) {
         return sky_grad;
     }
 
-    let p4 = cam.inv_view_proj_rte * vec4<f32>(in.ndc, 0.5, 1.0);
-    let w_safe = select(p4.w, select(-1e-6, 1e-6, p4.w >= 0.0), abs(p4.w) < 1e-6);
-    let rd = normalize(p4.xyz / w_safe);
     let space_t = 1.0 - smoothstep(0.0, 0.85, cam.env_params.z);
 
-    // 1. Pitch-black deep space + scientifically aligned Milky Way band in J2000 ICRF
+    // 1. Pitch-black deep space + J2000 ICRF telescope skybox cubemap (or procedural Milky Way fallback)
     var col = vec3<f32>(0.0);
     if (cam.ambient_color.w > 0.001 && space_t > 0.001) {
-        let rd_icrf = normalize((cam.icrf_from_ecef * vec4<f32>(rd, 0.0)).xyz);
-        // Galactic North Pole & Galactic Center unit vectors (J2000)
-        let gnp = vec3<f32>(-0.867666, -0.198076, 0.455984);
-        let gc = vec3<f32>(-0.054876, -0.873437, -0.483835);
-        let sin_b = dot(rd_icrf, gnp);
-        let core_w = 0.35 + 0.65 * max(dot(rd_icrf, gc), 0.0);
-        let dust_n = noise3(rd_icrf * 7.5) * 0.65 + noise3(rd_icrf * 17.0) * 0.35;
-        let rift = smoothstep(0.015, 0.14, abs(sin_b) + (dust_n - 0.5) * 0.09);
-        let mw = exp(-pow(abs(sin_b) * 8.0, 1.5)) * core_w * (0.45 + 0.55 * dust_n) * mix(0.45, 1.0, rift);
-        col += vec3<f32>(0.055, 0.072, 0.125) * mw * min(cam.ambient_color.w, 1.8) * space_t;
+        let cube_s = textureSampleLevel(skybox_cube, env_sampler, rd_icrf, sky_lod);
+        let sky_gain = cam.viewport_wh.z;
+        if (cube_s.a > 0.01 && sky_gain > 0.001) {
+            col += cube_s.rgb * sky_gain * space_t;
+        } else {
+            // Galactic North Pole & Galactic Center unit vectors (J2000)
+            let gnp = vec3<f32>(-0.867666, -0.198076, 0.455984);
+            let gc = vec3<f32>(-0.054876, -0.873437, -0.483835);
+            let sin_b = dot(rd_icrf, gnp);
+            let core_w = 0.35 + 0.65 * max(dot(rd_icrf, gc), 0.0);
+            let dust_n = noise3(rd_icrf * 7.5) * 0.65 + noise3(rd_icrf * 17.0) * 0.35;
+            let rift = smoothstep(0.015, 0.14, abs(sin_b) + (dust_n - 0.5) * 0.09);
+            let mw = exp(-pow(abs(sin_b) * 8.0, 1.5)) * core_w * (0.45 + 0.55 * dust_n) * mix(0.45, 1.0, rift);
+            col += vec3<f32>(0.055, 0.072, 0.125) * mw * min(cam.ambient_color.w, 1.8) * space_t;
+        }
     }
 
     // Blend pitch-black space to daytime sky when morphing down into 2.5D
@@ -590,6 +607,7 @@ struct GpuTileInstance {
     center_high: vec4<f32>,
     center_low: vec4<f32>,
     uv_rect: vec4<f32>,
+    night_uv_rect: vec4<f32>,
     tint: vec4<f32>,
     tile_meta: vec4<u32>,
 }
@@ -610,6 +628,8 @@ struct TerrainVsOut {
     @location(4) @interpolate(flat) unlit: u32,
     @location(5) ecef_pos: vec3<f32>,
     @location(6) view_rel: vec3<f32>,
+    @location(7) night_uv: vec2<f32>,
+    @location(8) @interpolate(flat) night_layer: u32,
 }
 
 @vertex
@@ -633,6 +653,8 @@ fn vs_terrain(
     out.unlit = inst.tile_meta.z;
     out.ecef_pos = (inst.center_high.xyz + inst.center_low.xyz) + v.pos_u.xyz;
     out.view_rel = world_rel;
+    out.night_uv = mix(inst.night_uv_rect.xy, inst.night_uv_rect.zw, raw_uv);
+    out.night_layer = inst.tile_meta.w;
     return out;
 }
 
@@ -683,10 +705,11 @@ fn fs_terrain(in: TerrainVsOut) -> @location(0) vec4<f32> {
     let city_strength = max(cam.env_params.y, 0.0);
     let blend_25d = clamp(cam.env_params.z, 0.0, 1.0);
 
-    // Uniform daylight lighting (used when day/night shading is toggled off OR in 2.5D near ground)
-    let flat_lit = vec3<f32>(0.90) + vec3<f32>(0.12) * max(ndotl, 0.0);
+    // Unified shadowless daylight lighting (used when sun lighting is toggled off OR in 2.5D near ground)
+    let flat_lit = vec3<f32>(0.98);
 
     let d = normalize(in.ecef_pos);
+    let px_m = max(length(fwidth(d)) * 6378137.0, 6.0);
     let lon = atan2(d.y, d.x);
     let sin_lat = clamp(d.z, -1.0, 1.0);
     let u = fract(lon / 6.28318530718 + 0.5);
@@ -707,16 +730,40 @@ fn fs_terrain(in: TerrainVsOut) -> @location(0) vec4<f32> {
     let lit = mix(flat_lit, day_lit, dn_strength);
     var rgb = base.rgb * lit + atmo_rim * dn_strength;
 
-    // Authentic NASA VIIRS Black Marble city lights masked cleanly to landmasses on the night side
+    // Multi-resolution NASA Black Marble (streamed z=5..8 pyramid + 4K base) with vector-scale street/bulb synthesis
     if (city_strength > 0.001 && dn_strength > 0.001 && on_land > 0.001) {
         let night_mask = smoothstep(0.06, -0.14, ndotl) * dn_strength * city_strength * on_land;
         if (night_mask > 0.001) {
-            let black_marble = env_mask.g;
-            let city_core = smoothstep(0.015, 0.45, black_marble);
-            let subtle_scatter = smoothstep(0.002, 0.12, black_marble) * 0.16;
-            let fine_twinkle = 0.85 + 0.15 * vnoise3(d * 680.0);
-            let city_luma = (city_core * fine_twinkle + subtle_scatter) * night_mask;
-            let warm_amber = vec3<f32>(0.96, 0.72, 0.36);
+            var black_marble = env_mask.g;
+            if (in.night_layer != 0u) {
+                let duv = 1.0 / 256.0;
+                let nl = i32(in.night_layer);
+                let luma_w = vec3<f32>(0.299, 0.587, 0.114);
+                let c0 = dot(textureSampleLevel(terrain_atlas, terrain_sampler, in.night_uv, nl, 0.0).rgb, luma_w);
+                let cx0 = dot(textureSampleLevel(terrain_atlas, terrain_sampler, clamp(in.night_uv - vec2<f32>(duv, 0.0), vec2<f32>(0.0), vec2<f32>(1.0)), nl, 0.0).rgb, luma_w);
+                let cx1 = dot(textureSampleLevel(terrain_atlas, terrain_sampler, clamp(in.night_uv + vec2<f32>(duv, 0.0), vec2<f32>(0.0), vec2<f32>(1.0)), nl, 0.0).rgb, luma_w);
+                let cy0 = dot(textureSampleLevel(terrain_atlas, terrain_sampler, clamp(in.night_uv - vec2<f32>(0.0, duv), vec2<f32>(0.0), vec2<f32>(1.0)), nl, 0.0).rgb, luma_w);
+                let cy1 = dot(textureSampleLevel(terrain_atlas, terrain_sampler, clamp(in.night_uv + vec2<f32>(0.0, duv), vec2<f32>(0.0), vec2<f32>(1.0)), nl, 0.0).rgb, luma_w);
+                black_marble = (c0 * 2.0 + cx0 + cx1 + cy0 + cy1) * (1.0 / 6.0);
+            }
+            let city_core = smoothstep(0.015, 0.42, black_marble);
+            let corridor = smoothstep(0.003, 0.14, black_marble) * 0.22;
+            let n_block = vnoise3(d * 2800.0);
+            let n_street = vnoise3(d * 9200.0);
+            let n_bulb = vnoise3(d * 26000.0);
+            let fine_w = 1.0 - smoothstep(160.0, 1400.0, px_m);
+            let street_w = 1.0 - smoothstep(35.0, 320.0, px_m);
+            var sub_grid = 1.0;
+            if (fine_w > 0.01) {
+                let arterial = smoothstep(0.32, 0.88, vnoise3(d * 68000.0));
+                let lamps = smoothstep(0.45, 0.94, vnoise3(d * 195000.0));
+                let fine_mask = mix(0.28 + 0.95 * arterial, 0.14 + 1.35 * arterial * (0.45 + 0.55 * lamps), street_w);
+                sub_grid = mix(1.0, fine_mask, fine_w);
+            }
+            let street_grid = smoothstep(0.24, 0.86, n_block * 0.55 + n_street * 0.45);
+            let pinpoint = mix(0.62, 1.38, street_grid * (0.55 + 0.45 * n_bulb)) * sub_grid;
+            let city_luma = (city_core * pinpoint + corridor * (0.65 + 0.35 * n_block) * sub_grid) * night_mask;
+            let warm_amber = vec3<f32>(0.97, 0.74, 0.38);
             let warm_white = vec3<f32>(1.0, 0.90, 0.68);
             rgb += mix(warm_amber, warm_white, city_core) * city_luma * 0.92;
         }
@@ -754,9 +801,81 @@ struct CloudOut {
     @location(0) unit_pos: vec3<f32>,
 }
 
+fn cloud_hash31(p: vec3<f32>) -> f32 {
+    var q = fract(p * vec3<f32>(0.1031, 0.1030, 0.0973));
+    q += dot(q, q.yxz + 33.33);
+    return fract((q.x + q.y) * q.z);
+}
+
+fn cloud_noise(x: vec3<f32>) -> f32 {
+    let i = floor(x);
+    let f = fract(x);
+    let u = f * f * (3.0 - 2.0 * f);
+    let n000 = cloud_hash31(i);
+    let n100 = cloud_hash31(i + vec3<f32>(1.0, 0.0, 0.0));
+    let n010 = cloud_hash31(i + vec3<f32>(0.0, 1.0, 0.0));
+    let n110 = cloud_hash31(i + vec3<f32>(1.0, 1.0, 0.0));
+    let n001 = cloud_hash31(i + vec3<f32>(0.0, 0.0, 1.0));
+    let n101 = cloud_hash31(i + vec3<f32>(1.0, 0.0, 1.0));
+    let n011 = cloud_hash31(i + vec3<f32>(0.0, 1.0, 1.0));
+    let n111 = cloud_hash31(i + vec3<f32>(1.0, 1.0, 1.0));
+    return mix(
+        mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
+        mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y),
+        u.z,
+    );
+}
+
+fn sample_cloud_rgba_raw(uv: vec2<f32>, lod: f32) -> vec4<f32> {
+    return textureSampleLevel(cloud_tex, cloud_sampler, uv, lod);
+}
+
+fn cloud_rgba_to_density(s: vec4<f32>) -> f32 {
+    // Smoothly support both RGBA alpha-masked PNG cloud maps and opaque RGB JPEG maps without
+    // hard threshold steps across texel boundaries.
+    let rgb_luma = dot(s.rgb, vec3<f32>(0.299, 0.587, 0.114));
+    return s.a * mix(rgb_luma, 1.0, 1.0 - smoothstep(0.97, 0.999, s.a));
+}
+
+fn sample_cloud_density(uv: vec2<f32>, lod: f32) -> f32 {
+    return cloud_rgba_to_density(sample_cloud_rgba_raw(uv, lod));
+}
+
+// Fast 4-tap hardware-bilinear cubic B-spline interpolation: eliminates C1 texel grid Mach bands
+// when viewing 1K/2K/4K/8K equirectangular cloud textures at close range.
+fn sample_cloud_bicubic_rgba(uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {
+    let tc = uv * dims - vec2<f32>(0.5, 0.5);
+    let i = floor(tc);
+    let f = clamp(tc - i, vec2<f32>(0.0), vec2<f32>(1.0));
+    let f2 = f * f;
+    let f3 = f2 * f;
+
+    let w0 = (vec2<f32>(1.0) - f) * (vec2<f32>(1.0) - f) * (vec2<f32>(1.0) - f) * (1.0 / 6.0);
+    let w1 = (3.0 * f3 - 6.0 * f2 + vec2<f32>(4.0)) * (1.0 / 6.0);
+    let w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + vec2<f32>(1.0)) * (1.0 / 6.0);
+    let w3 = f3 * (1.0 / 6.0);
+
+    let g0 = w0 + w1;
+    let g1 = w2 + w3;
+    let inv_dims = 1.0 / dims;
+    let u0 = fract((i.x - 0.5 + w1.x / max(g0.x, 1e-5)) * inv_dims.x);
+    let u1 = fract((i.x + 1.5 + w3.x / max(g1.x, 1e-5)) * inv_dims.x);
+    let v0 = clamp((i.y - 0.5 + w1.y / max(g0.y, 1e-5)) * inv_dims.y, 0.001, 0.999);
+    let v1 = clamp((i.y + 1.5 + w3.y / max(g1.y, 1e-5)) * inv_dims.y, 0.001, 0.999);
+
+    let c00 = sample_cloud_rgba_raw(vec2<f32>(u0, v0), 0.0);
+    let c10 = sample_cloud_rgba_raw(vec2<f32>(u1, v0), 0.0);
+    let c01 = sample_cloud_rgba_raw(vec2<f32>(u0, v1), 0.0);
+    let c11 = sample_cloud_rgba_raw(vec2<f32>(u1, v1), 0.0);
+
+    let top = mix(c10, c00, g0.x);
+    let bot = mix(c11, c01, g0.x);
+    return mix(bot, top, g0.y);
+}
+
 @vertex
 fn vs_cloud(@location(0) pos_u: vec4<f32>, @location(1) norm_v: vec4<f32>) -> CloudOut {
-    let cloud_r = 6402000.0;
+    let cloud_r = 6391500.0;
     let world_pos = pos_u.xyz * cloud_r;
     let world_rel = (world_pos - cam.eye_high.xyz) - cam.eye_low.xyz;
     var out: CloudOut;
@@ -767,33 +886,121 @@ fn vs_cloud(@location(0) pos_u: vec4<f32>, @location(1) norm_v: vec4<f32>) -> Cl
 
 @fragment
 fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
-    let space_fade = 1.0 - smoothstep(0.0, 0.72, cam.env_params.z);
-    let opacity = cam.cloud_params.x * space_fade;
+    let cloud_r = 6391500.0;
+    let opacity = clamp(cam.cloud_params.x + cam.viewport_wh.w, 0.0, 1.0);
     if (opacity <= 0.004) {
         discard;
     }
 
+    let eye_pos = cam.eye_high.xyz + cam.eye_low.xyz;
+    let eye_r = max(length(eye_pos), 1.0);
+    let eye_alt = max(eye_r - 6378137.0, 0.0);
+    let below_clouds = select(0.0, 1.0, eye_r < cloud_r);
+
     let d = normalize(in.unit_pos);
-    let u = fract((atan2(d.y, d.x) + cam.cloud_params.y) / 6.28318530718 + 0.5);
-    let v = clamp(0.5 - asin(clamp(d.z, -1.0, 1.0)) / 3.14159265359, 0.001, 0.999);
-    let s = textureSampleLevel(cloud_tex, cloud_sampler, vec2<f32>(u, v), 0.0);
-    // Support both RGBA alpha cloudmaps (matteason clouds-alpha.png) and grayscale cloudmaps
-    let density = select(s.a, s.r, s.a > 0.995 && s.r < 0.99);
+    let shell_pos = d * cloud_r;
+    let view_vec = shell_pos - eye_pos;
+    let view_dist = max(length(view_vec), 1.0);
+    let view_dir = view_vec / view_dist;
+
+    // Physical plane-proximity transparency: stays at X in orbit, fades cleanly toward transparent
+    // as the camera approaches the cloud deck (~13.4 km), then recovers opacity X as the camera
+    // descends further below the deck toward the ground.
+    let above_fade = smoothstep(2500.0, 180000.0, max(eye_r - cloud_r, 0.0));
+    let below_fade = smoothstep(1800.0, 9500.0, max(cloud_r - eye_r, 0.0));
+    let plane_alt_fade = mix(above_fade, below_fade, below_clouds);
+    let ray_prox_fade = smoothstep(1500.0, 12000.0, view_dist);
+    let eye_up = eye_pos / eye_r;
+    let sky_hemi_fade = mix(1.0, smoothstep(-0.18, 0.02, dot(view_dir, eye_up)), below_clouds);
+    let cross_fade = plane_alt_fade * ray_prox_fade * sky_hemi_fade;
+    if (cross_fade <= 0.004) {
+        discard;
+    }
+
+    // Soften low-altitude oblique horizon limb so the cloud shell never ends in a hard polygonal bar.
+    let low_alt_factor = 1.0 - smoothstep(40000.0, 350000.0, eye_alt);
+    let horizon_graze = abs(dot(view_dir, d));
+    let horizon_fade = mix(1.0, smoothstep(0.015, 0.16, horizon_graze), low_alt_factor);
+    if (horizon_fade <= 0.004) {
+        discard;
+    }
+
+    let u_base = fract((atan2(d.y, d.x) + cam.cloud_params.y) / 6.28318530718 + 0.5);
+    let v_base = clamp(0.5 - asin(clamp(d.z, -1.0, 1.0)) / 3.14159265359, 0.001, 0.999);
+    let dims = max(vec2<f32>(textureDimensions(cloud_tex, 0)), vec2<f32>(1.0));
+    let du = 1.0 / dims.x;
+    let dv = 1.0 / dims.y;
+    let uv_lod = clamp(log2(max(dims.x / 1024.0, 1.0)) * smoothstep(2200000.0, 14000000.0, eye_alt), 0.0, 3.0);
+
+    let detail_w = 1.0 - smoothstep(120000.0, 2200000.0, eye_alt);
+    let mode_25d = smoothstep(0.15, 0.75, clamp(max(detail_w, below_clouds), 0.0, 1.0));
+
+    var u = u_base;
+    var v = v_base;
+    if (detail_w > 0.01) {
+        let warp_wind = vec3<f32>(cam.cloud_params.z * 0.00012, 0.0, 0.0);
+        let wu = cloud_noise(d * 520.0 + warp_wind) - 0.5;
+        let wv = cloud_noise(d * 520.0 + vec3<f32>(19.3, 7.1, 31.7) + warp_wind) - 0.5;
+        let warp_amp = 0.75 * detail_w;
+        u = fract(u_base + wu * du * warp_amp);
+        v = clamp(v_base + wv * dv * warp_amp, 0.001, 0.999);
+    }
+
+    let s_lod = sample_cloud_rgba_raw(vec2<f32>(u, v), uv_lod);
+    let s_c = select(s_lod, mix(s_lod, sample_cloud_bicubic_rgba(vec2<f32>(u, v), dims), detail_w), detail_w > 0.01);
+    let d_c = cloud_rgba_to_density(s_c);
+
+    let sun_uv = vec2<f32>(fract(u + du * 1.5), clamp(v - dv * 1.5, 0.001, 0.999));
+    let d_sun = select(
+        sample_cloud_density(sun_uv, uv_lod),
+        mix(sample_cloud_density(sun_uv, uv_lod), cloud_rgba_to_density(sample_cloud_bicubic_rgba(sun_uv, dims)), detail_w),
+        detail_w > 0.01,
+    );
+
+    // Full 3D space uses rich sculpted optical contrast; 2.5D below clouds applies wispy FBM + steep sigmoid cutout
+    let crisp_3d = pow(clamp(d_c, 0.0, 1.0), 1.75);
+
+    let base_density = d_c;
+    let clear_cut = smoothstep(0.16, 0.54, base_density);
+    var refined = clear_cut;
+    if (detail_w > 0.005 && clear_cut > 0.004) {
+        let wind = vec3<f32>(cam.cloud_params.z * 0.00018, 0.0, 0.0);
+        let n1 = cloud_noise(d * 850.0 + wind);
+        let n2 = cloud_noise(d * 2400.0 + wind * 1.4);
+        let n3 = cloud_noise(d * 6800.0 - wind * 0.8);
+        let fbm = n1 * 0.55 + n2 * 0.30 + n3 * 0.15;
+        let eroded = clamp(clear_cut * (0.42 + fbm * 1.18) - 0.14, 0.0, 1.0);
+        refined = mix(clear_cut, eroded, detail_w * 0.90);
+    }
+
+    let sigmoid_curve = 1.0 / (1.0 + exp(-(refined - 0.44) * 11.5));
+    let hard_zero_gate = smoothstep(0.14, 0.32, refined);
+    let mask_25d = clamp(sigmoid_curve * hard_zero_gate * 1.04, 0.0, 1.0);
+    let mask_density = mix(crisp_3d, mask_25d, mode_25d);
 
     let ndotl = dot(d, normalize(cam.sun_dir.xyz));
     let dn_strength = clamp(cam.env_params.x, 0.0, 1.0);
     let term = smoothstep(-0.14, 0.18, ndotl);
-    // Keep night-side clouds subtle so polar/northern cloud decks do not cast an extra dark veil above city lights
     let night_fade = mix(0.14, 1.0, mix(1.0, term, dn_strength));
-    let alpha = smoothstep(0.08, 0.85, density) * opacity * night_fade;
+    let lit_mask = mix(night_fade, 1.0, below_clouds);
+    let layer_translucency = mix(1.0, 0.88, below_clouds);
+    let alpha = mask_density * opacity * lit_mask * cross_fade * horizon_fade * layer_translucency;
     if (alpha <= 0.003) {
         discard;
     }
 
-    let flat_cloud = vec3<f32>(0.96, 0.97, 0.99);
+    let bump_scale = 1.65 * (1.0 - 0.45 * detail_w);
+    let ridge_bump = clamp((d_c - d_sun) * bump_scale, -0.22, 0.22);
+    let tex_tint = clamp(0.84 + (d_c - 0.55) * 0.30 + ridge_bump * 0.75, 0.72, 1.05);
+    let shade_base = mix(vec3<f32>(0.68, 0.74, 0.82), vec3<f32>(0.99, 0.995, 1.0), clamp(d_c * 0.95 + ridge_bump, 0.0, 1.0)) * tex_tint;
+    let flat_cloud = mix(
+        shade_base,
+        mix(vec3<f32>(0.76, 0.81, 0.88), vec3<f32>(0.98, 0.99, 1.0), mask_density),
+        below_clouds,
+    );
     let sunset = exp(-pow(ndotl * 7.5, 2.0)) * vec3<f32>(0.48, 0.22, 0.08);
-    let day_cloud = vec3<f32>(0.05, 0.07, 0.11) + cam.sun_color.rgb * term + sunset;
-    let rgb = mix(flat_cloud, day_cloud, dn_strength);
+    let day_cloud = (vec3<f32>(0.05, 0.07, 0.11) + cam.sun_color.rgb * term + sunset) * tex_tint;
+    let rgb = mix(flat_cloud, day_cloud, dn_strength * (1.0 - below_clouds));
     return vec4<f32>(rgb, alpha);
 }
 "#;
@@ -1320,11 +1527,8 @@ impl GpuImageryAtlas {
         let Some(id) = tex_id else {
             return 0;
         };
-        self.slots_by_id
-            .get(&id)
-            .filter(|s| s.revision == revision)
-            .map(|s| s.layer)
-            .unwrap_or(0)
+        let _ = revision;
+        self.slots_by_id.get(&id).map(|s| s.layer).unwrap_or(0)
     }
 }
 
@@ -1356,15 +1560,167 @@ struct GpuEnvironmentState {
     land_mask_id_rev: Option<(u64, u64)>,
     cloud_map_id_rev: Option<(u64, u64)>,
     moon_tex_id_rev: Option<(u64, u64)>,
+    skybox_cube_id_rev: Option<(u64, u64)>,
     stars_ptr: usize,
     stars_len: usize,
     land_mask_view: wgpu::TextureView,
     cloud_map_view: wgpu::TextureView,
     moon_view: wgpu::TextureView,
+    skybox_cube_view: wgpu::TextureView,
     env_sampler: wgpu::Sampler,
     star_buffer: wgpu::Buffer,
     star_capacity: usize,
     star_count: u32,
+}
+
+fn srgb_u8_to_linear(c: u8) -> f32 {
+    let x = c as f32 / 255.0;
+    if x <= 0.04045 {
+        x / 12.92
+    } else {
+        ((x + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb_u8(c: f32) -> u8 {
+    let x = c.clamp(0.0, 1.0);
+    let s = if x <= 0.0031308 {
+        x * 12.92
+    } else {
+        1.055 * x.powf(1.0 / 2.4) - 0.055
+    };
+    (s * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
+fn downsample_srgb_rgba8_half(src: &[u8], w: u32, h: u32) -> (u32, u32, Vec<u8>) {
+    let nw = (w / 2).max(1);
+    let nh = (h / 2).max(1);
+    let mut out = vec![0u8; (nw as usize) * (nh as usize) * 4];
+    for y in 0..nh {
+        let sy0 = (y * 2).min(h - 1) as usize;
+        let sy1 = (y * 2 + 1).min(h - 1) as usize;
+        for x in 0..nw {
+            let sx0 = (x * 2).min(w - 1) as usize;
+            let sx1 = (x * 2 + 1).min(w - 1) as usize;
+            let coords = [(sx0, sy0), (sx1, sy0), (sx0, sy1), (sx1, sy1)];
+            let mut lr = 0.0f32;
+            let mut lg = 0.0f32;
+            let mut lb = 0.0f32;
+            let mut la = 0.0f32;
+            for &(sx, sy) in &coords {
+                let idx = (sy * (w as usize) + sx) * 4;
+                lr += srgb_u8_to_linear(src[idx]);
+                lg += srgb_u8_to_linear(src[idx + 1]);
+                lb += srgb_u8_to_linear(src[idx + 2]);
+                la += src[idx + 3] as f32 / 255.0;
+            }
+            let dst = ((y as usize) * (nw as usize) + (x as usize)) * 4;
+            out[dst] = linear_to_srgb_u8(lr * 0.25);
+            out[dst + 1] = linear_to_srgb_u8(lg * 0.25);
+            out[dst + 2] = linear_to_srgb_u8(lb * 0.25);
+            out[dst + 3] = ((la * 0.25) * 255.0).round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    (nw, nh, out)
+}
+
+fn create_rgba8_cube_view(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    face_size: u32,
+    faces: &[std::sync::Arc<Vec<u8>>; 6],
+    format: wgpu::TextureFormat,
+) -> wgpu::TextureView {
+    let max_dim = device.limits().max_texture_dimension_2d.max(1);
+    let mut size = face_size.max(1);
+    let mut layer_bufs: Vec<Vec<u8>> = faces
+        .iter()
+        .map(|f| {
+            let expected = (size as usize) * (size as usize) * 4;
+            if f.len() >= expected {
+                f[..expected].to_vec()
+            } else {
+                vec![0u8; expected]
+            }
+        })
+        .collect();
+    while size > max_dim && size > 1 {
+        let mut next_size = size;
+        layer_bufs = layer_bufs
+            .into_iter()
+            .map(|buf| {
+                let (nw, _, down) = downsample_srgb_rgba8_half(&buf, size, size);
+                next_size = nw;
+                down
+            })
+            .collect();
+        size = next_size;
+    }
+
+    let mip_level_count = if size > 1 {
+        32 - size.leading_zeros()
+    } else {
+        1
+    };
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 6,
+        },
+        mip_level_count,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+
+    for layer in 0..6u32 {
+        let mut cur_w = size;
+        let mut cur_buf = std::mem::take(&mut layer_bufs[layer as usize]);
+        for mip in 0..mip_level_count {
+            let expected = (cur_w as usize) * (cur_w as usize) * 4;
+            if cur_buf.len() >= expected {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &tex,
+                        mip_level: mip,
+                        origin: wgpu::Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: layer,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &cur_buf[..expected],
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(cur_w * 4),
+                        rows_per_image: Some(cur_w),
+                    },
+                    wgpu::Extent3d {
+                        width: cur_w,
+                        height: cur_w,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            if mip + 1 < mip_level_count {
+                let (nw, _, next) = downsample_srgb_rgba8_half(&cur_buf, cur_w, cur_w);
+                cur_w = nw;
+                cur_buf = next;
+            }
+        }
+    }
+
+    tex.create_view(&wgpu::TextureViewDescriptor {
+        label: Some(label),
+        dimension: Some(wgpu::TextureViewDimension::Cube),
+        ..Default::default()
+    })
 }
 
 fn create_rgba8_2d_view(
@@ -1375,8 +1731,31 @@ fn create_rgba8_2d_view(
     height: u32,
     rgba: &[u8],
 ) -> wgpu::TextureView {
-    let w = width.max(1);
-    let h = height.max(1);
+    let max_dim = device.limits().max_texture_dimension_2d.max(1);
+    let mut w = width.max(1);
+    let mut h = height.max(1);
+    let mut scaled: Option<Vec<u8>> = None;
+    let initial_expected = (w as usize) * (h as usize) * 4;
+    if rgba.len() >= initial_expected && (w > max_dim || h > max_dim) {
+        let mut buf = rgba[..initial_expected].to_vec();
+        while (w > max_dim || h > max_dim) && w > 1 && h > 1 {
+            let (nw, nh, next) = downsample_srgb_rgba8_half(&buf, w, h);
+            w = nw;
+            h = nh;
+            buf = next;
+        }
+        scaled = Some(buf);
+    }
+    let data: &[u8] = scaled.as_deref().unwrap_or(rgba);
+
+    let expected = (w as usize) * (h as usize) * 4;
+    let can_mip = data.len() >= expected && w >= 64 && h >= 64;
+    let mip_level_count = if can_mip {
+        (32 - w.min(h).leading_zeros()).min(5)
+    } else {
+        1
+    };
+
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {
@@ -1384,34 +1763,48 @@ fn create_rgba8_2d_view(
             height: h,
             depth_or_array_layers: 1,
         },
-        mip_level_count: 1,
+        mip_level_count,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    let expected = (w as usize) * (h as usize) * 4;
-    if rgba.len() >= expected {
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &rgba[..expected],
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(w * 4),
-                rows_per_image: Some(h),
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
+    if data.len() >= expected {
+        let mut cur_w = w;
+        let mut cur_h = h;
+        let mut mip_owned: Option<Vec<u8>> = None;
+        for mip in 0..mip_level_count {
+            let mip_bytes = mip_owned.as_deref().unwrap_or(&data[..expected]);
+            let mip_exp = (cur_w as usize) * (cur_h as usize) * 4;
+            if mip_bytes.len() >= mip_exp {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &tex,
+                        mip_level: mip,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &mip_bytes[..mip_exp],
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(cur_w * 4),
+                        rows_per_image: Some(cur_h),
+                    },
+                    wgpu::Extent3d {
+                        width: cur_w,
+                        height: cur_h,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            if mip + 1 < mip_level_count {
+                let (nw, nh, next) = downsample_srgb_rgba8_half(mip_bytes, cur_w, cur_h);
+                cur_w = nw;
+                cur_h = nh;
+                mip_owned = Some(next);
+            }
+        }
     }
     tex.create_view(&Default::default())
 }
@@ -1553,26 +1946,119 @@ pub struct Wgpu3DRenderer {
     cached_fallback_frame: Option<Arc<RetainedTerrainFrame>>,
 }
 
+/// Returns adapter-supported [`wgpu::Limits`] requesting up to [`MAX_ATLAS_LAYERS`] texture array layers.
+pub fn preferred_wgpu_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
+    let mut limits = wgpu::Limits::default();
+    limits.max_texture_array_layers = adapter
+        .limits()
+        .max_texture_array_layers
+        .min(MAX_ATLAS_LAYERS)
+        .max(limits.max_texture_array_layers);
+    limits
+}
+
+/// Acquires the first compatible [`wgpu::Adapter`] whose `request_device` succeeds,
+/// preferring discrete GPUs first and automatically failing over across integrated/software
+/// adapters when the primary GPU driver reports device loss or resource exhaustion.
+pub fn request_working_adapter_and_device(
+    instance: &wgpu::Instance,
+    compatible_surface: Option<&wgpu::Surface<'_>>,
+    label: &str,
+) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), String> {
+    let mut candidates: Vec<wgpu::Adapter> = Vec::new();
+    let mut seen: Vec<(u32, u32, wgpu::DeviceType, wgpu::Backend, String)> = Vec::new();
+    let mut push_unique = |adapter: wgpu::Adapter| {
+        if let Some(surface) = compatible_surface {
+            if !adapter.is_surface_supported(surface) {
+                return;
+            }
+        }
+        let info = adapter.get_info();
+        let key = (
+            info.vendor,
+            info.device,
+            info.device_type,
+            info.backend,
+            info.name,
+        );
+        if !seen.contains(&key) {
+            seen.push(key);
+            candidates.push(adapter);
+        }
+    };
+
+    if let Some(preferred) = pollster::block_on(instance.request_adapter(
+        &wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface,
+            force_fallback_adapter: false,
+        },
+    )) {
+        push_unique(preferred);
+    }
+
+    let mut enumerated: Vec<wgpu::Adapter> = instance
+        .enumerate_adapters(wgpu::Backends::all())
+        .into_iter()
+        .collect();
+    enumerated.sort_by_key(|a| {
+        let info = a.get_info();
+        let dev_rank = match info.device_type {
+            wgpu::DeviceType::DiscreteGpu => 0u8,
+            wgpu::DeviceType::IntegratedGpu => 1,
+            wgpu::DeviceType::VirtualGpu => 2,
+            wgpu::DeviceType::Cpu => 3,
+            wgpu::DeviceType::Other => 4,
+        };
+        let backend_rank = match info.backend {
+            wgpu::Backend::Vulkan => 0u8,
+            wgpu::Backend::Metal | wgpu::Backend::Dx12 => 1,
+            wgpu::Backend::Gl => 2,
+            _ => 3,
+        };
+        (dev_rank, backend_rank)
+    });
+    for adapter in enumerated {
+        push_unique(adapter);
+    }
+
+    if candidates.is_empty() {
+        return Err(if compatible_surface.is_some() {
+            "no compatible wgpu adapter for window surface".to_string()
+        } else {
+            "no wgpu adapter available".to_string()
+        });
+    }
+
+    let mut errors = Vec::new();
+    for adapter in candidates {
+        let info = adapter.get_info();
+        let required_limits = preferred_wgpu_limits(&adapter);
+        match pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some(label),
+                required_features: wgpu::Features::empty(),
+                required_limits,
+                memory_hints: wgpu::MemoryHints::Performance,
+            },
+            None,
+        )) {
+            Ok((device, queue)) => return Ok((adapter, device, queue)),
+            Err(e) => {
+                errors.push(format!("{} ({:?}/{:?}): {e}", info.name, info.backend, info.device_type));
+            }
+        }
+    }
+
+    Err(format!("request_device failed: {}", errors.join("; ")))
+}
+
 impl Wgpu3DRenderer {
     /// Creates a headless `Wgpu3DRenderer` using any available hardware or software Vulkan/GL adapter.
     pub fn new_headless(color_format: wgpu::TextureFormat) -> Result<Self, String> {
         let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        }))
-        .ok_or_else(|| "no wgpu adapter available".to_string())?;
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("strata_render_wgpu_device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::Performance,
-            },
-            None,
-        ))
-        .map_err(|e| format!("request_device failed: {e}"))?;
+        let (_adapter, device, queue) =
+            request_working_adapter_and_device(&instance, None, "strata_render_wgpu_device")?;
         Ok(Self::from_device(
             Arc::new(device),
             Arc::new(queue),
@@ -1619,7 +2105,7 @@ impl Wgpu3DRenderer {
             label: Some("strata_3d_env_sampler"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Linear,
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
@@ -1648,6 +2134,22 @@ impl Wgpu3DRenderer {
             1,
             &[190, 190, 190, 255],
         );
+        let black_face = Arc::new(vec![0u8, 0, 0, 0]);
+        let skybox_cube_view = create_rgba8_cube_view(
+            &device,
+            &queue,
+            "strata_env_skybox_fallback",
+            1,
+            &[
+                Arc::clone(&black_face),
+                Arc::clone(&black_face),
+                Arc::clone(&black_face),
+                Arc::clone(&black_face),
+                Arc::clone(&black_face),
+                black_face,
+            ],
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
         let star_capacity = 64usize;
         let star_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("strata_3d_stars"),
@@ -1659,11 +2161,13 @@ impl Wgpu3DRenderer {
             land_mask_id_rev: None,
             cloud_map_id_rev: None,
             moon_tex_id_rev: None,
+            skybox_cube_id_rev: None,
             stars_ptr: 0,
             stars_len: 0,
             land_mask_view,
             cloud_map_view,
             moon_view,
+            skybox_cube_view,
             env_sampler,
             star_buffer,
             star_capacity,
@@ -1705,15 +2209,25 @@ impl Wgpu3DRenderer {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::Cube,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
-        let sky_bind_group = Self::create_tex2d_bind_group(
+        let sky_bind_group = Self::create_sky_bind_group(
             &device,
             &sky_bind_group_layout,
-            "strata_3d_sky_bg",
             &camera_buffer,
             &env_state.moon_view,
             &env_state.env_sampler,
+            &env_state.skybox_cube_view,
         );
         let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("strata_3d_sky_pl"),
@@ -1923,7 +2437,7 @@ impl Wgpu3DRenderer {
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: None,
                 front_face: wgpu::FrontFace::Ccw,
                 ..Default::default()
             },
@@ -1938,7 +2452,7 @@ impl Wgpu3DRenderer {
             multiview: None,
             cache: None,
         });
-        let (ico_v, ico_i) = build_unit_icosphere(4);
+        let (ico_v, ico_i) = build_unit_icosphere(6);
         let cloud_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("strata_3d_cloud_vb"),
             size: (ico_v.len() * std::mem::size_of::<RteTileVertex>()) as u64,
@@ -2347,6 +2861,38 @@ impl Wgpu3DRenderer {
         })
     }
 
+    fn create_sky_bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        camera_buffer: &wgpu::Buffer,
+        moon_view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+        skybox_cube_view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("strata_3d_sky_bg"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(moon_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(skybox_cube_view),
+                },
+            ],
+        })
+    }
+
     fn create_star_bind_group(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
@@ -2453,6 +2999,8 @@ impl Wgpu3DRenderer {
             }
         }
 
+        let mut sky_rebind = false;
+
         if let Some(ref moon) = env.moon_texture {
             let key = Some((moon.id, moon.revision));
             if self.env_state.moon_tex_id_rev != key {
@@ -2465,15 +3013,59 @@ impl Wgpu3DRenderer {
                     &moon.rgba8,
                 );
                 self.env_state.moon_tex_id_rev = key;
-                self.sky_bind_group = Self::create_tex2d_bind_group(
-                    &self.device,
-                    &self.sky_bind_group_layout,
-                    "strata_3d_sky_bg",
-                    &self.camera_buffer,
-                    &self.env_state.moon_view,
-                    &self.env_state.env_sampler,
-                );
+                sky_rebind = true;
             }
+        }
+
+        match &env.skybox_cubemap {
+            Some(cube) => {
+                let key = Some((cube.id, cube.revision));
+                if self.env_state.skybox_cube_id_rev != key {
+                    self.env_state.skybox_cube_view = create_rgba8_cube_view(
+                        &self.device,
+                        &self.queue,
+                        "strata_env_skybox_cube",
+                        cube.face_size,
+                        &cube.faces_rgba8,
+                        wgpu::TextureFormat::Rgba8Unorm,
+                    );
+                    self.env_state.skybox_cube_id_rev = key;
+                    sky_rebind = true;
+                }
+            }
+            None => {
+                if self.env_state.skybox_cube_id_rev.is_some() {
+                    let black_face = Arc::new(vec![0u8, 0, 0, 0]);
+                    self.env_state.skybox_cube_view = create_rgba8_cube_view(
+                        &self.device,
+                        &self.queue,
+                        "strata_env_skybox_fallback",
+                        1,
+                        &[
+                            Arc::clone(&black_face),
+                            Arc::clone(&black_face),
+                            Arc::clone(&black_face),
+                            Arc::clone(&black_face),
+                            Arc::clone(&black_face),
+                            black_face,
+                        ],
+                        wgpu::TextureFormat::Rgba8Unorm,
+                    );
+                    self.env_state.skybox_cube_id_rev = None;
+                    sky_rebind = true;
+                }
+            }
+        }
+
+        if sky_rebind {
+            self.sky_bind_group = Self::create_sky_bind_group(
+                &self.device,
+                &self.sky_bind_group_layout,
+                &self.camera_buffer,
+                &self.env_state.moon_view,
+                &self.env_state.env_sampler,
+                &self.env_state.skybox_cube_view,
+            );
         }
 
         if let Some(ref stars) = env.stars {
@@ -2694,12 +3286,21 @@ impl Wgpu3DRenderer {
                 let (cy_hi, cy_lo) = split_f64_to_f32(inst.center_ecef[1]);
                 let (cz_hi, cz_lo) = split_f64_to_f32(inst.center_ecef[2]);
                 let tex_layer = self.atlas.layer_for(inst.texture_id, inst.texture_revision);
+                let night_layer = self
+                    .atlas
+                    .layer_for(inst.night_texture_id, inst.night_texture_revision);
+                let eff_tint = if inst.texture_id.is_some() && tex_layer == 0 {
+                    [0.14, 0.19, 0.27, 1.0]
+                } else {
+                    inst.tint
+                };
                 instances_gpu.push(GpuTileInstance {
                     center_high: [cx_hi, cy_hi, cz_hi, 0.0],
                     center_low: [cx_lo, cy_lo, cz_lo, 0.0],
                     uv_rect: inst.uv_rect,
-                    tint: inst.tint,
-                    tile_meta: [base_v, tex_layer, u32::from(inst.unlit), 0],
+                    night_uv_rect: inst.night_uv_rect,
+                    tint: eff_tint,
+                    tile_meta: [base_v, tex_layer, u32::from(inst.unlit), night_layer],
                 });
             }
 
@@ -2930,8 +3531,7 @@ impl Wgpu3DRenderer {
                 }
             }
 
-            if cam.cloud_layer_opacity > 0.004
-                && cam.local_25d_blend < 0.72
+            if (cam.cloud_layer_opacity > 0.004 || cam.local_cloud_opacity > 0.004)
                 && self.cloud_index_count > 0
             {
                 pass.set_pipeline(&self.cloud_pipeline);

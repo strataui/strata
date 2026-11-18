@@ -464,6 +464,27 @@ pub struct RetainedTileInstance {
     pub uv_rect: [f32; 4],
     pub tint: [f32; 4],
     pub unlit: bool,
+    pub night_texture_id: Option<u64>,
+    pub night_texture_revision: u64,
+    pub night_uv_rect: [f32; 4],
+}
+
+impl Default for RetainedTileInstance {
+    fn default() -> Self {
+        Self {
+            key: TileKeyId::quadtree(0, 0, 0),
+            mesh_revision: 0,
+            center_ecef: [0.0; 3],
+            texture_id: None,
+            texture_revision: 0,
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
+            tint: [1.0, 1.0, 1.0, 1.0],
+            unlit: false,
+            night_texture_id: None,
+            night_texture_revision: 0,
+            night_uv_rect: [0.0, 0.0, 1.0, 1.0],
+        }
+    }
 }
 
 /// Dynamic or non-grid RTC geometry (buildings, vector ribbons, trajectories) anchored in ECEF.
@@ -489,8 +510,19 @@ pub struct RetainedStar {
     pub color: [f32; 4],
 }
 
-/// Persistent GPU-uploadable planetary & space environment assets (land mask, cloud map, Moon, star catalog).
+/// 6-face RGBA8 cubemap texture uploadable to `wgpu` (`TextureViewDimension::Cube`).
 #[derive(Debug, Clone, PartialEq)]
+pub struct RetainedCubemapTexture {
+    pub id: u64,
+    pub revision: u64,
+    /// Width and height of each square cubemap face in texels.
+    pub face_size: u32,
+    /// 6 faces in WebGPU/Vulkan array-layer order: `[+X, -X, +Y, -Y, +Z, -Z]`.
+    pub faces_rgba8: [std::sync::Arc<Vec<u8>>; 6],
+}
+
+/// Persistent GPU-uploadable planetary & space environment assets (land mask, cloud map, Moon, star catalog, space skybox).
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct RetainedEnvironmentAssets {
     pub revision: u64,
     /// Equirectangular land mask (land=255, ocean=0 in red/alpha channels) for deterministic land-only city lights.
@@ -501,6 +533,8 @@ pub struct RetainedEnvironmentAssets {
     pub moon_texture: Option<std::sync::Arc<RetainedTileTexture>>,
     /// Real bright star catalog (e.g. Yale BSC5 in J2000 ICRF).
     pub stars: Option<std::sync::Arc<Vec<RetainedStar>>>,
+    /// J2000 ICRF telescope space skybox cubemap (`[+X, -X, +Y, -Y, +Z, -Z]`).
+    pub skybox_cubemap: Option<std::sync::Arc<RetainedCubemapTexture>>,
 }
 
 /// Camera and lighting uniforms needed for O(1) RTE GPU frame presentation without scene rebuilds.
@@ -543,8 +577,12 @@ pub struct RetainedCameraUniforms {
     pub stars_visible: bool,
     /// Brightness multiplier for starfield & Milky Way band.
     pub stars_intensity: f32,
+    /// Brightness multiplier for real telescope skybox cubemap (`1.0` default).
+    pub skybox_intensity: f32,
     /// Opacity of global 3D cloud-map shell (`0.0` = off; auto-fades out in 2.5D).
     pub cloud_layer_opacity: f32,
+    /// Opacity of local cropped satellite overhead cloud canopy in low-altitude / 2.5D view.
+    pub local_cloud_opacity: f32,
     /// Global cloud-map longitudinal scroll offset in radians.
     pub cloud_lon_offset_rad: f32,
     /// Simulation / animation time in seconds.
@@ -581,7 +619,9 @@ impl Default for RetainedCameraUniforms {
             moon_angular_radius_rad: 0.022,
             stars_visible: false,
             stars_intensity: 1.0,
+            skybox_intensity: 1.0,
             cloud_layer_opacity: 0.0,
+            local_cloud_opacity: 0.0,
             cloud_lon_offset_rad: 0.0,
             time_s: 0.0,
         }

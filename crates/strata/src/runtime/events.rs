@@ -45,6 +45,19 @@ impl AppRuntime {
         py: f32,
         modifiers: strata_platform::Modifiers,
     ) -> PointerDownAction {
+        self.dispatch_pointer_down_action_with_button_and_modifiers(px, py, 0, modifiers)
+    }
+
+    /// Dispatches pointer down with explicit mouse button (`0` = Left, `1` = Middle, `2` = Right)
+    /// and modifier keys, managing text input focus/caret on primary clicks and invoking DOM
+    /// `PointerDown` / `MouseDown` listeners with accurate `button` / `buttons` metadata.
+    pub fn dispatch_pointer_down_action_with_button_and_modifiers(
+        &mut self,
+        px: f32,
+        py: f32,
+        button: i16,
+        modifiers: strata_platform::Modifiers,
+    ) -> PointerDownAction {
         // Surfaces marked `data-keep-focus` (context menus, toolbars) never steal focus from the
         // active text input, so commands such as Cut/Paste act on the field the user was editing.
         if Self::hit_test_property(
@@ -61,157 +74,162 @@ impl AppRuntime {
         }
 
         let mut input_handled = false;
-        if let Some(target) = Self::hit_test_input(&self.root_blueprint, &self.layout_root, px, py)
-        {
-            let target_key = target
-                .input_id
-                .clone()
-                .unwrap_or_else(|| format!("input:{}", target.input_index));
-            let text_val = if let Some(ref active) = self.active_focus {
-                let current_key = active
+        if button == 0 {
+            if let Some(target) =
+                Self::hit_test_input(&self.root_blueprint, &self.layout_root, px, py)
+            {
+                let target_key = target
                     .input_id
                     .clone()
-                    .unwrap_or_else(|| format!("input:{}", active.input_index));
-                if current_key == target_key {
-                    active.state.text.get()
+                    .unwrap_or_else(|| format!("input:{}", target.input_index));
+                let text_val = if let Some(ref active) = self.active_focus {
+                    let current_key = active
+                        .input_id
+                        .clone()
+                        .unwrap_or_else(|| format!("input:{}", active.input_index));
+                    if current_key == target_key {
+                        active.state.text.get()
+                    } else {
+                        target.current_value.clone()
+                    }
                 } else {
                     target.current_value.clone()
-                }
-            } else {
-                target.current_value.clone()
-            };
-            let content_box_width = target.content_box_width;
-            let rel_x = if px < target.content_box_x {
-                0.0
-            } else if content_box_width > 0.0 && px > target.content_box_x + content_box_width {
-                100000.0
-            } else {
-                px - target.content_box_x
-            };
-            let char_idx = Self::calculate_exact_char_index_at_offset(
-                &text_val,
-                rel_x,
-                target.font_size,
-                target.line_height,
-                target.is_mono,
-                target.font_family,
-            );
-
-            let now = std::time::Instant::now();
-            let click_count = if let Some((last_time, last_x, last_y, count)) = self.last_click_info
-            {
-                if now.duration_since(last_time).as_millis() < 400
-                    && (px - last_x).abs() < 5.0
-                    && (py - last_y).abs() < 5.0
+                };
+                let content_box_width = target.content_box_width;
+                let rel_x = if px < target.content_box_x {
+                    0.0
+                } else if content_box_width > 0.0 && px > target.content_box_x + content_box_width
                 {
-                    count + 1
+                    100000.0
+                } else {
+                    px - target.content_box_x
+                };
+                let char_idx = Self::calculate_exact_char_index_at_offset(
+                    &text_val,
+                    rel_x,
+                    target.font_size,
+                    target.line_height,
+                    target.is_mono,
+                    target.font_family,
+                );
+
+                let now = std::time::Instant::now();
+                let click_count = if let Some((last_time, last_x, last_y, count)) =
+                    self.last_click_info
+                {
+                    if now.duration_since(last_time).as_millis() < 400
+                        && (px - last_x).abs() < 5.0
+                        && (py - last_y).abs() < 5.0
+                    {
+                        count + 1
+                    } else {
+                        1
+                    }
                 } else {
                     1
+                };
+                self.last_click_info = Some((now, px, py, click_count));
+                self.reset_caret_blink();
+
+                let target_key = target
+                    .input_id
+                    .clone()
+                    .unwrap_or_else(|| format!("input:{}", target.input_index));
+
+                // If the same input is already active, handle multi-click or reposition caret
+                if let Some(ref mut active) = self.active_focus {
+                    let current_key = active
+                        .input_id
+                        .clone()
+                        .unwrap_or_else(|| format!("input:{}", active.input_index));
+                    if current_key == target_key {
+                        if modifiers.shift {
+                            // Shift+click extends the existing selection from its anchor to the clicked index.
+                            active.state.update_selection_drag(char_idx);
+                            self.drag_selection_active = true;
+                        } else if click_count == 2 {
+                            active.state.select_word_at_index(char_idx);
+                            self.drag_selection_active = false;
+                        } else if click_count == 3 {
+                            active.state.select_line_at_index(char_idx);
+                            self.drag_selection_active = false;
+                        } else if click_count >= 4 {
+                            active.state.select_all();
+                            self.drag_selection_active = false;
+                        } else {
+                            active.state.cursor_index.set(char_idx);
+                            active.state.selection_anchor.set(Some(char_idx));
+                            self.drag_selection_active = true;
+                        }
+                        self.sync_active_input_layout();
+                        return PointerDownAction::CaretMoved;
+                    }
+
+                    // Switching away from previous input: persist its undo/redo history in input_states
+                    self.input_states.insert(current_key, active.state.clone());
+                    if let Some(ref blur_cb) = active.on_blur {
+                        blur_cb(strata_dom::Event::new(strata_dom::EventType::Blur));
+                    }
                 }
-            } else {
-                1
-            };
-            self.last_click_info = Some((now, px, py, click_count));
-            self.reset_caret_blink();
 
-            let target_key = target
-                .input_id
-                .clone()
-                .unwrap_or_else(|| format!("input:{}", target.input_index));
+                // Restore existing input state (with its private undo/redo history) or initialize new one
+                let state = self.input_states.remove(&target_key).unwrap_or_else(|| {
+                    strata_dom::text_input::TextInputState::with_text(&target.current_value)
+                });
 
-            // If the same input is already active, handle multi-click or reposition caret
-            if let Some(ref mut active) = self.active_focus {
-                let current_key = active
+                // Sync external value if state was empty
+                if state.text.get().is_empty() && !target.current_value.is_empty() {
+                    state.text.set(target.current_value.clone());
+                }
+
+                if click_count == 2 {
+                    state.select_word_at_index(char_idx);
+                    self.drag_selection_active = false;
+                } else if click_count == 3 {
+                    state.select_line_at_index(char_idx);
+                    self.drag_selection_active = false;
+                } else if click_count >= 4 {
+                    state.select_all();
+                    self.drag_selection_active = false;
+                } else {
+                    state.cursor_index.set(char_idx);
+                    state.selection_anchor.set(Some(char_idx));
+                    self.drag_selection_active = true;
+                }
+                state.is_focused.set(true);
+
+                if let Some(ref focus_cb) = target.on_focus {
+                    focus_cb(strata_dom::Event::new(strata_dom::EventType::Focus));
+                }
+
+                self.active_focus = Some(ActiveInput {
+                    input_index: target.input_index,
+                    input_id: target.input_id,
+                    entity_id: target.entity_id,
+                    state,
+                    on_input: target.on_input,
+                    on_change: target.on_change,
+                    on_submit: target.on_submit,
+                    on_blur: target.on_blur,
+                });
+                self.sync_active_input_layout();
+                input_handled = true;
+            } else if let Some(active) = self.active_focus.take() {
+                let key = active
                     .input_id
                     .clone()
                     .unwrap_or_else(|| format!("input:{}", active.input_index));
-                if current_key == target_key {
-                    if modifiers.shift {
-                        // Shift+click extends the existing selection from its anchor to the clicked index.
-                        active.state.update_selection_drag(char_idx);
-                        self.drag_selection_active = true;
-                    } else if click_count == 2 {
-                        active.state.select_word_at_index(char_idx);
-                        self.drag_selection_active = false;
-                    } else if click_count == 3 {
-                        active.state.select_line_at_index(char_idx);
-                        self.drag_selection_active = false;
-                    } else if click_count >= 4 {
-                        active.state.select_all();
-                        self.drag_selection_active = false;
-                    } else {
-                        active.state.cursor_index.set(char_idx);
-                        active.state.selection_anchor.set(Some(char_idx));
-                        self.drag_selection_active = true;
-                    }
-                    self.sync_active_input_layout();
-                    return PointerDownAction::CaretMoved;
-                }
-
-                // Switching away from previous input: persist its undo/redo history in input_states
-                self.input_states.insert(current_key, active.state.clone());
+                self.input_states.insert(key, active.state.clone());
+                self.drag_selection_active = false;
+                self.last_click_info = None;
                 if let Some(ref blur_cb) = active.on_blur {
                     blur_cb(strata_dom::Event::new(strata_dom::EventType::Blur));
                 }
-            }
-
-            // Restore existing input state (with its private undo/redo history) or initialize new one
-            let state = self.input_states.remove(&target_key).unwrap_or_else(|| {
-                strata_dom::text_input::TextInputState::with_text(&target.current_value)
-            });
-
-            // Sync external value if state was empty
-            if state.text.get().is_empty() && !target.current_value.is_empty() {
-                state.text.set(target.current_value.clone());
-            }
-
-            if click_count == 2 {
-                state.select_word_at_index(char_idx);
-                self.drag_selection_active = false;
-            } else if click_count == 3 {
-                state.select_line_at_index(char_idx);
-                self.drag_selection_active = false;
-            } else if click_count >= 4 {
-                state.select_all();
-                self.drag_selection_active = false;
+                self.sync_active_input_layout();
+                input_handled = true;
             } else {
-                state.cursor_index.set(char_idx);
-                state.selection_anchor.set(Some(char_idx));
-                self.drag_selection_active = true;
+                self.drag_selection_active = false;
             }
-            state.is_focused.set(true);
-
-            if let Some(ref focus_cb) = target.on_focus {
-                focus_cb(strata_dom::Event::new(strata_dom::EventType::Focus));
-            }
-
-            self.active_focus = Some(ActiveInput {
-                input_index: target.input_index,
-                input_id: target.input_id,
-                entity_id: target.entity_id,
-                state,
-                on_input: target.on_input,
-                on_change: target.on_change,
-                on_submit: target.on_submit,
-                on_blur: target.on_blur,
-            });
-            self.sync_active_input_layout();
-            input_handled = true;
-        } else if let Some(active) = self.active_focus.take() {
-            let key = active
-                .input_id
-                .clone()
-                .unwrap_or_else(|| format!("input:{}", active.input_index));
-            self.input_states.insert(key, active.state.clone());
-            self.drag_selection_active = false;
-            self.last_click_info = None;
-            if let Some(ref blur_cb) = active.on_blur {
-                blur_cb(strata_dom::Event::new(strata_dom::EventType::Blur));
-            }
-            self.sync_active_input_layout();
-            input_handled = true;
-        } else {
-            self.drag_selection_active = false;
         }
 
         // Also dispatch PointerDown and MouseDown to DOM listeners
@@ -230,7 +248,7 @@ impl AppRuntime {
                 strata_dom::EventType::PointerDown,
                 px,
                 py,
-                0,
+                button,
                 1,
                 Some(&target_box_copy),
             );
@@ -257,7 +275,7 @@ impl AppRuntime {
                 strata_dom::EventType::MouseDown,
                 px,
                 py,
-                0,
+                button,
                 1,
                 Some(&target_box_copy),
             );
@@ -277,8 +295,12 @@ impl AppRuntime {
         }
         self.pointer_capture_target = captured_target;
 
-        let focus_path = self.find_focus_path_at(px, py);
-        let focus_changed = self.set_focus_path(focus_path);
+        let focus_changed = if button == 0 {
+            let focus_path = self.find_focus_path_at(px, py);
+            self.set_focus_path(focus_path)
+        } else {
+            false
+        };
 
         if dom_handled {
             PointerDownAction::DomListenerInvoked
@@ -476,10 +498,20 @@ impl AppRuntime {
         self.dispatch_pointer_move_action(px, py).is_handled()
     }
 
-    /// Dispatches pointer up, returning detailed action result.
+    /// Dispatches pointer up with primary button (`0`), returning detailed action result.
     pub fn dispatch_pointer_up_action(&mut self, px: f32, py: f32) -> PointerUpAction {
+        self.dispatch_pointer_up_action_with_button(px, py, 0)
+    }
+
+    /// Dispatches pointer up with explicit mouse button (`0` = Left, `1` = Middle, `2` = Right).
+    pub fn dispatch_pointer_up_action_with_button(
+        &mut self,
+        px: f32,
+        py: f32,
+        button: i16,
+    ) -> PointerUpAction {
         let mut selection_ended = false;
-        if self.drag_selection_active {
+        if button == 0 && self.drag_selection_active {
             self.drag_selection_active = false;
             if let Some(ref mut active) = self.active_focus {
                 if let Some(anchor) = active.state.selection_anchor.get() {
@@ -505,7 +537,8 @@ impl AppRuntime {
                         cap_path,
                         ev_type,
                     ) {
-                        let ev = self.create_mouse_event(ev_type, px, py, 0, 1, Some(target_box));
+                        let ev =
+                            self.create_mouse_event(ev_type, px, py, button, 1, Some(target_box));
                         handler(ev);
                         dom_handled = true;
                     }
@@ -522,7 +555,8 @@ impl AppRuntime {
                         )
                     {
                         hit_eid = Some(eid);
-                        let ev = self.create_mouse_event(ev_type, px, py, 0, 1, Some(target_box));
+                        let ev =
+                            self.create_mouse_event(ev_type, px, py, button, 1, Some(target_box));
                         handler(ev);
                         dom_handled = true;
                     }
@@ -533,8 +567,14 @@ impl AppRuntime {
                         ev_type,
                     ) {
                         if hit_eid != Some(cap_eid) {
-                            let ev =
-                                self.create_mouse_event(ev_type, px, py, 0, 1, Some(target_box));
+                            let ev = self.create_mouse_event(
+                                ev_type,
+                                px,
+                                py,
+                                button,
+                                1,
+                                Some(target_box),
+                            );
                             handler(ev);
                             dom_handled = true;
                         }
@@ -548,7 +588,8 @@ impl AppRuntime {
                         py,
                         ev_type,
                     ) {
-                        let ev = self.create_mouse_event(ev_type, px, py, 0, 1, Some(target_box));
+                        let ev =
+                            self.create_mouse_event(ev_type, px, py, button, 1, Some(target_box));
                         handler(ev);
                         dom_handled = true;
                     }
@@ -979,6 +1020,8 @@ impl AppRuntime {
         if let Some(tb) = target_box {
             ev.offset_x = (px - tb.x) as f64;
             ev.offset_y = (py - tb.y) as f64;
+            ev.width = tb.width as f64;
+            ev.height = tb.height as f64;
         } else {
             ev.offset_x = px as f64;
             ev.offset_y = py as f64;
@@ -992,6 +1035,52 @@ impl AppRuntime {
             ev.meta_key = mods.meta;
         }
         ev
+    }
+
+    /// Returns `true` when the active pointer capture target or element at `(px, py)` belongs to
+    /// a retained `<Canvas3D>` viewport tracked by this runtime.
+    pub fn target_is_retained_canvas3d(&self, px: f32, py: f32) -> bool {
+        if self.tracked_retained_3d.is_empty() {
+            return false;
+        }
+        let path_is_canvas = |path: &[usize]| -> bool {
+            let mut current = &self.root_blueprint;
+            if let NodeBlueprint::Element { tag, .. } = current {
+                if matches!(tag, Tag::Canvas | Tag::Custom("Canvas3D")) {
+                    return true;
+                }
+            }
+            for &idx in path {
+                let mut flat = Vec::new();
+                match current {
+                    NodeBlueprint::Element { children, .. }
+                    | NodeBlueprint::Fragment(children) => {
+                        for child in children {
+                            Self::flatten_blueprints(child, &mut flat);
+                        }
+                    }
+                    _ => return false,
+                }
+                if idx >= flat.len() {
+                    return false;
+                }
+                current = flat[idx];
+                if let NodeBlueprint::Element { tag, .. } = current {
+                    if matches!(tag, Tag::Canvas | Tag::Custom("Canvas3D")) {
+                        return true;
+                    }
+                }
+            }
+            false
+        };
+        if let Some((ref cap_path, _)) = self.pointer_capture_target {
+            if path_is_canvas(cap_path) {
+                return true;
+            }
+        }
+        Self::hit_test_node_path(&self.root_blueprint, &self.layout_root, px, py)
+            .as_deref()
+            .is_some_and(path_is_canvas)
     }
 
     /// Dispatches a pointer click event at (x, y) coordinates into the application blueprint tree.
