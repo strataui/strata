@@ -2782,13 +2782,17 @@ mod gtk_gpu_x11 {
             screen,
         );
 
+        let swapchain_mode = match present_mode {
+            crate::surface::PresentMode::Fifo => crate::surface::PresentMode::Mailbox,
+            other => other,
+        };
         let presenter = unsafe {
             crate::wgpu_surface::WgpuWindowPresenter::from_raw_handles(
                 raw_window_handle::RawWindowHandle::Xlib(win_handle),
                 raw_window_handle::RawDisplayHandle::Xlib(disp_handle),
                 w,
                 h,
-                present_mode,
+                swapchain_mode,
             )
         };
         let presenter = match presenter {
@@ -3526,6 +3530,35 @@ fn map_key_name_to_keycode(key_name: &str) -> crate::events::KeyCode {
         "space" => crate::events::KeyCode::Space,
         _ => crate::events::KeyCode::Unknown,
     }
+}
+
+/// Returns the native refresh interval of the active window's monitor (or primary monitor) from GDK.
+///
+/// Queries `gdk::Monitor::refresh_rate()` (reported in millihertz, e.g. `144_000` for 144 Hz,
+/// returning `~6.944 ms`). Falls back to `16 ms` (~60 Hz) when GDK is not initialized or the
+/// display server does not report a positive refresh rate.
+pub fn gtk_primary_refresh_interval() -> std::time::Duration {
+    use gtk::gdk::prelude::MonitorExt;
+    if let Some(display) = gtk::gdk::Display::default() {
+        let monitor = CURRENT_GTK_WINDOW
+            .with(|w| {
+                use gtk::prelude::WidgetExt;
+                w.borrow()
+                    .as_ref()
+                    .and_then(|win| win.window())
+                    .and_then(|gdk_win| display.monitor_at_window(&gdk_win))
+            })
+            .or_else(|| display.primary_monitor())
+            .or_else(|| display.monitor(0));
+        if let Some(m) = monitor {
+            let refresh_mhz = m.refresh_rate();
+            if refresh_mhz > 0 {
+                let nanos = (1_000_000_000_000u64 / (refresh_mhz as u64)).max(100_000);
+                return std::time::Duration::from_nanos(nanos);
+            }
+        }
+    }
+    std::time::Duration::from_millis(16)
 }
 
 fn query_primary_workarea() -> Option<(i32, i32, i32, i32)> {

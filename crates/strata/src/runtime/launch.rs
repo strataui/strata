@@ -204,6 +204,18 @@ where
     }
 }
 
+#[inline]
+pub(crate) fn primary_refresh_interval() -> std::time::Duration {
+    #[cfg(target_os = "linux")]
+    {
+        strata_platform::gtk_primary_refresh_interval()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::time::Duration::from_millis(16)
+    }
+}
+
 pub(crate) fn compute_next_wakeup(
     rt: &AppRuntime,
     frame_hook_due_in: Option<std::time::Duration>,
@@ -233,7 +245,7 @@ pub(crate) fn compute_next_wakeup(
         let anim_interval = if uncapped {
             std::time::Duration::ZERO
         } else {
-            std::time::Duration::from_millis(16)
+            primary_refresh_interval()
         };
         consider(anim_interval);
     } else if rt.active_focus.is_some() {
@@ -560,10 +572,9 @@ where
     };
 
     let frame_hook_state = std::rc::Rc::new(std::cell::RefCell::new(on_frame_opt.map(
-        |(interval, cb)| {
-            let interval = interval.unwrap_or(std::time::Duration::from_millis(16));
+        |(explicit_interval, cb)| {
             let now = std::time::Instant::now();
-            (interval, now, cb)
+            (explicit_interval, now, None::<std::time::Instant>, cb)
         },
     )));
     let frame_hook_tick = frame_hook_state.clone();
@@ -648,13 +659,25 @@ where
                     needs_rebuild = true;
                     needs_redraw = true;
                 }
-                if let Some((interval, ref mut last_called, ref mut cb)) =
-                    *frame_hook_tick.borrow_mut()
+                if let Some((
+                    explicit_interval,
+                    ref mut last_called,
+                    ref mut next_deadline_opt,
+                    ref mut cb,
+                )) = *frame_hook_tick.borrow_mut()
                 {
+                    let interval = explicit_interval.unwrap_or_else(primary_refresh_interval);
                     let now = std::time::Instant::now();
-                    let elapsed = now.saturating_duration_since(*last_called);
-                    if elapsed >= interval {
+                    let deadline = *next_deadline_opt.get_or_insert_with(|| *last_called + interval);
+                    let tolerance = std::time::Duration::from_micros(1200).min(interval / 3);
+                    if now + tolerance >= deadline {
+                        let elapsed = now.saturating_duration_since(*last_called);
                         *last_called = now;
+                        let mut next_dl = deadline + interval;
+                        if next_dl <= now {
+                            next_dl = now + interval;
+                        }
+                        *next_deadline_opt = Some(next_dl);
                         let info = AppFrameInfo {
                             frame_index: rt.frame_count,
                             viewport_width: rt.viewport_width,
@@ -1017,9 +1040,14 @@ where
     let frame_hook_wakeup = frame_hook_state;
     let next_wakeup = move || -> Option<std::time::Duration> {
         let hook_due = frame_hook_wakeup
-            .borrow()
-            .as_ref()
-            .map(|(interval, last_called, _)| interval.saturating_sub(last_called.elapsed()));
+            .borrow_mut()
+            .as_mut()
+            .map(|(explicit_interval, last_called, next_deadline_opt, _)| {
+                let interval = explicit_interval.unwrap_or_else(primary_refresh_interval);
+                let now = std::time::Instant::now();
+                let deadline = *next_deadline_opt.get_or_insert_with(|| *last_called + interval);
+                deadline.saturating_duration_since(now)
+            });
         compute_next_wakeup(&runtime_wakeup.borrow(), hook_due, uncapped_present)
     };
 
