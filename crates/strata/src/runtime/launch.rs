@@ -588,10 +588,16 @@ where
             } = event
             {
                 let (px, py) = rt.last_mouse_pos;
+                let signals_before = strata_dom::reactive::has_dirty_signals();
                 let (wheel_handled, scroll_changed) =
                     rt.dispatch_smooth_scroll_action(px, py, *delta_x, *delta_y);
                 if wheel_handled {
-                    needs_rebuild = true;
+                    let retained_only = !signals_before
+                        && !strata_dom::reactive::has_dirty_signals()
+                        && rt.target_is_retained_canvas3d(px, py);
+                    if !retained_only {
+                        needs_rebuild = true;
+                    }
                 }
                 if scroll_changed {
                     needs_redraw = true;
@@ -663,21 +669,28 @@ where
                 }
             }
             if let strata_platform::PlatformEvent::MouseDown { x, y, button } = event {
+                rt.last_mouse_pos = (*x, *y);
                 let btn_idx = button.to_button_index();
+                let signals_before = strata_dom::reactive::has_dirty_signals();
                 if *button == strata_platform::MouseButton::Left {
                     rt.is_mouse_down = true;
                     if rt.check_scrollbar_thumb_press(*x, *y) {
                         needs_redraw = true;
                     } else {
                         rt.begin_window_drag_candidate(*x, *y);
-                        let action = rt.dispatch_pointer_down_action_with_modifiers(
+                        let action = rt.dispatch_pointer_down_action_with_button_and_modifiers(
                             *x,
                             *y,
+                            btn_idx,
                             strata_platform::gtk_current_modifiers(),
                         );
-                        if action.needs_rebuild() {
+                        let retained_only = action == PointerDownAction::DomListenerInvoked
+                            && !signals_before
+                            && !strata_dom::reactive::has_dirty_signals()
+                            && rt.target_is_retained_canvas3d(*x, *y);
+                        if action.needs_rebuild() && !retained_only {
                             needs_rebuild = true;
-                        } else if action.needs_redraw() {
+                        } else if action.needs_redraw() && !retained_only {
                             needs_redraw = true;
                         }
                         if rt.dispatch_mouse_click(*x, *y, btn_idx, 1) {
@@ -691,16 +704,40 @@ where
                         }
                     }
                 } else if *button == strata_platform::MouseButton::Middle {
-                    let action = rt.dispatch_pointer_down_action(*x, *y);
-                    if action.needs_rebuild() {
+                    let action = rt.dispatch_pointer_down_action_with_button_and_modifiers(
+                        *x,
+                        *y,
+                        btn_idx,
+                        strata_platform::gtk_current_modifiers(),
+                    );
+                    let retained_only = action == PointerDownAction::DomListenerInvoked
+                        && !signals_before
+                        && !strata_dom::reactive::has_dirty_signals()
+                        && rt.target_is_retained_canvas3d(*x, *y);
+                    if action.needs_rebuild() && !retained_only {
                         needs_rebuild = true;
-                    } else if action.needs_redraw() {
+                    } else if action.needs_redraw() && !retained_only {
                         needs_redraw = true;
                     }
                     if rt.dispatch_mouse_click(*x, *y, btn_idx, 1) {
                         needs_rebuild = true;
                     }
                 } else if *button == strata_platform::MouseButton::Right {
+                    let action = rt.dispatch_pointer_down_action_with_button_and_modifiers(
+                        *x,
+                        *y,
+                        btn_idx,
+                        strata_platform::gtk_current_modifiers(),
+                    );
+                    let retained_only = action == PointerDownAction::DomListenerInvoked
+                        && !signals_before
+                        && !strata_dom::reactive::has_dirty_signals()
+                        && rt.target_is_retained_canvas3d(*x, *y);
+                    if action.needs_rebuild() && !retained_only {
+                        needs_rebuild = true;
+                    } else if action.needs_redraw() && !retained_only {
+                        needs_redraw = true;
+                    }
                     if rt.dispatch_context_menu(*x, *y) {
                         needs_rebuild = true;
                     }
@@ -710,6 +747,8 @@ where
                 }
             }
             if let strata_platform::PlatformEvent::MouseUp { x, y, button } = event {
+                rt.last_mouse_pos = (*x, *y);
+                let btn_idx = button.to_button_index();
                 let was_mouse_down = rt.is_mouse_down;
                 if *button == strata_platform::MouseButton::Left {
                     rt.is_mouse_down = false;
@@ -719,10 +758,16 @@ where
                     needs_redraw = true;
                 }
                 rt.pending_window_drag = None;
-                let action = rt.dispatch_pointer_up_action(*x, *y);
-                if action.needs_rebuild() {
+                let signals_before = strata_dom::reactive::has_dirty_signals();
+                let was_retained_canvas = rt.target_is_retained_canvas3d(*x, *y);
+                let action = rt.dispatch_pointer_up_action_with_button(*x, *y, btn_idx);
+                let retained_only = action == PointerUpAction::DomListenerInvoked
+                    && !signals_before
+                    && !strata_dom::reactive::has_dirty_signals()
+                    && was_retained_canvas;
+                if action.needs_rebuild() && !retained_only {
                     needs_rebuild = true;
-                } else if action.needs_redraw() {
+                } else if action.needs_redraw() && !retained_only {
                     needs_redraw = true;
                 }
                 if was_mouse_down && !needs_rebuild && rt.restyle_for_active_change() {
@@ -747,10 +792,16 @@ where
                         }
                         needs_rebuild = true;
                     }
+                    let signals_before = strata_dom::reactive::has_dirty_signals();
+                    let is_retained_canvas = rt.target_is_retained_canvas3d(*x, *y);
                     let action = rt.dispatch_pointer_move_action(*x, *y);
-                    if action.needs_rebuild() {
+                    let retained_only = action == PointerMoveAction::DomListenerInvoked
+                        && !signals_before
+                        && !strata_dom::reactive::has_dirty_signals()
+                        && is_retained_canvas;
+                    if action.needs_rebuild() && !retained_only {
                         needs_rebuild = true;
-                    } else if action.needs_redraw() {
+                    } else if action.needs_redraw() && !retained_only {
                         needs_redraw = true;
                     }
                     if rt.update_hover(*x, *y) {
@@ -760,18 +811,8 @@ where
                             needs_rebuild = true;
                         }
                     }
-                    let is_over_scrollbar = rt.active_scrollbars.iter().any(|bar| {
-                        bar.max_scroll_y > 1.0
-                            && (*x >= bar.track_bounds.x
-                                && *x <= bar.bounds.x + bar.bounds.width + 1.0
-                                && *y >= bar.track_bounds.y
-                                && *y <= bar.track_bounds.y + bar.track_bounds.height)
-                    });
-                    let cur = if is_over_scrollbar {
-                        strata_platform::window::CursorIcon::Default
-                    } else {
-                        AppRuntime::hit_test_cursor(&rt.root_blueprint, &rt.layout_root, *x, *y)
-                    };
+                    let cur = super::platforms::resolved_cursor_at(&rt, *x, *y);
+                    rt.current_cursor = cur;
                     strata_platform::gtk_set_cursor(cur);
                 }
             }
@@ -811,16 +852,44 @@ where
         let retained_3d_dirty =
             !needs_rebuild && !needs_redraw && runtime_event.borrow().poll_retained_3d_dirty();
 
+        let refresh_pointer_cursor = |rt: &mut AppRuntime| {
+            let (px, py) = rt.last_mouse_pos;
+            let cur = super::platforms::resolved_cursor_at(rt, px, py);
+            rt.current_cursor = cur;
+            strata_platform::gtk_set_cursor(cur);
+        };
+
         if needs_rebuild {
             #[cfg(target_os = "linux")]
             if strata_platform::gtk_is_closing() {
                 return (false, false);
             }
             if runtime_event.borrow_mut().sync_dynamic_text() {
+                if !matches!(event, strata_platform::PlatformEvent::CursorLeft)
+                    && (matches!(
+                        event,
+                        strata_platform::PlatformEvent::MouseDown { .. }
+                            | strata_platform::PlatformEvent::MouseUp { .. }
+                            | strata_platform::PlatformEvent::MouseMove { .. }
+                    ) || runtime_event.borrow().current_hover_path.is_some())
+                {
+                    refresh_pointer_cursor(&mut runtime_event.borrow_mut());
+                }
                 (true, true)
             } else {
                 let new_view = (root_fn_event.borrow_mut())();
-                runtime_event.borrow_mut().update_view(new_view);
+                let mut rt = runtime_event.borrow_mut();
+                rt.update_view(new_view);
+                if !matches!(event, strata_platform::PlatformEvent::CursorLeft)
+                    && (matches!(
+                        event,
+                        strata_platform::PlatformEvent::MouseDown { .. }
+                            | strata_platform::PlatformEvent::MouseUp { .. }
+                            | strata_platform::PlatformEvent::MouseMove { .. }
+                    ) || rt.current_hover_path.is_some())
+                {
+                    refresh_pointer_cursor(&mut rt);
+                }
                 (true, true)
             }
         } else if needs_redraw {
@@ -828,14 +897,35 @@ where
             if strata_platform::gtk_is_closing() {
                 return (false, false);
             }
+            if matches!(
+                event,
+                strata_platform::PlatformEvent::MouseDown { .. }
+                    | strata_platform::PlatformEvent::MouseUp { .. }
+            ) {
+                refresh_pointer_cursor(&mut runtime_event.borrow_mut());
+            }
             (true, true)
         } else if retained_3d_dirty {
             #[cfg(target_os = "linux")]
             if strata_platform::gtk_is_closing() {
                 return (false, false);
             }
+            if matches!(
+                event,
+                strata_platform::PlatformEvent::MouseDown { .. }
+                    | strata_platform::PlatformEvent::MouseUp { .. }
+            ) {
+                refresh_pointer_cursor(&mut runtime_event.borrow_mut());
+            }
             (true, false)
         } else {
+            if matches!(
+                event,
+                strata_platform::PlatformEvent::MouseDown { .. }
+                    | strata_platform::PlatformEvent::MouseUp { .. }
+            ) {
+                refresh_pointer_cursor(&mut runtime_event.borrow_mut());
+            }
             (false, false)
         }
     };
@@ -844,7 +934,38 @@ where
     let on_event = move |event: &strata_platform::PlatformEvent| -> bool {
         let (redraw, paint_dirty) = on_event_inner(event);
         if paint_dirty {
-            runtime_dirty.borrow_mut().mark_paint_dirty();
+            let mut rt = runtime_dirty.borrow_mut();
+            rt.mark_paint_dirty();
+            if redraw && strata_platform::gtk_gpu_surface_is_active() {
+                let dl_recompiled = rt.compile_display_list_if_dirty();
+                let mcp_active = rt
+                    .mcp_cursor
+                    .as_ref()
+                    .is_some_and(|c| c.fade_opacity > 0.001);
+                let overlay_dirty = dl_recompiled || mcp_active;
+                let (w, h) = (rt.viewport_width, rt.viewport_height);
+                let cursor_tuple = rt
+                    .mcp_cursor
+                    .as_ref()
+                    .map(|c| c as *const strata_platform::McpCursorState);
+                let theme_ref =
+                    cursor_tuple.map(|_| rt.cursor_theme() as *const strata_platform::CursorTheme);
+                let cursor_pair = match (cursor_tuple, theme_ref) {
+                    (Some(c), Some(t)) => Some(unsafe { (&*c, &*t) }),
+                    _ => None,
+                };
+                if strata_platform::try_present_display_list_gpu(
+                    &rt.display_list,
+                    w,
+                    h,
+                    overlay_dirty,
+                    transparent_bg,
+                    cursor_pair,
+                ) {
+                    rt.acknowledge_retained_3d_presented();
+                    return false;
+                }
+            }
             return redraw;
         }
         if redraw

@@ -35,9 +35,9 @@ strata_macro = { path = "crates/core/strata_macro", version = "0.1.1" }
 strata_aria = { path = "crates/core/strata_aria", version = "0.1.0" }
 
 # Render
-strata_render = { path = "crates/render/strata_render", version = "0.1.0" }
+strata_render = { path = "crates/render/strata_render", version = "0.1.1" }
 strata_gpu_path = { path = "crates/render/strata_gpu_path", version = "0.1.0" }
-strata_platform = { package = "strata-ui-platform", path = "crates/render/strata_platform", version = "0.1.0" }
+strata_platform = { package = "strata-ui-platform", path = "crates/render/strata_platform", version = "0.1.1" }
 strata_tui = { path = "crates/render/strata_tui", version = "0.1.0" }
 strata_audio = { path = "crates/render/strata_audio", version = "0.1.0" }
 

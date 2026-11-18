@@ -289,3 +289,257 @@ fn test_compute_idle_sleep_pacing_states() {
     assert_eq!(dirty_sleep, std::time::Duration::from_millis(16));
     let _ = strata_dom::reactive::take_dirty_signals();
 }
+
+#[test]
+fn test_dynamic_grab_and_grabbing_cursor_on_component() {
+    use strata::prelude::rsx;
+    use strata_platform::window::CursorIcon;
+
+    let build = |grabbing: bool| {
+        let cls = if grabbing {
+            "absolute inset-0 w-full h-full z-0 cursor-grabbing"
+        } else {
+            "absolute inset-0 w-full h-full z-0 cursor-grab"
+        };
+        rsx! {
+            <div class="relative w-[800px] h-[600px]">
+                <div class={cls}>""</div>
+                <button class="absolute top-0 left-0 z-10 w-[100px] h-[40px]">"Action"</button>
+            </div>
+        }
+    };
+
+    let mut runtime = AppRuntime::new(build(false), 800.0, 600.0, 1.0);
+    let mut compositor = SwapchainCompositor::new(800, 600, 1.0);
+    let mut presenter = SoftwareSurfacePresenter::new(800, 600, SwapchainFormat::Bgra8Unorm);
+    let mut hook = |_: &PlatformEvent, _: &mut AppRuntime| false;
+
+    // Hovering open canvas shows Grab; hovering overlay button shows Pointer.
+    dispatch_native_platform_event(
+        &PlatformEvent::MouseMove { x: 400.0, y: 300.0 },
+        &mut runtime,
+        &mut compositor,
+        &mut presenter,
+        &mut hook,
+    );
+    assert_eq!(runtime.current_cursor, CursorIcon::Grab);
+
+    dispatch_native_platform_event(
+        &PlatformEvent::MouseMove { x: 40.0, y: 20.0 },
+        &mut runtime,
+        &mut compositor,
+        &mut presenter,
+        &mut hook,
+    );
+    assert_eq!(runtime.current_cursor, CursorIcon::Pointer);
+
+    // Move back over canvas, press down -> dynamic view swap updates cursor to Grabbing; release -> Grab.
+    dispatch_native_platform_event(
+        &PlatformEvent::MouseMove { x: 400.0, y: 300.0 },
+        &mut runtime,
+        &mut compositor,
+        &mut presenter,
+        &mut hook,
+    );
+    assert_eq!(runtime.current_cursor, CursorIcon::Grab);
+
+    runtime.update_view(build(true));
+    dispatch_native_platform_event(
+        &PlatformEvent::MouseDown {
+            button: MouseButton::Left,
+            x: 400.0,
+            y: 300.0,
+        },
+        &mut runtime,
+        &mut compositor,
+        &mut presenter,
+        &mut hook,
+    );
+    assert_eq!(runtime.current_cursor, CursorIcon::Grabbing);
+
+    runtime.update_view(build(false));
+    dispatch_native_platform_event(
+        &PlatformEvent::MouseUp {
+            button: MouseButton::Left,
+            x: 400.0,
+            y: 300.0,
+        },
+        &mut runtime,
+        &mut compositor,
+        &mut presenter,
+        &mut hook,
+    );
+    assert_eq!(runtime.current_cursor, CursorIcon::Grab);
+}
+
+#[test]
+fn test_canvas3d_grab_grabbing_with_overlay_and_hook() {
+    use strata::prelude::rsx;
+    use strata_platform::window::CursorIcon;
+    use strata_render::scene3d::{Canvas3D, RetainedScene3D};
+
+    let retained = RetainedScene3D::new(Default::default());
+    let build = |grabbing: bool| {
+        let cls = if grabbing {
+            "absolute inset-0 w-full h-full z-0 cursor-grabbing"
+        } else {
+            "absolute inset-0 w-full h-full z-0 cursor-grab"
+        };
+        let canvas = Canvas3D::builder()
+            .retained(retained.clone())
+            .class(cls)
+            .build();
+        rsx! {
+            <div class="relative w-full h-full bg-black overflow-hidden">
+                {canvas}
+                <div class="absolute inset-0 z-10 pointer-events-none">
+                    <div class="text-white">"Label"</div>
+                </div>
+            </div>
+        }
+    };
+
+    let mut runtime = AppRuntime::new(build(false), 1280.0, 800.0, 1.0);
+    let mut compositor = SwapchainCompositor::new(1280, 800, 1.0);
+    let mut presenter = SoftwareSurfacePresenter::new(1280, 800, SwapchainFormat::Bgra8Unorm);
+    let mut dragging = false;
+    let mut hook = |ev: &PlatformEvent, _: &mut AppRuntime| -> bool {
+        match ev {
+            PlatformEvent::MouseDown { .. } => {
+                dragging = true;
+                true
+            }
+            PlatformEvent::MouseUp { .. } => {
+                dragging = false;
+                true
+            }
+            _ => false,
+        }
+    };
+
+    dispatch_native_platform_event(
+        &PlatformEvent::MouseMove { x: 640.0, y: 400.0 },
+        &mut runtime,
+        &mut compositor,
+        &mut presenter,
+        &mut hook,
+    );
+    assert_eq!(runtime.current_cursor, CursorIcon::Grab);
+
+    let (rebuild, _, _) = dispatch_native_platform_event(
+        &PlatformEvent::MouseDown {
+            button: MouseButton::Left,
+            x: 640.0,
+            y: 400.0,
+        },
+        &mut runtime,
+        &mut compositor,
+        &mut presenter,
+        &mut hook,
+    );
+    assert!(rebuild);
+    runtime.update_view(build(dragging));
+    let cur_after_rebuild = AppRuntime::hit_test_cursor(
+        &runtime.root_blueprint,
+        &runtime.layout_root,
+        runtime.last_mouse_pos.0,
+        runtime.last_mouse_pos.1,
+    );
+    assert_eq!(cur_after_rebuild, CursorIcon::Grabbing);
+}
+
+#[test]
+fn test_right_click_dispatches_onmousedown_and_onmouseup_with_button_and_size() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use strata_render::scene3d::{RetainedCameraUniforms, RetainedScene3D};
+
+    let retained = RetainedScene3D::new(RetainedCameraUniforms::default());
+    let log: Rc<RefCell<Vec<(&'static str, i16, f64, f64, f64, f64)>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let log_down = log.clone();
+    let log_up = log.clone();
+
+    let canvas = Canvas3D::builder()
+        .retained(retained)
+        .width(640.0)
+        .height(400.0)
+        .onmousedown(move |ev| {
+            log_down.borrow_mut().push((
+                "down",
+                ev.button,
+                ev.offset_x,
+                ev.offset_y,
+                ev.width,
+                ev.height,
+            ));
+        })
+        .onmouseup(move |ev| {
+            log_up.borrow_mut().push((
+                "up",
+                ev.button,
+                ev.offset_x,
+                ev.offset_y,
+                ev.width,
+                ev.height,
+            ));
+        })
+        .build();
+
+    let view = rsx! {
+        <div class="w-full h-full flex flex-col">
+            <div class="w-full h-10">
+                <button class="w-32 h-10">"Top"</button>
+            </div>
+            {canvas}
+        </div>
+    };
+
+    let mut runtime = AppRuntime::new(view, 800.0, 600.0, 1.0);
+    runtime.tick_frame();
+    let mut compositor = SwapchainCompositor::new(800, 600, 1.0);
+    let mut presenter = SoftwareSurfacePresenter::new(800, 600, SwapchainFormat::Bgra8Unorm);
+    let mut hook = |_: &PlatformEvent, _: &mut AppRuntime| false;
+
+    assert!(!runtime.target_is_retained_canvas3d(20.0, 15.0));
+    assert!(runtime.target_is_retained_canvas3d(120.0, 100.0));
+
+    dispatch_native_platform_event(
+        &PlatformEvent::MouseDown {
+            button: MouseButton::Right,
+            x: 120.0,
+            y: 100.0,
+        },
+        &mut runtime,
+        &mut compositor,
+        &mut presenter,
+        &mut hook,
+    );
+    dispatch_native_platform_event(
+        &PlatformEvent::MouseUp {
+            button: MouseButton::Right,
+            x: 140.0,
+            y: 110.0,
+        },
+        &mut runtime,
+        &mut compositor,
+        &mut presenter,
+        &mut hook,
+    );
+
+    let events = log.borrow();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].0, "down");
+    assert_eq!(events[0].1, 2);
+    assert!((events[0].2 - 120.0).abs() < 1e-3);
+    assert!((events[0].3 - 60.0).abs() < 1e-3);
+    assert!((events[0].4 - 640.0).abs() < 1e-3);
+    assert!((events[0].5 - 400.0).abs() < 1e-3);
+
+    assert_eq!(events[1].0, "up");
+    assert_eq!(events[1].1, 2);
+    assert!((events[1].4 - 640.0).abs() < 1e-3);
+    assert!((events[1].5 - 400.0).abs() < 1e-3);
+}
+
+

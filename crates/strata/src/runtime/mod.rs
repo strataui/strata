@@ -1143,10 +1143,22 @@ impl AppRuntime {
                 let hover_changed = self.update_hover(*x, *y);
                 self.dispatch_pointer_move_action(*x, *y).needs_redraw() || hover_changed
             }
-            PlatformEvent::MouseDown { x, y, .. } => {
-                self.is_mouse_down = true;
-                let action = self.dispatch_pointer_down_action(*x, *y);
-                let click_invoked = self.dispatch_mouse_click(*x, *y, 0, 1);
+            PlatformEvent::MouseDown { button, x, y } => {
+                let btn_idx = button.to_button_index();
+                if *button == strata_platform::MouseButton::Left {
+                    self.is_mouse_down = true;
+                }
+                let action = self.dispatch_pointer_down_action_with_button_and_modifiers(
+                    *x,
+                    *y,
+                    btn_idx,
+                    Default::default(),
+                );
+                let click_invoked = if *button != strata_platform::MouseButton::Right {
+                    self.dispatch_mouse_click(*x, *y, btn_idx, 1)
+                } else {
+                    self.dispatch_context_menu(*x, *y)
+                };
                 let dynamic_updated = self.sync_dynamic_text();
                 if action.needs_rebuild() || click_invoked || dynamic_updated {
                     self.rebuild_layout_tree();
@@ -1155,10 +1167,13 @@ impl AppRuntime {
                     action.needs_redraw() || self.restyle_for_active_change()
                 }
             }
-            PlatformEvent::MouseUp { x, y, .. } => {
+            PlatformEvent::MouseUp { button, x, y } => {
+                let btn_idx = button.to_button_index();
                 let was_mouse_down = self.is_mouse_down;
-                self.is_mouse_down = false;
-                let action = self.dispatch_pointer_up_action(*x, *y);
+                if *button == strata_platform::MouseButton::Left {
+                    self.is_mouse_down = false;
+                }
+                let action = self.dispatch_pointer_up_action_with_button(*x, *y, btn_idx);
                 if action.needs_rebuild() {
                     self.rebuild_layout_tree();
                     true

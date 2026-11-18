@@ -72,22 +72,11 @@ impl WgpuWindowPresenter {
     /// Creates an offscreen-capable `WgpuWindowPresenter` with BGRA8 pixel format matching Cairo.
     pub fn new_offscreen(present_mode: PresentMode) -> Result<Self, String> {
         let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        }))
-        .ok_or_else(|| "no wgpu adapter available".to_string())?;
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("strata_platform_wgpu_device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::Performance,
-            },
+        let (_adapter, device, queue) = strata_render::gpu_wgpu::request_working_adapter_and_device(
+            &instance,
             None,
-        ))
-        .map_err(|e| format!("request_device failed: {e}"))?;
+            "strata_platform_wgpu_device",
+        )?;
 
         let renderer = Wgpu3DRenderer::from_device(
             Arc::new(device),
@@ -123,23 +112,11 @@ impl WgpuWindowPresenter {
         let surface = unsafe { instance.create_surface_unsafe(target) }
             .map_err(|e| format!("create_surface_unsafe failed: {e}"))?;
 
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        }))
-        .ok_or_else(|| "no compatible wgpu adapter for window surface".to_string())?;
-
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("strata_platform_surface_device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::Performance,
-            },
-            None,
-        ))
-        .map_err(|e| format!("request_device failed: {e}"))?;
+        let (adapter, device, queue) = strata_render::gpu_wgpu::request_working_adapter_and_device(
+            &instance,
+            Some(&surface),
+            "strata_platform_surface_device",
+        )?;
 
         let caps = surface.get_capabilities(&adapter);
         let format = caps

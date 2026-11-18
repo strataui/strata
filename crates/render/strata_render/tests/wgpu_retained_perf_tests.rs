@@ -145,6 +145,7 @@ fn build_retained_grid_frame(width: u32, height: u32) -> RetainedTerrainFrame {
                 uv_rect: [0.0, 0.0, 1.0, 1.0],
                 tint: [1.0, 1.0, 1.0, 1.0],
                 unlit: false,
+                ..Default::default()
             });
         }
     }
@@ -305,3 +306,95 @@ fn wgpu_25d_shadowless_daylight_with_below_horizon_sun() {
         &hi_bgra[center_idx..center_idx + 4]
     );
 }
+
+#[test]
+fn wgpu_skybox_cubemap_renders_faces_and_fades_in_25d() {
+    use strata_render::scene3d::{RetainedCubemapTexture, RetainedEnvironmentAssets};
+
+    let mut renderer = match Wgpu3DRenderer::new_headless(wgpu::TextureFormat::Bgra8Unorm) {
+        Ok(r) => r,
+        Err(reason) => {
+            eprintln!("[skip wgpu_skybox_cubemap test] {}", reason);
+            return;
+        }
+    };
+    let (w, h) = (64u32, 64u32);
+    let face_colors: [[u8; 4]; 6] = [
+        [240, 20, 20, 255],   // +X = red
+        [20, 240, 20, 255],   // -X = green
+        [20, 20, 240, 255],   // +Y = blue
+        [240, 240, 20, 255],  // -Y = yellow
+        [240, 20, 240, 255],  // +Z = magenta
+        [20, 240, 240, 255],  // -Z = cyan
+    ];
+    let faces_rgba8: [Arc<Vec<u8>>; 6] = std::array::from_fn(|i| {
+        Arc::new(face_colors[i].repeat(16)) // 4x4 face
+    });
+    let cube = Arc::new(RetainedCubemapTexture {
+        id: 77,
+        revision: 1,
+        face_size: 4,
+        faces_rgba8,
+    });
+    let env = Arc::new(RetainedEnvironmentAssets {
+        revision: 1,
+        skybox_cubemap: Some(cube),
+        ..Default::default()
+    });
+
+    let aims: [[f64; 3]; 6] = [
+        [1.0, 0.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, -1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, -1.0],
+    ];
+    for (idx, aim) in aims.iter().enumerate() {
+        let up_ref = if aim[1].abs() > 0.9 {
+            [0.0, 0.0, 1.0]
+        } else {
+            [0.0, 1.0, 0.0]
+        };
+        let fwd = norm3(*aim);
+        let right = norm3(cross3(fwd, up_ref));
+        let up = norm3(cross3(right, fwd));
+        let view_rot = [
+            [right[0] as f32, up[0] as f32, -fwd[0] as f32, 0.0],
+            [right[1] as f32, up[1] as f32, -fwd[1] as f32, 0.0],
+            [right[2] as f32, up[2] as f32, -fwd[2] as f32, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let mut cam = camera_uniforms([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], w, h);
+        cam.view_rot = view_rot;
+        cam.view_proj_rte = mul_mat4_col(&cam.proj, &view_rot);
+        cam.stars_visible = true;
+        cam.stars_intensity = 1.0;
+        cam.skybox_intensity = 1.0;
+        cam.local_25d_blend = 0.0;
+
+        let frame = RetainedTerrainFrame {
+            camera: cam,
+            geometry_revision: 1,
+            meshes: Vec::new(),
+            instances: Vec::new(),
+            textures: Vec::new(),
+            dynamic_meshes: Vec::new(),
+            environment: Some(Arc::clone(&env)),
+        };
+        let retained = RetainedScene3D::new(cam);
+        retained.update_terrain(Arc::new(frame));
+        let scene = Scene3D::new().with_retained_handle(retained);
+        let bgra = renderer.render_offscreen(&scene, w, h, true, true).expect("offscreen");
+        let center_idx = (((h / 2) * w + (w / 2)) * 4) as usize;
+        let b = bgra[center_idx];
+        let g = bgra[center_idx + 1];
+        let r = bgra[center_idx + 2];
+        let exp = face_colors[idx];
+        // Verify dominant channels match the uploaded cubemap face color.
+        assert_eq!(r > 150, exp[0] > 150, "face {idx} R mismatch: got RGB=({r},{g},{b}) exp={exp:?}");
+        assert_eq!(g > 150, exp[1] > 150, "face {idx} G mismatch: got RGB=({r},{g},{b}) exp={exp:?}");
+        assert_eq!(b > 150, exp[2] > 150, "face {idx} B mismatch: got RGB=({r},{g},{b}) exp={exp:?}");
+    }
+}
+
