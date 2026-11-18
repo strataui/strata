@@ -1662,30 +1662,96 @@ fn compute_opacity_group_clip(rest: &[DrawCommand]) -> Option<(f64, f64, f64, f6
     }
 }
 
+#[inline]
+fn rect_overlaps_dirty_tiles(
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    bits: &[u64],
+    cols: usize,
+    rows: usize,
+) -> bool {
+    if cols == 0 || rows == 0 || x2 <= 0.0 || y2 <= 0.0 || x2 <= x1 || y2 <= y1 {
+        return false;
+    }
+    let c0 = ((x1.floor().max(0.0) as usize) >> 6).min(cols - 1);
+    let r0 = ((y1.floor().max(0.0) as usize) >> 6).min(rows - 1);
+    let c1 = (((x2.ceil().max(1.0) as usize) - 1) >> 6).min(cols - 1);
+    let r1 = (((y2.ceil().max(1.0) as usize) - 1) >> 6).min(rows - 1);
+    if c0 > c1 || r0 > r1 {
+        return false;
+    }
+    for r in r0..=r1 {
+        let row_base = r * cols;
+        for c in c0..=c1 {
+            let idx = row_base + c;
+            if (bits[idx >> 6] & (1u64 << (idx & 63))) != 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[inline]
+fn command_paint_rect(cmd: &DrawCommand) -> Option<(f64, f64, f64, f64)> {
+    match cmd {
+        DrawCommand::DrawShadow { bounds, shadow, .. } => {
+            let ext = (shadow.blur_radius.max(0.0) * 2.5 + shadow.spread_radius.max(0.0) + 12.0)
+                as f64;
+            let sx1 = bounds.x as f64 + shadow.offset_x.min(0.0) as f64 - ext;
+            let sy1 = bounds.y as f64 + shadow.offset_y.min(0.0) as f64 - ext;
+            let sx2 = (bounds.x + bounds.width) as f64 + shadow.offset_x.max(0.0) as f64 + ext;
+            let sy2 = (bounds.y + bounds.height) as f64 + shadow.offset_y.max(0.0) as f64 + ext;
+            Some((sx1, sy1, sx2, sy2))
+        }
+        _ => cmd.bounds().map(|b| {
+            let pad = 12.0f64;
+            (
+                b.x as f64 - pad,
+                b.y as f64 - pad,
+                (b.x + b.width) as f64 + pad,
+                (b.y + b.height) as f64 + pad,
+            )
+        }),
+    }
+}
+
 fn render_display_list_to_cairo_impl(
     cr: &cairo::Context,
     list: &DisplayList,
     punch_viewport_hole: bool,
+) {
+    render_display_list_to_cairo_with_dirty_tiles(cr, list, punch_viewport_hole, None);
+}
+
+fn render_display_list_to_cairo_with_dirty_tiles(
+    cr: &cairo::Context,
+    list: &DisplayList,
+    punch_viewport_hole: bool,
+    dirty_tiles: Option<(&[u64], usize, usize)>,
 ) {
     let perf_start = std::time::Instant::now();
     let mut current_clip = cr
         .clip_extents()
         .unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
     let mut operator_stack: Vec<cairo::Operator> = Vec::new();
-    let mut opacity_stack: Vec<f64> = Vec::new();
+    let mut opacity_stack: Vec<Option<f64>> = Vec::new();
     let mut shared_layout: Option<pango::Layout> = None;
     let cmds = list.commands();
 
     for (cmd_idx, cmd) in cmds.iter().enumerate() {
         if !cmd.is_clip() && !cmd.is_state_command() {
             let (cx1, cy1, cx2, cy2) = current_clip;
-            if let Some(b) = cmd.bounds() {
-                let bx1 = b.x as f64;
-                let by1 = b.y as f64;
-                let bx2 = (b.x + b.width) as f64;
-                let by2 = (b.y + b.height) as f64;
+            if let Some((bx1, by1, bx2, by2)) = command_paint_rect(cmd) {
                 if bx2 < cx1 || bx1 > cx2 || by2 < cy1 || by1 > cy2 {
                     continue;
+                }
+                if let Some((bits, cols, rows)) = dirty_tiles {
+                    if !rect_overlaps_dirty_tiles(bx1, by1, bx2, by2, bits, cols, rows) {
+                        continue;
+                    }
                 }
             }
         }
@@ -1944,12 +2010,17 @@ fn render_display_list_to_cairo_impl(
                         continue;
                     }
 
+                    let fx1 = (frag.bounds.x - 12.0) as f64;
+                    let fy1 = (frag.bounds.y - 12.0) as f64;
+                    let fx2 = (frag.bounds.x + frag.bounds.width + 12.0) as f64;
+                    let fy2 = (frag.bounds.y + frag.bounds.height + 12.0) as f64;
                     if let Some((cx1, cy1, cx2, cy2)) = clip_opt {
-                        let fx1 = (frag.bounds.x - 4.0) as f64;
-                        let fy1 = (frag.bounds.y - 2.0) as f64;
-                        let fx2 = (frag.bounds.x + frag.bounds.width + 4.0) as f64;
-                        let fy2 = (frag.bounds.y + frag.bounds.height + 2.0) as f64;
                         if fx2 < cx1 || fx1 > cx2 || fy2 < cy1 || fy1 > cy2 {
+                            continue;
+                        }
+                    }
+                    if let Some((bits, cols, rows)) = dirty_tiles {
+                        if !rect_overlaps_dirty_tiles(fx1, fy1, fx2, fy2, bits, cols, rows) {
                             continue;
                         }
                     }
@@ -2249,20 +2320,49 @@ fn render_display_list_to_cairo_impl(
             }
             DrawCommand::PushOpacity { alpha } => {
                 let _ = cr.save();
+                let mut skip_group = false;
                 if let Some((bx, by, bw, bh)) = compute_opacity_group_clip(&cmds[cmd_idx + 1..]) {
-                    cr.rectangle(bx, by, bw, bh);
-                    cr.clip();
-                    current_clip = cr
-                        .clip_extents()
-                        .unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
+                    let (cx1, cy1, cx2, cy2) = current_clip;
+                    if bx + bw < cx1 || bx > cx2 || by + bh < cy1 || by > cy2 {
+                        skip_group = true;
+                    } else if let Some((bits, cols, rows)) = dirty_tiles {
+                        if !rect_overlaps_dirty_tiles(
+                            bx - 12.0,
+                            by - 12.0,
+                            bx + bw + 12.0,
+                            by + bh + 12.0,
+                            bits,
+                            cols,
+                            rows,
+                        ) {
+                            skip_group = true;
+                        }
+                    }
+                    if skip_group {
+                        cr.rectangle(0.0, 0.0, 0.0, 0.0);
+                        cr.clip();
+                        current_clip = (0.0, 0.0, 0.0, 0.0);
+                    } else {
+                        cr.rectangle(bx, by, bw, bh);
+                        cr.clip();
+                        current_clip = cr
+                            .clip_extents()
+                            .unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
+                    }
                 }
-                cr.push_group();
-                opacity_stack.push(*alpha as f64);
+                if skip_group {
+                    opacity_stack.push(None);
+                } else {
+                    cr.push_group();
+                    opacity_stack.push(Some(*alpha as f64));
+                }
             }
             DrawCommand::PopOpacity => {
-                if let Some(alpha) = opacity_stack.pop() {
-                    let _ = cr.pop_group_to_source();
-                    let _ = cr.paint_with_alpha(alpha);
+                if let Some(alpha_opt) = opacity_stack.pop() {
+                    if let Some(alpha) = alpha_opt {
+                        let _ = cr.pop_group_to_source();
+                        let _ = cr.paint_with_alpha(alpha);
+                    }
                     let _ = cr.restore();
                     current_clip = cr
                         .clip_extents()
@@ -2671,6 +2771,8 @@ mod gtk_gpu_x11 {
         );
     }
 
+    const OVERLAY_TILE_PX: usize = 64;
+
     pub(super) struct GtkGpuSurfaceState {
         xdisplay: *mut xlib::Display,
         child_xid: xlib::Window,
@@ -2681,7 +2783,13 @@ mod gtk_gpu_x11 {
         overlay_uploaded: bool,
         last_overlay_hash: Option<u64>,
         overlay_surface: Option<(u32, u32, cairo::ImageSurface)>,
-        last_overlay_painted_rects: Vec<(f64, f64, f64, f64)>,
+        tile_cols: usize,
+        tile_rows: usize,
+        last_tile_hashes: Vec<u64>,
+        new_tile_hashes: Vec<u64>,
+        dirty_tile_bits: Vec<u64>,
+        dirty_upload_rects: Vec<(u32, u32, u32, u32)>,
+        upload_scratch: Vec<u8>,
         last_scene: Option<Arc<Scene3D>>,
         last_viewport: Option<[f32; 4]>,
     }
@@ -2718,7 +2826,9 @@ mod gtk_gpu_x11 {
             self.overlay_uploaded = false;
             self.last_overlay_hash = None;
             self.overlay_surface = None;
-            self.last_overlay_painted_rects.clear();
+            self.tile_cols = 0;
+            self.tile_rows = 0;
+            self.last_tile_hashes.clear();
             self.last_viewport = None;
         }
 
@@ -2757,6 +2867,123 @@ mod gtk_gpu_x11 {
         }
     }
 
+    #[inline]
+    fn rgba_to_u64(c: strata_primitives::Rgba) -> u64 {
+        ((c.r as u64) << 24) | ((c.g as u64) << 16) | ((c.b as u64) << 8) | (c.a as u64)
+    }
+
+    fn hash_single_draw_command(cmd: &DrawCommand, seed: u64) -> u64 {
+        use std::fmt::Write as _;
+        let mut h_acc = FnvFmtHasher(seed);
+        match cmd {
+            DrawCommand::DrawViewport3D { bounds, .. } => {
+                h_acc.push_u64(0x3D);
+                h_acc.push_u64(bounds.x.to_bits() as u64);
+                h_acc.push_u64(bounds.y.to_bits() as u64);
+                h_acc.push_u64(bounds.width.to_bits() as u64);
+                h_acc.push_u64(bounds.height.to_bits() as u64);
+            }
+            DrawCommand::DrawRect { bounds, color } => {
+                h_acc.push_u64(0x10);
+                h_acc.push_u64(bounds.x.to_bits() as u64);
+                h_acc.push_u64(bounds.y.to_bits() as u64);
+                h_acc.push_u64(bounds.width.to_bits() as u64);
+                h_acc.push_u64(bounds.height.to_bits() as u64);
+                h_acc.push_u64(rgba_to_u64(*color));
+            }
+            DrawCommand::DrawRoundedRect {
+                bounds,
+                color,
+                border_radius,
+                border_width,
+                border_color,
+            } => {
+                h_acc.push_u64(0x11);
+                h_acc.push_u64(bounds.x.to_bits() as u64);
+                h_acc.push_u64(bounds.y.to_bits() as u64);
+                h_acc.push_u64(bounds.width.to_bits() as u64);
+                h_acc.push_u64(bounds.height.to_bits() as u64);
+                h_acc.push_u64(rgba_to_u64(*color));
+                h_acc.push_u64(border_radius.top_left.to_bits() as u64);
+                h_acc.push_u64(border_radius.top_right.to_bits() as u64);
+                h_acc.push_u64(border_radius.bottom_right.to_bits() as u64);
+                h_acc.push_u64(border_radius.bottom_left.to_bits() as u64);
+                h_acc.push_u64(border_width.top.to_bits() as u64);
+                h_acc.push_u64(border_width.right.to_bits() as u64);
+                h_acc.push_u64(border_width.bottom.to_bits() as u64);
+                h_acc.push_u64(border_width.left.to_bits() as u64);
+                if let Some(bc) = border_color {
+                    h_acc.push_u64(rgba_to_u64(*bc));
+                }
+            }
+            DrawCommand::DrawTextFragments { fragments } => {
+                h_acc.push_u64(0x22);
+                h_acc.push_u64(fragments.len() as u64);
+                for f in fragments {
+                    let _ = h_acc.write_str(&f.text);
+                    h_acc.push_u64(f.bounds.x.to_bits() as u64);
+                    h_acc.push_u64(f.bounds.y.to_bits() as u64);
+                    h_acc.push_u64(f.bounds.width.to_bits() as u64);
+                    h_acc.push_u64(f.bounds.height.to_bits() as u64);
+                    h_acc.push_u64(rgba_to_u64(f.style.color));
+                    h_acc.push_u64(
+                        f.style
+                            .background_color
+                            .map(rgba_to_u64)
+                            .unwrap_or(0xdead_beef),
+                    );
+                    h_acc.push_u64(f.style.font_size.to_bits() as u64);
+                    h_acc.push_u64(f.style.font_weight as u64);
+                    h_acc.push_u64(f.style.font_style as u64);
+                    h_acc.push_u64(f.style.text_decoration as u64);
+                }
+            }
+            DrawCommand::DrawSvgPath {
+                bounds,
+                path_data,
+                stroke_color,
+                fill_color,
+                stroke_width,
+                view_box,
+                ..
+            } => {
+                h_acc.push_u64(0x28);
+                h_acc.push_u64(bounds.x.to_bits() as u64);
+                h_acc.push_u64(bounds.y.to_bits() as u64);
+                h_acc.push_u64(bounds.width.to_bits() as u64);
+                h_acc.push_u64(bounds.height.to_bits() as u64);
+                let _ = h_acc.write_str(path_data);
+                h_acc.push_u64(stroke_color.map(rgba_to_u64).unwrap_or(0xdead_0001));
+                h_acc.push_u64(fill_color.map(rgba_to_u64).unwrap_or(0xdead_0002));
+                h_acc.push_u64(stroke_width.to_bits() as u64);
+                h_acc.push_u64(view_box.0.to_bits() as u64);
+                h_acc.push_u64(view_box.1.to_bits() as u64);
+            }
+            DrawCommand::PushOpacity { alpha } => {
+                h_acc.push_u64(0x33);
+                h_acc.push_u64(alpha.to_bits() as u64);
+            }
+            DrawCommand::PopOpacity => h_acc.push_u64(0x34),
+            DrawCommand::PushClip { bounds, radius } => {
+                h_acc.push_u64(0x35);
+                h_acc.push_u64(bounds.x.to_bits() as u64);
+                h_acc.push_u64(bounds.y.to_bits() as u64);
+                h_acc.push_u64(bounds.width.to_bits() as u64);
+                h_acc.push_u64(bounds.height.to_bits() as u64);
+                h_acc.push_u64(radius.top_left.to_bits() as u64);
+                h_acc.push_u64(radius.top_right.to_bits() as u64);
+                h_acc.push_u64(radius.bottom_right.to_bits() as u64);
+                h_acc.push_u64(radius.bottom_left.to_bits() as u64);
+            }
+            DrawCommand::PopClip => h_acc.push_u64(0x36),
+            DrawCommand::PushBackdropFilter { .. } | DrawCommand::PopBackdropFilter => {}
+            other => {
+                let _ = write!(h_acc, "{:?}", other);
+            }
+        }
+        h_acc.0
+    }
+
     fn compute_overlay_hash(
         list: &DisplayList,
         w: u32,
@@ -2780,94 +3007,139 @@ mod gtk_gpu_x11 {
             }
         }
         h_acc.push_u64(list.commands().len() as u64);
+        let mut acc = h_acc.0;
         for cmd in list.commands() {
+            acc = hash_single_draw_command(cmd, acc);
+        }
+        acc
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn compute_overlay_tile_hashes(
+        list: &DisplayList,
+        w: u32,
+        h: u32,
+        transparent_bg: bool,
+        cursor_overlay: Option<(&crate::McpCursorState, &crate::CursorTheme)>,
+        cols: usize,
+        rows: usize,
+        out_hashes: &mut Vec<u64>,
+    ) {
+        use std::fmt::Write as _;
+        out_hashes.clear();
+        out_hashes.resize(
+            cols * rows,
+            0xcbf2_9ce4_8422_2325 ^ ((transparent_bg as u64) << 1),
+        );
+        let wf = w as f64;
+        let hf = h as f64;
+        let mut clip_stack: Vec<(f64, f64, f64, f64)> = vec![(0.0, 0.0, wf, hf)];
+        let mut state_stack: Vec<u64> = vec![0x9e37_79b9_7f4a_7c15];
+
+        let mut mix_rect = |rx1: f64, ry1: f64, rx2: f64, ry2: f64, cmd_h: u64| {
+            if rx2 <= rx1 || ry2 <= ry1 {
+                return;
+            }
+            let c0 = ((rx1.floor().max(0.0) as usize) >> 6).min(cols - 1);
+            let r0 = ((ry1.floor().max(0.0) as usize) >> 6).min(rows - 1);
+            let c1 = (((rx2.ceil().max(1.0) as usize) - 1) >> 6).min(cols - 1);
+            let r1 = (((ry2.ceil().max(1.0) as usize) - 1) >> 6).min(rows - 1);
+            if c0 == 0 && c1 + 1 == cols && r0 == 0 && r1 + 1 == rows {
+                for slot in out_hashes.iter_mut() {
+                    *slot = (*slot ^ cmd_h).wrapping_mul(0x100_0000_01b3);
+                }
+            } else {
+                for r in r0..=r1 {
+                    let row_off = r * cols;
+                    for c in c0..=c1 {
+                        let slot = &mut out_hashes[row_off + c];
+                        *slot = (*slot ^ cmd_h).wrapping_mul(0x100_0000_01b3);
+                    }
+                }
+            }
+        };
+
+        for cmd in list.commands() {
+            let cur_state = *state_stack.last().unwrap_or(&0x9e37_79b9_7f4a_7c15);
+            let (cx1, cy1, cx2, cy2) = *clip_stack.last().unwrap_or(&(0.0, 0.0, wf, hf));
             match cmd {
-                DrawCommand::DrawViewport3D { bounds, .. } => {
-                    h_acc.push_u64(0x3D);
-                    h_acc.push_u64(bounds.x.to_bits() as u64);
-                    h_acc.push_u64(bounds.y.to_bits() as u64);
-                    h_acc.push_u64(bounds.width.to_bits() as u64);
-                    h_acc.push_u64(bounds.height.to_bits() as u64);
-                }
-                DrawCommand::DrawRoundedRect {
-                    bounds,
-                    color,
-                    border_radius,
-                    border_width,
-                    border_color,
-                } => {
-                    let rgba_u64 = |c: strata_primitives::Rgba| -> u64 {
-                        ((c.r as u64) << 24)
-                            | ((c.g as u64) << 16)
-                            | ((c.b as u64) << 8)
-                            | (c.a as u64)
-                    };
-                    h_acc.push_u64(0x11);
-                    h_acc.push_u64(bounds.x.to_bits() as u64);
-                    h_acc.push_u64(bounds.y.to_bits() as u64);
-                    h_acc.push_u64(bounds.width.to_bits() as u64);
-                    h_acc.push_u64(bounds.height.to_bits() as u64);
-                    h_acc.push_u64(rgba_u64(*color));
-                    h_acc.push_u64(border_radius.top_left.to_bits() as u64);
-                    h_acc.push_u64(border_radius.top_right.to_bits() as u64);
-                    h_acc.push_u64(border_radius.bottom_right.to_bits() as u64);
-                    h_acc.push_u64(border_radius.bottom_left.to_bits() as u64);
-                    h_acc.push_u64(border_width.top.to_bits() as u64);
-                    h_acc.push_u64(border_width.right.to_bits() as u64);
-                    h_acc.push_u64(border_width.bottom.to_bits() as u64);
-                    h_acc.push_u64(border_width.left.to_bits() as u64);
-                    if let Some(bc) = border_color {
-                        h_acc.push_u64(rgba_u64(*bc));
-                    }
-                }
-                DrawCommand::DrawTextFragments { fragments } => {
-                    let rgba_u64 = |c: strata_primitives::Rgba| -> u64 {
-                        ((c.r as u64) << 24)
-                            | ((c.g as u64) << 16)
-                            | ((c.b as u64) << 8)
-                            | (c.a as u64)
-                    };
-                    h_acc.push_u64(0x22);
-                    h_acc.push_u64(fragments.len() as u64);
-                    for f in fragments {
-                        let _ = h_acc.write_str(&f.text);
-                        h_acc.push_u64(f.bounds.x.to_bits() as u64);
-                        h_acc.push_u64(f.bounds.y.to_bits() as u64);
-                        h_acc.push_u64(f.bounds.width.to_bits() as u64);
-                        h_acc.push_u64(f.bounds.height.to_bits() as u64);
-                        h_acc.push_u64(rgba_u64(f.style.color));
-                        h_acc.push_u64(
-                            f.style
-                                .background_color
-                                .map(rgba_u64)
-                                .unwrap_or(0xdead_beef),
-                        );
-                        h_acc.push_u64(f.style.font_size.to_bits() as u64);
-                        h_acc.push_u64(f.style.font_weight as u64);
-                        h_acc.push_u64(f.style.font_style as u64);
-                        h_acc.push_u64(f.style.text_decoration as u64);
-                    }
-                }
-                DrawCommand::PushOpacity { alpha } => {
-                    h_acc.push_u64(0x33);
-                    h_acc.push_u64(alpha.to_bits() as u64);
-                }
-                DrawCommand::PopOpacity => h_acc.push_u64(0x34),
                 DrawCommand::PushClip { bounds, .. } => {
-                    h_acc.push_u64(0x35);
-                    h_acc.push_u64(bounds.x.to_bits() as u64);
-                    h_acc.push_u64(bounds.y.to_bits() as u64);
-                    h_acc.push_u64(bounds.width.to_bits() as u64);
-                    h_acc.push_u64(bounds.height.to_bits() as u64);
+                    state_stack.push(hash_single_draw_command(cmd, cur_state));
+                    clip_stack.push((
+                        cx1.max(bounds.x as f64),
+                        cy1.max(bounds.y as f64),
+                        cx2.min((bounds.x + bounds.width) as f64),
+                        cy2.min((bounds.y + bounds.height) as f64),
+                    ));
                 }
-                DrawCommand::PopClip => h_acc.push_u64(0x36),
+                DrawCommand::PopClip => {
+                    if clip_stack.len() > 1 {
+                        clip_stack.pop();
+                    }
+                    if state_stack.len() > 1 {
+                        state_stack.pop();
+                    }
+                }
+                DrawCommand::PushClipPath { bounds, .. } => {
+                    state_stack.push(hash_single_draw_command(cmd, cur_state));
+                    clip_stack.push((
+                        cx1.max(bounds.x as f64),
+                        cy1.max(bounds.y as f64),
+                        cx2.min((bounds.x + bounds.width) as f64),
+                        cy2.min((bounds.y + bounds.height) as f64),
+                    ));
+                }
+                DrawCommand::PopClipPath => {
+                    if clip_stack.len() > 1 {
+                        clip_stack.pop();
+                    }
+                    if state_stack.len() > 1 {
+                        state_stack.pop();
+                    }
+                }
+                DrawCommand::PushOpacity { .. } | DrawCommand::PushBlendMode { .. } => {
+                    state_stack.push(hash_single_draw_command(cmd, cur_state));
+                }
+                DrawCommand::PopOpacity | DrawCommand::PopBlendMode => {
+                    if state_stack.len() > 1 {
+                        state_stack.pop();
+                    }
+                }
                 DrawCommand::PushBackdropFilter { .. } | DrawCommand::PopBackdropFilter => {}
-                other => {
-                    let _ = write!(h_acc, "{:?}", other);
+                _ => {
+                    let cmd_h = hash_single_draw_command(cmd, cur_state);
+                    let (bx1, by1, bx2, by2) =
+                        super::command_paint_rect(cmd).unwrap_or((cx1, cy1, cx2, cy2));
+                    mix_rect(
+                        bx1.max(cx1).max(0.0),
+                        by1.max(cy1).max(0.0),
+                        bx2.min(cx2).min(wf),
+                        by2.min(cy2).min(hf),
+                        cmd_h,
+                    );
                 }
             }
         }
-        h_acc.0
+
+        if let Some((mc, _)) = cursor_overlay {
+            if mc.fade_opacity > 0.001 {
+                let mut ch = FnvFmtHasher(0x517c_c1b7_2722_0a95);
+                ch.push_u64(mc.current_x.to_bits() as u64);
+                ch.push_u64(mc.current_y.to_bits() as u64);
+                ch.push_u64(mc.fade_opacity.to_bits() as u64);
+                ch.push_u64(mc.is_down as u64);
+                let _ = write!(ch, "{:?}", mc.cursor_icon);
+                let cx = mc.current_x as f64;
+                let cy = mc.current_y as f64;
+                mix_rect(
+                    (cx - 32.0).max(0.0),
+                    (cy - 32.0).max(0.0),
+                    (cx + 32.0).min(wf),
+                    (cy + 32.0).min(hf),
+                    ch.0,
+                );
+            }
+        }
     }
 
     thread_local! {
@@ -2972,7 +3244,13 @@ mod gtk_gpu_x11 {
             overlay_uploaded: false,
             last_overlay_hash: None,
             overlay_surface: None,
-            last_overlay_painted_rects: Vec::new(),
+            tile_cols: 0,
+            tile_rows: 0,
+            last_tile_hashes: Vec::new(),
+            new_tile_hashes: Vec::new(),
+            dirty_tile_bits: Vec::new(),
+            dirty_upload_rects: Vec::new(),
+            upload_scratch: Vec::new(),
             last_scene: None,
             last_viewport: None,
         })
@@ -2997,8 +3275,144 @@ mod gtk_gpu_x11 {
                 return false;
             };
             state.overlay_surface = Some((w, h, surf));
-            state.last_overlay_painted_rects.clear();
+            state.tile_cols = 0;
+            state.tile_rows = 0;
+            state.last_tile_hashes.clear();
         }
+
+        let has_unbounded = list.commands().iter().any(|c| {
+            matches!(
+                c,
+                DrawCommand::PushTransform { .. }
+                    | DrawCommand::PushFilter { .. }
+                    | DrawCommand::PushIsolation { isolate: true }
+            )
+        });
+        let cols = (w as usize).div_ceil(OVERLAY_TILE_PX).max(1);
+        let rows = (h as usize).div_ceil(OVERLAY_TILE_PX).max(1);
+        let total_tiles = cols * rows;
+
+        if !has_unbounded {
+            compute_overlay_tile_hashes(
+                list,
+                w,
+                h,
+                transparent_bg,
+                cursor_overlay,
+                cols,
+                rows,
+                &mut state.new_tile_hashes,
+            );
+        } else {
+            state.last_tile_hashes.clear();
+        }
+
+        let can_incremental = !needs_new_surf
+            && state.overlay_uploaded
+            && !has_unbounded
+            && state.tile_cols == cols
+            && state.tile_rows == rows
+            && state.last_tile_hashes.len() == total_tiles;
+
+        if can_incremental {
+            state.dirty_tile_bits.clear();
+            state.dirty_tile_bits.resize(total_tiles.div_ceil(64), 0);
+            state.dirty_upload_rects.clear();
+            let mut dirty_tiles_count = 0usize;
+            for r in 0..rows {
+                let row_off = r * cols;
+                let mut c = 0usize;
+                while c < cols {
+                    let idx = row_off + c;
+                    if state.new_tile_hashes[idx] == state.last_tile_hashes[idx] {
+                        c += 1;
+                        continue;
+                    }
+                    let c_start = c;
+                    while c < cols
+                        && state.new_tile_hashes[row_off + c] != state.last_tile_hashes[row_off + c]
+                    {
+                        let bit_idx = row_off + c;
+                        state.dirty_tile_bits[bit_idx >> 6] |= 1u64 << (bit_idx & 63);
+                        dirty_tiles_count += 1;
+                        c += 1;
+                    }
+                    let rx = (c_start * OVERLAY_TILE_PX) as u32;
+                    let ry = (r * OVERLAY_TILE_PX) as u32;
+                    let rw = ((c * OVERLAY_TILE_PX) as u32).min(w) - rx;
+                    let rh = (((r + 1) * OVERLAY_TILE_PX) as u32).min(h) - ry;
+                    if let Some(prev) = state.dirty_upload_rects.last_mut() {
+                        if prev.0 == rx && prev.2 == rw && prev.1 + prev.3 == ry {
+                            prev.3 += rh;
+                            continue;
+                        }
+                    }
+                    state.dirty_upload_rects.push((rx, ry, rw, rh));
+                }
+            }
+
+            if dirty_tiles_count == 0 {
+                return true;
+            }
+            if dirty_tiles_count * 2 <= total_tiles {
+                let Some((_, _, ref mut surf)) = state.overlay_surface else {
+                    return false;
+                };
+                {
+                    let Ok(cr) = cairo::Context::new(&*surf) else {
+                        return false;
+                    };
+                    cr.set_font_options(&super::parity_font_options());
+                    for &(rx, ry, rw, rh) in &state.dirty_upload_rects {
+                        cr.rectangle(rx as f64, ry as f64, rw as f64, rh as f64);
+                    }
+                    cr.clip();
+                    if transparent_bg {
+                        cr.set_operator(cairo::Operator::Clear);
+                        let _ = cr.paint();
+                    } else {
+                        cr.set_operator(cairo::Operator::Source);
+                        cr.set_source_rgb(0.035, 0.035, 0.043);
+                        let _ = cr.paint();
+                    }
+                    cr.set_operator(cairo::Operator::Over);
+                    super::render_display_list_to_cairo_with_dirty_tiles(
+                        &cr,
+                        list,
+                        true,
+                        Some((&state.dirty_tile_bits, cols, rows)),
+                    );
+                    if let Some((mcp_cursor, theme)) = cursor_overlay {
+                        if mcp_cursor.fade_opacity > 0.001 {
+                            theme.render_cairo(
+                                &cr,
+                                mcp_cursor.cursor_icon,
+                                mcp_cursor.current_x,
+                                mcp_cursor.current_y,
+                                mcp_cursor.fade_opacity,
+                                mcp_cursor.is_down,
+                            );
+                        }
+                    }
+                }
+                surf.flush();
+                let stride = surf.stride() as usize;
+                let Ok(data) = surf.data() else {
+                    return false;
+                };
+                state.presenter.upload_ui_overlay_bgra_rects(
+                    w,
+                    h,
+                    stride,
+                    &data,
+                    &state.dirty_upload_rects,
+                    &mut state.upload_scratch,
+                );
+                std::mem::swap(&mut state.last_tile_hashes, &mut state.new_tile_hashes);
+                return true;
+            }
+        }
+
         let Some((_, _, ref mut surf)) = state.overlay_surface else {
             return false;
         };
@@ -3009,14 +3423,7 @@ mod gtk_gpu_x11 {
             cr.set_font_options(&super::parity_font_options());
             if transparent_bg {
                 cr.set_operator(cairo::Operator::Clear);
-                if state.last_overlay_painted_rects.is_empty() {
-                    let _ = cr.paint();
-                } else {
-                    for &(rx, ry, rw, rh) in &state.last_overlay_painted_rects {
-                        cr.rectangle(rx, ry, rw, rh);
-                    }
-                    let _ = cr.fill();
-                }
+                let _ = cr.paint();
             } else {
                 cr.set_operator(cairo::Operator::Source);
                 cr.set_source_rgb(0.035, 0.035, 0.043);
@@ -3037,38 +3444,6 @@ mod gtk_gpu_x11 {
                 }
             }
         }
-        state.last_overlay_painted_rects.clear();
-        let has_unbounded = list
-            .commands()
-            .iter()
-            .any(|c| matches!(c, DrawCommand::PushTransform { .. }));
-        if transparent_bg && !has_unbounded {
-            let pad = 12.0f64;
-            for cmd in list.commands() {
-                if matches!(cmd, DrawCommand::DrawViewport3D { .. }) || cmd.is_clip() {
-                    continue;
-                }
-                if let Some(b) = cmd.bounds() {
-                    if b.width > 0.0 && b.height > 0.0 {
-                        let rx = (b.x as f64 - pad).floor().max(0.0);
-                        let ry = (b.y as f64 - pad).floor().max(0.0);
-                        let rw = ((b.x + b.width) as f64 + pad).ceil() - rx;
-                        let rh = ((b.y + b.height) as f64 + pad).ceil() - ry;
-                        state.last_overlay_painted_rects.push((rx, ry, rw, rh));
-                    }
-                }
-            }
-            if let Some((mc, _)) = cursor_overlay {
-                if mc.fade_opacity > 0.001 {
-                    state.last_overlay_painted_rects.push((
-                        ((mc.current_x as f64) - 32.0).max(0.0),
-                        ((mc.current_y as f64) - 32.0).max(0.0),
-                        64.0,
-                        64.0,
-                    ));
-                }
-            }
-        }
         surf.flush();
         let stride = surf.stride() as usize;
         let row_bytes = (w as usize) * 4;
@@ -3080,14 +3455,25 @@ mod gtk_gpu_x11 {
                 .presenter
                 .upload_ui_overlay_bgra(w, h, &data[..row_bytes * (h as usize)]);
         } else {
-            let mut out = vec![0u8; row_bytes * (h as usize)];
+            state.upload_scratch.resize(row_bytes * (h as usize), 0);
             for row in 0..(h as usize) {
                 let src_off = row * stride;
                 let dst_off = row * row_bytes;
-                out[dst_off..dst_off + row_bytes]
+                state.upload_scratch[dst_off..dst_off + row_bytes]
                     .copy_from_slice(&data[src_off..src_off + row_bytes]);
             }
-            state.presenter.upload_ui_overlay_bgra(w, h, &out);
+            state
+                .presenter
+                .upload_ui_overlay_bgra(w, h, &state.upload_scratch);
+        }
+        if !has_unbounded {
+            state.tile_cols = cols;
+            state.tile_rows = rows;
+            std::mem::swap(&mut state.last_tile_hashes, &mut state.new_tile_hashes);
+        } else {
+            state.tile_cols = 0;
+            state.tile_rows = 0;
+            state.last_tile_hashes.clear();
         }
         true
     }
@@ -5178,5 +5564,80 @@ mod frameless_resize_tests {
             super::compute_tick_rearm_decision(None, t_move, None),
             super::TickRearmDecision::KeepPending
         );
+    }
+
+    #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+    #[test]
+    fn test_overlay_64x64_tile_damage_isolates_moving_labels_from_static_hud() {
+        use strata_layout::Rect;
+        use strata_primitives::Rgba;
+        use strata_render::compositor::{DisplayList, DrawCommand};
+
+        let make_frame = |label_x: f32| -> DisplayList {
+            let mut dl = DisplayList::new();
+            // Full-screen root + 3D viewport hole
+            dl.push(DrawCommand::DrawRect {
+                bounds: Rect::new(0.0, 0.0, 1920.0, 1080.0),
+                color: Rgba::rgba(9, 9, 11, 255),
+            });
+            // Static top-right HUD panel (around x=1500..1900, y=12..140)
+            dl.push(DrawCommand::DrawRect {
+                bounds: Rect::new(1500.0, 12.0, 400.0, 128.0),
+                color: Rgba::rgba(20, 20, 24, 220),
+            });
+            // Moving map label pill around (label_x, 540)
+            dl.push(DrawCommand::DrawRect {
+                bounds: Rect::new(label_x, 540.0, 72.0, 20.0),
+                color: Rgba::rgba(0, 0, 0, 180),
+            });
+            dl
+        };
+
+        let cols = 1920usize.div_ceil(64);
+        let rows = 1080usize.div_ceil(64);
+        let mut h1 = Vec::new();
+        let mut h2 = Vec::new();
+        super::gtk_gpu_x11::compute_overlay_tile_hashes(
+            &make_frame(420.0),
+            1920,
+            1080,
+            true,
+            None,
+            cols,
+            rows,
+            &mut h1,
+        );
+        super::gtk_gpu_x11::compute_overlay_tile_hashes(
+            &make_frame(423.5),
+            1920,
+            1080,
+            true,
+            None,
+            cols,
+            rows,
+            &mut h2,
+        );
+
+        let mut dirty_bits = vec![0u64; (cols * rows).div_ceil(64)];
+        let mut dirty_count = 0usize;
+        for (i, (&a, &b)) in h1.iter().zip(h2.iter()).enumerate() {
+            if a != b {
+                dirty_bits[i >> 6] |= 1u64 << (i & 63);
+                dirty_count += 1;
+            }
+        }
+        assert!(
+            dirty_count > 0 && dirty_count <= 8,
+            "moving 1 label should dirty only 2..8 64x64 tiles out of 510, got {dirty_count}"
+        );
+        // Static top-right HUD (1500..1900, 12..140) must NOT overlap any dirty tile!
+        assert!(
+            !super::rect_overlaps_dirty_tiles(1488.0, 0.0, 1912.0, 152.0, &dirty_bits, cols, rows),
+            "static top-right HUD panel must be completely culled on label-only frames"
+        );
+        // Moved label region (420..495, 540..560) MUST overlap dirty tiles!
+        assert!(super::rect_overlaps_dirty_tiles(
+            420.0, 540.0, 495.0, 560.0, &dirty_bits, cols, rows
+        ));
     }
 }

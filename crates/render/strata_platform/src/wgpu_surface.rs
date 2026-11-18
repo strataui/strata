@@ -154,7 +154,11 @@ impl WgpuWindowPresenter {
             present_mode: selected_mode,
             alpha_mode,
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: if selected_mode == wgpu::PresentMode::Mailbox {
+                3
+            } else {
+                2
+            },
         };
         surface.configure(&device, &cfg);
 
@@ -253,6 +257,83 @@ impl WgpuWindowPresenter {
                 wgpu::Extent3d {
                     width: w,
                     height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+    }
+
+    /// Uploads only damaged sub-rectangles of the 2D UI HUD overlay texture, avoiding full-frame
+    /// 8 MB CPU-to-GPU transfers when only small labels or HUD counters changed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upload_ui_overlay_bgra_rects(
+        &mut self,
+        width: u32,
+        height: u32,
+        stride: usize,
+        bgra: &[u8],
+        rects: &[(u32, u32, u32, u32)],
+        scratch: &mut Vec<u8>,
+    ) {
+        let w = width.max(1);
+        let h = height.max(1);
+        if stride < (w as usize) * 4 || bgra.len() < stride * (h as usize) {
+            return;
+        }
+        let recreate = self
+            .ui_overlay
+            .as_ref()
+            .map(|o| o.width != w || o.height != h)
+            .unwrap_or(true);
+        if recreate {
+            if stride == (w as usize) * 4 {
+                self.upload_ui_overlay_bgra(w, h, bgra);
+            } else {
+                scratch.resize((w * h * 4) as usize, 0);
+                let row_bytes = (w as usize) * 4;
+                for row in 0..(h as usize) {
+                    scratch[row * row_bytes..(row + 1) * row_bytes]
+                        .copy_from_slice(&bgra[row * stride..row * stride + row_bytes]);
+                }
+                self.upload_ui_overlay_bgra(w, h, scratch);
+            }
+            return;
+        }
+        let Some(ref ov) = self.ui_overlay else {
+            return;
+        };
+        let queue = self.renderer.queue();
+        for &(rx, ry, rw, rh) in rects {
+            if rx >= w || ry >= h || rw == 0 || rh == 0 {
+                continue;
+            }
+            let cw = rw.min(w - rx);
+            let ch = rh.min(h - ry);
+            let row_bytes = (cw as usize) * 4;
+            let total_bytes = row_bytes * (ch as usize);
+            scratch.resize(total_bytes, 0);
+            for r in 0..(ch as usize) {
+                let src_off = ((ry as usize) + r) * stride + (rx as usize) * 4;
+                let dst_off = r * row_bytes;
+                scratch[dst_off..dst_off + row_bytes]
+                    .copy_from_slice(&bgra[src_off..src_off + row_bytes]);
+            }
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &ov.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: rx, y: ry, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &scratch[..total_bytes],
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(cw * 4),
+                    rows_per_image: Some(ch),
+                },
+                wgpu::Extent3d {
+                    width: cw,
+                    height: ch,
                     depth_or_array_layers: 1,
                 },
             );
