@@ -2644,6 +2644,7 @@ mod gtk_gpu_x11 {
             self.presenter.resize(w, h);
             self.overlay_uploaded = false;
             self.last_overlay_hash = None;
+            self.last_viewport = None;
         }
 
         fn destroy(self) {
@@ -2973,7 +2974,7 @@ mod gtk_gpu_x11 {
             let Some(ref mut state) = *cell else {
                 return false;
             };
-            if !state.mapped {
+            if !state.mapped || !state.overlay_uploaded {
                 return false;
             }
             let (Some(ref scene), Some(vp)) = (&state.last_scene, state.last_viewport) else {
@@ -3758,11 +3759,6 @@ where
         im_unrealize.set_client_window(None::<&gtk::gdk::Window>);
     });
 
-    drawing_area.connect_size_allocate(|_widget, alloc| {
-        #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
-        gtk_gpu_x11::resize_active(alloc.width().max(1) as u32, alloc.height().max(1) as u32);
-    });
-
     let im_focus_in = im_context.clone();
     drawing_area.connect_focus_in_event(move |_widget, _event| {
         use gtk::prelude::*;
@@ -3899,6 +3895,27 @@ where
             changed
         },
     ));
+
+    let last_allocated_size = std::cell::Cell::new((0u32, 0u32));
+    let on_event_resize = on_event_rc.clone();
+    drawing_area.connect_size_allocate(move |widget, alloc| {
+        use gtk::prelude::WidgetExt;
+        let w = alloc.width().max(1) as u32;
+        let h = alloc.height().max(1) as u32;
+        #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+        gtk_gpu_x11::resize_active(w, h);
+        if last_allocated_size.get() != (w, h) {
+            last_allocated_size.set((w, h));
+            let ev = crate::events::PlatformEvent::WindowResized {
+                width: w,
+                height: h,
+            };
+            if let Ok(mut cb) = on_event_resize.try_borrow_mut() {
+                let _ = (*cb)(&ev);
+            }
+            widget.queue_draw();
+        }
+    });
 
     DRAWING_AREA_HANDLE.with(|da| {
         *da.borrow_mut() = Some(drawing_area.clone());

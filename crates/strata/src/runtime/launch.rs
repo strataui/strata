@@ -583,6 +583,35 @@ where
             if invoke_user_event_hook(event, &mut rt, &mut *event_handler_event.borrow_mut()) {
                 needs_rebuild = true;
             }
+            if let strata_platform::PlatformEvent::WindowResized { width, height } = event {
+                let wf = (*width).max(1) as f32;
+                let hf = (*height).max(1) as f32;
+                let size_changed = (rt.viewport_width - wf).abs() > 0.01
+                    || (rt.viewport_height - hf).abs() > 0.01;
+                rt.viewport_width = wf;
+                rt.viewport_height = hf;
+                if size_changed {
+                    let signals_before = strata_dom::reactive::has_dirty_signals();
+                    {
+                        let rt = &mut *rt;
+                        rt.unapply_scroll_offsets();
+                        rt.layout_root.compute_layout(wf, hf);
+                        AppRuntime::sync_layout_to_ir(&rt.layout_root, &mut rt.ir_graph);
+                        rt.apply_viewport_clamps();
+                        rt.apply_scroll_offsets();
+                        rt.spatial_index
+                            .rebuild(&rt.root_blueprint, &rt.layout_root);
+                    }
+                    let resize_fired = rt.dispatch_resize_observers();
+                    if resize_fired
+                        || (!signals_before && strata_dom::reactive::has_dirty_signals())
+                    {
+                        needs_rebuild = true;
+                    }
+                    rt.mark_paint_dirty();
+                }
+                needs_redraw = true;
+            }
             if let strata_platform::PlatformEvent::Scroll {
                 delta_x, delta_y, ..
             } = event

@@ -49,10 +49,32 @@ where
             width: w,
             height: h,
         } => {
+            let wf = (*w).max(1) as f32;
+            let hf = (*h).max(1) as f32;
             compositor.resize(*w, *h, runtime.dpr);
             let _ = presenter.resize(*w, *h);
-            runtime.viewport_width = *w as f32;
-            runtime.viewport_height = *h as f32;
+            let size_changed = (runtime.viewport_width - wf).abs() > 0.01
+                || (runtime.viewport_height - hf).abs() > 0.01;
+            runtime.viewport_width = wf;
+            runtime.viewport_height = hf;
+            if size_changed {
+                let signals_before = strata_dom::reactive::has_dirty_signals();
+                runtime.unapply_scroll_offsets();
+                runtime.layout_root.compute_layout(wf, hf);
+                AppRuntime::sync_layout_to_ir(&runtime.layout_root, &mut runtime.ir_graph);
+                runtime.apply_viewport_clamps();
+                runtime.apply_scroll_offsets();
+                runtime
+                    .spatial_index
+                    .rebuild(&runtime.root_blueprint, &runtime.layout_root);
+                let resize_fired = runtime.dispatch_resize_observers();
+                if resize_fired
+                    || (!signals_before && strata_dom::reactive::has_dirty_signals())
+                {
+                    needs_rebuild = true;
+                }
+                runtime.mark_paint_dirty();
+            }
             needs_redraw = true;
         }
         strata_platform::PlatformEvent::ScaleFactorChanged { scale_factor } => {
@@ -441,6 +463,14 @@ where
             } else if let Some(ref mut f) = root_fn {
                 let new_view = f();
                 runtime.update_view(new_view);
+                let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
+                let _ = window.present_surface(
+                    &presenter.backing_buffer,
+                    presenter.width,
+                    presenter.height,
+                );
+            } else {
+                runtime.mark_paint_dirty();
                 let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
                 let _ = window.present_surface(
                     &presenter.backing_buffer,
