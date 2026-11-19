@@ -1,6 +1,6 @@
 [package]
-name = "strata_macro"
-version = "0.1.1"
+name = "strata-macro"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -15,5 +15,5 @@ proc-macro = true
 [dependencies]
 
 [dev-dependencies]
-strata_dom = { path = "../strata_dom" }
-strata_js = { path = "../../runtime/strata_js" }
+strata-dom = { path = "../strata_dom" }
+strata-js = { path = "../../runtime/strata_js" }

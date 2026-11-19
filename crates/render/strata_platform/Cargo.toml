@@ -1,6 +1,6 @@
 [package]
 name = "strata-ui-platform"
-version = "0.1.1"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -14,10 +14,10 @@ name = "strata_platform"
 path = "src/lib.rs"
 
 [dependencies]
-strata_render = { workspace = true }
-strata_style = { workspace = true }
-strata_primitives = { workspace = true }
-strata_layout = { workspace = true }
+strata-render = { workspace = true }
+strata-style = { workspace = true }
+strata-primitives = { workspace = true }
+strata-layout = { workspace = true }
 wgpu = { version = "24.0", optional = true }
 pollster = { version = "0.4", optional = true }
 raw-window-handle = { version = "0.6", optional = true }
@@ -26,11 +26,11 @@ raw-window-handle = { version = "0.6", optional = true }
 default = ["gtk-compat", "xlib", "wgpu-backend"]
 gtk-compat = ["dep:gtk", "dep:cairo-rs", "dep:pangocairo", "dep:pango"]
 xlib = ["dep:x11"]
-wgpu-backend = ["dep:wgpu", "dep:pollster", "dep:raw-window-handle", "strata_render/wgpu-backend"]
+wgpu-backend = ["dep:wgpu", "dep:pollster", "dep:raw-window-handle", "strata-render/wgpu-backend"]
 test-internals = []
 
 [dev-dependencies]
-strata_platform = { package = "strata-ui-platform", path = ".", features = ["test-internals"] }
+strata-ui-platform = { path = ".", features = ["test-internals"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11 = { version = "2.21", features = ["xlib"], optional = true }

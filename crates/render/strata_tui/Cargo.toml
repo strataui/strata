@@ -1,5 +1,5 @@
 [package]
-name = "strata_tui"
+name = "strata-tui"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -10,11 +10,11 @@ homepage.workspace = true
 documentation.workspace = true
 
 [dependencies]
-strata_dom = { workspace = true }
-strata_style = { workspace = true }
-strata_layout = { workspace = true }
-strata_primitives = { workspace = true }
-strata_platform = { workspace = true }
+strata-dom = { workspace = true }
+strata-style = { workspace = true }
+strata-layout = { workspace = true }
+strata-primitives = { workspace = true }
+strata-ui-platform = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

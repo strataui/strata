@@ -503,6 +503,27 @@ class PublishCratesTests(unittest.TestCase):
                 strata.resolve(),
             )
 
+    def test_publish_workspace_rejects_canonical_name_collisions(self) -> None:
+        base = Path("/tmp")
+        crates = [
+            publish_crates.WorkspaceCrate("strata-ui", "0.1.0", base / "a/Cargo.toml", base / "a", ()),
+            publish_crates.WorkspaceCrate("strata_ui", "0.1.0", base / "b/Cargo.toml", base / "b", ()),
+        ]
+        self.assertEqual(
+            publish_crates.find_canonical_name_collisions(crates),
+            {"strata_ui": ["strata-ui", "strata_ui"]},
+        )
+        stderr = io.StringIO()
+        with (
+            contextlib.redirect_stderr(stderr),
+            mock.patch.object(publish_crates, "collect_workspace_crates", return_value=crates),
+            mock.patch.object(publish_crates, "stream_command") as cmd_mock,
+        ):
+            rc = publish_crates.publish_workspace("strata", base, [])
+        self.assertEqual(rc, 1)
+        self.assertIn("strata-ui, strata_ui", stderr.getvalue())
+        cmd_mock.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

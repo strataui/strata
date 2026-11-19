@@ -1,5 +1,5 @@
 [package]
-name = "strata_js"
+name = "strata-js"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -11,4 +11,4 @@ documentation.workspace = true
 
 [dependencies]
 regex = "1.10"
-strata_web_api = { workspace = true }
+strata-web-api = { workspace = true }

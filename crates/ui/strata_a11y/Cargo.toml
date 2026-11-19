@@ -1,5 +1,5 @@
 [package]
-name = "strata_a11y"
+name = "strata-a11y"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -12,8 +12,8 @@ documentation.workspace = true
 [dependencies]
 accesskit = "0.25.2"
 uuid = "1.0"
-strata_dom = { workspace = true }
-strata_layout = { workspace = true }
-strata_primitives = { workspace = true }
+strata-dom = { workspace = true }
+strata-layout = { workspace = true }
+strata-primitives = { workspace = true }
 
 

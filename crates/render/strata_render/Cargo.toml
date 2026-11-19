@@ -1,6 +1,6 @@
 [package]
-name = "strata_render"
-version = "0.1.1"
+name = "strata-render"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -10,13 +10,13 @@ homepage.workspace = true
 documentation.workspace = true
 
 [dependencies]
-strata_primitives = { workspace = true }
-strata_style = { workspace = true }
-strata_layout = { workspace = true }
-strata_dom = { workspace = true }
-strata_macro = { workspace = true }
-strata_js = { workspace = true }
-strata_gpu_path = { workspace = true }
+strata-primitives = { workspace = true }
+strata-style = { workspace = true }
+strata-layout = { workspace = true }
+strata-dom = { workspace = true }
+strata-macro = { workspace = true }
+strata-js = { workspace = true }
+strata-gpu-path = { workspace = true }
 miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 wgpu = { version = "24.0", optional = true }
 bytemuck = { version = "1.25", features = ["derive"], optional = true }

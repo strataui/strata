@@ -1,5 +1,5 @@
 [package]
-name = "strata_benchmark"
+name = "strata-benchmark"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -10,11 +10,11 @@ homepage.workspace = true
 documentation.workspace = true
 
 [dependencies]
-strata_primitives = { workspace = true }
-strata_dom = { workspace = true }
-strata_layout = { workspace = true }
-strata_style = { workspace = true }
-strata_render = { workspace = true }
-strata_web_reader = { workspace = true }
-strata = { workspace = true }
-strata_platform = { workspace = true }
+strata-primitives = { workspace = true }
+strata-dom = { workspace = true }
+strata-layout = { workspace = true }
+strata-style = { workspace = true }
+strata-render = { workspace = true }
+strata-web-reader = { workspace = true }
+strata-ui = { workspace = true }
+strata-ui-platform = { workspace = true }

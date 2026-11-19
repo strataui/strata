@@ -1,5 +1,5 @@
 [package]
-name = "strata_router"
+name = "strata-router"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -10,8 +10,8 @@ homepage.workspace = true
 documentation.workspace = true
 
 [dependencies]
-strata_dom = { workspace = true }
-strata_macro = { workspace = true }
-strata_primitives = { workspace = true }
+strata-dom = { workspace = true }
+strata-macro = { workspace = true }
+strata-primitives = { workspace = true }
 
 [dev-dependencies]

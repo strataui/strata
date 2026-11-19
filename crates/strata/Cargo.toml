@@ -18,78 +18,78 @@ path = "src/lib.rs"
 
 [dependencies]
 # Core mandatory primitives & runtime
-strata_dom = { workspace = true }
-strata_macro = { workspace = true }
-strata_style = { workspace = true }
-strata_layout = { workspace = true }
-strata_render = { workspace = true }
-strata_js = { workspace = true }
-strata_platform = { workspace = true }
-strata_primitives = { workspace = true }
-strata_vfs = { workspace = true }
-strata_storage = { workspace = true }
-strata_web_api = { workspace = true }
-strata_gpu_path = { workspace = true }
-strata_a11y = { workspace = true }
+strata-dom = { workspace = true }
+strata-macro = { workspace = true }
+strata-style = { workspace = true }
+strata-layout = { workspace = true }
+strata-render = { workspace = true }
+strata-js = { workspace = true }
+strata-ui-platform = { workspace = true }
+strata-primitives = { workspace = true }
+strata-vfs = { workspace = true }
+strata-storage = { workspace = true }
+strata-web-api = { workspace = true }
+strata-gpu-path = { workspace = true }
+strata-a11y = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Decoupled optional ecosystem crates
-strata_ui = { workspace = true, optional = true }
-strata_icons = { workspace = true, optional = true }
-strata_device = { workspace = true, optional = true }
-strata_parallel = { workspace = true, optional = true }
-strata_tui = { workspace = true, optional = true }
-strata_codegen_js = { workspace = true, optional = true }
-strata_devtools = { workspace = true, optional = true }
-strata_mobile_test = { workspace = true, optional = true }
-strata_sim = { workspace = true, optional = true }
-strata_audio = { workspace = true, optional = true }
+strata-components = { workspace = true, optional = true }
+strata-icons = { workspace = true, optional = true }
+strata-device = { workspace = true, optional = true }
+strata-parallel = { workspace = true, optional = true }
+strata-tui = { workspace = true, optional = true }
+strata-codegen-js = { workspace = true, optional = true }
+strata-devtools = { workspace = true, optional = true }
+strata-mobile-test = { workspace = true, optional = true }
+strata-sim = { workspace = true, optional = true }
+strata-audio = { workspace = true, optional = true }
 
-strata_crdt = { workspace = true, optional = true }
-strata_agent_ui = { workspace = true, optional = true }
-strata_i18n = { workspace = true, optional = true }
-strata_router = { workspace = true, optional = true }
-strata_form = { workspace = true, optional = true }
-strata_query = { workspace = true, optional = true }
-strata_virtual = { workspace = true, optional = true }
-strata_aria = { workspace = true, optional = true }
-strata_store = { workspace = true, optional = true }
-strata_toast = { workspace = true, optional = true }
-strata_motion = { workspace = true, optional = true }
-strata_table = { workspace = true, optional = true }
-strata_charts = { workspace = true, optional = true }
-strata_editor = { workspace = true, optional = true }
+strata-crdt = { workspace = true, optional = true }
+strata-agent-ui = { workspace = true, optional = true }
+strata-i18n = { workspace = true, optional = true }
+strata-router = { workspace = true, optional = true }
+strata-form = { workspace = true, optional = true }
+strata-query = { workspace = true, optional = true }
+strata-virtual = { workspace = true, optional = true }
+strata-aria = { workspace = true, optional = true }
+strata-ui-store = { workspace = true, optional = true }
+strata-toast = { workspace = true, optional = true }
+strata-motion = { workspace = true, optional = true }
+strata-table = { workspace = true, optional = true }
+strata-charts = { workspace = true, optional = true }
+strata-editor = { workspace = true, optional = true }
 
 [features]
 default = ["tailwind", "device"]
 tailwind = []
-ui = ["dep:strata_ui"]
-icons = ["dep:strata_icons"]
-i18n = ["dep:strata_i18n"]
-router = ["dep:strata_router"]
-form = ["dep:strata_form"]
-query = ["dep:strata_query"]
-virtual = ["dep:strata_virtual"]
-aria = ["dep:strata_aria"]
-store = ["dep:strata_store"]
-toast = ["dep:strata_toast"]
-motion = ["dep:strata_motion"]
-table = ["dep:strata_table"]
-charts = ["dep:strata_charts"]
-editor = ["dep:strata_editor"]
-device = ["dep:strata_device"]
-parallel = ["dep:strata_parallel"]
-tui = ["dep:strata_tui"]
-codegen-js = ["dep:strata_codegen_js"]
-devtools = ["dep:strata_devtools"]
-mobile-test = ["dep:strata_mobile_test"]
-sim = ["dep:strata_sim"]
+ui = ["dep:strata-components"]
+icons = ["dep:strata-icons"]
+i18n = ["dep:strata-i18n"]
+router = ["dep:strata-router"]
+form = ["dep:strata-form"]
+query = ["dep:strata-query"]
+virtual = ["dep:strata-virtual"]
+aria = ["dep:strata-aria"]
+store = ["dep:strata-ui-store"]
+toast = ["dep:strata-toast"]
+motion = ["dep:strata-motion"]
+table = ["dep:strata-table"]
+charts = ["dep:strata-charts"]
+editor = ["dep:strata-editor"]
+device = ["dep:strata-device"]
+parallel = ["dep:strata-parallel"]
+tui = ["dep:strata-tui"]
+codegen-js = ["dep:strata-codegen-js"]
+devtools = ["dep:strata-devtools"]
+mobile-test = ["dep:strata-mobile-test"]
+sim = ["dep:strata-sim"]
 a11y = []
-audio = ["dep:strata_audio"]
+audio = ["dep:strata-audio"]
 
-crdt = ["dep:strata_crdt"]
-agent-ui = ["dep:strata_agent_ui"]
+crdt = ["dep:strata-crdt"]
+agent-ui = ["dep:strata-agent-ui"]
 full = [
     "ui",
     "icons",
@@ -119,12 +119,12 @@ full = [
 ]
 
 [dev-dependencies]
-strata_ui = { workspace = true }
-strata_icons = { workspace = true }
-strata_device = { workspace = true }
-strata_web_reader = { workspace = true }
-strata_devtools = { workspace = true }
-strata_aria = { workspace = true }
+strata-components = { workspace = true }
+strata-icons = { workspace = true }
+strata-device = { workspace = true }
+strata-web-reader = { workspace = true }
+strata-devtools = { workspace = true }
+strata-aria = { workspace = true }
 
 
 

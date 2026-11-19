@@ -1,5 +1,5 @@
 [package]
-name = "strata_primitives"
+name = "strata-primitives"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

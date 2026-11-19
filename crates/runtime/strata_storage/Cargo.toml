@@ -1,5 +1,5 @@
 [package]
-name = "strata_storage"
+name = "strata-storage"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -10,6 +10,6 @@ homepage.workspace = true
 documentation.workspace = true
 
 [dependencies]
-strata_vfs = { workspace = true }
+strata-vfs = { workspace = true }
 ring = "0.17"
 
