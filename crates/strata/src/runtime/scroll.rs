@@ -796,8 +796,12 @@ impl AppRuntime {
                 .unwrap_or(bar.scroll_y)
         };
 
-        if let Some(ref mut tracker) = self.active_smooth_scroll {
-            if tracker.container_path == bar.path {
+        if self
+            .active_smooth_scroll
+            .as_ref()
+            .is_some_and(|t| t.container_path == bar.path)
+        {
+            if let Some(mut tracker) = self.active_smooth_scroll.take() {
                 let dt_flick = now.duration_since(tracker.last_event_time).as_secs_f32();
                 let accel = if dt_flick < 0.20 {
                     (1.0 + (0.12 / dt_flick.max(0.01)).min(2.5)).min(3.5)
@@ -814,11 +818,25 @@ impl AppRuntime {
                     (tracker.target_y + (e0 + c2 * t_prev) * decay).clamp(0.0, bar.max_scroll_y);
                 let v_now = (tracker.initial_velocity - omega * c2 * t_prev) * decay;
 
+                let catchup_dy = y_now - tracker.current_y;
+                if catchup_dy.abs() > 0.001 {
+                    self.apply_scroll_delta_to_container(
+                        &tracker.container_path,
+                        tracker.is_id,
+                        &tracker.container_id,
+                        y_now,
+                        catchup_dy,
+                        bar.max_scroll_y,
+                        bar.available_travel,
+                        bar.bounds.y,
+                    );
+                    tracker.current_y = y_now;
+                }
+
                 let impulse = delta_y * accel;
                 let new_target = (tracker.target_y + impulse).clamp(0.0, bar.max_scroll_y);
 
                 tracker.start_y = y_now;
-                tracker.current_y = y_now;
                 tracker.initial_velocity = v_now;
                 tracker.target_y = new_target;
                 tracker.start_time = now;
@@ -826,6 +844,7 @@ impl AppRuntime {
                 tracker.max_scroll_y = bar.max_scroll_y;
                 tracker.available_travel = bar.available_travel;
                 tracker.bounds_y = bar.bounds.y;
+                self.active_smooth_scroll = Some(tracker);
                 return (wheel_handled, true);
             }
         }
