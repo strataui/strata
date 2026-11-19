@@ -5008,6 +5008,22 @@ where
         gtk::glib::Propagation::Proceed
     });
 
+    let on_event_focus_in = on_event_rc.clone();
+    window.connect_focus_in_event(move |_widget, _event| {
+        if let Ok(mut cb) = on_event_focus_in.try_borrow_mut() {
+            let _ = cb(&crate::events::PlatformEvent::WindowFocused(true));
+        }
+        gtk::glib::Propagation::Proceed
+    });
+
+    let on_event_focus_out = on_event_rc.clone();
+    window.connect_focus_out_event(move |_widget, _event| {
+        if let Ok(mut cb) = on_event_focus_out.try_borrow_mut() {
+            let _ = cb(&crate::events::PlatformEvent::WindowFocused(false));
+        }
+        gtk::glib::Propagation::Proceed
+    });
+
     if let Some(anchor) = effective_anchor {
         if anchor.is_sticky_dock() {
             window.connect_realize(move |win| {
