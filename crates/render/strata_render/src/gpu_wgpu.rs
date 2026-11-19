@@ -3,7 +3,8 @@
 
 use crate::scene3d::{
     Background3D, Camera3D, Geometry3D, Light3D, Material3D, Mesh3D, RetainedCameraUniforms,
-    RetainedDynamicMesh, RetainedEnvironmentAssets, RetainedStar, RetainedTerrainFrame,
+    RetainedDynamicMesh, RetainedEnvironmentAssets, RetainedParticleBillboard,
+    RetainedParticleLayer, RetainedParticleSprite, RetainedStar, RetainedTerrainFrame,
     RetainedTileMesh, RetainedTileTexture, RteTileVertex, Scene3D, TileKeyId,
 };
 use bytemuck::{Pod, Zeroable};
@@ -286,6 +287,23 @@ struct GpuGeoInstance {
     col2: [f32; 4],        // xyz = model col 2 (+Z Up -> world m), w = unlit (1.0 or 0.0)
     base_color: [f32; 4],  // rgba
     emissive: [f32; 4],    // xyz = emissive rgb, w = accent_mix
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuParticleLayerUniforms {
+    basis_east: [f32; 4],      // xyz = local ENU east, w = wrapped_phase.x
+    basis_north: [f32; 4],     // xyz = local ENU north, w = wrapped_phase.y
+    basis_up: [f32; 4],        // xyz = local ENU up, w = wrapped_phase.z
+    cam_right_mpx: [f32; 4],   // xyz = camera right world vec, w = meters_per_px_at_1m
+    cam_up_pad: [f32; 4],      // xyz = camera up world vec, w = 0.0
+    altitude_bounds: [f32; 4], // x = eye_alt_msl, y = ground_alt_msl, z = ceiling_alt_msl, w = ceiling_fade_m
+    volume_params: [f32; 4],   // x = extent_xy, y = extent_z, z = edge_fade_frac, w = near_fade_m
+    motion_params: [f32; 4],   // x = fall_speed_mps, y = wind_e, z = wind_n, w = wrapped_time_s
+    size_params: [f32; 4],     // x = width_m, y = height_m, z = velocity_stretch, w = spin_rad_s
+    flutter_clamp: [f32; 4],   // x = flutter_amp_m, y = flutter_freq_hz, z = min_px, w = max_px
+    color: [f32; 4],           // rgba
+    meta: [u32; 4],            // x = sprite_mode, y = billboard_mode, z = seed, w = particle_count
 }
 
 /// Builds a shared triangle index buffer for a terrain grid `(grid_res x grid_res)` with optional skirts.
@@ -1355,6 +1373,280 @@ fn fs_geo_object(in: GeoVsOut) -> @location(0) vec4<f32> {
     let diffuse_albedo = albedo * (1.0 - metalness * 0.65);
     let color = clamp(diffuse_albedo * diffuse_light + spec + in.emissive.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
     return vec4<f32>(color, in.base_color.a);
+}
+"#;
+
+const PARTICLE_VOLUME_WGSL: &str = r#"
+struct GpuCameraUniforms {
+    view_proj_rte: mat4x4<f32>,
+    inv_view_proj_rte: mat4x4<f32>,
+    ecef_from_icrf: mat4x4<f32>,
+    icrf_from_ecef: mat4x4<f32>,
+    eye_high: vec4<f32>,
+    eye_low: vec4<f32>,
+    sun_dir: vec4<f32>,
+    sun_color: vec4<f32>,
+    ambient_color: vec4<f32>,
+    sky_top: vec4<f32>,
+    sky_bottom: vec4<f32>,
+    moon_dir: vec4<f32>,
+    env_params: vec4<f32>,
+    cloud_params: vec4<f32>,
+    viewport_wh: vec4<f32>,
+}
+
+struct GpuParticleLayerUniforms {
+    basis_east: vec4<f32>,
+    basis_north: vec4<f32>,
+    basis_up: vec4<f32>,
+    cam_right_mpx: vec4<f32>,
+    cam_up_pad: vec4<f32>,
+    altitude_bounds: vec4<f32>,
+    volume_params: vec4<f32>,
+    motion_params: vec4<f32>,
+    size_params: vec4<f32>,
+    flutter_clamp: vec4<f32>,
+    color: vec4<f32>,
+    particle_meta: vec4<u32>,
+}
+
+@group(0) @binding(0) var<uniform> cam: GpuCameraUniforms;
+@group(0) @binding(1) var<uniform> layer: GpuParticleLayerUniforms;
+@group(1) @binding(0) var sprite_tex: texture_2d<f32>;
+@group(1) @binding(1) var sprite_sampler: sampler;
+
+struct ParticleVsOut {
+    @builtin(position) clip_pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) @interpolate(flat) sprite_mode: u32,
+}
+
+fn pcg_u32(v: u32) -> u32 {
+    let state = v * 747796405u + 2891336453u;
+    let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+fn hash01(seed: u32) -> f32 {
+    return f32(pcg_u32(seed)) * (1.0 / 4294967296.0);
+}
+
+@vertex
+fn vs_particle(
+    @builtin(vertex_index) vid: u32,
+    @builtin(instance_index) inst_idx: u32,
+) -> ParticleVsOut {
+    var out: ParticleVsOut;
+    out.clip_pos = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    out.uv = vec2<f32>(0.5, 0.5);
+    out.color = vec4<f32>(0.0);
+    out.sprite_mode = layer.particle_meta.x;
+
+    let base_seed = inst_idx * 4u + layer.particle_meta.z * 1664525u + 1013904223u;
+    let r0 = hash01(base_seed + 0u);
+    let r1 = hash01(base_seed + 1u);
+    let r2 = hash01(base_seed + 2u);
+    let r3 = hash01(base_seed + 3u);
+
+    let extent_xy = max(layer.volume_params.x, 1.0);
+    let extent_z = max(layer.volume_params.y, 1.0);
+    let edge_fade_frac = clamp(layer.volume_params.z, 0.04, 0.48);
+    let near_fade_m = max(layer.volume_params.w, 0.1);
+
+    // Pre-wrapped f64->f32 toroidal phase keeps particles 100% locked to world ENU coordinates:
+    // panning camera right (+East) shifts wrapped_phase.x down so drops stream cleanly left.
+    let u_e = fract(r0 + layer.basis_east.w);
+    let u_n = fract(r1 + layer.basis_north.w);
+    let u_z = fract(r2 + layer.basis_up.w);
+
+    var rel_e = (u_e - 0.5) * extent_xy;
+    var rel_n = (u_n - 0.5) * extent_xy;
+    let rel_z = (u_z - 0.5) * extent_z;
+
+    let time_s = layer.motion_params.w;
+    let flutter_amp = layer.flutter_clamp.x;
+    if (flutter_amp > 0.0001) {
+        let flutter_freq = layer.flutter_clamp.y;
+        let phase = r3 * 6.2831853 + time_s * flutter_freq * (0.72 + 0.56 * fract(r0 * 17.31));
+        let amp = flutter_amp * (0.55 + 0.90 * r3);
+        rel_e += sin(phase) * amp;
+        rel_n += cos(phase * 0.83 + r1 * 6.2831853) * amp;
+    }
+
+    let east = layer.basis_east.xyz;
+    let north = layer.basis_north.xyz;
+    let up = layer.basis_up.xyz;
+    let center_rel = east * rel_e + north * rel_n + up * rel_z;
+
+    let center_clip = cam.view_proj_rte * vec4<f32>(center_rel, 1.0);
+    if (center_clip.w <= 0.05) {
+        return out;
+    }
+
+    let dist = max(length(center_rel), 0.05);
+    let nx = abs(rel_e) / (0.5 * extent_xy);
+    let ny = abs(rel_n) / (0.5 * extent_xy);
+    let nz = abs(rel_z) / (0.5 * extent_z);
+    let box_r = max(max(nx, ny), nz);
+    let edge_fade = 1.0 - smoothstep(1.0 - edge_fade_frac, 1.0, box_r);
+    let near_fade = smoothstep(near_fade_m * 0.30, near_fade_m, dist);
+
+    // Physical altitude bounds: clip smoothly at ground terrain surface and cloud ceiling.
+    let particle_alt_msl = layer.altitude_bounds.x + rel_z;
+    let ground_alt_msl = layer.altitude_bounds.y;
+    let ceiling_alt_msl = layer.altitude_bounds.z;
+    let ceiling_fade_m = max(layer.altitude_bounds.w, 1.0);
+    let above_ground = smoothstep(ground_alt_msl - 0.5, ground_alt_msl + 1.5, particle_alt_msl);
+    let below_ceiling = 1.0 - smoothstep(ceiling_alt_msl - ceiling_fade_m, ceiling_alt_msl, particle_alt_msl);
+
+    let alpha_mul = edge_fade * near_fade * above_ground * below_ceiling;
+    if (alpha_mul <= 0.003 || layer.color.a <= 0.003) {
+        return out;
+    }
+
+    // 6-vertex quad corners in [-1, 1] x [-1, 1]
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(1.0, -1.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(-1.0, 1.0),
+    );
+    let corner = corners[vid % 6u];
+
+    let cam_right = layer.cam_right_mpx.xyz;
+    let cam_up = layer.cam_up_pad.xyz;
+    let m_per_px = dist * max(layer.cam_right_mpx.w, 1e-6);
+    let min_px = max(layer.flutter_clamp.z, 0.75);
+    let max_px = max(layer.flutter_clamp.w, min_px);
+
+    var right_axis = cam_right;
+    var up_axis = cam_up;
+    var hw = 0.05;
+    var hh = 0.05;
+    var uv = vec2<f32>(corner.x * 0.5 + 0.5, 0.5 - corner.y * 0.5);
+
+    if (layer.particle_meta.y == 0u) {
+        // VelocityAligned: align streak vertically along 3D wind + gravity velocity vector.
+        let fall_v = layer.motion_params.x;
+        let wind_e = layer.motion_params.y;
+        let wind_n = layer.motion_params.z;
+        let vel = east * wind_e + north * wind_n - up * fall_v;
+        let speed = max(length(vel), 0.05);
+        let v_dir = vel / speed;
+        let view_dir = center_rel / dist;
+        let side_raw = cross(v_dir, view_dir);
+        let side_len = length(side_raw);
+        let foreshorten = mix(0.26, 1.0, smoothstep(0.06, 0.42, side_len));
+
+        if (side_len > 0.04) {
+            right_axis = side_raw / side_len;
+            up_axis = -v_dir;
+        } else {
+            right_axis = cam_right;
+            up_axis = cam_up;
+        }
+
+        let size_var = 0.75 + 0.50 * r3;
+        let raw_hw = max(layer.size_params.x * 0.5 * size_var, 0.004);
+        let raw_hh = max((layer.size_params.y + speed * layer.size_params.z) * 0.5 * size_var, raw_hw);
+        let max_streak_w_px = min(max_px * 0.12, max(min_px * 2.2, 3.2));
+        hw = clamp(raw_hw, min_px * 0.5 * m_per_px, max_streak_w_px * 0.5 * m_per_px);
+        hh = clamp(raw_hh, min_px * 0.5 * m_per_px, max_px * 0.5 * m_per_px) * foreshorten;
+        hh = max(hh, hw * 1.15);
+        // uv.y = 0 at leading bottom tip (corner.y = -1 -> +v_dir), uv.y = 1 at upper trailing tail
+        uv = vec2<f32>(corner.x * 0.5 + 0.5, corner.y * 0.5 + 0.5);
+    } else {
+        // CameraFacing: 2D camera-aligned billboard with per-particle spin (snowflakes, sleet, custom textures).
+        let spin_dir = select(-1.0, 1.0, (inst_idx & 1u) == 0u);
+        let ang = r3 * 6.2831853 + time_s * layer.size_params.w * spin_dir;
+        let s = sin(ang);
+        let c = cos(ang);
+        right_axis = cam_right * c - cam_up * s;
+        up_axis = cam_right * s + cam_up * c;
+
+        let size_var = 0.65 + 0.70 * r3;
+        let raw_hw = max(layer.size_params.x * 0.5 * size_var, 0.005);
+        let raw_hh = max(layer.size_params.y * 0.5 * size_var, 0.005);
+        hw = clamp(raw_hw, min_px * 0.5 * m_per_px, max_px * 0.5 * m_per_px);
+        hh = clamp(raw_hh, min_px * 0.5 * m_per_px, max_px * 0.5 * m_per_px);
+        uv = vec2<f32>(corner.x * 0.5 + 0.5, 0.5 - corner.y * 0.5);
+    }
+
+    let world_rel = center_rel + right_axis * (corner.x * hw) + up_axis * (corner.y * hh);
+    out.clip_pos = cam.view_proj_rte * vec4<f32>(world_rel, 1.0);
+    out.uv = uv;
+
+    // Day/night atmospheric lighting tint so precipitation responds naturally to sun elevation.
+    let dn = clamp(cam.env_params.x, 0.0, 1.0);
+    let sun_elev = dot(normalize(up), normalize(cam.sun_dir.xyz));
+    let sun_w = smoothstep(-0.10, 0.28, sun_elev);
+    let day_lit = mix(
+        vec3<f32>(0.26, 0.31, 0.40),
+        cam.ambient_color.rgb * 0.85 + cam.sun_color.rgb * 0.92,
+        sun_w,
+    );
+    let lit = mix(vec3<f32>(0.96, 0.98, 1.0), clamp(day_lit, vec3<f32>(0.24), vec3<f32>(1.12)), dn);
+    let depth_fade = 0.82 + 0.18 * (1.0 - clamp(dist / max(extent_xy, 1.0), 0.0, 1.0));
+    out.color = vec4<f32>(layer.color.rgb * lit, layer.color.a * alpha_mul * depth_fade);
+    return out;
+}
+
+@fragment
+fn fs_particle(in: ParticleVsOut) -> @location(0) vec4<f32> {
+    let p = in.uv * 2.0 - vec2<f32>(1.0);
+    let r = length(p);
+
+    // Pre-compute simplistic 6-fold mathematical snowflake SDF in uniform control flow for fwidth().
+    let sector = 1.04719755; // pi / 3
+    let safe_ang = select(0.0, atan2(p.y, p.x), r > 1e-4);
+    let folded = abs(safe_ang - sector * floor(safe_ang / sector + 0.5));
+    let su = r * cos(folded);
+    let sv = r * sin(folded);
+    let d_core = r - 0.18;
+    let spoke_u = clamp(su, 0.0, 0.86);
+    let d_spoke = length(vec2<f32>(su - spoke_u, sv)) - 0.062;
+    let b_dir = vec2<f32>(0.5, 0.8660254);
+    let b_rel = vec2<f32>(su - 0.44, sv);
+    let b_proj = clamp(dot(b_rel, b_dir), 0.0, 0.29);
+    let d_branch = length(b_rel - b_dir * b_proj) - 0.048;
+    let d_crystal = min(d_core, min(d_spoke, d_branch));
+    let aa_crystal = max(fwidth(d_crystal), 0.045);
+
+    var out_col = in.color;
+    if (in.sprite_mode == 0u) {
+        let texel = textureSampleLevel(sprite_tex, sprite_sampler, in.uv, 0.0);
+        out_col = texel * in.color;
+    } else if (in.sprite_mode == 1u) {
+        // Pure mathematical tapered 2D raindrop streak (t = 0 leading tip, t = 1 upper motion tail).
+        let t = clamp(in.uv.y, 0.0, 1.0);
+        let width_prof = mix(0.76, 0.20, smoothstep(0.08, 1.0, t)) * smoothstep(0.0, 0.08, t);
+        let x_norm = abs(p.x) / max(width_prof, 0.04);
+        let core = exp(-x_norm * x_norm * 2.5);
+        let tail_fade = (1.0 - smoothstep(0.14, 1.0, t)) * smoothstep(0.0, 0.06, t);
+        let head_glint = exp(-((p.y + 0.72) * (p.y + 0.72) * 14.0 + p.x * p.x * 5.5)) * 0.35;
+        let mask = clamp(core * tail_fade + head_glint * core, 0.0, 1.0);
+        out_col = vec4<f32>(in.color.rgb + vec3<f32>(head_glint * 0.25), in.color.a * mask);
+    } else if (in.sprite_mode == 2u) {
+        // Simplistic mathematical 6-fold 2D snowflake crystal (zero asset files).
+        let crystal = 1.0 - smoothstep(-aa_crystal, aa_crystal, d_crystal);
+        let soft_halo = (1.0 - smoothstep(0.18, 0.94, r)) * 0.26;
+        let mask = clamp(max(crystal, soft_halo), 0.0, 1.0) * (1.0 - smoothstep(0.92, 1.0, r));
+        out_col = vec4<f32>(in.color.rgb, in.color.a * mask);
+    } else {
+        // ProceduralPellet: compact translucent sleet / graupel ice pellet.
+        let pr = length(vec2<f32>(p.x * 1.18, p.y * 0.85));
+        let mask = (1.0 - smoothstep(0.35, 0.95, pr));
+        let glint = exp(-pr * pr * 5.0) * 0.25;
+        out_col = vec4<f32>(in.color.rgb + vec3<f32>(glint), in.color.a * mask);
+    }
+
+    if (out_col.a <= 0.004) {
+        discard;
+    }
+    return out_col;
 }
 "#;
 
@@ -2667,6 +2959,14 @@ fn build_unit_icosphere(subdivisions: u32) -> (Vec<RteTileVertex>, Vec<u32>) {
     (rte_verts, indices)
 }
 
+struct CachedParticleTexture {
+    revision: u64,
+    width: u32,
+    height: u32,
+    _texture: wgpu::Texture,
+    bind_group: wgpu::BindGroup,
+}
+
 /// Hardware-accelerated `wgpu` 3D renderer capable of rendering directly into any `TextureView`
 /// (swapchain surface) or offscreen RGBA target.
 pub struct Wgpu3DRenderer {
@@ -2714,6 +3014,16 @@ pub struct Wgpu3DRenderer {
     geo_instance_buffer: wgpu::Buffer,
     geo_instance_capacity: usize,
     geo_meshes: HashMap<u64, CachedDynamicGpuMesh>,
+    particle_pipeline: wgpu::RenderPipeline,
+    particle_common_bgl: wgpu::BindGroupLayout,
+    particle_tex_bgl: wgpu::BindGroupLayout,
+    particle_sampler: wgpu::Sampler,
+    particle_uniform_buffer: wgpu::Buffer,
+    particle_uniform_capacity: usize,
+    particle_uniform_stride: u32,
+    particle_common_bind_group: wgpu::BindGroup,
+    particle_default_tex_bg: wgpu::BindGroup,
+    particle_textures: HashMap<u64, CachedParticleTexture>,
     overlay_pipeline: wgpu::RenderPipeline,
     overlay_main_pass_pipeline: wgpu::RenderPipeline,
     overlay_bind_group_layout: wgpu::BindGroupLayout,
@@ -3666,6 +3976,184 @@ impl Wgpu3DRenderer {
             Some(wgpu::BlendState::ALPHA_BLENDING),
         );
 
+        // GPU-instanced 2D camera-local toroidal particle volume pipeline (rain, snow, custom 2D sprites)
+        let particle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("strata_3d_particle_volume_wgsl"),
+            source: wgpu::ShaderSource::Wgsl(PARTICLE_VOLUME_WGSL.into()),
+        });
+        let ubo_align = device.limits().min_uniform_buffer_offset_alignment.max(256);
+        let particle_u_size = std::mem::size_of::<GpuParticleLayerUniforms>() as u32;
+        let particle_uniform_stride = particle_u_size.div_ceil(ubo_align) * ubo_align;
+        let particle_uniform_capacity = 16usize;
+        let particle_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("strata_3d_particle_uniforms"),
+            size: (particle_uniform_capacity as u64) * (particle_uniform_stride as u64),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let particle_common_bgl =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("strata_3d_particle_common_bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: true,
+                            min_binding_size: std::num::NonZeroU64::new(particle_u_size as u64),
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let particle_common_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("strata_3d_particle_common_bg"),
+            layout: &particle_common_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &particle_uniform_buffer,
+                        offset: 0,
+                        size: std::num::NonZeroU64::new(particle_u_size as u64),
+                    }),
+                },
+            ],
+        });
+        let particle_tex_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("strata_3d_particle_tex_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let particle_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("strata_3d_particle_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let default_p_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("strata_3d_particle_default_1x1"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &default_p_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255u8, 255, 255, 255],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let default_p_view = default_p_tex.create_view(&Default::default());
+        let particle_default_tex_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("strata_3d_particle_default_tex_bg"),
+            layout: &particle_tex_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&default_p_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&particle_sampler),
+                },
+            ],
+        });
+        let particle_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("strata_3d_particle_pl"),
+            bind_group_layouts: &[&particle_common_bgl, &particle_tex_bgl],
+            push_constant_ranges: &[],
+        });
+        let particle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("strata_3d_particle_pipeline"),
+            layout: Some(&particle_layout),
+            vertex: wgpu::VertexState {
+                module: &particle_shader,
+                entry_point: Some("vs_particle"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &particle_shader,
+                entry_point: Some("fs_particle"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                front_face: wgpu::FrontFace::Ccw,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         // 2D overlay composite pipeline
         let overlay_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("strata_2d_overlay_wgsl"),
@@ -3807,6 +4295,16 @@ impl Wgpu3DRenderer {
             geo_instance_buffer,
             geo_instance_capacity,
             geo_meshes: HashMap::new(),
+            particle_pipeline,
+            particle_common_bgl,
+            particle_tex_bgl,
+            particle_sampler,
+            particle_uniform_buffer,
+            particle_uniform_capacity,
+            particle_uniform_stride,
+            particle_common_bind_group,
+            particle_default_tex_bg,
+            particle_textures: HashMap::new(),
             overlay_pipeline,
             overlay_main_pass_pipeline,
             overlay_bind_group_layout,
@@ -4682,6 +5180,203 @@ impl Wgpu3DRenderer {
                 .write_buffer(&self.dynamic_uniform_buffer, 0, &staged);
         }
 
+        let mut particle_draws: Vec<(u32, Option<u64>)> = Vec::new();
+        if let Some(frame) = terrain_frame_opt.as_ref() {
+            if !frame.particle_layers.is_empty() {
+                for tex in frame.particle_textures.iter() {
+                    if tex.width == 0
+                        || tex.height == 0
+                        || tex.rgba8.len() < (tex.width as usize) * (tex.height as usize) * 4
+                    {
+                        continue;
+                    }
+                    let need_upload = match self.particle_textures.get(&tex.id) {
+                        Some(cached) => {
+                            cached.revision != tex.revision
+                                || cached.width != tex.width
+                                || cached.height != tex.height
+                        }
+                        None => true,
+                    };
+                    if need_upload {
+                        let gpu_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("strata_3d_particle_sprite_tex"),
+                            size: wgpu::Extent3d {
+                                width: tex.width,
+                                height: tex.height,
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                                | wgpu::TextureUsages::COPY_DST,
+                            view_formats: &[],
+                        });
+                        self.queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &gpu_tex,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            &tex.rgba8[..(tex.width as usize) * (tex.height as usize) * 4],
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(tex.width * 4),
+                                rows_per_image: Some(tex.height),
+                            },
+                            wgpu::Extent3d {
+                                width: tex.width,
+                                height: tex.height,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                        let view = gpu_tex.create_view(&Default::default());
+                        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("strata_3d_particle_sprite_bg"),
+                            layout: &self.particle_tex_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: wgpu::BindingResource::TextureView(&view),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::Sampler(
+                                        &self.particle_sampler,
+                                    ),
+                                },
+                            ],
+                        });
+                        self.particle_textures.insert(
+                            tex.id,
+                            CachedParticleTexture {
+                                revision: tex.revision,
+                                width: tex.width,
+                                height: tex.height,
+                                _texture: gpu_tex,
+                                bind_group: bg,
+                            },
+                        );
+                    }
+                }
+
+                let norm3 = |v: [f32; 3], fallback: [f32; 3]| -> [f32; 3] {
+                    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                    if l > 1e-6 {
+                        [v[0] / l, v[1] / l, v[2] / l]
+                    } else {
+                        fallback
+                    }
+                };
+                let cam_right = norm3(
+                    [cam.view_rot[0][0], cam.view_rot[1][0], cam.view_rot[2][0]],
+                    [1.0, 0.0, 0.0],
+                );
+                let cam_up = norm3(
+                    [cam.view_rot[0][1], cam.view_rot[1][1], cam.view_rot[2][1]],
+                    [0.0, 1.0, 0.0],
+                );
+                let meters_per_px_at_1m = 2.0 / (vp_h * cam.proj[1][1].abs().max(0.05));
+
+                let active_layers: Vec<&RetainedParticleLayer> = frame
+                    .particle_layers
+                    .iter()
+                    .filter(|l| l.particle_count > 0 && l.color[3] > 0.002)
+                    .collect();
+                if !active_layers.is_empty() {
+                    let stride = self.particle_uniform_stride as usize;
+                    if active_layers.len() > self.particle_uniform_capacity {
+                        let new_cap = active_layers.len().next_power_of_two().max(16);
+                        let u_size = std::mem::size_of::<GpuParticleLayerUniforms>() as u64;
+                        self.particle_uniform_buffer =
+                            self.device.create_buffer(&wgpu::BufferDescriptor {
+                                label: Some("strata_3d_particle_uniforms_grown"),
+                                size: (new_cap * stride) as u64,
+                                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                                mapped_at_creation: false,
+                            });
+                        self.particle_uniform_capacity = new_cap;
+                        self.particle_common_bind_group =
+                            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: Some("strata_3d_particle_common_bg_grown"),
+                                layout: &self.particle_common_bgl,
+                                entries: &[
+                                    wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: self.camera_buffer.as_entire_binding(),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: wgpu::BindingResource::Buffer(
+                                            wgpu::BufferBinding {
+                                                buffer: &self.particle_uniform_buffer,
+                                                offset: 0,
+                                                size: std::num::NonZeroU64::new(u_size),
+                                            },
+                                        ),
+                                    },
+                                ],
+                            });
+                    }
+                    let mut staged = vec![0u8; active_layers.len() * stride];
+                    for (i, layer) in active_layers.iter().enumerate() {
+                        let (sprite_mode, tex_id_opt) = match layer.sprite {
+                            RetainedParticleSprite::Textured(tid) => (0u32, Some(tid)),
+                            RetainedParticleSprite::ProceduralStreak => (1u32, None),
+                            RetainedParticleSprite::ProceduralSnowflake => (2u32, None),
+                            RetainedParticleSprite::ProceduralPellet => (3u32, None),
+                        };
+                        let billboard_mode = match layer.billboard {
+                            RetainedParticleBillboard::VelocityAligned => 0u32,
+                            RetainedParticleBillboard::CameraFacing => 1u32,
+                        };
+                        let gpu_u = GpuParticleLayerUniforms {
+                            basis_east: [
+                                layer.basis_east[0],
+                                layer.basis_east[1],
+                                layer.basis_east[2],
+                                layer.wrapped_phase[0],
+                            ],
+                            basis_north: [
+                                layer.basis_north[0],
+                                layer.basis_north[1],
+                                layer.basis_north[2],
+                                layer.wrapped_phase[1],
+                            ],
+                            basis_up: [
+                                layer.basis_up[0],
+                                layer.basis_up[1],
+                                layer.basis_up[2],
+                                layer.wrapped_phase[2],
+                            ],
+                            cam_right_mpx: [
+                                cam_right[0],
+                                cam_right[1],
+                                cam_right[2],
+                                meters_per_px_at_1m,
+                            ],
+                            cam_up_pad: [cam_up[0], cam_up[1], cam_up[2], 0.0],
+                            altitude_bounds: layer.altitude_bounds,
+                            volume_params: layer.volume_params,
+                            motion_params: layer.motion_params,
+                            size_params: layer.size_params,
+                            flutter_clamp: layer.flutter_clamp,
+                            color: layer.color,
+                            meta: [sprite_mode, billboard_mode, layer.seed, layer.particle_count],
+                        };
+                        let bytes = bytemuck::bytes_of(&gpu_u);
+                        staged[i * stride..i * stride + bytes.len()].copy_from_slice(bytes);
+                        particle_draws.push((layer.particle_count, tex_id_opt));
+                    }
+                    self.queue
+                        .write_buffer(&self.particle_uniform_buffer, 0, &staged);
+                }
+            }
+        }
+
         let topology_res = grid_topology.map(|(g, s)| self.ensure_topology(g, s));
         let depth_view = self.ensure_depth_view(target_width.max(1), target_height.max(1));
 
@@ -4852,6 +5547,20 @@ impl Wgpu3DRenderer {
                     pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                     pass.set_index_buffer(gpu_mesh.ibuf.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..gpu_mesh.index_count, 0, range.clone());
+                }
+            }
+
+            if !particle_draws.is_empty() {
+                pass.set_pipeline(&self.particle_pipeline);
+                for (i, (count, tex_id_opt)) in particle_draws.iter().enumerate() {
+                    let offset = (i as u32) * self.particle_uniform_stride;
+                    pass.set_bind_group(0, &self.particle_common_bind_group, &[offset]);
+                    let tex_bg = tex_id_opt
+                        .and_then(|tid| self.particle_textures.get(&tid))
+                        .map(|c| &c.bind_group)
+                        .unwrap_or(&self.particle_default_tex_bg);
+                    pass.set_bind_group(1, tex_bg, &[]);
+                    pass.draw(0..6, 0..*count);
                 }
             }
 

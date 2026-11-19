@@ -587,4 +587,118 @@ fn wgpu_instanced_geo_objects_render_at_planetary_rte_coords_with_nonuniform_sca
     );
 }
 
+#[test]
+fn wgpu_particle_volumes_render_procedural_rain_snow_custom_texture_and_clip_above_ceiling() {
+    use strata_render::scene3d::{
+        RetainedParticleBillboard, RetainedParticleLayer, RetainedParticleSprite,
+    };
+
+    let Ok(mut renderer) = Wgpu3DRenderer::new_headless(wgpu::TextureFormat::Bgra8Unorm) else {
+        return;
+    };
+    let (w, h) = (160u32, 160u32);
+    let mut cam = camera_uniforms([0.0, 0.0, 0.0], [0.0, 0.0, -10.0], w, h);
+    cam.background = Background3D::Solid(Color::rgba(0, 0, 0, 255));
+    cam.day_night_strength = 0.0;
+
+    let count_lit_pixels = |bgra: &[u8]| -> usize {
+        bgra.chunks_exact(4)
+            .filter(|px| px[0] > 18 || px[1] > 18 || px[2] > 18)
+            .count()
+    };
+
+    // 1. Procedural rain streak volume below cloud ceiling
+    let rain_layer = RetainedParticleLayer {
+        id: 1,
+        particle_count: 1_200,
+        sprite: RetainedParticleSprite::ProceduralStreak,
+        billboard: RetainedParticleBillboard::VelocityAligned,
+        basis_east: [1.0, 0.0, 0.0],
+        basis_north: [0.0, 0.0, -1.0],
+        basis_up: [0.0, 1.0, 0.0],
+        wrapped_phase: [0.15, 0.25, 0.35],
+        altitude_bounds: [200.0, 0.0, 5_500.0, 900.0],
+        volume_params: [32.0, 24.0, 0.15, 0.8],
+        motion_params: [26.0, 2.0, 0.5, 1.2],
+        size_params: [0.06, 1.2, 0.035, 0.0],
+        flutter_clamp: [0.0, 0.0, 1.6, 48.0],
+        color: [0.75, 0.88, 1.0, 0.85],
+        seed: 7,
+    };
+    let retained = RetainedScene3D::new(cam);
+    retained.update_camera_and_particles(cam, Arc::new(vec![rain_layer.clone()]), Arc::default());
+    let scene = Scene3D::new().with_retained_handle(retained.clone());
+    let bgra_rain = renderer
+        .render_offscreen(&scene, w, h, true, true)
+        .expect("rain offscreen");
+    let rain_lit = count_lit_pixels(&bgra_rain);
+    assert!(
+        rain_lit >= 60,
+        "procedural 2D rain streaks must render visible pixels, got {rain_lit}"
+    );
+
+    // 2. Mathematical 6-fold 2D snowflake crystal volume
+    let snow_layer = RetainedParticleLayer {
+        id: 2,
+        particle_count: 900,
+        sprite: RetainedParticleSprite::ProceduralSnowflake,
+        billboard: RetainedParticleBillboard::CameraFacing,
+        size_params: [0.22, 0.22, 0.0, 1.2],
+        flutter_clamp: [0.6, 1.2, 3.5, 16.0],
+        color: [0.98, 0.99, 1.0, 0.95],
+        seed: 19,
+        ..rain_layer.clone()
+    };
+    retained.update_particles(Arc::new(vec![snow_layer.clone()]), Arc::default());
+    let bgra_snow = renderer
+        .render_offscreen(&scene, w, h, true, true)
+        .expect("snow offscreen");
+    let snow_lit = count_lit_pixels(&bgra_snow);
+    assert!(
+        snow_lit >= 100,
+        "mathematical 2D snowflakes must render visible pixels, got {snow_lit}"
+    );
+
+    // 3. Custom 2D RGBA8 sprite texture (bright magenta square)
+    let custom_tex = Arc::new(RetainedTileTexture {
+        id: 777,
+        revision: 1,
+        width: 4,
+        height: 4,
+        rgba8: Arc::new([255u8, 40, 220, 255].repeat(16)),
+    });
+    let tex_layer = RetainedParticleLayer {
+        id: 3,
+        sprite: RetainedParticleSprite::Textured(777),
+        color: [1.0, 1.0, 1.0, 0.95],
+        seed: 31,
+        ..snow_layer.clone()
+    };
+    retained.update_particles(Arc::new(vec![tex_layer]), Arc::new(vec![custom_tex]));
+    let bgra_tex = renderer
+        .render_offscreen(&scene, w, h, true, true)
+        .expect("custom texture particle offscreen");
+    let magenta_hits = bgra_tex
+        .chunks_exact(4)
+        .filter(|px| px[2] > 120 && px[0] > 100 && px[1] < 80)
+        .count();
+    assert!(
+        magenta_hits >= 50,
+        "custom 2D RGBA8 textured particle layer must render magenta sprites, got {magenta_hits}"
+    );
+
+    // 4. Camera well above cloud ceiling clips all particles to zero
+    let mut above_clouds = snow_layer;
+    above_clouds.altitude_bounds = [8_000.0, 0.0, 5_500.0, 900.0];
+    retained.update_particles(Arc::new(vec![above_clouds]), Arc::default());
+    let bgra_above = renderer
+        .render_offscreen(&scene, w, h, true, true)
+        .expect("above cloud ceiling offscreen");
+    let above_lit = count_lit_pixels(&bgra_above);
+    assert_eq!(
+        above_lit, 0,
+        "particles above cloud ceiling must clip completely to zero, got {above_lit}"
+    );
+}
+
 
