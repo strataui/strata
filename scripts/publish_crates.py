@@ -3,18 +3,23 @@
 
 Workflow per workspace:
 1. Inspect workspace crates via `cargo metadata` (respecting `publish = false`).
-2. Query crates.io metadata (`https://crates.io/api/v1/crates/{name}`) and cached
+2. Detect crates with uncommitted or untracked files in git (including external path
+   dependencies in sibling repos such as `earth` -> `strata`) and skip both those
+   dirty crates and every crate that transitively depends on them (unless `--allow-dirty`
+   is explicitly passed). Clean crates that do not depend on dirty crates are still
+   bumped and published.
+3. Query crates.io metadata (`https://crates.io/api/v1/crates/{name}`) and cached
    published `.crate` archives (`https://static.crates.io/crates/{name}/{name}-{ver}.crate`)
-   to detect crates whose packageable source/manifest files changed since their last
+   to detect clean crates whose packageable source/manifest files changed since their last
    published version.
-3. Bump patch versions (`X.Y.Z` -> `X.Y.(Z+1)`) ONLY for changed crates whose current
+4. Bump patch versions (`X.Y.Z` -> `X.Y.(Z+1)`) ONLY for changed clean crates whose current
    local version is already published on crates.io, updating each crate's `Cargo.toml`,
    root `[workspace.dependencies]`, any internal explicit version requirements, and
    `Cargo.lock` (unless `--no-bump` or `--dry-run` is passed; `--bump-only` performs
    these bumps and exits cleanly).
-4. Publish unpublished crate versions in topological dependency order, prioritizing updates
-   to already-published crates before brand-new (`404`) crates, and automatically waiting
-   out HTTP 429 rate limits using crates.io's reset timestamp (`Please try again after ...`).
+5. Publish unpublished clean crate versions in topological dependency order, prioritizing
+   updates to already-published crates before brand-new (`404`) crates, and automatically
+   waiting out HTTP 429 rate limits using crates.io's reset timestamp (`Please try again after ...`).
 
 Requires `cargo login` or `CARGO_REGISTRY_TOKEN`. Unknown CLI flags are forwarded directly
 to `cargo publish` (e.g. `--dry-run`, `--allow-dirty`, `-j 4`).
@@ -99,6 +104,19 @@ class BumpPlan:
     manifest_changed: bool
 
 
+@dataclass(frozen=True)
+class DirtyCrateReport:
+    """Dirty crates in a workspace split into directly dirty vs transitively affected."""
+
+    direct: frozenset[str]
+    transitive: frozenset[str]
+    external_causes: dict[str, tuple[str, ...]]
+
+    @property
+    def all_dirty(self) -> frozenset[str]:
+        return self.direct | self.transitive
+
+
 def workspace_version(workspace_toml: Path) -> str:
     """Return `[workspace.package].version` from a workspace Cargo.toml."""
     with workspace_toml.open("rb") as f:
@@ -179,92 +197,263 @@ def collect_publishable_crates(repo_root: Path) -> list[tuple[str, str]]:
 
 
 def list_dirty_repo_paths(repo_root: Path) -> set[Path]:
-    """Return resolved paths of modified or untracked files in git."""
+    """Return paths of uncommitted (staged, unstaged, or untracked) files in git."""
     res = subprocess.run(
-        ["git", "-C", str(repo_root), "status", "--porcelain", "--untracked-files=all"],
+        ["git", "-C", str(repo_root), "status", "--porcelain", "-z", "--untracked-files=all"],
+        text=True,
+        encoding="utf-8",
+        errors="surrogateescape",
+        capture_output=True,
+        check=False,
+    )
+    if res.returncode != 0:
+        if (repo_root / ".git").exists():
+            raise RuntimeError(f"git status failed in {repo_root}: {res.stderr.strip()}")
+        return set()
+    if not res.stdout:
+        return set()
+
+    resolved_root = repo_root.resolve()
+    dirty_paths: set[Path] = set()
+    entries = res.stdout.split("\0")
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        status = entry[:2]
+        raw_path = entry[3:]
+        if raw_path:
+            dirty_paths.add(Path(os.path.normpath(resolved_root / raw_path)))
+        if ("R" in status or "C" in status) and i < len(entries):
+            # In `git status --porcelain -z`, renames and copies are followed by the original path.
+            i += 1
+    return dirty_paths
+
+
+def _find_git_root(path: Path) -> Path | None:
+    """Return the resolved git repository top-level directory containing `path`, or None."""
+    target = path if path.is_dir() else path.parent
+    if not target.exists():
+        return None
+    res = subprocess.run(
+        ["git", "-C", str(target), "rev-parse", "--show-toplevel"],
         text=True,
         capture_output=True,
         check=False,
     )
     if res.returncode != 0 or not res.stdout.strip():
-        return set()
-    dirty_paths: set[Path] = set()
-    for line in res.stdout.splitlines():
-        if len(line) < 4:
-            continue
-        raw_path = line[3:].strip()
-        if " -> " in raw_path:
-            raw_path = raw_path.split(" -> ", 1)[1].strip()
-        raw_path = raw_path.strip('"')
-        dirty_paths.add((repo_root / raw_path).resolve())
-    return dirty_paths
+        return None
+    return Path(res.stdout.strip()).resolve()
 
 
 def collect_dirty_crates(
     repo_root: Path,
+    *,
     ignore_paths: set[Path] | None = None,
-) -> set[str]:
-    """Return crate names that have uncommitted changes or transitively depend on one."""
-    dirty_paths = list_dirty_repo_paths(repo_root)
-    if ignore_paths:
-        ignored = {p.resolve() for p in ignore_paths}
-        dirty_paths = {p for p in dirty_paths if p not in ignored}
-    if not dirty_paths:
-        return set()
+    ignore_paths_by_repo: dict[Path, set[Path]] | None = None,
+    _repo_cache: dict[Path, DirtyCrateReport] | None = None,
+    _visiting_repos: set[Path] | None = None,
+) -> DirtyCrateReport:
+    """Return crates with uncommitted/untracked files and all crates that transitively depend on them.
 
-    dirty_roots: set[str] = set()
-    for p in dirty_paths:
-        cur = p if p.is_dir() else p.parent
-        while cur != repo_root and cur != cur.parent:
-            manifest = cur / "Cargo.toml"
-            if manifest.is_file():
-                try:
-                    with manifest.open("rb") as f:
-                        name = tomllib.load(f).get("package", {}).get("name")
-                    if isinstance(name, str) and name:
-                        dirty_roots.add(name)
-                except Exception:
-                    pass
-                break
-            cur = cur.parent
-
-    if not dirty_roots:
-        return set()
-
-    # Expand to transitive workspace dependents so clean crates that depend on dirty ones are also deferred.
-    meta = subprocess.run(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-        cwd=str(repo_root),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if meta.returncode != 0:
-        return dirty_roots
+    Inspects both intra-workspace dependencies and external path dependencies in sibling git
+    repositories (e.g. `earth` -> `strata`). Files outside any crate (such as `scripts/`) do not
+    mark crates dirty, while an uncommitted workspace root `Cargo.toml` marks all workspace crates
+    dirty.
+    """
+    resolved_root = repo_root.resolve()
+    cache = _repo_cache if _repo_cache is not None else {}
+    visiting = _visiting_repos if _visiting_repos is not None else set()
+    if resolved_root in cache:
+        return cache[resolved_root]
+    if resolved_root in visiting:
+        return DirtyCrateReport(frozenset(), frozenset(), {})
+    visiting.add(resolved_root)
 
     try:
-        packages = json.loads(meta.stdout).get("packages", [])
-        rev_deps: dict[str, set[str]] = {}
-        for pkg in packages:
-            pkg_name = pkg.get("name")
-            if not pkg_name:
-                continue
-            for dep in pkg.get("dependencies", []):
-                dep_name = dep.get("name")
-                if dep_name:
-                    rev_deps.setdefault(dep_name, set()).add(pkg_name)
+        effective_ignore: set[Path] = set()
+        if ignore_paths:
+            effective_ignore.update(Path(os.path.normpath(p.resolve())) for p in ignore_paths)
+        if ignore_paths_by_repo and resolved_root in ignore_paths_by_repo:
+            effective_ignore.update(
+                Path(os.path.normpath(p.resolve())) for p in ignore_paths_by_repo[resolved_root]
+            )
 
-        all_dirty = set(dirty_roots)
-        queue = list(dirty_roots)
+        dirty_paths = list_dirty_repo_paths(resolved_root) - effective_ignore
+
+        meta = subprocess.run(
+            ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+            cwd=str(resolved_root),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if meta.returncode != 0:
+            if not dirty_paths:
+                report = DirtyCrateReport(frozenset(), frozenset(), {})
+                cache[resolved_root] = report
+                return report
+            # Fallback if cargo metadata is unavailable: map dirty paths to nearest package Cargo.toml.
+            direct_fallback: set[str] = set()
+            for p in dirty_paths:
+                cur = p if p.is_dir() else p.parent
+                while cur != cur.parent:
+                    manifest = cur / "Cargo.toml"
+                    if manifest.is_file():
+                        try:
+                            name = tomllib.loads(manifest.read_text(encoding="utf-8")).get("package", {}).get("name")
+                            if isinstance(name, str) and name:
+                                direct_fallback.add(name)
+                        except Exception:
+                            pass
+                        break
+                    if cur == resolved_root:
+                        break
+                    cur = cur.parent
+            report = DirtyCrateReport(frozenset(direct_fallback), frozenset(), {})
+            cache[resolved_root] = report
+            return report
+
+        data = json.loads(meta.stdout)
+        ws_ids = set(data.get("workspace_members", []))
+        ws_packages = [pkg for pkg in data.get("packages", []) if pkg.get("id") in ws_ids]
+        ws_names: set[str] = {str(pkg["name"]) for pkg in ws_packages if pkg.get("name")}
+
+        pkg_dirs: list[tuple[Path, str]] = []
+        extra_files_to_pkgs: dict[Path, set[str]] = {}
+        rev_deps: dict[str, set[str]] = {}
+        external_deps: dict[str, list[tuple[str, Path]]] = {}
+
+        root_manifest = Path(os.path.normpath(resolved_root / "Cargo.toml"))
+        root_lockfile = Path(os.path.normpath(resolved_root / "Cargo.lock"))
+
+        for pkg in ws_packages:
+            pkg_name = pkg.get("name")
+            if not isinstance(pkg_name, str) or not pkg_name:
+                continue
+            pkg_dir = Path(os.path.normpath(Path(pkg["manifest_path"]).resolve().parent))
+            pkg_dirs.append((pkg_dir, pkg_name))
+
+            readme = pkg.get("readme")
+            if isinstance(readme, str) and readme:
+                readme_path = Path(os.path.normpath(pkg_dir / readme))
+                extra_files_to_pkgs.setdefault(readme_path, set()).add(pkg_name)
+
+            has_bin = False
+            for target in pkg.get("targets", []):
+                src_path = target.get("src_path")
+                if isinstance(src_path, str) and src_path:
+                    resolved_src = Path(os.path.normpath(Path(src_path).resolve()))
+                    extra_files_to_pkgs.setdefault(resolved_src, set()).add(pkg_name)
+                if "bin" in target.get("kind", []):
+                    has_bin = True
+            if has_bin:
+                extra_files_to_pkgs.setdefault(root_lockfile, set()).add(pkg_name)
+
+            for dep in pkg.get("dependencies", []):
+                if dep.get("kind") == "dev":
+                    continue
+                dep_name = dep.get("name")
+                dep_path = dep.get("path")
+                if not isinstance(dep_name, str) or not dep_name or not dep_path:
+                    continue
+                if dep_name in ws_names:
+                    if dep_name != pkg_name:
+                        rev_deps.setdefault(dep_name, set()).add(pkg_name)
+                else:
+                    external_deps.setdefault(pkg_name, []).append(
+                        (dep_name, Path(os.path.normpath(Path(dep_path).resolve())))
+                    )
+
+        # Match deepest pkg_dir first so nested packages map to the inner crate.
+        pkg_dirs.sort(key=lambda item: len(item[0].parts), reverse=True)
+
+        direct_dirty: set[str] = set()
+        for p in dirty_paths:
+            if p == root_manifest:
+                direct_dirty.update(ws_names)
+                continue
+            if p in extra_files_to_pkgs:
+                direct_dirty.update(extra_files_to_pkgs[p])
+            for pkg_dir, pkg_name in pkg_dirs:
+                if p == pkg_dir or pkg_dir in p.parents:
+                    direct_dirty.add(pkg_name)
+                    break
+
+        # Check external path dependencies (e.g. earth -> strata).
+        external_causes: dict[str, set[str]] = {}
+        for pkg_name, deps in external_deps.items():
+            for dep_name, dep_dir in deps:
+                ext_git_root = _find_git_root(dep_dir)
+                if ext_git_root is None or ext_git_root == resolved_root:
+                    continue
+                ext_report = collect_dirty_crates(
+                    ext_git_root,
+                    ignore_paths_by_repo=ignore_paths_by_repo,
+                    _repo_cache=cache,
+                    _visiting_repos=visiting,
+                )
+                if dep_name in ext_report.all_dirty:
+                    external_causes.setdefault(pkg_name, set()).add(dep_name)
+
+        # Propagate transitively through intra-workspace reverse dependencies.
+        affected: set[str] = set(direct_dirty) | set(external_causes.keys())
+        queue = list(affected)
         while queue:
             cur_pkg = queue.pop()
             for dependent in rev_deps.get(cur_pkg, ()):
-                if dependent not in all_dirty:
-                    all_dirty.add(dependent)
+                if dependent not in affected:
+                    affected.add(dependent)
                     queue.append(dependent)
-        return all_dirty
-    except Exception:
-        return dirty_roots
+
+        transitive_only = affected - direct_dirty
+        sorted_ext_causes = {k: tuple(sorted(v)) for k, v in external_causes.items()}
+        report = DirtyCrateReport(
+            direct=frozenset(direct_dirty),
+            transitive=frozenset(transitive_only),
+            external_causes=sorted_ext_causes,
+        )
+        cache[resolved_root] = report
+        return report
+    finally:
+        visiting.discard(resolved_root)
+
+
+def _format_name_preview(names: list[str], limit: int = 8) -> str:
+    preview = ", ".join(names[:limit])
+    if len(names) > limit:
+        preview += f", ... (+{len(names) - limit} more)"
+    return preview
+
+
+def _format_dirty_crates_summary(
+    label: str,
+    considered_names: set[str],
+    report: DirtyCrateReport,
+) -> str | None:
+    """Format a concise summary of skipped directly-dirty and transitively-affected crates."""
+    direct = sorted(report.direct & considered_names)
+    transitive = sorted(report.transitive & considered_names)
+    total = len(direct) + len(transitive)
+    if total == 0:
+        return None
+    parts: list[str] = []
+    if direct:
+        parts.append(f"{len(direct)} directly dirty: {_format_name_preview(direct)}")
+    if transitive:
+        annotated = [
+            f"{name} <- {', '.join(report.external_causes[name])}"
+            if name in report.external_causes
+            else name
+            for name in transitive
+        ]
+        parts.append(f"{len(transitive)} depending on dirty crates: {_format_name_preview(annotated)}")
+    return (
+        f"[{label}] Skipping {total} crate(s) due to uncommitted/untracked files "
+        f"({'; '.join(parts)})."
+    )
 
 
 def sparse_index_url(name: str) -> str:
@@ -912,34 +1101,69 @@ def publish_workspace(
     bump_only: bool = False,
     updated_only: bool = False,
     cache_dir: Path | None = None,
+    ignore_paths_by_repo: dict[Path, set[Path]] | None = None,
 ) -> int:
-    """Auto-bump changed crates (when enabled) and publish unpublished crates in `repo_root`."""
+    """Auto-bump changed clean crates (when enabled) and publish unpublished clean crates in `repo_root`.
+
+    Skips any crate that has uncommitted or untracked files in git, as well as every crate that
+    transitively depends on a dirty crate (including external path dependencies in sibling repos),
+    unless `--allow-dirty` is explicitly passed in `extra_args`.
+    """
     dry_run = "--dry-run" in extra_args
+    allow_dirty = "--allow-dirty" in extra_args
     resolved_cache = cache_dir or (repo_root / "target" / ".crates_io_publish_cache")
 
     crates = collect_workspace_crates(repo_root)
     if single_package is not None:
         crates = [c for c in crates if c.name == single_package]
+    considered_names = {c.name for c in crates}
 
-    info_map = {c.name: fetch_crates_io_info(c.name, cache_dir=resolved_cache) for c in crates}
-    dirty_before = list_dirty_repo_paths(repo_root)
+    if allow_dirty:
+        dirty_report = DirtyCrateReport(frozenset(), frozenset(), {})
+    else:
+        dirty_report = collect_dirty_crates(
+            repo_root,
+            ignore_paths_by_repo=ignore_paths_by_repo,
+        )
+
+    last_reported_dirty = dirty_report.all_dirty & considered_names
+    summary = _format_dirty_crates_summary(label, considered_names, dirty_report)
+    if summary:
+        print(summary, flush=True)
+
+    clean_crates = [c for c in crates if c.name not in dirty_report.all_dirty]
+    if not clean_crates:
+        skipped_dirty = len(crates)
+        if skipped_dirty:
+            print(
+                f"[{label}] No clean crates left to publish ({skipped_dirty} dirty/dependent crate(s) skipped).",
+                flush=True,
+            )
+        else:
+            print(f"[{label}] No publishable crates found.", flush=True)
+        return 0
+
+    info_map = {c.name: fetch_crates_io_info(c.name, cache_dir=resolved_cache) for c in clean_crates}
     bumped_paths: set[Path] = set()
 
     if auto_bump:
         plans, bumped_paths = auto_bump_changed_crates(
             label,
             repo_root,
-            crates,
+            clean_crates,
             info_map,
             resolved_cache,
             apply=not dry_run,
         )
+        if bumped_paths and ignore_paths_by_repo is not None:
+            ignore_paths_by_repo.setdefault(repo_root.resolve(), set()).update(bumped_paths)
         if bump_only:
             return 0
         if plans and not dry_run:
             crates = collect_workspace_crates(repo_root)
             if single_package is not None:
                 crates = [c for c in crates if c.name == single_package]
+            considered_names = {c.name for c in crates}
 
     if bump_only:
         return 0
@@ -947,10 +1171,40 @@ def publish_workspace(
     attempt = 0
     while True:
         attempt += 1
-        info_map = {c.name: fetch_crates_io_info(c.name, cache_dir=resolved_cache) for c in crates}
+        if allow_dirty:
+            dirty_report = DirtyCrateReport(frozenset(), frozenset(), {})
+        else:
+            dirty_report = collect_dirty_crates(
+                repo_root,
+                ignore_paths=bumped_paths,
+                ignore_paths_by_repo=ignore_paths_by_repo,
+            )
+            current_reported_dirty = dirty_report.all_dirty & considered_names
+            if current_reported_dirty != last_reported_dirty:
+                last_reported_dirty = current_reported_dirty
+                summary = _format_dirty_crates_summary(label, considered_names, dirty_report)
+                if summary:
+                    print(summary, flush=True)
+
+        clean_crates = [c for c in crates if c.name not in dirty_report.all_dirty]
+        skipped_dirty = len(crates) - len(clean_crates)
+        if not clean_crates:
+            print(
+                f"[{label}] No clean crates left to publish ({skipped_dirty} dirty/dependent crate(s) skipped).",
+                flush=True,
+            )
+            return 0
+
+        if attempt > 1:
+            info_map = {c.name: fetch_crates_io_info(c.name, cache_dir=resolved_cache) for c in clean_crates}
+        else:
+            for crate in clean_crates:
+                if crate.name not in info_map:
+                    info_map[crate.name] = fetch_crates_io_info(crate.name, cache_dir=resolved_cache)
+
         published: list[WorkspaceCrate] = []
         unpublished: list[WorkspaceCrate] = []
-        for crate in crates:
+        for crate in clean_crates:
             info = info_map[crate.name]
             if info.is_strataui_repo and crate.version in info.active_versions:
                 published.append(crate)
@@ -965,43 +1219,30 @@ def publish_workspace(
                 unpublished.append(crate)
 
         if not unpublished:
-            print(f"[{label}] All {len(crates)} crate(s) are already published on crates.io.", flush=True)
+            if skipped_dirty:
+                print(
+                    f"[{label}] All {len(clean_crates)} clean crate(s) are already published on crates.io "
+                    f"({skipped_dirty} dirty/dependent crate(s) skipped).",
+                    flush=True,
+                )
+            else:
+                print(f"[{label}] All {len(clean_crates)} crate(s) are already published on crates.io.", flush=True)
             return 0
 
         unpub_names = {c.name for c in unpublished}
-        dirty_names = set() if "--allow-dirty" in extra_args else collect_dirty_crates(
-            repo_root,
-            ignore_paths=bumped_paths - dirty_before,
-        )
-        ready = [c for c in unpublished if c.name not in dirty_names]
-        deferred = [c for c in unpublished if c.name in dirty_names]
-
-        targets = partition_publish_targets(ready, info_map, unpub_names, updated_only)
+        targets = partition_publish_targets(unpublished, info_map, unpub_names, updated_only)
         if updated_only and not targets:
-            if not any(info_map[c.name].is_strataui_repo for c in deferred):
-                print(
-                    f"[{label}] No updated existing crates to publish (--updated-only skipped {len(ready)} brand-new crate(s)).",
-                    flush=True,
-                )
-                return 0
-
-        if not targets and deferred:
             print(
-                f"[{label}] Waiting 15s for {len(deferred)} crate(s) with uncommitted changes to be committed: "
-                f"{', '.join(f'{c.name}@{c.version}' for c in deferred[:8])}"
-                + ("..." if len(deferred) > 8 else ""),
+                f"[{label}] No updated existing crates to publish (--updated-only skipped {len(unpublished)} brand-new crate(s)).",
                 flush=True,
             )
-            if dry_run:
-                return 0
-            time.sleep(15.0)
-            continue
+            return 0
 
         skip_msg = f"skipping {len(published)} already published"
-        if updated_only and len(ready) > len(targets):
-            skip_msg += f", {len(ready) - len(targets)} brand-new skipped"
-        if deferred:
-            skip_msg += f", deferring {len(deferred)} uncommitted"
+        if updated_only and len(unpublished) > len(targets):
+            skip_msg += f", {len(unpublished) - len(targets)} brand-new skipped"
+        if skipped_dirty:
+            skip_msg += f", {skipped_dirty} dirty/dependent skipped"
         print(
             f"[{label}] Attempt {attempt}: {len(targets)} crate(s) ready ({skip_msg}): "
             f"{', '.join(f'{c.name}@{c.version}' for c in targets[:8])}"
@@ -1010,11 +1251,8 @@ def publish_workspace(
         )
 
         run_args = list(extra_args)
-        only_auto_bumped_dirty = bool(bumped_paths) and list_dirty_repo_paths(repo_root).issubset(
-            dirty_before | bumped_paths
-        )
-        if (deferred or only_auto_bumped_dirty) and "--allow-dirty" not in run_args:
-            # Allow clean auto-bumped manifests/lockfile or unrelated deferred crates during workspace publish.
+        if bumped_paths and "--allow-dirty" not in run_args:
+            # Allow clean auto-bumped manifests/lockfile during workspace publish.
             run_args.append("--allow-dirty")
 
         pkg_flags: list[str] = []
@@ -1024,13 +1262,7 @@ def publish_workspace(
 
         rc, output = stream_command(cmd, repo_root)
         if rc == 0:
-            if not deferred:
-                return 0
-            print(
-                f"[{label}] Clean crates published; revisiting {len(deferred)} deferred crate(s)...",
-                flush=True,
-            )
-            continue
+            return 0
 
         limited, wait_secs, summary = parse_rate_limit(output)
         if limited and not dry_run:
@@ -1065,7 +1297,11 @@ def publish_workspace(
 def parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     """Parse script control flags while forwarding unknown flags to `cargo publish`."""
     parser = argparse.ArgumentParser(
-        description="Auto-bump changed crates since their last publish and publish workspace crates to crates.io.",
+        description=(
+            "Auto-bump changed crates since their last publish and publish workspace crates to crates.io. "
+            "Crates with uncommitted or untracked files (and crates that transitively depend on them) "
+            "are skipped unless `--allow-dirty` is passed."
+        ),
     )
     parser.add_argument(
         "--bump-only",
@@ -1103,6 +1339,7 @@ def main(argv: list[str] | None = None) -> int:
     script_dir = Path(__file__).resolve().parent
     strata_root = script_dir.parent
     earth_root = strata_root.parent / "earth"
+    bumped_paths_by_repo: dict[Path, set[Path]] = {}
 
     rc = publish_workspace(
         "strata",
@@ -1112,6 +1349,7 @@ def main(argv: list[str] | None = None) -> int:
         bump_only=args.bump_only,
         updated_only=args.updated_only,
         cache_dir=args.cache_dir,
+        ignore_paths_by_repo=bumped_paths_by_repo,
     )
     if rc != 0:
         return rc
@@ -1126,6 +1364,7 @@ def main(argv: list[str] | None = None) -> int:
             bump_only=args.bump_only,
             updated_only=args.updated_only,
             cache_dir=args.cache_dir,
+            ignore_paths_by_repo=bumped_paths_by_repo,
         )
         if rc != 0:
             return rc
