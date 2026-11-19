@@ -633,3 +633,123 @@ fn test_canvas3d_pointer_events_none_overlay_fast_path_and_hover_reconcile() {
     assert!(runtime.last_update_reconciled());
 }
 
+#[test]
+fn test_reconcile_preserves_and_propagates_inherited_text_color() {
+    use strata_render::compositor::DrawCommand;
+
+    let build = |cls: &str, r: u8, g: u8, b: u8, alpha: &str, label: &str, with_dot: bool| -> View {
+        let style_str = format!(
+            "left: 120px; top: 80px; background-color: rgba(0,0,0,0.25); color: rgba({r},{g},{b},{alpha}); font-size: 13px;"
+        );
+        let span_cls = format!("select-none {}", cls);
+        let text_owned = label.to_string();
+        if with_dot {
+            rsx! {
+                <div class="relative w-full h-full bg-black">
+                    <div class="absolute flex items-center gap-1.5" style={style_str}>
+                        <div class="w-1.5 h-1.5 rounded-full bg-white" />
+                        <span class={span_cls}>{text_owned}</span>
+                    </div>
+                </div>
+            }
+        } else {
+            rsx! {
+                <div class="relative w-full h-full bg-black">
+                    <div class="absolute flex items-center gap-1.5" style={style_str}>
+                        <span class={span_cls}>{text_owned}</span>
+                    </div>
+                </div>
+            }
+        }
+    };
+
+    let extract_text_colors = |rt: &AppRuntime| -> Vec<strata_primitives::Rgba> {
+        let mut out = Vec::new();
+        for cmd in rt.display_list.commands() {
+            match cmd {
+                DrawCommand::DrawText { color, .. } => out.push(*color),
+                DrawCommand::DrawTextFragments { fragments } => {
+                    for f in fragments {
+                        out.push(f.style.color);
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    };
+
+    // 1. Start near horizon (faint white alpha=0.05) with Continent class.
+    let mut rt = AppRuntime::new(
+        build("font-semibold tracking-widest", 255, 255, 255, "0.05", "EUROPE", false),
+        1440.0,
+        900.0,
+        1.0,
+    );
+
+    // 2. Parent style fades to bright alpha=0.95 while child span & text are unchanged:
+    //    inherited alpha MUST propagate down to text (not stay stuck at 0.05!).
+    rt.update_view(build(
+        "font-semibold tracking-widest",
+        255,
+        255,
+        255,
+        "0.95",
+        "EUROPE",
+        false,
+    ));
+    assert!(rt.last_update_reconciled());
+    let cols1 = extract_text_colors(&rt);
+    assert!(!cols1.is_empty());
+    for c in &cols1 {
+        assert_eq!((c.r, c.g, c.b), (255, 255, 255));
+        assert!(c.a > 220, "expected bright propagated alpha, got {c:?}");
+    }
+
+    // 3. Child span changes class (Continent -> Ocean italic) AND parent color changes to light-blue:
+    //    rebuilt shallow span MUST inherit light-blue from parent, NEVER Rgba::BLACK!
+    rt.update_view(build(
+        "italic tracking-wider",
+        148,
+        197,
+        255,
+        "0.92",
+        "ATLANTIC OCEAN",
+        false,
+    ));
+    assert!(rt.last_update_reconciled());
+    let cols2 = extract_text_colors(&rt);
+    assert!(!cols2.is_empty());
+    for c in &cols2 {
+        assert_eq!(
+            (c.r, c.g, c.b),
+            (148, 197, 255),
+            "reconciled span/text lost parent color and turned {c:?}"
+        );
+        assert!(c.a > 210);
+    }
+
+    // 4. Child count grows (None -> CityDot with leading dot + span):
+    //    newly appended child subtree MUST inherit parent color, NEVER Rgba::BLACK!
+    rt.update_view(build(
+        "font-medium",
+        245,
+        235,
+        210,
+        "0.96",
+        "Istanbul",
+        true,
+    ));
+    assert!(rt.last_update_reconciled());
+    let cols3 = extract_text_colors(&rt);
+    assert!(!cols3.is_empty());
+    for c in &cols3 {
+        assert_eq!(
+            (c.r, c.g, c.b),
+            (245, 235, 210),
+            "appended child subtree lost parent color and turned {c:?}"
+        );
+        assert!(c.a > 220);
+    }
+}
+
