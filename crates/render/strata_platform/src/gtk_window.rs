@@ -4191,6 +4191,86 @@ fn map_key_name_to_keycode(key_name: &str) -> crate::events::KeyCode {
     }
 }
 
+/// Fallback mapping from Linux X11/Wayland evdev+8 hardware keycodes so shifted symbols
+/// (e.g. `Shift+1` -> `"exclam"`) and non-Latin layouts still resolve physical keys.
+fn map_evdev_hardware_keycode(hw_code: u16) -> crate::events::KeyCode {
+    match hw_code {
+        9 => crate::events::KeyCode::Escape,
+        10 => crate::events::KeyCode::Digit1,
+        11 => crate::events::KeyCode::Digit2,
+        12 => crate::events::KeyCode::Digit3,
+        13 => crate::events::KeyCode::Digit4,
+        14 => crate::events::KeyCode::Digit5,
+        15 => crate::events::KeyCode::Digit6,
+        16 => crate::events::KeyCode::Digit7,
+        17 => crate::events::KeyCode::Digit8,
+        18 => crate::events::KeyCode::Digit9,
+        19 => crate::events::KeyCode::Digit0,
+        22 => crate::events::KeyCode::Backspace,
+        23 => crate::events::KeyCode::Tab,
+        24 => crate::events::KeyCode::KeyQ,
+        25 => crate::events::KeyCode::KeyW,
+        26 => crate::events::KeyCode::KeyE,
+        27 => crate::events::KeyCode::KeyR,
+        28 => crate::events::KeyCode::KeyT,
+        29 => crate::events::KeyCode::KeyY,
+        30 => crate::events::KeyCode::KeyU,
+        31 => crate::events::KeyCode::KeyI,
+        32 => crate::events::KeyCode::KeyO,
+        33 => crate::events::KeyCode::KeyP,
+        36 => crate::events::KeyCode::Enter,
+        38 => crate::events::KeyCode::KeyA,
+        39 => crate::events::KeyCode::KeyS,
+        40 => crate::events::KeyCode::KeyD,
+        41 => crate::events::KeyCode::KeyF,
+        42 => crate::events::KeyCode::KeyG,
+        43 => crate::events::KeyCode::KeyH,
+        44 => crate::events::KeyCode::KeyJ,
+        45 => crate::events::KeyCode::KeyK,
+        46 => crate::events::KeyCode::KeyL,
+        52 => crate::events::KeyCode::KeyZ,
+        53 => crate::events::KeyCode::KeyX,
+        54 => crate::events::KeyCode::KeyC,
+        55 => crate::events::KeyCode::KeyV,
+        56 => crate::events::KeyCode::KeyB,
+        57 => crate::events::KeyCode::KeyN,
+        58 => crate::events::KeyCode::KeyM,
+        65 => crate::events::KeyCode::Space,
+        67 => crate::events::KeyCode::F1,
+        68 => crate::events::KeyCode::F2,
+        69 => crate::events::KeyCode::F3,
+        70 => crate::events::KeyCode::F4,
+        71 => crate::events::KeyCode::F5,
+        72 => crate::events::KeyCode::F6,
+        73 => crate::events::KeyCode::F7,
+        74 => crate::events::KeyCode::F8,
+        75 => crate::events::KeyCode::F9,
+        76 => crate::events::KeyCode::F10,
+        95 => crate::events::KeyCode::F11,
+        96 => crate::events::KeyCode::F12,
+        110 => crate::events::KeyCode::Home,
+        111 => crate::events::KeyCode::ArrowUp,
+        112 => crate::events::KeyCode::PageUp,
+        113 => crate::events::KeyCode::ArrowLeft,
+        114 => crate::events::KeyCode::ArrowRight,
+        115 => crate::events::KeyCode::End,
+        116 => crate::events::KeyCode::ArrowDown,
+        117 => crate::events::KeyCode::PageDown,
+        119 => crate::events::KeyCode::Delete,
+        _ => crate::events::KeyCode::Unknown,
+    }
+}
+
+#[inline]
+fn resolve_gtk_keycode(key_name: &str, hardware_keycode: u16) -> crate::events::KeyCode {
+    let by_name = map_key_name_to_keycode(key_name);
+    if by_name != crate::events::KeyCode::Unknown {
+        by_name
+    } else {
+        map_evdev_hardware_keycode(hardware_keycode)
+    }
+}
+
 /// Returns the native refresh interval of the active window's monitor (or primary monitor) from GDK.
 ///
 /// Queries `gdk::Monitor::refresh_rate()` (reported in millihertz, e.g. `144_000` for 144 Hz,
@@ -4355,7 +4435,12 @@ where
     window.set_decorated(decorated);
     window.set_resizable(resizable);
     window.set_keep_above(always_on_top);
-    window.add_events(gtk::gdk::EventMask::STRUCTURE_MASK);
+    window.add_events(
+        gtk::gdk::EventMask::STRUCTURE_MASK
+            | gtk::gdk::EventMask::KEY_PRESS_MASK
+            | gtk::gdk::EventMask::KEY_RELEASE_MASK
+            | gtk::gdk::EventMask::FOCUS_CHANGE_MASK,
+    );
 
     if transparent {
         window.set_app_paintable(true);
@@ -4433,6 +4518,7 @@ where
 
     // Initialize OS Input Method Editor (IME) context for CJK and international text entry
     let im_context = gtk::IMMulticontext::new();
+    let ime_composing = std::rc::Rc::new(std::cell::Cell::new(false));
     CURRENT_IM_CONTEXT.with(|im| {
         *im.borrow_mut() = Some(im_context.clone());
     });
@@ -4461,9 +4547,11 @@ where
     });
 
     let im_focus_out = im_context.clone();
+    let ime_composing_focus_out = ime_composing.clone();
     drawing_area.connect_focus_out_event(move |_widget, _event| {
         use gtk::prelude::*;
         DRAG_STATE.with(|d| d.set(None));
+        ime_composing_focus_out.set(false);
         im_focus_out.focus_out();
         gtk::glib::Propagation::Proceed
     });
@@ -4854,10 +4942,12 @@ where
     // Connect IME signals (preedit-changed, commit, retrieve-surrounding, delete-surrounding)
     let on_event_preedit = on_event_rc.clone();
     let da_preedit = drawing_area.clone();
+    let ime_composing_preedit = ime_composing.clone();
     im_context.connect_preedit_changed(move |ctx| {
         use gtk::prelude::*;
         let (text, _attrs, cursor_pos) = ctx.preedit_string();
         let text_str = text.to_string();
+        ime_composing_preedit.set(!text_str.is_empty());
         let cursor = if cursor_pos >= 0 {
             Some((cursor_pos as usize, cursor_pos as usize))
         } else {
@@ -4874,7 +4964,9 @@ where
 
     let on_event_commit = on_event_rc.clone();
     let da_commit = drawing_area.clone();
+    let ime_composing_commit = ime_composing.clone();
     im_context.connect_commit(move |_ctx, text| {
+        ime_composing_commit.set(false);
         let plat_event = crate::events::PlatformEvent::ImeCommit(text.to_string());
         if (on_event_commit.borrow_mut())(&plat_event) {
             da_commit.queue_draw();
@@ -4901,15 +4993,15 @@ where
         true
     });
 
-    // Keyboard handlers on Window to capture global shortcuts reliably with IME filtering
+    // Keyboard handlers on Window: always emit physical KeyDown/KeyUp for printable keys
+    // (unless an active multi-keystroke IME preedit composition consumes the navigation key),
+    // and only suppress fallback ReceivedCharacter when IMMulticontext already committed text.
     let im_key_press = im_context.clone();
+    let ime_composing_press = ime_composing.clone();
     let on_event_key = on_event_rc.clone();
     let da_key = drawing_area.clone();
     window.connect_key_press_event(move |_widget, event| {
         use gtk::prelude::*;
-        if im_key_press.filter_keypress(event) {
-            return gtk::glib::Propagation::Stop;
-        }
 
         let state = event.state();
         let modifiers = crate::events::Modifiers {
@@ -4919,10 +5011,15 @@ where
             meta: state.contains(gtk::gdk::ModifierType::META_MASK)
                 || state.contains(gtk::gdk::ModifierType::SUPER_MASK),
         };
+        CURRENT_MODIFIERS.with(|m| m.set(modifiers));
+
+        if ime_composing_press.get() && im_key_press.filter_keypress(event) {
+            return gtk::glib::Propagation::Stop;
+        }
 
         let keyval = event.keyval();
         let key_name = keyval.name().unwrap_or_default();
-        let key_code = map_key_name_to_keycode(key_name.as_str());
+        let key_code = resolve_gtk_keycode(key_name.as_str(), event.hardware_keycode());
 
         let mut redraw = false;
 
@@ -4935,8 +5032,10 @@ where
             redraw = true;
         }
 
-        // If printable character and not a Ctrl/Alt/Meta command, also emit ReceivedCharacter
-        if !modifiers.ctrl && !modifiers.alt && !modifiers.meta {
+        let ime_handled = im_key_press.filter_keypress(event);
+
+        // If printable character and not handled by IME or Ctrl/Alt/Meta command, emit ReceivedCharacter
+        if !ime_handled && !modifiers.ctrl && !modifiers.alt && !modifiers.meta {
             if let Some(ch) = keyval.to_unicode() {
                 if !ch.is_control() {
                     let char_event = crate::events::PlatformEvent::ReceivedCharacter(ch);
@@ -4951,17 +5050,19 @@ where
             da_key.queue_draw();
         }
 
-        gtk::glib::Propagation::Proceed
+        if ime_handled || redraw {
+            gtk::glib::Propagation::Stop
+        } else {
+            gtk::glib::Propagation::Proceed
+        }
     });
 
     let im_key_release = im_context.clone();
+    let ime_composing_release = ime_composing;
     let on_event_key_up = on_event_rc.clone();
     let da_key_up = drawing_area.clone();
     window.connect_key_release_event(move |_widget, event| {
         use gtk::prelude::*;
-        if im_key_release.filter_keypress(event) {
-            return gtk::glib::Propagation::Stop;
-        }
 
         let state = event.state();
         let modifiers = crate::events::Modifiers {
@@ -4971,10 +5072,17 @@ where
             meta: state.contains(gtk::gdk::ModifierType::META_MASK)
                 || state.contains(gtk::gdk::ModifierType::SUPER_MASK),
         };
+        CURRENT_MODIFIERS.with(|m| m.set(modifiers));
+
+        let was_composing = ime_composing_release.get();
+        let ime_handled = im_key_release.filter_keypress(event);
+        if was_composing && ime_handled {
+            return gtk::glib::Propagation::Stop;
+        }
 
         let keyval = event.keyval();
         let key_name = keyval.name().unwrap_or_default();
-        let key_code = map_key_name_to_keycode(key_name.as_str());
+        let key_code = resolve_gtk_keycode(key_name.as_str(), event.hardware_keycode());
 
         let plat_event = crate::events::PlatformEvent::KeyUp {
             key: key_code,
@@ -5706,4 +5814,19 @@ mod frameless_resize_tests {
             420.0, 540.0, 495.0, 560.0, &dirty_bits, cols, rows
         ));
     }
+
+    #[test]
+    fn test_resolve_gtk_keycode_printable_and_evdev_fallback() {
+        use crate::events::KeyCode;
+        assert_eq!(super::resolve_gtk_keycode("k", 45), KeyCode::KeyK);
+        assert_eq!(super::resolve_gtk_keycode("K", 45), KeyCode::KeyK);
+        assert_eq!(super::resolve_gtk_keycode("l", 46), KeyCode::KeyL);
+        assert_eq!(super::resolve_gtk_keycode("L", 46), KeyCode::KeyL);
+        // Non-Latin layout or shifted symbol falls back to evdev+8 hardware keycode:
+        assert_eq!(super::resolve_gtk_keycode("Cyrillic_el", 45), KeyCode::KeyK);
+        assert_eq!(super::resolve_gtk_keycode("Cyrillic_de", 46), KeyCode::KeyL);
+        assert_eq!(super::resolve_gtk_keycode("exclam", 10), KeyCode::Digit1);
+        assert_eq!(super::resolve_gtk_keycode("idotless", 31), KeyCode::KeyI);
+    }
 }
+
