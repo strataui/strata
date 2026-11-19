@@ -276,6 +276,18 @@ struct GpuDynamicUniforms {
     dyn_meta: [u32; 4], // x = unlit, y = use_vertex_color, z = use_texture, w = atlas_layer
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuGeoInstance {
+    anchor_high: [f32; 4], // xyz = split high f32 of anchor_ecef
+    anchor_low: [f32; 4],  // xyz = split low f32 of anchor_ecef
+    col0: [f32; 4],        // xyz = model col 0 (+X East -> world m), w = roughness
+    col1: [f32; 4],        // xyz = model col 1 (+Y North -> world m), w = metalness
+    col2: [f32; 4],        // xyz = model col 2 (+Z Up -> world m), w = unlit (1.0 or 0.0)
+    base_color: [f32; 4],  // rgba
+    emissive: [f32; 4],    // xyz = emissive rgb, w = accent_mix
+}
+
 /// Builds a shared triangle index buffer for a terrain grid `(grid_res x grid_res)` with optional skirts.
 pub fn build_terrain_grid_indices(grid_res: u32, has_skirts: bool) -> Vec<u32> {
     let n = grid_res.max(2);
@@ -1227,6 +1239,122 @@ fn fs_dynamic(in: DynVsOut) -> @location(0) vec4<f32> {
     let day_lit = cam.ambient_color.rgb + cam.sun_color.rgb * ndotl;
     let lit = mix(flat_lit, day_lit, dn);
     return vec4<f32>(in.color.rgb * lit, in.color.a);
+}
+"#;
+
+const GEO_OBJECT_WGSL: &str = r#"
+struct GpuCameraUniforms {
+    view_proj_rte: mat4x4<f32>,
+    inv_view_proj_rte: mat4x4<f32>,
+    ecef_from_icrf: mat4x4<f32>,
+    icrf_from_ecef: mat4x4<f32>,
+    eye_high: vec4<f32>,
+    eye_low: vec4<f32>,
+    sun_dir: vec4<f32>,
+    sun_color: vec4<f32>,
+    ambient_color: vec4<f32>,
+    sky_top: vec4<f32>,
+    sky_bottom: vec4<f32>,
+    moon_dir: vec4<f32>,
+    env_params: vec4<f32>,
+    cloud_params: vec4<f32>,
+    viewport_wh: vec4<f32>,
+}
+
+struct GpuGeoInstance {
+    anchor_high: vec4<f32>,
+    anchor_low: vec4<f32>,
+    col0: vec4<f32>,
+    col1: vec4<f32>,
+    col2: vec4<f32>,
+    base_color: vec4<f32>,
+    emissive: vec4<f32>,
+}
+
+@group(0) @binding(0) var<uniform> cam: GpuCameraUniforms;
+@group(0) @binding(1) var<storage, read> geo_instances: array<GpuGeoInstance>;
+
+struct GeoVsOut {
+    @builtin(position) clip_pos: vec4<f32>,
+    @location(0) world_rel: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) base_color: vec4<f32>,
+    @location(3) emissive: vec4<f32>,
+    @location(4) material_params: vec4<f32>,
+}
+
+@vertex
+fn vs_geo_object(
+    @location(0) pos_u: vec4<f32>,
+    @location(1) norm_v: vec4<f32>,
+    @builtin(instance_index) inst_idx: u32,
+) -> GeoVsOut {
+    let inst = geo_instances[inst_idx];
+    let c0 = inst.col0.xyz;
+    let c1 = inst.col1.xyz;
+    let c2 = inst.col2.xyz;
+
+    let center_rel = (inst.anchor_high.xyz - cam.eye_high.xyz)
+                   + (inst.anchor_low.xyz - cam.eye_low.xyz);
+    let local_offset = c0 * pos_u.x + c1 * pos_u.y + c2 * pos_u.z;
+    let world_rel = center_rel + local_offset;
+
+    // Exact cofactor (adjugate^T) normal transform: det(M) * (M^-1)^T * n.
+    // Preserves surface perpendicularity under non-uniform scale and 2D/2.5D morphing.
+    let adj0 = cross(c1, c2);
+    let adj1 = cross(c2, c0);
+    let adj2 = cross(c0, c1);
+    var world_n = adj0 * norm_v.x + adj1 * norm_v.y + adj2 * norm_v.z;
+    if (dot(world_n, world_n) < 1e-12) {
+        world_n = c0 * norm_v.x + c1 * norm_v.y + c2 * norm_v.z;
+    }
+
+    var out: GeoVsOut;
+    out.clip_pos = cam.view_proj_rte * vec4<f32>(world_rel, 1.0);
+    out.world_rel = world_rel;
+    out.normal = world_n;
+    out.base_color = inst.base_color;
+    out.emissive = inst.emissive;
+    out.material_params = vec4<f32>(inst.col0.w, inst.col1.w, inst.col2.w, norm_v.w);
+    return out;
+}
+
+@fragment
+fn fs_geo_object(in: GeoVsOut) -> @location(0) vec4<f32> {
+    let accent_t = clamp(in.material_params.w * in.emissive.w, 0.0, 1.0);
+    let albedo = mix(in.base_color.rgb, vec3<f32>(0.97, 0.99, 1.0), accent_t);
+
+    if (in.material_params.z >= 0.5) {
+        return vec4<f32>(clamp(albedo + in.emissive.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), in.base_color.a);
+    }
+
+    let len_sq = dot(in.normal, in.normal);
+    let n = select(vec3<f32>(0.0, 0.0, 1.0), normalize(in.normal), len_sq > 1e-10);
+    let view_dir = select(vec3<f32>(0.0, 0.0, 1.0), normalize(-in.world_rel), dot(in.world_rel, in.world_rel) > 1e-8);
+    let sun_dir = normalize(cam.sun_dir.xyz);
+
+    let roughness = clamp(in.material_params.x, 0.05, 1.0);
+    let metalness = clamp(in.material_params.y, 0.0, 1.0);
+
+    let dn = clamp(cam.env_params.x, 0.0, 1.0);
+    let ndotl_sun = max(dot(n, sun_dir), 0.0);
+    let ndotv = max(dot(n, view_dir), 0.0);
+    let hemi = 0.5 + 0.5 * dot(n, view_dir);
+
+    let studio_lit = vec3<f32>(0.42 + 0.24 * hemi) + vec3<f32>(0.52) * max(ndotl_sun, ndotv * 0.65);
+    let day_lit = cam.ambient_color.rgb * (0.75 + 0.45 * hemi) + cam.sun_color.rgb * ndotl_sun;
+    let diffuse_light = mix(studio_lit, day_lit, dn);
+
+    let half_vec = select(view_dir, normalize(sun_dir + view_dir), dot(sun_dir + view_dir, sun_dir + view_dir) > 1e-6);
+    let ndoth = max(dot(n, half_vec), 0.0);
+    let shininess = mix(96.0, 8.0, roughness * roughness);
+    let spec_strength = (1.0 - roughness * 0.75) * mix(0.22, 0.85, metalness);
+    let f0 = mix(vec3<f32>(0.04), albedo, metalness);
+    let spec = f0 * pow(ndoth, shininess) * spec_strength * max(ndotl_sun, 1.0 - dn);
+
+    let diffuse_albedo = albedo * (1.0 - metalness * 0.65);
+    let color = clamp(diffuse_albedo * diffuse_light + spec + in.emissive.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    return vec4<f32>(color, in.base_color.a);
 }
 "#;
 
@@ -2579,6 +2707,13 @@ pub struct Wgpu3DRenderer {
     dynamic_uniform_stride: u32,
     dynamic_bind_group: wgpu::BindGroup,
     dynamic_meshes: HashMap<u64, CachedDynamicGpuMesh>,
+    geo_object_pipeline: wgpu::RenderPipeline,
+    geo_object_transparent_pipeline: wgpu::RenderPipeline,
+    geo_object_bind_group_layout: wgpu::BindGroupLayout,
+    geo_object_bind_group: wgpu::BindGroup,
+    geo_instance_buffer: wgpu::Buffer,
+    geo_instance_capacity: usize,
+    geo_meshes: HashMap<u64, CachedDynamicGpuMesh>,
     overlay_pipeline: wgpu::RenderPipeline,
     overlay_main_pass_pipeline: wgpu::RenderPipeline,
     overlay_bind_group_layout: wgpu::BindGroupLayout,
@@ -3413,6 +3548,124 @@ impl Wgpu3DRenderer {
             cache: None,
         });
 
+        // Hardware-instanced geodetic 3D object pipeline (storage buffer + double-single RTE + 3x3 cofactor normals)
+        let geo_object_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("strata_3d_geo_object_wgsl"),
+            source: wgpu::ShaderSource::Wgsl(GEO_OBJECT_WGSL.into()),
+        });
+        let geo_instance_capacity = 256usize;
+        let geo_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("strata_3d_geo_instances"),
+            size: (geo_instance_capacity * std::mem::size_of::<GpuGeoInstance>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let geo_object_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("strata_3d_geo_object_bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let geo_object_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("strata_3d_geo_object_bg"),
+            layout: &geo_object_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: geo_instance_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let geo_object_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("strata_3d_geo_object_pl"),
+            bind_group_layouts: &[&geo_object_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let make_geo_pipeline = |label: &str, depth_write_enabled: bool, blend: Option<wgpu::BlendState>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&geo_object_layout),
+                vertex: wgpu::VertexState {
+                    module: &geo_object_shader,
+                    entry_point: Some("vs_geo_object"),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<RteTileVertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x4,
+                                offset: 0,
+                                shader_location: 0,
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x4,
+                                offset: 16,
+                                shader_location: 1,
+                            },
+                        ],
+                    }],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &geo_object_shader,
+                    entry_point: Some("fs_geo_object"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let geo_object_pipeline =
+            make_geo_pipeline("strata_3d_geo_object_pipeline", true, None);
+        let geo_object_transparent_pipeline = make_geo_pipeline(
+            "strata_3d_geo_object_transparent_pipeline",
+            false,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+        );
+
         // 2D overlay composite pipeline
         let overlay_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("strata_2d_overlay_wgsl"),
@@ -3547,6 +3800,13 @@ impl Wgpu3DRenderer {
             dynamic_uniform_stride,
             dynamic_bind_group,
             dynamic_meshes: HashMap::new(),
+            geo_object_pipeline,
+            geo_object_transparent_pipeline,
+            geo_object_bind_group_layout,
+            geo_object_bind_group,
+            geo_instance_buffer,
+            geo_instance_capacity,
+            geo_meshes: HashMap::new(),
             overlay_pipeline,
             overlay_main_pass_pipeline,
             overlay_bind_group_layout,
@@ -4043,6 +4303,9 @@ impl Wgpu3DRenderer {
         let mut all_terrain_opaque = true;
         let mut grid_topology: Option<(u32, bool)> = None;
         let mut dynamic_draws: Vec<(u64, [f64; 3], [f32; 4], bool)> = Vec::new();
+        let mut geo_opaque_batches: Vec<(u64, std::ops::Range<u32>)> = Vec::new();
+        let mut geo_transparent_batches: Vec<(u64, std::ops::Range<u32>)> = Vec::new();
+        let mut staged_geo_instances: Vec<GpuGeoInstance> = Vec::new();
 
         if let Some(frame) = terrain_frame_opt.as_ref() {
             let frame_changed = frame.geometry_revision != self.last_geometry_rev
@@ -4210,7 +4473,160 @@ impl Wgpu3DRenderer {
                 }
                 dynamic_draws.push((dm.id, dm.anchor_ecef, dm.color, dm.unlit));
             }
+
+            for asset in frame.geo_mesh_assets.iter() {
+                if asset.vertices.is_empty() || asset.indices.is_empty() {
+                    continue;
+                }
+                let vb_bytes: &[u8] = bytemuck::cast_slice(&asset.vertices);
+                let ib_bytes: &[u8] = bytemuck::cast_slice(&asset.indices);
+                let mut need_recreate = true;
+                if let Some(existing) = self.geo_meshes.get_mut(&asset.id) {
+                    if existing.revision == asset.revision {
+                        need_recreate = false;
+                    } else if existing.vbuf.size() >= vb_bytes.len() as u64
+                        && existing.ibuf.size() >= ib_bytes.len() as u64
+                    {
+                        self.queue.write_buffer(&existing.vbuf, 0, vb_bytes);
+                        self.queue.write_buffer(&existing.ibuf, 0, ib_bytes);
+                        existing.revision = asset.revision;
+                        existing.index_count = asset.indices.len() as u32;
+                        need_recreate = false;
+                    }
+                }
+                if need_recreate {
+                    let vbuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("strata_3d_geo_vb"),
+                        size: (vb_bytes.len() as u64).next_power_of_two().max(256),
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    self.queue.write_buffer(&vbuf, 0, vb_bytes);
+                    let ibuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("strata_3d_geo_ib"),
+                        size: (ib_bytes.len() as u64).next_power_of_two().max(64),
+                        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    self.queue.write_buffer(&ibuf, 0, ib_bytes);
+                    self.geo_meshes.insert(
+                        asset.id,
+                        CachedDynamicGpuMesh {
+                            revision: asset.revision,
+                            vbuf,
+                            ibuf,
+                            index_count: asset.indices.len() as u32,
+                        },
+                    );
+                }
+            }
+
+            if !frame.geo_instances.is_empty() {
+                let mut opaque_items: Vec<(u64, GpuGeoInstance)> =
+                    Vec::with_capacity(frame.geo_instances.len());
+                let mut transparent_items: Vec<(u64, GpuGeoInstance)> = Vec::new();
+
+                for inst in frame.geo_instances.iter() {
+                    if !self.geo_meshes.contains_key(&inst.mesh_id) {
+                        continue;
+                    }
+                    let (ax_hi, ax_lo) = split_f64_to_f32(inst.anchor_ecef[0]);
+                    let (ay_hi, ay_lo) = split_f64_to_f32(inst.anchor_ecef[1]);
+                    let (az_hi, az_lo) = split_f64_to_f32(inst.anchor_ecef[2]);
+                    let gpu_inst = GpuGeoInstance {
+                        anchor_high: [ax_hi, ay_hi, az_hi, 0.0],
+                        anchor_low: [ax_lo, ay_lo, az_lo, 0.0],
+                        col0: [
+                            inst.model_cols[0][0],
+                            inst.model_cols[0][1],
+                            inst.model_cols[0][2],
+                            inst.roughness,
+                        ],
+                        col1: [
+                            inst.model_cols[1][0],
+                            inst.model_cols[1][1],
+                            inst.model_cols[1][2],
+                            inst.metalness,
+                        ],
+                        col2: [
+                            inst.model_cols[2][0],
+                            inst.model_cols[2][1],
+                            inst.model_cols[2][2],
+                            if inst.unlit { 1.0 } else { 0.0 },
+                        ],
+                        base_color: inst.base_color,
+                        emissive: [
+                            inst.emissive_rgb[0],
+                            inst.emissive_rgb[1],
+                            inst.emissive_rgb[2],
+                            inst.accent_mix,
+                        ],
+                    };
+                    if inst.base_color[3] >= 0.999 {
+                        opaque_items.push((inst.mesh_id, gpu_inst));
+                    } else {
+                        transparent_items.push((inst.mesh_id, gpu_inst));
+                    }
+                }
+
+                opaque_items.sort_by_key(|(mesh_id, _)| *mesh_id);
+                staged_geo_instances.reserve(opaque_items.len() + transparent_items.len());
+
+                let push_batches = |items: Vec<(u64, GpuGeoInstance)>,
+                                    staged: &mut Vec<GpuGeoInstance>,
+                                    batches: &mut Vec<(u64, std::ops::Range<u32>)>| {
+                    for (mesh_id, gpu_inst) in items {
+                        let idx = staged.len() as u32;
+                        staged.push(gpu_inst);
+                        if let Some((last_id, range)) = batches.last_mut() {
+                            if *last_id == mesh_id && range.end == idx {
+                                range.end = idx + 1;
+                                continue;
+                            }
+                        }
+                        batches.push((mesh_id, idx..(idx + 1)));
+                    }
+                };
+                push_batches(opaque_items, &mut staged_geo_instances, &mut geo_opaque_batches);
+                push_batches(
+                    transparent_items,
+                    &mut staged_geo_instances,
+                    &mut geo_transparent_batches,
+                );
+            }
             t_dyn = tp4.elapsed().as_secs_f64() * 1000.0;
+        }
+
+        if !staged_geo_instances.is_empty() {
+            if staged_geo_instances.len() > self.geo_instance_capacity {
+                let new_cap = staged_geo_instances.len().next_power_of_two().max(256);
+                self.geo_instance_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("strata_3d_geo_instances_grown"),
+                    size: (new_cap * std::mem::size_of::<GpuGeoInstance>()) as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                self.geo_instance_capacity = new_cap;
+                self.geo_object_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("strata_3d_geo_object_bg_grown"),
+                    layout: &self.geo_object_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.camera_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: self.geo_instance_buffer.as_entire_binding(),
+                        },
+                    ],
+                });
+            }
+            self.queue.write_buffer(
+                &self.geo_instance_buffer,
+                0,
+                bytemuck::cast_slice(&staged_geo_instances),
+            );
         }
 
         if !dynamic_draws.is_empty() {
@@ -4379,6 +4795,19 @@ impl Wgpu3DRenderer {
                 }
             }
 
+            if !geo_opaque_batches.is_empty() {
+                pass.set_pipeline(&self.geo_object_pipeline);
+                pass.set_bind_group(0, &self.geo_object_bind_group, &[]);
+                for (mesh_id, range) in &geo_opaque_batches {
+                    let Some(gpu_mesh) = self.geo_meshes.get(mesh_id) else {
+                        continue;
+                    };
+                    pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                    pass.set_index_buffer(gpu_mesh.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..gpu_mesh.index_count, 0, range.clone());
+                }
+            }
+
             if (cam.cloud_layer_opacity > 0.004 || cam.local_cloud_opacity > 0.004)
                 && self.cloud_index_count > 0
             {
@@ -4410,6 +4839,19 @@ impl Wgpu3DRenderer {
                     pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                     pass.set_index_buffer(gpu_mesh.ibuf.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+                }
+            }
+
+            if !geo_transparent_batches.is_empty() {
+                pass.set_pipeline(&self.geo_object_transparent_pipeline);
+                pass.set_bind_group(0, &self.geo_object_bind_group, &[]);
+                for (mesh_id, range) in &geo_transparent_batches {
+                    let Some(gpu_mesh) = self.geo_meshes.get(mesh_id) else {
+                        continue;
+                    };
+                    pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                    pass.set_index_buffer(gpu_mesh.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..gpu_mesh.index_count, 0, range.clone());
                 }
             }
 
@@ -4651,7 +5093,7 @@ pub fn fallback_frame_from_scene3d(
         instances: Vec::new(),
         textures: Vec::new(),
         dynamic_meshes,
-        environment: None,
+        ..Default::default()
     }
 }
 

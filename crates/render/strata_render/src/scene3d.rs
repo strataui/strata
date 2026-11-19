@@ -499,6 +499,53 @@ pub struct RetainedDynamicMesh {
     pub unlit: bool,
 }
 
+/// Canonical local-space 3D mesh asset uploaded once to GPU VRAM and shared across any number of
+/// [`RetainedGeoInstance`]s.
+///
+/// Vertex coordinates are authored in local model metres (`+X` East, `+Y` North, `+Z` Up).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetainedMeshAsset {
+    pub id: u64,
+    pub revision: u64,
+    pub vertices: std::sync::Arc<Vec<RteTileVertex>>,
+    pub indices: std::sync::Arc<Vec<u32>>,
+}
+
+/// Hardware-instanced 3D object anchored in double-precision ECEF / morphed planetary space.
+///
+/// `model_cols` is a column-major 3x3 linear transform mapping local model coordinates (`+X`, `+Y`, `+Z`)
+/// to world relative metres (combining scale, local heading/pitch/roll, local ENU basis, and 2D/2.5D
+/// surface morphing).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetainedGeoInstance {
+    pub mesh_id: u64,
+    pub anchor_ecef: [f64; 3],
+    pub model_cols: [[f32; 3]; 3],
+    pub base_color: [f32; 4],
+    pub emissive_rgb: [f32; 3],
+    pub roughness: f32,
+    pub metalness: f32,
+    pub unlit: bool,
+    /// Optional white-core accent mix (`0.0` default; multiplied by vertex `uv.y` in shader).
+    pub accent_mix: f32,
+}
+
+impl Default for RetainedGeoInstance {
+    fn default() -> Self {
+        Self {
+            mesh_id: 0,
+            anchor_ecef: [0.0; 3],
+            model_cols: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            base_color: [1.0, 1.0, 1.0, 1.0],
+            emissive_rgb: [0.0, 0.0, 0.0],
+            roughness: 0.45,
+            metalness: 0.1,
+            unlit: false,
+            accent_mix: 0.0,
+        }
+    }
+}
+
 /// One real catalog star in J2000 ICRF celestial coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RetainedStar {
@@ -628,8 +675,8 @@ impl Default for RetainedCameraUniforms {
     }
 }
 
-/// Snapshot of retained terrain tiles, textures, dynamic meshes, and camera parameters.
-#[derive(Debug, Clone, PartialEq)]
+/// Snapshot of retained terrain tiles, textures, dynamic meshes, instanced geo objects, and camera parameters.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct RetainedTerrainFrame {
     pub camera: RetainedCameraUniforms,
     pub geometry_revision: u64,
@@ -637,6 +684,8 @@ pub struct RetainedTerrainFrame {
     pub instances: Vec<RetainedTileInstance>,
     pub textures: Vec<std::sync::Arc<RetainedTileTexture>>,
     pub dynamic_meshes: Vec<RetainedDynamicMesh>,
+    pub geo_mesh_assets: std::sync::Arc<Vec<std::sync::Arc<RetainedMeshAsset>>>,
+    pub geo_instances: std::sync::Arc<Vec<RetainedGeoInstance>>,
     pub environment: Option<std::sync::Arc<RetainedEnvironmentAssets>>,
 }
 
@@ -763,7 +812,86 @@ impl RetainedScene3D {
                     instances: existing.instances.clone(),
                     textures: existing.textures.clone(),
                     dynamic_meshes,
+                    geo_mesh_assets: existing.geo_mesh_assets.clone(),
+                    geo_instances: existing.geo_instances.clone(),
                     environment: existing.environment.clone(),
+                }));
+            }
+        }
+        self.inner
+            .camera_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Updates hardware-instanced geodetic objects in O(1) TerrainFrame shallow-clone time without
+    /// rebuilding terrain tiles, textures, or environment state.
+    pub fn update_geo_objects(
+        &self,
+        geo_mesh_assets: std::sync::Arc<Vec<std::sync::Arc<RetainedMeshAsset>>>,
+        geo_instances: std::sync::Arc<Vec<RetainedGeoInstance>>,
+    ) {
+        if let Ok(mut guard) = self.inner.state.write() {
+            let camera = guard.camera;
+            if let Some(ref existing) = guard.terrain {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: existing.geometry_revision,
+                    meshes: existing.meshes.clone(),
+                    instances: existing.instances.clone(),
+                    textures: existing.textures.clone(),
+                    dynamic_meshes: existing.dynamic_meshes.clone(),
+                    geo_mesh_assets,
+                    geo_instances,
+                    environment: existing.environment.clone(),
+                }));
+            } else {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: 1,
+                    geo_mesh_assets,
+                    geo_instances,
+                    ..Default::default()
+                }));
+            }
+        }
+        self.inner
+            .geometry_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+        self.inner
+            .camera_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Updates camera uniforms, dynamic 3D overlays, and hardware-instanced geodetic objects atomically.
+    pub fn update_camera_and_world_overlays(
+        &self,
+        camera: RetainedCameraUniforms,
+        dynamic_meshes: Vec<RetainedDynamicMesh>,
+        geo_mesh_assets: std::sync::Arc<Vec<std::sync::Arc<RetainedMeshAsset>>>,
+        geo_instances: std::sync::Arc<Vec<RetainedGeoInstance>>,
+    ) {
+        if let Ok(mut guard) = self.inner.state.write() {
+            guard.camera = camera;
+            if let Some(ref existing) = guard.terrain {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: existing.geometry_revision,
+                    meshes: existing.meshes.clone(),
+                    instances: existing.instances.clone(),
+                    textures: existing.textures.clone(),
+                    dynamic_meshes,
+                    geo_mesh_assets,
+                    geo_instances,
+                    environment: existing.environment.clone(),
+                }));
+            } else if !geo_instances.is_empty() || !dynamic_meshes.is_empty() {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: 1,
+                    dynamic_meshes,
+                    geo_mesh_assets,
+                    geo_instances,
+                    ..Default::default()
                 }));
             }
         }
