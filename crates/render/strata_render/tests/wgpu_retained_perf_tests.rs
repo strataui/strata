@@ -7,8 +7,9 @@ use std::time::Instant;
 
 use strata_render::gpu_wgpu::Wgpu3DRenderer;
 use strata_render::scene3d::{
-    Background3D, RetainedCameraUniforms, RetainedScene3D, RetainedTerrainFrame,
-    RetainedTileInstance, RetainedTileMesh, RetainedTileTexture, RteTileVertex, Scene3D, TileKeyId,
+    Background3D, RetainedCameraUniforms, RetainedGeoInstance, RetainedMeshAsset, RetainedScene3D,
+    RetainedTerrainFrame, RetainedTileInstance, RetainedTileMesh, RetainedTileTexture,
+    RteTileVertex, Scene3D, TileKeyId,
 };
 use strata_style::Color;
 
@@ -156,8 +157,7 @@ fn build_retained_grid_frame(width: u32, height: u32) -> RetainedTerrainFrame {
         meshes,
         instances,
         textures,
-        dynamic_meshes: Vec::new(),
-        environment: None,
+        ..Default::default()
     }
 }
 
@@ -376,11 +376,8 @@ fn wgpu_skybox_cubemap_renders_faces_and_fades_in_25d() {
         let frame = RetainedTerrainFrame {
             camera: cam,
             geometry_revision: 1,
-            meshes: Vec::new(),
-            instances: Vec::new(),
-            textures: Vec::new(),
-            dynamic_meshes: Vec::new(),
             environment: Some(Arc::clone(&env)),
+            ..Default::default()
         };
         let retained = RetainedScene3D::new(cam);
         retained.update_terrain(Arc::new(frame));
@@ -482,8 +479,7 @@ fn wgpu_lod_zoom_burst_renders_all_100_new_chunks_without_holes() {
         meshes,
         instances,
         textures,
-        dynamic_meshes: Vec::new(),
-        environment: None,
+        ..Default::default()
     }));
 
     // Render single flight frame (`unlimited_upload_budget = false`).
@@ -508,6 +504,86 @@ fn wgpu_lod_zoom_burst_renders_all_100_new_chunks_without_holes() {
     assert_eq!(
         bad_pixels, 0,
         "LOD zoom burst left missing or untextured chunks on frame 1 ({bad_pixels} non-green pixels)"
+    );
+}
+
+#[test]
+fn wgpu_instanced_geo_objects_render_at_planetary_rte_coords_with_nonuniform_scale() {
+    let Ok(mut renderer) = Wgpu3DRenderer::new_headless(wgpu::TextureFormat::Bgra8Unorm) else {
+        return;
+    };
+    let (w, h) = (128u32, 128u32);
+
+    // Anchor at full WGS84 planetary ECEF magnitude (6,378,137 m) to verify 48-bit split RTE jitter-free rendering.
+    let anchor = [6_378_137.0_f64, 125_000.0_f64, 420_000.0_f64];
+    let eye = [anchor[0] + 60.0, anchor[1], anchor[2]];
+    let mut cam = camera_uniforms(eye, anchor, w, h);
+    cam.background = Background3D::Solid(Color::rgba(8, 12, 20, 255));
+    cam.sun_dir = [1.0, 0.0, 0.0];
+    cam.day_night_strength = 1.0;
+
+    // Unit quad in local YZ plane facing +X (toward camera), uploaded ONCE as a shared RetainedMeshAsset.
+    let quad_asset = Arc::new(RetainedMeshAsset {
+        id: 7,
+        revision: 1,
+        vertices: Arc::new(vec![
+            RteTileVertex::new([0.0, -1.0, -1.0], [1.0, 0.0, 0.0], [0.0, 0.0]),
+            RteTileVertex::new([0.0, 1.0, -1.0], [1.0, 0.0, 0.0], [1.0, 0.0]),
+            RteTileVertex::new([0.0, 1.0, 1.0], [1.0, 0.0, 0.0], [1.0, 1.0]),
+            RteTileVertex::new([0.0, -1.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0]),
+        ]),
+        indices: Arc::new(vec![0, 1, 2, 0, 2, 3]),
+    });
+
+    // Two hardware instances sharing mesh_id = 7 (separated along Z, which is camera horizontal axis) with non-uniform 3x3 scale.
+    let instances = Arc::new(vec![
+        RetainedGeoInstance {
+            mesh_id: 7,
+            anchor_ecef: [anchor[0], anchor[1], anchor[2] - 14.0],
+            model_cols: [[1.0, 0.0, 0.0], [0.0, 12.0, 0.0], [0.0, 0.0, 8.0]],
+            base_color: [0.1, 0.85, 0.95, 1.0],
+            roughness: 0.35,
+            metalness: 0.1,
+            unlit: false,
+            ..Default::default()
+        },
+        RetainedGeoInstance {
+            mesh_id: 7,
+            anchor_ecef: [anchor[0], anchor[1], anchor[2] + 14.0],
+            model_cols: [[1.0, 0.0, 0.0], [0.0, 12.0, 0.0], [0.0, 0.0, 8.0]],
+            base_color: [0.95, 0.45, 0.1, 1.0],
+            roughness: 0.35,
+            metalness: 0.1,
+            unlit: false,
+            ..Default::default()
+        },
+    ]);
+
+    let retained = RetainedScene3D::new(cam);
+    retained.update_geo_objects(Arc::new(vec![quad_asset]), instances);
+    let scene = Scene3D::new().with_retained_handle(retained);
+
+    let bgra = renderer
+        .render_offscreen(&scene, w, h, true, true)
+        .expect("instanced geo render");
+
+    let mut cyan_hits = 0usize;
+    let mut orange_hits = 0usize;
+    for px in 0..w {
+        let idx = (((h / 2) * w + px) * 4) as usize;
+        let b = bgra[idx];
+        let g = bgra[idx + 1];
+        let r = bgra[idx + 2];
+        if b > 140 && g > 120 && r < 80 {
+            cyan_hits += 1;
+        }
+        if r > 140 && g > 60 && b < 80 {
+            orange_hits += 1;
+        }
+    }
+    assert!(
+        cyan_hits >= 5 && orange_hits >= 5,
+        "both hardware-instanced RTE geo objects must render cleanly (cyan_hits={cyan_hits}, orange_hits={orange_hits})"
     );
 }
 
