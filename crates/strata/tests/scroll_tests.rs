@@ -447,3 +447,55 @@ fn test_scrollbar_right_edge_pixel_perfect_hit_testing() {
     );
     assert!(runtime.scrollbar_drag.is_none());
 }
+
+#[test]
+fn test_smooth_scroll_consecutive_impulses_preserve_exact_layout_offset() {
+    let mut runtime = AppRuntime::new(
+        rsx! {
+            <div id="rapid-wheel" class="flex flex-col w-[440px] h-[400px] p-5 overflow-y-auto">
+                <div class="h-[300px] w-full shrink-0" />
+                <div class="h-[300px] w-full shrink-0" />
+            </div>
+        },
+        440.0,
+        400.0,
+        1.0,
+    );
+
+    let initial_y0 = runtime.layout_root.children[0].geometry.border_box.y;
+    let max_scroll = runtime.active_scrollbars[0].max_scroll_y;
+    assert!(max_scroll > 200.0);
+
+    // First wheel impulse
+    assert!(runtime.dispatch_smooth_scroll(220.0, 200.0, 0.0, 110.0));
+    // Simulate 25ms elapsed before the next wheel event arrives without an intervening AnimationTick
+    if let Some(ref mut tr) = runtime.active_smooth_scroll {
+        tr.start_time = std::time::Instant::now() - std::time::Duration::from_millis(25);
+        tr.last_event_time = tr.start_time;
+    }
+
+    // Second and third consecutive wheel impulses while in-flight
+    assert!(runtime.dispatch_smooth_scroll(220.0, 200.0, 0.0, 110.0));
+    if let Some(ref mut tr) = runtime.active_smooth_scroll {
+        tr.start_time = std::time::Instant::now() - std::time::Duration::from_millis(25);
+        tr.last_event_time = tr.start_time;
+    }
+    assert!(runtime.dispatch_smooth_scroll(220.0, 200.0, 0.0, 500.0));
+
+    // Settle completely
+    let settle_t = std::time::Instant::now() + std::time::Duration::from_millis(600);
+    runtime.poll_smooth_scroll_at(settle_t);
+
+    assert!(
+        (runtime.active_scrollbars[0].scroll_y - max_scroll).abs() < 0.01,
+        "scroll_y must reach exact max_scroll_y"
+    );
+    let actual_y0 = runtime.layout_root.children[0].geometry.border_box.y;
+    let expected_y0 = initial_y0 - max_scroll;
+    assert!(
+        (actual_y0 - expected_y0).abs() < 0.05,
+        "layout child must scroll all the way to {expected_y0}, got {actual_y0} (lost {}px)",
+        actual_y0 - expected_y0
+    );
+}
+
