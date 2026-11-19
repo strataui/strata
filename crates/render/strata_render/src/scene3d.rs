@@ -546,6 +546,90 @@ impl Default for RetainedGeoInstance {
     }
 }
 
+/// 2D sprite rendering mode for a GPU-instanced [`RetainedParticleLayer`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum RetainedParticleSprite {
+    /// Sample a custom 2D RGBA8 texture identified by `texture_id` inside
+    /// [`RetainedTerrainFrame::particle_textures`].
+    Textured(u64),
+    /// Pure mathematical 2D motion-tapered raindrop streak (zero texture fetches).
+    #[default]
+    ProceduralStreak,
+    /// Pure mathematical simplistic 6-fold geometric snowflake crystal (zero texture fetches).
+    ProceduralSnowflake,
+    /// Pure mathematical soft translucent sleet/graupel ice pellet (zero texture fetches).
+    ProceduralPellet,
+}
+
+/// Billboard alignment strategy for a GPU-instanced [`RetainedParticleLayer`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum RetainedParticleBillboard {
+    /// Aligns the 2D quad's vertical axis with the particle's 3D apparent velocity vector
+    /// and horizontal axis perpendicular to both velocity and camera view ray.
+    #[default]
+    VelocityAligned,
+    /// Camera-facing 2D sprite aligned with camera right/up vectors with per-particle 2D spin.
+    CameraFacing,
+}
+
+/// GPU-instanced camera-local toroidal 2D billboard particle volume.
+///
+/// All `particle_count` particles are procedurally distributed, toroidally wrapped in
+/// world-locked East-North-Up (ENU) space around the camera eye, depth-tested against
+/// terrain and 3D objects, and billboarded entirely on the GPU in one draw call.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetainedParticleLayer {
+    pub id: u64,
+    pub particle_count: u32,
+    pub sprite: RetainedParticleSprite,
+    pub billboard: RetainedParticleBillboard,
+    /// Local orthonormal unit East vector in world / ECEF coordinates at the camera eye.
+    pub basis_east: [f32; 3],
+    /// Local orthonormal unit North vector in world / ECEF coordinates at the camera eye.
+    pub basis_north: [f32; 3],
+    /// Local orthonormal unit Up vector in world / ECEF coordinates at the camera eye.
+    pub basis_up: [f32; 3],
+    /// Pre-wrapped `f64 -> f32` fractional toroidal offsets in `[0.0, 1.0)` encoding
+    /// `(wind_enu * time_s - camera_world_phase_enu) / volume_extent_enu`.
+    pub wrapped_phase: [f32; 3],
+    /// `[eye_alt_msl_m, ground_alt_msl_m, ceiling_alt_msl_m, ceiling_fade_band_m]`.
+    pub altitude_bounds: [f32; 4],
+    /// `[extent_xy_m, extent_z_m, box_edge_fade_frac, near_lens_fade_m]`.
+    pub volume_params: [f32; 4],
+    /// `[fall_speed_mps, wind_east_mps, wind_north_mps, wrapped_time_s]`.
+    pub motion_params: [f32; 4],
+    /// `[width_m, height_m, velocity_stretch, spin_rad_s]`.
+    pub size_params: [f32; 4],
+    /// `[flutter_amp_m, flutter_freq_hz, min_px_size, max_px_size]`.
+    pub flutter_clamp: [f32; 4],
+    /// Multiplicative RGBA tint (alpha modulates global opacity & cloud envelope).
+    pub color: [f32; 4],
+    /// Deterministic per-layer hash seed offset.
+    pub seed: u32,
+}
+
+impl Default for RetainedParticleLayer {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            particle_count: 0,
+            sprite: RetainedParticleSprite::ProceduralStreak,
+            billboard: RetainedParticleBillboard::VelocityAligned,
+            basis_east: [1.0, 0.0, 0.0],
+            basis_north: [0.0, 1.0, 0.0],
+            basis_up: [0.0, 0.0, 1.0],
+            wrapped_phase: [0.0, 0.0, 0.0],
+            altitude_bounds: [100.0, 0.0, 5_500.0, 900.0],
+            volume_params: [48.0, 36.0, 0.22, 1.4],
+            motion_params: [26.0, 3.0, 1.0, 0.0],
+            size_params: [0.045, 0.95, 0.032, 0.0],
+            flutter_clamp: [0.0, 0.0, 1.4, 52.0],
+            color: [0.80, 0.89, 1.0, 0.72],
+            seed: 1,
+        }
+    }
+}
+
 /// One real catalog star in J2000 ICRF celestial coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RetainedStar {
@@ -675,7 +759,8 @@ impl Default for RetainedCameraUniforms {
     }
 }
 
-/// Snapshot of retained terrain tiles, textures, dynamic meshes, instanced geo objects, and camera parameters.
+/// Snapshot of retained terrain tiles, textures, dynamic meshes, instanced geo objects,
+/// GPU-instanced 2D camera-local particle volumes, and camera parameters.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RetainedTerrainFrame {
     pub camera: RetainedCameraUniforms,
@@ -686,6 +771,8 @@ pub struct RetainedTerrainFrame {
     pub dynamic_meshes: Vec<RetainedDynamicMesh>,
     pub geo_mesh_assets: std::sync::Arc<Vec<std::sync::Arc<RetainedMeshAsset>>>,
     pub geo_instances: std::sync::Arc<Vec<RetainedGeoInstance>>,
+    pub particle_layers: std::sync::Arc<Vec<RetainedParticleLayer>>,
+    pub particle_textures: std::sync::Arc<Vec<std::sync::Arc<RetainedTileTexture>>>,
     pub environment: Option<std::sync::Arc<RetainedEnvironmentAssets>>,
 }
 
@@ -778,10 +865,22 @@ impl RetainedScene3D {
             .fetch_add(1, std::sync::atomic::Ordering::Release);
     }
 
-    /// Publishes a new terrain tile frame from a background LOD worker while preserving the live camera.
+    /// Publishes a new terrain tile frame from a background LOD worker while preserving the live camera
+    /// and any main-thread camera-locked particle layers when the worker frame omits them.
     pub fn update_terrain_preserving_camera(&self, terrain: std::sync::Arc<RetainedTerrainFrame>) {
         if let Ok(mut guard) = self.inner.state.write() {
-            guard.terrain = Some(terrain);
+            if let Some(ref existing) = guard.terrain {
+                if terrain.particle_layers.is_empty() && !existing.particle_layers.is_empty() {
+                    let mut merged = (*terrain).clone();
+                    merged.particle_layers = existing.particle_layers.clone();
+                    merged.particle_textures = existing.particle_textures.clone();
+                    guard.terrain = Some(std::sync::Arc::new(merged));
+                } else {
+                    guard.terrain = Some(terrain);
+                }
+            } else {
+                guard.terrain = Some(terrain);
+            }
         }
         self.inner
             .geometry_generation
@@ -795,8 +894,8 @@ impl RetainedScene3D {
             .fetch_add(1, std::sync::atomic::Ordering::Release);
     }
 
-    /// Updates camera uniforms and replaces only dynamic 3D overlays (e.g. 2.5D weather or orbital satellites)
-    /// without rebuilding or re-allocating cached terrain tiles, textures, or environment assets.
+    /// Updates camera uniforms and replaces only dynamic 3D overlays (e.g. orbital satellites or ocean waves)
+    /// without rebuilding or re-allocating cached terrain tiles, textures, particle volumes, or environment assets.
     pub fn update_camera_and_dynamic_meshes(
         &self,
         camera: RetainedCameraUniforms,
@@ -814,6 +913,8 @@ impl RetainedScene3D {
                     dynamic_meshes,
                     geo_mesh_assets: existing.geo_mesh_assets.clone(),
                     geo_instances: existing.geo_instances.clone(),
+                    particle_layers: existing.particle_layers.clone(),
+                    particle_textures: existing.particle_textures.clone(),
                     environment: existing.environment.clone(),
                 }));
             }
@@ -824,7 +925,7 @@ impl RetainedScene3D {
     }
 
     /// Updates hardware-instanced geodetic objects in O(1) TerrainFrame shallow-clone time without
-    /// rebuilding terrain tiles, textures, or environment state.
+    /// rebuilding terrain tiles, textures, particle volumes, or environment state.
     pub fn update_geo_objects(
         &self,
         geo_mesh_assets: std::sync::Arc<Vec<std::sync::Arc<RetainedMeshAsset>>>,
@@ -842,6 +943,8 @@ impl RetainedScene3D {
                     dynamic_meshes: existing.dynamic_meshes.clone(),
                     geo_mesh_assets,
                     geo_instances,
+                    particle_layers: existing.particle_layers.clone(),
+                    particle_textures: existing.particle_textures.clone(),
                     environment: existing.environment.clone(),
                 }));
             } else {
@@ -882,6 +985,8 @@ impl RetainedScene3D {
                     dynamic_meshes,
                     geo_mesh_assets,
                     geo_instances,
+                    particle_layers: existing.particle_layers.clone(),
+                    particle_textures: existing.particle_textures.clone(),
                     environment: existing.environment.clone(),
                 }));
             } else if !geo_instances.is_empty() || !dynamic_meshes.is_empty() {
@@ -901,7 +1006,7 @@ impl RetainedScene3D {
     }
 
     /// Updates camera uniforms and hardware-instanced geodetic objects atomically while preserving
-    /// existing terrain meshes, textures, and dynamic 3D overlays without rebuilding them.
+    /// existing terrain meshes, textures, particle volumes, and dynamic 3D overlays.
     pub fn update_camera_and_geo_objects(
         &self,
         camera: RetainedCameraUniforms,
@@ -920,6 +1025,8 @@ impl RetainedScene3D {
                     dynamic_meshes: existing.dynamic_meshes.clone(),
                     geo_mesh_assets,
                     geo_instances,
+                    particle_layers: existing.particle_layers.clone(),
+                    particle_textures: existing.particle_textures.clone(),
                     environment: existing.environment.clone(),
                 }));
             } else if !geo_instances.is_empty() {
@@ -928,6 +1035,171 @@ impl RetainedScene3D {
                     geometry_revision: 1,
                     geo_mesh_assets,
                     geo_instances,
+                    ..Default::default()
+                }));
+            }
+        }
+        self.inner
+            .camera_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Updates only GPU-instanced 2D camera-local particle volumes in O(1) without touching terrain,
+    /// dynamic meshes, or geodetic objects.
+    pub fn update_particles(
+        &self,
+        particle_layers: std::sync::Arc<Vec<RetainedParticleLayer>>,
+        particle_textures: std::sync::Arc<Vec<std::sync::Arc<RetainedTileTexture>>>,
+    ) {
+        if let Ok(mut guard) = self.inner.state.write() {
+            let camera = guard.camera;
+            if let Some(ref existing) = guard.terrain {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: existing.geometry_revision,
+                    meshes: existing.meshes.clone(),
+                    instances: existing.instances.clone(),
+                    textures: existing.textures.clone(),
+                    dynamic_meshes: existing.dynamic_meshes.clone(),
+                    geo_mesh_assets: existing.geo_mesh_assets.clone(),
+                    geo_instances: existing.geo_instances.clone(),
+                    particle_layers,
+                    particle_textures,
+                    environment: existing.environment.clone(),
+                }));
+            } else if !particle_layers.is_empty() {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: 1,
+                    particle_layers,
+                    particle_textures,
+                    ..Default::default()
+                }));
+            }
+        }
+        self.inner
+            .camera_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Updates camera uniforms and GPU-instanced 2D camera-local particle volumes atomically in O(1).
+    pub fn update_camera_and_particles(
+        &self,
+        camera: RetainedCameraUniforms,
+        particle_layers: std::sync::Arc<Vec<RetainedParticleLayer>>,
+        particle_textures: std::sync::Arc<Vec<std::sync::Arc<RetainedTileTexture>>>,
+    ) {
+        if let Ok(mut guard) = self.inner.state.write() {
+            guard.camera = camera;
+            if let Some(ref existing) = guard.terrain {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: existing.geometry_revision,
+                    meshes: existing.meshes.clone(),
+                    instances: existing.instances.clone(),
+                    textures: existing.textures.clone(),
+                    dynamic_meshes: existing.dynamic_meshes.clone(),
+                    geo_mesh_assets: existing.geo_mesh_assets.clone(),
+                    geo_instances: existing.geo_instances.clone(),
+                    particle_layers,
+                    particle_textures,
+                    environment: existing.environment.clone(),
+                }));
+            } else if !particle_layers.is_empty() {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: 1,
+                    particle_layers,
+                    particle_textures,
+                    ..Default::default()
+                }));
+            }
+        }
+        self.inner
+            .camera_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Updates camera uniforms, hardware-instanced geodetic objects, and particle volumes atomically.
+    pub fn update_camera_and_geo_and_particles(
+        &self,
+        camera: RetainedCameraUniforms,
+        geo_mesh_assets: std::sync::Arc<Vec<std::sync::Arc<RetainedMeshAsset>>>,
+        geo_instances: std::sync::Arc<Vec<RetainedGeoInstance>>,
+        particle_layers: std::sync::Arc<Vec<RetainedParticleLayer>>,
+        particle_textures: std::sync::Arc<Vec<std::sync::Arc<RetainedTileTexture>>>,
+    ) {
+        if let Ok(mut guard) = self.inner.state.write() {
+            guard.camera = camera;
+            if let Some(ref existing) = guard.terrain {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: existing.geometry_revision,
+                    meshes: existing.meshes.clone(),
+                    instances: existing.instances.clone(),
+                    textures: existing.textures.clone(),
+                    dynamic_meshes: existing.dynamic_meshes.clone(),
+                    geo_mesh_assets,
+                    geo_instances,
+                    particle_layers,
+                    particle_textures,
+                    environment: existing.environment.clone(),
+                }));
+            } else if !geo_instances.is_empty() || !particle_layers.is_empty() {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: 1,
+                    geo_mesh_assets,
+                    geo_instances,
+                    particle_layers,
+                    particle_textures,
+                    ..Default::default()
+                }));
+            }
+        }
+        self.inner
+            .camera_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Updates camera uniforms, dynamic overlays, geodetic objects, and particle volumes atomically.
+    pub fn update_camera_and_world_and_particles(
+        &self,
+        camera: RetainedCameraUniforms,
+        dynamic_meshes: Vec<RetainedDynamicMesh>,
+        geo_mesh_assets: std::sync::Arc<Vec<std::sync::Arc<RetainedMeshAsset>>>,
+        geo_instances: std::sync::Arc<Vec<RetainedGeoInstance>>,
+        particle_layers: std::sync::Arc<Vec<RetainedParticleLayer>>,
+        particle_textures: std::sync::Arc<Vec<std::sync::Arc<RetainedTileTexture>>>,
+    ) {
+        if let Ok(mut guard) = self.inner.state.write() {
+            guard.camera = camera;
+            if let Some(ref existing) = guard.terrain {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: existing.geometry_revision,
+                    meshes: existing.meshes.clone(),
+                    instances: existing.instances.clone(),
+                    textures: existing.textures.clone(),
+                    dynamic_meshes,
+                    geo_mesh_assets,
+                    geo_instances,
+                    particle_layers,
+                    particle_textures,
+                    environment: existing.environment.clone(),
+                }));
+            } else if !geo_instances.is_empty()
+                || !dynamic_meshes.is_empty()
+                || !particle_layers.is_empty()
+            {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: 1,
+                    dynamic_meshes,
+                    geo_mesh_assets,
+                    geo_instances,
+                    particle_layers,
+                    particle_textures,
                     ..Default::default()
                 }));
             }
