@@ -737,7 +737,67 @@ impl AppRuntime {
         }
     }
 
-    /// Reconciles `layout_node` in-place from `old_bp` to `new_bp`.
+    fn inherited_style_equal(
+        a: &strata_style::ComputedStyle,
+        b: &strata_style::ComputedStyle,
+    ) -> bool {
+        a.color == b.color
+            && a.font_family == b.font_family
+            && a.font_size == b.font_size
+            && a.root_font_size == b.root_font_size
+            && a.font_weight == b.font_weight
+            && a.font_style == b.font_style
+            && a.text_align == b.text_align
+            && a.line_height == b.line_height
+            && a.letter_spacing == b.letter_spacing
+            && a.text_decoration == b.text_decoration
+            && a.text_transform == b.text_transform
+            && a.text_overflow == b.text_overflow
+            && a.white_space == b.white_space
+            && a.cursor == b.cursor
+            && a.user_select == b.user_select
+            && a.pointer_events == b.pointer_events
+            && a.visibility == b.visibility
+            && a.caret_color == b.caret_color
+            && a.border_collapse == b.border_collapse
+            && a.border_spacing == b.border_spacing
+            && a.caption_side == b.caption_side
+            && a.custom_properties == b.custom_properties
+    }
+
+    fn blueprint_visually_equal(a: &NodeBlueprint, b: &NodeBlueprint) -> bool {
+        match (a, b) {
+            (NodeBlueprint::Text(t1), NodeBlueprint::Text(t2)) => t1 == t2,
+            (NodeBlueprint::Empty, NodeBlueprint::Empty) => true,
+            (
+                NodeBlueprint::Element {
+                    tag: t1,
+                    classes: cls1,
+                    attributes: a1,
+                    children: c1,
+                },
+                NodeBlueprint::Element {
+                    tag: t2,
+                    classes: cls2,
+                    attributes: a2,
+                    children: c2,
+                },
+            ) => {
+                t1 == t2
+                    && cls1 == cls2
+                    && c1.len() == c2.len()
+                    && Self::attributes_visually_equal(a1, a2)
+                    && c1
+                        .iter()
+                        .zip(c2.iter())
+                        .all(|(x, y)| Self::blueprint_visually_equal(x, y))
+            }
+            _ => false,
+        }
+    }
+
+    /// Reconciles `layout_node` in-place from `old_bp` to `new_bp`, preserving W3C CSS property
+    /// inheritance top-down from `parent_style`.
     /// Returns `None` if a structural mismatch requires a full subtree rebuild,
     /// `Some(true)` if any layout cache in this subtree was invalidated, or
     /// `Some(false)` if this entire subtree is visually and structurally identical.
@@ -745,18 +805,39 @@ impl AppRuntime {
         old_bp: &NodeBlueprint,
         new_bp: &NodeBlueprint,
         layout_node: &mut LayoutNode,
+        parent_style: Option<&strata_style::ComputedStyle>,
+        parent_inherited_changed: bool,
+        stylesheets: &[std::sync::Arc<strata_style::StyleSheet>],
         ctx: &crate::runtime::InteractionContext,
     ) -> Option<bool> {
         match (old_bp, new_bp) {
             (NodeBlueprint::Text(t1), NodeBlueprint::Text(t2)) => {
-                if t1 == t2 {
+                if t1 == t2 && !parent_inherited_changed {
                     Some(false)
                 } else {
-                    layout_node.text = Some(t2.clone());
-                    layout_node.inline_items.clear();
-                    layout_node.line_boxes.clear();
-                    layout_node.layout_cache = strata_layout::tree::LayoutCacheEntry::invalid();
+                    *layout_node = Self::build_text_leaf_layout_node(t2.clone(), parent_style);
                     Some(true)
+                }
+            }
+            (
+                NodeBlueprint::Element { tag: t1, .. },
+                NodeBlueprint::Element { tag: t2, .. },
+            ) if t1 == t2
+                && matches!(
+                    t1,
+                    strata_dom::Tag::Svg
+                        | strata_dom::Tag::Path
+                        | strata_dom::Tag::Input
+                        | strata_dom::Tag::Img
+                ) =>
+            {
+                if !parent_inherited_changed && Self::blueprint_visually_equal(old_bp, new_bp) {
+                    if let Some(eid) = new_bp.entity_id() {
+                        layout_node.entity_id = eid;
+                    }
+                    Some(false)
+                } else {
+                    None
                 }
             }
             (
@@ -773,12 +854,56 @@ impl AppRuntime {
                     children: c2,
                 },
             ) if t1 == t2
-                && *t1 != strata_dom::Tag::Svg
                 && !layout_node.is_top_layer
                 && layout_node.children.len() == c1.len()
                 && Self::element_attr_value(a1, "key") == Self::element_attr_value(a2, "key")
                 && Self::element_attr_value(a1, "id") == Self::element_attr_value(a2, "id") =>
             {
+                let self_props_changed = cls1 != cls2 || !Self::attributes_visually_equal(a1, a2);
+                let single_text_changed = c1.len() == 1
+                    && c2.len() == 1
+                    && matches!(
+                        (&c1[0], &c2[0]),
+                        (NodeBlueprint::Text(x), NodeBlueprint::Text(y)) if x != y
+                    );
+
+                let (self_rewritten, child_inherited_changed) =
+                    if self_props_changed || parent_inherited_changed || single_text_changed {
+                        let shallow_bp = NodeBlueprint::Element {
+                            tag: *t2,
+                            classes: cls2.clone(),
+                            attributes: a2.clone(),
+                            children: Vec::new(),
+                        };
+                        let mut path_buf = Vec::new();
+                        let mut ancestors = Vec::new();
+                        let mut updated = Self::build_layout_tree_full(
+                            &shallow_bp,
+                            parent_style,
+                            &mut path_buf,
+                            ctx,
+                            stylesheets,
+                            &mut ancestors,
+                            &[],
+                            true,
+                        );
+                        Self::apply_single_text_inline_intrinsic_sizing(&mut updated.style, c2);
+                        if let Some(eid) = new_bp.entity_id() {
+                            updated.entity_id = eid;
+                        }
+                        let inh_changed =
+                            !Self::inherited_style_equal(&layout_node.style, &updated.style);
+                        updated.children = std::mem::take(&mut layout_node.children);
+                        *layout_node = updated;
+                        (true, inh_changed)
+                    } else {
+                        if let Some(eid) = new_bp.entity_id() {
+                            layout_node.entity_id = eid;
+                        }
+                        (false, false)
+                    };
+
+                let parent_style_for_children = layout_node.style.clone();
                 let mut children_changed = c1.len() != c2.len();
                 let common = c1.len().min(c2.len());
                 for i in 0..common {
@@ -786,13 +911,26 @@ impl AppRuntime {
                         &c1[i],
                         &c2[i],
                         &mut layout_node.children[i],
+                        Some(&parent_style_for_children),
+                        child_inherited_changed,
+                        stylesheets,
                         ctx,
                     ) {
                         Some(false) => {}
                         Some(true) => children_changed = true,
                         None => {
-                            layout_node.children[i] =
-                                Self::build_layout_tree_with_interaction(&c2[i], ctx);
+                            let mut path_buf = Vec::new();
+                            let mut ancestors = Vec::new();
+                            layout_node.children[i] = Self::build_layout_tree_full(
+                                &c2[i],
+                                Some(&parent_style_for_children),
+                                &mut path_buf,
+                                ctx,
+                                stylesheets,
+                                &mut ancestors,
+                                &[],
+                                i + 1 == c2.len(),
+                            );
                             children_changed = true;
                         }
                     }
@@ -800,34 +938,30 @@ impl AppRuntime {
                 if c2.len() < c1.len() {
                     layout_node.children.truncate(c2.len());
                 } else if c2.len() > c1.len() {
-                    for nc in &c2[common..] {
-                        layout_node
-                            .children
-                            .push(Self::build_layout_tree_with_interaction(nc, ctx));
+                    for (offset, nc) in c2[common..].iter().enumerate() {
+                        let idx = common + offset;
+                        let mut path_buf = Vec::new();
+                        let mut ancestors = Vec::new();
+                        layout_node.children.push(Self::build_layout_tree_full(
+                            nc,
+                            Some(&parent_style_for_children),
+                            &mut path_buf,
+                            ctx,
+                            stylesheets,
+                            &mut ancestors,
+                            &[],
+                            idx + 1 == c2.len(),
+                        ));
                     }
                 }
 
-                if cls1 == cls2 && Self::attributes_visually_equal(a1, a2) {
-                    if let Some(eid) = new_bp.entity_id() {
-                        layout_node.entity_id = eid;
-                    }
-                    if children_changed {
-                        layout_node.layout_cache = strata_layout::tree::LayoutCacheEntry::invalid();
-                    }
-                    Some(children_changed)
-                } else {
-                    // Only this element's own classes/attributes changed (e.g. SplitPane flex ratio):
-                    // rebuild only this node's style/props and preserve all reconciled children.
-                    let shallow_bp = NodeBlueprint::Element {
-                        tag: *t2,
-                        classes: cls2.clone(),
-                        attributes: a2.clone(),
-                        children: Vec::new(),
-                    };
-                    let mut updated = Self::build_layout_tree_with_interaction(&shallow_bp, ctx);
-                    updated.children = std::mem::take(&mut layout_node.children);
-                    *layout_node = updated;
+                if self_rewritten || children_changed {
+                    layout_node.inline_items.clear();
+                    layout_node.line_boxes.clear();
+                    layout_node.layout_cache = strata_layout::tree::LayoutCacheEntry::invalid();
                     Some(true)
+                } else {
+                    Some(false)
                 }
             }
             _ => None,
@@ -866,7 +1000,11 @@ impl AppRuntime {
                     &self.cached_stylesheets,
                 )
             });
-        let reconciled = if sheets_unchanged && hover_safe && self.current_focus_path.is_none() {
+        let reconciled = if self.cached_stylesheets.is_empty()
+            && sheets_unchanged
+            && hover_safe
+            && self.current_focus_path.is_none()
+        {
             let ctx = crate::runtime::InteractionContext {
                 hovered_path: None,
                 focused_path: None,
@@ -877,6 +1015,9 @@ impl AppRuntime {
                 &old_blueprint,
                 &self.root_blueprint,
                 &mut self.layout_root,
+                None,
+                false,
+                &self.cached_stylesheets,
                 &ctx,
             )
             .is_some()

@@ -1639,12 +1639,12 @@ fn compute_opacity_group_clip(rest: &[DrawCommand]) -> Option<(f64, f64, f64, f6
                 return None;
             }
             _ => {
-                if let Some(b) = cmd.bounds() {
-                    if b.width > 0.0 && b.height > 0.0 {
-                        min_x = min_x.min(b.x);
-                        min_y = min_y.min(b.y);
-                        max_x = max_x.max(b.x + b.width);
-                        max_y = max_y.max(b.y + b.height);
+                if let Some((bx1, by1, bx2, by2)) = command_paint_rect(cmd) {
+                    if bx2 > bx1 && by2 > by1 {
+                        min_x = min_x.min(bx1 as f32);
+                        min_y = min_y.min(by1 as f32);
+                        max_x = max_x.max(bx2 as f32);
+                        max_y = max_y.max(by2 as f32);
                     }
                 }
             }
@@ -1705,6 +1705,29 @@ fn command_paint_rect(cmd: &DrawCommand) -> Option<(f64, f64, f64, f64)> {
             let sx2 = (bounds.x + bounds.width) as f64 + shadow.offset_x.max(0.0) as f64 + ext;
             let sy2 = (bounds.y + bounds.height) as f64 + shadow.offset_y.max(0.0) as f64 + ext;
             Some((sx1, sy1, sx2, sy2))
+        }
+        DrawCommand::DrawText {
+            origin,
+            bounds_width,
+            bounds_height,
+            text,
+            font_size,
+            line_height,
+            ..
+        } => {
+            let w = bounds_width
+                .unwrap_or(0.0)
+                .max(text.len() as f32 * (*font_size) * 0.95) as f64;
+            let h = bounds_height
+                .unwrap_or(0.0)
+                .max(line_height.max(*font_size) * 1.5) as f64;
+            let pad = 16.0f64;
+            Some((
+                origin.0 as f64 - pad,
+                origin.1 as f64 - pad,
+                origin.0 as f64 + w + pad,
+                origin.1 as f64 + h + pad,
+            ))
         }
         _ => cmd.bounds().map(|b| {
             let pad = 12.0f64;
@@ -2937,6 +2960,33 @@ mod gtk_gpu_x11 {
                     h_acc.push_u64(f.style.font_style as u64);
                     h_acc.push_u64(f.style.text_decoration as u64);
                 }
+            }
+            DrawCommand::DrawText {
+                origin,
+                bounds_width,
+                bounds_height,
+                text_align,
+                text,
+                font_size,
+                line_height,
+                font_weight,
+                color,
+                is_monospace,
+                font_family,
+            } => {
+                h_acc.push_u64(0x23);
+                let _ = h_acc.write_str(text);
+                h_acc.push_u64(origin.0.to_bits() as u64);
+                h_acc.push_u64(origin.1.to_bits() as u64);
+                h_acc.push_u64(bounds_width.unwrap_or(-1.0).to_bits() as u64);
+                h_acc.push_u64(bounds_height.unwrap_or(-1.0).to_bits() as u64);
+                h_acc.push_u64(*text_align as u64);
+                h_acc.push_u64(font_size.to_bits() as u64);
+                h_acc.push_u64(line_height.to_bits() as u64);
+                h_acc.push_u64(*font_weight as u64);
+                h_acc.push_u64(rgba_to_u64(*color));
+                h_acc.push_u64(*is_monospace as u64);
+                let _ = write!(h_acc, "{:?}", font_family);
             }
             DrawCommand::DrawSvgPath {
                 bounds,

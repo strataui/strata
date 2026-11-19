@@ -303,7 +303,7 @@ impl AppRuntime {
 
     /// Resolves `:root`, `html`, and `body` rules from mounted `<style>` sheets so root custom properties
     /// (`--*`) and document typography/color defaults cascade to the entire RSX tree.
-    fn resolve_document_root_inherited_style(
+    pub(crate) fn resolve_document_root_inherited_style(
         blueprint: &NodeBlueprint,
         stylesheets: &[std::sync::Arc<strata_style::StyleSheet>],
         ctx: &InteractionContext,
@@ -491,7 +491,7 @@ impl AppRuntime {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn build_layout_tree_full(
+    pub(crate) fn build_layout_tree_full(
         blueprint: &NodeBlueprint,
         parent_style: Option<&ComputedStyle>,
         current_path: &mut Vec<usize>,
@@ -651,7 +651,7 @@ impl AppRuntime {
     }
 
     #[inline(never)]
-    fn build_text_leaf_layout_node(
+    pub(crate) fn build_text_leaf_layout_node(
         text: String,
         parent_style: Option<&ComputedStyle>,
     ) -> LayoutNode {
@@ -1791,7 +1791,7 @@ impl AppRuntime {
     }
 
     #[inline(never)]
-    fn apply_single_text_inline_intrinsic_sizing(
+    pub(crate) fn apply_single_text_inline_intrinsic_sizing(
         style: &mut ComputedStyle,
         children: &[NodeBlueprint],
     ) {
