@@ -900,6 +900,43 @@ impl RetainedScene3D {
             .fetch_add(1, std::sync::atomic::Ordering::Release);
     }
 
+    /// Updates camera uniforms and hardware-instanced geodetic objects atomically while preserving
+    /// existing terrain meshes, textures, and dynamic 3D overlays without rebuilding them.
+    pub fn update_camera_and_geo_objects(
+        &self,
+        camera: RetainedCameraUniforms,
+        geo_mesh_assets: std::sync::Arc<Vec<std::sync::Arc<RetainedMeshAsset>>>,
+        geo_instances: std::sync::Arc<Vec<RetainedGeoInstance>>,
+    ) {
+        if let Ok(mut guard) = self.inner.state.write() {
+            guard.camera = camera;
+            if let Some(ref existing) = guard.terrain {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: existing.geometry_revision,
+                    meshes: existing.meshes.clone(),
+                    instances: existing.instances.clone(),
+                    textures: existing.textures.clone(),
+                    dynamic_meshes: existing.dynamic_meshes.clone(),
+                    geo_mesh_assets,
+                    geo_instances,
+                    environment: existing.environment.clone(),
+                }));
+            } else if !geo_instances.is_empty() {
+                guard.terrain = Some(std::sync::Arc::new(RetainedTerrainFrame {
+                    camera,
+                    geometry_revision: 1,
+                    geo_mesh_assets,
+                    geo_instances,
+                    ..Default::default()
+                }));
+            }
+        }
+        self.inner
+            .camera_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
     pub fn set_fallback_scene(&self, scene: std::sync::Arc<Scene3D>) {
         if let Ok(mut guard) = self.inner.state.write() {
             guard.fallback_scene = Some(scene);
