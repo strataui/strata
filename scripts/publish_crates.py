@@ -1091,6 +1091,15 @@ def sleep_with_countdown(seconds: float) -> None:
             print(f"[rate-limit] {mins}m{secs:02d}s remaining before next publish attempt...", flush=True)
 
 
+def find_canonical_name_collisions(crates: list[WorkspaceCrate]) -> dict[str, list[str]]:
+    """Return canonical (`-` vs `_` normalized) crate name collisions among publishable crates."""
+    by_canon: dict[str, list[str]] = {}
+    for crate in crates:
+        canon = crate.name.lower().replace("-", "_")
+        by_canon.setdefault(canon, []).append(crate.name)
+    return {canon: sorted(names) for canon, names in by_canon.items() if len(names) > 1}
+
+
 def publish_workspace(
     label: str,
     repo_root: Path,
@@ -1116,6 +1125,17 @@ def publish_workspace(
     crates = collect_workspace_crates(repo_root)
     if single_package is not None:
         crates = [c for c in crates if c.name == single_package]
+
+    collisions = find_canonical_name_collisions(crates)
+    if collisions:
+        details = "; ".join(f"{canon}: {', '.join(names)}" for canon, names in sorted(collisions.items()))
+        print(
+            f"[error] [{label}] Crates.io canonical `-`/`_` name collision(s) detected: {details}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
+
     considered_names = {c.name for c in crates}
 
     if allow_dirty:

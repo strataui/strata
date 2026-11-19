@@ -1,5 +1,5 @@
 [package]
-name = "strata_sim"
+name = "strata-sim"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -10,18 +10,18 @@ homepage.workspace = true
 documentation.workspace = true
 
 [dependencies]
-strata_primitives = { workspace = true }
-strata_dom = { workspace = true }
-strata_macro = { workspace = true }
-strata_style = { workspace = true }
-strata_layout = { workspace = true }
-strata_render = { workspace = true }
-strata_device = { workspace = true }
-strata_icons = { workspace = true }
-strata_ui = { workspace = true }
-strata_platform = { workspace = true }
-strata_web_api = { workspace = true }
+strata-primitives = { workspace = true }
+strata-dom = { workspace = true }
+strata-macro = { workspace = true }
+strata-style = { workspace = true }
+strata-layout = { workspace = true }
+strata-render = { workspace = true }
+strata-device = { workspace = true }
+strata-icons = { workspace = true }
+strata-components = { workspace = true }
+strata-ui-platform = { workspace = true }
+strata-web-api = { workspace = true }
 
 [dev-dependencies]
-strata = { package = "strata-ui", path = "../../strata" }
+strata-ui = { path = "../../strata" }
 

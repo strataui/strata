@@ -596,9 +596,9 @@ dependencies = [
 name = "creative_studio"
 version = "0.1.0"
 dependencies = [
+ "strata-components",
+ "strata-icons",
  "strata-ui",
- "strata_icons",
- "strata_ui",
 ]
 
 [[package]]
@@ -896,9 +896,9 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 name = "ecommerce_storefront"
 version = "0.1.0"
 dependencies = [
+ "strata-components",
+ "strata-icons",
  "strata-ui",
- "strata_icons",
- "strata_ui",
 ]
 
 [[package]]
@@ -3185,9 +3185,9 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 name = "saas_dashboard"
 version = "0.1.0"
 dependencies = [
+ "strata-components",
+ "strata-icons",
  "strata-ui",
- "strata_icons",
- "strata_ui",
 ]
 
 [[package]]
@@ -3588,54 +3588,442 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff7589a1859b09232522bb9edf076ca7fcf14ded96685d3fa629db73023ffbb7"
 
 [[package]]
+name = "strata-a11y"
+version = "0.1.0"
+dependencies = [
+ "accesskit",
+ "strata-dom",
+ "strata-layout",
+ "strata-primitives",
+ "uuid",
+]
+
+[[package]]
+name = "strata-agent-ui"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-aria"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-audio"
+version = "0.1.0"
+dependencies = [
+ "cpal",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-benchmark"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-layout",
+ "strata-primitives",
+ "strata-render",
+ "strata-style",
+ "strata-ui",
+ "strata-ui-platform",
+ "strata-web-reader",
+]
+
+[[package]]
+name = "strata-build"
+version = "0.1.0"
+
+[[package]]
+name = "strata-charts"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-chromium-surface"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-primitives",
+ "strata-render",
+ "strata-ui-platform",
+]
+
+[[package]]
+name = "strata-codegen-js"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-primitives",
+ "strata-style",
+]
+
+[[package]]
+name = "strata-components"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-icons",
+ "strata-macro",
+ "strata-motion",
+ "strata-primitives",
+ "strata-render",
+ "strata-style",
+]
+
+[[package]]
+name = "strata-crdt"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-device"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-devtools"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-layout",
+ "strata-primitives",
+ "strata-render",
+ "strata-style",
+ "strata-ui-platform",
+]
+
+[[package]]
+name = "strata-dom"
+version = "0.1.0"
+dependencies = [
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-editor"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "strata-dom",
+ "strata-primitives",
+ "strata-style",
+ "strata-web-reader",
+ "tree-sitter",
+ "tree-sitter-javascript",
+ "tree-sitter-rust",
+]
+
+[[package]]
+name = "strata-ffi"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-layout",
+ "strata-render",
+ "strata-style",
+ "strata-ui",
+]
+
+[[package]]
+name = "strata-form"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-gpu-path"
+version = "0.1.0"
+dependencies = [
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-hot-reload"
+version = "0.1.0"
+dependencies = [
+ "libloading 0.8.9",
+ "strata-dom",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-i18n"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-icons"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-macro",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-js"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "strata-web-api",
+]
+
+[[package]]
+name = "strata-layout"
+version = "0.1.0"
+dependencies = [
+ "strata-primitives",
+ "strata-style",
+]
+
+[[package]]
+name = "strata-macro"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-js",
+]
+
+[[package]]
+name = "strata-mcp"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "strata-dom",
+ "strata-primitives",
+ "strata-ui",
+ "strata-ui-platform",
+]
+
+[[package]]
+name = "strata-mobile-test"
+version = "0.1.0"
+dependencies = [
+ "strata-device",
+ "strata-primitives",
+ "strata-ui-platform",
+]
+
+[[package]]
+name = "strata-motion"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-parallel"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "strata-dom",
+ "strata-layout",
+ "strata-primitives",
+ "strata-render",
+ "strata-style",
+]
+
+[[package]]
+name = "strata-parity-tauri"
+version = "0.1.0"
+dependencies = [
+ "cairo-rs",
+ "gtk",
+ "image",
+ "strata-dom",
+ "strata-layout",
+ "strata-mobile-test",
+ "strata-render",
+ "strata-style",
+ "strata-ui",
+ "strata-ui-platform",
+ "strata-web-reader",
+ "tauri",
+ "tauri-build",
+]
+
+[[package]]
+name = "strata-plugin-runtime"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-primitives"
+version = "0.1.0"
+
+[[package]]
+name = "strata-query"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-render"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "miniz_oxide 0.8.9",
+ "pollster",
+ "strata-dom",
+ "strata-gpu-path",
+ "strata-js",
+ "strata-layout",
+ "strata-macro",
+ "strata-primitives",
+ "strata-style",
+ "wgpu",
+]
+
+[[package]]
+name = "strata-router"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-macro",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-sim"
+version = "0.1.0"
+dependencies = [
+ "strata-components",
+ "strata-device",
+ "strata-dom",
+ "strata-icons",
+ "strata-layout",
+ "strata-macro",
+ "strata-primitives",
+ "strata-render",
+ "strata-style",
+ "strata-ui",
+ "strata-ui-platform",
+ "strata-web-api",
+]
+
+[[package]]
+name = "strata-storage"
+version = "0.1.0"
+dependencies = [
+ "ring",
+ "strata-vfs",
+]
+
+[[package]]
+name = "strata-style"
+version = "0.1.0"
+dependencies = [
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-table"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "strata-dom",
+]
+
+[[package]]
+name = "strata-toast"
+version = "0.1.0"
+dependencies = [
+ "strata-dom",
+ "strata-primitives",
+]
+
+[[package]]
+name = "strata-tui"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "strata-dom",
+ "strata-layout",
+ "strata-primitives",
+ "strata-style",
+ "strata-ui-platform",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "strata-ui"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "strata-a11y",
+ "strata-agent-ui",
+ "strata-aria",
+ "strata-audio",
+ "strata-charts",
+ "strata-codegen-js",
+ "strata-components",
+ "strata-crdt",
+ "strata-device",
+ "strata-devtools",
+ "strata-dom",
+ "strata-editor",
+ "strata-form",
+ "strata-gpu-path",
+ "strata-i18n",
+ "strata-icons",
+ "strata-js",
+ "strata-layout",
+ "strata-macro",
+ "strata-mobile-test",
+ "strata-motion",
+ "strata-parallel",
+ "strata-primitives",
+ "strata-query",
+ "strata-render",
+ "strata-router",
+ "strata-sim",
+ "strata-storage",
+ "strata-style",
+ "strata-table",
+ "strata-toast",
+ "strata-tui",
  "strata-ui-platform",
  "strata-ui-store",
- "strata_a11y",
- "strata_agent_ui",
- "strata_aria",
- "strata_audio",
- "strata_charts",
- "strata_codegen_js",
- "strata_crdt",
- "strata_device",
- "strata_devtools",
- "strata_dom",
- "strata_editor",
- "strata_form",
- "strata_gpu_path",
- "strata_i18n",
- "strata_icons",
- "strata_js",
- "strata_layout",
- "strata_macro",
- "strata_mobile_test",
- "strata_motion",
- "strata_parallel",
- "strata_primitives",
- "strata_query",
- "strata_render",
- "strata_router",
- "strata_sim",
- "strata_storage",
- "strata_style",
- "strata_table",
- "strata_toast",
- "strata_tui",
- "strata_ui",
- "strata_vfs",
- "strata_virtual",
- "strata_web_api",
- "strata_web_reader",
+ "strata-vfs",
+ "strata-virtual",
+ "strata-web-api",
+ "strata-web-reader",
 ]
 
 [[package]]
 name = "strata-ui-platform"
-version = "0.1.1"
+version = "0.1.0"
 dependencies = [
  "cairo-rs",
  "gtk",
@@ -3644,11 +4032,11 @@ dependencies = [
  "pangocairo",
  "pollster",
  "raw-window-handle",
+ "strata-layout",
+ "strata-primitives",
+ "strata-render",
+ "strata-style",
  "strata-ui-platform",
- "strata_layout",
- "strata_primitives",
- "strata_render",
- "strata_style",
  "wgpu",
  "windows-sys 0.52.0",
  "x11",
@@ -3660,429 +4048,25 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "strata_dom",
- "strata_macro",
- "strata_storage",
+ "strata-dom",
+ "strata-macro",
+ "strata-storage",
 ]
 
 [[package]]
-name = "strata_a11y"
-version = "0.1.0"
-dependencies = [
- "accesskit",
- "strata_dom",
- "strata_layout",
- "strata_primitives",
- "uuid",
-]
-
-[[package]]
-name = "strata_agent_ui"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_aria"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_audio"
-version = "0.1.0"
-dependencies = [
- "cpal",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_benchmark"
-version = "0.1.0"
-dependencies = [
- "strata-ui",
- "strata-ui-platform",
- "strata_dom",
- "strata_layout",
- "strata_primitives",
- "strata_render",
- "strata_style",
- "strata_web_reader",
-]
-
-[[package]]
-name = "strata_browser"
-version = "0.1.0"
-dependencies = [
- "strata-ui",
- "strata-ui-platform",
- "strata_dom",
- "strata_icons",
- "strata_layout",
- "strata_macro",
- "strata_render",
- "strata_style",
- "strata_ui",
- "strata_web_reader",
-]
-
-[[package]]
-name = "strata_build"
+name = "strata-vfs"
 version = "0.1.0"
 
 [[package]]
-name = "strata_charts"
+name = "strata-virtual"
 version = "0.1.0"
 dependencies = [
- "strata_dom",
- "strata_primitives",
+ "strata-dom",
+ "strata-primitives",
 ]
 
 [[package]]
-name = "strata_chromium_surface"
-version = "0.1.0"
-dependencies = [
- "strata-ui-platform",
- "strata_dom",
- "strata_primitives",
- "strata_render",
-]
-
-[[package]]
-name = "strata_codegen_js"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_primitives",
- "strata_style",
-]
-
-[[package]]
-name = "strata_crdt"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_device"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_devtools"
-version = "0.1.0"
-dependencies = [
- "strata-ui-platform",
- "strata_dom",
- "strata_layout",
- "strata_primitives",
- "strata_render",
- "strata_style",
-]
-
-[[package]]
-name = "strata_dom"
-version = "0.1.1"
-dependencies = [
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_editor"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "strata_dom",
- "strata_primitives",
- "strata_style",
- "strata_web_reader",
- "tree-sitter",
- "tree-sitter-javascript",
- "tree-sitter-rust",
-]
-
-[[package]]
-name = "strata_ffi"
-version = "0.1.0"
-dependencies = [
- "strata-ui",
- "strata_dom",
- "strata_layout",
- "strata_render",
- "strata_style",
-]
-
-[[package]]
-name = "strata_form"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_gpu_path"
-version = "0.1.0"
-dependencies = [
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_hot_reload"
-version = "0.1.0"
-dependencies = [
- "libloading 0.8.9",
- "strata_dom",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_i18n"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_icons"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_macro",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_js"
-version = "0.1.0"
-dependencies = [
- "regex",
- "strata_web_api",
-]
-
-[[package]]
-name = "strata_layout"
-version = "0.1.0"
-dependencies = [
- "strata_primitives",
- "strata_style",
-]
-
-[[package]]
-name = "strata_macro"
-version = "0.1.1"
-dependencies = [
- "strata_dom",
- "strata_js",
-]
-
-[[package]]
-name = "strata_mcp"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "strata-ui",
- "strata-ui-platform",
- "strata_dom",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_mobile_test"
-version = "0.1.0"
-dependencies = [
- "strata-ui-platform",
- "strata_device",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_motion"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_parallel"
-version = "0.1.0"
-dependencies = [
- "rayon",
- "strata_dom",
- "strata_layout",
- "strata_primitives",
- "strata_render",
- "strata_style",
-]
-
-[[package]]
-name = "strata_parity_tauri"
-version = "0.1.0"
-dependencies = [
- "cairo-rs",
- "gtk",
- "image",
- "strata-ui",
- "strata-ui-platform",
- "strata_dom",
- "strata_layout",
- "strata_mobile_test",
- "strata_render",
- "strata_style",
- "strata_web_reader",
- "tauri",
- "tauri-build",
-]
-
-[[package]]
-name = "strata_plugin_runtime"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_primitives"
-version = "0.1.0"
-
-[[package]]
-name = "strata_query"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_render"
-version = "0.1.1"
-dependencies = [
- "bytemuck",
- "miniz_oxide 0.8.9",
- "pollster",
- "strata_dom",
- "strata_gpu_path",
- "strata_js",
- "strata_layout",
- "strata_macro",
- "strata_primitives",
- "strata_style",
- "wgpu",
-]
-
-[[package]]
-name = "strata_router"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_macro",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_sim"
-version = "0.1.0"
-dependencies = [
- "strata-ui",
- "strata-ui-platform",
- "strata_device",
- "strata_dom",
- "strata_icons",
- "strata_layout",
- "strata_macro",
- "strata_primitives",
- "strata_render",
- "strata_style",
- "strata_ui",
- "strata_web_api",
-]
-
-[[package]]
-name = "strata_storage"
-version = "0.1.0"
-dependencies = [
- "ring",
- "strata_vfs",
-]
-
-[[package]]
-name = "strata_style"
-version = "0.1.1"
-dependencies = [
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_table"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "strata_dom",
-]
-
-[[package]]
-name = "strata_toast"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_tui"
-version = "0.1.0"
-dependencies = [
- "libc",
- "strata-ui-platform",
- "strata_dom",
- "strata_layout",
- "strata_primitives",
- "strata_style",
- "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "strata_ui"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_icons",
- "strata_macro",
- "strata_motion",
- "strata_primitives",
- "strata_render",
- "strata_style",
-]
-
-[[package]]
-name = "strata_vfs"
-version = "0.1.0"
-
-[[package]]
-name = "strata_virtual"
-version = "0.1.0"
-dependencies = [
- "strata_dom",
- "strata_primitives",
-]
-
-[[package]]
-name = "strata_web_api"
+name = "strata-web-api"
 version = "0.1.0"
 dependencies = [
  "brotli",
@@ -4097,17 +4081,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "strata_web_reader"
+name = "strata-web-reader"
 version = "0.1.0"
 dependencies = [
  "serde",
- "strata_dom",
- "strata_js",
- "strata_layout",
- "strata_primitives",
- "strata_storage",
- "strata_style",
- "strata_web_api",
+ "strata-dom",
+ "strata-js",
+ "strata-layout",
+ "strata-primitives",
+ "strata-storage",
+ "strata-style",
+ "strata-web-api",
+]
+
+[[package]]
+name = "strata_browser"
+version = "0.1.0"
+dependencies = [
+ "strata-components",
+ "strata-dom",
+ "strata-icons",
+ "strata-layout",
+ "strata-macro",
+ "strata-render",
+ "strata-style",
+ "strata-ui",
+ "strata-ui-platform",
+ "strata-web-reader",
 ]
 
 [[package]]

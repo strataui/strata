@@ -1,5 +1,5 @@
 [package]
-name = "strata_vfs"
+name = "strata-vfs"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

@@ -80,7 +80,7 @@ jobs:
           targets: aarch64-linux-android
 
       - name: Check platform and core crates
-        run: cargo check -p strata_platform -p strata_dom -p strata_layout -p strata_primitives --target aarch64-linux-android
+        run: cargo check -p strata-ui-platform -p strata-dom -p strata-layout -p strata-primitives --target aarch64-linux-android
 
   check-wasm:
     name: Check (WebAssembly wasm32)
@@ -95,4 +95,4 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Check core layout and DOM crates
-        run: cargo check -p strata_dom -p strata_layout -p strata_style -p strata_primitives --target wasm32-unknown-unknown
+        run: cargo check -p strata-dom -p strata-layout -p strata-style -p strata-primitives --target wasm32-unknown-unknown
