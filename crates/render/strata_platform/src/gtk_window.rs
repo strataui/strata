@@ -4763,6 +4763,7 @@ where
                 x: x as f32,
                 y: y as f32,
             },
+            gtk::gdk::EventType::TripleButtonPress => return gtk::glib::Propagation::Proceed,
             _ => crate::events::PlatformEvent::MouseDown {
                 button: btn,
                 x: x as f32,
