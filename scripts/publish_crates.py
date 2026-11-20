@@ -1206,8 +1206,76 @@ def find_canonical_name_collisions(crates: list[WorkspaceCrate]) -> dict[str, li
     return {canon: sorted(names) for canon, names in by_canon.items() if len(names) > 1}
 
 
-def purge_stale_package_verify_cache(repo_root: Path, cargo_home: Path | None = None) -> None:
+_REGISTRY_CRATE_FILE_RE = re.compile(r"^(?P<name>.+?)-(?P<ver>\d+\.\d+\.\d+[^/]*)\.crate$")
+
+
+def purge_stale_registry_crates(
+    crate_names: set[str],
+    cargo_home: Path | None = None,
+    name_prefixes: tuple[str, ...] = (),
+) -> list[str]:
+    """Drop locally cached crates.io copies of `crate_names` so cargo re-downloads them.
+
+    If one of our crates was ever published, deleted and re-published under the same
+    `name-version`, `~/.cargo/registry/cache/*/<name>-<ver>.crate` (and its extracted
+    `registry/src/*/<name>-<ver>/` tree plus the sparse-index cache entry) can hold the old
+    tarball. `cargo publish` verification of a dependent crate then compiles against that stale
+    source and fails with errors like `cannot find function ... in crate ...` even though the
+    published version is fine. Any crate whose name starts with one of `name_prefixes` is also
+    purged, covering sibling-repo dependencies that are not members of this workspace.
+    Returns the removed `name-version` identifiers.
+    """
+
+    def ours(name: str) -> bool:
+        return name in crate_names or name.startswith(name_prefixes)
+
+    resolved_cargo_home = cargo_home or Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
+    registry = resolved_cargo_home / "registry"
+    removed: list[str] = []
+
+    cache_root = registry / "cache"
+    if cache_root.is_dir():
+        for reg_dir in cache_root.iterdir():
+            if not reg_dir.is_dir():
+                continue
+            for crate_file in reg_dir.glob("*.crate"):
+                m = _REGISTRY_CRATE_FILE_RE.match(crate_file.name)
+                if m and ours(m.group("name")):
+                    crate_file.unlink(missing_ok=True)
+                    removed.append(f"{m.group('name')}-{m.group('ver')}")
+
+    src_root = registry / "src"
+    if src_root.is_dir():
+        for reg_dir in src_root.iterdir():
+            if not reg_dir.is_dir():
+                continue
+            for entry in reg_dir.iterdir():
+                m = re.match(r"^(?P<name>.+?)-\d+\.\d+\.\d+", entry.name)
+                if entry.is_dir() and m and ours(m.group("name")):
+                    shutil.rmtree(entry, ignore_errors=True)
+
+    index_root = registry / "index"
+    if index_root.is_dir():
+        for idx_dir in index_root.iterdir():
+            cache_dir = idx_dir / ".cache"
+            if not cache_dir.is_dir():
+                continue
+            for entry in cache_dir.rglob("*"):
+                if entry.is_file() and ours(entry.name):
+                    entry.unlink(missing_ok=True)
+    return removed
+
+
+def purge_stale_package_verify_cache(
+    repo_root: Path,
+    cargo_home: Path | None = None,
+    crate_names: set[str] | None = None,
+    name_prefixes: tuple[str, ...] = (),
+) -> None:
     """Purge stale `target/package`, `~/.cargo/registry/src/-*`, and `tmp-registry` build artifacts.
+
+    When `crate_names` is given, locally cached crates.io copies of those crates are also
+    dropped (see `purge_stale_registry_crates`) together with any compiled artifacts built from them.
 
     Cargo sets a constant epoch mtime (`2006-07-24`) on files inside packaged `.crate` tarballs.
     When an unpublished crate is modified without changing its version, Cargo's mtime-based
@@ -1225,6 +1293,14 @@ def purge_stale_package_verify_cache(repo_root: Path, cargo_home: Path | None = 
             if entry.is_dir() and entry.name.startswith("-"):
                 shutil.rmtree(entry, ignore_errors=True)
 
+    stale_name_re = None
+    if crate_names or name_prefixes:
+        names = crate_names or set()
+        purge_stale_registry_crates(names, cargo_home=resolved_cargo_home, name_prefixes=name_prefixes)
+        alternatives = [re.escape(n) + r"-\d" for n in sorted(names)]
+        alternatives += [re.escape(pfx) for pfx in name_prefixes]
+        stale_name_re = re.compile(r"/registry/src/[^/]+/(?:" + "|".join(alternatives) + ")")
+
     deps_dir = repo_root / "target" / "debug" / "deps"
     fp_dir = repo_root / "target" / "debug" / ".fingerprint"
     if deps_dir.is_dir():
@@ -1234,7 +1310,7 @@ def purge_stale_package_verify_cache(repo_root: Path, cargo_home: Path | None = 
                 text = d_file.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 continue
-            if "/registry/src/-" in text:
+            if "/registry/src/-" in text or (stale_name_re and stale_name_re.search(text)):
                 stem = d_file.stem
                 if "-" in stem:
                     stale_hashes.add(stem.rsplit("-", 1)[1])
@@ -1472,7 +1548,11 @@ def publish_workspace(
             pkg_flags.extend(["-p", target.name])
         cmd = ["cargo", "publish", *pkg_flags, *run_args]
 
-        purge_stale_package_verify_cache(repo_root)
+        purge_stale_package_verify_cache(
+            repo_root,
+            crate_names={c.name for c in crates},
+            name_prefixes=("strata-",),
+        )
         rc, output = stream_command(cmd, repo_root)
         made_upload_progress = ("Uploaded " in output) or ("Published " in output)
         if rc == 0:
