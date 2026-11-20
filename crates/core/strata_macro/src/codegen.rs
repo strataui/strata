@@ -339,47 +339,151 @@ fn is_top_level_closure_literal(expr: &str) -> bool {
     false
 }
 
-/// If `expr` is an inline closure (`|...| ...` or `move |...| ...`) or an `Rc::new(|...| ...)`
-/// wrapper around an inline closure, returns the inner closure expression so `rsx!` can dispatch
-/// to `.{prop}_fn(closure)` and preserve expected-type inference on closure parameters.
-fn extract_inline_closure_expr(expr: &str) -> Option<&str> {
+/// If `expr` is enclosed by a single matching pair of `( ... )` or `{ ... }` spanning the entire
+/// trimmed string (ignoring delimiters inside string/char literals), returns the inner slice.
+fn strip_outer_delim(expr: &str, open: char, close: char) -> Option<&str> {
     let t = expr.trim();
-    if is_top_level_closure_literal(t) {
-        return Some(t);
+    if !t.starts_with(open) || !t.ends_with(close) || t.len() < 2 {
+        return None;
     }
-    if t.ends_with(')') {
-        for prefix in [
-            "Rc::new",
-            "Rc :: new",
-            "std::rc::Rc::new",
-            "std :: rc :: Rc :: new",
-            "alloc::rc::Rc::new",
-            "alloc :: rc :: Rc :: new",
-        ] {
-            if let Some(rest) = t.strip_prefix(prefix) {
-                let rest = rest.trim_start();
-                if let Some(inner) = rest.strip_prefix('(') {
-                    let body = inner[..inner.len() - 1].trim();
-                    let mut depth = 0i32;
-                    let mut balanced = true;
-                    for ch in body.chars() {
-                        if ch == '(' {
-                            depth += 1;
-                        } else if ch == ')' {
-                            depth -= 1;
-                            if depth < 0 {
-                                balanced = false;
-                                break;
-                            }
-                        }
-                    }
-                    if balanced && depth == 0 && is_top_level_closure_literal(body) {
-                        return Some(body);
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut escape = false;
+    for (byte_idx, ch) in t.char_indices() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if in_str {
+            if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        if in_char {
+            if ch == '\\' {
+                escape = true;
+            } else if ch == '\'' {
+                in_char = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_str = true,
+            ch if ch == open => depth += 1,
+            ch if ch == close => {
+                depth -= 1;
+                if depth == 0 && byte_idx + ch.len_utf8() < t.len() {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth == 0 {
+        Some(t[open.len_utf8()..t.len() - close.len_utf8()].trim())
+    } else {
+        None
+    }
+}
+
+/// Finds the byte index of the last top-level `;` inside a block body (at delimiter depth 0).
+fn rfind_top_level_semicolon(body: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut escape = false;
+    let mut last_semi = None;
+    for (byte_idx, ch) in body.char_indices() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if in_str {
+            if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_str = true,
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ';' if depth == 0 => last_semi = Some(byte_idx),
+            _ => {}
+        }
+    }
+    last_semi
+}
+
+/// If `expr` is an inline closure (`|...| ...` or `move |...| ...`), or a closure wrapped in any
+/// combination of `Rc::new(...)`, `Some(...)`, parentheses `(...)`, or a setup block
+/// `{ let ...; move |...| ... }`, returns a normalized closure/block expression suitable for
+/// `.{prop}_fn(...)` so `rustc` preserves expected-type inference on unannotated closure arguments.
+fn extract_inline_closure_expr(expr: &str) -> Option<String> {
+    let t = expr.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if is_top_level_closure_literal(t) {
+        return Some(t.to_string());
+    }
+
+    // 1. Unwrap `Some(...)` and `Rc::new(...)` wrappers
+    for prefix in [
+        "Some",
+        "Option::Some",
+        "Option :: Some",
+        "std::option::Option::Some",
+        "std :: option :: Option :: Some",
+        "core::option::Option::Some",
+        "core :: option :: Option :: Some",
+        "Rc::new",
+        "Rc :: new",
+        "std::rc::Rc::new",
+        "std :: rc :: Rc :: new",
+        "alloc::rc::Rc::new",
+        "alloc :: rc :: Rc :: new",
+    ] {
+        if let Some(rest) = t.strip_prefix(prefix) {
+            let rest = rest.trim_start();
+            if rest.starts_with('(') {
+                if let Some(inner) = strip_outer_delim(rest, '(', ')') {
+                    return extract_inline_closure_expr(inner);
+                }
+            }
+        }
+    }
+
+    // 2. Unwrap outer parentheses `(move |x| ...)`
+    if t.starts_with('(') {
+        if let Some(inner) = strip_outer_delim(t, '(', ')') {
+            return extract_inline_closure_expr(inner);
+        }
+    }
+
+    // 3. Handle block expressions `{ move |x| ... }` or `{ let a = ...; move |x| ... }`
+    if t.starts_with('{') {
+        if let Some(body) = strip_outer_delim(t, '{', '}') {
+            if let Some(norm) = extract_inline_closure_expr(body) {
+                return Some(format!("{{ {} }}", norm));
+            }
+            if let Some(semi_idx) = rfind_top_level_semicolon(body) {
+                let stmts = body[..=semi_idx].trim();
+                let tail = body[semi_idx + 1..].trim();
+                if !tail.is_empty() {
+                    if let Some(norm_tail) = extract_inline_closure_expr(tail) {
+                        return Some(format!("{{ {} {} }}", stmts, norm_tail));
                     }
                 }
             }
         }
     }
+
     None
 }
 
