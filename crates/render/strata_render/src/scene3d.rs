@@ -2107,6 +2107,14 @@ impl Canvas3DBuilder {
         self
     }
 
+    pub fn on_camera_change_fn(
+        mut self,
+        cb: impl Fn(&crate::orbit_controls::OrbitControls) + 'static,
+    ) -> Self {
+        self.on_camera_change = Some(std::rc::Rc::new(cb));
+        self
+    }
+
     fn push_event(
         mut self,
         ty: strata_dom::EventType,
@@ -2120,36 +2128,72 @@ impl Canvas3DBuilder {
         self.push_event(strata_dom::EventType::MouseDown, handler)
     }
 
+    pub fn onmousedown_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.onmousedown(handler)
+    }
+
     pub fn onmousemove(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
         self.push_event(strata_dom::EventType::MouseMove, handler)
+    }
+
+    pub fn onmousemove_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.onmousemove(handler)
     }
 
     pub fn onmouseup(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
         self.push_event(strata_dom::EventType::MouseUp, handler)
     }
 
+    pub fn onmouseup_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.onmouseup(handler)
+    }
+
     pub fn onwheel(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
         self.push_event(strata_dom::EventType::Wheel, handler)
+    }
+
+    pub fn onwheel_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.onwheel(handler)
     }
 
     pub fn onpointerdown(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
         self.push_event(strata_dom::EventType::PointerDown, handler)
     }
 
+    pub fn onpointerdown_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.onpointerdown(handler)
+    }
+
     pub fn onpointermove(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
         self.push_event(strata_dom::EventType::PointerMove, handler)
+    }
+
+    pub fn onpointermove_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.onpointermove(handler)
     }
 
     pub fn onpointerup(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
         self.push_event(strata_dom::EventType::PointerUp, handler)
     }
 
+    pub fn onpointerup_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.onpointerup(handler)
+    }
+
     pub fn onclick(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
         self.push_event(strata_dom::EventType::Click, handler)
     }
 
+    pub fn onclick_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.onclick(handler)
+    }
+
     pub fn onresize(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
         self.push_event(strata_dom::EventType::Resize, handler)
+    }
+
+    pub fn onresize_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.onresize(handler)
     }
 
     /// Binds a persistent [`RetainedScene3D`] handle for out-of-band zero-rebuild GPU updates.

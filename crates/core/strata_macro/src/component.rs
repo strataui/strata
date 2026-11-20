@@ -92,8 +92,8 @@ pub fn expand_component(_attr: TokenStream, item: TokenStream) -> TokenStream {
         if param.name == "onclick" {
             builder_fields.push("pub onclick: Option<std::rc::Rc<dyn Fn()>>,".to_string());
             builder_setters.push(format!(
-                "#[allow(dead_code)]\n{} fn onclick<Args>(mut self, handler: impl strata_dom::EventHandlerMarker<Args> + 'static) -> Self {{\n    self.onclick = Some(std::rc::Rc::new(move || handler.call_handler(strata_dom::Event::default())));\n    self\n}}",
-                vis
+                "#[allow(dead_code)]\n{} fn onclick<Args>(mut self, handler: impl strata_dom::EventHandlerMarker<Args> + 'static) -> Self {{\n    self.onclick = Some(std::rc::Rc::new(move || handler.call_handler(strata_dom::Event::default())));\n    self\n}}\n\n    #[allow(dead_code)]\n    {} fn onclick_fn(mut self, handler: impl Fn() + 'static) -> Self {{\n        self.onclick = Some(std::rc::Rc::new(handler));\n        self\n    }}",
+                vis, vis
             ));
             build_args.push("self.onclick".to_string());
         } else if let Some(fn_bound) = extract_rc_dyn_fn_bound(&param.ty, param.is_option) {
@@ -143,8 +143,8 @@ impl<__F: {fn_bound} + 'static> {trait_name}<(((),),)> for std::rc::Rc<__F> {{
                 param.name, fn_bound
             ));
             builder_setters.push(format!(
-                "#[allow(dead_code)]\n{} fn {}<__Marker>(mut self, val: impl {}<__Marker>) -> Self {{\n    self.{} = val.into_callback();\n    self\n}}",
-                vis, param.name, trait_name, param.name
+                "#[allow(dead_code)]\n{} fn {}<__Marker>(mut self, val: impl {}<__Marker>) -> Self {{\n    self.{} = val.into_callback();\n    self\n}}\n\n    #[allow(dead_code)]\n    {} fn {}_fn(mut self, val: impl {} + 'static) -> Self {{\n        self.{} = Some(std::rc::Rc::new(val));\n        self\n    }}",
+                vis, param.name, trait_name, param.name, vis, param.name, fn_bound, param.name
             ));
             if param.is_option {
                 build_args.push(format!("self.{}", param.name));

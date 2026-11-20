@@ -91,6 +91,11 @@ impl SceneViewportBuilder {
         self
     }
 
+    pub fn on_camera_change_fn(mut self, cb: impl Fn(&OrbitControls) + 'static) -> Self {
+        self.on_camera_change = Some(Rc::new(cb));
+        self
+    }
+
     pub fn children(mut self, children: Vec<NodeBlueprint>) -> Self {
         self.children = Some(children);
         self
