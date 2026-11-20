@@ -117,6 +117,9 @@ where
                     &mut needs_redraw,
                 );
             }
+            if runtime.dismiss_hover_tooltip_and_repaint() {
+                needs_redraw = true;
+            }
             if scroll_changed {
                 needs_redraw = true;
             }
@@ -125,12 +128,13 @@ where
             let scroll_changed = runtime.poll_smooth_scroll();
             let anim_changed = runtime.poll_animations();
             let caret_changed = runtime.poll_caret_blink();
+            let tooltip_changed = runtime.poll_hover_tooltip();
             let mcp_changed = if let Some(ref mut c) = runtime.mcp_cursor {
                 c.poll_tick()
             } else {
                 false
             };
-            if scroll_changed || anim_changed || caret_changed || mcp_changed {
+            if scroll_changed || anim_changed || caret_changed || tooltip_changed || mcp_changed {
                 needs_redraw = true;
             }
         }
@@ -154,6 +158,9 @@ where
         }
         strata_platform::PlatformEvent::MouseDown { button, x, y } => {
             runtime.last_mouse_pos = (*x, *y);
+            if runtime.dismiss_hover_tooltip_and_repaint() {
+                needs_redraw = true;
+            }
             let btn_idx = button.to_button_index();
             if *button == strata_platform::MouseButton::Left {
                 runtime.is_mouse_down = true;
@@ -289,6 +296,11 @@ where
         | strata_platform::PlatformEvent::ReceivedCharacter(_)
         | strata_platform::PlatformEvent::ImePreedit { .. }
         | strata_platform::PlatformEvent::ImeCommit(_) => {
+            if matches!(event, strata_platform::PlatformEvent::KeyDown { .. })
+                && runtime.dismiss_hover_tooltip_and_repaint()
+            {
+                needs_redraw = true;
+            }
             let res = runtime.dispatch_key_event(event);
             if res.needs_rebuild() {
                 needs_rebuild = true;
@@ -299,6 +311,15 @@ where
         strata_platform::PlatformEvent::WindowMaximized(_) => {
             needs_rebuild = true;
             needs_redraw = true;
+        }
+        strata_platform::PlatformEvent::FileDrop(paths) => {
+            if runtime.dismiss_hover_tooltip_and_repaint() {
+                needs_redraw = true;
+            }
+            if runtime.dispatch_file_drop(paths.clone()) {
+                needs_rebuild = true;
+                needs_redraw = true;
+            }
         }
         _ => {}
     }
@@ -313,7 +334,7 @@ impl AppRuntime {
     /// - 50ms if a text input currently has active focus (to service responsive caret blinking).
     /// - 200ms if the runtime is completely idle (dropping CPU consumption to ~0%).
     pub fn compute_idle_sleep(&self, was_active: bool) -> std::time::Duration {
-        let base = if was_active
+        let mut base = if was_active
             || self.has_active_animations()
             || self.active_smooth_scroll.is_some()
             || self.scrollbar_drag.is_some()
@@ -327,6 +348,9 @@ impl AppRuntime {
         } else {
             std::time::Duration::from_millis(200)
         };
+        if let Some(due) = self.next_hover_tooltip_due_in() {
+            base = base.min(due.max(std::time::Duration::from_millis(1)));
+        }
         if let Some(next_timer) = strata_js::web::time_until_next_timer() {
             base.min(next_timer.max(std::time::Duration::from_millis(1)))
         } else {

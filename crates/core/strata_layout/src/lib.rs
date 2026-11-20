@@ -49,8 +49,8 @@ pub use text::{
 pub use tree::{
     clear_layout_overflow, last_layout_overflow, record_layout_overflow, set_on_layout_overflow,
     solve_anchored_position, AnchorPlacement, FillRule, ImageResource, LayoutDepthGuard,
-    LayoutNode, PortalAnchorSpec, StrokeLineCap, StrokeLineJoin, SvgItem, ViewportSceneHandle,
-    MAX_LAYOUT_DEPTH,
+    LayoutNode, PortalAnchorSpec, StrokeLineCap, StrokeLineJoin, SvgItem, SvgTextData,
+    ViewportSceneHandle, MAX_LAYOUT_DEPTH,
 };
 pub use typography::{
     apply_small_caps, bidi_mirror, can_break_between_chars, classify_line_break, is_prohibited_end,

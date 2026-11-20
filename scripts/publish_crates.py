@@ -59,6 +59,16 @@ RETRY_AFTER_SECS_RE = re.compile(
     r"(?:retry-after\s*[:=]\s*|try again in\s+)(\d+)\s*(?:s|sec|secs|seconds?)?\b",
     re.IGNORECASE,
 )
+DELETED_CRATE_REUSE_RE = re.compile(
+    r"A crate with the name\s+[`'\"]?([A-Za-z0-9_-]+)[`'\"]?\s+was recently deleted\.\s*"
+    r"Reuse of this name will be available after\s+"
+    r"(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)",
+    re.IGNORECASE,
+)
+FAILED_PUBLISH_CRATE_RE = re.compile(
+    r"failed to publish\s+([A-Za-z0-9_-]+)\s+v",
+    re.IGNORECASE,
+)
 CLOCK_SKEW_BUFFER_SECS = 3.0
 FALLBACK_RATE_LIMIT_SECS = 600.0
 CARGO_GENERATED_FILES = frozenset(
@@ -1056,6 +1066,93 @@ def parse_rate_limit(output: str, now: float | None = None) -> tuple[bool, float
     return True, FALLBACK_RATE_LIMIT_SECS, f"no reset timestamp in response; using fallback {FALLBACK_RATE_LIMIT_SECS:.0f}s"
 
 
+def _format_duration(seconds: float) -> str:
+    """Format a non-negative duration cleanly as `XhYYmZZs` or `MmSSs`."""
+    total_secs = max(0, int(round(seconds)))
+    hours, rem = divmod(total_secs, 3600)
+    mins, secs = divmod(rem, 60)
+    if hours > 0:
+        return f"{hours}h{mins:02d}m{secs:02d}s"
+    return f"{mins}m{secs:02d}s"
+
+
+def parse_deleted_name_cooldown(
+    output: str,
+    now: float | None = None,
+) -> tuple[bool, str | None, float | None, str | None]:
+    """Detect crates.io 24h post-deletion name reuse cooldown in `cargo publish` output.
+
+    Returns `(is_cooldown, crate_name, available_epoch_ts, human_summary)`.
+    `available_epoch_ts` includes `CLOCK_SKEW_BUFFER_SECS`.
+    """
+    matches = DELETED_CRATE_REUSE_RE.findall(output)
+    if not matches:
+        return False, None, None, None
+
+    deleted_name, raw_iso = matches[-1]
+    failed_matches = FAILED_PUBLISH_CRATE_RE.findall(output)
+    reported_name = failed_matches[-1] if failed_matches else deleted_name
+
+    current_ts = time.time() if now is None else now
+    try:
+        avail_dt = dt.datetime.fromisoformat(raw_iso.replace("Z", "+00:00"))
+        if avail_dt.tzinfo is None:
+            avail_dt = avail_dt.replace(tzinfo=dt.timezone.utc)
+        delta = max(0.0, avail_dt.timestamp() - current_ts)
+        available_ts = max(avail_dt.timestamp(), current_ts) + CLOCK_SKEW_BUFFER_SECS
+        local_str = avail_dt.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+        utc_str = avail_dt.astimezone(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        summary = (
+            f"available at {utc_str} ({local_str}); in {_format_duration(delta)} "
+            f"(+{CLOCK_SKEW_BUFFER_SECS:.0f}s buffer)"
+        )
+        return True, reported_name or deleted_name, available_ts, summary
+    except Exception:
+        fallback_ts = current_ts + FALLBACK_RATE_LIMIT_SECS
+        return (
+            True,
+            reported_name or deleted_name,
+            fallback_ts,
+            f"unparseable reuse timestamp {raw_iso!r}; using fallback {_format_duration(FALLBACK_RATE_LIMIT_SECS)}",
+        )
+
+
+def _match_crate_by_canonical_name(crates: list[WorkspaceCrate], raw_name: str | None) -> str | None:
+    """Resolve a crates.io crate name (matching `-` and `_` equivalently) to a workspace crate name."""
+    if not raw_name:
+        return None
+    target_canon = raw_name.lower().replace("-", "_")
+    for crate in crates:
+        if crate.name.lower().replace("-", "_") == target_canon:
+            return crate.name
+    return None
+
+
+def collect_cooldown_blocked(
+    unpublished: list[WorkspaceCrate],
+    active_cooldowns: dict[str, float],
+) -> set[str]:
+    """Return unpublished crate names currently in deletion cooldown or transitively depending on one."""
+    if not active_cooldowns:
+        return set()
+    unpub_by_name = {c.name: c for c in unpublished}
+    rev_deps: dict[str, set[str]] = {}
+    for crate in unpublished:
+        for dep in crate.workspace_deps:
+            if dep in unpub_by_name:
+                rev_deps.setdefault(dep, set()).add(crate.name)
+
+    blocked: set[str] = {name for name in active_cooldowns if name in unpub_by_name}
+    queue = list(blocked)
+    while queue:
+        cur = queue.pop()
+        for dependent in rev_deps.get(cur, ()):
+            if dependent not in blocked:
+                blocked.add(dependent)
+                queue.append(dependent)
+    return blocked
+
+
 def stream_command(cmd: list[str], cwd: Path) -> tuple[int, str]:
     """Run `cmd` in `cwd`, streaming combined stdout/stderr live while capturing full output."""
     proc = subprocess.Popen(
@@ -1076,19 +1173,27 @@ def stream_command(cmd: list[str], cwd: Path) -> tuple[int, str]:
     return rc, "".join(chunks)
 
 
-def sleep_with_countdown(seconds: float) -> None:
-    """Sleep for `seconds` while printing periodic status updates every 60 seconds."""
+def sleep_with_countdown(seconds: float, reason: str = "rate-limit") -> None:
+    """Sleep for `seconds` while printing periodic status updates."""
     end = time.time() + max(0.0, seconds)
     while True:
         remaining = end - time.time()
         if remaining <= 0:
             break
-        step = min(remaining, 60.0)
+        if remaining > 3600.0:
+            interval = 900.0
+        elif remaining > 600.0:
+            interval = 300.0
+        else:
+            interval = 60.0
+        step = min(remaining, interval)
         time.sleep(step)
         remaining_after = end - time.time()
         if remaining_after > 1.0:
-            mins, secs = divmod(int(round(remaining_after)), 60)
-            print(f"[rate-limit] {mins}m{secs:02d}s remaining before next publish attempt...", flush=True)
+            print(
+                f"[{reason}] {_format_duration(remaining_after)} remaining before next publish attempt...",
+                flush=True,
+            )
 
 
 def find_canonical_name_collisions(crates: list[WorkspaceCrate]) -> dict[str, list[str]]:
@@ -1116,7 +1221,9 @@ def publish_workspace(
 
     Skips any crate that has uncommitted or untracked files in git, as well as every crate that
     transitively depends on a dirty crate (including external path dependencies in sibling repos),
-    unless `--allow-dirty` is explicitly passed in `extra_args`.
+    unless `--allow-dirty` is explicitly passed in `extra_args`. Crates blocked by crates.io's
+    24-hour post-deletion name cooldown are skipped while other ready crates publish, then retried
+    automatically once their cooldown expires.
     """
     dry_run = "--dry-run" in extra_args
     allow_dirty = "--allow-dirty" in extra_args
@@ -1189,6 +1296,10 @@ def publish_workspace(
         return 0
 
     attempt = 0
+    propagation_retries = 0
+    needs_info_refresh = False
+    cooldown_until: dict[str, float] = {}
+
     while True:
         attempt += 1
         if allow_dirty:
@@ -1215,8 +1326,9 @@ def publish_workspace(
             )
             return 0
 
-        if attempt > 1:
+        if needs_info_refresh:
             info_map = {c.name: fetch_crates_io_info(c.name, cache_dir=resolved_cache) for c in clean_crates}
+            needs_info_refresh = False
         else:
             for crate in clean_crates:
                 if crate.name not in info_map:
@@ -1250,19 +1362,51 @@ def publish_workspace(
             return 0
 
         unpub_names = {c.name for c in unpublished}
-        targets = partition_publish_targets(unpublished, info_map, unpub_names, updated_only)
-        if updated_only and not targets:
-            print(
-                f"[{label}] No updated existing crates to publish (--updated-only skipped {len(unpublished)} brand-new crate(s)).",
-                flush=True,
-            )
+        now_ts = time.time()
+        for name in list(cooldown_until):
+            if name not in unpub_names or cooldown_until[name] <= now_ts:
+                del cooldown_until[name]
+
+        cooldown_blocked = collect_cooldown_blocked(unpublished, cooldown_until)
+        ready_unpublished = [c for c in unpublished if c.name not in cooldown_blocked]
+        targets = partition_publish_targets(ready_unpublished, info_map, unpub_names, updated_only)
+
+        if not targets:
+            if updated_only and not any(
+                info_map[c.name].is_strataui_repo for c in unpublished if c.name in cooldown_blocked
+            ):
+                print(
+                    f"[{label}] No updated existing crates to publish (--updated-only skipped {len(unpublished)} brand-new crate(s)).",
+                    flush=True,
+                )
+                return 0
+            if cooldown_blocked and cooldown_until:
+                earliest_name, earliest_ts = min(cooldown_until.items(), key=lambda item: item[1])
+                wait_secs = max(0.0, earliest_ts - time.time())
+                earliest_dt = dt.datetime.fromtimestamp(earliest_ts, tz=dt.timezone.utc)
+                utc_str = earliest_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+                local_str = earliest_dt.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+                print(
+                    f"[{label}] {len(cooldown_blocked)} crate(s) waiting for crates.io deletion cooldown "
+                    f"(earliest unlock: `{earliest_name}` at {utc_str} / {local_str}; "
+                    f"waiting {_format_duration(wait_secs)} before retrying)...",
+                    flush=True,
+                )
+                if dry_run:
+                    return 0
+                sleep_with_countdown(wait_secs, reason="cooldown")
+                needs_info_refresh = True
+                propagation_retries = 0
+                continue
             return 0
 
         skip_msg = f"skipping {len(published)} already published"
-        if updated_only and len(unpublished) > len(targets):
-            skip_msg += f", {len(unpublished) - len(targets)} brand-new skipped"
+        if updated_only and len(ready_unpublished) > len(targets):
+            skip_msg += f", {len(ready_unpublished) - len(targets)} brand-new skipped"
         if skipped_dirty:
             skip_msg += f", {skipped_dirty} dirty/dependent skipped"
+        if cooldown_blocked:
+            skip_msg += f", {len(cooldown_blocked)} in deletion cooldown"
         print(
             f"[{label}] Attempt {attempt}: {len(targets)} crate(s) ready ({skip_msg}): "
             f"{', '.join(f'{c.name}@{c.version}' for c in targets[:8])}"
@@ -1281,34 +1425,73 @@ def publish_workspace(
         cmd = ["cargo", "publish", *pkg_flags, *run_args]
 
         rc, output = stream_command(cmd, repo_root)
+        made_upload_progress = ("Uploaded " in output) or ("Published " in output)
         if rc == 0:
-            return 0
+            if not cooldown_blocked:
+                return 0
+            print(
+                f"[{label}] Published unblocked crate(s); {len(cooldown_blocked)} crate(s) still waiting on deletion cooldown...",
+                flush=True,
+            )
+            needs_info_refresh = True
+            propagation_retries = 0
+            continue
+
+        deleted_hit, deleted_name, available_ts, cooldown_summary = parse_deleted_name_cooldown(output)
+        if deleted_hit and not dry_run:
+            assert available_ts is not None
+            matched_name = _match_crate_by_canonical_name(targets, deleted_name)
+            if matched_name is not None:
+                cooldown_until[matched_name] = available_ts
+                print(
+                    f"\n[{label}] Skipping `{matched_name}` for now: recently deleted on crates.io "
+                    f"({cooldown_summary}); continuing with other ready crates and will retry later.",
+                    flush=True,
+                )
+                if made_upload_progress:
+                    needs_info_refresh = True
+                    propagation_retries = 0
+                continue
+            wait_secs = max(0.0, available_ts - time.time())
+            print(
+                f"\n[{label}] Detected crates.io deletion cooldown ({cooldown_summary}). "
+                f"Sleeping {_format_duration(wait_secs)} before retrying...",
+                flush=True,
+            )
+            sleep_with_countdown(wait_secs, reason="cooldown")
+            needs_info_refresh = True
+            propagation_retries = 0
+            continue
 
         limited, wait_secs, summary = parse_rate_limit(output)
         if limited and not dry_run:
             assert wait_secs is not None
             print(
                 f"\n[{label}] Detected crates.io HTTP 429 rate limit ({summary}). "
-                f"Sleeping {wait_secs:.1f}s before retrying...",
+                f"Sleeping {_format_duration(wait_secs)} before retrying...",
                 flush=True,
             )
-            sleep_with_countdown(wait_secs)
+            sleep_with_countdown(wait_secs, reason="rate-limit")
+            needs_info_refresh = True
+            propagation_retries = 0
             continue
 
         if (
             not dry_run
-            and attempt <= 4
+            and propagation_retries < 4
             and (
                 "failed to select a version for the requirement" in output
                 or "no matching package named" in output
             )
         ):
+            propagation_retries += 1
             print(
                 f"\n[{label}] Crates.io index has not yet propagated newly published dependencies; "
-                f"retrying in 10s (attempt {attempt}/4)...",
+                f"retrying in 10s (retry {propagation_retries}/4)...",
                 flush=True,
             )
             time.sleep(10.0)
+            needs_info_refresh = True
             continue
 
         return rc

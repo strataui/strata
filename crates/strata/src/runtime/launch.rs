@@ -233,6 +233,9 @@ pub(crate) fn compute_next_wakeup(
     } else if rt.poll_retained_3d_dirty() {
         consider(std::time::Duration::ZERO);
     }
+    if let Some(d) = rt.next_hover_tooltip_due_in() {
+        consider(d);
+    }
     let uncapped = uncapped_present || rt.has_uncapped_canvas3d();
     if rt.has_active_animations()
         || rt.active_smooth_scroll.is_some()
@@ -641,6 +644,9 @@ where
                         needs_rebuild = true;
                     }
                 }
+                if rt.dismiss_hover_tooltip_and_repaint() {
+                    needs_redraw = true;
+                }
                 if scroll_changed {
                     needs_redraw = true;
                 }
@@ -649,12 +655,18 @@ where
                 let scroll_changed = rt.poll_smooth_scroll();
                 let anim_changed = rt.poll_animations();
                 let caret_changed = rt.poll_caret_blink();
+                let tooltip_changed = rt.poll_hover_tooltip();
                 let mcp_changed = if let Some(ref mut c) = rt.mcp_cursor {
                     c.poll_tick()
                 } else {
                     false
                 };
-                if scroll_changed || anim_changed || caret_changed || mcp_changed {
+                if scroll_changed
+                    || anim_changed
+                    || caret_changed
+                    || tooltip_changed
+                    || mcp_changed
+                {
                     needs_redraw = true;
                 }
                 if strata_js::web::tick_timers() > 0 {
@@ -724,6 +736,9 @@ where
             }
             if let strata_platform::PlatformEvent::MouseDown { x, y, button } = event {
                 rt.last_mouse_pos = (*x, *y);
+                if rt.dismiss_hover_tooltip_and_repaint() {
+                    needs_redraw = true;
+                }
                 let btn_idx = button.to_button_index();
                 let signals_before = strata_dom::reactive::has_dirty_signals();
                 if *button == strata_platform::MouseButton::Left {
@@ -890,11 +905,24 @@ where
                     | strata_platform::PlatformEvent::ImePreedit { .. }
                     | strata_platform::PlatformEvent::ImeCommit(_)
             ) {
+                if matches!(event, strata_platform::PlatformEvent::KeyDown { .. })
+                    && rt.dismiss_hover_tooltip_and_repaint()
+                {
+                    needs_redraw = true;
+                }
                 let res = rt.dispatch_key_event(event);
                 if res.needs_rebuild() {
                     needs_rebuild = true;
                 } else if res.needs_redraw() {
                     needs_redraw = true;
+                }
+            }
+            if let strata_platform::PlatformEvent::FileDrop(paths) = event {
+                if rt.dismiss_hover_tooltip_and_repaint() {
+                    needs_redraw = true;
+                }
+                if rt.dispatch_file_drop(paths.clone()) {
+                    needs_rebuild = true;
                 }
             }
         }

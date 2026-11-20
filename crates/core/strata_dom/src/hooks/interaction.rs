@@ -233,3 +233,112 @@ pub fn dispatch_click_outside() -> bool {
     });
     triggered
 }
+
+/// Captures the listener IDs of all `use_click_outside` registrations whose `is_open` signal
+/// is currently `true` prior to dispatching a pointer-down event.
+pub fn snapshot_open_click_outside_ids() -> Vec<u32> {
+    OUTSIDE_LISTENERS.with(|l| {
+        l.borrow()
+            .iter()
+            .filter_map(|(id, is_open, _)| if is_open.get() { Some(*id) } else { None })
+            .collect()
+    })
+}
+
+/// Dispatches outside-click dismissal only for listeners that were already open in `open_ids`
+/// and are still open after the pointer-down event finished.
+pub fn dispatch_click_outside_for_ids(open_ids: &[u32]) -> bool {
+    if open_ids.is_empty() {
+        return false;
+    }
+    let mut triggered = false;
+    OUTSIDE_LISTENERS.with(|l| {
+        let list = l.borrow().clone();
+        for (id, is_open, handler) in list {
+            if open_ids.contains(&id) && is_open.get() {
+                handler();
+                triggered = true;
+            }
+        }
+    });
+    triggered
+}
+
+/// Queued programmatic scroll operation executed by `AppRuntime`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProgrammaticScrollCommand {
+    ScrollTo { id: String, x: f32, y: f32 },
+    ScrollToTop { id: String },
+    ScrollToBottom { id: String },
+    ScrollIntoView { target_id: String },
+}
+
+thread_local! {
+    static PENDING_SCROLL_COMMANDS: RefCell<Vec<ProgrammaticScrollCommand>> = const { RefCell::new(Vec::new()) };
+    static LIVE_SCROLL_OFFSETS: RefCell<std::collections::HashMap<String, (f32, f32)>> = RefCell::new(std::collections::HashMap::new());
+}
+
+/// Programmatically scrolls a scrollable container with DOM `id` to `(x, y)` in pixels.
+pub fn scroll_to(id: impl Into<String>, x: f32, y: f32) {
+    let id = id.into();
+    LIVE_SCROLL_OFFSETS.with(|m| {
+        m.borrow_mut().insert(id.clone(), (x.max(0.0), y.max(0.0)));
+    });
+    PENDING_SCROLL_COMMANDS.with(|q| {
+        q.borrow_mut()
+            .push(ProgrammaticScrollCommand::ScrollTo { id, x, y });
+    });
+}
+
+/// Programmatically scrolls a scrollable container with DOM `id` to the top (`scroll_y = 0`).
+pub fn scroll_to_top(id: impl Into<String>) {
+    let id = id.into();
+    LIVE_SCROLL_OFFSETS.with(|m| {
+        let cur_x = m.borrow().get(&id).map(|v| v.0).unwrap_or(0.0);
+        m.borrow_mut().insert(id.clone(), (cur_x, 0.0));
+    });
+    PENDING_SCROLL_COMMANDS.with(|q| {
+        q.borrow_mut()
+            .push(ProgrammaticScrollCommand::ScrollToTop { id });
+    });
+}
+
+/// Programmatically scrolls a scrollable container with DOM `id` to its maximum vertical extent.
+pub fn scroll_to_bottom(id: impl Into<String>) {
+    PENDING_SCROLL_COMMANDS.with(|q| {
+        q.borrow_mut()
+            .push(ProgrammaticScrollCommand::ScrollToBottom { id: id.into() });
+    });
+}
+
+/// Programmatically scrolls the nearest scrollable ancestor of `target_id` so the target element is visible.
+pub fn scroll_into_view(target_id: impl Into<String>) {
+    PENDING_SCROLL_COMMANDS.with(|q| {
+        q.borrow_mut()
+            .push(ProgrammaticScrollCommand::ScrollIntoView {
+                target_id: target_id.into(),
+            });
+    });
+}
+
+/// Returns the live `(scroll_left, scroll_top)` offset for the scrollable container with DOM `id`.
+pub fn get_scroll_offset(id: &str) -> (f32, f32) {
+    LIVE_SCROLL_OFFSETS.with(|m| m.borrow().get(id).copied().unwrap_or((0.0, 0.0)))
+}
+
+/// Updates the live `(scroll_left, scroll_top)` registry for `id` (called by `AppRuntime`).
+pub fn set_live_scroll_offset(id: &str, x: f32, y: f32) {
+    LIVE_SCROLL_OFFSETS.with(|m| {
+        m.borrow_mut().insert(id.to_string(), (x, y));
+    });
+}
+
+/// Drains all queued programmatic scroll commands for execution by `AppRuntime`.
+pub fn take_pending_scroll_commands() -> Vec<ProgrammaticScrollCommand> {
+    PENDING_SCROLL_COMMANDS.with(|q| std::mem::take(&mut *q.borrow_mut()))
+}
+
+/// Returns `true` if any programmatic scroll commands are queued.
+pub fn has_pending_scroll_commands() -> bool {
+    PENDING_SCROLL_COMMANDS.with(|q| !q.borrow().is_empty())
+}

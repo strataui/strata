@@ -202,3 +202,47 @@ pub enum PlatformEvent {
     // Single-Instance IPC
     SingleInstanceTriggered(Vec<String>),
 }
+
+/// Decodes a `file://` URI (or raw local filesystem path) with RFC 3986 percent-encoding into a `PathBuf`.
+pub fn decode_file_uri_to_path(uri: &str) -> Option<PathBuf> {
+    let trimmed = uri.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let raw_path = if let Some(rest) = trimmed.strip_prefix("file://localhost") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("file://") {
+        rest
+    } else {
+        trimmed
+    };
+    if raw_path.is_empty() {
+        return None;
+    }
+    let bytes = raw_path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let h1 = (bytes[i + 1] as char).to_digit(16);
+            let h2 = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(d1), Some(d2)) = (h1, h2) {
+                decoded.push(((d1 << 4) | d2) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[i]);
+        i += 1;
+    }
+    let s = String::from_utf8_lossy(&decoded).into_owned();
+    Some(PathBuf::from(s))
+}
+
+/// Parses an RFC 2483 `text/uri-list` payload into a list of local `PathBuf`s.
+pub fn parse_dropped_uri_list_to_paths(payload: &str) -> Vec<PathBuf> {
+    payload
+        .lines()
+        .filter_map(decode_file_uri_to_path)
+        .collect()
+}

@@ -77,6 +77,18 @@ pub struct AppRuntime {
     pub is_dark_mode: bool,
     /// Last recorded pointer coordinates.
     pub last_mouse_pos: (f32, f32),
+    /// Resolved native tooltip text (`title` or button/image `alt`) for the hovered element.
+    pub hover_tooltip_text: Option<String>,
+    /// Tree path of the element that owns `hover_tooltip_text`.
+    pub hover_tooltip_path: Option<Vec<usize>>,
+    /// Pointer coordinates used to anchor the native hover tooltip.
+    pub hover_tooltip_anchor: (f32, f32),
+    /// Timestamp when pointer dwell began on the current tooltip target.
+    pub hover_tooltip_since: Option<std::time::Instant>,
+    /// Whether the native hover tooltip popup is currently displayed.
+    pub hover_tooltip_visible: bool,
+    /// Dwell delay before a native hover tooltip becomes visible.
+    pub hover_tooltip_delay: std::time::Duration,
     /// Scroll offsets keyed by hierarchical tree path (e.g. [0, 1, 0]).
     pub scroll_offsets: std::collections::HashMap<Vec<usize>, (f32, f32)>,
     /// Scroll offsets keyed by element string ID (e.g. "browser-viewport-tab-1").
@@ -164,6 +176,8 @@ pub struct AppRuntime {
     pub(crate) pending_cursor_warp: Option<(f32, f32)>,
     /// True when the most recent `update_view` call reconciled the existing layout tree in place.
     pub(crate) last_update_reconciled: bool,
+    /// Active native DOM drag-and-drop operation (`ondragstart`, `ondragover`, `ondrop`, etc.).
+    pub(crate) active_dom_drag: Option<ActiveDomDrag>,
 }
 
 /// Whether opt-in `[perf]` timing output is enabled through `STRATA_PERF_LOG`.
@@ -278,6 +292,12 @@ impl AppRuntime {
             is_mouse_down: false,
             is_dark_mode: false,
             last_mouse_pos: (0.0, 0.0),
+            hover_tooltip_text: None,
+            hover_tooltip_path: None,
+            hover_tooltip_anchor: (0.0, 0.0),
+            hover_tooltip_since: None,
+            hover_tooltip_visible: false,
+            hover_tooltip_delay: std::time::Duration::from_millis(450),
             scroll_offsets: std::collections::HashMap::new(),
             scroll_offsets_by_id: std::collections::HashMap::new(),
             active_scrollbars: Vec::new(),
@@ -322,6 +342,7 @@ impl AppRuntime {
             last_pointer_pos: None,
             pending_cursor_warp: None,
             last_update_reconciled: false,
+            active_dom_drag: None,
         };
 
         runtime.has_resize_listeners =
@@ -886,6 +907,7 @@ impl AppRuntime {
                             &mut ancestors,
                             &[],
                             true,
+                            (false, false, false),
                         );
                         Self::apply_single_text_inline_intrinsic_sizing(&mut updated.style, c2);
                         if let Some(eid) = new_bp.entity_id() {
@@ -930,6 +952,7 @@ impl AppRuntime {
                                 &mut ancestors,
                                 &[],
                                 i + 1 == c2.len(),
+                                (false, false, false),
                             );
                             children_changed = true;
                         }
@@ -951,6 +974,7 @@ impl AppRuntime {
                             &mut ancestors,
                             &[],
                             idx + 1 == c2.len(),
+                            (false, false, false),
                         ));
                     }
                 }
@@ -1055,6 +1079,7 @@ impl AppRuntime {
         if perf_logging_enabled() {
             perf_log_ms("sync_tree_animations", sync_start, "update_view");
         }
+        self.refresh_hover_tooltip_after_view_update();
         self.tick_frame();
     }
 
@@ -1215,6 +1240,7 @@ impl AppRuntime {
         }
         self.render_scrollbars();
         self.render_active_input_caret();
+        self.render_hover_tooltip();
         self.gpu_path_pipeline
             .resize(self.viewport_width, self.viewport_height);
         self.gpu_path_pipeline
@@ -1283,6 +1309,7 @@ impl AppRuntime {
             PlatformEvent::Scroll {
                 delta_x, delta_y, ..
             } => {
+                let tooltip_dismissed = self.dismiss_hover_tooltip_and_repaint();
                 let (wheel_handled, scroll_changed) = self.dispatch_smooth_scroll_action(
                     self.last_mouse_pos.0,
                     self.last_mouse_pos.1,
@@ -1293,14 +1320,15 @@ impl AppRuntime {
                     self.rebuild_layout_tree();
                     true
                 } else {
-                    scroll_changed
+                    scroll_changed || tooltip_dismissed
                 }
             }
             PlatformEvent::AnimationTick => {
                 let scroll_changed = self.poll_smooth_scroll();
                 let anim_changed = self.poll_animations();
                 let caret_changed = self.poll_caret_blink();
-                scroll_changed || anim_changed || caret_changed
+                let tooltip_changed = self.poll_hover_tooltip();
+                scroll_changed || anim_changed || caret_changed || tooltip_changed
             }
             PlatformEvent::MouseMove { x, y } => {
                 self.last_mouse_pos = (*x, *y);
@@ -1310,6 +1338,7 @@ impl AppRuntime {
                 self.dispatch_pointer_move_action(*x, *y).needs_redraw() || hover_changed
             }
             PlatformEvent::MouseDown { button, x, y } => {
+                let tooltip_dismissed = self.dismiss_hover_tooltip_and_repaint();
                 let btn_idx = button.to_button_index();
                 if *button == strata_platform::MouseButton::Left {
                     self.is_mouse_down = true;
@@ -1330,7 +1359,7 @@ impl AppRuntime {
                     self.rebuild_layout_tree();
                     true
                 } else {
-                    action.needs_redraw() || self.restyle_for_active_change()
+                    tooltip_dismissed || action.needs_redraw() || self.restyle_for_active_change()
                 }
             }
             PlatformEvent::MouseUp { button, x, y } => {
@@ -1359,9 +1388,22 @@ impl AppRuntime {
             | PlatformEvent::ReceivedCharacter(_)
             | PlatformEvent::ImePreedit { .. }
             | PlatformEvent::ImeCommit(_) => {
+                let tooltip_dismissed = matches!(event, PlatformEvent::KeyDown { .. })
+                    && self.dismiss_hover_tooltip_and_repaint();
                 let res = self.dispatch_key_event(event);
                 let dynamic_updated = self.sync_dynamic_text();
-                res.needs_redraw() || dynamic_updated
+                tooltip_dismissed || res.needs_redraw() || dynamic_updated
+            }
+            PlatformEvent::FileDrop(paths) => {
+                let tooltip_dismissed = self.dismiss_hover_tooltip_and_repaint();
+                let drop_handled = self.dispatch_file_drop(paths.clone());
+                let dynamic_updated = self.sync_dynamic_text();
+                if drop_handled || dynamic_updated {
+                    self.rebuild_layout_tree();
+                    true
+                } else {
+                    tooltip_dismissed
+                }
             }
             _ => false,
         };

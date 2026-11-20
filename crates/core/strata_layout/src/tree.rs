@@ -30,10 +30,22 @@ pub enum FillRule {
     EvenOdd,
 }
 
-/// An individual SVG vector item within a layout node.
+/// An SVG `<text>` or `<tspan>` text span positioned within an `<svg>` coordinate system.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SvgTextData {
+    pub content: String,
+    pub x: f32,
+    pub y: f32,
+    pub font_size: f32,
+    pub font_weight: strata_style::types::FontWeight,
+    pub text_anchor: strata_style::TextAlign,
+}
+
+/// An individual SVG vector or text item within a layout node.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SvgItem {
     pub path_data: String,
+    pub text: Option<SvgTextData>,
     pub stroke_color: Option<strata_style::types::Color>,
     pub fill_color: Option<strata_style::types::Color>,
     pub stroke_is_current_color: bool,
@@ -50,6 +62,7 @@ impl SvgItem {
     pub fn new(path_data: String, view_box: (f32, f32)) -> Self {
         Self {
             path_data,
+            text: None,
             stroke_color: None,
             fill_color: None,
             stroke_is_current_color: false,
@@ -608,6 +621,7 @@ impl LayoutNode {
                 stroke_dasharray: Vec::new(),
                 fill_rule: FillRule::NonZero,
                 view_box: (24.0, 24.0),
+                text: None,
             }],
             image: None,
             scene_3d: None,

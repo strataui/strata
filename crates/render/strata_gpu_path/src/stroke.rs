@@ -228,3 +228,108 @@ pub fn expand_stroke_quadratics(
 
     result
 }
+
+/// Extracts the sub-curve of `q` over parameter interval `[t0, t1]` (`0.0 <= t0 <= t1 <= 1.0`)
+/// via exact De Casteljau subdivision.
+pub fn quadratic_subcurve(q: &QuadraticBezier, t0: f32, t1: f32) -> QuadraticBezier {
+    let t0 = t0.clamp(0.0, 1.0);
+    let t1 = t1.clamp(t0, 1.0);
+    if t1 <= 1e-6 {
+        return QuadraticBezier::new(q.p0, q.p0, q.p0);
+    }
+    let a = q.p0.lerp(q.p1, t1);
+    let b = q.p1.lerp(q.p2, t1);
+    let end = a.lerp(b, t1);
+    if t0 <= 1e-6 {
+        return QuadraticBezier::new(q.p0, a, end);
+    }
+    let u = (t0 / t1).clamp(0.0, 1.0);
+    let c = q.p0.lerp(a, u);
+    let d = a.lerp(end, u);
+    let start = c.lerp(d, u);
+    QuadraticBezier::new(start, d, end)
+}
+
+fn quadratic_arc_length(q: &QuadraticBezier) -> f32 {
+    let mut len = 0.0f32;
+    let mut prev = q.p0;
+    for i in 1..=4 {
+        let pt = q.evaluate(i as f32 * 0.25);
+        let dx = pt.x - prev.x;
+        let dy = pt.y - prev.y;
+        len += (dx * dx + dy * dy).sqrt();
+        prev = pt;
+    }
+    len
+}
+
+/// Subdivides a sequence of quadratic Bézier curves into contiguous "on" dash sub-paths
+/// according to an SVG `stroke-dasharray` pattern.
+pub fn dash_quadratics(
+    quads: &[QuadraticBezier],
+    dasharray: &[f32],
+) -> Vec<Vec<QuadraticBezier>> {
+    let mut pattern: Vec<f32> = dasharray.iter().copied().filter(|&d| d > 0.0).collect();
+    if pattern.is_empty() || quads.is_empty() {
+        return if quads.is_empty() {
+            Vec::new()
+        } else {
+            vec![quads.to_vec()]
+        };
+    }
+    if pattern.len() % 2 == 1 {
+        let copy = pattern.clone();
+        pattern.extend(copy);
+    }
+
+    let mut out: Vec<Vec<QuadraticBezier>> = Vec::new();
+    let mut current_dash: Vec<QuadraticBezier> = Vec::new();
+    let mut dash_idx = 0usize;
+    let mut dash_remaining = pattern[0];
+    let mut is_draw = true;
+    let mut prev_end: Option<Point2D> = None;
+
+    for q in quads {
+        if let Some(pe) = prev_end {
+            if pe.distance_squared(q.p0) > 1e-3 {
+                if !current_dash.is_empty() {
+                    out.push(std::mem::take(&mut current_dash));
+                }
+                dash_idx = 0;
+                dash_remaining = pattern[0];
+                is_draw = true;
+            }
+        }
+        prev_end = Some(q.p2);
+
+        let seg_len = quadratic_arc_length(q);
+        if seg_len <= 1e-4 {
+            continue;
+        }
+        let mut t_cur = 0.0f32;
+        let mut len_left = seg_len;
+        while len_left > 1e-4 {
+            let take = len_left.min(dash_remaining);
+            let dt = (take / seg_len).clamp(0.0, 1.0 - t_cur);
+            let t_next = (t_cur + dt).min(1.0);
+            if is_draw && t_next > t_cur + 1e-5 {
+                current_dash.push(quadratic_subcurve(q, t_cur, t_next));
+            }
+            t_cur = t_next;
+            len_left -= take;
+            dash_remaining -= take;
+            if dash_remaining <= 1e-4 {
+                if is_draw && !current_dash.is_empty() {
+                    out.push(std::mem::take(&mut current_dash));
+                }
+                dash_idx = (dash_idx + 1) % pattern.len();
+                dash_remaining = pattern[dash_idx];
+                is_draw = dash_idx % 2 == 0;
+            }
+        }
+    }
+    if !current_dash.is_empty() {
+        out.push(current_dash);
+    }
+    out
+}

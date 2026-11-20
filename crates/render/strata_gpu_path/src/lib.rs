@@ -32,5 +32,6 @@ pub use shaders::{
     WGSL_PATH_COMPUTE_FLATTEN_SHADER,
 };
 pub use stroke::{
-    expand_stroke_quadratics, offset_quadratic, unit_normal, LineCap, LineJoin, StrokeOptions,
+    dash_quadratics, expand_stroke_quadratics, offset_quadratic, quadratic_subcurve, unit_normal,
+    LineCap, LineJoin, StrokeOptions,
 };

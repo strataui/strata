@@ -150,6 +150,7 @@ impl AppRuntime {
             &mut self.applied_scroll_offsets,
             &mut self.active_scrollbars,
         );
+        self.flush_pending_scroll_commands();
         self.sync_scroll_animations();
         self.resolve_top_layer_portals();
     }
@@ -405,6 +406,10 @@ impl AppRuntime {
             let clamped_x = stored_x.clamp(0.0, max_scroll_x);
             let clamped_y = stored_y.clamp(0.0, max_scroll_y);
 
+            if let Some(ref id) = elem_id {
+                strata_dom::hooks::set_live_scroll_offset(id, clamped_x, clamped_y);
+            }
+
             if clamped_x > 0.0 || clamped_y > 0.0 {
                 let target_fixed_cb = layout.style.establishes_fixed_containing_block();
                 let target_abs_cb = layout.style.position != strata_style::types::Position::Static
@@ -433,7 +438,7 @@ impl AppRuntime {
                 applied_scroll_offsets.insert(current_path.clone(), (clamped_x, clamped_y));
             }
 
-            if is_scroll_y && max_scroll_y > 1.0 && viewport_h > 20.0 {
+            if is_scroll_y && max_scroll_y > 0.0 && viewport_h > 0.0 {
                 let border_box = layout.geometry.border_box;
                 let track_width = 10.0;
                 let track_x = border_box.x + border_box.width - track_width;
@@ -441,7 +446,8 @@ impl AppRuntime {
                 let track_h = border_box.height;
                 let track_bounds = strata_layout::Rect::new(track_x, track_y, track_width, track_h);
 
-                let thumb_h = ((viewport_h / content_h) * track_h).clamp(24.0, track_h);
+                let min_thumb = 24.0_f32.min(track_h);
+                let thumb_h = ((viewport_h / content_h.max(1.0)) * track_h).clamp(min_thumb, track_h);
                 let available_travel = (track_h - thumb_h).max(0.0);
                 let thumb_y = if max_scroll_y > 0.0 && available_travel > 0.0 {
                     track_y + (clamped_y / max_scroll_y) * available_travel
@@ -529,23 +535,38 @@ impl AppRuntime {
         available_travel: f32,
         bounds_y: f32,
     ) {
-        if is_id {
+        let cur_x = self
+            .scroll_offsets
+            .get(path)
+            .map(|(x, _)| *x)
+            .unwrap_or(0.0);
+        if is_id && !id.is_empty() {
             self.scroll_offsets_by_id
-                .insert(id.to_string(), (0.0, new_scroll_y));
+                .insert(id.to_string(), (cur_x, new_scroll_y));
+            strata_dom::hooks::set_live_scroll_offset(id, cur_x, new_scroll_y);
         }
         self.scroll_offsets
-            .insert(path.to_vec(), (0.0, new_scroll_y));
+            .insert(path.to_vec(), (cur_x, new_scroll_y));
         self.applied_scroll_offsets
-            .insert(path.to_vec(), (0.0, new_scroll_y));
+            .insert(path.to_vec(), (cur_x, new_scroll_y));
 
+        let mut content_h = 0.0_f32;
         if let Some(b) = self.active_scrollbars.iter_mut().find(|b| b.path == path) {
             b.scroll_y = new_scroll_y;
+            content_h = b.content_h;
             if max_scroll_y > 0.0 && available_travel > 0.0 {
                 b.thumb_bounds.y = bounds_y + (new_scroll_y / max_scroll_y) * available_travel;
             }
         }
 
+        let mut client_w = 0.0_f32;
+        let mut client_h = 0.0_f32;
         if let Some(target) = Self::get_layout_node_mut(&mut self.layout_root, path) {
+            client_w = target.geometry.content_box.width;
+            client_h = target.geometry.content_box.height;
+            if content_h <= 0.0 {
+                content_h = client_h + max_scroll_y;
+            }
             let target_fixed_cb = target.style.establishes_fixed_containing_block();
             let target_abs_cb =
                 target.style.position != strata_style::types::Position::Static || target_fixed_cb;
@@ -567,6 +588,53 @@ impl AppRuntime {
             self.resolve_top_layer_portals();
         }
         self.spatial_index.sync_bounds(&self.layout_root);
+        self.fire_scroll_event(
+            path,
+            cur_x,
+            new_scroll_y,
+            0.0,
+            dy,
+            client_w,
+            content_h,
+            client_w,
+            client_h,
+        );
+    }
+
+    pub(crate) fn fire_scroll_event(
+        &self,
+        container_path: &[usize],
+        scroll_x: f32,
+        scroll_y: f32,
+        delta_x: f32,
+        delta_y: f32,
+        content_w: f32,
+        content_h: f32,
+        client_w: f32,
+        client_h: f32,
+    ) -> bool {
+        if let Some((handler, target_box, _)) = Self::find_event_at_or_above_path(
+            &self.root_blueprint,
+            &self.layout_root,
+            container_path,
+            strata_dom::EventType::Scroll,
+        ) {
+            let mut ev = strata_dom::Event::new(strata_dom::EventType::Scroll);
+            ev.scroll_left = scroll_x as f64;
+            ev.scroll_top = scroll_y as f64;
+            ev.scroll_width = content_w as f64;
+            ev.scroll_height = content_h as f64;
+            ev.client_width = client_w as f64;
+            ev.client_height = client_h as f64;
+            ev.delta_x = delta_x as f64;
+            ev.delta_y = delta_y as f64;
+            ev.width = target_box.width as f64;
+            ev.height = target_box.height as f64;
+            ev.value = format!("{:.1}", scroll_y);
+            handler(ev);
+            return true;
+        }
+        false
     }
 
     fn blueprint_has_wheel_listener(bp: &NodeBlueprint) -> bool {
@@ -1016,5 +1084,233 @@ impl AppRuntime {
             }
         }
         false
+    }
+
+    /// Returns the live `(scroll_left, scroll_top)` offset for a scrollable element `id`.
+    pub fn scroll_offset_by_id(&self, id: &str) -> (f32, f32) {
+        if let Some(off) = self.scroll_offsets_by_id.get(id) {
+            return *off;
+        }
+        if let Some(bar) = self
+            .active_scrollbars
+            .iter()
+            .find(|b| b.is_id && b.id == id)
+        {
+            return (0.0, bar.scroll_y);
+        }
+        strata_dom::get_scroll_offset(id)
+    }
+
+    /// Scrolls the scroll container with element `id` (or the primary scroll container if `id` is empty)
+    /// to `(scroll_x, scroll_y)`, clamping to the container's maximum scroll bounds and firing `EventType::Scroll`.
+    pub fn scroll_to_by_id(&mut self, id: &str, scroll_x: f32, scroll_y: f32) -> bool {
+        self.active_smooth_scroll = None;
+        let bar_opt = if id.is_empty() {
+            self.active_scrollbars
+                .iter()
+                .max_by(|a, b| {
+                    (a.bounds.width * a.bounds.height)
+                        .partial_cmp(&(b.bounds.width * b.bounds.height))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .cloned()
+        } else {
+            self.active_scrollbars
+                .iter()
+                .find(|b| b.is_id && b.id == id)
+                .cloned()
+        };
+
+        if let Some(bar) = bar_opt {
+            let clamped_y = scroll_y.clamp(0.0, bar.max_scroll_y);
+            let dy = clamped_y - bar.scroll_y;
+            if !id.is_empty() {
+                self.scroll_offsets_by_id
+                    .insert(id.to_string(), (scroll_x.max(0.0), clamped_y));
+                strata_dom::hooks::set_live_scroll_offset(id, scroll_x.max(0.0), clamped_y);
+            }
+            if dy.abs() > 0.01 {
+                self.last_scroll_interaction = Some(std::time::Instant::now());
+                self.apply_scroll_delta_to_container(
+                    &bar.path,
+                    bar.is_id,
+                    &bar.id,
+                    clamped_y,
+                    dy,
+                    bar.max_scroll_y,
+                    bar.available_travel,
+                    bar.bounds.y,
+                );
+                return true;
+            }
+            return false;
+        }
+
+        if !id.is_empty() {
+            let clamped_x = scroll_x.max(0.0);
+            let clamped_y = scroll_y.max(0.0);
+            self.scroll_offsets_by_id
+                .insert(id.to_string(), (clamped_x, clamped_y));
+            strata_dom::hooks::set_live_scroll_offset(id, clamped_x, clamped_y);
+        }
+        false
+    }
+
+    /// Scrolls the scroll container with element `id` (or the primary scroll container if `id` is empty) to the top.
+    pub fn scroll_to_top_by_id(&mut self, id: &str) -> bool {
+        if id.is_empty() {
+            let (px, py) = self.last_mouse_pos;
+            return self.scroll_to_top(px, py);
+        }
+        self.scroll_to_by_id(id, 0.0, 0.0)
+    }
+
+    /// Scrolls the scroll container with element `id` (or the primary scroll container if `id` is empty) to the bottom.
+    pub fn scroll_to_bottom_by_id(&mut self, id: &str) -> bool {
+        if id.is_empty() {
+            let (px, py) = self.last_mouse_pos;
+            return self.scroll_to_bottom(px, py);
+        }
+        if let Some(bar) = self
+            .active_scrollbars
+            .iter()
+            .find(|b| b.is_id && b.id == id)
+            .cloned()
+        {
+            return self.scroll_to_by_id(id, 0.0, bar.max_scroll_y);
+        }
+        false
+    }
+
+    pub(crate) fn find_element_path_by_id(
+        blueprint: &NodeBlueprint,
+        layout: &LayoutNode,
+        target_id: &str,
+        current_path: &mut Vec<usize>,
+    ) -> Option<Vec<usize>> {
+        if layout.element_id.as_deref() == Some(target_id) {
+            return Some(current_path.clone());
+        }
+        if let NodeBlueprint::Element { attributes, .. } = blueprint {
+            for attr in attributes {
+                if let strata_dom::Attribute::Property { key, value } = attr {
+                    if key == "id" && value == target_id {
+                        return Some(current_path.clone());
+                    }
+                }
+            }
+        }
+        for (idx, child_bp, child_layout) in Self::paired_blueprint_children(blueprint, layout) {
+            current_path.push(idx);
+            if let Some(found) =
+                Self::find_element_path_by_id(child_bp, child_layout, target_id, current_path)
+            {
+                return Some(found);
+            }
+            current_path.pop();
+        }
+        None
+    }
+
+    /// Scrolls the nearest enclosing scroll container so that the descendant element with `target_id` is visible.
+    pub fn scroll_into_view(&mut self, target_id: &str) -> bool {
+        if target_id.is_empty() {
+            return false;
+        }
+        let mut path_buf = Vec::new();
+        let Some(target_path) = Self::find_element_path_by_id(
+            &self.root_blueprint,
+            &self.layout_root,
+            target_id,
+            &mut path_buf,
+        ) else {
+            return false;
+        };
+
+        let Some(target_box) =
+            Self::get_layout_node(&self.layout_root, &target_path).map(|n| n.geometry.border_box)
+        else {
+            return false;
+        };
+
+        // Find the deepest active scrollbar that is a strict ancestor of `target_path`
+        let ancestor_bar = self
+            .active_scrollbars
+            .iter()
+            .filter(|b| target_path.len() > b.path.len() && target_path.starts_with(&b.path))
+            .max_by_key(|b| b.path.len())
+            .cloned();
+
+        let Some(bar) = ancestor_bar else {
+            return false;
+        };
+
+        let container_box = Self::get_layout_node(&self.layout_root, &bar.path)
+            .map(|n| n.geometry.content_box)
+            .unwrap_or(bar.bounds);
+
+        let cur_y = bar.scroll_y;
+        let new_y = if target_box.y < container_box.y {
+            let dy = target_box.y - container_box.y;
+            (cur_y + dy).clamp(0.0, bar.max_scroll_y)
+        } else if target_box.y + target_box.height > container_box.y + container_box.height {
+            let dy = (target_box.y + target_box.height) - (container_box.y + container_box.height);
+            (cur_y + dy).clamp(0.0, bar.max_scroll_y)
+        } else {
+            cur_y
+        };
+
+        let dy = new_y - cur_y;
+        if dy.abs() > 0.01 {
+            self.active_smooth_scroll = None;
+            self.last_scroll_interaction = Some(std::time::Instant::now());
+            self.apply_scroll_delta_to_container(
+                &bar.path,
+                bar.is_id,
+                &bar.id,
+                new_y,
+                dy,
+                bar.max_scroll_y,
+                bar.available_travel,
+                bar.bounds.y,
+            );
+            return true;
+        }
+        false
+    }
+
+    /// Drains and executes any programmatic scroll commands queued via `strata_dom::scroll_to`,
+    /// `scroll_to_top`, `scroll_to_bottom`, or `scroll_into_view`.
+    pub fn flush_pending_scroll_commands(&mut self) -> bool {
+        if !strata_dom::hooks::has_pending_scroll_commands() {
+            return false;
+        }
+        let cmds = strata_dom::hooks::take_pending_scroll_commands();
+        let mut any_changed = false;
+        for cmd in cmds {
+            match cmd {
+                strata_dom::ProgrammaticScrollCommand::ScrollTo { id, x, y } => {
+                    if self.scroll_to_by_id(&id, x, y) {
+                        any_changed = true;
+                    }
+                }
+                strata_dom::ProgrammaticScrollCommand::ScrollToTop { id } => {
+                    if self.scroll_to_top_by_id(&id) {
+                        any_changed = true;
+                    }
+                }
+                strata_dom::ProgrammaticScrollCommand::ScrollToBottom { id } => {
+                    if self.scroll_to_bottom_by_id(&id) {
+                        any_changed = true;
+                    }
+                }
+                strata_dom::ProgrammaticScrollCommand::ScrollIntoView { target_id } => {
+                    if self.scroll_into_view(&target_id) {
+                        any_changed = true;
+                    }
+                }
+            }
+        }
+        any_changed
     }
 }

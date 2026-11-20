@@ -1444,6 +1444,22 @@ impl Compositor {
                         bounds: vp_bounds,
                         scene: std::sync::Arc::clone(scene_arc),
                     });
+                } else if let Some(cmds) = handle
+                    .0
+                    .downcast_ref::<Vec<crate::canvas2d::CanvasCommand>>()
+                {
+                    list.push(DrawCommand::DrawCanvas2D {
+                        bounds: vp_bounds,
+                        commands: cmds.clone(),
+                    });
+                } else if let Some(cmds_arc) = handle
+                    .0
+                    .downcast_ref::<std::sync::Arc<Vec<crate::canvas2d::CanvasCommand>>>()
+                {
+                    list.push(DrawCommand::DrawCanvas2D {
+                        bounds: vp_bounds,
+                        commands: (**cmds_arc).clone(),
+                    });
                 }
             }
         }
@@ -1512,7 +1528,7 @@ impl Compositor {
             });
         }
 
-        // SVG Vector Path content on this node
+        // SVG Vector Path & Text content on this node
         if !node.svg_items.is_empty() {
             for item in &node.svg_items {
                 let fill = if item.fill_is_current_color {
@@ -1531,18 +1547,60 @@ impl Compositor {
                         }
                     })
                 };
-                list.push(DrawCommand::DrawSvgPath {
-                    bounds,
-                    path_data: item.path_data.clone(),
-                    stroke_color: stroke,
-                    fill_color: fill,
-                    stroke_width: item.stroke_width,
-                    stroke_linecap: item.stroke_linecap,
-                    stroke_linejoin: item.stroke_linejoin,
-                    stroke_dasharray: item.stroke_dasharray.clone(),
-                    fill_rule: item.fill_rule,
-                    view_box: item.view_box,
-                });
+                if let Some(ref svg_text) = item.text {
+                    if !svg_text.content.is_empty() {
+                        let scale_x = if item.view_box.0 > 0.0 {
+                            bounds.width / item.view_box.0
+                        } else {
+                            1.0
+                        };
+                        let scale_y = if item.view_box.1 > 0.0 {
+                            bounds.height / item.view_box.1
+                        } else {
+                            1.0
+                        };
+                        let avg_scale = ((scale_x + scale_y) * 0.5).max(0.01);
+                        let font_size = (svg_text.font_size * avg_scale).max(1.0);
+                        let text_color = fill.or(stroke).unwrap_or(node.style.color);
+                        let est_w = svg_text.content.chars().count() as f32 * font_size * 0.56;
+                        let anchor_dx = match svg_text.text_anchor {
+                            strata_style::TextAlign::Center => -est_w * 0.5,
+                            strata_style::TextAlign::Right => -est_w,
+                            _ => 0.0,
+                        };
+                        let px = bounds.x + svg_text.x * scale_x + anchor_dx;
+                        let py = bounds.y + svg_text.y * scale_y - font_size * 0.80;
+                        list.push(DrawCommand::DrawText {
+                            origin: (px, py),
+                            bounds_width: None,
+                            bounds_height: None,
+                            text_align: strata_style::TextAlign::Left,
+                            text: svg_text.content.clone(),
+                            font_size,
+                            line_height: font_size * 1.2,
+                            font_weight: svg_text.font_weight,
+                            color: text_color,
+                            is_monospace: strata_layout::is_monospace_family(
+                                node.style.font_family,
+                            ),
+                            font_family: node.style.font_family,
+                        });
+                    }
+                }
+                if !item.path_data.is_empty() {
+                    list.push(DrawCommand::DrawSvgPath {
+                        bounds,
+                        path_data: item.path_data.clone(),
+                        stroke_color: stroke,
+                        fill_color: fill,
+                        stroke_width: item.stroke_width,
+                        stroke_linecap: item.stroke_linecap,
+                        stroke_linejoin: item.stroke_linejoin,
+                        stroke_dasharray: item.stroke_dasharray.clone(),
+                        fill_rule: item.fill_rule,
+                        view_box: item.view_box,
+                    });
+                }
             }
         } else if let Some(ref path_data) = node.svg_path {
             list.push(DrawCommand::DrawSvgPath {

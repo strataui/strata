@@ -131,13 +131,18 @@ pub use strata_platform::{
     gtk_begin_window_drag, gtk_close, gtk_current_modifiers, gtk_get_clipboard_text,
     gtk_is_closing, gtk_is_maximized, gtk_minimize, gtk_set_clipboard_text, gtk_toggle_maximize,
 };
+pub use strata_dom::{
+    get_scroll_offset, scroll_into_view, scroll_to, scroll_to_bottom, scroll_to_top,
+    ProgrammaticScrollCommand,
+};
 pub use view_transition::{ViewTransitionManager, ViewTransitionSnapshot};
 
 pub mod prelude {
     pub use strata_dom;
     pub use strata_dom::{
         clear_cursor_override, create_anchored_portal, create_dropdown_portal, create_portal,
-        current_cursor, dispatch_click_outside, dispatch_global_keydown, set_current_cursor,
+        current_cursor, dispatch_click_outside, dispatch_global_keydown, get_scroll_offset,
+        scroll_into_view, scroll_to, scroll_to_bottom, scroll_to_top, set_current_cursor,
         set_system_color_scheme, set_system_contrast, set_system_reduced_motion,
         set_viewport_dimensions, use_active, use_click_outside, use_clipboard, use_color_scheme,
         use_contrast, use_cursor, use_effect, use_focus, use_focus_within, use_hover,
@@ -145,7 +150,7 @@ pub mod prelude {
         use_signal, use_state, AnchorPlacement, Attribute, ClickOutsideHandle, ClipboardHandle,
         ColorScheme, ContrastPreference, CursorIcon, Event, EventType, FocusHandlers,
         HoverHandlers, IntoNodeBlueprint, KeyChord, NodeBlueprint, Portal, PortalBuilder,
-        PressHandlers, ShortcutHandle, Signal, Tag, View,
+        PressHandlers, ProgrammaticScrollCommand, ShortcutHandle, Signal, Tag, View,
     };
     pub use strata_js;
     pub use strata_js::{

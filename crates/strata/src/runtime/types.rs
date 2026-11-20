@@ -277,3 +277,13 @@ pub(crate) struct CascadeElementMeta {
     pub attributes: Vec<(String, String)>,
     pub pseudo_state: strata_style::selector::PseudoState,
 }
+
+/// Active DOM drag-and-drop interaction state (`ondragstart`, `ondrag`, `ondragenter`, `ondragover`, `ondragleave`, `ondrop`, `ondragend`).
+#[derive(Debug, Clone)]
+pub struct ActiveDomDrag {
+    pub source_path: Vec<usize>,
+    pub start_pos: (f32, f32),
+    pub started: bool,
+    pub last_over_path: Option<Vec<usize>>,
+    pub data_transfer: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, String>>>,
+}

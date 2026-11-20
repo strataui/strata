@@ -782,7 +782,7 @@ impl FrameBuffer {
         stroke_width: f32,
         stroke_linecap: strata_layout::StrokeLineCap,
         stroke_linejoin: strata_layout::StrokeLineJoin,
-        _stroke_dasharray: &[f32],
+        stroke_dasharray: &[f32],
         fill_rule: strata_layout::FillRule,
         view_box: (f32, f32),
         clip: Option<Rect>,
@@ -847,27 +847,51 @@ impl FrameBuffer {
                     strata_layout::StrokeLineJoin::Bevel => strata_gpu_path::LineJoin::Bevel,
                     _ => strata_gpu_path::LineJoin::Miter,
                 };
+                let avg_scale = ((scale_x + scale_y) * 0.5).max(0.001);
                 let stroke_opts = strata_gpu_path::StrokeOptions {
-                    width: stroke_width * (scale_x + scale_y) * 0.5,
+                    width: stroke_width * avg_scale,
                     miter_limit: 4.0,
                     cap,
                     join,
                 };
-                let stroked_quads =
-                    strata_gpu_path::expand_stroke_quadratics(&transformed_quads, &stroke_opts);
                 let inflated = Rect::new(
-                    bounds.x - stroke_width,
-                    bounds.y - stroke_width,
-                    bounds.width + stroke_width * 2.0,
-                    bounds.height + stroke_width * 2.0,
+                    bounds.x - stroke_width * avg_scale,
+                    bounds.y - stroke_width * avg_scale,
+                    bounds.width + stroke_width * avg_scale * 2.0,
+                    bounds.height + stroke_width * avg_scale * 2.0,
                 );
-                self.rasterize_curves_fill(
-                    &stroked_quads,
-                    inflated,
-                    sc,
-                    strata_gpu_path::FillRule::NonZero,
-                    clip,
-                );
+                let has_dashes = stroke_dasharray.iter().any(|&d| d > 0.0);
+                if has_dashes {
+                    let scaled_dashes: Vec<f32> =
+                        stroke_dasharray.iter().map(|&d| d * avg_scale).collect();
+                    for dash_subpath in
+                        strata_gpu_path::dash_quadratics(&transformed_quads, &scaled_dashes)
+                    {
+                        let stroked_quads = strata_gpu_path::expand_stroke_quadratics(
+                            &dash_subpath,
+                            &stroke_opts,
+                        );
+                        self.rasterize_curves_fill(
+                            &stroked_quads,
+                            inflated,
+                            sc,
+                            strata_gpu_path::FillRule::NonZero,
+                            clip,
+                        );
+                    }
+                } else {
+                    let stroked_quads = strata_gpu_path::expand_stroke_quadratics(
+                        &transformed_quads,
+                        &stroke_opts,
+                    );
+                    self.rasterize_curves_fill(
+                        &stroked_quads,
+                        inflated,
+                        sc,
+                        strata_gpu_path::FillRule::NonZero,
+                        clip,
+                    );
+                }
             }
         }
     }
