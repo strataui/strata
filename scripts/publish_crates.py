@@ -37,6 +37,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -1205,6 +1206,53 @@ def find_canonical_name_collisions(crates: list[WorkspaceCrate]) -> dict[str, li
     return {canon: sorted(names) for canon, names in by_canon.items() if len(names) > 1}
 
 
+def purge_stale_package_verify_cache(repo_root: Path, cargo_home: Path | None = None) -> None:
+    """Purge stale `target/package`, `~/.cargo/registry/src/-*`, and `tmp-registry` build artifacts.
+
+    Cargo sets a constant epoch mtime (`2006-07-24`) on files inside packaged `.crate` tarballs.
+    When an unpublished crate is modified without changing its version, Cargo's mtime-based
+    registry fingerprint check in `target/debug/.fingerprint` can mistakenly treat an older
+    `.rlib`/`.rmeta` compiled from `~/.cargo/registry/src/-<hash>/` as fresh.
+    """
+    pkg_dir = repo_root / "target" / "package"
+    if pkg_dir.is_dir():
+        shutil.rmtree(pkg_dir, ignore_errors=True)
+
+    resolved_cargo_home = cargo_home or Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
+    reg_src = resolved_cargo_home / "registry" / "src"
+    if reg_src.is_dir():
+        for entry in reg_src.iterdir():
+            if entry.is_dir() and entry.name.startswith("-"):
+                shutil.rmtree(entry, ignore_errors=True)
+
+    deps_dir = repo_root / "target" / "debug" / "deps"
+    fp_dir = repo_root / "target" / "debug" / ".fingerprint"
+    if deps_dir.is_dir():
+        stale_hashes: set[str] = set()
+        for d_file in deps_dir.glob("*.d"):
+            try:
+                text = d_file.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if "/registry/src/-" in text:
+                stem = d_file.stem
+                if "-" in stem:
+                    stale_hashes.add(stem.rsplit("-", 1)[1])
+        if stale_hashes:
+            for h in stale_hashes:
+                for art in deps_dir.glob(f"*-{h}*"):
+                    try:
+                        if art.is_dir():
+                            shutil.rmtree(art, ignore_errors=True)
+                        else:
+                            art.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                if fp_dir.is_dir():
+                    for fp in fp_dir.glob(f"*-{h}"):
+                        shutil.rmtree(fp, ignore_errors=True)
+
+
 def publish_workspace(
     label: str,
     repo_root: Path,
@@ -1424,6 +1472,7 @@ def publish_workspace(
             pkg_flags.extend(["-p", target.name])
         cmd = ["cargo", "publish", *pkg_flags, *run_args]
 
+        purge_stale_package_verify_cache(repo_root)
         rc, output = stream_command(cmd, repo_root)
         made_upload_progress = ("Uploaded " in output) or ("Published " in output)
         if rc == 0:

@@ -604,7 +604,46 @@ class PublishCratesTests(unittest.TestCase):
             self.assertEqual(sleeps_seen[0][1], "cooldown")
             self.assertGreater(sleeps_seen[0][0], 0.0)
 
+    def test_purge_stale_package_verify_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            cargo_home = Path(tmp) / "cargo_home"
+            pkg_dir = root / "target" / "package"
+            deps_dir = root / "target" / "debug" / "deps"
+            fp_dir = root / "target" / "debug" / ".fingerprint"
+            tmp_reg_src = cargo_home / "registry" / "src" / "-9d7b2092832be407"
+            crates_io_src = cargo_home / "registry" / "src" / "index.crates.io-1949cf8c6b5b557f"
+
+            pkg_dir.mkdir(parents=True)
+            deps_dir.mkdir(parents=True)
+            (fp_dir / "strata-dom-bec116009e0ea45b").mkdir(parents=True)
+            (fp_dir / "strata-dom-971486b9ca0bf0c5").mkdir(parents=True)
+            tmp_reg_src.mkdir(parents=True)
+            crates_io_src.mkdir(parents=True)
+
+            (deps_dir / "strata_dom-bec116009e0ea45b.d").write_text(
+                f"lib: {tmp_reg_src}/strata-dom-0.1.0/src/lib.rs\n",
+                encoding="utf-8",
+            )
+            (deps_dir / "libstrata_dom-bec116009e0ea45b.rlib").write_bytes(b"stale")
+            (deps_dir / "strata_dom-971486b9ca0bf0c5.d").write_text(
+                "lib: src/lib.rs\n",
+                encoding="utf-8",
+            )
+            (deps_dir / "libstrata_dom-971486b9ca0bf0c5.rlib").write_bytes(b"workspace")
+
+            publish_crates.purge_stale_package_verify_cache(root, cargo_home=cargo_home)
+
+            self.assertFalse(pkg_dir.exists())
+            self.assertFalse(tmp_reg_src.exists())
+            self.assertTrue(crates_io_src.exists())
+            self.assertFalse((deps_dir / "libstrata_dom-bec116009e0ea45b.rlib").exists())
+            self.assertFalse((fp_dir / "strata-dom-bec116009e0ea45b").exists())
+            self.assertTrue((deps_dir / "libstrata_dom-971486b9ca0bf0c5.rlib").exists())
+            self.assertTrue((fp_dir / "strata-dom-971486b9ca0bf0c5").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
