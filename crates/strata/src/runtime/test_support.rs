@@ -43,6 +43,11 @@ impl NodeQuery {
     }
 
     /// Matches elements whose `title` attribute (or `alt` on `<button>` / `<img>`) equals `title`.
+    ///
+    /// `title` and `alt` are not prioritised here, unlike the hover tooltip (which prefers
+    /// `title`): the element matches if **either** attribute matches the needle. A button with
+    /// `title="Save"` and `alt="Store"` is found by both `"Save"` and `"Store"`. `alt` is only
+    /// considered on `<button>` and `<img>`; other elements match on `title` alone.
     pub fn title(title: impl Into<String>) -> Self {
         Self {
             title: Some(title.into()),
@@ -281,12 +286,14 @@ impl AppRuntime {
         self.click_last(&NodeQuery::text(text))
     }
 
-    /// Clicks the first element whose `title` (or button/img `alt`) equals `title`.
+    /// Clicks the first element whose `title` or (on button/img) `alt` equals `title`; either
+    /// attribute may match. See [`NodeQuery::title`].
     pub fn click_title(&self, title: &str) -> bool {
         self.click(&NodeQuery::title(title))
     }
 
-    /// Clicks the last (top-most) element whose `title` (or button/img `alt`) equals `title`.
+    /// Clicks the last (top-most) element whose `title` or (on button/img) `alt` equals `title`;
+    /// either attribute may match. See [`NodeQuery::title`].
     pub fn click_last_title(&self, title: &str) -> bool {
         self.click_last(&NodeQuery::title(title))
     }
