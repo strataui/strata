@@ -594,5 +594,43 @@ fn test_component_rc_closure_and_inline_closure_coercion() {
     assert_eq!(*seen_str.borrow(), "hellohello");
     assert_eq!(seen_num.get(), 84);
     assert_eq!(seen_act.get(), 111);
+
+    // 4. Block-wrapped closures (`{ let ...; move |s| ... }`), `Some(|n| ...)`, and `Some(Rc::new(|s| ...))`
+    //    preserve expected-type inference on unannotated closure arguments (`s.to_uppercase()`, `n.saturating_add(...)`)
+    let _v4 = rsx! {
+        <CallbackHost
+            on_change={{
+                let s4 = Rc::clone(&seen_str);
+                let prefix = "block";
+                move |s| *s4.borrow_mut() = format!("{prefix}:{}", s.to_uppercase())
+            }}
+            on_count={Some({
+                let n4 = Rc::clone(&seen_num);
+                move |n| n4.set(n.saturating_add(8))
+            })}
+            on_action={{
+                let a4 = Rc::clone(&seen_act);
+                move || a4.set(a4.get() + 1000)
+            }}
+        />
+    };
+    assert_eq!(*seen_str.borrow(), "block:HELLO");
+    assert_eq!(seen_num.get(), 50);
+    assert_eq!(seen_act.get(), 1111);
+
+    // 5. `Some(Rc::new(move |s| ...))` and block ending in `Some(Rc::new(move |n| ...))`
+    let s5 = Rc::clone(&seen_str);
+    let _v5 = rsx! {
+        <CallbackHost
+            on_change={Some(Rc::new(move |s| *s5.borrow_mut() = s.to_ascii_uppercase()))}
+            on_count={{
+                let n5 = Rc::clone(&seen_num);
+                Some(Rc::new(move |n| n5.set(n.saturating_sub(2))))
+            }}
+            on_action={|| {}}
+        />
+    };
+    assert_eq!(*seen_str.borrow(), "HELLO");
+    assert_eq!(seen_num.get(), 40);
 }
 
