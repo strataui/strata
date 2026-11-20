@@ -554,22 +554,24 @@ fn test_component_rc_closure_and_inline_closure_coercion() {
     let n1 = Rc::clone(&seen_num);
     let a1 = Rc::clone(&seen_act);
 
-    // 1. Passing unannotated `Rc::new(|...| ...)` AND bare inline closures directly inside `rsx!`
+    // 1. Passing unannotated `Rc::new(|s| ...)` AND bare inline closures `|n| ...` directly inside `rsx!`
+    //    with method calls on `s` (`s.to_uppercase()`) and `n` (`n.saturating_add(1)`) to prove
+    //    expected-type inference works without parameter type annotations!
     let _v1 = rsx! {
         <CallbackHost
-            on_change={Rc::new(move |s: &str| *s1.borrow_mut() = s.to_string())}
-            on_count={move |n: usize| n1.set(n)}
+            on_change={Rc::new(move |s| *s1.borrow_mut() = s.to_uppercase())}
+            on_count={move |n| n1.set(n.saturating_add(1))}
             on_action={Rc::new(move || a1.set(a1.get() + 1))}
         />
     };
-    assert_eq!(*seen_str.borrow(), "hello");
-    assert_eq!(seen_num.get(), 42);
+    assert_eq!(*seen_str.borrow(), "HELLO");
+    assert_eq!(seen_num.get(), 43);
     assert_eq!(seen_act.get(), 1);
 
-    // 2. Passing bare `None`, typed `Rc<dyn Fn(...)>`, and `Option<Rc<dyn Fn(...)>>`
+    // 2. Passing bare `None`, typed `Rc<dyn Fn(...)>`, and explicit `.on_change_fn(|s| ...)` builder overload
     let s2 = Rc::clone(&seen_str);
     let a2 = Rc::clone(&seen_act);
-    let typed_cb: Rc<dyn Fn(&str)> = Rc::new(move |s: &str| *s2.borrow_mut() = format!("{s}-world"));
+    let typed_cb: Rc<dyn Fn(&str)> = Rc::new(move |s| *s2.borrow_mut() = format!("{s}-world"));
     let _v2 = rsx! {
         <CallbackHost
             on_change={typed_cb}
@@ -579,5 +581,18 @@ fn test_component_rc_closure_and_inline_closure_coercion() {
     };
     assert_eq!(*seen_str.borrow(), "hello-world");
     assert_eq!(seen_act.get(), 11);
+
+    // 3. Direct builder `.on_change_fn(|s| ...)` and `.on_count_fn(|n| ...)` overloads with inferred arg types
+    let s3 = Rc::clone(&seen_str);
+    let n3 = Rc::clone(&seen_num);
+    let a3 = Rc::clone(&seen_act);
+    let _v3 = CallbackHost::builder()
+        .on_change_fn(move |s| *s3.borrow_mut() = s.repeat(2))
+        .on_count_fn(move |n| n3.set(n.wrapping_mul(2)))
+        .on_action_fn(move || a3.set(a3.get() + 100))
+        .build();
+    assert_eq!(*seen_str.borrow(), "hellohello");
+    assert_eq!(seen_num.get(), 84);
+    assert_eq!(seen_act.get(), 111);
 }
 

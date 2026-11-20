@@ -291,7 +291,17 @@ fn lower_component(comp: &RsxComponent, errors: &mut Vec<String>) -> String {
                 builder_calls.push(format!(".{}({:?})", prop_name, s));
             }
             RsxAttrValue::Expression(stream) => {
-                builder_calls.push(format!(".{}({})", prop_name, stream));
+                let stream_str = stream.to_string();
+                let routed_closure = if prop_name != "onclick" && !prop_name.ends_with("_fn") {
+                    extract_inline_closure_expr(&stream_str)
+                } else {
+                    None
+                };
+                if let Some(closure_expr) = routed_closure {
+                    builder_calls.push(format!(".{}_fn({})", prop_name, closure_expr));
+                } else {
+                    builder_calls.push(format!(".{}({})", prop_name, stream_str));
+                }
             }
             RsxAttrValue::Flag => {
                 builder_calls.push(format!(".{}(true)", prop_name));
@@ -312,6 +322,65 @@ fn lower_component(comp: &RsxComponent, errors: &mut Vec<String>) -> String {
         full_path,
         builder_calls.join("")
     )
+}
+
+fn is_top_level_closure_literal(expr: &str) -> bool {
+    let t = expr.trim();
+    if t.starts_with('|') {
+        return true;
+    }
+    if let Some(rest) = t.strip_prefix("move") {
+        if rest.starts_with(|c: char| c.is_whitespace() || c == '|')
+            && rest.trim_start().starts_with('|')
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// If `expr` is an inline closure (`|...| ...` or `move |...| ...`) or an `Rc::new(|...| ...)`
+/// wrapper around an inline closure, returns the inner closure expression so `rsx!` can dispatch
+/// to `.{prop}_fn(closure)` and preserve expected-type inference on closure parameters.
+fn extract_inline_closure_expr(expr: &str) -> Option<&str> {
+    let t = expr.trim();
+    if is_top_level_closure_literal(t) {
+        return Some(t);
+    }
+    if t.ends_with(')') {
+        for prefix in [
+            "Rc::new",
+            "Rc :: new",
+            "std::rc::Rc::new",
+            "std :: rc :: Rc :: new",
+            "alloc::rc::Rc::new",
+            "alloc :: rc :: Rc :: new",
+        ] {
+            if let Some(rest) = t.strip_prefix(prefix) {
+                let rest = rest.trim_start();
+                if let Some(inner) = rest.strip_prefix('(') {
+                    let body = inner[..inner.len() - 1].trim();
+                    let mut depth = 0i32;
+                    let mut balanced = true;
+                    for ch in body.chars() {
+                        if ch == '(' {
+                            depth += 1;
+                        } else if ch == ')' {
+                            depth -= 1;
+                            if depth < 0 {
+                                balanced = false;
+                                break;
+                            }
+                        }
+                    }
+                    if balanced && depth == 0 && is_top_level_closure_literal(body) {
+                        return Some(body);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn lower_positional_call(full_path: &str, comp: &RsxComponent, errors: &mut Vec<String>) -> String {
