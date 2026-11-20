@@ -642,6 +642,36 @@ class PublishCratesTests(unittest.TestCase):
             self.assertTrue((deps_dir / "libstrata_dom-971486b9ca0bf0c5.rlib").exists())
             self.assertTrue((fp_dir / "strata-dom-971486b9ca0bf0c5").exists())
 
+    def test_purge_stale_registry_crates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cargo_home = Path(tmp) / "cargo_home"
+            reg = "index.crates.io-1949cf8c6b5b557f"
+            cache = cargo_home / "registry" / "cache" / reg
+            src = cargo_home / "registry" / "src" / reg
+            idx = cargo_home / "registry" / "index" / reg / ".cache"
+            cache.mkdir(parents=True)
+            (src / "strata-ui-platform-0.1.0").mkdir(parents=True)
+            (src / "serde-1.0.200").mkdir(parents=True)
+            (idx / "st" / "ra").mkdir(parents=True)
+            (idx / "se" / "rd").mkdir(parents=True)
+            for crate in ("strata-ui-platform-0.1.0", "other-ours-0.2.1", "serde-1.0.200"):
+                (cache / f"{crate}.crate").write_bytes(b"x")
+            (idx / "st" / "ra" / "strata-ui-platform").write_bytes(b"x")
+            (idx / "se" / "rd" / "serde").write_bytes(b"x")
+
+            removed = publish_crates.purge_stale_registry_crates(
+                {"other-ours"}, cargo_home=cargo_home, name_prefixes=("strata-",)
+            )
+
+            self.assertEqual(sorted(removed), ["other-ours-0.2.1", "strata-ui-platform-0.1.0"])
+            self.assertFalse((cache / "strata-ui-platform-0.1.0.crate").exists())
+            self.assertFalse((cache / "other-ours-0.2.1.crate").exists())
+            self.assertTrue((cache / "serde-1.0.200.crate").exists())
+            self.assertFalse((src / "strata-ui-platform-0.1.0").exists())
+            self.assertTrue((src / "serde-1.0.200").exists())
+            self.assertFalse((idx / "st" / "ra" / "strata-ui-platform").exists())
+            self.assertTrue((idx / "se" / "rd" / "serde").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
