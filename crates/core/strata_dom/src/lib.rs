@@ -91,6 +91,18 @@ impl EventHandlerMarker<(Event,)> for Rc<dyn Fn(Event)> {
     }
 }
 
+impl<F: Fn(Event) + 'static> EventHandlerMarker<(Rc<()>, Event)> for Rc<F> {
+    fn call_handler(&self, event: Event) {
+        (self)(event);
+    }
+}
+
+impl<F: Fn() + 'static> EventHandlerMarker<(Rc<()>,)> for Rc<F> {
+    fn call_handler(&self, _event: Event) {
+        (self)();
+    }
+}
+
 impl<Args, F: EventHandlerMarker<Args>> EventHandlerMarker<Args> for Option<F> {
     fn call_handler(&self, event: Event) {
         if let Some(ref handler) = self {
@@ -111,6 +123,30 @@ impl<F: Fn(String) + 'static> ValueHandlerMarker<(String,)> for F {
 }
 
 impl<F: Fn() + 'static> ValueHandlerMarker<()> for F {
+    fn call_handler(&self, _val: String) {
+        (self)();
+    }
+}
+
+impl ValueHandlerMarker<(String,)> for Rc<dyn Fn(String)> {
+    fn call_handler(&self, val: String) {
+        (self)(val);
+    }
+}
+
+impl ValueHandlerMarker<()> for Rc<dyn Fn()> {
+    fn call_handler(&self, _val: String) {
+        (self)();
+    }
+}
+
+impl<F: Fn(String) + 'static> ValueHandlerMarker<(Rc<()>, String)> for Rc<F> {
+    fn call_handler(&self, val: String) {
+        (self)(val);
+    }
+}
+
+impl<F: Fn() + 'static> ValueHandlerMarker<(Rc<()>,)> for Rc<F> {
     fn call_handler(&self, _val: String) {
         (self)();
     }

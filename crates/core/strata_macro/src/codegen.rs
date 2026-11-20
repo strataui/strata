@@ -276,18 +276,11 @@ fn lower_component(comp: &RsxComponent, errors: &mut Vec<String>) -> String {
         return lower_positional_call(&full_path, comp, errors);
     }
 
-    // Case B: PascalCase component (bare `<Portal>` or path-qualified `<strata_dom::Portal>`,
-    // `<::strata_dom::Portal>`, `<crate::ui::Modal>`, `<self::Card>`, `<super::Dialog>`)
-    // with 0 props and 0 children: zero-overhead direct call.
-    if comp.props.is_empty() && comp.children.is_empty() {
-        return format!(
-            "strata_dom::IntoNodeBlueprint::into_node_blueprint({}())",
-            full_path
-        );
-    }
-
-    // Case C: PascalCase component with props and/or children: uses companion builder
-    // (`#full_path::builder()...build()`).
+    // Case B: PascalCase component (bare `<Portal>`, `<ToastHost />`, or path-qualified
+    // `<strata_dom::Portal>`, `<::strata_dom::Portal>`, `<crate::ui::Modal>`, `<self::Card>`,
+    // `<super::Dialog>`): always uses companion builder (`#full_path::builder()...build()`),
+    // even when 0 props and 0 children are supplied, so components with optional parameters work
+    // as self-closing `<MyComponent />` tags.
     let mut builder_calls = Vec::new();
 
     for prop in &comp.props {
@@ -431,7 +424,7 @@ mod tests {
         let empty_code = generate_rsx(&empty_nodes).expect("empty component codegen must succeed");
         assert!(
             empty_code.contains(
-                "strata_dom::IntoNodeBlueprint::into_node_blueprint(strata_dom::Portal())"
+                "strata_dom::IntoNodeBlueprint::into_node_blueprint(strata_dom::Portal::builder().build())"
             ),
             "unexpected empty codegen: {empty_code}"
         );

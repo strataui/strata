@@ -489,3 +489,95 @@ fn test_rsx_path_qualified_components_and_portals() {
         _ => panic!("Expected root Element"),
     }
 }
+
+#[component]
+fn OptionalToastHost(max_visible: Option<usize>, position: Option<&'static str>) -> View {
+    let max_v = max_visible.unwrap_or(3);
+    let pos = position.unwrap_or("bottom-right");
+    rsx! {
+        <div data-max={max_v.to_string()} data-pos={pos} />
+    }
+}
+
+#[test]
+fn test_zero_prop_self_closing_component_with_optional_params() {
+    let view = rsx! {
+        <div>
+            <OptionalToastHost />
+            <OptionalToastHost max_visible={5} />
+        </div>
+    };
+    match view.root {
+        NodeBlueprint::Element { children, .. } => {
+            assert_eq!(children.len(), 2);
+            match &children[0] {
+                NodeBlueprint::Element { attributes, .. } => {
+                    assert!(attributes.iter().any(|a| matches!(
+                        a,
+                        Attribute::Property { key, value } if key == "data-max" && value == "3"
+                    )));
+                    assert!(attributes.iter().any(|a| matches!(
+                        a,
+                        Attribute::Property { key, value } if key == "data-pos" && value == "bottom-right"
+                    )));
+                }
+                _ => panic!("Expected Element"),
+            }
+        }
+        _ => panic!("Expected root Element"),
+    }
+}
+
+#[component]
+fn CallbackHost(
+    on_change: Option<Rc<dyn Fn(&str)>>,
+    on_count: Option<std::rc::Rc<dyn Fn(usize)>>,
+    on_action: Rc<dyn Fn()>,
+) -> View {
+    if let Some(ref cb) = on_change {
+        cb("hello");
+    }
+    if let Some(ref cb) = on_count {
+        cb(42);
+    }
+    on_action();
+    rsx! { <div /> }
+}
+
+#[test]
+fn test_component_rc_closure_and_inline_closure_coercion() {
+    let seen_str = Rc::new(std::cell::RefCell::new(String::new()));
+    let seen_num = Rc::new(Cell::new(0usize));
+    let seen_act = Rc::new(Cell::new(0usize));
+
+    let s1 = Rc::clone(&seen_str);
+    let n1 = Rc::clone(&seen_num);
+    let a1 = Rc::clone(&seen_act);
+
+    // 1. Passing unannotated `Rc::new(|...| ...)` AND bare inline closures directly inside `rsx!`
+    let _v1 = rsx! {
+        <CallbackHost
+            on_change={Rc::new(move |s: &str| *s1.borrow_mut() = s.to_string())}
+            on_count={move |n: usize| n1.set(n)}
+            on_action={Rc::new(move || a1.set(a1.get() + 1))}
+        />
+    };
+    assert_eq!(*seen_str.borrow(), "hello");
+    assert_eq!(seen_num.get(), 42);
+    assert_eq!(seen_act.get(), 1);
+
+    // 2. Passing bare `None`, typed `Rc<dyn Fn(...)>`, and `Option<Rc<dyn Fn(...)>>`
+    let s2 = Rc::clone(&seen_str);
+    let a2 = Rc::clone(&seen_act);
+    let typed_cb: Rc<dyn Fn(&str)> = Rc::new(move |s: &str| *s2.borrow_mut() = format!("{s}-world"));
+    let _v2 = rsx! {
+        <CallbackHost
+            on_change={typed_cb}
+            on_count={None}
+            on_action={move || a2.set(a2.get() + 10)}
+        />
+    };
+    assert_eq!(*seen_str.borrow(), "hello-world");
+    assert_eq!(seen_act.get(), 11);
+}
+

@@ -80,6 +80,7 @@ pub fn expand_component(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let mut builder_fields = Vec::new();
     let mut builder_setters = Vec::new();
+    let mut callback_traits = Vec::new();
     let mut build_args = Vec::new();
     let mut has_children_param = false;
 
@@ -95,6 +96,64 @@ pub fn expand_component(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 vis
             ));
             build_args.push("self.onclick".to_string());
+        } else if let Some(fn_bound) = extract_rc_dyn_fn_bound(&param.ty, param.is_option) {
+            let trait_name = format!("__{}_{}_IntoCallback", fn_name, param.name);
+            callback_traits.push(format!(
+                r#"#[doc(hidden)]
+#[allow(non_camel_case_types, dead_code)]
+{vis}trait {trait_name}<__Marker = ()> {{
+    fn into_callback(self) -> Option<std::rc::Rc<dyn {fn_bound}>>;
+}}
+
+impl {trait_name}<()> for Option<std::rc::Rc<dyn {fn_bound}>> {{
+    #[inline]
+    fn into_callback(self) -> Option<std::rc::Rc<dyn {fn_bound}>> {{
+        self
+    }}
+}}
+
+impl {trait_name}<()> for std::rc::Rc<dyn {fn_bound}> {{
+    #[inline]
+    fn into_callback(self) -> Option<std::rc::Rc<dyn {fn_bound}>> {{
+        Some(self)
+    }}
+}}
+
+impl<__F: {fn_bound} + 'static> {trait_name}<((),)> for __F {{
+    #[inline]
+    fn into_callback(self) -> Option<std::rc::Rc<dyn {fn_bound}>> {{
+        Some(std::rc::Rc::new(self))
+    }}
+}}
+
+impl<__F: {fn_bound} + 'static> {trait_name}<(((),),)> for std::rc::Rc<__F> {{
+    #[inline]
+    fn into_callback(self) -> Option<std::rc::Rc<dyn {fn_bound}>> {{
+        let coerced: std::rc::Rc<dyn {fn_bound}> = self;
+        Some(coerced)
+    }}
+}}"#,
+                vis = vis,
+                trait_name = trait_name,
+                fn_bound = fn_bound,
+            ));
+
+            builder_fields.push(format!(
+                "pub {}: Option<std::rc::Rc<dyn {}>>,",
+                param.name, fn_bound
+            ));
+            builder_setters.push(format!(
+                "#[allow(dead_code)]\n{} fn {}<__Marker>(mut self, val: impl {}<__Marker>) -> Self {{\n    self.{} = val.into_callback();\n    self\n}}",
+                vis, param.name, trait_name, param.name
+            ));
+            if param.is_option {
+                build_args.push(format!("self.{}", param.name));
+            } else {
+                build_args.push(format!(
+                    "self.{}.expect(\"Prop `{}` is required for <{}>\")",
+                    param.name, param.name, fn_name
+                ));
+            }
         } else if param.is_option {
             builder_fields.push(format!("pub {}: {},", param.name, param.ty));
             builder_setters.push(format!(
@@ -133,6 +192,8 @@ pub fn expand_component(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let companion_code = format!(
         r#"
+{callback_traits}
+
 // Companion Type Namespace Item
 #[allow(non_snake_case)]
 {vis}struct {fn_name} {{}}
@@ -164,6 +225,7 @@ impl {builder_name} {{
     }}
 }}
 "#,
+        callback_traits = callback_traits.join("\n\n"),
         vis = vis,
         fn_name = fn_name,
         builder_name = builder_name,
@@ -180,6 +242,60 @@ impl {builder_name} {{
     match full_expanded.parse() {
         Ok(stream) => stream,
         Err(_) => item, // Fallback to original item if parse error
+    }
+}
+
+fn strip_single_generic_wrapper<'a>(ty: &'a str, prefixes: &[&str]) -> Option<&'a str> {
+    let trimmed = ty.trim();
+    if !trimmed.ends_with('>') {
+        return None;
+    }
+    for prefix in prefixes {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            let rest = rest.trim_start();
+            if let Some(inner) = rest.strip_prefix('<') {
+                return Some(inner[..inner.len() - 1].trim());
+            }
+        }
+    }
+    None
+}
+
+fn extract_rc_dyn_fn_bound(ty: &str, is_option: bool) -> Option<String> {
+    let maybe_rc = if is_option {
+        strip_single_generic_wrapper(
+            ty,
+            &[
+                "Option",
+                "std::option::Option",
+                "std :: option :: Option",
+                "core::option::Option",
+                "core :: option :: Option",
+            ],
+        )?
+    } else {
+        ty.trim()
+    };
+
+    let rc_inner = strip_single_generic_wrapper(
+        maybe_rc,
+        &[
+            "Rc",
+            "std::rc::Rc",
+            "std :: rc :: Rc",
+            "alloc::rc::Rc",
+            "alloc :: rc :: Rc",
+        ],
+    )?;
+
+    let fn_bound = rc_inner.strip_prefix("dyn ")?.trim();
+    if fn_bound.starts_with("Fn")
+        || fn_bound.starts_with("std::ops::Fn")
+        || fn_bound.starts_with("core::ops::Fn")
+    {
+        Some(fn_bound.to_string())
+    } else {
+        None
     }
 }
 
