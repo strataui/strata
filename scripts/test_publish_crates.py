@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import subprocess
 import sys
 import tarfile
@@ -29,6 +30,14 @@ def _make_crate_tarball(name: str, version: str, files: dict[str, bytes]) -> byt
 
 
 class PublishCratesTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Keep publish-flow tests hermetic: the cache purge must never touch the real ~/.cargo.
+        self._cargo_home = tempfile.TemporaryDirectory()
+        self.addCleanup(self._cargo_home.cleanup)
+        env_patch = mock.patch.dict(os.environ, {"CARGO_HOME": self._cargo_home.name})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+
     def test_bump_patch_version_skips_existing(self) -> None:
         self.assertEqual(publish_crates.bump_patch_version("0.1.0"), "0.1.1")
         self.assertEqual(
