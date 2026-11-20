@@ -114,8 +114,8 @@ pub use runtime::{
     app, launch, launch_auto, launch_headless, launch_headless_pump, launch_window,
     launch_with_config, launch_with_events, launch_with_frame, queue_edit_command, AppFrameInfo,
     AppLifecycleHooks, AppRuntime, DynamicTextBinding, EditCommand, FrameOutcome,
-    KeyDispatchResult, PointerDownAction, PointerMoveAction, PointerUpAction, StrataApp,
-    StrataAppBuilder,
+    KeyDispatchResult, MatchMode, NodeQuery, PointerDownAction, PointerMoveAction, PointerUpAction,
+    StrataApp, StrataAppBuilder,
 };
 #[cfg(target_os = "linux")]
 pub use runtime::{

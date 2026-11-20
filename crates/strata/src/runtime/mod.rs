@@ -33,6 +33,7 @@ mod scrollbar;
 mod selection;
 pub mod spatial;
 mod tailwind;
+pub mod test_support;
 
 pub use app::*;
 pub use dom_hydration::*;
@@ -42,6 +43,7 @@ pub use launch::*;
 pub use platforms::*;
 pub use profile::{FrameProfile, FrameProfileHook};
 pub use spatial::*;
+pub use test_support::{MatchMode, NodeQuery};
 pub use types::*;
 
 /// Live running application instance holding active state, layout tree, and display list.
