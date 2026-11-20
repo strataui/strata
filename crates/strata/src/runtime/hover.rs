@@ -576,17 +576,12 @@ impl AppRuntime {
 
         let probe_state = strata_style::selector::PseudoState {
             is_hovered: true,
-            is_focused: false,
-            is_active: false,
-            is_disabled: false,
-            is_dark: false,
+            ..Default::default()
         };
         let probe_state_dark = strata_style::selector::PseudoState {
             is_hovered: true,
-            is_focused: false,
-            is_active: false,
-            is_disabled: false,
             is_dark: true,
+            ..Default::default()
         };
 
         for bp in path_nodes {
@@ -669,7 +664,45 @@ impl AppRuntime {
         false
     }
 
-    /// Checks if a single blueprint node has hover utility classes (including chained modifiers like `dark:hover:*`) or boundary event listeners.
+    /// Returns true when `node` carries the Tailwind `"group"` class and any descendant uses `group-hover:`.
+    pub(crate) fn subtree_has_group_hover_effects(node: &NodeBlueprint) -> bool {
+        fn check(bp: &NodeBlueprint) -> bool {
+            match bp {
+                NodeBlueprint::Element {
+                    classes, children, ..
+                } => {
+                    let has_gh = classes.iter().any(|c| {
+                        strata_style::tailwind::tokenize_classes(c)
+                            .into_iter()
+                            .any(|tok| {
+                                let mut cur = tok;
+                                while let (Some(m), rest) =
+                                    strata_style::tailwind::split_modifier(cur)
+                                {
+                                    if m == "group-hover" {
+                                        return true;
+                                    }
+                                    cur = rest;
+                                }
+                                false
+                            })
+                    });
+                    has_gh || children.iter().any(check)
+                }
+                NodeBlueprint::Fragment(children) => children.iter().any(check),
+                _ => false,
+            }
+        }
+        match node {
+            NodeBlueprint::Element {
+                classes, children, ..
+            } if Self::classes_have_group_marker(classes) => children.iter().any(check),
+            _ => false,
+        }
+    }
+
+    /// Checks if a single blueprint node has hover utility classes (including chained modifiers like `dark:hover:*`),
+    /// `.group` descendants with `group-hover:*`, or boundary event listeners.
     pub fn node_has_hover_effects(node: &NodeBlueprint) -> bool {
         match node {
             NodeBlueprint::Element {
@@ -695,6 +728,9 @@ impl AppRuntime {
                 if has_hover_class {
                     return true;
                 }
+                if Self::subtree_has_group_hover_effects(node) {
+                    return true;
+                }
                 attributes.iter().any(|attr| match attr {
                     strata_dom::Attribute::EventListener { event, .. } => matches!(
                         event,
@@ -717,6 +753,9 @@ impl AppRuntime {
         self.last_mouse_pos = (px, py);
         let new_path = Self::hit_test_node_path(&self.root_blueprint, &self.layout_root, px, py);
         if new_path == self.current_hover_path {
+            if self.hover_tooltip_since.is_some() && !self.hover_tooltip_visible {
+                self.hover_tooltip_anchor = (px, py);
+            }
             return false;
         }
 
@@ -724,6 +763,7 @@ impl AppRuntime {
         self.current_hover_path = new_path.clone();
 
         self.dispatch_boundary_events(old_path.as_deref(), new_path.as_deref(), px, py);
+        let tooltip_changed = self.sync_hover_tooltip(px, py);
 
         let old_has_effects = old_path.as_deref().is_some_and(|p| {
             Self::node_path_has_hover_effects_with_sheets(
@@ -778,6 +818,10 @@ impl AppRuntime {
                     perf_log_ms("hover_repaint", hover_start, "paint-only hover");
                 }
             }
+            true
+        } else if tooltip_changed {
+            self.hover_paint_only = true;
+            self.compile_display_list();
             true
         } else {
             self.hover_paint_only = false;
@@ -870,6 +914,9 @@ impl AppRuntime {
                 }
                 let child_bp = flat[idx];
                 prefix.push(idx);
+                if AppRuntime::subtree_has_group_hover_effects(child_bp) {
+                    return false;
+                }
                 if AppRuntime::node_has_hover_effects(child_bp) {
                     let parent_style = cur_layout.style.clone();
                     let child_layout = &mut cur_layout.children[idx];
@@ -1050,6 +1097,11 @@ impl AppRuntime {
     /// Clears any active hover state when the pointer departs the window surface.
     pub fn clear_hover(&mut self) -> bool {
         if self.current_hover_path.is_none() {
+            if self.dismiss_hover_tooltip() {
+                self.hover_paint_only = true;
+                self.compile_display_list();
+                return true;
+            }
             return false;
         }
         let old_path = self.current_hover_path.take();
@@ -1059,6 +1111,7 @@ impl AppRuntime {
             self.last_mouse_pos.0,
             self.last_mouse_pos.1,
         );
+        let tooltip_dismissed = self.dismiss_hover_tooltip();
         let old_has_effects = old_path
             .as_deref()
             .is_some_and(|p| Self::node_path_has_hover_effects(&self.root_blueprint, p));
@@ -1081,9 +1134,298 @@ impl AppRuntime {
                 }
             }
             true
+        } else if tooltip_dismissed {
+            self.hover_paint_only = true;
+            self.compile_display_list();
+            true
         } else {
             self.hover_paint_only = false;
             false
         }
+    }
+
+    /// Resolves the nearest native tooltip text along `path` (deepest hovered element up to root).
+    /// Prefers non-empty `title` attributes, falling back to non-empty `alt` attributes on
+    /// `<button>` and `<img>` elements when no `title` is present along the hovered chain.
+    pub(crate) fn resolve_hover_tooltip(
+        blueprint: &NodeBlueprint,
+        path: &[usize],
+    ) -> Option<(Vec<usize>, String)> {
+        let mut chain: Vec<(Vec<usize>, &NodeBlueprint)> = Vec::with_capacity(path.len() + 1);
+        let mut current = blueprint;
+        let mut prefix = Vec::with_capacity(path.len());
+        chain.push((prefix.clone(), current));
+        for &idx in path {
+            let mut flat = Vec::new();
+            match current {
+                NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children) => {
+                    for child in children {
+                        Self::flatten_blueprints(child, &mut flat);
+                    }
+                }
+                _ => break,
+            }
+            if idx >= flat.len() {
+                break;
+            }
+            current = flat[idx];
+            prefix.push(idx);
+            chain.push((prefix.clone(), current));
+        }
+
+        // Pass 1: explicit non-empty `title` attribute (deepest wins).
+        for (node_path, node) in chain.iter().rev() {
+            if let NodeBlueprint::Element { attributes, .. } = node {
+                for attr in attributes {
+                    if let strata_dom::Attribute::Property { key, value } = attr {
+                        if key.eq_ignore_ascii_case("title") {
+                            let trimmed = value.trim();
+                            if !trimmed.is_empty() {
+                                return Some((node_path.clone(), trimmed.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pass 2: fallback to non-empty `alt` attribute on `<button>` or `<img>`.
+        for (node_path, node) in chain.iter().rev() {
+            if let NodeBlueprint::Element {
+                tag, attributes, ..
+            } = node
+            {
+                let supports_alt_tooltip = match tag {
+                    strata_dom::Tag::Img | strata_dom::Tag::Button => true,
+                    strata_dom::Tag::Custom(name) => {
+                        name.eq_ignore_ascii_case("img") || name.eq_ignore_ascii_case("button")
+                    }
+                    _ => false,
+                };
+                if !supports_alt_tooltip {
+                    continue;
+                }
+                for attr in attributes {
+                    if let strata_dom::Attribute::Property { key, value } = attr {
+                        if key.eq_ignore_ascii_case("alt") {
+                            let trimmed = value.trim();
+                            if !trimmed.is_empty() {
+                                return Some((node_path.clone(), trimmed.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Synchronizes hover tooltip state with `self.current_hover_path`.
+    /// Returns `true` when an active visible tooltip was hidden or changed and requires repainting.
+    pub(crate) fn sync_hover_tooltip(&mut self, px: f32, py: f32) -> bool {
+        let resolved = self
+            .current_hover_path
+            .as_deref()
+            .and_then(|p| Self::resolve_hover_tooltip(&self.root_blueprint, p));
+
+        match resolved {
+            Some((owner_path, text)) => {
+                if self.hover_tooltip_path.as_ref() == Some(&owner_path)
+                    && self.hover_tooltip_text.as_deref() == Some(text.as_str())
+                {
+                    if self.hover_tooltip_since.is_some() && !self.hover_tooltip_visible {
+                        self.hover_tooltip_anchor = (px, py);
+                    }
+                    false
+                } else {
+                    let was_visible = self.hover_tooltip_visible;
+                    self.hover_tooltip_path = Some(owner_path);
+                    self.hover_tooltip_text = Some(text);
+                    self.hover_tooltip_anchor = (px, py);
+                    self.hover_tooltip_since = if self.is_mouse_down {
+                        None
+                    } else {
+                        Some(std::time::Instant::now())
+                    };
+                    self.hover_tooltip_visible = false;
+                    was_visible
+                }
+            }
+            None => self.dismiss_hover_tooltip(),
+        }
+    }
+
+    /// Re-validates the active hover tooltip after `root_blueprint` is replaced by `update_view`.
+    pub(crate) fn refresh_hover_tooltip_after_view_update(&mut self) {
+        let Some(ref path) = self.current_hover_path else {
+            self.dismiss_hover_tooltip();
+            return;
+        };
+        match Self::resolve_hover_tooltip(&self.root_blueprint, path) {
+            Some((owner_path, text)) => {
+                if self.hover_tooltip_path.as_ref() == Some(&owner_path) {
+                    self.hover_tooltip_text = Some(text);
+                } else {
+                    self.hover_tooltip_path = Some(owner_path);
+                    self.hover_tooltip_text = Some(text);
+                    self.hover_tooltip_anchor = self.last_mouse_pos;
+                    self.hover_tooltip_since = if self.is_mouse_down {
+                        None
+                    } else {
+                        Some(std::time::Instant::now())
+                    };
+                    self.hover_tooltip_visible = false;
+                }
+            }
+            None => {
+                self.dismiss_hover_tooltip();
+            }
+        }
+    }
+
+    /// Clears all pending/visible native hover tooltip state.
+    /// Returns `true` if a visible tooltip was dismissed.
+    pub fn dismiss_hover_tooltip(&mut self) -> bool {
+        let was_visible = self.hover_tooltip_visible;
+        self.hover_tooltip_text = None;
+        self.hover_tooltip_path = None;
+        self.hover_tooltip_since = None;
+        self.hover_tooltip_visible = false;
+        was_visible
+    }
+
+    /// Dismisses any visible or pending native hover tooltip and recompiles the display list if
+    /// the tooltip was visible on screen.
+    pub fn dismiss_hover_tooltip_and_repaint(&mut self) -> bool {
+        let was_visible = self.hover_tooltip_visible;
+        self.hover_tooltip_since = None;
+        self.hover_tooltip_visible = false;
+        if was_visible {
+            self.paint_dirty = true;
+            self.compile_display_list();
+        }
+        was_visible
+    }
+
+    /// Returns the remaining duration until a pending native hover tooltip should appear.
+    pub fn next_hover_tooltip_due_in(&self) -> Option<std::time::Duration> {
+        if self.hover_tooltip_visible || self.is_mouse_down {
+            return None;
+        }
+        let (_, Some(since)) = (&self.hover_tooltip_text, self.hover_tooltip_since) else {
+            return None;
+        };
+        Some(self.hover_tooltip_delay.saturating_sub(since.elapsed()))
+    }
+
+    /// Advances the native hover tooltip dwell timer. Returns `true` when the tooltip transitions
+    /// to visible and updates the display list.
+    pub fn poll_hover_tooltip(&mut self) -> bool {
+        if self.hover_tooltip_visible || self.is_mouse_down {
+            return false;
+        }
+        let (Some(_), Some(since)) = (&self.hover_tooltip_text, self.hover_tooltip_since) else {
+            return false;
+        };
+        if since.elapsed() < self.hover_tooltip_delay {
+            return false;
+        }
+        self.hover_tooltip_visible = true;
+        self.paint_dirty = true;
+        self.compile_display_list();
+        true
+    }
+
+    /// Appends native hover tooltip draw commands on top of the compiled display list when active.
+    pub fn render_hover_tooltip(&mut self) {
+        if !self.hover_tooltip_visible {
+            return;
+        }
+        let Some(ref text) = self.hover_tooltip_text else {
+            return;
+        };
+        if text.is_empty() || self.viewport_width <= 0.0 || self.viewport_height <= 0.0 {
+            return;
+        }
+
+        let font_size = 12.0_f32;
+        let line_height = 1.35_f32;
+        let font_family = strata_primitives::AtomId::FONT_SANS;
+        let font_weight = strata_style::types::FontWeight::Normal;
+        let pad_x = 9.0_f32;
+        let pad_y = 5.0_f32;
+        let margin = 6.0_f32;
+        let max_text_w = (self.viewport_width - pad_x * 2.0 - margin * 2.0).clamp(96.0, 340.0);
+
+        let (tw, th) = strata_layout::measure_text_bounds_styled_with_family(
+            text,
+            font_size,
+            line_height,
+            Some(max_text_w),
+            false,
+            font_family,
+            font_weight,
+            strata_style::types::FontStyle::Normal,
+        );
+        let text_w = tw.max(12.0).min(max_text_w);
+        let text_h = th.max(font_size * line_height);
+        let box_w = (text_w + pad_x * 2.0)
+            .ceil()
+            .min((self.viewport_width - margin * 2.0).max(24.0));
+        let box_h = (text_h + pad_y * 2.0)
+            .ceil()
+            .min((self.viewport_height - margin * 2.0).max(22.0));
+
+        let (ax, ay) = self.hover_tooltip_anchor;
+        let mut x = ax + 12.0;
+        let mut y = ay + 18.0;
+        if x + box_w > self.viewport_width - margin {
+            x = (self.viewport_width - margin - box_w).max(margin);
+        }
+        if y + box_h > self.viewport_height - margin {
+            y = (ay - box_h - 10.0).max(margin);
+        }
+        x = x.max(margin);
+        y = y.max(margin);
+
+        let bounds = strata_layout::Rect::new(x, y, box_w, box_h);
+        let radius = strata_style::types::BorderRadius::all(6.0);
+
+        self.display_list
+            .push(strata_render::compositor::DrawCommand::DrawShadow {
+                bounds,
+                shadow: strata_style::types::BoxShadow {
+                    offset_x: 0.0,
+                    offset_y: 4.0,
+                    blur_radius: 12.0,
+                    spread_radius: 0.0,
+                    color: strata_style::types::Color::new(0, 0, 0, 110),
+                    inset: false,
+                },
+                border_radius: radius,
+            });
+        self.display_list
+            .push(strata_render::compositor::DrawCommand::DrawRoundedRect {
+                bounds,
+                color: strata_style::types::Color::new(18, 22, 29, 242),
+                border_radius: radius,
+                border_width: strata_primitives::geom::EdgeInsets::all(1.0),
+                border_color: Some(strata_style::types::Color::new(255, 255, 255, 34)),
+            });
+        self.display_list
+            .push(strata_render::compositor::DrawCommand::DrawText {
+                origin: (x + pad_x, y + pad_y),
+                bounds_width: Some((box_w - pad_x * 2.0).max(1.0)),
+                bounds_height: Some((box_h - pad_y * 2.0).max(1.0)),
+                text_align: strata_style::TextAlign::Left,
+                text: text.clone(),
+                font_size,
+                line_height,
+                font_weight,
+                color: strata_style::types::Color::new(241, 245, 249, 255),
+                is_monospace: false,
+                font_family,
+            });
     }
 }

@@ -807,6 +807,45 @@ unsafe extern "system" fn win32_wnd_proc(
                 PostQuitMessage(0);
                 return 0;
             }
+            0x0233 => {
+                // WM_DROPFILES
+                let hdrop = wparam;
+                let shell32 = GetModuleHandleA(b"shell32.dll\0".as_ptr());
+                if shell32 != 0 && hdrop != 0 {
+                    type DragQueryFileWFn =
+                        unsafe extern "system" fn(usize, u32, *mut u16, u32) -> u32;
+                    type DragFinishFn = unsafe extern "system" fn(usize);
+                    if let Some(query_sym) = GetProcAddress(shell32, b"DragQueryFileW\0".as_ptr()) {
+                        let drag_query: DragQueryFileWFn = std::mem::transmute(query_sym);
+                        let count = drag_query(hdrop, 0xFFFF_FFFF, std::ptr::null_mut(), 0);
+                        let mut paths = Vec::with_capacity(count as usize);
+                        for idx in 0..count {
+                            let len = drag_query(hdrop, idx, std::ptr::null_mut(), 0);
+                            if len > 0 {
+                                let mut buf = vec![0u16; (len + 1) as usize];
+                                let written =
+                                    drag_query(hdrop, idx, buf.as_mut_ptr(), len + 1);
+                                if written > 0 {
+                                    let s = String::from_utf16_lossy(&buf[..written as usize]);
+                                    paths.push(std::path::PathBuf::from(s));
+                                }
+                            }
+                        }
+                        if !paths.is_empty() {
+                            state
+                                .lock()
+                                .unwrap()
+                                .event_queue
+                                .push_back(PlatformEvent::FileDrop(paths));
+                        }
+                    }
+                    if let Some(finish_sym) = GetProcAddress(shell32, b"DragFinish\0".as_ptr()) {
+                        let drag_finish: DragFinishFn = std::mem::transmute(finish_sym);
+                        drag_finish(hdrop);
+                    }
+                }
+                return 0;
+            }
             _ => {}
         }
     }

@@ -29,6 +29,14 @@ pub enum EventType {
     Focus,
     Blur,
     Wheel,
+    Scroll,
+    DragStart,
+    Drag,
+    DragEnter,
+    DragOver,
+    DragLeave,
+    Drop,
+    DragEnd,
     TransitionRun,
     TransitionStart,
     TransitionEnd,
@@ -57,8 +65,8 @@ pub struct Event {
     pub phase: Cell<EventPhase>,
     pub target_id: Option<u32>,
     pub current_target_id: Cell<Option<u32>>,
-    pub propagation_stopped: Cell<bool>,
-    pub default_prevented: Cell<bool>,
+    pub propagation_stopped: std::rc::Rc<Cell<bool>>,
+    pub default_prevented: std::rc::Rc<Cell<bool>>,
 
     // Text & Form Value Properties
     pub value: String,
@@ -83,9 +91,19 @@ pub struct Event {
     pub pointer_capture_requested: std::rc::Rc<Cell<Option<bool>>>,
     pub cursor_warp_requested: std::rc::Rc<Cell<Option<(f64, f64)>>>,
 
-    // Element Layout Measurement Properties (ResizeObserver / onresize)
+    // Element Layout & Scroll Measurement Properties (ResizeObserver / onresize / onscroll)
     pub width: f64,
     pub height: f64,
+    pub scroll_top: f64,
+    pub scroll_left: f64,
+    pub scroll_height: f64,
+    pub scroll_width: f64,
+    pub client_height: f64,
+    pub client_width: f64,
+
+    // Drag-and-Drop & FileDrop Properties (W3C DragEvent / DataTransfer)
+    pub files: Vec<std::path::PathBuf>,
+    pub data_transfer: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, String>>>,
 
     // Keyboard Properties (W3C KeyboardEvent)
     pub key: String,
@@ -121,8 +139,8 @@ impl Default for Event {
             phase: Cell::new(EventPhase::None),
             target_id: None,
             current_target_id: Cell::new(None),
-            propagation_stopped: Cell::new(false),
-            default_prevented: Cell::new(false),
+            propagation_stopped: std::rc::Rc::new(Cell::new(false)),
+            default_prevented: std::rc::Rc::new(Cell::new(false)),
             value: String::new(),
             data: None,
             input_type: String::new(),
@@ -144,6 +162,16 @@ impl Default for Event {
             cursor_warp_requested: std::rc::Rc::new(Cell::new(None)),
             width: 0.0,
             height: 0.0,
+            scroll_top: 0.0,
+            scroll_left: 0.0,
+            scroll_height: 0.0,
+            scroll_width: 0.0,
+            client_height: 0.0,
+            client_width: 0.0,
+            files: Vec::new(),
+            data_transfer: std::rc::Rc::new(std::cell::RefCell::new(
+                std::collections::HashMap::new(),
+            )),
             key: String::new(),
             code: String::new(),
             repeat: false,
@@ -170,6 +198,18 @@ impl Event {
             event_type,
             ..Default::default()
         }
+    }
+
+    /// Stores a key/value payload in the shared drag-and-drop `DataTransfer` store.
+    pub fn set_data(&self, format: impl Into<String>, data: impl Into<String>) {
+        self.data_transfer
+            .borrow_mut()
+            .insert(format.into(), data.into());
+    }
+
+    /// Retrieves a payload by format key from the shared drag-and-drop `DataTransfer` store.
+    pub fn get_data(&self, format: &str) -> Option<String> {
+        self.data_transfer.borrow().get(format).cloned()
     }
 
     /// Requests pointer capture on the current event target for `pointer_id` so subsequent

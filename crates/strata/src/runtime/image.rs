@@ -267,6 +267,15 @@ impl AppRuntime {
                     Tag::Custom(s) => *s == "rect",
                     _ => false,
                 };
+                let is_text_tag = match tag {
+                    Tag::Custom(s) => matches!(*s, "text" | "tspan"),
+                    _ => false,
+                };
+                let mut text_dx = 0.0f32;
+                let mut text_dy = 0.0f32;
+                let mut text_font_size = 12.0f32;
+                let mut text_font_weight = strata_style::types::FontWeight::Normal;
+                let mut text_anchor = strata_style::TextAlign::Left;
 
                 for attr in attributes {
                     if let strata_dom::Attribute::Property { key, value } = attr {
@@ -388,10 +397,38 @@ impl AppRuntime {
                                 has_ellipse = true;
                             }
                             "x" => {
-                                rect_x = value.parse().unwrap_or(0.0);
+                                rect_x = value.trim_end_matches("px").parse().unwrap_or(0.0);
                             }
                             "y" => {
-                                rect_y = value.parse().unwrap_or(0.0);
+                                rect_y = value.trim_end_matches("px").parse().unwrap_or(0.0);
+                            }
+                            "dx" => {
+                                text_dx = value.trim_end_matches("px").parse().unwrap_or(0.0);
+                            }
+                            "dy" => {
+                                text_dy = value.trim_end_matches("px").parse().unwrap_or(0.0);
+                            }
+                            "font-size" | "fontSize" => {
+                                if let Ok(fs) = value.trim().trim_end_matches("px").parse::<f32>() {
+                                    text_font_size = fs.max(1.0);
+                                }
+                            }
+                            "font-weight" | "fontWeight" => {
+                                text_font_weight = match value.trim().to_ascii_lowercase().as_str() {
+                                    "bold" | "700" | "800" | "900" => {
+                                        strata_style::types::FontWeight::Bold
+                                    }
+                                    "semibold" | "600" => strata_style::types::FontWeight::SemiBold,
+                                    "medium" | "500" => strata_style::types::FontWeight::Medium,
+                                    _ => strata_style::types::FontWeight::Normal,
+                                };
+                            }
+                            "text-anchor" | "textAnchor" => {
+                                text_anchor = match value.trim().to_ascii_lowercase().as_str() {
+                                    "middle" => strata_style::TextAlign::Center,
+                                    "end" => strata_style::TextAlign::Right,
+                                    _ => strata_style::TextAlign::Left,
+                                };
                             }
                             "width" => {
                                 rect_w = value.parse().unwrap_or(0.0);
@@ -406,9 +443,47 @@ impl AppRuntime {
                     }
                 }
 
-                if let Some(path_str) = d {
+                if is_text_tag {
+                    let mut text_content = String::new();
+                    for child in children {
+                        match child {
+                            NodeBlueprint::Text(t) => text_content.push_str(t),
+                            NodeBlueprint::DynamicText(f) => {
+                                text_content.push_str(&f());
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !text_content.is_empty() {
+                        let resolved_fill = fill.or(stroke).or(Some(parent_color));
+                        let resolved_is_current =
+                            fill_is_current || (fill.is_none() && stroke.is_none());
+                        items.push(strata_layout::SvgItem {
+                            path_data: String::new(),
+                            text: Some(strata_layout::SvgTextData {
+                                content: text_content,
+                                x: rect_x + text_dx,
+                                y: rect_y + text_dy,
+                                font_size: text_font_size,
+                                font_weight: text_font_weight,
+                                text_anchor,
+                            }),
+                            stroke_color: stroke,
+                            fill_color: resolved_fill,
+                            stroke_is_current_color: stroke_is_current,
+                            fill_is_current_color: resolved_is_current,
+                            stroke_width,
+                            stroke_linecap,
+                            stroke_linejoin,
+                            stroke_dasharray: stroke_dasharray.clone(),
+                            fill_rule,
+                            view_box: default_view_box,
+                        });
+                    }
+                } else if let Some(path_str) = d {
                     items.push(strata_layout::SvgItem {
                         path_data: path_str,
+                        text: None,
                         stroke_color: stroke,
                         fill_color: fill,
                         stroke_is_current_color: stroke_is_current,
@@ -424,6 +499,7 @@ impl AppRuntime {
                     if let Some(poly_path) = Self::parse_points_to_path(&pts, is_polygon) {
                         items.push(strata_layout::SvgItem {
                             path_data: poly_path,
+                            text: None,
                             stroke_color: stroke,
                             fill_color: fill,
                             stroke_is_current_color: stroke_is_current,
@@ -439,6 +515,7 @@ impl AppRuntime {
                 } else if has_line {
                     items.push(strata_layout::SvgItem {
                         path_data: format!("M {} {} L {} {}", x1, y1, x2, y2),
+                        text: None,
                         stroke_color: stroke.or(Some(parent_color)),
                         fill_color: None,
                         stroke_is_current_color: stroke_is_current || stroke.is_none(),
@@ -455,6 +532,7 @@ impl AppRuntime {
                         path_data: Self::ellipse_to_cubic_bezier_path(
                             cx, cy, r, r, rotation.0, rotation.1, rotation.2,
                         ),
+                        text: None,
                         stroke_color: stroke,
                         fill_color: fill,
                         stroke_is_current_color: stroke_is_current,
@@ -471,6 +549,7 @@ impl AppRuntime {
                         path_data: Self::ellipse_to_cubic_bezier_path(
                             cx, cy, rx, ry, rotation.0, rotation.1, rotation.2,
                         ),
+                        text: None,
                         stroke_color: stroke,
                         fill_color: fill,
                         stroke_is_current_color: stroke_is_current,
@@ -511,6 +590,7 @@ impl AppRuntime {
                     };
                     items.push(strata_layout::SvgItem {
                         path_data: rect_path,
+                        text: None,
                         stroke_color: stroke,
                         fill_color: fill,
                         stroke_is_current_color: stroke_is_current,
@@ -524,7 +604,7 @@ impl AppRuntime {
                     });
                 }
 
-                // Recurse for children (e.g. <g>, or nested paths)
+                // Recurse for children (e.g. <g>, <text><tspan>, or nested paths)
                 for child in children {
                     let child_items = Self::collect_svg_items_with_transform(
                         child,

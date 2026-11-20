@@ -23,14 +23,13 @@ impl TailwindEngine {
         let state = crate::selector::PseudoState {
             is_hovered,
             is_focused,
-            is_active: false,
-            is_disabled: false,
             is_dark: is_dark_mode,
+            ..Default::default()
         };
         Self::resolve_classes_with_pseudo_state(classes, &state)
     }
 
-    /// Resolves Tailwind classes evaluating a full `PseudoState` (`hover:`, `focus:`, `active:`, `disabled:`, `dark:`).
+    /// Resolves Tailwind classes evaluating a full `PseudoState` (`hover:`, `focus:`, `active:`, `disabled:`, `dark:`, `group-hover:`).
     pub fn resolve_classes_with_pseudo_state(
         classes: &str,
         state: &crate::selector::PseudoState,
@@ -55,9 +54,8 @@ impl TailwindEngine {
         let state = crate::selector::PseudoState {
             is_hovered,
             is_focused,
-            is_active: false,
-            is_disabled: false,
             is_dark: is_dark_mode,
+            ..Default::default()
         };
         Self::apply_class_with_pseudo_state(style, token, &state);
     }
@@ -2571,13 +2569,25 @@ fn match_modifiers<'a>(
                 has_interactive = true;
                 state.is_hovered
             }
+            "group-hover" => {
+                has_interactive = true;
+                state.is_group_hovered
+            }
             "focus" | "focus-visible" | "focus-within" => {
                 has_interactive = true;
                 state.is_focused
             }
+            "group-focus" | "group-focus-visible" | "group-focus-within" => {
+                has_interactive = true;
+                state.is_group_focused
+            }
             "active" => {
                 has_interactive = true;
                 state.is_active
+            }
+            "group-active" => {
+                has_interactive = true;
+                state.is_group_active
             }
             "disabled" => state.is_disabled,
             "dark" => state.is_dark,

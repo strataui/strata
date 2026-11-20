@@ -499,3 +499,353 @@ fn test_smooth_scroll_consecutive_impulses_preserve_exact_layout_offset() {
     );
 }
 
+#[test]
+fn test_onscroll_event_and_programmatic_scroll_to_bottom_and_scroll_into_view() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let observed_scroll = Rc::new(RefCell::new((0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64)));
+    let observed_clone = Rc::clone(&observed_scroll);
+    let on_scroll = move |e: Event| {
+        *observed_clone.borrow_mut() = (
+            e.scroll_top,
+            e.scroll_height,
+            e.client_height,
+            e.delta_y,
+        );
+    };
+
+    let mut runtime = AppRuntime::new(
+        rsx! {
+            <div
+                id="log-scroller"
+                class="flex flex-col w-[400px] h-[200px] overflow-y-auto bg-neutral-900"
+                onscroll=on_scroll
+            >
+                <div id="item-0" class="h-[150px] w-full shrink-0" />
+                <div id="item-1" class="h-[150px] w-full shrink-0" />
+                <div id="item-2" class="h-[150px] w-full shrink-0" />
+                <div id="item-3" class="h-[150px] w-full shrink-0" />
+            </div>
+        },
+        400.0,
+        200.0,
+        1.0,
+    );
+
+    assert_eq!(runtime.scroll_offset_by_id("log-scroller"), (0.0, 0.0));
+    assert_eq!(get_scroll_offset("log-scroller"), (0.0, 0.0));
+
+    // 1. Wheel scroll fires onscroll with live scroll_top, scroll_height (600), client_height (200), delta_y (80)
+    assert!(runtime.dispatch_scroll(100.0, 100.0, 0.0, 80.0));
+    let (top, sh, ch, dy) = *observed_scroll.borrow();
+    assert!((top - 80.0).abs() < 0.01);
+    assert!((sh - 600.0).abs() < 0.01);
+    assert!((ch - 200.0).abs() < 0.01);
+    assert!((dy - 80.0).abs() < 0.01);
+    assert_eq!(get_scroll_offset("log-scroller"), (0.0, 80.0));
+
+    // 2. Programmatic scroll_to_bottom via global hook + flush
+    scroll_to_bottom("log-scroller");
+    assert!(runtime.flush_pending_scroll_commands());
+    assert_eq!(runtime.scroll_offset_by_id("log-scroller"), (0.0, 400.0));
+    assert_eq!(get_scroll_offset("log-scroller"), (0.0, 400.0));
+    assert!((observed_scroll.borrow().0 - 400.0).abs() < 0.01);
+
+    // 3. Programmatic scroll_to_top
+    scroll_to_top("log-scroller");
+    assert!(runtime.flush_pending_scroll_commands());
+    assert_eq!(runtime.scroll_offset_by_id("log-scroller"), (0.0, 0.0));
+
+    // 4. Programmatic scroll_into_view("item-2") (item-2 spans y = 300..450 in a 200px viewport -> scrolls to 250px)
+    scroll_into_view("item-2");
+    assert!(runtime.flush_pending_scroll_commands());
+    assert!(
+        (runtime.scroll_offset_by_id("log-scroller").1 - 250.0).abs() < 0.05,
+        "scroll_into_view(item-2) should scroll to 250.0, got {}",
+        runtime.scroll_offset_by_id("log-scroller").1
+    );
+}
+
+#[test]
+fn test_canvas2d_component_emits_draw_canvas2d_and_compiles_gpu_and_rasterizer() {
+    use std::rc::Rc;
+    use strata::style::types::Color;
+    use strata_render::compositor::DrawCommand;
+    use strata_ui::canvas::{Canvas2D, Canvas2DContext};
+
+    let draw_cb: Rc<dyn Fn(&mut Canvas2DContext)> = Rc::new(|ctx: &mut Canvas2DContext| {
+        ctx.set_fill_style(Color::rgba(255, 0, 0, 255));
+        ctx.fill_rect(10.0, 10.0, 60.0, 40.0);
+        ctx.set_stroke_style(Color::rgba(0, 255, 0, 255));
+        ctx.set_line_width(2.0);
+        ctx.stroke_rect(10.0, 10.0, 60.0, 40.0);
+        ctx.begin_path();
+        ctx.move_to(20.0, 80.0);
+        ctx.line_to(160.0, 80.0);
+        ctx.stroke();
+        ctx.begin_path();
+        ctx.arc(120.0, 50.0, 15.0, 0.0, std::f32::consts::TAU, false);
+        ctx.fill();
+    });
+
+    let view = Canvas2D(Some(200.0), Some(120.0), None, Some(draw_cb));
+    let runtime = AppRuntime::new(view, 240.0, 160.0, 1.0);
+
+    let has_canvas_cmd = runtime.display_list.commands.iter().any(|cmd| {
+        matches!(
+            cmd,
+            DrawCommand::DrawCanvas2D { commands, .. } if commands.len() == 4
+        )
+    });
+    assert!(
+        has_canvas_cmd,
+        "<Canvas2D> must emit DrawCommand::DrawCanvas2D with 4 recorded commands"
+    );
+
+    // GPU path pipeline must compile line/arc/path primitives from DrawCanvas2D
+    assert!(
+        !runtime.gpu_path_segments().is_empty(),
+        "GpuPathPipeline must compile path segments from DrawCommand::DrawCanvas2D"
+    );
+    let quad_batch =
+        strata_render::GpuBatch::from_display_list(&runtime.display_list, 240.0, 160.0);
+    assert!(
+        quad_batch.len() >= 2,
+        "GpuBatch must compile FillRect and StrokeRect from DrawCommand::DrawCanvas2D"
+    );
+
+    // Software FrameBuffer must rasterize the filled rectangle
+    let mut fb = strata_render::FrameBuffer::new(240, 160);
+    fb.execute_display_list(&runtime.display_list);
+    let px = fb.get_pixel(30, 30);
+    assert_eq!(px, Color::rgba(255, 0, 0, 255));
+}
+
+#[test]
+fn test_svg_text_and_stroke_dasharray_in_rasterizer_and_gpu_pipeline() {
+    use strata_render::compositor::DrawCommand;
+
+    let runtime = AppRuntime::new(
+        rsx! {
+            <div class="w-[200px] h-[100px] bg-black">
+                <svg viewBox="0 0 200 100" class="w-[200px] h-[100px]">
+                    <path
+                        d="M 20 30 L 180 30"
+                        stroke="#ff0000"
+                        stroke-width="6"
+                        stroke-dasharray="20,20"
+                        stroke-linecap="butt"
+                        fill="none"
+                    />
+                    <text x="100" y="75" font-size="16" text-anchor="middle" fill="#00ff00">
+                        "ALT 120m"
+                    </text>
+                </svg>
+            </div>
+        },
+        200.0,
+        100.0,
+        1.0,
+    );
+
+    let has_dashed_path = runtime.display_list.commands.iter().any(|cmd| {
+        matches!(
+            cmd,
+            DrawCommand::DrawSvgPath { stroke_dasharray, .. }
+                if stroke_dasharray.as_slice() == [20.0, 20.0]
+        )
+    });
+    assert!(has_dashed_path, "<svg> must propagate stroke-dasharray");
+
+    let has_svg_text = runtime.display_list.commands.iter().any(|cmd| {
+        matches!(
+            cmd,
+            DrawCommand::DrawText { text, .. } if text == "ALT 120m"
+        )
+    });
+    assert!(
+        has_svg_text,
+        "<svg> must parse <text> and emit DrawCommand::DrawText"
+    );
+
+    // Software rasterizer must leave gaps in the dashed line (x=30 is in first 20px dash [20..40], x=50 is in first 20px gap [40..60])
+    let mut fb = strata_render::FrameBuffer::new(200, 100);
+    fb.execute_display_list(&runtime.display_list);
+    let dash_on = fb.get_pixel(30, 30);
+    let dash_gap = fb.get_pixel(50, 30);
+    assert_eq!(
+        dash_on.r, 255,
+        "Pixel inside first dash [20..40] must be painted red"
+    );
+    assert_eq!(
+        dash_gap.r, 0,
+        "Pixel inside first dash gap [40..60] must remain background black"
+    );
+}
+
+#[test]
+fn test_platform_event_file_drop_and_uri_list_parsing() {
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+    use std::rc::Rc;
+
+    let parsed = strata_platform::parse_dropped_uri_list_to_paths(
+        "# comment\r\nfile:///tmp/mission%20plan.json\r\nfile://localhost/var/data/track.gpx\r\n",
+    );
+    assert_eq!(
+        parsed,
+        vec![
+            PathBuf::from("/tmp/mission plan.json"),
+            PathBuf::from("/var/data/track.gpx"),
+        ]
+    );
+
+    let dropped_files = Rc::new(RefCell::new(Vec::<PathBuf>::new()));
+    let dropped_clone = Rc::clone(&dropped_files);
+    let on_drop = move |e: Event| {
+        *dropped_clone.borrow_mut() = e.files.clone();
+    };
+
+    let mut runtime = AppRuntime::new(
+        rsx! {
+            <div
+                class="w-[300px] h-[200px] bg-neutral-900"
+                ondrop=on_drop
+            >
+                "Drop Zone"
+            </div>
+        },
+        300.0,
+        200.0,
+        1.0,
+    );
+
+    runtime.step_event(&PlatformEvent::MouseMove { x: 100.0, y: 100.0 });
+    let redraw = runtime.step_event(&PlatformEvent::FileDrop(parsed.clone()));
+    assert!(redraw);
+    assert_eq!(*dropped_files.borrow(), parsed);
+}
+
+#[test]
+fn test_use_click_outside_invoked_by_runtime_on_outside_pointer_down() {
+    let is_open = Signal::new(true);
+    let _handle = use_click_outside(is_open.clone(), {
+        let is_open = is_open.clone();
+        move || is_open.set(false)
+    });
+    let on_down = move |e: Event| {
+        e.stop_propagation();
+    };
+
+    let mut runtime = AppRuntime::new(
+        rsx! {
+            <div class="w-[400px] h-[300px] bg-black">
+                <div
+                    class="w-[150px] h-[100px] bg-neutral-800"
+                    onmousedown=on_down
+                >
+                    "Inside Popover"
+                </div>
+            </div>
+        },
+        400.0,
+        300.0,
+        1.0,
+    );
+
+    // 1. Clicking inside popover (50, 50) calls stop_propagation -> must NOT dismiss
+    runtime.dispatch_pointer_down(50.0, 50.0);
+    assert!(
+        is_open.get(),
+        "Clicking inside with stop_propagation must not trigger use_click_outside"
+    );
+
+    // 2. Clicking outside popover (300, 200) -> runtime automatically invokes use_click_outside
+    runtime.dispatch_pointer_down(300.0, 200.0);
+    assert!(
+        !is_open.get(),
+        "Clicking outside must automatically dismiss use_click_outside"
+    );
+}
+
+#[test]
+fn test_native_dom_drag_and_drop_lifecycle_with_data_transfer() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let log = Rc::new(RefCell::new(Vec::<String>::new()));
+    let l1 = Rc::clone(&log);
+    let l2 = Rc::clone(&log);
+    let l3 = Rc::clone(&log);
+    let l4 = Rc::clone(&log);
+    let l5 = Rc::clone(&log);
+    let l6 = Rc::clone(&log);
+
+    let on_drag_start = move |e: Event| {
+        e.set_data("text/plain", "node-42");
+        l1.borrow_mut().push("dragstart".to_string());
+    };
+    let on_drag_end = move |_e: Event| {
+        l2.borrow_mut().push("dragend".to_string());
+    };
+    let on_drag_enter = move |_e: Event| {
+        l3.borrow_mut().push("dragenter".to_string());
+    };
+    let on_drag_over = move |e: Event| {
+        e.prevent_default();
+        l4.borrow_mut().push("dragover".to_string());
+    };
+    let on_drag_leave = move |_e: Event| {
+        l5.borrow_mut().push("dragleave".to_string());
+    };
+    let on_drop = move |e: Event| {
+        let payload = e.get_data("text/plain").unwrap_or_default();
+        l6.borrow_mut().push(format!("drop:{payload}"));
+    };
+
+    let mut runtime = AppRuntime::new(
+        rsx! {
+            <div class="flex flex-row w-[400px] h-[200px] bg-black">
+                <div
+                    class="w-[150px] h-[150px] bg-blue-600"
+                    draggable="true"
+                    ondragstart=on_drag_start
+                    ondragend=on_drag_end
+                >
+                    "Draggable"
+                </div>
+                <div
+                    class="w-[150px] h-[150px] bg-neutral-800"
+                    ondragenter=on_drag_enter
+                    ondragover=on_drag_over
+                    ondragleave=on_drag_leave
+                    ondrop=on_drop
+                >
+                    "Drop Target"
+                </div>
+            </div>
+        },
+        400.0,
+        200.0,
+        1.0,
+    );
+
+    // Press on draggable source (x=50, y=50)
+    runtime.dispatch_pointer_down(50.0, 50.0);
+    // Move past drag threshold still over source (x=60, y=50) -> fires dragstart
+    runtime.dispatch_pointer_move(60.0, 50.0);
+    // Move into drop target (x=220, y=50) -> fires dragenter + dragover
+    runtime.dispatch_pointer_move(220.0, 50.0);
+    // Release over drop target -> fires drop + dragend
+    runtime.dispatch_pointer_up(220.0, 50.0);
+
+    let events = log.borrow().clone();
+    assert!(events.contains(&"dragstart".to_string()));
+    assert!(events.contains(&"dragenter".to_string()));
+    assert!(events.contains(&"dragover".to_string()));
+    assert!(events.contains(&"drop:node-42".to_string()));
+    assert_eq!(events.last().map(String::as_str), Some("dragend"));
+}
+
+

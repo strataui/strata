@@ -16,6 +16,9 @@ pub struct PseudoState {
     pub is_active: bool,
     pub is_disabled: bool,
     pub is_dark: bool,
+    pub is_group_hovered: bool,
+    pub is_group_focused: bool,
+    pub is_group_active: bool,
 }
 
 /// Attribute matching operator per W3C CSS Selectors Level 4.

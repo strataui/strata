@@ -3,9 +3,9 @@
 
 use crate::scene3d::{
     Background3D, Camera3D, Geometry3D, Light3D, Material3D, Mesh3D, RetainedCameraUniforms,
-    RetainedDynamicMesh, RetainedEnvironmentAssets, RetainedParticleBillboard,
-    RetainedParticleLayer, RetainedParticleSprite, RetainedStar, RetainedTerrainFrame,
-    RetainedTileMesh, RetainedTileTexture, RteTileVertex, Scene3D, TileKeyId,
+    RetainedDynamicMesh, RetainedEnvironmentAssets, RetainedOceanSurface,
+    RetainedParticleBillboard, RetainedParticleLayer, RetainedParticleSprite, RetainedStar,
+    RetainedTerrainFrame, RetainedTileMesh, RetainedTileTexture, RteTileVertex, Scene3D, TileKeyId,
 };
 use bytemuck::{Pod, Zeroable};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -154,21 +154,195 @@ struct GpuCameraUniforms {
     inv_view_proj_rte: [[f32; 4]; 4],
     ecef_from_icrf: [[f32; 4]; 4],
     icrf_from_ecef: [[f32; 4]; 4],
+    light_view_proj_rte: [[f32; 4]; 4],
     eye_high: [f32; 4],
     eye_low: [f32; 4],
-    sun_dir: [f32; 4],       // xyz = sun dir, w = sun_visible (0/1)
-    sun_color: [f32; 4],     // rgb = color, w = sun_angular_radius_rad
-    ambient_color: [f32; 4], // rgb = ambient, w = stars_intensity (0 when off)
+    sun_dir: [f32; 4],            // xyz = sun dir, w = sun_visible (0/1)
+    sun_color: [f32; 4],          // rgb = color, w = sun_angular_radius_rad
+    ambient_color: [f32; 4],      // rgb = ambient, w = stars_intensity (0 when off)
     sky_top: [f32; 4],
     sky_bottom: [f32; 4],
-    moon_dir: [f32; 4],     // xyz = moon dir, w = moon_visible (0/1)
-    env_params: [f32; 4], // x = day_night_strength, y = city_lights_intensity, z = local_25d_blend, w = moon_angular_radius_rad
-    cloud_params: [f32; 4], // x = cloud_layer_opacity, y = cloud_lon_offset_rad, z = time_s, w = space_sky_enabled (0/1)
-    viewport_wh: [f32; 4],  // x = w, y = h, z = 0, w = 0
+    moon_dir: [f32; 4],           // xyz = moon dir, w = moon_visible (0/1)
+    env_params: [f32; 4],         // x = day_night_strength, y = city_lights_intensity, z = local_25d_blend, w = moon_angular_radius_rad
+    cloud_params: [f32; 4],       // x = cloud_layer_opacity, y = cloud_lon_offset_rad, z = time_s, w = space_sky_enabled (0/1)
+    viewport_wh: [f32; 4],        // x = w, y = h, z = skybox_intensity, w = local_cloud_opacity
+    atmo_25d_params: [f32; 4],    // x = realistic_25d_sky, y = night_stars_25d, z = terrain_25d_lighting, w = terrain_25d_shadows
+    weather_opt_params: [f32; 4], // x = weather_darkness, y = weather_cloud_cover, z = weather_haze, w = shadow_radius_m
+    cloud_tint_params: [f32; 4],  // xyz = cloud_tint_rgb, w = cloud_25d_cover_boost
+}
+
+fn dot3_f64(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross3_f64(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn norm3_f64(a: [f64; 3], fallback: [f64; 3]) -> [f64; 3] {
+    let l = dot3_f64(a, a).sqrt();
+    if l > 1e-9 {
+        [a[0] / l, a[1] / l, a[2] / l]
+    } else {
+        fallback
+    }
+}
+
+/// Computes a texel-snapped RTE orthographic directional shadow matrix (`light_view_proj_rte`)
+/// framing visible mountains and 3D objects around the camera. Returns `(matrix, shadow_radius_m, active)`.
+fn compute_shadow_light_vp_rte(
+    cam: &RetainedCameraUniforms,
+    shadow_map_size: u32,
+) -> ([[f32; 4]; 4], f32, bool) {
+    let ident = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+    if cam.terrain_25d_shadows <= 0.001 || cam.local_25d_blend <= 0.02 {
+        return (ident, 0.0, false);
+    }
+
+    let sun = norm3_f64(
+        [cam.sun_dir[0] as f64, cam.sun_dir[1] as f64, cam.sun_dir[2] as f64],
+        [0.0, 0.0, 1.0],
+    );
+    let eye = cam.eye_ecef;
+    let eye_r = dot3_f64(eye, eye).sqrt();
+    let (eye_up, eye_alt, is_planet) = if eye_r > 1_000_000.0 {
+        (
+            [eye[0] / eye_r, eye[1] / eye_r, eye[2] / eye_r],
+            (eye_r - 6_378_137.0).max(30.0),
+            true,
+        )
+    } else {
+        ([0.0, 1.0, 0.0], eye[1].abs().max(eye_r * 0.5).max(15.0), false)
+    };
+
+    let sun_elev = dot3_f64(sun, eye_up);
+    if sun_elev <= 0.025 {
+        return (ident, 0.0, false);
+    }
+
+    // Clamp grazing light angle slightly when constructing the shadow ortho box so distant peaks still fit cleanly.
+    let radius = if is_planet {
+        (eye_alt * 3.8).clamp(380.0, 28_000.0)
+    } else {
+        (eye_alt * 3.0).clamp(40.0, 1_000.0)
+    };
+    let depth_half = (radius * 2.4).max(if is_planet { 14_000.0 } else { 200.0 });
+
+    // Camera forward vector in world space is `-row2(view_rot)` (column-major: row 2 = [view_rot[0][2], view_rot[1][2], view_rot[2][2]]).
+    let cam_fwd = norm3_f64(
+        [
+            -(cam.view_rot[0][2] as f64),
+            -(cam.view_rot[1][2] as f64),
+            -(cam.view_rot[2][2] as f64),
+        ],
+        [0.0, 0.0, -1.0],
+    );
+    let fwd_dot_up = dot3_f64(cam_fwd, eye_up);
+    let fwd_horiz = norm3_f64(
+        [
+            cam_fwd[0] - eye_up[0] * fwd_dot_up,
+            cam_fwd[1] - eye_up[1] * fwd_dot_up,
+            cam_fwd[2] - eye_up[2] * fwd_dot_up,
+        ],
+        [1.0, 0.0, 0.0],
+    );
+
+    // Center shadow frustum slightly ahead of camera and down toward ground relief.
+    let fwd_shift = radius * 0.36;
+    let down_shift = if is_planet {
+        eye_alt.min(radius * 0.65)
+    } else {
+        eye_alt * 0.5
+    };
+    let center_rel = [
+        fwd_horiz[0] * fwd_shift - eye_up[0] * down_shift,
+        fwd_horiz[1] * fwd_shift - eye_up[1] * down_shift,
+        fwd_horiz[2] * fwd_shift - eye_up[2] * down_shift,
+    ];
+
+    // Orthonormal light basis: l_right, l_up perpendicular to sun direction.
+    let ref_up = if dot3_f64(sun, eye_up).abs() > 0.96 {
+        fwd_horiz
+    } else {
+        eye_up
+    };
+    let l_right = norm3_f64(cross3_f64(ref_up, sun), [1.0, 0.0, 0.0]);
+    let l_up = norm3_f64(cross3_f64(sun, l_right), [0.0, 1.0, 0.0]);
+
+    // Snap world shadow center in light space to texel increments to prevent shimmer while panning.
+    let world_center = [
+        eye[0] + center_rel[0],
+        eye[1] + center_rel[1],
+        eye[2] + center_rel[2],
+    ];
+    let texel_size = (2.0 * radius) / (shadow_map_size.clamp(512, 4096) as f64);
+    let cx_l = (dot3_f64(world_center, l_right) / texel_size).floor() * texel_size;
+    let cy_l = (dot3_f64(world_center, l_up) / texel_size).floor() * texel_size;
+    let cz_l = dot3_f64(world_center, sun);
+
+    let eye_x_l = dot3_f64(eye, l_right);
+    let eye_y_l = dot3_f64(eye, l_up);
+    let eye_z_l = dot3_f64(eye, sun);
+
+    let dx = eye_x_l - cx_l;
+    let dy = eye_y_l - cy_l;
+    let dz = eye_z_l - cz_l;
+
+    // Map world_rel -> light NDC:
+    // ndc_x = (dot(world_rel, l_right) + dx) / radius
+    // ndc_y = (dot(world_rel, l_up) + dy) / radius
+    // ndc_z = 0.5 - (dot(world_rel, sun) + dz) / (2 * depth_half)  (closer to sun = smaller depth in [0, 1])
+    let sx = 1.0 / radius;
+    let sy = 1.0 / radius;
+    let sz = -0.5 / depth_half;
+
+    let mat = [
+        [
+            (l_right[0] * sx) as f32,
+            (l_up[0] * sy) as f32,
+            (sun[0] * sz) as f32,
+            0.0,
+        ],
+        [
+            (l_right[1] * sx) as f32,
+            (l_up[1] * sy) as f32,
+            (sun[1] * sz) as f32,
+            0.0,
+        ],
+        [
+            (l_right[2] * sx) as f32,
+            (l_up[2] * sy) as f32,
+            (sun[2] * sz) as f32,
+            0.0,
+        ],
+        [
+            (dx * sx) as f32,
+            (dy * sy) as f32,
+            (0.5 + dz * sz) as f32,
+            1.0,
+        ],
+    ];
+    (mat, radius as f32, true)
 }
 
 impl GpuCameraUniforms {
-    fn from_retained(cam: &RetainedCameraUniforms, viewport_w: f32, viewport_h: f32) -> Self {
+    fn from_retained(
+        cam: &RetainedCameraUniforms,
+        viewport_w: f32,
+        viewport_h: f32,
+        light_view_proj_rte: [[f32; 4]; 4],
+        shadow_radius_m: f32,
+        shadows_active: bool,
+    ) -> Self {
         let (ex_hi, ex_lo) = split_f64_to_f32(cam.eye_ecef[0]);
         let (ey_hi, ey_lo) = split_f64_to_f32(cam.eye_ecef[1]);
         let (ez_hi, ez_lo) = split_f64_to_f32(cam.eye_ecef[2]);
@@ -185,8 +359,14 @@ impl GpuCameraUniforms {
         };
         let inv_vp = invert_mat4(cam.view_proj_rte);
         let icrf_from_ecef = transpose_mat4(cam.ecef_from_icrf);
-        let space_sky = if cam.stars_visible || cam.sun_visible || cam.moon_visible {
+        let space_sky = if cam.stars_visible
+            || cam.sun_visible
+            || cam.moon_visible
+            || cam.realistic_25d_sky > 0.001
+        {
             1.0
+        } else if matches!(cam.background, Background3D::Solid(_)) {
+            2.0
         } else {
             0.0
         };
@@ -195,11 +375,17 @@ impl GpuCameraUniforms {
         } else {
             0.0
         };
+        let shadow_strength = if shadows_active {
+            cam.terrain_25d_shadows.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         Self {
             view_proj_rte: cam.view_proj_rte,
             inv_view_proj_rte: inv_vp,
             ecef_from_icrf: cam.ecef_from_icrf,
             icrf_from_ecef,
+            light_view_proj_rte,
             eye_high: [ex_hi, ey_hi, ez_hi, 0.0],
             eye_low: [ex_lo, ey_lo, ez_lo, 0.0],
             sun_dir: [
@@ -245,6 +431,123 @@ impl GpuCameraUniforms {
                 viewport_h.max(1.0),
                 cam.skybox_intensity.max(0.0),
                 cam.local_cloud_opacity.max(0.0),
+            ],
+            atmo_25d_params: [
+                cam.realistic_25d_sky.clamp(0.0, 1.0),
+                cam.night_stars_25d.clamp(0.0, 1.0),
+                cam.terrain_25d_lighting.clamp(0.0, 1.0),
+                shadow_strength,
+            ],
+            weather_opt_params: [
+                cam.weather_darkness.clamp(0.0, 1.0),
+                cam.weather_cloud_cover.clamp(0.0, 1.0),
+                cam.weather_haze.clamp(0.0, 1.0),
+                shadow_radius_m.max(0.0),
+            ],
+            cloud_tint_params: [
+                cam.cloud_tint_rgb[0].clamp(0.0, 2.0),
+                cam.cloud_tint_rgb[1].clamp(0.0, 2.0),
+                cam.cloud_tint_rgb[2].clamp(0.0, 2.0),
+                cam.cloud_25d_cover_boost.clamp(0.0, 1.0),
+            ],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuOceanUniforms {
+    origin_high: [f32; 4],    // xyz = split high f32 of ocean origin_ecef, w = enabled (0/1)
+    origin_low: [f32; 4],     // xyz = split low f32 of ocean origin_ecef, w = alt_fade
+    basis_east: [f32; 4],     // xyz = local ENU east, w = wave_strength
+    basis_north: [f32; 4],    // xyz = local ENU north, w = wave_scale
+    basis_up: [f32; 4],       // xyz = local ENU up, w = glint_intensity
+    train_a: [f32; 4],        // x = dir_e, y = dir_n, z = wind_speed_mps, w = phase_time_s
+    train_b: [f32; 4],        // x = dir_e, y = dir_n, z = wind_speed_mps, w = phase_time_s
+    blend_params: [f32; 4],   // x = weight_a, y = weight_b, z = opacity, w = coastal_shoaling (0/1)
+    coastal_params: [f32; 4], // x = shoaling_range_m, y = sdf_half_span_m, z = sdf_center_e, w = sdf_center_n
+}
+
+impl GpuOceanUniforms {
+    fn disabled() -> Self {
+        Self {
+            origin_high: [0.0; 4],
+            origin_low: [0.0; 4],
+            basis_east: [1.0, 0.0, 0.0, 0.0],
+            basis_north: [0.0, 1.0, 0.0, 1.0],
+            basis_up: [0.0, 0.0, 1.0, 1.0],
+            train_a: [1.0, 0.0, 8.0, 0.0],
+            train_b: [1.0, 0.0, 8.0, 0.0],
+            blend_params: [1.0, 0.0, 0.0, 0.0],
+            coastal_params: [360.0, 1_500.0, 0.0, 0.0],
+        }
+    }
+
+    fn from_retained(ocean: &RetainedOceanSurface, has_sdf_tex: bool) -> Self {
+        if !ocean.enabled || ocean.alt_fade <= 0.002 || ocean.opacity <= 0.002 {
+            return Self::disabled();
+        }
+        let (ox_hi, ox_lo) = split_f64_to_f32(ocean.origin_ecef[0]);
+        let (oy_hi, oy_lo) = split_f64_to_f32(ocean.origin_ecef[1]);
+        let (oz_hi, oz_lo) = split_f64_to_f32(ocean.origin_ecef[2]);
+        let norm2 = |v: [f32; 2]| -> [f32; 2] {
+            let l = (v[0] * v[0] + v[1] * v[1]).sqrt();
+            if l > 1e-5 {
+                [v[0] / l, v[1] / l]
+            } else {
+                [1.0, 0.0]
+            }
+        };
+        let da = norm2(ocean.train_a.dir_en);
+        let db = norm2(ocean.train_b.dir_en);
+        Self {
+            origin_high: [ox_hi, oy_hi, oz_hi, 1.0],
+            origin_low: [ox_lo, oy_lo, oz_lo, ocean.alt_fade.clamp(0.0, 1.0)],
+            basis_east: [
+                ocean.basis_east[0],
+                ocean.basis_east[1],
+                ocean.basis_east[2],
+                ocean.wave_strength.clamp(0.0, 4.0),
+            ],
+            basis_north: [
+                ocean.basis_north[0],
+                ocean.basis_north[1],
+                ocean.basis_north[2],
+                ocean.wave_scale.clamp(0.15, 6.0),
+            ],
+            basis_up: [
+                ocean.basis_up[0],
+                ocean.basis_up[1],
+                ocean.basis_up[2],
+                ocean.glint_intensity.clamp(0.0, 4.0),
+            ],
+            train_a: [
+                da[0],
+                da[1],
+                ocean.train_a.wind_speed_mps.clamp(0.2, 60.0),
+                ocean.train_a.phase_time_s,
+            ],
+            train_b: [
+                db[0],
+                db[1],
+                ocean.train_b.wind_speed_mps.clamp(0.2, 60.0),
+                ocean.train_b.phase_time_s,
+            ],
+            blend_params: [
+                ocean.train_a.weight.clamp(0.0, 1.0),
+                ocean.train_b.weight.clamp(0.0, 1.0),
+                ocean.opacity.clamp(0.0, 1.0),
+                if ocean.coastal_shoaling && has_sdf_tex {
+                    1.0
+                } else {
+                    0.0
+                },
+            ],
+            coastal_params: [
+                ocean.shoaling_range_m.max(20.0),
+                ocean.sdf_half_span_m.max(50.0),
+                ocean.sdf_center_en_m[0],
+                ocean.sdf_center_en_m[1],
             ],
         }
     }
@@ -295,6 +598,7 @@ struct GpuParticleLayerUniforms {
     basis_east: [f32; 4],      // xyz = local ENU east, w = wrapped_phase.x
     basis_north: [f32; 4],     // xyz = local ENU north, w = wrapped_phase.y
     basis_up: [f32; 4],        // xyz = local ENU up, w = wrapped_phase.z
+    forward_bias: [f32; 4],    // xyz = world-space forward cone center offset, w = 0.0
     cam_right_mpx: [f32; 4],   // xyz = camera right world vec, w = meters_per_px_at_1m
     cam_up_pad: [f32; 4],      // xyz = camera up world vec, w = 0.0
     altitude_bounds: [f32; 4], // x = eye_alt_msl, y = ground_alt_msl, z = ceiling_alt_msl, w = ceiling_fade_m
@@ -371,6 +675,7 @@ struct GpuCameraUniforms {
     inv_view_proj_rte: mat4x4<f32>,
     ecef_from_icrf: mat4x4<f32>,
     icrf_from_ecef: mat4x4<f32>,
+    light_view_proj_rte: mat4x4<f32>,
     eye_high: vec4<f32>,
     eye_low: vec4<f32>,
     sun_dir: vec4<f32>,
@@ -382,6 +687,9 @@ struct GpuCameraUniforms {
     env_params: vec4<f32>,
     cloud_params: vec4<f32>,
     viewport_wh: vec4<f32>,
+    atmo_25d_params: vec4<f32>,
+    weather_opt_params: vec4<f32>,
+    cloud_tint_params: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> cam: GpuCameraUniforms;
@@ -439,6 +747,93 @@ fn noise3(p: vec3<f32>) -> f32 {
     );
 }
 
+fn eval_physical_sky_25d(
+    rd: vec3<f32>,
+    eye_up: vec3<f32>,
+    horiz_sin: f32,
+    sun_dir: vec3<f32>,
+    weather_dark: f32,
+    cloud_cov: f32,
+    haze: f32,
+) -> vec3<f32> {
+    let mu = dot(rd, eye_up);
+    let elev = mu - horiz_sin;
+    let h_elev = clamp(max(elev, 0.0), 0.0, 1.0);
+    let sun_elev = dot(sun_dir, eye_up);
+
+    // Kasten-Young optical air mass approximation for solar transmittance & Rayleigh scattering.
+    let sun_deg = max(sun_elev * 57.29578, -2.0);
+    let m_sun = 1.0 / (max(sun_elev, 0.008) + 0.15 * pow(max(sun_deg + 3.885, 0.45), -1.253));
+    let sun_trans = exp(-vec3<f32>(0.085, 0.195, 0.46) * clamp(m_sun * 0.48, 0.0, 18.0));
+
+    let day_t = smoothstep(-0.08, 0.24, sun_elev);
+    let twilight_t = smoothstep(-0.22, -0.02, sun_elev) * (1.0 - smoothstep(0.02, 0.22, sun_elev));
+    let golden_t = exp(-pow((sun_elev - 0.03) * 7.8, 2.0));
+
+    // Noon zenith/mid/horizon -> Golden sunset/sunrise -> Twilight -> Deep midnight indigo.
+    let noon_zenith = vec3<f32>(0.08, 0.23, 0.56);
+    let noon_mid = vec3<f32>(0.24, 0.50, 0.86);
+    let noon_horiz = vec3<f32>(0.72, 0.85, 0.96);
+
+    let sunset_zenith = vec3<f32>(0.09, 0.13, 0.30);
+    let sunset_mid = vec3<f32>(0.36, 0.26, 0.36);
+    let sunset_horiz = vec3<f32>(0.96, 0.48, 0.19);
+
+    let night_zenith = vec3<f32>(0.006, 0.011, 0.026);
+    let night_mid = vec3<f32>(0.012, 0.020, 0.044);
+    let night_horiz = vec3<f32>(0.024, 0.038, 0.068);
+
+    let day_zen = mix(sunset_zenith, noon_zenith, smoothstep(0.02, 0.35, sun_elev));
+    let day_mid_c = mix(sunset_mid, noon_mid, smoothstep(0.02, 0.35, sun_elev));
+    let day_hor = mix(sunset_horiz, noon_horiz, smoothstep(0.02, 0.32, sun_elev));
+
+    let zenith_c = mix(night_zenith, day_zen, day_t) + vec3<f32>(0.03, 0.04, 0.09) * twilight_t;
+    let mid_c = mix(night_mid, day_mid_c, day_t) + vec3<f32>(0.10, 0.07, 0.12) * twilight_t;
+    let horiz_c = mix(night_horiz, day_hor, day_t) + vec3<f32>(0.34, 0.16, 0.10) * twilight_t;
+
+    let zenith_t = pow(clamp(h_elev * 1.85, 0.0, 1.0), 0.58);
+    let dome = mix(mid_c, zenith_c, zenith_t);
+    let optical_haze = exp(-h_elev * mix(10.0, 5.2, clamp(haze * 0.7 + weather_dark * 0.4, 0.0, 1.0)));
+
+    // Henyey-Greenstein forward Mie scattering around the sun direction.
+    let cos_theta = clamp(dot(rd, sun_dir), -1.0, 1.0);
+    let g_mie = 0.76;
+    let hg = (1.0 - g_mie * g_mie) / pow(max(1.0 + g_mie * g_mie - 2.0 * g_mie * cos_theta, 0.04), 1.5);
+    let sun_above = smoothstep(-0.08, 0.06, sun_elev);
+    let cloud_atten = 1.0 - clamp(weather_dark * 0.78 + cloud_cov * 0.35, 0.0, 0.92);
+    let mie_glow = (vec3<f32>(0.98, 0.84, 0.62) * sun_trans + vec3<f32>(0.55, 0.24, 0.06) * golden_t)
+        * clamp(hg * 0.048, 0.0, 1.35)
+        * sun_above
+        * cloud_atten
+        * (0.35 + 0.65 * exp(-h_elev * 2.2));
+
+    // Anti-solar / azimuth sunset band along the horizon toward the sun.
+    let sun_az_glow = pow(max(cos_theta, 0.0), 3.0) * (golden_t * 0.75 + twilight_t * 0.55)
+        * exp(-h_elev * 4.5) * cloud_atten;
+    let sunset_band = vec3<f32>(1.0, 0.46, 0.16) * sun_az_glow * 0.65;
+
+    var sky = mix(dome, horiz_c, clamp(optical_haze * 0.92, 0.0, 1.0)) + mie_glow + sunset_band;
+
+    // Weather / overcast cloud darkening & slate desaturation.
+    let storm_w = clamp(weather_dark * 0.82 + cloud_cov * 0.22, 0.0, 0.92);
+    if (storm_w > 0.002) {
+        let luma = dot(sky, vec3<f32>(0.299, 0.587, 0.114));
+        let overcast_day = mix(vec3<f32>(0.20, 0.24, 0.29), vec3<f32>(0.42, 0.47, 0.54), optical_haze);
+        let overcast_night = vec3<f32>(0.015, 0.020, 0.030);
+        let overcast_col = mix(overcast_night, overcast_day, clamp(day_t + twilight_t * 0.35, 0.0, 1.0));
+        let desaturated = mix(sky, vec3<f32>(luma) * vec3<f32>(0.88, 0.94, 1.02), storm_w * 0.65);
+        sky = mix(desaturated, overcast_col, storm_w * 0.68);
+    }
+
+    let below_t = smoothstep(0.0, 0.06, -elev);
+    let ground_mist = mix(
+        mix(night_horiz, horiz_c * 0.88, clamp(day_t + twilight_t * 0.5, 0.0, 1.0)),
+        vec3<f32>(0.26, 0.30, 0.36) * max(day_t, 0.08),
+        storm_w * 0.70,
+    );
+    return mix(sky, ground_mist, below_t);
+}
+
 @fragment
 fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let rd = normalize(in.ray_dir);
@@ -446,24 +841,36 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     // Derivatives must remain in uniform control flow for WGSL validation.
     let dx_icrf = dpdx(rd_icrf);
     let dy_icrf = dpdy(rd_icrf);
+    if (cam.cloud_params.w > 1.5) {
+        return cam.sky_top;
+    }
 
     let space_t = 1.0 - smoothstep(0.0, 0.85, cam.env_params.z);
     let sun_dir = normalize(cam.sun_dir.xyz);
+    let real_sky_w = clamp(cam.atmo_25d_params.x, 0.0, 1.0);
+    let night_star_w = clamp(cam.atmo_25d_params.y, 0.0, 1.0);
+    let weather_dark = clamp(cam.weather_opt_params.x, 0.0, 1.0);
+    let cloud_cov = clamp(cam.weather_opt_params.y, 0.0, 1.0);
+    let weather_haze = clamp(cam.weather_opt_params.z, 0.0, 1.0);
+
+    let eye_pos = cam.eye_high.xyz + cam.eye_low.xyz;
+    let eye_r = length(eye_pos);
+    let eye_up = select(vec3<f32>(0.0, 1.0, 0.0), eye_pos / max(eye_r, 1.0), eye_r > 1000000.0);
+    let r_earth = 6378137.0;
+    let horiz_sin = select(
+        0.0,
+        -sqrt(max(eye_r * eye_r - r_earth * r_earth, 0.0)) / max(eye_r, r_earth),
+        eye_r > 1000000.0,
+    );
+    let elev = dot(rd, eye_up) - horiz_sin;
+    let sun_elev = dot(sun_dir, eye_up);
 
     var atmo_sky = vec3<f32>(0.0);
     if (cam.cloud_params.w < 0.5 || space_t < 0.999) {
         let sky_grad_2d = mix(cam.sky_top, cam.sky_bottom, clamp(in.uv_y, 0.0, 1.0));
-        atmo_sky = sky_grad_2d.rgb;
-        let eye_pos = cam.eye_high.xyz + cam.eye_low.xyz;
-        let eye_r = length(eye_pos);
+        var classic_sky = sky_grad_2d.rgb;
         if (eye_r > 1000000.0) {
-            let eye_up = eye_pos / eye_r;
-            let r_earth = 6378137.0;
-            let horiz_sin = -sqrt(max(eye_r * eye_r - r_earth * r_earth, 0.0)) / max(eye_r, r_earth);
-            let mu = dot(rd, eye_up);
-            let elev = mu - horiz_sin;
             let h_elev = clamp(max(elev, 0.0), 0.0, 1.0);
-
             let day_scale = clamp(max(cam.sky_bottom.b, max(cam.sky_bottom.r, cam.sky_bottom.g)), 0.0, 1.0);
             let zenith_col = vec3<f32>(0.10, 0.25, 0.55) * day_scale;
             let mid_col = vec3<f32>(0.27, 0.53, 0.86) * day_scale;
@@ -475,29 +882,46 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
             let mie_sun = pow(max(dot(rd, sun_dir), 0.0), 5.0) * (1.0 - smoothstep(0.0, 0.45, h_elev));
             let warm_mist = horizon_mist + vec3<f32>(0.12, 0.09, 0.04) * mie_sun * day_scale;
             let above_sky = mix(base_dome, warm_mist, clamp(optical_haze * 0.90, 0.0, 1.0));
-            // Below the mathematical horizon, hold the soft horizon mist so valleys between distant
-            // terrain tiles never expose a dark or hard-edged gap.
-            let below_t = smoothstep(0.0, -0.06, elev);
+            let below_t = smoothstep(0.0, 0.06, -elev);
             let ground_mist = vec3<f32>(0.64, 0.77, 0.90) * day_scale;
-            atmo_sky = mix(above_sky, ground_mist, below_t);
+            classic_sky = mix(above_sky, ground_mist, below_t);
+        }
+        // Subtle weather darkening even in classic mode if base weather API explicitly supplies storm_darkness.
+        if (weather_dark > 0.002 && real_sky_w < 0.999) {
+            let classic_storm = vec3<f32>(0.24, 0.29, 0.36);
+            classic_sky = mix(classic_sky, classic_storm, weather_dark * 0.62);
+        }
+        if (real_sky_w > 0.001) {
+            let phys_sky = eval_physical_sky_25d(rd, eye_up, horiz_sin, sun_dir, weather_dark, cloud_cov, weather_haze);
+            atmo_sky = mix(classic_sky, phys_sky, real_sky_w);
+        } else {
+            atmo_sky = classic_sky;
         }
         if (cam.cloud_params.w < 0.5) {
             return vec4<f32>(atmo_sky, sky_grad_2d.a);
         }
     }
 
+    // Effective skybox visibility: full in orbital space, plus smooth night-sky emergence in 2.5D when synced!
+    let sky_clear_factor = 1.0 - clamp(cloud_cov * 0.85 + weather_dark * 0.55, 0.0, 0.98);
+    let night_sun_t = 1.0 - smoothstep(-0.14, 0.04, sun_elev);
+    let night_vis_25d = night_sun_t
+        * night_star_w
+        * sky_clear_factor
+        * smoothstep(-0.005, 0.08, elev);
+    let skybox_vis = max(space_t, night_vis_25d * (1.0 - space_t));
+
     // 1. Pitch-black deep space + J2000 ICRF telescope skybox cubemap (or procedural Milky Way fallback)
-    var col = vec3<f32>(0.0);
-    if (cam.ambient_color.w > 0.001 && space_t > 0.001) {
+    var space_col = vec3<f32>(0.0);
+    if (cam.ambient_color.w > 0.001 && skybox_vis > 0.001) {
         let cube_dim = max(f32(textureDimensions(skybox_cube, 0).x), 1.0);
         let texel_sq = (cube_dim * cube_dim * 0.25) * max(dot(dx_icrf, dx_icrf), dot(dy_icrf, dy_icrf));
         let sky_lod = max(0.5 * log2(max(texel_sq, 1.0)), 0.0);
         let cube_s = textureSampleLevel(skybox_cube, env_sampler, rd_icrf, sky_lod);
         let sky_gain = cam.viewport_wh.z;
         if (cube_s.a > 0.01 && sky_gain > 0.001) {
-            col += cube_s.rgb * sky_gain * space_t;
+            space_col += cube_s.rgb * sky_gain * skybox_vis;
         } else {
-            // Galactic North Pole & Galactic Center unit vectors (J2000)
             let gnp = vec3<f32>(-0.867666, -0.198076, 0.455984);
             let sin_b = dot(rd_icrf, gnp);
             if (abs(sin_b) < 0.35) {
@@ -506,30 +930,42 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
                 let dust_n = noise3(rd_icrf * 7.5) * 0.65 + noise3(rd_icrf * 17.0) * 0.35;
                 let rift = smoothstep(0.015, 0.14, abs(sin_b) + (dust_n - 0.5) * 0.09);
                 let mw = exp(-pow(abs(sin_b) * 8.0, 1.5)) * core_w * (0.45 + 0.55 * dust_n) * mix(0.45, 1.0, rift);
-                col += vec3<f32>(0.055, 0.072, 0.125) * mw * min(cam.ambient_color.w, 1.8) * space_t;
+                space_col += vec3<f32>(0.075, 0.095, 0.165) * mw * min(cam.ambient_color.w, 1.8) * skybox_vis;
             }
         }
     }
 
-    // Blend pitch-black space to 3D horizon-anchored daytime atmospheric sky when morphing down into 2.5D
+    // Blend pitch-black space to 3D horizon-anchored atmospheric sky when morphing down into 2.5D,
+    // keeping night Milky Way cubemap cleanly additive over the dark 2.5D night sky!
+    var col = space_col;
     if (space_t < 0.999) {
-        col = mix(atmo_sky, col, space_t);
+        col = mix(atmo_sky + space_col * 1.15, space_col, space_t);
     }
 
-    // 2. Realistic Sun (photosphere limb darkening + solar corona + halo)
+    // 2. Realistic Sun (photosphere limb darkening + solar corona + atmospheric aureole in 2.5D)
     if (cam.sun_dir.w > 0.5) {
         let sun_cos = clamp(dot(rd, sun_dir), -1.0, 1.0);
-        if (sun_cos > 0.82) {
+        if (sun_cos > 0.80) {
             let sun_ang = acos(sun_cos);
             let r_sun = max(cam.sun_color.w, 0.004);
-            if (sun_ang < r_sun * 1.08) {
-                let mu = sqrt(max(1.0 - (sun_ang / r_sun) * (sun_ang / r_sun), 0.0));
-                let aa = 1.0 - smoothstep(r_sun * 0.94, r_sun * 1.06, sun_ang);
-                let limb = mix(0.48, 1.0, pow(mu, 0.45));
-                col = mix(col, cam.sun_color.rgb * (3.6 * limb), aa);
+            let above_horiz = mix(smoothstep(-0.025, 0.015, elev), 1.0, space_t);
+            let atmo_sun_atten = mix(1.0 - clamp(weather_dark * 0.82 + cloud_cov * 0.45, 0.0, 0.95), 1.0, space_t);
+            let sunset_warm = mix(
+                mix(vec3<f32>(1.0, 0.56, 0.24), vec3<f32>(1.0, 0.98, 0.92), smoothstep(-0.02, 0.28, sun_elev)),
+                vec3<f32>(1.0, 0.98, 0.95),
+                space_t,
+            );
+            let sun_vis = above_horiz * atmo_sun_atten;
+            if (sun_vis > 0.002) {
+                if (sun_ang < r_sun * 1.08) {
+                    let mu_s = sqrt(max(1.0 - (sun_ang / r_sun) * (sun_ang / r_sun), 0.0));
+                    let aa = (1.0 - smoothstep(r_sun * 0.94, r_sun * 1.06, sun_ang)) * sun_vis;
+                    let limb = mix(0.48, 1.0, pow(mu_s, 0.45));
+                    col = mix(col, cam.sun_color.rgb * sunset_warm * (3.6 * limb), aa);
+                }
+                let corona = exp(-sun_ang / (r_sun * 2.4)) * 0.85 + exp(-sun_ang / (r_sun * 12.0)) * 0.14;
+                col += cam.sun_color.rgb * sunset_warm * corona * mix(0.62, 1.0, space_t) * sun_vis;
             }
-            let corona = exp(-sun_ang / (r_sun * 2.4)) * 0.85 + exp(-sun_ang / (r_sun * 12.0)) * 0.13;
-            col += cam.sun_color.rgb * vec3<f32>(1.0, 0.90, 0.72) * corona * mix(0.45, 1.0, space_t);
         }
     }
 
@@ -538,7 +974,8 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
         let m_dir = normalize(cam.moon_dir.xyz);
         let b_cos = dot(rd, m_dir);
         let r_moon = max(cam.env_params.w, 0.004);
-        if (b_cos > 1.0 - 0.501 * r_moon * r_moon) {
+        let above_horiz_m = mix(smoothstep(-0.02, 0.02, elev), 1.0, space_t);
+        if (above_horiz_m > 0.005 && b_cos > 1.0 - 0.501 * r_moon * r_moon) {
             let sin_r = sin(r_moon);
             let r2 = sin_r * sin_r;
             let d2 = max(1.0 - b_cos * b_cos, 0.0);
@@ -563,8 +1000,10 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
                 let lommel = ndotl_m / (ndotl_m + 0.36 * ndotv_m + 0.06);
                 let earthshine = vec3<f32>(0.024, 0.032, 0.048);
                 let lit_moon = albedo * (cam.sun_color.rgb * lommel * 1.45 + earthshine);
-                let aa_m = 1.0 - smoothstep(r2 * 0.90, r2, d2);
-                col = mix(col, lit_moon, aa_m * mix(0.75, 1.0, space_t));
+                let aa_m = (1.0 - smoothstep(r2 * 0.90, r2, d2)) * above_horiz_m;
+                let moon_night_t = 1.0 - smoothstep(-0.10, 0.10, sun_elev);
+                let moon_25d_vis = mix(0.32, 0.98, moon_night_t) * sky_clear_factor;
+                col = mix(col, max(col, lit_moon), aa_m * mix(moon_25d_vis, 1.0, space_t));
             }
         }
     }
@@ -579,6 +1018,7 @@ struct GpuCameraUniforms {
     inv_view_proj_rte: mat4x4<f32>,
     ecef_from_icrf: mat4x4<f32>,
     icrf_from_ecef: mat4x4<f32>,
+    light_view_proj_rte: mat4x4<f32>,
     eye_high: vec4<f32>,
     eye_low: vec4<f32>,
     sun_dir: vec4<f32>,
@@ -590,6 +1030,9 @@ struct GpuCameraUniforms {
     env_params: vec4<f32>,
     cloud_params: vec4<f32>,
     viewport_wh: vec4<f32>,
+    atmo_25d_params: vec4<f32>,
+    weather_opt_params: vec4<f32>,
+    cloud_tint_params: vec4<f32>,
 }
 
 struct GpuStar {
@@ -627,15 +1070,36 @@ fn vs_star(
     var out: StarVsOut;
     out.local_uv = q;
     let space_t = 1.0 - smoothstep(0.0, 0.80, cam.env_params.z);
-    if (clip.w <= 0.001 || space_t <= 0.005 || cam.ambient_color.w <= 0.001) {
+
+    let eye_pos = cam.eye_high.xyz + cam.eye_low.xyz;
+    let eye_r = length(eye_pos);
+    let eye_up = select(vec3<f32>(0.0, 1.0, 0.0), eye_pos / max(eye_r, 1.0), eye_r > 1000000.0);
+    let r_earth = 6378137.0;
+    let horiz_sin = select(
+        0.0,
+        -sqrt(max(eye_r * eye_r - r_earth * r_earth, 0.0)) / max(eye_r, r_earth),
+        eye_r > 1000000.0,
+    );
+    let sun_elev = dot(normalize(cam.sun_dir.xyz), eye_up);
+    let star_elev = dot(dir_ecef, eye_up) - horiz_sin;
+    let sky_clear = 1.0 - clamp(cam.weather_opt_params.y * 0.85 + cam.weather_opt_params.x * 0.55, 0.0, 0.98);
+    let night_sun_t = 1.0 - smoothstep(-0.14, 0.04, sun_elev);
+    let night_vis_25d = night_sun_t
+        * clamp(cam.atmo_25d_params.y, 0.0, 1.0)
+        * sky_clear
+        * smoothstep(0.002, 0.045, star_elev);
+    let eff_vis = max(space_t, night_vis_25d * (1.0 - space_t));
+
+    if (clip.w <= 0.001 || eff_vis <= 0.005 || cam.ambient_color.w <= 0.001) {
         out.clip_pos = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         out.color_flux = vec4<f32>(0.0);
         return out;
     }
 
     let vmag = s.icrf_dir_mag.w;
-    let flux = clamp(pow(10.0, -0.32 * (vmag - 2.6)), 0.14, 3.2) * cam.ambient_color.w * space_t;
-    let size_px = clamp(1.55 + (5.0 - vmag) * 0.55, 1.4, 4.6);
+    let boost_25d = mix(2.35, 1.0, space_t);
+    let flux = clamp(pow(10.0, -0.32 * (vmag - 2.6)), 0.18, 3.6) * cam.ambient_color.w * eff_vis * boost_25d;
+    let size_px = clamp(mix(1.85, 1.55, space_t) + (5.0 - vmag) * 0.58, 1.5, 4.8);
     clip.z = clip.w * 0.99985;
     let px_ndc = (q * size_px / max(cam.viewport_wh.xy, vec2<f32>(1.0, 1.0))) * 2.0;
     clip.x += px_ndc.x * clip.w;
@@ -663,6 +1127,7 @@ struct GpuCameraUniforms {
     inv_view_proj_rte: mat4x4<f32>,
     ecef_from_icrf: mat4x4<f32>,
     icrf_from_ecef: mat4x4<f32>,
+    light_view_proj_rte: mat4x4<f32>,
     eye_high: vec4<f32>,
     eye_low: vec4<f32>,
     sun_dir: vec4<f32>,
@@ -674,6 +1139,21 @@ struct GpuCameraUniforms {
     env_params: vec4<f32>,
     cloud_params: vec4<f32>,
     viewport_wh: vec4<f32>,
+    atmo_25d_params: vec4<f32>,
+    weather_opt_params: vec4<f32>,
+    cloud_tint_params: vec4<f32>,
+}
+
+struct GpuOceanUniforms {
+    origin_high: vec4<f32>,
+    origin_low: vec4<f32>,
+    basis_east: vec4<f32>,
+    basis_north: vec4<f32>,
+    basis_up: vec4<f32>,
+    train_a: vec4<f32>,
+    train_b: vec4<f32>,
+    blend_params: vec4<f32>,
+    coastal_params: vec4<f32>,
 }
 
 struct GpuTileVertex {
@@ -696,6 +1176,12 @@ struct GpuTileInstance {
 @group(0) @binding(3) var terrain_atlas: texture_2d_array<f32>;
 @group(0) @binding(4) var terrain_sampler: sampler;
 @group(0) @binding(5) var land_mask_tex: texture_2d<f32>;
+
+@group(1) @binding(0) var shadow_map: texture_depth_2d;
+@group(1) @binding(1) var shadow_sampler: sampler_comparison;
+@group(1) @binding(2) var<uniform> ocean: GpuOceanUniforms;
+@group(1) @binding(3) var coastal_sdf_tex: texture_2d<f32>;
+@group(1) @binding(4) var coastal_sdf_sampler: sampler;
 
 struct TerrainVsOut {
     @builtin(position) clip_pos: vec4<f32>,
@@ -760,6 +1246,131 @@ fn vnoise2(x: vec2<f32>) -> f32 {
     return mix(mix(n00, n10, u.x), mix(n01, n11, u.x), u.y);
 }
 
+fn sample_shadow_pcf(world_rel: vec3<f32>, n_mesh: vec3<f32>, sun_dir: vec3<f32>, shadow_radius: f32) -> f32 {
+    let ndotl = max(dot(n_mesh, sun_dir), 0.0);
+    let normal_bias = max(shadow_radius * 0.0016, 0.45) * (1.25 - 0.75 * ndotl);
+    let biased_rel = world_rel + n_mesh * normal_bias;
+    let lclip = cam.light_view_proj_rte * vec4<f32>(biased_rel, 1.0);
+    let ndc = lclip.xyz / max(lclip.w, 1e-5);
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    let depth_ref = clamp(ndc.z - 0.00055, 0.0, 0.9999);
+
+    let dims = max(vec2<f32>(textureDimensions(shadow_map)), vec2<f32>(1.0));
+    let texel = 1.0 / dims;
+    var acc = 0.0;
+    acc += textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(uv + vec2<f32>(-texel.x, -texel.y), vec2<f32>(0.001), vec2<f32>(0.999)), depth_ref);
+    acc += textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(uv + vec2<f32>(0.0, -texel.y), vec2<f32>(0.001), vec2<f32>(0.999)), depth_ref);
+    acc += textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(uv + vec2<f32>(texel.x, -texel.y), vec2<f32>(0.001), vec2<f32>(0.999)), depth_ref);
+    acc += textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(uv + vec2<f32>(-texel.x, 0.0), vec2<f32>(0.001), vec2<f32>(0.999)), depth_ref);
+    acc += textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(uv, vec2<f32>(0.001), vec2<f32>(0.999)), depth_ref);
+    acc += textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(uv + vec2<f32>(texel.x, 0.0), vec2<f32>(0.001), vec2<f32>(0.999)), depth_ref);
+    acc += textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(uv + vec2<f32>(-texel.x, texel.y), vec2<f32>(0.001), vec2<f32>(0.999)), depth_ref);
+    acc += textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(uv + vec2<f32>(0.0, texel.y), vec2<f32>(0.001), vec2<f32>(0.999)), depth_ref);
+    acc += textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(uv + vec2<f32>(texel.x, texel.y), vec2<f32>(0.001), vec2<f32>(0.999)), depth_ref);
+    let pcf = acc * (1.0 / 9.0);
+
+    // Smooth edge fade near the border of the orthographic shadow frustum so shadows never clip abruptly.
+    let border = max(abs(ndc.x), abs(ndc.y));
+    let in_bounds = (1.0 - smoothstep(0.84, 0.99, border)) * step(0.0, ndc.z) * step(ndc.z, 1.0);
+    return mix(1.0, pcf, in_bounds);
+}
+
+fn eval_sky_reflection(
+    rd: vec3<f32>,
+    eye_up: vec3<f32>,
+    sun_dir: vec3<f32>,
+    real_sky_w: f32,
+    weather_dark: f32,
+    cloud_cov: f32,
+) -> vec3<f32> {
+    let h = clamp(max(dot(rd, eye_up), 0.0), 0.0, 1.0);
+    let sun_elev = dot(sun_dir, eye_up);
+    let day_t = smoothstep(-0.08, 0.24, sun_elev);
+    let twilight_t = smoothstep(-0.22, -0.02, sun_elev) * (1.0 - smoothstep(0.02, 0.22, sun_elev));
+    let golden_t = exp(-pow((sun_elev - 0.03) * 7.5, 2.0));
+
+    let day_zen = mix(vec3<f32>(0.09, 0.14, 0.32), vec3<f32>(0.08, 0.24, 0.56), smoothstep(0.02, 0.35, sun_elev));
+    let day_hor = mix(vec3<f32>(0.95, 0.48, 0.20), vec3<f32>(0.72, 0.85, 0.96), smoothstep(0.02, 0.32, sun_elev));
+    let night_zen = vec3<f32>(0.009, 0.016, 0.036);
+    let night_hor = vec3<f32>(0.026, 0.042, 0.075);
+
+    let zen = mix(night_zen, day_zen, day_t) + vec3<f32>(0.04, 0.04, 0.10) * twilight_t;
+    let hor = mix(night_hor, day_hor, day_t) + vec3<f32>(0.32, 0.15, 0.09) * twilight_t;
+    var phys = mix(hor, zen, pow(h, 0.55));
+    let sun_cos = max(dot(rd, sun_dir), 0.0);
+    let cloud_atten = 1.0 - clamp(weather_dark * 0.78 + cloud_cov * 0.35, 0.0, 0.92);
+    phys += vec3<f32>(1.0, 0.58, 0.26) * pow(sun_cos, 6.0) * (golden_t * 0.55 + day_t * 0.18) * cloud_atten;
+
+    let storm_w = clamp(weather_dark * 0.82 + cloud_cov * 0.22, 0.0, 0.92);
+    let overcast = mix(vec3<f32>(0.02, 0.025, 0.038), vec3<f32>(0.32, 0.37, 0.44), clamp(day_t + twilight_t * 0.35, 0.0, 1.0));
+    phys = mix(phys, overcast, storm_w * 0.72);
+
+    let classic = mix(vec3<f32>(0.68, 0.82, 0.95), vec3<f32>(0.14, 0.34, 0.66), pow(h, 0.55));
+    return mix(classic, phys, real_sky_w);
+}
+
+// Evaluates 6 directional anti-aliased trochoidal/Gerstner wave octaves for one wind wave train.
+// Uses spatially constant `wind_dir` (preventing `grad(d)*pos_en` phase-compression fringes near
+// curved coasts) plus subtle low-frequency domain warp for authentic organic sea-surface swells.
+// Returns vec3(slope_east, slope_north, crest_steepness).
+fn eval_ocean_train(
+    pos_en: vec2<f32>,
+    wind_dir: vec2<f32>,
+    wind_speed: f32,
+    t: f32,
+    wave_scale: f32,
+    px_m: f32,
+    shoal_boost: f32,
+) -> vec3<f32> {
+    let dir0 = normalize(wind_dir);
+    let perp0 = vec2<f32>(-dir0.y, dir0.x);
+
+    // Subtle organic domain warp breaks up infinite straight sine ridges into natural wind-sea groups.
+    let warp_en = vec2<f32>(
+        vnoise2(pos_en * 0.0045 + vec2<f32>(0.0, t * 0.03)) - 0.5,
+        vnoise2(pos_en * 0.0045 + vec2<f32>(19.3, -t * 0.025)) - 0.5,
+    ) * 18.0;
+    let p_eff = pos_en + warp_en;
+
+    // Beaufort scaling: gentle capillary chop at 1-3 m/s -> steep rolling whitecap swells at 14-25 m/s.
+    let beaufort = clamp((wind_speed - 0.5) / 14.0, 0.06, 2.2);
+    let len_wind = mix(0.42, 1.85, clamp(wind_speed / 18.0, 0.0, 1.4));
+    let offshore_atten = mix(1.0, 0.42, shoal_boost);
+
+    // 6 non-harmonic golden-ratio directional octaves spanning regional ocean swells to crisp wind chop.
+    var angs = array<f32, 6>(0.0, 0.24, -0.31, 0.56, -0.62, 0.16);
+    var wls = array<f32, 6>(138.0, 82.0, 47.0, 26.0, 13.5, 5.8);
+    var amps = array<f32, 6>(0.056, 0.048, 0.040, 0.032, 0.024, 0.016);
+    var phases = array<f32, 6>(0.0, 1.41, 2.83, 4.19, 0.92, 5.14);
+
+    var slope = vec2<f32>(0.0);
+    var crest_acc = 0.0;
+
+    for (var i: u32 = 0u; i < 6u; i = i + 1u) {
+        let wl = max((wls[i] * len_wind) / max(wave_scale, 0.15), 1.4);
+        // Smooth spatial anti-aliasing: drop sub-pixel octaves before Nyquist aliasing occurs.
+        let aa_w = 1.0 - smoothstep(wl * 0.14, wl * 0.48, px_m);
+        if (aa_w > 0.008) {
+            let ca = cos(angs[i]);
+            let sa = sin(angs[i]);
+            let d = dir0 * ca + perp0 * sa;
+            let k = 6.2831853 / wl;
+            // Exact deep-water gravity wave dispersion: omega = sqrt(g * k).
+            let omega = sqrt(9.81 * k);
+            let ph = dot(d, p_eff) * k - omega * t + phases[i];
+            let s = sin(ph);
+            let c = cos(ph);
+            // Trochoidal crest sharpening: broad troughs, sharp wind-driven crests.
+            let sharp = 0.5 + 0.5 * s;
+            let steep = amps[i] * beaufort * offshore_atten * aa_w;
+            let d_wave = c * (0.68 + 0.64 * sharp);
+            slope += d * (d_wave * steep);
+            crest_acc += pow(sharp, 2.8) * steep * 3.6;
+        }
+    }
+    return vec3<f32>(slope.x, slope.y, crest_acc);
+}
+
 fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
     if (in.unlit != 0u) {
         return base;
@@ -772,14 +1383,23 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
     let dn_strength = clamp(cam.env_params.x, 0.0, 1.0);
     let city_strength = max(cam.env_params.y, 0.0);
     let blend_25d = clamp(cam.env_params.z, 0.0, 1.0);
-
-    let flat_lit = vec3<f32>(0.98);
+    let real_sky_w = clamp(cam.atmo_25d_params.x, 0.0, 1.0);
+    let night_star_w = clamp(cam.atmo_25d_params.y, 0.0, 1.0);
+    let lit_25d_w = clamp(cam.atmo_25d_params.z, 0.0, 1.0);
+    let shadow_w = clamp(cam.atmo_25d_params.w, 0.0, 1.0);
+    let weather_dark = clamp(cam.weather_opt_params.x, 0.0, 1.0);
+    let cloud_cov = clamp(cam.weather_opt_params.y, 0.0, 1.0);
+    let weather_haze = clamp(cam.weather_opt_params.z, 0.0, 1.0);
 
     let d = normalize(in.ecef_pos);
-    let ndotl = dot(d, sun_dir);
-    let slope_shade = clamp(1.0 + (dot(n_mesh, sun_dir) - ndotl) * 0.35 * blend_25d, 0.82, 1.18);
+    let eye_pos = cam.eye_high.xyz + cam.eye_low.xyz;
+    let eye_r = length(eye_pos);
+    let local_up = select(vec3<f32>(0.0, 1.0, 0.0), d, eye_r > 1000000.0);
+    let ndotl = dot(local_up, sun_dir);
+    let slope_ndotl = max(dot(n_mesh, sun_dir), 0.0);
 
-    let px_m = max(length(fwidth(d)) * 6378137.0, 6.0);
+    // Keep derivatives & texture lookups in uniform control flow for WGSL validation.
+    let px_m = max(length(fwidth(in.view_rel)), 0.15);
     var u = fract(in.land_uv_approx.x);
     var v = in.land_uv_approx.y;
     if ((d.x < -0.5 && abs(d.y) < 0.14) || abs(d.z) > 0.95) {
@@ -790,22 +1410,259 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
     let env_mask = textureSampleLevel(land_mask_tex, terrain_sampler, vec2<f32>(u, v), env_lod);
     let on_land = smoothstep(0.18, 0.55, env_mask.r);
 
+    // Hardware 9-tap PCF directional shadow sampling (uniform control flow).
+    var shadow_factor = 1.0;
+    if (shadow_w > 0.001) {
+        let pcf = sample_shadow_pcf(in.view_rel, n_mesh, sun_dir, max(cam.weather_opt_params.w, 10.0));
+        shadow_factor = mix(1.0, pcf, shadow_w * (1.0 - weather_dark * 0.58));
+    }
+
+    // --- Orbital 3D lighting ---
+    let slope_shade = clamp(1.0 + (dot(n_mesh, sun_dir) - ndotl) * 0.35 * blend_25d, 0.82, 1.18);
     let terminator = smoothstep(-0.14, 0.16, ndotl);
     let tn = ndotl * 7.5;
     let twilight = exp(-tn * tn) * vec3<f32>(0.42, 0.18, 0.06);
-    let f1 = 1.0 - max(dot(d, view_dir), 0.0);
+    let f1 = 1.0 - max(dot(local_up, view_dir), 0.0);
     let fresnel = f1 * f1 * f1;
     let atmo_rim = vec3<f32>(0.28, 0.56, 1.0) * fresnel * smoothstep(-0.18, 0.32, ndotl) * 0.45 * (1.0 - blend_25d);
     let ocean_night = vec3<f32>(0.048, 0.068, 0.108);
     let land_night = vec3<f32>(0.095, 0.120, 0.174);
     let night_fill = mix(ocean_night, land_night, on_land);
-    let day_lit = (night_fill + cam.sun_color.rgb * terminator + twilight) * slope_shade;
+    let day_lit_3d = (night_fill + cam.sun_color.rgb * terminator + twilight) * slope_shade;
+    let flat_lit = vec3<f32>(0.98);
+    var lit = mix(flat_lit, day_lit_3d, dn_strength);
 
-    let lit = mix(flat_lit, day_lit, dn_strength);
+    // --- Opt-in Realistic 2.5D Mountain Lighting & Cast Shadows ---
+    let local_lit_blend = lit_25d_w * blend_25d;
+    if (local_lit_blend > 0.001) {
+        let sun_elev = dot(local_up, sun_dir);
+        let day_t = smoothstep(-0.08, 0.24, sun_elev);
+        let golden_t = exp(-pow((sun_elev - 0.04) * 7.2, 2.0));
+        let sun_tint = mix(vec3<f32>(1.0, 0.56, 0.26), vec3<f32>(1.02, 0.99, 0.94), smoothstep(0.01, 0.30, sun_elev));
+        let weather_sun_atten = 1.0 - clamp(weather_dark * 0.70 + cloud_cov * 0.22, 0.0, 0.85);
+        // Normalize diffuse relative to typical overhead imagery luminance so sunlit slopes look crisp,
+        // shaded valley/mountain backs drop dramatically into cool blue ambient shadow!
+        let direct_intensity = smoothstep(-0.04, 0.12, sun_elev) * weather_sun_atten;
+        let slope_term = clamp(slope_ndotl / max(sun_elev, 0.28), 0.0, 1.38);
+        let direct_sun = sun_tint * (0.76 * slope_term * direct_intensity * shadow_factor);
+
+        let sky_hemi = 0.5 + 0.5 * dot(n_mesh, local_up);
+        let day_amb = mix(vec3<f32>(0.22, 0.28, 0.40), vec3<f32>(0.34, 0.42, 0.54), sky_hemi)
+            * mix(1.0, 0.72, weather_dark);
+        let sunset_amb = vec3<f32>(0.30, 0.22, 0.26) * golden_t * 0.55;
+        let night_amb = mix(vec3<f32>(0.055, 0.075, 0.125), vec3<f32>(0.095, 0.120, 0.180), on_land)
+            * (0.75 + 0.25 * sky_hemi);
+        let ambient_25d = mix(night_amb, day_amb, day_t) + sunset_amb;
+        let lit_25d = ambient_25d + direct_sun;
+        lit = mix(lit, lit_25d, local_lit_blend);
+    }
+
     var rgb = base.rgb * lit + atmo_rim * dn_strength;
 
-    if (city_strength > 0.001 && dn_strength > 0.001 && on_land > 0.001 && ndotl < 0.06) {
-        let night_mask = smoothstep(0.06, -0.14, ndotl) * dn_strength * city_strength * on_land;
+    // --- GPU-Native Directional Ocean Waves + Optional Coastal Periodic Surf ---
+    let ocean_on = ocean.origin_high.w * ocean.origin_low.w;
+    if (ocean_on > 0.002) {
+        // Compute high-precision RTE local tangent coordinates relative to ocean origin.
+        let cam_minus_orig = (cam.eye_high.xyz - ocean.origin_high.xyz)
+                           + (cam.eye_low.xyz - ocean.origin_low.xyz);
+        let p_rel_orig = in.view_rel + cam_minus_orig;
+        let east_v = ocean.basis_east.xyz;
+        let north_v = ocean.basis_north.xyz;
+        let up_v = ocean.basis_up.xyz;
+        let pos_en = vec2<f32>(dot(p_rel_orig, east_v), dot(p_rel_orig, north_v));
+        let rel_h = dot(p_rel_orig, up_v);
+
+        // Optional coastal SDF texture sample with smooth border taper so open ocean never seams.
+        let half_span = max(ocean.coastal_params.y, 50.0);
+        let sdf_uv = (pos_en - ocean.coastal_params.zw) / (2.0 * half_span) + vec2<f32>(0.5);
+        let in_sdf = smoothstep(0.01, 0.09, sdf_uv.x) * (1.0 - smoothstep(0.91, 0.99, sdf_uv.x))
+                   * smoothstep(0.01, 0.09, sdf_uv.y) * (1.0 - smoothstep(0.91, 0.99, sdf_uv.y));
+        let sdf_s = textureSampleLevel(
+            coastal_sdf_tex,
+            coastal_sdf_sampler,
+            clamp(sdf_uv, vec2<f32>(0.002), vec2<f32>(0.998)),
+            0.0,
+        );
+
+        let use_sdf = ocean.blend_params.w * in_sdf;
+        let curve_sag = select(0.0, 1.0, eye_r > 1000000.0)
+            * (1.0 - blend_25d)
+            * dot(pos_en, pos_en)
+            / (2.0 * 6378137.0);
+        let sea_elev = rel_h + curve_sag;
+        // Reject elevated land (> +0.6..+5.5m) while preserving sea level & negative ocean bathymetry
+        // so distant offshore ocean tiles stay wavy all the way to the horizon!
+        let elev_water = 1.0 - smoothstep(0.6, 5.5, sea_elev);
+
+        // Fast GPU water classification (recognizes deep blue ocean, emerald coastal water where
+        // B > R, and cool-white sea-level surf foam while rejecting chlorophyll grass & tan sand where R > B).
+        let max_c = max(base.r, max(base.g, base.b));
+        let min_c = min(base.r, min(base.g, base.b));
+        let cool_px = select(0.0, 1.0, (base.b >= base.r - 0.010) && (base.b + 0.030 >= base.g) && ((base.b - base.r >= 0.012) || max_c < 0.42));
+        let emerald_px = select(0.0, 1.0, (base.b >= base.r + 0.014) && (base.g >= base.r + 0.016) && base.r < 0.46);
+        let surf_foam_px = select(0.0, 1.0, (min_c > 0.56) && (base.b >= base.r - 0.012) && (sea_elev < 0.90) && (env_mask.r < 0.72));
+        let warm_land = select(0.0, 1.0, (base.r - base.b >= 0.022) || ((min_c > 0.64) && (base.r > base.b + 0.008)));
+        let img_water = clamp((cool_px + emerald_px + surf_foam_px) * (1.0 - warm_land), 0.0, 1.0);
+
+        let open_ocean_mask = 1.0 - smoothstep(0.08, 0.42, env_mask.r);
+        let gpu_water = clamp(mix(img_water, 1.0, open_ocean_mask) * (1.0 - smoothstep(0.75, 0.96, env_mask.r) * (1.0 - img_water)) * elev_water, 0.0, 1.0);
+
+        let water_mask = mix(gpu_water, sdf_s.r, use_sdf);
+        if (water_mask > 0.01) {
+            let shore_dist_norm = mix(1.0, sdf_s.g, use_sdf);
+            let raw_sdir = sdf_s.ba * 2.0 - vec2<f32>(1.0);
+            let sdir_len = length(raw_sdir);
+            let shore_dir = select(vec2<f32>(1.0, 0.0), raw_sdir / max(sdir_len, 1e-4), sdir_len > 0.05);
+
+            let shoal_boost = use_sdf * (1.0 - smoothstep(0.04, 0.45, shore_dist_norm));
+
+            let wave_strength = ocean.basis_east.w;
+            let wave_scale = ocean.basis_north.w;
+            let glint_scale = ocean.basis_up.w;
+
+            // Dual-state smooth wind cross-fade (zero phase-spin glitch on wind angle/speed change!).
+            let wa = ocean.blend_params.x;
+            let wb = ocean.blend_params.y;
+            let w_sum = max(wa + wb, 1e-4);
+            var wave_res = vec3<f32>(0.0);
+            if (wa > 0.002) {
+                wave_res += eval_ocean_train(
+                    pos_en,
+                    ocean.train_a.xy,
+                    ocean.train_a.z,
+                    ocean.train_a.w,
+                    wave_scale,
+                    px_m,
+                    shoal_boost,
+                ) * (wa / w_sum);
+            }
+            if (wb > 0.002) {
+                wave_res += eval_ocean_train(
+                    pos_en,
+                    ocean.train_b.xy,
+                    ocean.train_b.z,
+                    ocean.train_b.w,
+                    wave_scale,
+                    px_m,
+                    shoal_boost,
+                ) * (wb / w_sum);
+            }
+
+            let eff_wind_speed = (ocean.train_a.z * wa + ocean.train_b.z * wb) / w_sum;
+            let eff_t = (ocean.train_a.w * wa + ocean.train_b.w * wb) / w_sum;
+
+            // Optional Coastal Periodic Breaking Surf & Advancing/Receding Beach Swash!
+            // Uses pure SDF distance `d_m` (|grad d_m| == 1.0 everywhere) so wave fronts align
+            // parallel to bays & beaches with exact physical wavelength and zero phase-gradient fringes!
+            var coastal_foam = 0.0;
+            var surf_slope = vec2<f32>(0.0);
+            if (use_sdf > 0.01 && shore_dist_norm < 0.96) {
+                let d_m = shore_dist_norm * ocean.coastal_params.x;
+                // Gentle coastal warp so wave crests curve organically along bays & headlands.
+                let warp = (vnoise2(pos_en * 0.008) - 0.5) * 28.0 + (vnoise2(pos_en * 0.022) - 0.5) * 9.0;
+                let d_warped = max(d_m + warp, 0.0);
+                let surf_wl = clamp(mix(32.0, 58.0, clamp(eff_wind_speed / 16.0, 0.0, 1.0)), 26.0, 64.0);
+                let k_surf = 6.2831853 / surf_wl;
+                // Period ~7-11 s real ocean surf period; +omega*t moves crests INWARD toward the beach!
+                let omega_surf = sqrt(9.81 * k_surf) * 0.62;
+                let surf_phase = k_surf * d_warped + omega_surf * eff_t;
+                // Realistic wave-set group modulation (3-5 stronger waves, then calm lull!).
+                let set_group = 0.60 + 0.40 * sin(0.24 * k_surf * d_warped + 0.20 * omega_surf * eff_t);
+                let surf_aa = 1.0 - smoothstep(surf_wl * 0.16, surf_wl * 0.55, px_m);
+
+                // Asymmetric shoaling swells & breaking surf crests inside [6m .. 220m] from beach.
+                let shoal_swell_zone = smoothstep(4.0, 20.0, d_m) * (1.0 - smoothstep(140.0, 320.0, d_m));
+                let breaker_zone = smoothstep(5.0, 26.0, d_m) * (1.0 - smoothstep(95.0, 220.0, d_m));
+                let s_wave = 0.5 + 0.5 * sin(surf_phase);
+                let crest_line = pow(s_wave, 4.8) * breaker_zone * set_group * surf_aa;
+                let foam_noise = 0.52 + 0.48 * vnoise2(pos_en * 0.18 + shore_dir * eff_t * 1.2);
+                let wake_trail = pow(0.5 + 0.5 * sin(surf_phase - 0.65), 2.5) * breaker_zone * set_group * 0.28 * surf_aa;
+                coastal_foam += (crest_line * 0.68 + wake_trail) * foam_noise * use_sdf;
+                surf_slope += shore_dir * (cos(surf_phase) * shoal_swell_zone * set_group * 0.16 * surf_aa * use_sdf);
+
+                // Rhythmic shoreline swash & backwash right on the wet beach edge [0..26 m].
+                let swash_cycle = 0.5 + 0.5 * sin(omega_surf * eff_t * 0.78 + warp * 0.10);
+                let swash_reach = mix(6.0, 26.0, swash_cycle * set_group);
+                let swash_sheet = (1.0 - smoothstep(swash_reach * 0.45, swash_reach, d_m))
+                                * smoothstep(0.0, 2.5, d_m + 1.0);
+                let swash_lip = exp(-pow((d_m - swash_reach * 0.85) / 4.2, 2.0)) * (0.65 + 0.35 * swash_cycle);
+                let lace = smoothstep(0.28, 0.76, vnoise2(pos_en * 0.32 - shore_dir * eff_t * 0.8));
+                coastal_foam += (swash_sheet * 0.35 * lace + swash_lip * 0.66) * surf_aa * use_sdf;
+            }
+
+            let slope_e = (wave_res.x * wave_strength + surf_slope.x) * water_mask;
+            let slope_n = (wave_res.y * wave_strength + surf_slope.y) * water_mask;
+            let n_water = normalize(up_v - east_v * slope_e - north_v * slope_n);
+
+            // Physically based Fresnel sky reflection + deep pelagic water absorption.
+            // Clamp reflected ray slightly above horizon so grazing troughs never reflect a black void.
+            let ndotv = max(dot(n_water, view_dir), 0.03);
+            let f_schlick = 0.02 + 0.98 * pow(1.0 - ndotv, 5.0);
+            var refl_dir = reflect(-view_dir, n_water);
+            let refl_up = dot(refl_dir, local_up);
+            if (refl_up < 0.035) {
+                refl_dir = normalize(refl_dir + local_up * (0.035 - refl_up));
+            }
+            let sky_refl = eval_sky_reflection(refl_dir, local_up, sun_dir, real_sky_w, weather_dark, cloud_cov);
+
+            let sun_elev = dot(local_up, sun_dir);
+            let day_t = smoothstep(-0.08, 0.24, sun_elev);
+            let water_albedo = mix(
+                base.rgb * lit,
+                mix(vec3<f32>(0.014, 0.052, 0.095), vec3<f32>(0.028, 0.135, 0.205), shoal_boost) * max(lit, vec3<f32>(0.12)),
+                0.42,
+            );
+
+            // Subsurface turquoise glow through sunlit wave crests & shallow coastal water.
+            let sss = pow(clamp(wave_res.z * 0.75, 0.0, 1.0), 1.4) * smoothstep(-0.04, 0.30, sun_elev)
+                    * (0.35 + 0.65 * shoal_boost) * shadow_factor * (1.0 - weather_dark * 0.72);
+            let sss_col = vec3<f32>(0.04, 0.32, 0.36) * sss * 0.42;
+
+            // Crisp GGX-like solar specular glitter path + subtle silver moon glitter at night.
+            let half_s = normalize(sun_dir + view_dir);
+            let ndoth_s = max(dot(n_water, half_s), 0.0);
+            let rough = clamp(mix(0.06, 0.22, clamp(eff_wind_speed / 22.0, 0.0, 1.0)), 0.05, 0.28);
+            let spec_exp = mix(420.0, 38.0, rough * 3.2);
+            let sun_vis_w = smoothstep(-0.03, 0.12, sun_elev) * (1.0 - clamp(weather_dark * 0.85 + cloud_cov * 0.45, 0.0, 0.96));
+            let sun_spec_col = mix(vec3<f32>(1.0, 0.56, 0.22), vec3<f32>(1.0, 0.97, 0.90), smoothstep(0.0, 0.28, sun_elev));
+            let sun_glint = sun_spec_col * (pow(ndoth_s, spec_exp) * 2.4 + pow(ndoth_s, 22.0) * 0.16)
+                          * sun_vis_w * shadow_factor * glint_scale;
+
+            var moon_glint = vec3<f32>(0.0);
+            if (cam.moon_dir.w > 0.5 && sun_elev < 0.02) {
+                let m_dir = normalize(cam.moon_dir.xyz);
+                let m_elev = dot(local_up, m_dir);
+                if (m_elev > 0.02) {
+                    let half_m = normalize(m_dir + view_dir);
+                    let ndoth_m = max(dot(n_water, half_m), 0.0);
+                    let night_w = (1.0 - smoothstep(-0.10, 0.02, sun_elev)) * (1.0 - cloud_cov * 0.75);
+                    moon_glint = vec3<f32>(0.62, 0.74, 0.92) * pow(ndoth_m, 96.0) * 0.45 * night_w * glint_scale;
+                }
+            }
+
+            // Open-sea whitecap foam at higher Beaufort wind speeds + coastal surf foam.
+            let wind_foam_thresh = clamp((eff_wind_speed - 7.5) / 12.0, 0.0, 1.0);
+            let chop_noise = vnoise2(pos_en * 0.28 - ocean.train_a.xy * eff_t * 1.2);
+            let whitecap = smoothstep(0.55, 1.05, wave_res.z * wave_strength * (0.75 + 0.5 * chop_noise))
+                         * wind_foam_thresh * 0.55;
+            let total_foam = clamp(whitecap + coastal_foam, 0.0, 0.85);
+            let foam_sun_tint = mix(vec3<f32>(0.98, 0.78, 0.62), vec3<f32>(0.94, 0.97, 1.0), smoothstep(0.02, 0.28, sun_elev));
+            let foam_col = mix(vec3<f32>(0.16, 0.20, 0.28), foam_sun_tint, clamp(day_t * 0.9 + 0.12, 0.12, 1.0))
+                         * mix(1.0, 0.68, weather_dark);
+
+            var ocean_rgb = mix(water_albedo + sss_col, sky_refl, clamp(f_schlick * 0.90 + 0.10, 0.0, 0.92))
+                          + sun_glint + moon_glint;
+            ocean_rgb = mix(ocean_rgb, foam_col, total_foam);
+
+            let ocean_blend = clamp(water_mask * ocean.blend_params.z * ocean_on, 0.0, 1.0);
+            rgb = mix(rgb, ocean_rgb, ocean_blend);
+        }
+    }
+
+    // --- Night City Lights (orbital 3D Black Marble + crisp close-2.5D street illumination) ---
+    let eff_night_city = max(dn_strength * city_strength, local_lit_blend * night_star_w * city_strength);
+    if (eff_night_city > 0.001 && on_land > 0.001 && ndotl < 0.06) {
+        let night_mask = (1.0 - smoothstep(-0.14, 0.06, ndotl)) * eff_night_city * on_land;
         if (night_mask > 0.001) {
             let eg = env_mask.g;
             let base_lin = select(
@@ -833,9 +1690,11 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
                 let bm_srgb = sqrt(clamp(black_marble, 0.0, 1.0));
                 let city_core = smoothstep(0.08, 0.48, bm_srgb);
                 let corridor = smoothstep(0.02, 0.22, bm_srgb) * 0.22;
+                let orbital_city_w = 1.0 - smoothstep(0.08, 0.82, blend_25d);
+                let local_city_w = smoothstep(0.12, 0.85, blend_25d);
                 var pinpoint = 0.86;
                 var corridor_mod = 0.825;
-                if (px_m < 4500.0) {
+                if (orbital_city_w > 0.01 && px_m < 4500.0) {
                     let p2 = vec2<f32>(d.x - d.z * 0.618034, d.y + d.z * 0.618034);
                     let med_w = 1.0 - smoothstep(1400.0, 4500.0, px_m);
                     let n_block = vnoise2(p2 * 2800.0);
@@ -852,20 +1711,36 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
                     pinpoint = mix(0.86, detail_pin, med_w);
                     corridor_mod = mix(0.825, (0.65 + 0.35 * n_block) * sub_grid, med_w);
                 }
-                let city_luma = (city_core * pinpoint + corridor * corridor_mod) * night_mask;
+                let orbital_luma = (city_core * pinpoint + corridor * corridor_mod) * night_mask * orbital_city_w * 0.92;
+                let base_luma = dot(base.rgb, vec3<f32>(0.299, 0.587, 0.114));
+                let urban_mat = smoothstep(0.18, 0.52, base_luma)
+                    * (1.0 - smoothstep(0.03, 0.10, base.g - max(base.r, base.b)))
+                    * (1.0 - smoothstep(0.04, 0.12, base.b - base.r));
+                let street_hi = smoothstep(0.36, 0.72, base_luma);
+                let local_luma = (bm_srgb * (0.14 + 0.36 * urban_mat + 0.44 * street_hi))
+                    * night_mask * local_city_w * 0.58;
                 let warm_amber = vec3<f32>(0.97, 0.74, 0.38);
                 let warm_white = vec3<f32>(1.0, 0.90, 0.68);
-                rgb += mix(warm_amber, warm_white, city_core) * city_luma * 0.92;
+                rgb += mix(warm_amber, warm_white, city_core) * orbital_luma
+                     + mix(vec3<f32>(0.96, 0.68, 0.32), vec3<f32>(1.0, 0.88, 0.66), street_hi) * local_luma;
             }
         }
     }
 
+    // --- Weather- & Sky-Matched Aerial Perspective / Precipitation Mist ---
     if (blend_25d > 0.01) {
         let view_dist = length(in.view_rel);
-        let haze_start = smoothstep(3500.0, 52000.0, view_dist);
-        let aerial_haze = clamp((1.0 - exp(-view_dist * 0.000018)) * haze_start * blend_25d * 0.68, 0.0, 0.72);
+        let haze_density = mix(0.000018, 0.00016, weather_haze);
+        let haze_near = mix(3500.0, 420.0, weather_haze);
+        let haze_far = mix(52000.0, 9500.0, weather_haze);
+        let haze_start = smoothstep(haze_near, haze_far, view_dist);
+        let aerial_haze = clamp((1.0 - exp(-view_dist * haze_density)) * haze_start * blend_25d * mix(0.68, 0.84, weather_haze), 0.0, 0.82);
+
         let day_scale = clamp(max(cam.sky_bottom.b, max(cam.sky_bottom.r, cam.sky_bottom.g)), 0.0, 1.0);
-        let horizon_haze_col = vec3<f32>(0.73, 0.85, 0.96) * day_scale * mix(vec3<f32>(1.0), clamp(lit * 1.15, vec3<f32>(0.35), vec3<f32>(1.0)), dn_strength);
+        let classic_haze = vec3<f32>(0.73, 0.85, 0.96) * day_scale * mix(vec3<f32>(1.0), clamp(lit * 1.15, vec3<f32>(0.35), vec3<f32>(1.0)), dn_strength);
+        let horiz_dir = normalize(in.view_rel - local_up * dot(in.view_rel, local_up) + local_up * 0.02);
+        let phys_haze = eval_sky_reflection(horiz_dir, local_up, sun_dir, 1.0, weather_dark, cloud_cov);
+        let horizon_haze_col = mix(classic_haze, phys_haze, max(real_sky_w, weather_haze * 0.65));
         rgb = mix(rgb, horizon_haze_col, aerial_haze);
     }
 
@@ -889,12 +1764,13 @@ fn fs_terrain(in: TerrainVsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-const CLOUD_SHELL_WGSL: &str = r#"
+const TERRAIN_SHADOW_WGSL: &str = r#"
 struct GpuCameraUniforms {
     view_proj_rte: mat4x4<f32>,
     inv_view_proj_rte: mat4x4<f32>,
     ecef_from_icrf: mat4x4<f32>,
     icrf_from_ecef: mat4x4<f32>,
+    light_view_proj_rte: mat4x4<f32>,
     eye_high: vec4<f32>,
     eye_low: vec4<f32>,
     sun_dir: vec4<f32>,
@@ -906,6 +1782,64 @@ struct GpuCameraUniforms {
     env_params: vec4<f32>,
     cloud_params: vec4<f32>,
     viewport_wh: vec4<f32>,
+    atmo_25d_params: vec4<f32>,
+    weather_opt_params: vec4<f32>,
+    cloud_tint_params: vec4<f32>,
+}
+
+struct GpuTileVertex {
+    pos_u: vec4<f32>,
+    norm_v: vec4<f32>,
+}
+
+struct GpuTileInstance {
+    center_high: vec4<f32>,
+    center_low: vec4<f32>,
+    uv_rect: vec4<f32>,
+    night_uv_rect: vec4<f32>,
+    tint: vec4<f32>,
+    tile_meta: vec4<u32>,
+}
+
+@group(0) @binding(0) var<uniform> cam: GpuCameraUniforms;
+@group(0) @binding(1) var<storage, read> vertices: array<GpuTileVertex>;
+@group(0) @binding(2) var<storage, read> instances: array<GpuTileInstance>;
+
+@vertex
+fn vs_terrain_shadow(
+    @builtin(vertex_index) local_v: u32,
+    @builtin(instance_index) inst_id: u32,
+) -> @builtin(position) vec4<f32> {
+    let inst = instances[inst_id];
+    let v = vertices[inst.tile_meta.x + local_v];
+    let center_rel = (inst.center_high.xyz - cam.eye_high.xyz)
+                   + (inst.center_low.xyz - cam.eye_low.xyz);
+    let world_rel = center_rel + v.pos_u.xyz;
+    return cam.light_view_proj_rte * vec4<f32>(world_rel, 1.0);
+}
+"#;
+
+const CLOUD_SHELL_WGSL: &str = r#"
+struct GpuCameraUniforms {
+    view_proj_rte: mat4x4<f32>,
+    inv_view_proj_rte: mat4x4<f32>,
+    ecef_from_icrf: mat4x4<f32>,
+    icrf_from_ecef: mat4x4<f32>,
+    light_view_proj_rte: mat4x4<f32>,
+    eye_high: vec4<f32>,
+    eye_low: vec4<f32>,
+    sun_dir: vec4<f32>,
+    sun_color: vec4<f32>,
+    ambient_color: vec4<f32>,
+    sky_top: vec4<f32>,
+    sky_bottom: vec4<f32>,
+    moon_dir: vec4<f32>,
+    env_params: vec4<f32>,
+    cloud_params: vec4<f32>,
+    viewport_wh: vec4<f32>,
+    atmo_25d_params: vec4<f32>,
+    weather_opt_params: vec4<f32>,
+    cloud_tint_params: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> cam: GpuCameraUniforms;
@@ -1001,7 +1935,8 @@ fn vs_cloud(@location(0) pos_u: vec4<f32>, @location(1) norm_v: vec4<f32>) -> Cl
     let detail_w = 1.0 - smoothstep(120000.0, 2200000.0, eye_alt);
     let mode_25d = smoothstep(0.15, 0.75, clamp(max(detail_w, below_clouds), 0.0, 1.0));
     let gate_25d = smoothstep(0.85, 0.995, mode_25d);
-    let coarse_gate = mix(0.014, 0.212, gate_25d);
+    let cover_boost = clamp(cam.cloud_tint_params.w, 0.0, 1.0) * below_clouds;
+    let coarse_gate = mix(0.014, mix(0.212, 0.015, cover_boost), gate_25d);
 
     let shell_pos = d * base_cloud_r;
     let view_vec = shell_pos - eye_pos;
@@ -1028,7 +1963,7 @@ fn vs_cloud(@location(0) pos_u: vec4<f32>, @location(1) norm_v: vec4<f32>) -> Cl
     let term = smoothstep(-0.14, 0.18, ndotl);
     let night_fade = mix(0.14, 1.0, mix(1.0, term, dn_strength));
     let lit_mask = mix(night_fade, 1.0, below_clouds);
-    let layer_translucency = mix(1.0, 0.88, below_clouds);
+    let layer_translucency = mix(1.0, mix(0.88, 0.96, cover_boost), below_clouds);
     let common_alpha = opacity * lit_mask * cross_fade * horizon_fade * layer_translucency;
 
     let east_raw = vec3<f32>(-d.y, d.x, 0.0);
@@ -1045,7 +1980,7 @@ fn vs_cloud(@location(0) pos_u: vec4<f32>, @location(1) norm_v: vec4<f32>) -> Cl
     let par_vec = vec2<f32>(v_east * par_amp * east_scale, v_north * par_amp);
 
     let unlit_key = normalize(d * 0.52 + t_north * 0.62 - t_east * 0.58);
-    let relief_light = normalize(mix(unlit_key, normalize(sun_dir + d * 0.28), dn_strength * 0.75));
+    let relief_light = normalize(mix(unlit_key, normalize(sun_dir + d * 0.28), max(dn_strength, cam.atmo_25d_params.x) * 0.75));
     let light_ts = vec3<f32>(dot(relief_light, t_east), dot(relief_light, t_north), dot(relief_light, d));
     let sun_ts = vec3<f32>(dot(sun_dir, t_east), dot(sun_dir, t_north), ndotl);
     let uv_lod = clamp(0.6931472 * smoothstep(2200000.0, 14000000.0, eye_alt), 0.0, 3.0);
@@ -1085,9 +2020,9 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
     let u_base = fract(u_unwrapped + cam.cloud_params.y * 0.15915494309);
     let uv_lod = in.sun_ts_lod.w;
 
-    // 128 KB mip-2 coarse check exits immediately in 16 VGPRs before Stage-2 VMEM burst.
+    let cover_boost = clamp(cam.cloud_tint_params.w, 0.0, 1.0) * in.grad_step_bic.w;
     let d_coarse = sample_cloud_density(vec2<f32>(u_base, v_base), max(uv_lod, 2.0));
-    if (d_coarse <= in.params_fs.y) {
+    if (d_coarse + cover_boost * 0.65 <= in.params_fs.y) {
         return vec4<f32>(0.0);
     }
 
@@ -1100,7 +2035,6 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
     let p_cloud2 = vec2<f32>(d.x - d.z * 0.618034, d.y + d.z * 0.618034);
     let noise_uv = p_cloud2 * 26.5625 + vec2<f32>(cam.cloud_params.z * 0.000005625, 0.0);
 
-    // Single unbranched 4-fetch VMEM clause: all 4 texture samples issue in parallel.
     let d_c_lin = sample_cloud_density(vec2<f32>(u, v), uv_lod);
     let d_e = sample_cloud_density(vec2<f32>(fract(u + in.grad_step_bic.x), v), uv_lod);
     let d_n = sample_cloud_density(vec2<f32>(u, clamp(v - in.grad_step_bic.y, 0.001, 0.999)), uv_lod);
@@ -1114,7 +2048,7 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
     }
     let warp_delta = (ns_all.ba - vec2<f32>(0.5)) * (0.55 * detail_w);
     let d_c = clamp(
-        d_c_base + warp_delta.x * (d_e - d_c_lin) + warp_delta.y * (d_n - d_c_lin),
+        d_c_base + warp_delta.x * (d_e - d_c_lin) + warp_delta.y * (d_n - d_c_lin) + cover_boost * 0.55,
         0.0,
         1.0,
     );
@@ -1175,17 +2109,37 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
     let ndotl = in.sun_ts_lod.z;
     let sn = ndotl * 7.5;
     let sn2 = sn * sn;
-    let sunset = (1.0 / (1.0 + sn2 + 0.5 * sn2 * sn2)) * vec3<f32>(0.48, 0.22, 0.08);
+    let sunset = (1.0 / (1.0 + sn2 + 0.5 * sn2 * sn2)) * vec3<f32>(0.54, 0.24, 0.09);
     let sun_slope = smoothstep(-0.10, 0.65, dot(n_ts, in.sun_ts_lod.xyz));
     let term = in.light_ts_term.w;
     let dn_strength = clamp(cam.env_params.x, 0.0, 1.0);
+    let real_sky_w = clamp(cam.atmo_25d_params.x, 0.0, 1.0);
+    let weather_dark = clamp(cam.weather_opt_params.x, 0.0, 1.0);
+
     let day_cloud = (vec3<f32>(0.04, 0.06, 0.10) + cam.sun_color.rgb * term * mix(0.76, 1.12, sun_slope) + sunset) * tex_tint;
-    var rgb = mix(flat_cloud, day_cloud, dn_strength * (1.0 - below_clouds));
+    let below_lit_blend = max(dn_strength * (1.0 - below_clouds), real_sky_w * below_clouds);
+    var rgb = mix(flat_cloud, day_cloud, below_lit_blend);
+
+    // Unified Base Weather API cloud storm darkening & tint (bright cumulus -> brooding nimbostratus!).
+    let storm_dark_w = clamp(weather_dark, 0.0, 1.0) * below_clouds;
+    if (storm_dark_w > 0.002) {
+        let day_t = mix(1.0, smoothstep(-0.08, 0.22, ndotl), real_sky_w);
+        let storm_underbelly = mix(vec3<f32>(0.03, 0.04, 0.06), vec3<f32>(0.24, 0.28, 0.34), day_t)
+                             * mix(0.76, 1.12, relief_factor);
+        rgb = mix(rgb, storm_underbelly, storm_dark_w * 0.78);
+    }
+    rgb *= cam.cloud_tint_params.xyz;
 
     let cloud_haze_t = in.view_ts_haze.w;
     if (cloud_haze_t > 0.001) {
         let day_scale = clamp(max(cam.sky_bottom.b, max(cam.sky_bottom.r, cam.sky_bottom.g)), 0.0, 1.0);
-        rgb = mix(rgb, vec3<f32>(0.75, 0.86, 0.96) * day_scale, cloud_haze_t);
+        let classic_fog = vec3<f32>(0.75, 0.86, 0.96) * day_scale;
+        let day_t = smoothstep(-0.08, 0.24, ndotl);
+        let golden_t = exp(-pow((ndotl - 0.03) * 7.5, 2.0));
+        var phys_fog = mix(vec3<f32>(0.022, 0.036, 0.066), mix(vec3<f32>(0.92, 0.48, 0.20), vec3<f32>(0.72, 0.85, 0.96), smoothstep(0.02, 0.32, ndotl)), day_t)
+                     + vec3<f32>(0.25, 0.12, 0.06) * golden_t;
+        phys_fog = mix(phys_fog, vec3<f32>(0.28, 0.32, 0.38) * max(day_t, 0.08), weather_dark * 0.72);
+        rgb = mix(rgb, mix(classic_fog, phys_fog, real_sky_w), cloud_haze_t);
     }
 
     return vec4<f32>(rgb, alpha);
@@ -1198,6 +2152,7 @@ struct GpuCameraUniforms {
     inv_view_proj_rte: mat4x4<f32>,
     ecef_from_icrf: mat4x4<f32>,
     icrf_from_ecef: mat4x4<f32>,
+    light_view_proj_rte: mat4x4<f32>,
     eye_high: vec4<f32>,
     eye_low: vec4<f32>,
     sun_dir: vec4<f32>,
@@ -1209,6 +2164,9 @@ struct GpuCameraUniforms {
     env_params: vec4<f32>,
     cloud_params: vec4<f32>,
     viewport_wh: vec4<f32>,
+    atmo_25d_params: vec4<f32>,
+    weather_opt_params: vec4<f32>,
+    cloud_tint_params: vec4<f32>,
 }
 
 struct GpuDynamicUniforms {
@@ -1252,7 +2210,7 @@ fn fs_dynamic(in: DynVsOut) -> @location(0) vec4<f32> {
     let len_sq = dot(in.normal, in.normal);
     let n = select(vec3<f32>(0.0, 1.0, 0.0), normalize(in.normal), len_sq > 0.0001);
     let ndotl = max(dot(n, normalize(cam.sun_dir.xyz)), 0.0);
-    let dn = clamp(cam.env_params.x, 0.0, 1.0);
+    let dn = max(clamp(cam.env_params.x, 0.0, 1.0), clamp(cam.atmo_25d_params.z * cam.env_params.z, 0.0, 1.0));
     let flat_lit = vec3<f32>(0.85) + vec3<f32>(0.22) * ndotl;
     let day_lit = cam.ambient_color.rgb + cam.sun_color.rgb * ndotl;
     let lit = mix(flat_lit, day_lit, dn);
@@ -1266,6 +2224,7 @@ struct GpuCameraUniforms {
     inv_view_proj_rte: mat4x4<f32>,
     ecef_from_icrf: mat4x4<f32>,
     icrf_from_ecef: mat4x4<f32>,
+    light_view_proj_rte: mat4x4<f32>,
     eye_high: vec4<f32>,
     eye_low: vec4<f32>,
     sun_dir: vec4<f32>,
@@ -1277,6 +2236,162 @@ struct GpuCameraUniforms {
     env_params: vec4<f32>,
     cloud_params: vec4<f32>,
     viewport_wh: vec4<f32>,
+    atmo_25d_params: vec4<f32>,
+    weather_opt_params: vec4<f32>,
+    cloud_tint_params: vec4<f32>,
+}
+
+struct GpuGeoInstance {
+    anchor_high: vec4<f32>,
+    anchor_low: vec4<f32>,
+    col0: vec4<f32>,
+    col1: vec4<f32>,
+    col2: vec4<f32>,
+    base_color: vec4<f32>,
+    emissive: vec4<f32>,
+}
+
+@group(0) @binding(0) var<uniform> cam: GpuCameraUniforms;
+@group(0) @binding(1) var<storage, read> geo_instances: array<GpuGeoInstance>;
+@group(1) @binding(0) var shadow_map: texture_depth_2d;
+@group(1) @binding(1) var shadow_sampler: sampler_comparison;
+@group(2) @binding(0) var geo_albedo_tex: texture_2d<f32>;
+@group(2) @binding(1) var geo_albedo_sampler: sampler;
+
+struct GeoVsOut {
+    @builtin(position) clip_pos: vec4<f32>,
+    @location(0) world_rel: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) base_color: vec4<f32>,
+    @location(3) emissive: vec4<f32>,
+    @location(4) material_params: vec4<f32>,
+    @location(5) uv: vec2<f32>,
+}
+
+@vertex
+fn vs_geo_object(
+    @location(0) pos_u: vec4<f32>,
+    @location(1) norm_v: vec4<f32>,
+    @location(2) vert_color: vec4<f32>,
+    @builtin(instance_index) inst_idx: u32,
+) -> GeoVsOut {
+    let inst = geo_instances[inst_idx];
+    let c0 = inst.col0.xyz;
+    let c1 = inst.col1.xyz;
+    let c2 = inst.col2.xyz;
+
+    let center_rel = (inst.anchor_high.xyz - cam.eye_high.xyz)
+                   + (inst.anchor_low.xyz - cam.eye_low.xyz);
+    let local_offset = c0 * pos_u.x + c1 * pos_u.y + c2 * pos_u.z;
+    let world_rel = center_rel + local_offset;
+
+    let adj0 = cross(c1, c2);
+    let adj1 = cross(c2, c0);
+    let adj2 = cross(c0, c1);
+    var world_n = adj0 * norm_v.x + adj1 * norm_v.y + adj2 * norm_v.z;
+    if (dot(world_n, world_n) < 1e-12) {
+        world_n = c0 * norm_v.x + c1 * norm_v.y + c2 * norm_v.z;
+    }
+
+    var out: GeoVsOut;
+    out.clip_pos = cam.view_proj_rte * vec4<f32>(world_rel, 1.0);
+    out.world_rel = world_rel;
+    out.normal = world_n;
+    out.base_color = inst.base_color * vert_color;
+    out.emissive = inst.emissive;
+    out.material_params = vec4<f32>(inst.col0.w, inst.col1.w, inst.col2.w, norm_v.w);
+    out.uv = vec2<f32>(pos_u.w, norm_v.w);
+    return out;
+}
+
+fn sample_geo_shadow(world_rel: vec3<f32>, n: vec3<f32>, sun_dir: vec3<f32>, shadow_radius: f32) -> f32 {
+    let ndotl = max(dot(n, sun_dir), 0.0);
+    let normal_bias = max(shadow_radius * 0.0014, 0.35) * (1.2 - 0.7 * ndotl);
+    let lclip = cam.light_view_proj_rte * vec4<f32>(world_rel + n * normal_bias, 1.0);
+    let ndc = lclip.xyz / max(lclip.w, 1e-5);
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    let depth_ref = clamp(ndc.z - 0.0005, 0.0, 0.9999);
+    let dims = max(vec2<f32>(textureDimensions(shadow_map)), vec2<f32>(1.0));
+    let texel = 1.0 / dims;
+    var acc = 0.0;
+    acc += textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(uv + vec2<f32>(-texel.x, -texel.y), vec2<f32>(0.001), vec2<f32>(0.999)), depth_ref);
+    acc += textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(uv + vec2<f32>(texel.x, -texel.y), vec2<f32>(0.001), vec2<f32>(0.999)), depth_ref);
+    acc += textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(uv, vec2<f32>(0.001), vec2<f32>(0.999)), depth_ref);
+    acc += textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(uv + vec2<f32>(-texel.x, texel.y), vec2<f32>(0.001), vec2<f32>(0.999)), depth_ref);
+    acc += textureSampleCompareLevel(shadow_map, shadow_sampler, clamp(uv + vec2<f32>(texel.x, texel.y), vec2<f32>(0.001), vec2<f32>(0.999)), depth_ref);
+    let border = max(abs(ndc.x), abs(ndc.y));
+    let in_bounds = (1.0 - smoothstep(0.84, 0.99, border)) * step(0.0, ndc.z) * step(ndc.z, 1.0);
+    return mix(1.0, acc * 0.2, in_bounds);
+}
+
+@fragment
+fn fs_geo_object(in: GeoVsOut) -> @location(0) vec4<f32> {
+    let tex = textureSample(geo_albedo_tex, geo_albedo_sampler, in.uv);
+    let tinted = in.base_color * tex;
+    let accent_t = clamp(in.material_params.w * in.emissive.w, 0.0, 1.0);
+    let albedo = mix(tinted.rgb, vec3<f32>(0.97, 0.99, 1.0), accent_t);
+
+    if (in.material_params.z >= 0.5) {
+        return vec4<f32>(clamp(albedo + in.emissive.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), tinted.a);
+    }
+
+    let len_sq = dot(in.normal, in.normal);
+    let n = select(vec3<f32>(0.0, 0.0, 1.0), normalize(in.normal), len_sq > 1e-10);
+    let view_dir = select(vec3<f32>(0.0, 0.0, 1.0), normalize(-in.world_rel), dot(in.world_rel, in.world_rel) > 1e-8);
+    let sun_dir = normalize(cam.sun_dir.xyz);
+
+    let roughness = clamp(in.material_params.x, 0.05, 1.0);
+    let metalness = clamp(in.material_params.y, 0.0, 1.0);
+
+    let dn = max(clamp(cam.env_params.x, 0.0, 1.0), clamp(cam.atmo_25d_params.z * cam.env_params.z, 0.0, 1.0));
+    let shadow_w = clamp(cam.atmo_25d_params.w, 0.0, 1.0);
+    var shadow_f = 1.0;
+    if (shadow_w > 0.001) {
+        shadow_f = mix(1.0, sample_geo_shadow(in.world_rel, n, sun_dir, max(cam.weather_opt_params.w, 10.0)), shadow_w * (1.0 - cam.weather_opt_params.x * 0.55));
+    }
+
+    let ndotl_sun = max(dot(n, sun_dir), 0.0) * shadow_f;
+    let ndotv = max(dot(n, view_dir), 0.0);
+    let hemi = 0.5 + 0.5 * dot(n, view_dir);
+
+    let studio_lit = vec3<f32>(0.42 + 0.24 * hemi) + vec3<f32>(0.52) * max(ndotl_sun, ndotv * 0.65);
+    let day_lit = cam.ambient_color.rgb * (0.75 + 0.45 * hemi) + cam.sun_color.rgb * ndotl_sun * (1.0 - cam.weather_opt_params.x * 0.55);
+    let diffuse_light = mix(studio_lit, day_lit, dn);
+
+    let half_vec = select(view_dir, normalize(sun_dir + view_dir), dot(sun_dir + view_dir, sun_dir + view_dir) > 1e-6);
+    let ndoth = max(dot(n, half_vec), 0.0);
+    let shininess = mix(96.0, 8.0, roughness * roughness);
+    let spec_strength = (1.0 - roughness * 0.75) * mix(0.22, 0.85, metalness);
+    let f0 = mix(vec3<f32>(0.04), albedo, metalness);
+    let spec = f0 * pow(ndoth, shininess) * spec_strength * max(ndotl_sun, 1.0 - dn);
+
+    let diffuse_albedo = albedo * (1.0 - metalness * 0.65);
+    let color = clamp(diffuse_albedo * diffuse_light + spec + in.emissive.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    return vec4<f32>(color, tinted.a);
+}
+"#;
+
+const GEO_SHADOW_WGSL: &str = r#"
+struct GpuCameraUniforms {
+    view_proj_rte: mat4x4<f32>,
+    inv_view_proj_rte: mat4x4<f32>,
+    ecef_from_icrf: mat4x4<f32>,
+    icrf_from_ecef: mat4x4<f32>,
+    light_view_proj_rte: mat4x4<f32>,
+    eye_high: vec4<f32>,
+    eye_low: vec4<f32>,
+    sun_dir: vec4<f32>,
+    sun_color: vec4<f32>,
+    ambient_color: vec4<f32>,
+    sky_top: vec4<f32>,
+    sky_bottom: vec4<f32>,
+    moon_dir: vec4<f32>,
+    env_params: vec4<f32>,
+    cloud_params: vec4<f32>,
+    viewport_wh: vec4<f32>,
+    atmo_25d_params: vec4<f32>,
+    weather_opt_params: vec4<f32>,
+    cloud_tint_params: vec4<f32>,
 }
 
 struct GpuGeoInstance {
@@ -1292,87 +2407,17 @@ struct GpuGeoInstance {
 @group(0) @binding(0) var<uniform> cam: GpuCameraUniforms;
 @group(0) @binding(1) var<storage, read> geo_instances: array<GpuGeoInstance>;
 
-struct GeoVsOut {
-    @builtin(position) clip_pos: vec4<f32>,
-    @location(0) world_rel: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-    @location(2) base_color: vec4<f32>,
-    @location(3) emissive: vec4<f32>,
-    @location(4) material_params: vec4<f32>,
-}
-
 @vertex
-fn vs_geo_object(
+fn vs_geo_shadow(
     @location(0) pos_u: vec4<f32>,
     @location(1) norm_v: vec4<f32>,
     @builtin(instance_index) inst_idx: u32,
-) -> GeoVsOut {
+) -> @builtin(position) vec4<f32> {
     let inst = geo_instances[inst_idx];
-    let c0 = inst.col0.xyz;
-    let c1 = inst.col1.xyz;
-    let c2 = inst.col2.xyz;
-
     let center_rel = (inst.anchor_high.xyz - cam.eye_high.xyz)
                    + (inst.anchor_low.xyz - cam.eye_low.xyz);
-    let local_offset = c0 * pos_u.x + c1 * pos_u.y + c2 * pos_u.z;
-    let world_rel = center_rel + local_offset;
-
-    // Exact cofactor (adjugate^T) normal transform: det(M) * (M^-1)^T * n.
-    // Preserves surface perpendicularity under non-uniform scale and 2D/2.5D morphing.
-    let adj0 = cross(c1, c2);
-    let adj1 = cross(c2, c0);
-    let adj2 = cross(c0, c1);
-    var world_n = adj0 * norm_v.x + adj1 * norm_v.y + adj2 * norm_v.z;
-    if (dot(world_n, world_n) < 1e-12) {
-        world_n = c0 * norm_v.x + c1 * norm_v.y + c2 * norm_v.z;
-    }
-
-    var out: GeoVsOut;
-    out.clip_pos = cam.view_proj_rte * vec4<f32>(world_rel, 1.0);
-    out.world_rel = world_rel;
-    out.normal = world_n;
-    out.base_color = inst.base_color;
-    out.emissive = inst.emissive;
-    out.material_params = vec4<f32>(inst.col0.w, inst.col1.w, inst.col2.w, norm_v.w);
-    return out;
-}
-
-@fragment
-fn fs_geo_object(in: GeoVsOut) -> @location(0) vec4<f32> {
-    let accent_t = clamp(in.material_params.w * in.emissive.w, 0.0, 1.0);
-    let albedo = mix(in.base_color.rgb, vec3<f32>(0.97, 0.99, 1.0), accent_t);
-
-    if (in.material_params.z >= 0.5) {
-        return vec4<f32>(clamp(albedo + in.emissive.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), in.base_color.a);
-    }
-
-    let len_sq = dot(in.normal, in.normal);
-    let n = select(vec3<f32>(0.0, 0.0, 1.0), normalize(in.normal), len_sq > 1e-10);
-    let view_dir = select(vec3<f32>(0.0, 0.0, 1.0), normalize(-in.world_rel), dot(in.world_rel, in.world_rel) > 1e-8);
-    let sun_dir = normalize(cam.sun_dir.xyz);
-
-    let roughness = clamp(in.material_params.x, 0.05, 1.0);
-    let metalness = clamp(in.material_params.y, 0.0, 1.0);
-
-    let dn = clamp(cam.env_params.x, 0.0, 1.0);
-    let ndotl_sun = max(dot(n, sun_dir), 0.0);
-    let ndotv = max(dot(n, view_dir), 0.0);
-    let hemi = 0.5 + 0.5 * dot(n, view_dir);
-
-    let studio_lit = vec3<f32>(0.42 + 0.24 * hemi) + vec3<f32>(0.52) * max(ndotl_sun, ndotv * 0.65);
-    let day_lit = cam.ambient_color.rgb * (0.75 + 0.45 * hemi) + cam.sun_color.rgb * ndotl_sun;
-    let diffuse_light = mix(studio_lit, day_lit, dn);
-
-    let half_vec = select(view_dir, normalize(sun_dir + view_dir), dot(sun_dir + view_dir, sun_dir + view_dir) > 1e-6);
-    let ndoth = max(dot(n, half_vec), 0.0);
-    let shininess = mix(96.0, 8.0, roughness * roughness);
-    let spec_strength = (1.0 - roughness * 0.75) * mix(0.22, 0.85, metalness);
-    let f0 = mix(vec3<f32>(0.04), albedo, metalness);
-    let spec = f0 * pow(ndoth, shininess) * spec_strength * max(ndotl_sun, 1.0 - dn);
-
-    let diffuse_albedo = albedo * (1.0 - metalness * 0.65);
-    let color = clamp(diffuse_albedo * diffuse_light + spec + in.emissive.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
-    return vec4<f32>(color, in.base_color.a);
+    let local_offset = inst.col0.xyz * pos_u.x + inst.col1.xyz * pos_u.y + inst.col2.xyz * pos_u.z;
+    return cam.light_view_proj_rte * vec4<f32>(center_rel + local_offset, 1.0);
 }
 "#;
 
@@ -1382,6 +2427,7 @@ struct GpuCameraUniforms {
     inv_view_proj_rte: mat4x4<f32>,
     ecef_from_icrf: mat4x4<f32>,
     icrf_from_ecef: mat4x4<f32>,
+    light_view_proj_rte: mat4x4<f32>,
     eye_high: vec4<f32>,
     eye_low: vec4<f32>,
     sun_dir: vec4<f32>,
@@ -1393,12 +2439,16 @@ struct GpuCameraUniforms {
     env_params: vec4<f32>,
     cloud_params: vec4<f32>,
     viewport_wh: vec4<f32>,
+    atmo_25d_params: vec4<f32>,
+    weather_opt_params: vec4<f32>,
+    cloud_tint_params: vec4<f32>,
 }
 
 struct GpuParticleLayerUniforms {
     basis_east: vec4<f32>,
     basis_north: vec4<f32>,
     basis_up: vec4<f32>,
+    forward_bias: vec4<f32>,
     cam_right_mpx: vec4<f32>,
     cam_up_pad: vec4<f32>,
     altitude_bounds: vec4<f32>,
@@ -1454,8 +2504,6 @@ fn vs_particle(
     let edge_fade_frac = clamp(layer.volume_params.z, 0.04, 0.48);
     let near_fade_m = max(layer.volume_params.w, 0.1);
 
-    // Pre-wrapped f64->f32 toroidal phase keeps particles 100% locked to world ENU coordinates:
-    // panning camera right (+East) shifts wrapped_phase.x down so drops stream cleanly left.
     let u_e = fract(r0 + layer.basis_east.w);
     let u_n = fract(r1 + layer.basis_north.w);
     let u_z = fract(r2 + layer.basis_up.w);
@@ -1477,7 +2525,7 @@ fn vs_particle(
     let east = layer.basis_east.xyz;
     let north = layer.basis_north.xyz;
     let up = layer.basis_up.xyz;
-    let center_rel = east * rel_e + north * rel_n + up * rel_z;
+    let center_rel = east * rel_e + north * rel_n + up * rel_z + layer.forward_bias.xyz;
 
     let center_clip = cam.view_proj_rte * vec4<f32>(center_rel, 1.0);
     if (center_clip.w <= 0.05) {
@@ -1493,11 +2541,12 @@ fn vs_particle(
     let near_fade = smoothstep(near_fade_m * 0.30, near_fade_m, dist);
 
     // Physical altitude bounds: clip smoothly at ground terrain surface and cloud ceiling.
-    let particle_alt_msl = layer.altitude_bounds.x + rel_z;
+    let bias_alt = dot(layer.forward_bias.xyz, up);
+    let particle_alt_msl = layer.altitude_bounds.x + rel_z + bias_alt;
     let ground_alt_msl = layer.altitude_bounds.y;
     let ceiling_alt_msl = layer.altitude_bounds.z;
     let ceiling_fade_m = max(layer.altitude_bounds.w, 1.0);
-    let above_ground = smoothstep(ground_alt_msl - 0.5, ground_alt_msl + 1.5, particle_alt_msl);
+    let above_ground = smoothstep(ground_alt_msl - 0.5, ground_alt_msl + 2.5, particle_alt_msl);
     let below_ceiling = 1.0 - smoothstep(ceiling_alt_msl - ceiling_fade_m, ceiling_alt_msl, particle_alt_msl);
 
     let alpha_mul = edge_fade * near_fade * above_ground * below_ceiling;
@@ -1505,7 +2554,6 @@ fn vs_particle(
         return out;
     }
 
-    // 6-vertex quad corners in [-1, 1] x [-1, 1]
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(-1.0, -1.0),
         vec2<f32>(1.0, -1.0),
@@ -1529,7 +2577,7 @@ fn vs_particle(
     var uv = vec2<f32>(corner.x * 0.5 + 0.5, 0.5 - corner.y * 0.5);
 
     if (layer.particle_meta.y == 0u) {
-        // VelocityAligned: align streak vertically along 3D wind + gravity velocity vector.
+        // VelocityAligned: align streak or far-field curtain vertically along 3D wind + gravity velocity vector.
         let fall_v = layer.motion_params.x;
         let wind_e = layer.motion_params.y;
         let wind_n = layer.motion_params.z;
@@ -1552,14 +2600,19 @@ fn vs_particle(
         let size_var = 0.75 + 0.50 * r3;
         let raw_hw = max(layer.size_params.x * 0.5 * size_var, 0.004);
         let raw_hh = max((layer.size_params.y + speed * layer.size_params.z) * 0.5 * size_var, raw_hw);
-        let max_streak_w_px = min(max_px * 0.12, max(min_px * 2.2, 3.2));
-        hw = clamp(raw_hw, min_px * 0.5 * m_per_px, max_streak_w_px * 0.5 * m_per_px);
-        hh = clamp(raw_hh, min_px * 0.5 * m_per_px, max_px * 0.5 * m_per_px) * foreshorten;
-        hh = max(hh, hw * 1.15);
-        // uv.y = 0 at leading bottom tip (corner.y = -1 -> +v_dir), uv.y = 1 at upper trailing tail
+        if (layer.particle_meta.x == 4u) {
+            // ProceduralCurtain: wide translucent rain-shaft / snow-squall veil without narrow streak clamp.
+            hw = clamp(raw_hw, min_px * 0.5 * m_per_px, max_px * 0.5 * m_per_px);
+            hh = clamp(raw_hh, min_px * 0.5 * m_per_px, max_px * 0.9 * m_per_px) * mix(0.45, 1.0, foreshorten);
+        } else {
+            let max_streak_w_px = min(max_px * 0.12, max(min_px * 2.2, 3.2));
+            hw = clamp(raw_hw, min_px * 0.5 * m_per_px, max_streak_w_px * 0.5 * m_per_px);
+            hh = clamp(raw_hh, min_px * 0.5 * m_per_px, max_px * 0.5 * m_per_px) * foreshorten;
+            hh = max(hh, hw * 1.15);
+        }
         uv = vec2<f32>(corner.x * 0.5 + 0.5, corner.y * 0.5 + 0.5);
     } else {
-        // CameraFacing: 2D camera-aligned billboard with per-particle spin (snowflakes, sleet, custom textures).
+        // CameraFacing: 2D camera-aligned billboard with per-particle spin.
         let spin_dir = select(-1.0, 1.0, (inst_idx & 1u) == 0u);
         let ang = r3 * 6.2831853 + time_s * layer.size_params.w * spin_dir;
         let s = sin(ang);
@@ -1579,17 +2632,19 @@ fn vs_particle(
     out.clip_pos = cam.view_proj_rte * vec4<f32>(world_rel, 1.0);
     out.uv = uv;
 
-    // Day/night atmospheric lighting tint so precipitation responds naturally to sun elevation.
-    let dn = clamp(cam.env_params.x, 0.0, 1.0);
+    // Day/night/sunset lighting tint so precipitation responds naturally to sun elevation.
+    let dn = max(clamp(cam.env_params.x, 0.0, 1.0), clamp(cam.atmo_25d_params.z * cam.env_params.z, 0.0, 1.0));
     let sun_elev = dot(normalize(up), normalize(cam.sun_dir.xyz));
     let sun_w = smoothstep(-0.10, 0.28, sun_elev);
+    let golden_w = exp(-pow((sun_elev - 0.03) * 7.5, 2.0));
+    let sun_warm = mix(vec3<f32>(1.0, 0.68, 0.42), cam.sun_color.rgb, smoothstep(0.0, 0.28, sun_elev));
     let day_lit = mix(
-        vec3<f32>(0.26, 0.31, 0.40),
-        cam.ambient_color.rgb * 0.85 + cam.sun_color.rgb * 0.92,
+        vec3<f32>(0.22, 0.27, 0.38),
+        cam.ambient_color.rgb * 0.85 + sun_warm * 0.92 + vec3<f32>(0.18, 0.09, 0.03) * golden_w,
         sun_w,
     );
-    let lit = mix(vec3<f32>(0.96, 0.98, 1.0), clamp(day_lit, vec3<f32>(0.24), vec3<f32>(1.12)), dn);
-    let depth_fade = 0.82 + 0.18 * (1.0 - clamp(dist / max(extent_xy, 1.0), 0.0, 1.0));
+    let lit = mix(vec3<f32>(0.96, 0.98, 1.0), clamp(day_lit, vec3<f32>(0.20), vec3<f32>(1.12)), dn);
+    let depth_fade = 0.80 + 0.20 * (1.0 - clamp(dist / max(extent_xy, 1.0), 0.0, 1.0));
     out.color = vec4<f32>(layer.color.rgb * lit, layer.color.a * alpha_mul * depth_fade);
     return out;
 }
@@ -1600,7 +2655,7 @@ fn fs_particle(in: ParticleVsOut) -> @location(0) vec4<f32> {
     let r = length(p);
 
     // Pre-compute simplistic 6-fold mathematical snowflake SDF in uniform control flow for fwidth().
-    let sector = 1.04719755; // pi / 3
+    let sector = 1.04719755;
     let safe_ang = select(0.0, atan2(p.y, p.x), r > 1e-4);
     let folded = abs(safe_ang - sector * floor(safe_ang / sector + 0.5));
     let su = r * cos(folded);
@@ -1620,7 +2675,7 @@ fn fs_particle(in: ParticleVsOut) -> @location(0) vec4<f32> {
         let texel = textureSampleLevel(sprite_tex, sprite_sampler, in.uv, 0.0);
         out_col = texel * in.color;
     } else if (in.sprite_mode == 1u) {
-        // Pure mathematical tapered 2D raindrop streak (t = 0 leading tip, t = 1 upper motion tail).
+        // Pure mathematical tapered 2D raindrop streak.
         let t = clamp(in.uv.y, 0.0, 1.0);
         let width_prof = mix(0.76, 0.20, smoothstep(0.08, 1.0, t)) * smoothstep(0.0, 0.08, t);
         let x_norm = abs(p.x) / max(width_prof, 0.04);
@@ -1634,6 +2689,13 @@ fn fs_particle(in: ParticleVsOut) -> @location(0) vec4<f32> {
         let crystal = 1.0 - smoothstep(-aa_crystal, aa_crystal, d_crystal);
         let soft_halo = (1.0 - smoothstep(0.18, 0.94, r)) * 0.26;
         let mask = clamp(max(crystal, soft_halo), 0.0, 1.0) * (1.0 - smoothstep(0.92, 1.0, r));
+        out_col = vec4<f32>(in.color.rgb, in.color.a * mask);
+    } else if (in.sprite_mode == 4u) {
+        // ProceduralCurtain: ultra-soft atmospheric regional rain-shaft / snow-squall mist veil.
+        let x_env = exp(-p.x * p.x * 2.4);
+        let y_env = smoothstep(0.0, 0.34, in.uv.y) * (1.0 - smoothstep(0.62, 1.0, in.uv.y));
+        let soft_stria = 0.86 + 0.14 * sin(in.uv.x * 9.4248 + in.uv.y * 1.8) * cos(in.uv.x * 15.708 - in.uv.y * 2.4);
+        let mask = clamp(x_env * y_env * soft_stria, 0.0, 1.0);
         out_col = vec4<f32>(in.color.rgb, in.color.a * mask);
     } else {
         // ProceduralPellet: compact translucent sleet / graupel ice pellet.
@@ -2125,11 +3187,40 @@ struct CachedIndexTopology {
     index_count: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuGeoVertex {
+    pos_u: [f32; 4],
+    norm_v: [f32; 4],
+    color: [f32; 4],
+}
+
 struct CachedDynamicGpuMesh {
     revision: u64,
     vbuf: wgpu::Buffer,
     ibuf: wgpu::Buffer,
     index_count: u32,
+    last_used_seq: u64,
+}
+
+struct CachedGeoGpuMesh {
+    revision: u64,
+    vbuf: wgpu::Buffer,
+    ibuf: wgpu::Buffer,
+    index_count: u32,
+    has_vertex_alpha: bool,
+    albedo_tex_id: Option<u64>,
+    last_used_seq: u64,
+}
+
+struct CachedGeoTexture {
+    revision: u64,
+    width: u32,
+    height: u32,
+    has_alpha: bool,
+    _texture: wgpu::Texture,
+    bind_group: wgpu::BindGroup,
+    last_used_seq: u64,
 }
 
 struct OffscreenTarget {
@@ -2992,9 +4083,21 @@ pub struct Wgpu3DRenderer {
     env_state: GpuEnvironmentState,
     terrain_pipeline: wgpu::RenderPipeline,
     terrain_opaque_pipeline: wgpu::RenderPipeline,
+    terrain_shadow_pipeline: wgpu::RenderPipeline,
     terrain_bind_group_layout: wgpu::BindGroupLayout,
     terrain_bind_group: wgpu::BindGroup,
     terrain_sampler: wgpu::Sampler,
+    shadow_ocean_bgl: wgpu::BindGroupLayout,
+    shadow_ocean_bind_group: wgpu::BindGroup,
+    shadow_sampler: wgpu::Sampler,
+    _shadow_fallback_tex: wgpu::Texture,
+    shadow_fallback_view: wgpu::TextureView,
+    shadow_target: Option<(u32, wgpu::Texture, wgpu::TextureView)>,
+    ocean_uniform_buffer: wgpu::Buffer,
+    coastal_sdf_sampler: wgpu::Sampler,
+    _coastal_sdf_fallback_tex: wgpu::Texture,
+    coastal_sdf_fallback_view: wgpu::TextureView,
+    coastal_sdf_cached: Option<(u64, u64, u32, u32, wgpu::Texture, wgpu::TextureView)>,
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     slab: GpuTileSlabAllocator,
@@ -3009,11 +4112,16 @@ pub struct Wgpu3DRenderer {
     dynamic_meshes: HashMap<u64, CachedDynamicGpuMesh>,
     geo_object_pipeline: wgpu::RenderPipeline,
     geo_object_transparent_pipeline: wgpu::RenderPipeline,
+    geo_shadow_pipeline: wgpu::RenderPipeline,
     geo_object_bind_group_layout: wgpu::BindGroupLayout,
     geo_object_bind_group: wgpu::BindGroup,
+    geo_tex_bgl: wgpu::BindGroupLayout,
+    geo_sampler: wgpu::Sampler,
+    geo_default_tex_bg: wgpu::BindGroup,
     geo_instance_buffer: wgpu::Buffer,
     geo_instance_capacity: usize,
-    geo_meshes: HashMap<u64, CachedDynamicGpuMesh>,
+    geo_meshes: HashMap<u64, CachedGeoGpuMesh>,
+    geo_textures: HashMap<u64, CachedGeoTexture>,
     particle_pipeline: wgpu::RenderPipeline,
     particle_common_bgl: wgpu::BindGroupLayout,
     particle_tex_bgl: wgpu::BindGroupLayout,
@@ -3033,8 +4141,7 @@ pub struct Wgpu3DRenderer {
     frame_index: u64,
     last_geometry_rev: u64,
     last_terrain_frame: Option<Arc<RetainedTerrainFrame>>,
-    last_scene_ptr: usize,
-    cached_fallback_frame: Option<Arc<RetainedTerrainFrame>>,
+    cached_fallback_frames: HashMap<(usize, u32, u32), (u64, Arc<RetainedTerrainFrame>)>,
 }
 
 /// Returns adapter-supported [`wgpu::Limits`] requesting up to [`MAX_ATLAS_LAYERS`] texture array layers.
@@ -3682,9 +4789,168 @@ impl Wgpu3DRenderer {
             &terrain_sampler,
             &env_state.land_mask_view,
         );
+        let shadow_ocean_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("strata_3d_shadow_ocean_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("strata_3d_shadow_cmp_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        let shadow_fallback_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("strata_3d_shadow_fallback_1x1"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let shadow_fallback_view = shadow_fallback_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        // Clear 1x1 fallback depth texture to 1.0 once so comparisons always pass when shadows are off.
+        {
+            let mut init_enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("strata_3d_shadow_fallback_init"),
+            });
+            let _ = init_enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("strata_3d_shadow_fallback_clear"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &shadow_fallback_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            queue.submit(Some(init_enc.finish()));
+        }
+
+        let ocean_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("strata_3d_ocean_uniforms"),
+            size: std::mem::size_of::<GpuOceanUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &ocean_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&GpuOceanUniforms::disabled()),
+        );
+        let coastal_sdf_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("strata_3d_coastal_sdf_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let coastal_sdf_fallback_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("strata_3d_coastal_sdf_fallback_1x1"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &coastal_sdf_fallback_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255u8, 255, 128, 128],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let coastal_sdf_fallback_view =
+            coastal_sdf_fallback_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let shadow_ocean_bind_group = Self::create_shadow_ocean_bind_group(
+            &device,
+            &shadow_ocean_bgl,
+            &shadow_fallback_view,
+            &shadow_sampler,
+            &ocean_uniform_buffer,
+            &coastal_sdf_fallback_view,
+            &coastal_sdf_sampler,
+        );
+
         let terrain_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("strata_3d_terrain_pl"),
-            bind_group_layouts: &[&terrain_bind_group_layout],
+            bind_group_layouts: &[&terrain_bind_group_layout, &shadow_ocean_bgl],
             push_constant_ranges: &[],
         });
         let make_terrain_pipeline = |label: &str, blend: Option<wgpu::BlendState>| {
@@ -3735,6 +5001,49 @@ impl Wgpu3DRenderer {
         );
         let terrain_opaque_pipeline =
             make_terrain_pipeline("strata_3d_terrain_opaque_pipeline", None);
+
+        let terrain_shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("strata_3d_terrain_shadow_wgsl"),
+            source: wgpu::ShaderSource::Wgsl(TERRAIN_SHADOW_WGSL.into()),
+        });
+        let terrain_shadow_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("strata_3d_terrain_shadow_pl"),
+                bind_group_layouts: &[&terrain_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+        let terrain_shadow_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("strata_3d_terrain_shadow_pipeline"),
+                layout: Some(&terrain_shadow_layout),
+                vertex: wgpu::VertexState {
+                    module: &terrain_shadow_shader,
+                    entry_point: Some("vs_terrain_shadow"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: None,
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState {
+                        constant: 2,
+                        slope_scale: 2.0,
+                        clamp: 0.0,
+                    },
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
 
         // Dynamic RTC mesh pipeline (buildings, entities, fallback meshes)
         let dynamic_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -3910,9 +5219,86 @@ impl Wgpu3DRenderer {
                 },
             ],
         });
+        let geo_tex_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("strata_3d_geo_tex_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let geo_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("strata_3d_geo_albedo_sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let default_geo_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("strata_3d_geo_default_1x1_white"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &default_geo_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255u8, 255, 255, 255],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let default_geo_view = default_geo_tex.create_view(&Default::default());
+        let geo_default_tex_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("strata_3d_geo_default_tex_bg"),
+            layout: &geo_tex_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&default_geo_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&geo_sampler),
+                },
+            ],
+        });
         let geo_object_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("strata_3d_geo_object_pl"),
-            bind_group_layouts: &[&geo_object_bind_group_layout],
+            bind_group_layouts: &[&geo_object_bind_group_layout, &shadow_ocean_bgl, &geo_tex_bgl],
             push_constant_ranges: &[],
         });
         let make_geo_pipeline = |label: &str, depth_write_enabled: bool, blend: Option<wgpu::BlendState>| {
@@ -3923,7 +5309,7 @@ impl Wgpu3DRenderer {
                     module: &geo_object_shader,
                     entry_point: Some("vs_geo_object"),
                     buffers: &[wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<RteTileVertex>() as u64,
+                        array_stride: std::mem::size_of::<GpuGeoVertex>() as u64,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &[
                             wgpu::VertexAttribute {
@@ -3935,6 +5321,11 @@ impl Wgpu3DRenderer {
                                 format: wgpu::VertexFormat::Float32x4,
                                 offset: 16,
                                 shader_location: 1,
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x4,
+                                offset: 32,
+                                shader_location: 2,
                             },
                         ],
                     }],
@@ -3975,6 +5366,62 @@ impl Wgpu3DRenderer {
             false,
             Some(wgpu::BlendState::ALPHA_BLENDING),
         );
+        let geo_shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("strata_3d_geo_shadow_wgsl"),
+            source: wgpu::ShaderSource::Wgsl(GEO_SHADOW_WGSL.into()),
+        });
+        let geo_shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("strata_3d_geo_shadow_pl"),
+            bind_group_layouts: &[&geo_object_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let geo_shadow_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("strata_3d_geo_shadow_pipeline"),
+                layout: Some(&geo_shadow_layout),
+                vertex: wgpu::VertexState {
+                    module: &geo_shadow_shader,
+                    entry_point: Some("vs_geo_shadow"),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<GpuGeoVertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x4,
+                                offset: 0,
+                                shader_location: 0,
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x4,
+                                offset: 16,
+                                shader_location: 1,
+                            },
+                        ],
+                    }],
+                    compilation_options: Default::default(),
+                },
+                fragment: None,
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState {
+                        constant: 2,
+                        slope_scale: 2.0,
+                        clamp: 0.0,
+                    },
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
 
         // GPU-instanced 2D camera-local toroidal particle volume pipeline (rain, snow, custom 2D sprites)
         let particle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -4273,9 +5720,21 @@ impl Wgpu3DRenderer {
             env_state,
             terrain_pipeline,
             terrain_opaque_pipeline,
+            terrain_shadow_pipeline,
             terrain_bind_group_layout,
             terrain_bind_group,
             terrain_sampler,
+            shadow_ocean_bgl,
+            shadow_ocean_bind_group,
+            shadow_sampler,
+            _shadow_fallback_tex: shadow_fallback_tex,
+            shadow_fallback_view,
+            shadow_target: None,
+            ocean_uniform_buffer,
+            coastal_sdf_sampler,
+            _coastal_sdf_fallback_tex: coastal_sdf_fallback_tex,
+            coastal_sdf_fallback_view,
+            coastal_sdf_cached: None,
             instance_buffer,
             instance_capacity: initial_instances,
             slab,
@@ -4290,11 +5749,16 @@ impl Wgpu3DRenderer {
             dynamic_meshes: HashMap::new(),
             geo_object_pipeline,
             geo_object_transparent_pipeline,
+            geo_shadow_pipeline,
             geo_object_bind_group_layout,
             geo_object_bind_group,
+            geo_tex_bgl,
+            geo_sampler,
+            geo_default_tex_bg,
             geo_instance_buffer,
             geo_instance_capacity,
             geo_meshes: HashMap::new(),
+            geo_textures: HashMap::new(),
             particle_pipeline,
             particle_common_bgl,
             particle_tex_bgl,
@@ -4314,8 +5778,7 @@ impl Wgpu3DRenderer {
             frame_index: 0,
             last_geometry_rev: 0,
             last_terrain_frame: None,
-            last_scene_ptr: 0,
-            cached_fallback_frame: None,
+            cached_fallback_frames: HashMap::new(),
         }
     }
 
@@ -4329,6 +5792,109 @@ impl Wgpu3DRenderer {
 
     pub fn color_format(&self) -> wgpu::TextureFormat {
         self.color_format
+    }
+
+    /// Number of currently cached GPU geodetic object mesh buffers.
+    pub fn cached_geo_mesh_count(&self) -> usize {
+        self.geo_meshes.len()
+    }
+
+    /// Number of currently cached GPU geodetic object albedo textures.
+    pub fn cached_geo_texture_count(&self) -> usize {
+        self.geo_textures.len()
+    }
+
+    fn ensure_geo_texture(
+        &mut self,
+        tex: &crate::scene3d::RetainedTileTexture,
+        seq: u64,
+    ) -> Option<(u64, bool)> {
+        if tex.width == 0
+            || tex.height == 0
+            || tex.rgba8.len() < (tex.width as usize) * (tex.height as usize) * 4
+        {
+            return None;
+        }
+        let need_upload = match self.geo_textures.get_mut(&tex.id) {
+            Some(existing) => {
+                existing.last_used_seq = seq;
+                if existing.revision == tex.revision
+                    && existing.width == tex.width
+                    && existing.height == tex.height
+                {
+                    return Some((tex.id, existing.has_alpha));
+                }
+                true
+            }
+            None => true,
+        };
+        if need_upload {
+            let byte_len = (tex.width as usize) * (tex.height as usize) * 4;
+            let bytes = &tex.rgba8[..byte_len];
+            let has_alpha = bytes.chunks_exact(4).any(|px| px[3] < 255);
+            let gpu_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("strata_3d_geo_albedo_tex"),
+                size: wgpu::Extent3d {
+                    width: tex.width,
+                    height: tex.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &gpu_tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(tex.width * 4),
+                    rows_per_image: Some(tex.height),
+                },
+                wgpu::Extent3d {
+                    width: tex.width,
+                    height: tex.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            let view = gpu_tex.create_view(&Default::default());
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("strata_3d_geo_albedo_bg"),
+                layout: &self.geo_tex_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.geo_sampler),
+                    },
+                ],
+            });
+            self.geo_textures.insert(
+                tex.id,
+                CachedGeoTexture {
+                    revision: tex.revision,
+                    width: tex.width,
+                    height: tex.height,
+                    has_alpha,
+                    _texture: gpu_tex,
+                    bind_group,
+                    last_used_seq: seq,
+                },
+            );
+            return Some((tex.id, has_alpha));
+        }
+        None
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4422,6 +5988,204 @@ impl Wgpu3DRenderer {
                 },
             ],
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_shadow_ocean_bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        shadow_view: &wgpu::TextureView,
+        shadow_sampler: &wgpu::Sampler,
+        ocean_buffer: &wgpu::Buffer,
+        coastal_sdf_view: &wgpu::TextureView,
+        coastal_sdf_sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("strata_3d_shadow_ocean_bg"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(shadow_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: ocean_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(coastal_sdf_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(coastal_sdf_sampler),
+                },
+            ],
+        })
+    }
+
+    fn sync_shadow_and_ocean_resources(
+        &mut self,
+        shadows_active: bool,
+        shadow_size: u32,
+        ocean_opt: Option<&RetainedOceanSurface>,
+    ) {
+        let mut need_rebind = false;
+        let clamped_shadow = shadow_size.clamp(512, 4096);
+        if shadows_active {
+            let needs_alloc = match self.shadow_target {
+                Some((sz, _, _)) => sz != clamped_shadow,
+                None => true,
+            };
+            if needs_alloc {
+                let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("strata_3d_shadow_map"),
+                    size: wgpu::Extent3d {
+                        width: clamped_shadow,
+                        height: clamped_shadow,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Depth32Float,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                });
+                let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                self.shadow_target = Some((clamped_shadow, tex, view));
+                need_rebind = true;
+            }
+        }
+
+        let mut has_sdf = false;
+        if let Some(ocean) = ocean_opt {
+            if ocean.enabled && ocean.coastal_shoaling {
+                if let Some(ref sdf) = ocean.coastal_sdf {
+                    let expected_bytes = (sdf.width as usize)
+                        .saturating_mul(sdf.height as usize)
+                        .saturating_mul(4);
+                    if sdf.width > 0 && sdf.height > 0 && sdf.rgba8.len() == expected_bytes {
+                        has_sdf = true;
+                        let needs_upload = match self.coastal_sdf_cached {
+                            Some((id, rev, w, h, _, _)) => {
+                                id != sdf.id || rev != sdf.revision || w != sdf.width || h != sdf.height
+                            }
+                            None => true,
+                        };
+                        if needs_upload {
+                            let same_dims = match self.coastal_sdf_cached {
+                                Some((_, _, w, h, _, _)) => w == sdf.width && h == sdf.height,
+                                None => false,
+                            };
+                            if same_dims {
+                                if let Some((id, rev, w, h, ref tex, _)) = self.coastal_sdf_cached.as_mut() {
+                                    self.queue.write_texture(
+                                        wgpu::TexelCopyTextureInfo {
+                                            texture: tex,
+                                            mip_level: 0,
+                                            origin: wgpu::Origin3d::ZERO,
+                                            aspect: wgpu::TextureAspect::All,
+                                        },
+                                        &sdf.rgba8,
+                                        wgpu::TexelCopyBufferLayout {
+                                            offset: 0,
+                                            bytes_per_row: Some(*w * 4),
+                                            rows_per_image: Some(*h),
+                                        },
+                                        wgpu::Extent3d {
+                                            width: *w,
+                                            height: *h,
+                                            depth_or_array_layers: 1,
+                                        },
+                                    );
+                                    *id = sdf.id;
+                                    *rev = sdf.revision;
+                                }
+                            } else {
+                                let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                                    label: Some("strata_3d_coastal_sdf_tex"),
+                                    size: wgpu::Extent3d {
+                                        width: sdf.width,
+                                        height: sdf.height,
+                                        depth_or_array_layers: 1,
+                                    },
+                                    mip_level_count: 1,
+                                    sample_count: 1,
+                                    dimension: wgpu::TextureDimension::D2,
+                                    format: wgpu::TextureFormat::Rgba8Unorm,
+                                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                                        | wgpu::TextureUsages::COPY_DST,
+                                    view_formats: &[],
+                                });
+                                self.queue.write_texture(
+                                    wgpu::TexelCopyTextureInfo {
+                                        texture: &tex,
+                                        mip_level: 0,
+                                        origin: wgpu::Origin3d::ZERO,
+                                        aspect: wgpu::TextureAspect::All,
+                                    },
+                                    &sdf.rgba8,
+                                    wgpu::TexelCopyBufferLayout {
+                                        offset: 0,
+                                        bytes_per_row: Some(sdf.width * 4),
+                                        rows_per_image: Some(sdf.height),
+                                    },
+                                    wgpu::Extent3d {
+                                        width: sdf.width,
+                                        height: sdf.height,
+                                        depth_or_array_layers: 1,
+                                    },
+                                );
+                                let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                                self.coastal_sdf_cached =
+                                    Some((sdf.id, sdf.revision, sdf.width, sdf.height, tex, view));
+                                need_rebind = true;
+                            }
+                        }
+                    }
+                }
+            }
+            let gpu_ocean = GpuOceanUniforms::from_retained(ocean, has_sdf);
+            self.queue.write_buffer(
+                &self.ocean_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&gpu_ocean),
+            );
+        } else {
+            self.queue.write_buffer(
+                &self.ocean_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&GpuOceanUniforms::disabled()),
+            );
+        }
+
+        if need_rebind {
+            let shadow_view = self
+                .shadow_target
+                .as_ref()
+                .map(|(_, _, v)| v)
+                .unwrap_or(&self.shadow_fallback_view);
+            let sdf_view = self
+                .coastal_sdf_cached
+                .as_ref()
+                .map(|(_, _, _, _, _, v)| v)
+                .unwrap_or(&self.coastal_sdf_fallback_view);
+            self.shadow_ocean_bind_group = Self::create_shadow_ocean_bind_group(
+                &self.device,
+                &self.shadow_ocean_bgl,
+                shadow_view,
+                &self.shadow_sampler,
+                &self.ocean_uniform_buffer,
+                sdf_view,
+                &self.coastal_sdf_sampler,
+            );
+        }
     }
 
     fn create_terrain_bind_group(
@@ -4746,6 +6510,67 @@ impl Wgpu3DRenderer {
         unlimited_upload_budget: bool,
         overlay_bind_group: Option<&wgpu::BindGroup>,
     ) {
+        self.render_scene_to_view_internal(
+            scene,
+            target_view,
+            target_width,
+            target_height,
+            viewport,
+            unlimited_upload_budget,
+            true,
+            false,
+            overlay_bind_group,
+        );
+    }
+
+    /// Renders multiple 3D viewports (`(viewport_rect, scene)`) sequentially into `target_view`
+    /// without clearing prior viewports, and composites `overlay_bind_group` once on the final pass.
+    pub fn render_viewports_and_overlay_to_view(
+        &mut self,
+        viewports: &[([f32; 4], &Scene3D)],
+        target_view: &wgpu::TextureView,
+        target_width: u32,
+        target_height: u32,
+        unlimited_upload_budget: bool,
+        overlay_bind_group: Option<&wgpu::BindGroup>,
+    ) {
+        if viewports.is_empty() {
+            if let Some(ov_bg) = overlay_bind_group {
+                self.composite_overlay_to_view(target_view, ov_bg);
+            }
+            return;
+        }
+        let multi = viewports.len() > 1;
+        for (idx, &(vp, scene)) in viewports.iter().enumerate() {
+            let is_first = idx == 0;
+            let is_last = idx + 1 == viewports.len();
+            self.render_scene_to_view_internal(
+                scene,
+                target_view,
+                target_width,
+                target_height,
+                Some(vp),
+                unlimited_upload_budget,
+                is_first,
+                multi,
+                if is_last { overlay_bind_group } else { None },
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_scene_to_view_internal(
+        &mut self,
+        scene: &Scene3D,
+        target_view: &wgpu::TextureView,
+        target_width: u32,
+        target_height: u32,
+        viewport: Option<[f32; 4]>,
+        unlimited_upload_budget: bool,
+        clear_color_target: bool,
+        multi_viewport_mode: bool,
+        overlay_bind_group: Option<&wgpu::BindGroup>,
+    ) {
         let perf = gpu_perf_logging_enabled();
         let t_start = std::time::Instant::now();
         let mut t_env = 0.0f64;
@@ -4763,6 +6588,13 @@ impl Wgpu3DRenderer {
             DEFAULT_TEXTURE_UPLOAD_BUDGET
         };
 
+        let vp_w_u32 = viewport
+            .map(|v| v[2].max(1.0).round() as u32)
+            .unwrap_or_else(|| target_width.max(1));
+        let vp_h_u32 = viewport
+            .map(|v| v[3].max(1.0).round() as u32)
+            .unwrap_or_else(|| target_height.max(1));
+
         let (cam, terrain_frame_opt) = if let Some(retained) = scene.retained_handle() {
             let terrain = retained.snapshot_terrain();
             let cam = retained.camera();
@@ -4770,16 +6602,21 @@ impl Wgpu3DRenderer {
         } else if let Some(terrain) = scene.retained_terrain() {
             (terrain.camera, Some(Arc::clone(terrain)))
         } else {
-            let scene_ptr = scene as *const Scene3D as usize;
-            if scene_ptr != self.last_scene_ptr || self.cached_fallback_frame.is_none() {
-                self.last_scene_ptr = scene_ptr;
-                self.cached_fallback_frame = Some(Arc::new(fallback_frame_from_scene3d(
+            let scene_key = (scene as *const Scene3D as usize, vp_w_u32, vp_h_u32);
+            let frame = if let Some((seq, existing)) = self.cached_fallback_frames.get_mut(&scene_key)
+            {
+                *seq = frame_idx;
+                Arc::clone(existing)
+            } else {
+                let built = Arc::new(fallback_frame_from_scene3d(
                     scene,
-                    target_width.max(1) as f32,
-                    target_height.max(1) as f32,
-                )));
-            }
-            let frame = self.cached_fallback_frame.clone().unwrap();
+                    vp_w_u32 as f32,
+                    vp_h_u32 as f32,
+                ));
+                self.cached_fallback_frames
+                    .insert(scene_key, (frame_idx, Arc::clone(&built)));
+                built
+            };
             (frame.camera, Some(frame))
         };
 
@@ -4792,7 +6629,16 @@ impl Wgpu3DRenderer {
             .map(|v| v[3])
             .unwrap_or_else(|| target_height.max(1) as f32)
             .max(1.0);
-        let gpu_cam = GpuCameraUniforms::from_retained(&cam, vp_w, vp_h);
+        let (light_vp_rte, shadow_radius_m, shadows_active) =
+            compute_shadow_light_vp_rte(&cam, cam.shadow_map_size);
+        let gpu_cam = GpuCameraUniforms::from_retained(
+            &cam,
+            vp_w,
+            vp_h,
+            light_vp_rte,
+            shadow_radius_m,
+            shadows_active,
+        );
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&gpu_cam));
 
@@ -4801,8 +6647,8 @@ impl Wgpu3DRenderer {
         let mut all_terrain_opaque = true;
         let mut grid_topology: Option<(u32, bool)> = None;
         let mut dynamic_draws: Vec<(u64, [f64; 3], [f32; 4], bool)> = Vec::new();
-        let mut geo_opaque_batches: Vec<(u64, std::ops::Range<u32>)> = Vec::new();
-        let mut geo_transparent_batches: Vec<(u64, std::ops::Range<u32>)> = Vec::new();
+        let mut geo_opaque_batches: Vec<(u64, Option<u64>, std::ops::Range<u32>)> = Vec::new();
+        let mut geo_transparent_batches: Vec<(u64, Option<u64>, std::ops::Range<u32>)> = Vec::new();
         let mut staged_geo_instances: Vec<GpuGeoInstance> = Vec::new();
 
         if let Some(frame) = terrain_frame_opt.as_ref() {
@@ -4932,6 +6778,7 @@ impl Wgpu3DRenderer {
                 let ib_bytes: &[u8] = bytemuck::cast_slice(&dm.indices);
                 let mut need_recreate = true;
                 if let Some(existing) = self.dynamic_meshes.get_mut(&dm.id) {
+                    existing.last_used_seq = frame_idx;
                     if existing.revision == dm.revision {
                         need_recreate = false;
                     } else if existing.vbuf.size() >= vb_bytes.len() as u64
@@ -4966,6 +6813,7 @@ impl Wgpu3DRenderer {
                             vbuf,
                             ibuf,
                             index_count: dm.indices.len() as u32,
+                            last_used_seq: frame_idx,
                         },
                     );
                 }
@@ -4976,58 +6824,120 @@ impl Wgpu3DRenderer {
                 if asset.vertices.is_empty() || asset.indices.is_empty() {
                     continue;
                 }
-                let vb_bytes: &[u8] = bytemuck::cast_slice(&asset.vertices);
-                let ib_bytes: &[u8] = bytemuck::cast_slice(&asset.indices);
-                let mut need_recreate = true;
+                let asset_tex_id = asset
+                    .albedo_texture
+                    .as_deref()
+                    .and_then(|tex| self.ensure_geo_texture(tex, frame_idx))
+                    .map(|(tid, _)| tid);
+                let mut need_upload = true;
                 if let Some(existing) = self.geo_meshes.get_mut(&asset.id) {
+                    existing.last_used_seq = frame_idx;
+                    existing.albedo_tex_id = asset_tex_id;
                     if existing.revision == asset.revision {
-                        need_recreate = false;
-                    } else if existing.vbuf.size() >= vb_bytes.len() as u64
-                        && existing.ibuf.size() >= ib_bytes.len() as u64
-                    {
-                        self.queue.write_buffer(&existing.vbuf, 0, vb_bytes);
-                        self.queue.write_buffer(&existing.ibuf, 0, ib_bytes);
-                        existing.revision = asset.revision;
-                        existing.index_count = asset.indices.len() as u32;
-                        need_recreate = false;
+                        need_upload = false;
                     }
                 }
-                if need_recreate {
-                    let vbuf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("strata_3d_geo_vb"),
-                        size: (vb_bytes.len() as u64).next_power_of_two().max(256),
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    });
-                    self.queue.write_buffer(&vbuf, 0, vb_bytes);
-                    let ibuf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("strata_3d_geo_ib"),
-                        size: (ib_bytes.len() as u64).next_power_of_two().max(64),
-                        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    });
-                    self.queue.write_buffer(&ibuf, 0, ib_bytes);
-                    self.geo_meshes.insert(
-                        asset.id,
-                        CachedDynamicGpuMesh {
-                            revision: asset.revision,
-                            vbuf,
-                            ibuf,
-                            index_count: asset.indices.len() as u32,
-                        },
-                    );
+                if need_upload {
+                    let mut packed_verts: Vec<GpuGeoVertex> =
+                        Vec::with_capacity(asset.vertices.len());
+                    let mut has_vertex_alpha = false;
+                    let vcols = asset.vertex_colors.as_deref();
+                    for (vi, v) in asset.vertices.iter().enumerate() {
+                        let c = vcols
+                            .and_then(|cols| cols.get(vi).copied())
+                            .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                        if c[3] < 0.999 {
+                            has_vertex_alpha = true;
+                        }
+                        packed_verts.push(GpuGeoVertex {
+                            pos_u: v.pos_u,
+                            norm_v: v.norm_v,
+                            color: c,
+                        });
+                    }
+                    let vb_bytes: &[u8] = bytemuck::cast_slice(&packed_verts);
+                    let ib_bytes: &[u8] = bytemuck::cast_slice(&asset.indices);
+                    let mut need_recreate = true;
+                    if let Some(existing) = self.geo_meshes.get_mut(&asset.id) {
+                        if existing.vbuf.size() >= vb_bytes.len() as u64
+                            && existing.ibuf.size() >= ib_bytes.len() as u64
+                        {
+                            self.queue.write_buffer(&existing.vbuf, 0, vb_bytes);
+                            self.queue.write_buffer(&existing.ibuf, 0, ib_bytes);
+                            existing.revision = asset.revision;
+                            existing.index_count = asset.indices.len() as u32;
+                            existing.has_vertex_alpha = has_vertex_alpha;
+                            existing.albedo_tex_id = asset_tex_id;
+                            existing.last_used_seq = frame_idx;
+                            need_recreate = false;
+                        }
+                    }
+                    if need_recreate {
+                        let vbuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("strata_3d_geo_vb"),
+                            size: (vb_bytes.len() as u64).next_power_of_two().max(256),
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                        self.queue.write_buffer(&vbuf, 0, vb_bytes);
+                        let ibuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("strata_3d_geo_ib"),
+                            size: (ib_bytes.len() as u64).next_power_of_two().max(64),
+                            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                        self.queue.write_buffer(&ibuf, 0, ib_bytes);
+                        self.geo_meshes.insert(
+                            asset.id,
+                            CachedGeoGpuMesh {
+                                revision: asset.revision,
+                                vbuf,
+                                ibuf,
+                                index_count: asset.indices.len() as u32,
+                                has_vertex_alpha,
+                                albedo_tex_id: asset_tex_id,
+                                last_used_seq: frame_idx,
+                            },
+                        );
+                    }
                 }
             }
 
             if !frame.geo_instances.is_empty() {
-                let mut opaque_items: Vec<(u64, GpuGeoInstance)> =
+                let mut opaque_items: Vec<(u64, Option<u64>, GpuGeoInstance)> =
                     Vec::with_capacity(frame.geo_instances.len());
-                let mut transparent_items: Vec<(u64, GpuGeoInstance)> = Vec::new();
+                let mut transparent_items: Vec<(f64, u64, Option<u64>, GpuGeoInstance)> =
+                    Vec::new();
 
                 for inst in frame.geo_instances.iter() {
-                    if !self.geo_meshes.contains_key(&inst.mesh_id) {
+                    let inst_tex_info = inst
+                        .albedo_texture
+                        .as_deref()
+                        .and_then(|tex| self.ensure_geo_texture(tex, frame_idx));
+                    let Some((mesh_has_alpha, mesh_tex_id)) =
+                        self.geo_meshes.get_mut(&inst.mesh_id).map(|m| {
+                            m.last_used_seq = frame_idx;
+                            (m.has_vertex_alpha, m.albedo_tex_id)
+                        })
+                    else {
                         continue;
-                    }
+                    };
+                    let (eff_tex_id, tex_has_alpha) = if let Some((tid, t_alpha)) = inst_tex_info {
+                        (Some(tid), t_alpha)
+                    } else if let Some(tid) = mesh_tex_id {
+                        let t_alpha = self
+                            .geo_textures
+                            .get_mut(&tid)
+                            .map(|t| {
+                                t.last_used_seq = frame_idx;
+                                t.has_alpha
+                            })
+                            .unwrap_or(false);
+                        (Some(tid), t_alpha)
+                    } else {
+                        (None, false)
+                    };
+
                     let (ax_hi, ax_lo) = split_f64_to_f32(inst.anchor_ecef[0]);
                     let (ay_hi, ay_lo) = split_f64_to_f32(inst.anchor_ecef[1]);
                     let (az_hi, az_lo) = split_f64_to_f32(inst.anchor_ecef[2]);
@@ -5060,38 +6970,68 @@ impl Wgpu3DRenderer {
                             inst.accent_mix,
                         ],
                     };
-                    if inst.base_color[3] >= 0.999 {
-                        opaque_items.push((inst.mesh_id, gpu_inst));
+                    let is_transparent =
+                        inst.base_color[3] < 0.999 || mesh_has_alpha || tex_has_alpha;
+                    if !is_transparent {
+                        opaque_items.push((inst.mesh_id, eff_tex_id, gpu_inst));
                     } else {
-                        transparent_items.push((inst.mesh_id, gpu_inst));
+                        let dx = inst.anchor_ecef[0] - cam.eye_ecef[0];
+                        let dy = inst.anchor_ecef[1] - cam.eye_ecef[1];
+                        let dz = inst.anchor_ecef[2] - cam.eye_ecef[2];
+                        let dist_sq = dx * dx + dy * dy + dz * dz;
+                        transparent_items.push((dist_sq, inst.mesh_id, eff_tex_id, gpu_inst));
                     }
                 }
 
-                opaque_items.sort_by_key(|(mesh_id, _)| *mesh_id);
+                opaque_items.sort_by_key(|(mesh_id, tex_id, _)| (*mesh_id, *tex_id));
+                // Sort transparent instances back-to-front (largest distance from camera eye first).
+                transparent_items.sort_by(|a, b| b.0.total_cmp(&a.0));
                 staged_geo_instances.reserve(opaque_items.len() + transparent_items.len());
 
-                let push_batches = |items: Vec<(u64, GpuGeoInstance)>,
-                                    staged: &mut Vec<GpuGeoInstance>,
-                                    batches: &mut Vec<(u64, std::ops::Range<u32>)>| {
-                    for (mesh_id, gpu_inst) in items {
-                        let idx = staged.len() as u32;
-                        staged.push(gpu_inst);
-                        if let Some((last_id, range)) = batches.last_mut() {
-                            if *last_id == mesh_id && range.end == idx {
-                                range.end = idx + 1;
-                                continue;
+                let push_batches =
+                    |items: Vec<(u64, Option<u64>, GpuGeoInstance)>,
+                     staged: &mut Vec<GpuGeoInstance>,
+                     batches: &mut Vec<(u64, Option<u64>, std::ops::Range<u32>)>| {
+                        for (mesh_id, tex_id, gpu_inst) in items {
+                            let idx = staged.len() as u32;
+                            staged.push(gpu_inst);
+                            if let Some((last_id, last_tex, range)) = batches.last_mut() {
+                                if *last_id == mesh_id && *last_tex == tex_id && range.end == idx {
+                                    range.end = idx + 1;
+                                    continue;
+                                }
                             }
+                            batches.push((mesh_id, tex_id, idx..(idx + 1)));
                         }
-                        batches.push((mesh_id, idx..(idx + 1)));
-                    }
-                };
-                push_batches(opaque_items, &mut staged_geo_instances, &mut geo_opaque_batches);
+                    };
                 push_batches(
-                    transparent_items,
+                    opaque_items,
+                    &mut staged_geo_instances,
+                    &mut geo_opaque_batches,
+                );
+                let sorted_transparent: Vec<(u64, Option<u64>, GpuGeoInstance)> = transparent_items
+                    .into_iter()
+                    .map(|(_, mid, tid, gi)| (mid, tid, gi))
+                    .collect();
+                push_batches(
+                    sorted_transparent,
                     &mut staged_geo_instances,
                     &mut geo_transparent_batches,
                 );
             }
+
+            // Evict deleted/unreferenced geo meshes, geo textures, dynamic meshes, and fallback scenes
+            // after a 32-frame grace window (prevents VRAM leaks while allowing multi-viewport sharing).
+            const GEO_CACHE_EVICT_FRAMES: u64 = 32;
+            self.geo_meshes
+                .retain(|_, m| frame_idx.saturating_sub(m.last_used_seq) <= GEO_CACHE_EVICT_FRAMES);
+            self.geo_textures
+                .retain(|_, t| frame_idx.saturating_sub(t.last_used_seq) <= GEO_CACHE_EVICT_FRAMES);
+            self.dynamic_meshes
+                .retain(|_, m| frame_idx.saturating_sub(m.last_used_seq) <= GEO_CACHE_EVICT_FRAMES);
+            self.cached_fallback_frames
+                .retain(|_, (seq, _)| frame_idx.saturating_sub(*seq) <= GEO_CACHE_EVICT_FRAMES);
+
             t_dyn = tp4.elapsed().as_secs_f64() * 1000.0;
         }
 
@@ -5328,6 +7268,7 @@ impl Wgpu3DRenderer {
                             RetainedParticleSprite::ProceduralStreak => (1u32, None),
                             RetainedParticleSprite::ProceduralSnowflake => (2u32, None),
                             RetainedParticleSprite::ProceduralPellet => (3u32, None),
+                            RetainedParticleSprite::ProceduralCurtain => (4u32, None),
                         };
                         let billboard_mode = match layer.billboard {
                             RetainedParticleBillboard::VelocityAligned => 0u32,
@@ -5351,6 +7292,12 @@ impl Wgpu3DRenderer {
                                 layer.basis_up[1],
                                 layer.basis_up[2],
                                 layer.wrapped_phase[2],
+                            ],
+                            forward_bias: [
+                                layer.forward_bias_world[0],
+                                layer.forward_bias_world[1],
+                                layer.forward_bias_world[2],
+                                0.0,
                             ],
                             cam_right_mpx: [
                                 cam_right[0],
@@ -5377,18 +7324,27 @@ impl Wgpu3DRenderer {
             }
         }
 
+        let ocean_opt = terrain_frame_opt.as_ref().and_then(|f| f.ocean.as_deref());
+        self.sync_shadow_and_ocean_resources(shadows_active, cam.shadow_map_size, ocean_opt);
+
         let topology_res = grid_topology.map(|(g, s)| self.ensure_topology(g, s));
         let depth_view = self.ensure_depth_view(target_width.max(1), target_height.max(1));
 
-        let clear_op = match cam.background {
-            Background3D::Transparent => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            Background3D::Solid(c) => wgpu::LoadOp::Clear(wgpu::Color {
-                r: c.r() as f64,
-                g: c.g() as f64,
-                b: c.b() as f64,
-                a: c.a() as f64,
-            }),
-            Background3D::VerticalGradient { .. } => wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+        let clear_op = if !clear_color_target {
+            wgpu::LoadOp::Load
+        } else if multi_viewport_mode {
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+        } else {
+            match cam.background {
+                Background3D::Transparent => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                Background3D::Solid(c) => wgpu::LoadOp::Clear(wgpu::Color {
+                    r: c.r() as f64,
+                    g: c.g() as f64,
+                    b: c.b() as f64,
+                    a: c.a() as f64,
+                }),
+                Background3D::VerticalGradient { .. } => wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            }
         };
 
         let tp_pass = std::time::Instant::now();
@@ -5397,6 +7353,49 @@ impl Wgpu3DRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("strata_3d_render_encoder"),
             });
+
+        // Opt-in directional shadow map pass for 2.5D mountains & opaque 3D objects (0.00 ms when off).
+        if shadows_active && (draw_count > 0 || !geo_opaque_batches.is_empty()) {
+            if let Some((_, _, ref shadow_view)) = self.shadow_target {
+                let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("strata_3d_shadow_pass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: shadow_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                if draw_count > 0 {
+                    if let Some((ref idx_buf, idx_count)) = topology_res {
+                        if idx_count > 0 {
+                            spass.set_pipeline(&self.terrain_shadow_pipeline);
+                            spass.set_bind_group(0, &self.terrain_bind_group, &[]);
+                            spass.set_index_buffer(idx_buf.slice(..), wgpu::IndexFormat::Uint32);
+                            spass.draw_indexed(0..idx_count, 0, 0..draw_count as u32);
+                        }
+                    }
+                }
+                if !geo_opaque_batches.is_empty() {
+                    spass.set_pipeline(&self.geo_shadow_pipeline);
+                    spass.set_bind_group(0, &self.geo_object_bind_group, &[]);
+                    for (mesh_id, _, range) in &geo_opaque_batches {
+                        let Some(gpu_mesh) = self.geo_meshes.get(mesh_id) else {
+                            continue;
+                        };
+                        spass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                        spass.set_index_buffer(gpu_mesh.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                        spass.draw_indexed(0..gpu_mesh.index_count, 0, range.clone());
+                    }
+                }
+            }
+        }
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("strata_3d_main_pass"),
@@ -5448,18 +7447,36 @@ impl Wgpu3DRenderer {
                     if idx_count > 0 {
                         pass.set_pipeline(&self.terrain_opaque_pipeline);
                         pass.set_bind_group(0, &self.terrain_bind_group, &[]);
+                        pass.set_bind_group(1, &self.shadow_ocean_bind_group, &[]);
                         pass.set_index_buffer(idx_buf.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(0..idx_count, 0, 0..draw_count as u32);
                     }
                 }
             }
 
-            if matches!(cam.background, Background3D::VerticalGradient { .. })
+            let need_scissored_solid_bg = (multi_viewport_mode || !clear_color_target)
+                && matches!(cam.background, Background3D::Solid(_));
+            if need_scissored_solid_bg
+                || matches!(cam.background, Background3D::VerticalGradient { .. })
                 || cam.stars_visible
                 || cam.sun_visible
                 || cam.moon_visible
+                || cam.realistic_25d_sky > 0.001
             {
-                let sky_opaque = cam.stars_visible || cam.sun_visible || cam.moon_visible;
+                let grad_opaque = match cam.background {
+                    Background3D::VerticalGradient { top, bottom } => {
+                        (multi_viewport_mode || !clear_color_target)
+                            && top.a() >= 0.999
+                            && bottom.a() >= 0.999
+                    }
+                    Background3D::Solid(c) => c.a() >= 0.999,
+                    Background3D::Transparent => false,
+                };
+                let sky_opaque = grad_opaque
+                    || cam.stars_visible
+                    || cam.sun_visible
+                    || cam.moon_visible
+                    || cam.realistic_25d_sky > 0.001;
                 pass.set_pipeline(if sky_opaque {
                     &self.sky_opaque_pipeline
                 } else {
@@ -5472,7 +7489,7 @@ impl Wgpu3DRenderer {
             if cam.stars_visible
                 && cam.stars_intensity > 0.001
                 && self.env_state.star_count > 0
-                && cam.local_25d_blend < 0.85
+                && (cam.local_25d_blend < 0.85 || cam.night_stars_25d > 0.001)
             {
                 pass.set_pipeline(&self.star_pipeline);
                 pass.set_bind_group(0, &self.star_bind_group, &[]);
@@ -5484,6 +7501,7 @@ impl Wgpu3DRenderer {
                     if idx_count > 0 {
                         pass.set_pipeline(&self.terrain_pipeline);
                         pass.set_bind_group(0, &self.terrain_bind_group, &[]);
+                        pass.set_bind_group(1, &self.shadow_ocean_bind_group, &[]);
                         pass.set_index_buffer(idx_buf.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(0..idx_count, 0, 0..draw_count as u32);
                     }
@@ -5493,10 +7511,16 @@ impl Wgpu3DRenderer {
             if !geo_opaque_batches.is_empty() {
                 pass.set_pipeline(&self.geo_object_pipeline);
                 pass.set_bind_group(0, &self.geo_object_bind_group, &[]);
-                for (mesh_id, range) in &geo_opaque_batches {
+                pass.set_bind_group(1, &self.shadow_ocean_bind_group, &[]);
+                for (mesh_id, tex_id_opt, range) in &geo_opaque_batches {
                     let Some(gpu_mesh) = self.geo_meshes.get(mesh_id) else {
                         continue;
                     };
+                    let tex_bg = tex_id_opt
+                        .and_then(|tid| self.geo_textures.get(&tid))
+                        .map(|t| &t.bind_group)
+                        .unwrap_or(&self.geo_default_tex_bg);
+                    pass.set_bind_group(2, tex_bg, &[]);
                     pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                     pass.set_index_buffer(gpu_mesh.ibuf.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..gpu_mesh.index_count, 0, range.clone());
@@ -5540,10 +7564,16 @@ impl Wgpu3DRenderer {
             if !geo_transparent_batches.is_empty() {
                 pass.set_pipeline(&self.geo_object_transparent_pipeline);
                 pass.set_bind_group(0, &self.geo_object_bind_group, &[]);
-                for (mesh_id, range) in &geo_transparent_batches {
+                pass.set_bind_group(1, &self.shadow_ocean_bind_group, &[]);
+                for (mesh_id, tex_id_opt, range) in &geo_transparent_batches {
                     let Some(gpu_mesh) = self.geo_meshes.get(mesh_id) else {
                         continue;
                     };
+                    let tex_bg = tex_id_opt
+                        .and_then(|tid| self.geo_textures.get(&tid))
+                        .map(|t| &t.bind_group)
+                        .unwrap_or(&self.geo_default_tex_bg);
+                    pass.set_bind_group(2, tex_bg, &[]);
                     pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                     pass.set_index_buffer(gpu_mesh.ibuf.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..gpu_mesh.index_count, 0, range.clone());

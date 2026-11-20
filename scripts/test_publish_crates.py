@@ -524,6 +524,86 @@ class PublishCratesTests(unittest.TestCase):
         self.assertIn("strata-ui, strata_ui", stderr.getvalue())
         cmd_mock.assert_not_called()
 
+    def test_parse_deleted_name_cooldown(self) -> None:
+        now = 1795100000.0
+        output = (
+            "error: failed to publish strata-build v0.1.0 to registry at https://crates.io\n"
+            "Caused by:\n"
+            "  the remote server responded with an error (status 400 Bad Request): "
+            "A crate with the name `strata_build` was recently deleted. "
+            "Reuse of this name will be available after 2026-11-20T15:28:51Z.\n"
+        )
+        hit, name, avail_ts, summary = publish_crates.parse_deleted_name_cooldown(output, now=now)
+        self.assertTrue(hit)
+        self.assertEqual(name, "strata-build")
+        self.assertIsNotNone(avail_ts)
+        self.assertGreater(avail_ts or 0.0, now)
+        self.assertIn("2026-11-20 15:28:51 UTC", summary or "")
+
+    def test_publish_workspace_skips_deleted_cooldown_publishes_others_and_retries_later(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            strata = Path(tmp) / "strata"
+            self._make_workspace_repo(
+                strata,
+                {
+                    "strata-build": [],
+                    "dep-on-build": [("strata-build", "../strata-build")],
+                    "strata-fresh": [],
+                },
+            )
+            fake_clock = [1795100000.0]
+            published_set: set[str] = set()
+            commands_seen: list[list[str]] = []
+            sleeps_seen: list[tuple[float, str]] = []
+
+            def fake_time() -> float:
+                return fake_clock[0]
+
+            def fake_fetch(name: str, **_kwargs: object) -> publish_crates.CratesIoInfo:
+                if name in published_set:
+                    return publish_crates.CratesIoInfo(True, True, frozenset({"0.1.0"}), frozenset({"0.1.0"}), "0.1.0")
+                return publish_crates.CratesIoInfo(False, False, frozenset(), frozenset(), None)
+
+            def fake_stream(cmd: list[str], _cwd: Path) -> tuple[int, str]:
+                commands_seen.append(cmd)
+                if len(commands_seen) == 1:
+                    return (
+                        101,
+                        "error: failed to publish strata-build v0.1.0 to registry at https://crates.io\n"
+                        "Caused by:\n"
+                        "  A crate with the name `strata_build` was recently deleted. "
+                        "Reuse of this name will be available after 2026-11-20T15:28:51Z.\n",
+                    )
+                if len(commands_seen) == 2:
+                    published_set.add("strata-fresh")
+                    return 0, "Published strata-fresh v0.1.0 at registry `crates-io`\n"
+                published_set.update({"strata-build", "dep-on-build"})
+                return 0, "Published strata-build v0.1.0 and dep-on-build v0.1.0\n"
+
+            def fake_sleep(secs: float, reason: str = "rate-limit") -> None:
+                sleeps_seen.append((secs, reason))
+                fake_clock[0] += secs + 1.0
+
+            stdout = io.StringIO()
+            with (
+                contextlib.redirect_stdout(stdout),
+                mock.patch.object(publish_crates.time, "time", side_effect=fake_time),
+                mock.patch.object(publish_crates, "fetch_crates_io_info", side_effect=fake_fetch),
+                mock.patch.object(publish_crates, "stream_command", side_effect=fake_stream),
+                mock.patch.object(publish_crates, "sleep_with_countdown", side_effect=fake_sleep),
+            ):
+                rc = publish_crates.publish_workspace("strata", strata, [], auto_bump=False)
+
+            self.assertEqual(rc, 0)
+            # 1st attempt: all 3; 2nd attempt (immediate, no sleep yet): only strata-fresh;
+            # 3rd attempt (after cooldown sleep): strata-build + dep-on-build.
+            self.assertEqual(len(commands_seen), 3)
+            self.assertEqual(commands_seen[1], ["cargo", "publish", "-p", "strata-fresh"])
+            self.assertEqual(commands_seen[2], ["cargo", "publish", "-p", "strata-build", "-p", "dep-on-build"])
+            self.assertEqual(len(sleeps_seen), 1)
+            self.assertEqual(sleeps_seen[0][1], "cooldown")
+            self.assertGreater(sleeps_seen[0][0], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

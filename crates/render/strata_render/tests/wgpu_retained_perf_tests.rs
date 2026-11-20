@@ -533,6 +533,8 @@ fn wgpu_instanced_geo_objects_render_at_planetary_rte_coords_with_nonuniform_sca
             RteTileVertex::new([0.0, -1.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0]),
         ]),
         indices: Arc::new(vec![0, 1, 2, 0, 2, 3]),
+        vertex_colors: None,
+        albedo_texture: None,
     });
 
     // Two hardware instances sharing mesh_id = 7 (separated along Z, which is camera horizontal axis) with non-uniform 3x3 scale.
@@ -616,6 +618,7 @@ fn wgpu_particle_volumes_render_procedural_rain_snow_custom_texture_and_clip_abo
         basis_east: [1.0, 0.0, 0.0],
         basis_north: [0.0, 0.0, -1.0],
         basis_up: [0.0, 1.0, 0.0],
+        forward_bias_world: [0.0, 0.0, -6.0],
         wrapped_phase: [0.15, 0.25, 0.35],
         altitude_bounds: [200.0, 0.0, 5_500.0, 900.0],
         volume_params: [32.0, 24.0, 0.15, 0.8],
@@ -659,6 +662,28 @@ fn wgpu_particle_volumes_render_procedural_rain_snow_custom_texture_and_clip_abo
         "mathematical 2D snowflakes must render visible pixels, got {snow_lit}"
     );
 
+    // 2b. ProceduralCurtain regional virga veil
+    let curtain_layer = RetainedParticleLayer {
+        id: 22,
+        particle_count: 400,
+        sprite: RetainedParticleSprite::ProceduralCurtain,
+        billboard: RetainedParticleBillboard::VelocityAligned,
+        size_params: [4.5, 12.0, 0.05, 0.0],
+        flutter_clamp: [0.0, 0.0, 6.0, 120.0],
+        color: [0.76, 0.84, 0.94, 0.40],
+        seed: 43,
+        ..rain_layer.clone()
+    };
+    retained.update_particles(Arc::new(vec![curtain_layer]), Arc::default());
+    let bgra_curtain = renderer
+        .render_offscreen(&scene, w, h, true, true)
+        .expect("curtain offscreen");
+    let curtain_lit = count_lit_pixels(&bgra_curtain);
+    assert!(
+        curtain_lit >= 50,
+        "procedural regional rain curtain must render visible veil pixels, got {curtain_lit}"
+    );
+
     // 3. Custom 2D RGBA8 sprite texture (bright magenta square)
     let custom_tex = Arc::new(RetainedTileTexture {
         id: 777,
@@ -700,5 +725,418 @@ fn wgpu_particle_volumes_render_procedural_rain_snow_custom_texture_and_clip_abo
         "particles above cloud ceiling must clip completely to zero, got {above_lit}"
     );
 }
+
+#[test]
+fn wgpu_physical_25d_sky_night_stars_and_weather_darkening() {
+    use strata_render::scene3d::{RetainedEnvironmentAssets, RetainedStar};
+
+    let Ok(mut renderer) = Wgpu3DRenderer::new_headless(wgpu::TextureFormat::Bgra8Unorm) else {
+        return;
+    };
+    let (w, h) = (160u32, 120u32);
+    // Look horizontally/upward across the horizon in Y-up test coordinates (local_25d_blend = 1.0).
+    let mut cam = camera_uniforms([0.0, 20.0, 0.0], [0.0, 26.0, -30.0], w, h);
+    cam.local_25d_blend = 1.0;
+    cam.realistic_25d_sky = 1.0;
+    cam.night_stars_25d = 1.0;
+    cam.sun_visible = true;
+    cam.stars_visible = true;
+    cam.stars_intensity = 1.5;
+    cam.background = Background3D::VerticalGradient {
+        top: Color::rgba(40, 100, 200, 255),
+        bottom: Color::rgba(160, 210, 245, 255),
+    };
+
+    // Place bright catalog stars directly ahead above the horizon (-Z, +Y).
+    let mut stars = Vec::new();
+    for i in 0..40 {
+        let fx = -0.35 + (i % 8) as f32 * 0.10;
+        let fy = 0.20 + (i / 8) as f32 * 0.10;
+        let fz = -1.0f32;
+        let len = (fx * fx + fy * fy + fz * fz).sqrt();
+        stars.push(RetainedStar {
+            icrf_dir: [fx / len, fy / len, fz / len],
+            vmag: -0.5,
+            color: [1.0, 0.98, 0.92, 1.0],
+        });
+    }
+    let env = Arc::new(RetainedEnvironmentAssets {
+        revision: 1,
+        stars: Some(Arc::new(stars)),
+        ..Default::default()
+    });
+
+    let mean_rgb = |bgra: &[u8]| -> [f32; 3] {
+        let mut r = 0.0f64;
+        let mut g = 0.0f64;
+        let mut b = 0.0f64;
+        let n = (bgra.len() / 4).max(1) as f64;
+        for px in bgra.chunks_exact(4) {
+            b += px[0] as f64;
+            g += px[1] as f64;
+            r += px[2] as f64;
+        }
+        [(r / n) as f32, (g / n) as f32, (b / n) as f32]
+    };
+
+    // 1. Noon clear sky (sun high at +Y): bright azure blue (B > R)
+    cam.sun_dir = [0.0, 0.92, -0.39];
+    let frame_noon = Arc::new(RetainedTerrainFrame {
+        camera: cam,
+        geometry_revision: 1,
+        environment: Some(Arc::clone(&env)),
+        ..Default::default()
+    });
+    let retained = RetainedScene3D::new(cam);
+    retained.update_terrain(frame_noon);
+    let scene = Scene3D::new().with_retained_handle(retained.clone());
+    let noon_px = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
+    let noon_rgb = mean_rgb(&noon_px);
+    assert!(
+        noon_rgb[2] > noon_rgb[0] + 20.0 && noon_rgb[2] > 90.0,
+        "noon 2.5D sky must be crisp azure blue, got rgb={noon_rgb:?}"
+    );
+
+    // 2. Golden sunset (sun right above horizon ahead -Z): warm orange/red shift (R > B)
+    cam.sun_dir = [0.0, 0.06, -0.998];
+    retained.update_camera(cam);
+    let sunset_px = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
+    let sunset_rgb = mean_rgb(&sunset_px);
+    assert!(
+        sunset_rgb[0] > sunset_rgb[2],
+        "golden sunset 2.5D sky looking toward sun must glow warm amber (R > B), got rgb={sunset_rgb:?}"
+    );
+
+    // 3. Storm darkening dims daytime sky dramatically toward moody overcast slate
+    cam.sun_dir = [0.0, 0.85, -0.52];
+    cam.weather_darkness = 0.9;
+    cam.weather_cloud_cover = 0.9;
+    retained.update_camera(cam);
+    let storm_px = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
+    let storm_rgb = mean_rgb(&storm_px);
+    assert!(
+        storm_rgb[2] < noon_rgb[2] * 0.72,
+        "overcast storm darkening must darken 2.5D sky significantly (noon={noon_rgb:?}, storm={storm_rgb:?})"
+    );
+
+    // 4. Clear starry night (sun far below horizon): dark sky + bright visible stars!
+    cam.sun_dir = [0.0, -0.65, -0.76];
+    cam.weather_darkness = 0.0;
+    cam.weather_cloud_cover = 0.0;
+    retained.update_camera(cam);
+    let night_px = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
+    let night_rgb = mean_rgb(&night_px);
+    let bright_star_pixels = night_px
+        .chunks_exact(4)
+        .filter(|px| px[2] > 110 && px[1] > 100 && px[0] > 90)
+        .count();
+    assert!(
+        night_rgb[2] < 48.0 && night_rgb[2] < noon_rgb[2] * 0.25 && bright_star_pixels >= 12,
+        "clear 2.5D night sky must be dark and render BSC5 stars above horizon (noon={noon_rgb:?}, rgb={night_rgb:?}, star_px={bright_star_pixels})"
+    );
+}
+
+#[test]
+fn wgpu_directional_mountain_shadows_and_gpu_ocean_coastal_surf() {
+    use strata_render::scene3d::{RetainedOceanSurface, RetainedOceanWaveTrain};
+
+    let Ok(mut renderer) = Wgpu3DRenderer::new_headless(wgpu::TextureFormat::Bgra8Unorm) else {
+        return;
+    };
+    let (w, h) = (160u32, 160u32);
+    // Camera elevated looking down at a 16x16 terrain patch with a tall mountain wall on +X casting a shadow onto the -X valley.
+    let mut cam = camera_uniforms([0.0, 85.0, 95.0], [0.0, 0.0, 0.0], w, h);
+    cam.local_25d_blend = 1.0;
+    cam.realistic_25d_sky = 1.0;
+    cam.terrain_25d_lighting = 1.0;
+    cam.terrain_25d_shadows = 0.9;
+    cam.shadow_map_size = 512;
+    // Low sun from +X casts a crisp shadow from the +X ridge onto the valley floor at X <= 0.
+    cam.sun_dir = [0.92, 0.39, 0.0];
+    cam.background = Background3D::Solid(Color::rgba(10, 15, 24, 255));
+
+    let grid = 17u32;
+    let mut verts = Vec::with_capacity((grid * grid) as usize);
+    for r in 0..grid {
+        let vz = 40.0 - (r as f32 / (grid - 1) as f32) * 80.0;
+        let v = r as f32 / (grid - 1) as f32;
+        for c in 0..grid {
+            let vx = -40.0 + (c as f32 / (grid - 1) as f32) * 80.0;
+            let u = c as f32 / (grid - 1) as f32;
+            // Tall ridge on X in [12..28], flat valley floor on X < 10.
+            let ridge_t = (1.0 - ((vx - 20.0).abs() / 10.0)).clamp(0.0, 1.0);
+            let vy = ridge_t * 34.0;
+            verts.push(RteTileVertex::new([vx, vy, vz], [0.0, 1.0, 0.0], [u, v]));
+        }
+    }
+    let mesh = Arc::new(RetainedTileMesh {
+        key: TileKeyId::quadtree(12, 0, 0),
+        revision: 1,
+        center_ecef: [0.0, 0.0, 0.0],
+        grid_res: grid,
+        has_skirts: false,
+        vertices: Arc::new(verts),
+        bounding_radius: 75.0,
+    });
+    let tex = Arc::new(RetainedTileTexture {
+        id: 100,
+        revision: 1,
+        width: 4,
+        height: 4,
+        rgba8: Arc::new([190u8, 190, 190, 255].repeat(16)),
+    });
+    let inst = RetainedTileInstance {
+        key: TileKeyId::quadtree(12, 0, 0),
+        mesh_revision: 1,
+        center_ecef: [0.0, 0.0, 0.0],
+        texture_id: Some(100),
+        texture_revision: 1,
+        uv_rect: [0.0, 0.0, 1.0, 1.0],
+        tint: [1.0, 1.0, 1.0, 1.0],
+        unlit: false,
+        ..Default::default()
+    };
+
+    let sample_valley_luma = |bgra: &[u8]| -> f32 {
+        // Center-left valley pixels directly behind the +X ridge.
+        let mut sum = 0.0f64;
+        let mut cnt = 0.0f64;
+        for py in 72..96u32 {
+            for px in 52..76u32 {
+                let idx = ((py * w + px) * 4) as usize;
+                sum += (bgra[idx] as f64 + bgra[idx + 1] as f64 + bgra[idx + 2] as f64) / 3.0;
+                cnt += 1.0;
+            }
+        }
+        (sum / cnt.max(1.0)) as f32
+    };
+
+    // 1. Render WITH directional mountain shadows enabled
+    let frame_sh = Arc::new(RetainedTerrainFrame {
+        camera: cam,
+        geometry_revision: 1,
+        meshes: vec![Arc::clone(&mesh)],
+        instances: vec![inst.clone()],
+        textures: vec![Arc::clone(&tex)],
+        ..Default::default()
+    });
+    let retained = RetainedScene3D::new(cam);
+    retained.update_terrain(frame_sh);
+    let scene = Scene3D::new().with_retained_handle(retained.clone());
+    let px_shadowed = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
+    let valley_shadowed = sample_valley_luma(&px_shadowed);
+
+    // 2. Render WITHOUT shadows (terrain_25d_shadows = 0.0) -> valley must be noticeably brighter!
+    cam.terrain_25d_shadows = 0.0;
+    retained.update_camera(cam);
+    let px_unshadowed = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
+    let valley_unshadowed = sample_valley_luma(&px_unshadowed);
+    assert!(
+        valley_shadowed + 10.0 < valley_unshadowed,
+        "mountain ridge must cast a real shadow darkening the valley (shadowed={valley_shadowed:.1}, unshadowed={valley_unshadowed:.1})"
+    );
+
+    // 3. Enable GPU 8-octave ocean waves + 16x16 coastal SDF surf texture and verify clean rendering
+    let sdf_tex = Arc::new(RetainedTileTexture {
+        id: 505,
+        revision: 1,
+        width: 16,
+        height: 16,
+        rgba8: Arc::new([255u8, 60, 255, 128].repeat(256)), // pure water close to shore, shore_dir = +East
+    });
+    let ocean = Arc::new(RetainedOceanSurface {
+        enabled: true,
+        origin_ecef: [0.0, 0.0, 0.0],
+        basis_east: [1.0, 0.0, 0.0],
+        basis_north: [0.0, 0.0, -1.0],
+        basis_up: [0.0, 1.0, 0.0],
+        train_a: RetainedOceanWaveTrain {
+            dir_en: [0.85, 0.52],
+            wind_speed_mps: 12.0,
+            phase_time_s: 3.4,
+            weight: 0.7,
+        },
+        train_b: RetainedOceanWaveTrain {
+            dir_en: [-0.3, 0.95],
+            wind_speed_mps: 16.0,
+            phase_time_s: 1.2,
+            weight: 0.3,
+        },
+        wave_strength: 1.2,
+        wave_scale: 1.0,
+        glint_intensity: 1.2,
+        opacity: 0.9,
+        alt_fade: 1.0,
+        coastal_shoaling: true,
+        shoaling_range_m: 120.0,
+        sdf_half_span_m: 60.0,
+        sdf_center_en_m: [0.0, 0.0],
+        coastal_sdf: Some(sdf_tex),
+    });
+    retained.update_camera_and_ocean(cam, Some(ocean));
+    let px_ocean = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
+    assert_ne!(
+        px_ocean, px_unshadowed,
+        "GPU 8-octave ocean & coastal surf shading must visibly shade water pixels"
+    );
+}
+
+#[test]
+fn wgpu_geo_textures_vertex_colors_back_to_front_alpha_vram_eviction_and_multi_viewport() {
+    let Ok(mut renderer) = Wgpu3DRenderer::new_headless(wgpu::TextureFormat::Bgra8Unorm) else {
+        return;
+    };
+    let (w, h) = (128u32, 128u32);
+    let anchor = [6_378_137.0_f64, 0.0_f64, 0.0_f64];
+    let eye = [anchor[0] + 50.0, anchor[1], anchor[2]];
+    let mut cam = camera_uniforms(eye, anchor, w, h);
+    cam.background = Background3D::Solid(Color::rgba(0, 0, 0, 255));
+
+    // 1. Stale background worker geo_revision guard on RetainedScene3D
+    let quad_verts = Arc::new(vec![
+        RteTileVertex::new([0.0, -10.0, -10.0], [1.0, 0.0, 0.0], [0.0, 0.0]),
+        RteTileVertex::new([0.0, 10.0, -10.0], [1.0, 0.0, 0.0], [1.0, 0.0]),
+        RteTileVertex::new([0.0, 10.0, 10.0], [1.0, 0.0, 0.0], [1.0, 1.0]),
+        RteTileVertex::new([0.0, -10.0, 10.0], [1.0, 0.0, 0.0], [0.0, 1.0]),
+    ]);
+    let quad_inds = Arc::new(vec![0, 1, 2, 0, 2, 3]);
+    let base_mesh = Arc::new(RetainedMeshAsset {
+        id: 1001,
+        revision: 1,
+        vertices: Arc::clone(&quad_verts),
+        indices: Arc::clone(&quad_inds),
+        vertex_colors: None,
+        albedo_texture: None,
+    });
+    let live_inst = RetainedGeoInstance {
+        mesh_id: 1001,
+        anchor_ecef: anchor,
+        base_color: [0.0, 1.0, 0.0, 1.0],
+        unlit: true,
+        ..Default::default()
+    };
+    let retained = RetainedScene3D::new(cam);
+    retained.update_geo_objects(
+        Arc::new(vec![Arc::clone(&base_mesh)]),
+        Arc::new(vec![live_inst.clone()]),
+    );
+    let rev_after_main = retained.geo_revision();
+    assert!(rev_after_main >= 1);
+
+    // Worker publishes an older snapshot (geo_revision = 0 < rev_after_main): must NOT overwrite live_inst!
+    let stale_worker_frame = Arc::new(RetainedTerrainFrame {
+        camera: cam,
+        geometry_revision: 2,
+        geo_revision: 0,
+        geo_mesh_assets: Arc::default(),
+        geo_instances: Arc::default(),
+        ..Default::default()
+    });
+    retained.update_terrain_preserving_camera(stale_worker_frame);
+    let snap = retained.snapshot_terrain().unwrap();
+    assert_eq!(
+        snap.geo_instances.len(),
+        1,
+        "stale worker frame must not overwrite newer main-thread geo_instances"
+    );
+
+    // 2. Albedo texture + per-vertex color rendering
+    let tex_green = Arc::new(RetainedTileTexture {
+        id: 9001,
+        revision: 1,
+        width: 2,
+        height: 2,
+        rgba8: Arc::new([0u8, 255, 0, 255].repeat(4)),
+    });
+    let colored_mesh = Arc::new(RetainedMeshAsset {
+        id: 1002,
+        revision: 1,
+        vertices: Arc::clone(&quad_verts),
+        indices: Arc::clone(&quad_inds),
+        vertex_colors: Some(Arc::new(vec![[1.0, 1.0, 1.0, 1.0]; 4])),
+        albedo_texture: None,
+    });
+    let textured_inst = RetainedGeoInstance {
+        mesh_id: 1002,
+        anchor_ecef: anchor,
+        base_color: [1.0, 1.0, 1.0, 1.0],
+        unlit: true,
+        albedo_texture: Some(Arc::clone(&tex_green)),
+        ..Default::default()
+    };
+    retained.update_geo_objects(
+        Arc::new(vec![Arc::clone(&colored_mesh)]),
+        Arc::new(vec![textured_inst]),
+    );
+    let scene = Scene3D::new().with_retained_handle(retained.clone());
+    let bgra_tex = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
+    let center_idx = (((h / 2) * w + (w / 2)) * 4) as usize;
+    assert!(
+        bgra_tex[center_idx + 1] > 200 && bgra_tex[center_idx + 2] < 30,
+        "albedo texture must tint geo object pure green at center pixel, got bgra={:?}",
+        &bgra_tex[center_idx..center_idx + 4]
+    );
+    assert_eq!(renderer.cached_geo_mesh_count(), 1);
+    assert_eq!(renderer.cached_geo_texture_count(), 1);
+
+    // 3. Back-to-front depth sorting of overlapping transparent objects:
+    // Near red quad (x = +10 from anchor, alpha = 0.5) and Far blue quad (x = -10 from anchor, alpha = 0.5).
+    // Regardless of whether near or far is listed first in geo_instances, back-to-front sorting
+    // must draw far blue FIRST and near red SECOND (producing R > B at the center pixel).
+    let near_red = RetainedGeoInstance {
+        mesh_id: 1001,
+        anchor_ecef: [anchor[0] + 10.0, anchor[1], anchor[2]],
+        base_color: [1.0, 0.0, 0.0, 0.5],
+        unlit: true,
+        ..Default::default()
+    };
+    let far_blue = RetainedGeoInstance {
+        mesh_id: 1001,
+        anchor_ecef: [anchor[0] - 10.0, anchor[1], anchor[2]],
+        base_color: [0.0, 0.0, 1.0, 0.5],
+        unlit: true,
+        ..Default::default()
+    };
+    retained.update_geo_objects(
+        Arc::new(vec![Arc::clone(&base_mesh)]),
+        Arc::new(vec![near_red.clone(), far_blue.clone()]),
+    );
+    let px_near_first = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
+    retained.update_geo_objects(
+        Arc::new(vec![Arc::clone(&base_mesh)]),
+        Arc::new(vec![far_blue, near_red]),
+    );
+    let px_far_first = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
+    let c_nf = &px_near_first[center_idx..center_idx + 4];
+    let c_ff = &px_far_first[center_idx..center_idx + 4];
+    assert_eq!(
+        c_nf, c_ff,
+        "transparent geo objects must render identically regardless of spawn order"
+    );
+    assert!(
+        c_nf[2] > c_nf[0] + 35,
+        "near red quad (0.5 alpha) over far blue quad (0.5 alpha) must composite red-dominant (R={}, B={})",
+        c_nf[2],
+        c_nf[0]
+    );
+
+    // 4. VRAM eviction: clearing geo objects and rendering >32 frames evicts unused geo_meshes & geo_textures.
+    retained.update_geo_objects(Arc::default(), Arc::default());
+    for _ in 0..36 {
+        let _ = renderer.render_offscreen(&scene, w, h, false, true).unwrap();
+    }
+    assert_eq!(
+        renderer.cached_geo_mesh_count(),
+        0,
+        "unreferenced geo_meshes must be evicted from GPU VRAM after grace window"
+    );
+    assert_eq!(
+        renderer.cached_geo_texture_count(),
+        0,
+        "unreferenced geo_textures must be evicted from GPU VRAM after grace window"
+    );
+}
+
+
 
 

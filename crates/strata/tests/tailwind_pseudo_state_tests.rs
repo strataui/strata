@@ -9,13 +9,7 @@ fn test_tailwind_engine_pseudo_state_resolution() {
     let classes = "bg-white text-black hover:bg-neutral-100 focus:ring-2 active:bg-neutral-200 disabled:opacity-50 dark:bg-black";
 
     // 1. Inactive base state
-    let state_default = PseudoState {
-        is_hovered: false,
-        is_focused: false,
-        is_active: false,
-        is_disabled: false,
-        is_dark: false,
-    };
+    let state_default = PseudoState::default();
     let style_default = TailwindEngine::resolve_classes_with_pseudo_state(classes, &state_default);
     assert_eq!(
         style_default.background_color,
@@ -25,10 +19,7 @@ fn test_tailwind_engine_pseudo_state_resolution() {
     // 2. Hovered state
     let state_hover = PseudoState {
         is_hovered: true,
-        is_focused: false,
-        is_active: false,
-        is_disabled: false,
-        is_dark: false,
+        ..Default::default()
     };
     let style_hover = TailwindEngine::resolve_classes_with_pseudo_state(classes, &state_hover);
     assert_eq!(
@@ -39,10 +30,8 @@ fn test_tailwind_engine_pseudo_state_resolution() {
     // 3. Active state
     let state_active = PseudoState {
         is_hovered: true,
-        is_focused: false,
         is_active: true,
-        is_disabled: false,
-        is_dark: false,
+        ..Default::default()
     };
     let style_active = TailwindEngine::resolve_classes_with_pseudo_state(classes, &state_active);
     assert_eq!(
@@ -52,11 +41,8 @@ fn test_tailwind_engine_pseudo_state_resolution() {
 
     // 4. Disabled state
     let state_disabled = PseudoState {
-        is_hovered: false,
-        is_focused: false,
-        is_active: false,
         is_disabled: true,
-        is_dark: false,
+        ..Default::default()
     };
     let style_disabled =
         TailwindEngine::resolve_classes_with_pseudo_state(classes, &state_disabled);
@@ -64,14 +50,22 @@ fn test_tailwind_engine_pseudo_state_resolution() {
 
     // 5. Dark mode state
     let state_dark = PseudoState {
-        is_hovered: false,
-        is_focused: false,
-        is_active: false,
-        is_disabled: false,
         is_dark: true,
+        ..Default::default()
     };
     let style_dark = TailwindEngine::resolve_classes_with_pseudo_state(classes, &state_dark);
     assert_eq!(style_dark.background_color, Some(Color::new(0, 0, 0, 255)));
+
+    // 6. group-hover state (`hidden group-hover:flex`)
+    let tip_classes = "hidden group-hover:flex";
+    let style_tip_off = TailwindEngine::resolve_classes_with_pseudo_state(tip_classes, &state_default);
+    assert_eq!(style_tip_off.display, strata_style::types::Display::None);
+    let state_gh = PseudoState {
+        is_group_hovered: true,
+        ..Default::default()
+    };
+    let style_tip_on = TailwindEngine::resolve_classes_with_pseudo_state(tip_classes, &state_gh);
+    assert_eq!(style_tip_on.display, strata_style::types::Display::Flex);
 }
 
 #[component]
@@ -169,3 +163,123 @@ fn test_app_runtime_dynamic_pseudo_classes() {
         "Dark mode container must resolve dark:bg-black"
     );
 }
+
+#[test]
+fn test_group_hover_tooltip_opens_and_closes_in_runtime() {
+    let view = rsx! {
+        <div class="flex flex-col w-[400px] h-[300px] p-4 bg-white">
+            <div class="group relative inline-flex w-[140px] h-[40px]">
+                <button class="w-[140px] h-[40px] bg-neutral-900 text-white">"Trigger"</button>
+                <div class="hidden group-hover:flex absolute top-full left-0 px-2 py-1 bg-black text-white">
+                    "Group Hover Tooltip"
+                </div>
+            </div>
+        </div>
+    };
+    let mut runtime = AppRuntime::new(view, 400.0, 300.0, 1.0);
+
+    // Initially hidden (`display: none`)
+    assert_eq!(
+        runtime.layout_root.children[0].children[1].style.display,
+        strata_style::types::Display::None
+    );
+
+    // Hovering inside the `.group` trigger reveals the `group-hover:flex` child.
+    let changed = runtime.update_hover(50.0, 30.0);
+    assert!(changed, "Hovering into .group must trigger restyle/layout");
+    assert_eq!(
+        runtime.layout_root.children[0].children[1].style.display,
+        strata_style::types::Display::Flex,
+        "group-hover:flex tooltip must open when ancestor .group is hovered"
+    );
+    let has_tip_text = runtime.display_list.commands().iter().any(|cmd| {
+        matches!(
+            cmd,
+            strata_render::compositor::DrawCommand::DrawText { text, .. }
+                if text.contains("Group Hover Tooltip")
+        )
+    });
+    assert!(has_tip_text, "Opened group-hover tooltip must render text");
+
+    // Moving outside `.group` hides it again.
+    let left_changed = runtime.update_hover(350.0, 250.0);
+    assert!(left_changed);
+    assert_eq!(
+        runtime.layout_root.children[0].children[1].style.display,
+        strata_style::types::Display::None,
+        "group-hover:flex tooltip must close when leaving .group"
+    );
+}
+
+#[test]
+fn test_native_hover_tooltip_for_title_and_alt_attributes() {
+    let view = rsx! {
+        <div class="flex flex-col w-[400px] h-[300px] p-4 gap-2 bg-white">
+            <button title="Center on Target" class="w-[140px] h-[40px] bg-neutral-900 text-white">
+                "Recenter"
+            </button>
+            <button alt="Toggle Terrain Wireframe" class="w-[140px] h-[40px] bg-neutral-800 text-white">
+                "Wireframe"
+            </button>
+        </div>
+    };
+    let mut runtime = AppRuntime::new(view, 400.0, 300.0, 1.0);
+    runtime.hover_tooltip_delay = std::time::Duration::from_millis(5);
+
+    let has_text = |rt: &AppRuntime, needle: &str| {
+        rt.display_list.commands().iter().any(|cmd| {
+            matches!(
+                cmd,
+                strata_render::compositor::DrawCommand::DrawText { text, .. } if text == needle
+            )
+        })
+    };
+
+    // Hover button 1 (`title="Center on Target"`): armed, not immediately visible.
+    runtime.step_event(&strata_platform::PlatformEvent::MouseMove { x: 50.0, y: 30.0 });
+    assert_eq!(
+        runtime.hover_tooltip_text.as_deref(),
+        Some("Center on Target")
+    );
+    assert!(!runtime.hover_tooltip_visible);
+    assert!(!has_text(&runtime, "Center on Target"));
+
+    // After dwell delay, AnimationTick reveals the tooltip in the display list.
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let woke = runtime.step_event(&strata_platform::PlatformEvent::AnimationTick);
+    assert!(woke);
+    assert!(runtime.hover_tooltip_visible);
+    assert!(has_text(&runtime, "Center on Target"));
+
+    // Clicking dismisses the tooltip immediately.
+    let click_dirty = runtime.step_event(&strata_platform::PlatformEvent::MouseDown {
+        button: strata_platform::MouseButton::Left,
+        x: 50.0,
+        y: 30.0,
+    });
+    assert!(click_dirty);
+    assert!(!runtime.hover_tooltip_visible);
+    assert!(!has_text(&runtime, "Center on Target"));
+    runtime.step_event(&strata_platform::PlatformEvent::MouseUp {
+        button: strata_platform::MouseButton::Left,
+        x: 50.0,
+        y: 30.0,
+    });
+
+    // Hover button 2 (`alt="Toggle Terrain Wireframe"` fallback on `<button>`).
+    runtime.step_event(&strata_platform::PlatformEvent::MouseMove { x: 50.0, y: 80.0 });
+    assert_eq!(
+        runtime.hover_tooltip_text.as_deref(),
+        Some("Toggle Terrain Wireframe")
+    );
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    assert!(runtime.step_event(&strata_platform::PlatformEvent::AnimationTick));
+    assert!(runtime.hover_tooltip_visible);
+    assert!(has_text(&runtime, "Toggle Terrain Wireframe"));
+
+    // CursorLeft clears the tooltip from the display list.
+    assert!(runtime.step_event(&strata_platform::PlatformEvent::CursorLeft));
+    assert!(!runtime.hover_tooltip_visible);
+    assert!(!has_text(&runtime, "Toggle Terrain Wireframe"));
+}
+

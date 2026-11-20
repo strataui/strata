@@ -146,7 +146,9 @@ impl A11yTreeBuilder {
 
                 let mut role_override: Option<String> = None;
                 let mut aria_label: Option<String> = None;
-                let mut aria_desc: Option<String> = None;
+                let mut alt_text: Option<String> = None;
+                let mut title_text: Option<String> = None;
+                let mut aria_describedby: Option<String> = None;
                 let mut aria_live: Option<String> = None;
                 let mut aria_atomic = false;
                 let mut aria_busy = false;
@@ -167,7 +169,9 @@ impl A11yTreeBuilder {
                         match key.as_str() {
                             "role" => role_override = Some(value.clone()),
                             "aria-label" => aria_label = Some(value.clone()),
-                            "aria-describedby" | "title" => aria_desc = Some(value.clone()),
+                            "alt" => alt_text = Some(value.clone()),
+                            "title" => title_text = Some(value.clone()),
+                            "aria-describedby" => aria_describedby = Some(value.clone()),
                             "aria-live" => aria_live = Some(value.clone()),
                             "aria-atomic" => aria_atomic = value == "true",
                             "aria-busy" => aria_busy = value == "true",
@@ -198,16 +202,38 @@ impl A11yTreeBuilder {
                 let tag_name = tag_to_str(tag);
                 let role = A11yRole::from_tag_or_role(tag_name, role_override.as_deref());
 
-                // 3. Resolve Accessible Name
+                // 3. Resolve Accessible Name:
+                //    non-empty `aria-label` -> non-empty `alt` -> non-empty child text -> non-empty `title`.
+                let non_empty = |opt: Option<String>| -> Option<String> {
+                    opt.and_then(|s| if s.trim().is_empty() { None } else { Some(s) })
+                };
+                let aria_label = non_empty(aria_label);
+                let alt_text = non_empty(alt_text);
+                let title_text = non_empty(title_text);
+                let aria_describedby = non_empty(aria_describedby);
+
+                let mut title_used_as_name = false;
                 let name = if let Some(label) = aria_label {
                     Some(label)
+                } else if let Some(alt) = alt_text {
+                    Some(alt)
                 } else {
                     let direct_text = extract_text_content(child);
                     if !direct_text.is_empty() {
                         Some(direct_text)
+                    } else if let Some(title) = title_text.clone() {
+                        title_used_as_name = true;
+                        Some(title)
                     } else {
                         None
                     }
+                };
+                let description = if aria_describedby.is_some() {
+                    aria_describedby
+                } else if !title_used_as_name {
+                    title_text
+                } else {
+                    None
                 };
 
                 // 4. Resolve Live Region Politeness
@@ -236,7 +262,7 @@ impl A11yTreeBuilder {
                     ));
                 }
                 node.name = name;
-                node.description = aria_desc;
+                node.description = description;
                 node.value = val_str;
                 node.numeric_value = num_val;
                 node.min_numeric_value = min_val;
@@ -444,3 +470,73 @@ fn collect_layout_boxes(node: &strata_layout::LayoutNode, out: &mut Vec<A11yRect
         collect_layout_boxes(child, out);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use strata_dom::{Attribute, ClassList, NodeBlueprint, Tag};
+
+    fn el(tag: Tag, props: &[(&str, &str)], children: Vec<NodeBlueprint>) -> NodeBlueprint {
+        NodeBlueprint::Element {
+            tag,
+            classes: ClassList::default(),
+            attributes: props
+                .iter()
+                .map(|(k, v)| Attribute::Property {
+                    key: (*k).to_string(),
+                    value: (*v).to_string(),
+                })
+                .collect(),
+            children,
+        }
+    }
+
+    #[test]
+    fn accessible_name_reads_alt_guards_empty_aria_label_and_falls_back_to_title() {
+        let root = el(
+            Tag::Div,
+            &[],
+            vec![
+                // 1. Empty aria-label="" must NOT clobber child text.
+                el(
+                    Tag::Button,
+                    &[("aria-label", "")],
+                    vec![NodeBlueprint::Text("Save Changes".to_string())],
+                ),
+                // 2. Image with `alt` gets accessible name from `alt`.
+                el(Tag::Img, &[("alt", "Satellite Preview")], vec![]),
+                // 3. Icon-only button with `alt` gets accessible name from `alt`.
+                el(Tag::Button, &[("alt", "Toggle Layers")], vec![]),
+                // 4. Icon-only button with only `title` falls back to `title` without duplicating description.
+                el(Tag::Button, &[("title", "Reset Camera")], vec![]),
+                // 5. Non-empty `aria-label` beats `alt`, child text, and `title` (and `title` remains description).
+                el(
+                    Tag::Button,
+                    &[
+                        ("aria-label", "Launch Mission"),
+                        ("alt", "Ignored Alt"),
+                        ("title", "Starts autonomous flight"),
+                    ],
+                    vec![NodeBlueprint::Text("Go".to_string())],
+                ),
+            ],
+        );
+
+        let tree = build_a11y_tree(&root);
+        let root_div = tree.nodes[&tree.root_id].children[0];
+        let kids = &tree.nodes[&root_div].children;
+        assert_eq!(kids.len(), 5);
+
+        assert_eq!(tree.nodes[&kids[0]].name.as_deref(), Some("Save Changes"));
+        assert_eq!(tree.nodes[&kids[1]].name.as_deref(), Some("Satellite Preview"));
+        assert_eq!(tree.nodes[&kids[2]].name.as_deref(), Some("Toggle Layers"));
+        assert_eq!(tree.nodes[&kids[3]].name.as_deref(), Some("Reset Camera"));
+        assert_eq!(tree.nodes[&kids[3]].description, None);
+        assert_eq!(tree.nodes[&kids[4]].name.as_deref(), Some("Launch Mission"));
+        assert_eq!(
+            tree.nodes[&kids[4]].description.as_deref(),
+            Some("Starts autonomous flight")
+        );
+    }
+}
+

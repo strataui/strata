@@ -347,6 +347,27 @@ impl WgpuWindowPresenter {
         viewport: Option<[f32; 4]>,
         draw_overlay: bool,
     ) -> Result<(), String> {
+        let vp = viewport.unwrap_or_else(|| {
+            let (w, h) = self
+                .surface_config
+                .as_ref()
+                .map(|c| (c.width as f32, c.height as f32))
+                .unwrap_or((1.0, 1.0));
+            [0.0, 0.0, w, h]
+        });
+        self.present_viewports_to_surface(&[(vp, scene)], draw_overlay)
+    }
+
+    /// Presents one or more 3D viewports directly into the single swapchain frame and composites
+    /// the cached 2D UI overlay once on top before presenting.
+    pub fn present_viewports_to_surface(
+        &mut self,
+        viewports: &[([f32; 4], &Scene3D)],
+        draw_overlay: bool,
+    ) -> Result<(), String> {
+        if viewports.is_empty() {
+            return Err("no 3D viewports to present".to_string());
+        }
         let Some(ref surface) = self.surface else {
             return Err("no active wgpu swapchain surface".to_string());
         };
@@ -372,15 +393,27 @@ impl WgpuWindowPresenter {
         } else {
             None
         };
-        self.renderer.render_scene_and_overlay_to_view(
-            scene,
-            &view,
-            cfg.width,
-            cfg.height,
-            viewport,
-            false,
-            ov_bg,
-        );
+        if viewports.len() == 1 {
+            let (vp, scene) = viewports[0];
+            self.renderer.render_scene_and_overlay_to_view(
+                scene,
+                &view,
+                cfg.width,
+                cfg.height,
+                Some(vp),
+                false,
+                ov_bg,
+            );
+        } else {
+            self.renderer.render_viewports_and_overlay_to_view(
+                viewports,
+                &view,
+                cfg.width,
+                cfg.height,
+                false,
+                ov_bg,
+            );
+        }
         let t_3d = std::time::Instant::now();
         let t_ov = t_3d;
         output.present();

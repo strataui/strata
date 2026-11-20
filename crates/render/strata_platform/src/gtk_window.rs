@@ -2126,6 +2126,201 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                     }
                 }
             }
+            DrawCommand::DrawCanvas2D { bounds, commands } => {
+                if bounds.width > 0.0 && bounds.height > 0.0 && !commands.is_empty() {
+                    let _ = cr.save();
+                    cr.rectangle(
+                        bounds.x as f64,
+                        bounds.y as f64,
+                        bounds.width as f64,
+                        bounds.height as f64,
+                    );
+                    cr.clip();
+                    cr.translate(bounds.x as f64, bounds.y as f64);
+                    for ccmd in commands {
+                        match ccmd {
+                            strata_render::canvas2d::CanvasCommand::FillRect {
+                                bounds: rb,
+                                color,
+                            } => {
+                                cr.set_source_rgba(
+                                    color.r() as f64,
+                                    color.g() as f64,
+                                    color.b() as f64,
+                                    color.a() as f64,
+                                );
+                                cr.rectangle(
+                                    rb.x as f64,
+                                    rb.y as f64,
+                                    rb.width as f64,
+                                    rb.height as f64,
+                                );
+                                let _ = cr.fill();
+                            }
+                            strata_render::canvas2d::CanvasCommand::StrokeRect {
+                                bounds: rb,
+                                color,
+                                line_width,
+                            } => {
+                                cr.set_source_rgba(
+                                    color.r() as f64,
+                                    color.g() as f64,
+                                    color.b() as f64,
+                                    color.a() as f64,
+                                );
+                                cr.set_line_width(*line_width as f64);
+                                cr.rectangle(
+                                    rb.x as f64,
+                                    rb.y as f64,
+                                    rb.width as f64,
+                                    rb.height as f64,
+                                );
+                                let _ = cr.stroke();
+                            }
+                            strata_render::canvas2d::CanvasCommand::ClearRect { bounds: rb } => {
+                                let _ = cr.save();
+                                cr.set_operator(cairo::Operator::Clear);
+                                cr.rectangle(
+                                    rb.x as f64,
+                                    rb.y as f64,
+                                    rb.width as f64,
+                                    rb.height as f64,
+                                );
+                                let _ = cr.fill();
+                                let _ = cr.restore();
+                            }
+                            strata_render::canvas2d::CanvasCommand::DrawLine {
+                                p0,
+                                p1,
+                                color,
+                                line_width,
+                            } => {
+                                cr.set_source_rgba(
+                                    color.r() as f64,
+                                    color.g() as f64,
+                                    color.b() as f64,
+                                    color.a() as f64,
+                                );
+                                cr.set_line_width(*line_width as f64);
+                                cr.new_path();
+                                cr.move_to(p0.0 as f64, p0.1 as f64);
+                                cr.line_to(p1.0 as f64, p1.1 as f64);
+                                let _ = cr.stroke();
+                            }
+                            strata_render::canvas2d::CanvasCommand::DrawCircle {
+                                center,
+                                radius,
+                                fill_color,
+                                stroke_color,
+                                line_width,
+                            } => {
+                                cr.new_path();
+                                cr.arc(
+                                    center.0 as f64,
+                                    center.1 as f64,
+                                    *radius as f64,
+                                    0.0,
+                                    std::f64::consts::TAU,
+                                );
+                                if let Some(fc) = fill_color {
+                                    cr.set_source_rgba(
+                                        fc.r() as f64,
+                                        fc.g() as f64,
+                                        fc.b() as f64,
+                                        fc.a() as f64,
+                                    );
+                                    if stroke_color.is_some() {
+                                        let _ = cr.fill_preserve();
+                                    } else {
+                                        let _ = cr.fill();
+                                    }
+                                }
+                                if let Some(sc) = stroke_color {
+                                    cr.set_source_rgba(
+                                        sc.r() as f64,
+                                        sc.g() as f64,
+                                        sc.b() as f64,
+                                        sc.a() as f64,
+                                    );
+                                    cr.set_line_width(*line_width as f64);
+                                    let _ = cr.stroke();
+                                }
+                            }
+                            strata_render::canvas2d::CanvasCommand::DrawPath {
+                                verbs,
+                                fill_color,
+                                stroke_color,
+                                line_width,
+                            } => {
+                                cr.new_path();
+                                for v in verbs {
+                                    match *v {
+                                        strata_render::canvas2d::CanvasPathVerb::MoveTo(x, y) => {
+                                            cr.move_to(x as f64, y as f64);
+                                        }
+                                        strata_render::canvas2d::CanvasPathVerb::LineTo(x, y) => {
+                                            cr.line_to(x as f64, y as f64);
+                                        }
+                                        strata_render::canvas2d::CanvasPathVerb::Arc {
+                                            cx,
+                                            cy,
+                                            radius,
+                                            start_angle,
+                                            end_angle,
+                                            counter_clockwise,
+                                        } => {
+                                            if counter_clockwise {
+                                                cr.arc_negative(
+                                                    cx as f64,
+                                                    cy as f64,
+                                                    radius as f64,
+                                                    start_angle as f64,
+                                                    end_angle as f64,
+                                                );
+                                            } else {
+                                                cr.arc(
+                                                    cx as f64,
+                                                    cy as f64,
+                                                    radius as f64,
+                                                    start_angle as f64,
+                                                    end_angle as f64,
+                                                );
+                                            }
+                                        }
+                                        strata_render::canvas2d::CanvasPathVerb::Close => {
+                                            cr.close_path();
+                                        }
+                                    }
+                                }
+                                if let Some(fc) = fill_color {
+                                    cr.set_source_rgba(
+                                        fc.r() as f64,
+                                        fc.g() as f64,
+                                        fc.b() as f64,
+                                        fc.a() as f64,
+                                    );
+                                    if stroke_color.is_some() {
+                                        let _ = cr.fill_preserve();
+                                    } else {
+                                        let _ = cr.fill();
+                                    }
+                                }
+                                if let Some(sc) = stroke_color {
+                                    cr.set_source_rgba(
+                                        sc.r() as f64,
+                                        sc.g() as f64,
+                                        sc.b() as f64,
+                                        sc.a() as f64,
+                                    );
+                                    cr.set_line_width(*line_width as f64);
+                                    let _ = cr.stroke();
+                                }
+                            }
+                        }
+                    }
+                    let _ = cr.restore();
+                }
+            }
             DrawCommand::DrawSvgPath {
                 bounds,
                 path_data,
@@ -2813,8 +3008,7 @@ mod gtk_gpu_x11 {
         dirty_tile_bits: Vec<u64>,
         dirty_upload_rects: Vec<(u32, u32, u32, u32)>,
         upload_scratch: Vec<u8>,
-        last_scene: Option<Arc<Scene3D>>,
-        last_viewport: Option<[f32; 4]>,
+        last_viewports: Vec<([f32; 4], Arc<Scene3D>)>,
     }
 
     impl GtkGpuSurfaceState {
@@ -2852,7 +3046,7 @@ mod gtk_gpu_x11 {
             self.tile_cols = 0;
             self.tile_rows = 0;
             self.last_tile_hashes.clear();
-            self.last_viewport = None;
+            self.last_viewports.clear();
         }
 
         fn destroy(self) {
@@ -3301,8 +3495,7 @@ mod gtk_gpu_x11 {
             dirty_tile_bits: Vec::new(),
             dirty_upload_rects: Vec::new(),
             upload_scratch: Vec::new(),
-            last_scene: None,
-            last_viewport: None,
+            last_viewports: Vec::new(),
         })
     }
 
@@ -3536,23 +3729,19 @@ mod gtk_gpu_x11 {
         transparent_bg: bool,
         cursor_overlay: Option<(&crate::McpCursorState, &crate::CursorTheme)>,
     ) -> bool {
-        let mut viewport_entry: Option<([f32; 4], Arc<Scene3D>)> = None;
-        let mut viewport_count = 0usize;
+        let mut viewports: Vec<([f32; 4], Arc<Scene3D>)> = Vec::new();
         for cmd in list.commands() {
             if let DrawCommand::DrawViewport3D { bounds, scene } = cmd {
                 if bounds.width > 0.0 && bounds.height > 0.0 {
-                    viewport_count += 1;
-                    if viewport_count == 1 {
-                        viewport_entry = Some((
-                            [bounds.x, bounds.y, bounds.width, bounds.height],
-                            Arc::clone(scene),
-                        ));
-                    }
+                    viewports.push((
+                        [bounds.x, bounds.y, bounds.width, bounds.height],
+                        Arc::clone(scene),
+                    ));
                 }
             }
         }
 
-        if viewport_count != 1 {
+        if viewports.is_empty() {
             GPU_SURFACE_STATE.with(|slot| {
                 if let Some(ref mut state) = *slot.borrow_mut() {
                     state.set_mapped(false);
@@ -3560,9 +3749,6 @@ mod gtk_gpu_x11 {
             });
             return false;
         }
-        let Some((vp_rect, scene)) = viewport_entry else {
-            return false;
-        };
 
         let w = width.max(1.0).round() as u32;
         let h = height.max(1.0).round() as u32;
@@ -3624,11 +3810,15 @@ mod gtk_gpu_x11 {
                 }
             }
 
-            state.last_viewport = Some(vp_rect);
-            state.last_scene = Some(Arc::clone(&scene));
+            state.last_viewports = viewports;
+            let vp_refs: Vec<([f32; 4], &Scene3D)> = state
+                .last_viewports
+                .iter()
+                .map(|(vp, sc)| (*vp, sc.as_ref()))
+                .collect();
             state
                 .presenter
-                .present_to_surface(&scene, Some(vp_rect), state.overlay_uploaded)
+                .present_viewports_to_surface(&vp_refs, state.overlay_uploaded)
                 .is_ok()
         })
     }
@@ -3639,15 +3829,17 @@ mod gtk_gpu_x11 {
             let Some(ref mut state) = *cell else {
                 return false;
             };
-            if !state.mapped || !state.overlay_uploaded {
+            if !state.mapped || !state.overlay_uploaded || state.last_viewports.is_empty() {
                 return false;
             }
-            let (Some(ref scene), Some(vp)) = (&state.last_scene, state.last_viewport) else {
-                return false;
-            };
+            let vp_refs: Vec<([f32; 4], &Scene3D)> = state
+                .last_viewports
+                .iter()
+                .map(|(vp, sc)| (*vp, sc.as_ref()))
+                .collect();
             state
                 .presenter
-                .present_to_surface(scene, Some(vp), state.overlay_uploaded)
+                .present_viewports_to_surface(&vp_refs, state.overlay_uploaded)
                 .is_ok()
         })
     }
@@ -4709,6 +4901,58 @@ where
     EVENT_DISPATCH_CALLBACK.with(|cb| {
         *cb.borrow_mut() = Some(Box::new(move |ev| (on_event_dispatch.borrow_mut())(&ev)));
     });
+
+    // OS file drag-and-drop destination handler (`text/uri-list` / `text/plain`)
+    {
+        use gtk::prelude::{DragContextExtManual, WidgetExt, WidgetExtManual};
+        let targets = [
+            gtk::TargetEntry::new("text/uri-list", gtk::TargetFlags::OTHER_APP, 0),
+            gtk::TargetEntry::new("text/plain", gtk::TargetFlags::OTHER_APP, 1),
+        ];
+        drawing_area.drag_dest_set(
+            gtk::DestDefaults::ALL,
+            &targets,
+            gtk::gdk::DragAction::COPY | gtk::gdk::DragAction::MOVE,
+        );
+        let on_event_drop = on_event_rc.clone();
+        drawing_area.connect_drag_data_received(
+            move |widget, context, x, y, selection_data, _info, time| {
+                let mut paths = Vec::new();
+                for uri in selection_data.uris() {
+                    if let Some(p) = crate::events::decode_file_uri_to_path(uri.as_str()) {
+                        paths.push(p);
+                    }
+                }
+                if paths.is_empty() {
+                    if let Some(text) = selection_data.text() {
+                        paths = crate::events::parse_dropped_uri_list_to_paths(text.as_str());
+                    }
+                }
+                if !paths.is_empty() {
+                    let move_ev = crate::events::PlatformEvent::MouseMove {
+                        x: x as f32,
+                        y: y as f32,
+                    };
+                    let drop_ev = crate::events::PlatformEvent::FileDrop(paths);
+                    let mut redraw = false;
+                    if let Ok(mut cb) = on_event_drop.try_borrow_mut() {
+                        if (*cb)(&move_ev) {
+                            redraw = true;
+                        }
+                        if (*cb)(&drop_ev) {
+                            redraw = true;
+                        }
+                    }
+                    if redraw {
+                        widget.queue_draw();
+                    }
+                    context.drag_finish(true, false, time);
+                } else {
+                    context.drag_finish(false, false, time);
+                }
+            },
+        );
+    }
 
     // Mouse button click handler
     let frameless_resizable =

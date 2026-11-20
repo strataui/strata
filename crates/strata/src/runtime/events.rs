@@ -233,6 +233,8 @@ impl AppRuntime {
         }
 
         // Also dispatch PointerDown and MouseDown to DOM listeners
+        let pre_open_outside_ids = strata_dom::hooks::snapshot_open_click_outside_ids();
+        let mut inside_click_stopped = false;
         self.pointer_capture_target = None;
         let mut dom_handled = false;
         let mut captured_target: Option<(Vec<usize>, bool)> = None;
@@ -253,8 +255,13 @@ impl AppRuntime {
                 Some(&target_box_copy),
             );
             let capture_req = ev.pointer_capture_requested.clone();
+            let stopped_cell = ev.propagation_stopped.clone();
+            let prevented_cell = ev.default_prevented.clone();
             handler(ev);
             dom_handled = true;
+            if stopped_cell.get() || prevented_cell.get() {
+                inside_click_stopped = true;
+            }
             if let Some(target_path) = self.layout_root.find_path_by_entity_id(eid) {
                 match capture_req.get() {
                     Some(true) => captured_target = Some((target_path, true)),
@@ -280,8 +287,13 @@ impl AppRuntime {
                 Some(&target_box_copy),
             );
             let capture_req = ev.pointer_capture_requested.clone();
+            let stopped_cell = ev.propagation_stopped.clone();
+            let prevented_cell = ev.default_prevented.clone();
             handler(ev);
             dom_handled = true;
+            if stopped_cell.get() || prevented_cell.get() {
+                inside_click_stopped = true;
+            }
             if let Some(target_path) = self.layout_root.find_path_by_entity_id(eid) {
                 match capture_req.get() {
                     Some(true) => captured_target = Some((target_path, true)),
@@ -294,6 +306,24 @@ impl AppRuntime {
             }
         }
         self.pointer_capture_target = captured_target;
+
+        if button == 0 {
+            self.active_dom_drag = self.find_draggable_path_at(px, py).map(|source_path| {
+                ActiveDomDrag {
+                    source_path,
+                    start_pos: (px, py),
+                    started: false,
+                    last_over_path: None,
+                    data_transfer: Default::default(),
+                }
+            });
+        }
+
+        if !pre_open_outside_ids.is_empty() && !inside_click_stopped {
+            if strata_dom::hooks::dispatch_click_outside_for_ids(&pre_open_outside_ids) {
+                dom_handled = true;
+            }
+        }
 
         let focus_changed = if button == 0 {
             let focus_path = self.find_focus_path_at(px, py);
@@ -484,6 +514,88 @@ impl AppRuntime {
             self.warp_cursor(wx as f32, wy as f32);
         }
 
+        if let Some(mut drag) = self.active_dom_drag.take() {
+            let mut cancel_drag = false;
+            if !drag.started {
+                let (sx, sy) = drag.start_pos;
+                if (px - sx).abs() > 3.0 || (py - sy).abs() > 3.0 {
+                    drag.started = true;
+                    let (invoked, prevented) = self.dispatch_drag_event_at_path(
+                        &drag.source_path,
+                        strata_dom::EventType::DragStart,
+                        sx,
+                        sy,
+                        &drag.data_transfer,
+                    );
+                    if invoked {
+                        dom_handled = true;
+                    }
+                    if prevented {
+                        cancel_drag = true;
+                    }
+                }
+            }
+
+            if drag.started && !cancel_drag {
+                let (drag_invoked, _) = self.dispatch_drag_event_at_path(
+                    &drag.source_path,
+                    strata_dom::EventType::Drag,
+                    px,
+                    py,
+                    &drag.data_transfer,
+                );
+                if drag_invoked {
+                    dom_handled = true;
+                }
+
+                let over_path = self.find_drop_target_path_at(px, py);
+                if over_path != drag.last_over_path {
+                    if let Some(ref old_path) = drag.last_over_path {
+                        let (leave_invoked, _) = self.dispatch_drag_event_at_path(
+                            old_path,
+                            strata_dom::EventType::DragLeave,
+                            px,
+                            py,
+                            &drag.data_transfer,
+                        );
+                        if leave_invoked {
+                            dom_handled = true;
+                        }
+                    }
+                    if let Some(ref new_path) = over_path {
+                        let (enter_invoked, _) = self.dispatch_drag_event_at_path(
+                            new_path,
+                            strata_dom::EventType::DragEnter,
+                            px,
+                            py,
+                            &drag.data_transfer,
+                        );
+                        if enter_invoked {
+                            dom_handled = true;
+                        }
+                    }
+                    drag.last_over_path = over_path.clone();
+                }
+
+                if let Some(ref cur_over) = over_path {
+                    let (over_invoked, _) = self.dispatch_drag_event_at_path(
+                        cur_over,
+                        strata_dom::EventType::DragOver,
+                        px,
+                        py,
+                        &drag.data_transfer,
+                    );
+                    if over_invoked {
+                        dom_handled = true;
+                    }
+                }
+            }
+
+            if !cancel_drag {
+                self.active_dom_drag = Some(drag);
+            }
+        }
+
         if dom_handled {
             PointerMoveAction::DomListenerInvoked
         } else if selection_dragged {
@@ -591,6 +703,67 @@ impl AppRuntime {
                         let ev =
                             self.create_mouse_event(ev_type, px, py, button, 1, Some(target_box));
                         handler(ev);
+                        dom_handled = true;
+                    }
+                }
+            }
+        }
+
+        if button == 0 {
+            if let Some(drag) = self.active_dom_drag.take() {
+                if drag.started {
+                    let drop_path = self.find_drop_target_path_at(px, py).or(drag.last_over_path);
+                    let mut drop_dispatched = false;
+                    if let Some(ref target_path) = drop_path {
+                        let (invoked, _) = self.dispatch_drag_event_at_path(
+                            target_path,
+                            strata_dom::EventType::Drop,
+                            px,
+                            py,
+                            &drag.data_transfer,
+                        );
+                        if invoked {
+                            drop_dispatched = true;
+                            dom_handled = true;
+                        }
+                    }
+                    if !drop_dispatched {
+                        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+                            &self.root_blueprint,
+                            &self.layout_root,
+                            px,
+                            py,
+                            strata_dom::EventType::Drop,
+                        ) {
+                            let target_box_copy = *target_box;
+                            let mut ev = self.create_mouse_event(
+                                strata_dom::EventType::Drop,
+                                px,
+                                py,
+                                0,
+                                1,
+                                Some(&target_box_copy),
+                            );
+                            ev.data_transfer = std::rc::Rc::clone(&drag.data_transfer);
+                            ev.data = drag
+                                .data_transfer
+                                .borrow()
+                                .get("text/plain")
+                                .cloned()
+                                .or_else(|| drag.data_transfer.borrow().values().next().cloned());
+                            handler(ev);
+                            dom_handled = true;
+                        }
+                    }
+
+                    let (end_invoked, _) = self.dispatch_drag_event_at_path(
+                        &drag.source_path,
+                        strata_dom::EventType::DragEnd,
+                        px,
+                        py,
+                        &drag.data_transfer,
+                    );
+                    if end_invoked {
                         dom_handled = true;
                     }
                 }
@@ -1236,6 +1409,180 @@ impl AppRuntime {
                     return true;
                 }
             }
+        }
+        false
+    }
+
+    /// Finds the deepest ancestor path at `(px, py)` that is draggable (`draggable="true"` or has an `ondragstart` listener).
+    pub(crate) fn find_draggable_path_at(&self, px: f32, py: f32) -> Option<Vec<usize>> {
+        let hit_path = Self::hit_test_node_path(&self.root_blueprint, &self.layout_root, px, py)?;
+        for len in (0..=hit_path.len()).rev() {
+            let prefix = &hit_path[..len];
+            let Some(NodeBlueprint::Element { attributes, .. }) =
+                Self::find_blueprint_at_path(&self.root_blueprint, prefix)
+            else {
+                continue;
+            };
+            let mut explicit_draggable: Option<bool> = None;
+            let mut has_drag_listener = false;
+            for attr in attributes {
+                match attr {
+                    strata_dom::Attribute::Property { key, value } if key == "draggable" => {
+                        explicit_draggable = Some(!value.eq_ignore_ascii_case("false"));
+                    }
+                    strata_dom::Attribute::EventListener { event, .. }
+                        if matches!(
+                            event,
+                            strata_dom::EventType::DragStart | strata_dom::EventType::Drag
+                        ) =>
+                    {
+                        has_drag_listener = true;
+                    }
+                    _ => {}
+                }
+            }
+            if explicit_draggable == Some(true)
+                || (explicit_draggable.is_none() && has_drag_listener)
+            {
+                return Some(prefix.to_vec());
+            }
+        }
+        None
+    }
+
+    /// Resolves the drop-target element path at `(px, py)`, preferring the nearest ancestor registering
+    /// a `DragEnter`, `DragOver`, `DragLeave`, or `Drop` listener so moving across child nodes inside a drop zone
+    /// does not emit spurious `dragleave` / `dragenter` transitions.
+    pub(crate) fn find_drop_target_path_at(&self, px: f32, py: f32) -> Option<Vec<usize>> {
+        let hit_path = Self::hit_test_node_path(&self.root_blueprint, &self.layout_root, px, py)?;
+        for len in (0..=hit_path.len()).rev() {
+            let prefix = &hit_path[..len];
+            let Some(NodeBlueprint::Element { attributes, .. }) =
+                Self::find_blueprint_at_path(&self.root_blueprint, prefix)
+            else {
+                continue;
+            };
+            let is_drop_zone = attributes.iter().any(|attr| {
+                matches!(
+                    attr,
+                    strata_dom::Attribute::EventListener {
+                        event: strata_dom::EventType::DragEnter
+                            | strata_dom::EventType::DragOver
+                            | strata_dom::EventType::DragLeave
+                            | strata_dom::EventType::Drop,
+                        ..
+                    }
+                )
+            });
+            if is_drop_zone {
+                return Some(prefix.to_vec());
+            }
+        }
+        Some(hit_path)
+    }
+
+    /// Dispatches a drag-and-drop `EventType` (`DragStart`, `Drag`, `DragEnter`, `DragOver`, `DragLeave`, `Drop`, `DragEnd`)
+    /// at or above `path`, returning `(listener_invoked, default_prevented)`.
+    pub(crate) fn dispatch_drag_event_at_path(
+        &self,
+        path: &[usize],
+        event_type: strata_dom::EventType,
+        px: f32,
+        py: f32,
+        data_transfer: &std::rc::Rc<
+            std::cell::RefCell<std::collections::HashMap<String, String>>,
+        >,
+    ) -> (bool, bool) {
+        if let Some((handler, target_box, _)) = Self::find_event_at_or_above_path(
+            &self.root_blueprint,
+            &self.layout_root,
+            path,
+            event_type,
+        ) {
+            let target_box_copy = *target_box;
+            let mut ev =
+                self.create_mouse_event(event_type, px, py, 0, 1, Some(&target_box_copy));
+            ev.data_transfer = std::rc::Rc::clone(data_transfer);
+            ev.data = data_transfer
+                .borrow()
+                .get("text/plain")
+                .cloned()
+                .or_else(|| data_transfer.borrow().values().next().cloned());
+            let prevented_cell = ev.default_prevented.clone();
+            handler(ev);
+            return (true, prevented_cell.get());
+        }
+        (false, false)
+    }
+
+    pub(crate) fn find_first_event_listener<'a>(
+        blueprint: &'a NodeBlueprint,
+        layout: &'a LayoutNode,
+        event_type: strata_dom::EventType,
+    ) -> Option<(
+        std::rc::Rc<dyn Fn(strata_dom::Event)>,
+        &'a strata_layout::Rect,
+    )> {
+        if let NodeBlueprint::Element { attributes, .. } = blueprint {
+            for attr in attributes {
+                if let strata_dom::Attribute::EventListener { event, handler } = attr {
+                    if *event == event_type {
+                        return Some((handler.clone(), &layout.geometry.border_box));
+                    }
+                }
+            }
+        }
+        for (_idx, child_bp, child_layout) in Self::paired_blueprint_children(blueprint, layout) {
+            if let Some(found) =
+                Self::find_first_event_listener(child_bp, child_layout, event_type)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Dispatches an OS file drop (`PlatformEvent::FileDrop`) to the drop target under `last_mouse_pos`
+    /// (or the primary `ondrop` listener in the tree), populating `event.files` and `event.data`.
+    pub fn dispatch_file_drop(&mut self, paths: Vec<std::path::PathBuf>) -> bool {
+        if paths.is_empty() {
+            return false;
+        }
+        let (px, py) = self.last_mouse_pos;
+        let hit = Self::hit_test_event_with_box(
+            &self.root_blueprint,
+            &self.layout_root,
+            px,
+            py,
+            strata_dom::EventType::Drop,
+        )
+        .or_else(|| {
+            Self::find_first_event_listener(
+                &self.root_blueprint,
+                &self.layout_root,
+                strata_dom::EventType::Drop,
+            )
+        });
+
+        if let Some((handler, target_box)) = hit {
+            let target_box_copy = *target_box;
+            let mut ev = self.create_mouse_event(
+                strata_dom::EventType::Drop,
+                px,
+                py,
+                0,
+                1,
+                Some(&target_box_copy),
+            );
+            if let Some(first) = paths.first() {
+                let first_str = first.to_string_lossy().into_owned();
+                ev.data = Some(first_str.clone());
+                ev.set_data("text/uri-list", first_str.clone());
+                ev.set_data("text/plain", first_str);
+            }
+            ev.files = paths;
+            handler(ev);
+            return true;
         }
         false
     }

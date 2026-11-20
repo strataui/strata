@@ -64,7 +64,10 @@ pub use dialog::{
     DialogMockResponse, MessageBoxButtons, MessageBoxResult, MessageBoxType, OpenFileOptions,
     PickFolderOptions, SaveFileOptions,
 };
-pub use events::{KeyCode, Modifiers, MouseButton, PlatformEvent, TouchPhase};
+pub use events::{
+    decode_file_uri_to_path, parse_dropped_uri_list_to_paths, KeyCode, Modifiers, MouseButton,
+    PlatformEvent, TouchPhase,
+};
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 pub use gtk;
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]

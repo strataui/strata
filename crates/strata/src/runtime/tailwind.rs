@@ -14,21 +14,22 @@ impl AppRuntime {
         let state = strata_style::selector::PseudoState {
             is_hovered,
             is_focused,
-            is_active: false,
-            is_disabled: false,
             is_dark,
+            ..Default::default()
         };
         Self::apply_tailwind_classes_with_pseudo_state(style, classes, &state);
     }
 
-    /// Full Tailwind CSS class parser supporting hover, focus, active, disabled, and dark mode variants.
+    /// Full Tailwind CSS class parser supporting hover, focus, active, disabled, dark, and group-* variants.
     pub fn apply_tailwind_classes_with_pseudo_state(
         style: &mut ComputedStyle,
         classes: &strata_dom::ClassList,
         state: &strata_style::selector::PseudoState,
     ) {
-        let active_count =
-            u8::from(state.is_focused) + u8::from(state.is_hovered) + u8::from(state.is_active);
+        let has_focus = state.is_focused || state.is_group_focused;
+        let has_hover = state.is_hovered || state.is_group_hovered;
+        let has_active = state.is_active || state.is_group_active;
+        let active_count = u8::from(has_focus) + u8::from(has_hover) + u8::from(has_active);
         if active_count <= 1 {
             for cls in classes.iter() {
                 for single_class in strata_style::tailwind::tokenize_classes(cls) {
@@ -62,14 +63,16 @@ impl AppRuntime {
         }
     }
 
-    /// Applies only active interactive (`hover:`, `focus:`, `active:`) Tailwind classes.
+    /// Applies only active interactive (`hover:`, `group-hover:`, `focus:`, `active:`) Tailwind classes.
     pub fn apply_interactive_tailwind_classes(
         style: &mut ComputedStyle,
         classes: &strata_dom::ClassList,
         state: &strata_style::selector::PseudoState,
     ) {
-        let active_count =
-            u8::from(state.is_focused) + u8::from(state.is_hovered) + u8::from(state.is_active);
+        let has_focus = state.is_focused || state.is_group_focused;
+        let has_hover = state.is_hovered || state.is_group_hovered;
+        let has_active = state.is_active || state.is_group_active;
+        let active_count = u8::from(has_focus) + u8::from(has_hover) + u8::from(has_active);
         if active_count <= 1 {
             for cls in classes.iter() {
                 for single_class in strata_style::tailwind::tokenize_classes(cls) {
@@ -104,13 +107,13 @@ impl AppRuntime {
                 }
             }
         };
-        if state.is_focused {
+        if has_focus {
             apply_phase(0);
         }
-        if state.is_hovered {
+        if has_hover {
             apply_phase(1);
         }
-        if state.is_active {
+        if has_active {
             apply_phase(2);
         }
     }
@@ -120,11 +123,61 @@ impl AppRuntime {
         self.hover_paint_only
     }
 
-    /// Returns true when any `hover:` utility or `<style>` `:hover` rule on the path mutates box geometry.
+    /// Returns true when `classes` contains the exact Tailwind `"group"` marker token.
+    pub(crate) fn classes_have_group_marker(classes: &strata_dom::ClassList) -> bool {
+        classes.iter().any(|c| {
+            strata_style::tailwind::tokenize_classes(c)
+                .into_iter()
+                .any(|tok| tok == "group")
+        })
+    }
+
+    /// Returns true when any descendant of a `.group` node has a `group-hover:` class affecting layout.
+    pub(crate) fn subtree_group_hover_affects_layout(node: &NodeBlueprint) -> bool {
+        fn check_node(bp: &NodeBlueprint) -> bool {
+            match bp {
+                NodeBlueprint::Element {
+                    classes, children, ..
+                } => {
+                    let self_hits = classes.iter().any(|class| {
+                        strata_style::tailwind::tokenize_classes(class)
+                            .into_iter()
+                            .any(|token| {
+                                let mut cur = token;
+                                let mut has_group_hover = false;
+                                while let (Some(m), rest) =
+                                    strata_style::tailwind::split_modifier(cur)
+                                {
+                                    if m == "group-hover" {
+                                        has_group_hover = true;
+                                    }
+                                    cur = rest;
+                                }
+                                has_group_hover && !AppRuntime::hover_token_is_paint_only(cur)
+                            })
+                    });
+                    self_hits || children.iter().any(check_node)
+                }
+                NodeBlueprint::Fragment(children) => children.iter().any(check_node),
+                _ => false,
+            }
+        }
+        match node {
+            NodeBlueprint::Element {
+                classes, children, ..
+            } if Self::classes_have_group_marker(classes) => children.iter().any(check_node),
+            _ => false,
+        }
+    }
+
+    /// Returns true when any `hover:` utility, `.group` descendant `group-hover:` utility, or
+    /// `<style>` `:hover` rule on the path mutates box geometry.
     pub(crate) fn path_hover_affects_layout(blueprint: &NodeBlueprint, path: &[usize]) -> bool {
         let mut path_nodes: Vec<&NodeBlueprint> = Vec::with_capacity(path.len() + 1);
         let mut current = blueprint;
-        if Self::node_hover_classes_affect_layout(current) {
+        if Self::node_hover_classes_affect_layout(current)
+            || Self::subtree_group_hover_affects_layout(current)
+        {
             return true;
         }
         path_nodes.push(current);
@@ -142,7 +195,9 @@ impl AppRuntime {
                 break;
             }
             current = flat[idx];
-            if Self::node_hover_classes_affect_layout(current) {
+            if Self::node_hover_classes_affect_layout(current)
+                || Self::subtree_group_hover_affects_layout(current)
+            {
                 return true;
             }
             path_nodes.push(current);
@@ -164,17 +219,12 @@ impl AppRuntime {
         };
         let probe_state = strata_style::selector::PseudoState {
             is_hovered: true,
-            is_focused: false,
-            is_active: false,
-            is_disabled: false,
-            is_dark: false,
+            ..Default::default()
         };
         let probe_state_dark = strata_style::selector::PseudoState {
             is_hovered: true,
-            is_focused: false,
-            is_active: false,
-            is_disabled: false,
             is_dark: true,
+            ..Default::default()
         };
 
         for bp in &path_nodes {

@@ -318,11 +318,8 @@ impl AppRuntime {
             _ => (Vec::new(), None, Vec::new()),
         };
         let pseudo_state = strata_style::selector::PseudoState {
-            is_hovered: false,
-            is_focused: false,
-            is_active: false,
-            is_disabled: false,
             is_dark: ctx.is_dark_mode,
+            ..Default::default()
         };
 
         for synthetic_tag in [":root", "html", "body"] {
@@ -411,6 +408,7 @@ impl AppRuntime {
             &mut ancestors,
             &[],
             true,
+            (false, false, false),
         )
     }
 
@@ -487,6 +485,7 @@ impl AppRuntime {
             &mut ancestors,
             &[],
             true,
+            (false, false, false),
         )
     }
 
@@ -500,6 +499,7 @@ impl AppRuntime {
         ancestors: &mut Vec<CascadeElementMeta>,
         preceding_siblings: &[CascadeElementMeta],
         is_last_element_child: bool,
+        group_state: (bool, bool, bool),
     ) -> LayoutNode {
         if current_path.len() >= 256 {
             let style = match parent_style {
@@ -539,6 +539,7 @@ impl AppRuntime {
                     ancestors,
                     preceding_siblings,
                     is_last_element_child,
+                    group_state,
                 );
 
                 Self::apply_top_layer_position_override(tag, attributes, &mut style);
@@ -572,21 +573,59 @@ impl AppRuntime {
                     }
                 }
 
-                // 3D Canvas Viewport handling: Canvas3D is a spatial viewport leaf in the 2D layout tree
-                if (matches!(tag, Tag::Canvas) || matches!(tag, Tag::Custom("Canvas3D")))
+                // 2D / 3D Canvas Viewport handling: Canvas / Canvas2D / Canvas3D (or any element carrying a Canvas2D ScenePayload)
+                let canvas2d_payload = attributes.iter().find_map(|attr| {
+                    if let strata_dom::Attribute::ScenePayload(payload) = attr {
+                        if payload
+                            .downcast_ref::<Vec<strata_render::canvas2d::CanvasCommand>>()
+                            .is_some()
+                            || payload
+                                .downcast_ref::<std::sync::Arc<
+                                    Vec<strata_render::canvas2d::CanvasCommand>,
+                                >>()
+                                .is_some()
+                        {
+                            return Some(std::sync::Arc::clone(payload));
+                        }
+                    }
+                    None
+                });
+                if (canvas2d_payload.is_some()
+                    || matches!(tag, Tag::Canvas)
+                    || matches!(tag, Tag::Custom("Canvas3D" | "Canvas2D")))
                     && Self::apply_canvas3d_sizing_and_check_leaf(attributes, children, &mut style)
                 {
                     let mut canvas_node = LayoutNode::new(*style).with_entity_id(entity_id);
-                    if let Some(scene_arc) =
+                    if let Some(payload) = canvas2d_payload {
+                        canvas_node.scene_3d = Some(strata_layout::ViewportSceneHandle(payload));
+                    } else if let Some(scene_arc) =
                         strata_render::scene3d::extract_scene3d_arc_from_blueprint(blueprint)
                     {
-                        canvas_node.scene_3d = Some(strata_layout::ViewportSceneHandle(scene_arc));
+                        canvas_node.scene_3d =
+                            Some(strata_layout::ViewportSceneHandle(scene_arc));
                     }
                     Self::apply_portal_and_anchor_metadata(&mut canvas_node, tag, attributes);
                     return canvas_node;
                 }
 
                 Self::apply_single_text_inline_intrinsic_sizing(&mut style, children);
+
+                let child_group_state = if Self::classes_have_group_marker(classes) {
+                    let self_hovered = ctx
+                        .hovered_path
+                        .is_some_and(|h| h.starts_with(current_path));
+                    let self_focused = ctx
+                        .focused_path
+                        .is_some_and(|f| f.starts_with(current_path));
+                    let self_active = self_hovered && ctx.is_mouse_down;
+                    (
+                        group_state.0 || self_hovered,
+                        group_state.1 || self_focused,
+                        group_state.2 || self_active,
+                    )
+                } else {
+                    group_state
+                };
 
                 let pushed_ancestor = if let Some(meta) = current_meta_opt {
                     ancestors.push(meta);
@@ -602,6 +641,7 @@ impl AppRuntime {
                     ctx,
                     stylesheets,
                     ancestors,
+                    child_group_state,
                 );
 
                 if pushed_ancestor {
@@ -642,6 +682,7 @@ impl AppRuntime {
                     ctx,
                     stylesheets,
                     ancestors,
+                    group_state,
                 );
 
                 LayoutNode::with_children(*style, child_nodes)
@@ -683,6 +724,7 @@ impl AppRuntime {
         LayoutNode::new(style)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_flattened_children_full(
         children: &[NodeBlueprint],
         parent_style: Option<&ComputedStyle>,
@@ -690,6 +732,7 @@ impl AppRuntime {
         ctx: &InteractionContext,
         stylesheets: &[std::sync::Arc<strata_style::StyleSheet>],
         ancestors: &mut Vec<CascadeElementMeta>,
+        group_state: (bool, bool, bool),
     ) -> Vec<LayoutNode> {
         if parent_path.len() >= 256 {
             return Vec::new();
@@ -722,6 +765,7 @@ impl AppRuntime {
                 ancestors,
                 &preceding_siblings,
                 is_last_elem,
+                group_state,
             );
             if !stylesheets.is_empty() {
                 if let NodeBlueprint::Element {
@@ -757,6 +801,9 @@ impl AppRuntime {
                                 is_active,
                                 is_disabled,
                                 is_dark: ctx.is_dark_mode,
+                                is_group_hovered: group_state.0,
+                                is_group_focused: group_state.1,
+                                is_group_active: group_state.2,
                             },
                         });
                     }
@@ -1187,6 +1234,7 @@ impl AppRuntime {
         ancestors: &[CascadeElementMeta],
         preceding_siblings: &[CascadeElementMeta],
         is_last_element_child: bool,
+        group_state: (bool, bool, bool),
     ) -> (Box<ComputedStyle>, Option<CascadeElementMeta>) {
         let is_hovered = ctx
             .hovered_path
@@ -1208,6 +1256,9 @@ impl AppRuntime {
             is_active,
             is_disabled,
             is_dark,
+            is_group_hovered: group_state.0,
+            is_group_focused: group_state.1,
+            is_group_active: group_state.2,
         };
         let mut style = Box::new(match parent_style {
             Some(p) => ComputedStyle::inherit_from(p),
