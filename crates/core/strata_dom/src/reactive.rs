@@ -1065,6 +1065,22 @@ pub fn with_component_key<R>(key: impl std::fmt::Display, f: impl FnOnce() -> R)
     f()
 }
 
+/// Evaluates `f` inside an implicit root component scope when no `#[component]` scope is
+/// active on the current thread.
+///
+/// Wrapping plain root view closures (e.g. `|| rsx! { <> <Child /> <Child /> </> }`) gives
+/// top-level unkeyed sibling components distinct ordinals (`#0`, `#1`, ...) instead of colliding
+/// on `#0`, and runs child unmount / `use_effect` cleanup when siblings are toggled off.
+pub fn with_root_component_scope<R>(f: impl FnOnce() -> R) -> R {
+    let has_active = HOOK_STORE.with(|store| !store.borrow().active_stack.is_empty());
+    if has_active {
+        f()
+    } else {
+        let _root_scope = ComponentScopeGuard::enter("__strata_root__");
+        f()
+    }
+}
+
 /// Clears all persisted component-scoped hook state and runs pending effect cleanups on this
 /// thread. Intended for test isolation or full application resets.
 pub fn reset_component_hooks() {
@@ -1334,6 +1350,40 @@ pub fn use_memo<T: Clone + PartialEq + 'static>(compute: impl FnMut() -> T + 'st
     use_hook_slot_or_init(|| Memo::new(compute))
 }
 
+/// React-style dependency-array memoization hook (`useMemo(() => compute(&deps), [deps])`).
+///
+/// Computes `compute(&deps)` on mount and recomputes only when `deps` changes (`PartialEq`)
+/// across component re-renders, returning a cached clone in between.
+pub fn use_memo_with_deps<D, T, F>(deps: D, compute: F) -> T
+where
+    D: PartialEq + 'static,
+    T: Clone + 'static,
+    F: FnOnce(&D) -> T,
+{
+    let mut deps_opt = Some(deps);
+    let mut compute_opt = Some(compute);
+
+    if let Some(cell) = use_hook_slot_cloned(|| {
+        let initial_deps = deps_opt.take().unwrap();
+        let initial_val = (compute_opt.take().unwrap())(&initial_deps);
+        Rc::new(RefCell::new((initial_deps, initial_val)))
+    }) {
+        if let (Some(new_deps), Some(run_fn)) = (deps_opt.take(), compute_opt.take()) {
+            let changed = cell.borrow().0 != new_deps;
+            if changed {
+                let next_val = run_fn(&new_deps);
+                let mut guard = cell.borrow_mut();
+                guard.0 = new_deps;
+                guard.1 = next_val;
+            }
+        }
+        return cell.borrow().1.clone();
+    }
+
+    let d = deps_opt.take().unwrap();
+    (compute_opt.take().unwrap())(&d)
+}
+
 /// Component-scoped reactive [`Effect`] that tracks read signals, runs cleanup before each
 /// re-execution, avoids duplicate registrations across re-renders, and automatically runs its
 /// cleanup closure when the owning component unmounts.
@@ -1396,10 +1446,26 @@ where
     }
 }
 
+struct ReducerSlot<S: Clone + 'static, A: 'static, R: 'static> {
+    state: Signal<S>,
+    reducer: Rc<RefCell<R>>,
+    dispatch: Rc<dyn Fn(A)>,
+}
+
+impl<S: Clone + 'static, A: 'static, R: 'static> Clone for ReducerSlot<S, A, R> {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            reducer: Rc::clone(&self.reducer),
+            dispatch: Rc::clone(&self.dispatch),
+        }
+    }
+}
+
 /// React-style `useReducer` hook returning `(ReadSignal<S>, Rc<dyn Fn(A)>)`.
 ///
-/// Persists state in a component hook slot and applies `reducer(&current_state, action)`
-/// whenever the returned dispatch function is invoked.
+/// Persists state, reducer closure, and `dispatch` handle in the component hook slot so
+/// `dispatch` preserves pointer identity (`Rc::ptr_eq`) across re-renders.
 pub fn use_reducer<S, A, R>(reducer: R, initial_state: S) -> (ReadSignal<S>, Rc<dyn Fn(A)>)
 where
     S: Clone + 'static,
@@ -1410,6 +1476,9 @@ where
 }
 
 /// React-style 3-argument `useReducer` hook with lazy state initialization (`init(initial_arg)`).
+///
+/// Preserves the `dispatch` `Rc` identity across component re-renders while refreshing the active
+/// reducer closure so inline reducers always see up-to-date prop captures.
 pub fn use_reducer_init<S, A, I, R, F>(
     reducer: R,
     initial_arg: I,
@@ -1421,15 +1490,35 @@ where
     R: FnMut(&S, A) -> S + 'static,
     F: FnOnce(I) -> S,
 {
-    let state_sig = use_hook_slot_or_init(|| Signal::new(init(initial_arg)));
-    let reducer_cell = Rc::new(RefCell::new(reducer));
-    let dispatch_sig = state_sig.clone();
-    let dispatch: Rc<dyn Fn(A)> = Rc::new(move |action: A| {
-        let current = dispatch_sig.untracked_get();
-        let next = (reducer_cell.borrow_mut())(&current, action);
-        dispatch_sig.set(next);
+    let mut reducer_opt = Some(reducer);
+    let mut init_opt = Some((initial_arg, init));
+
+    let slot = use_hook_slot_or_init(|| {
+        let (arg, init_fn) = init_opt.take().unwrap();
+        let state = Signal::new(init_fn(arg));
+        let reducer_cell = Rc::new(RefCell::new(reducer_opt.take().unwrap()));
+        let dispatch_sig = state.clone();
+        let dispatch_reducer = Rc::clone(&reducer_cell);
+        let dispatch: Rc<dyn Fn(A)> = Rc::new(move |action: A| {
+            let current = dispatch_sig.untracked_get();
+            let next = {
+                let mut r = dispatch_reducer.borrow_mut();
+                r(&current, action)
+            };
+            dispatch_sig.set(next);
+        });
+        ReducerSlot {
+            state,
+            reducer: reducer_cell,
+            dispatch,
+        }
     });
-    (state_sig.split().0, dispatch)
+
+    if let Some(latest_reducer) = reducer_opt.take() {
+        *slot.reducer.borrow_mut() = latest_reducer;
+    }
+
+    (slot.state.split().0, slot.dispatch)
 }
 
 /// Mutable, non-reactive reference container persisted across component re-renders (React `useRef`).

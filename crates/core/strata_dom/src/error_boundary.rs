@@ -74,28 +74,74 @@ impl ErrorBoundary {
         render: impl FnOnce() -> View,
         fallback: impl FnOnce(ErrorBoundaryInfo) -> View,
     ) -> View {
+        run_boundary(
+            None,
+            None,
+            render,
+            Some(fallback),
+            None::<fn(&str)>,
+        )
+    }
+}
+
+fn run_boundary<R, F, E>(
+    key: Option<String>,
+    reset_key: Option<String>,
+    render_fn: R,
+    fallback: Option<F>,
+    on_error: Option<E>,
+) -> View
+where
+    R: FnOnce() -> View,
+    F: FnOnce(ErrorBoundaryInfo) -> View,
+    E: FnOnce(&str),
+{
+    let eval = move || {
         let _scope = ComponentScopeGuard::enter("strata_dom::ErrorBoundary");
         let latched_error = use_signal::<Option<String>>(None);
+        let prev_reset_key = use_ref::<Option<String>>(reset_key.clone());
+
+        if *prev_reset_key.borrow() != reset_key {
+            prev_reset_key.set(reset_key);
+            if latched_error.untracked_get().is_some() {
+                latched_error.set(None);
+            }
+        }
+
         let reset_sig = latched_error.clone();
         let reset: Rc<dyn Fn()> = Rc::new(move || {
             reset_sig.set(None);
         });
 
-        if let Some(msg) = latched_error.get() {
-            return fallback(ErrorBoundaryInfo {
-                message: msg,
-                reset,
-            });
+        let render_fallback = |fb: Option<F>, message: String, reset: Rc<dyn Fn()>| {
+            let info = ErrorBoundaryInfo { message, reset };
+            match fb {
+                Some(f) => f(info),
+                None => default_fallback_view(&info),
+            }
+        };
+
+        if let Some(message) = latched_error.get() {
+            return render_fallback(fallback, message, reset);
         }
 
-        match catch_unwind(AssertUnwindSafe(render)) {
+        match catch_unwind(AssertUnwindSafe(render_fn)) {
             Ok(view) => view,
             Err(payload) => {
                 let message = panic_payload_to_string(payload);
+                if let Some(obs) = on_error {
+                    obs(&message);
+                }
                 latched_error.set(Some(message.clone()));
-                fallback(ErrorBoundaryInfo { message, reset })
+                render_fallback(fallback, message, reset)
             }
         }
+    };
+
+    if let Some(k) = key {
+        with_component_key(k, eval)
+    } else {
+        eval()
     }
 }
 
@@ -162,6 +208,10 @@ impl ErrorBoundaryBuilder {
     }
 
     /// Static children fallback when no `render` closure was provided.
+    ///
+    /// Note: Calling `children(vec![...])` in Rust evaluates child nodes eagerly before `build()`.
+    /// Prefer [`Self::render`] or `<ErrorBoundary><Child /></ErrorBoundary>` in `rsx!` (which
+    /// lowers children lazily via [`Self::build_with_render`]) so child render panics are caught.
     pub fn children(mut self, children: Vec<NodeBlueprint>) -> Self {
         self.children = Some(children);
         self
@@ -190,63 +240,53 @@ impl ErrorBoundaryBuilder {
         self
     }
 
+    /// Evaluates the boundary using a lazy fallback closure when no explicit [`Self::render`]
+    /// closure was supplied (targeted automatically by `rsx!` for `<ErrorBoundary><Child /></ErrorBoundary>`).
+    pub fn build_with_render<R: FnOnce() -> View>(self, lazy_render: R) -> View {
+        let Self {
+            render,
+            fallback,
+            on_error,
+            reset_key,
+            key,
+            children,
+        } = self;
+
+        run_boundary(
+            key,
+            reset_key,
+            move || match render {
+                Some(r) => r(),
+                None => match children {
+                    Some(ch) if !ch.is_empty() => View::new(NodeBlueprint::fragment(ch)),
+                    _ => lazy_render(),
+                },
+            },
+            fallback,
+            on_error,
+        )
+    }
+
     /// Evaluates the boundary and returns either the child [`View`] or the fallback [`View`].
     pub fn build(self) -> View {
-        let key = self.key;
-        let run = move || {
-            let _scope = ComponentScopeGuard::enter("strata_dom::ErrorBoundary");
-            let latched_error = use_signal::<Option<String>>(None);
-            let prev_reset_key = use_ref::<Option<String>>(self.reset_key.clone());
+        let Self {
+            render,
+            fallback,
+            on_error,
+            reset_key,
+            key,
+            children,
+        } = self;
 
-            if *prev_reset_key.borrow() != self.reset_key {
-                prev_reset_key.set(self.reset_key.clone());
-                if latched_error.untracked_get().is_some() {
-                    latched_error.set(None);
-                }
-            }
-
-            let reset_sig = latched_error.clone();
-            let reset: Rc<dyn Fn()> = Rc::new(move || {
-                reset_sig.set(None);
-            });
-
-            if let Some(message) = latched_error.get() {
-                let info = ErrorBoundaryInfo { message, reset };
-                return match self.fallback {
-                    Some(fb) => fb(info),
-                    None => default_fallback_view(&info),
-                };
-            }
-
-            let render_fn: RenderFn = match self.render {
-                Some(f) => f,
-                None => {
-                    let children = self.children.unwrap_or_default();
-                    return View::new(NodeBlueprint::fragment(children));
-                }
-            };
-
-            match catch_unwind(AssertUnwindSafe(render_fn)) {
-                Ok(view) => view,
-                Err(payload) => {
-                    let message = panic_payload_to_string(payload);
-                    if let Some(on_error) = self.on_error {
-                        on_error(&message);
-                    }
-                    latched_error.set(Some(message.clone()));
-                    let info = ErrorBoundaryInfo { message, reset };
-                    match self.fallback {
-                        Some(fb) => fb(info),
-                        None => default_fallback_view(&info),
-                    }
-                }
-            }
-        };
-
-        if let Some(k) = key {
-            with_component_key(k, run)
-        } else {
-            run()
-        }
+        run_boundary(
+            key,
+            reset_key,
+            move || match render {
+                Some(r) => r(),
+                None => View::new(NodeBlueprint::fragment(children.unwrap_or_default())),
+            },
+            fallback,
+            on_error,
+        )
     }
 }
