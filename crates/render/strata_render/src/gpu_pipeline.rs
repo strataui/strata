@@ -387,16 +387,41 @@ impl GpuBatch {
                 DrawCommand::DrawCanvas2D { bounds, commands } => {
                     if let Some(base_clip) = transform_rect_fn(*bounds).intersect(current_clip) {
                         let mut active_clip = Some(base_clip);
-                        let mut clip_stack: Vec<Option<Rect>> = Vec::new();
+                        let mut line_dash: Vec<f32> = Vec::new();
+                        let mut dash_offset: f32 = 0.0;
+                        let mut state_stack: Vec<(Option<Rect>, Vec<f32>, f32)> = Vec::new();
                         for ccmd in commands {
                             match ccmd {
                                 crate::canvas2d::CanvasCommand::Save => {
-                                    clip_stack.push(active_clip);
+                                    state_stack.push((
+                                        active_clip,
+                                        line_dash.clone(),
+                                        dash_offset,
+                                    ));
                                 }
                                 crate::canvas2d::CanvasCommand::Restore => {
-                                    if let Some(prev) = clip_stack.pop() {
-                                        active_clip = prev;
+                                    if let Some((prev_clip, prev_dash, prev_offset)) =
+                                        state_stack.pop()
+                                    {
+                                        active_clip = prev_clip;
+                                        line_dash = prev_dash;
+                                        dash_offset = prev_offset;
                                     }
+                                }
+                                crate::canvas2d::CanvasCommand::SetLineDash {
+                                    segments,
+                                    offset,
+                                } => {
+                                    line_dash = segments
+                                        .iter()
+                                        .copied()
+                                        .filter(|d| d.is_finite() && *d >= 0.0)
+                                        .collect();
+                                    if line_dash.len() % 2 == 1 {
+                                        let dup = line_dash.clone();
+                                        line_dash.extend(dup);
+                                    }
+                                    dash_offset = if offset.is_finite() { *offset } else { 0.0 };
                                 }
                                 crate::canvas2d::CanvasCommand::ClipPath { verbs } => {
                                     if let Some(vbbox) =
@@ -436,14 +461,91 @@ impl GpuBatch {
                                             rb.width,
                                             rb.height,
                                         );
-                                        batch.push(GpuQuadInstance::from_rounded_rect(
-                                            transform_rect_fn(r),
-                                            Color::TRANSPARENT,
-                                            BorderRadius::default(),
-                                            EdgeInsets::all(*line_width),
-                                            Some(*color),
-                                            canvas_clip,
-                                        ));
+                                        let period: f32 = line_dash.iter().copied().sum();
+                                        if line_dash.is_empty() || period <= 1e-4 {
+                                            batch.push(GpuQuadInstance::from_rounded_rect(
+                                                transform_rect_fn(r),
+                                                Color::TRANSPARENT,
+                                                BorderRadius::default(),
+                                                EdgeInsets::all(*line_width),
+                                                Some(*color),
+                                                canvas_clip,
+                                            ));
+                                        } else if *line_width > 0.0 && r.width > 0.0 && r.height > 0.0
+                                        {
+                                            let lw = *line_width;
+                                            let half = lw * 0.5;
+                                            let mut phase = dash_offset.rem_euclid(period);
+                                            let mut dash_idx = 0usize;
+                                            while dash_idx < line_dash.len()
+                                                && phase >= line_dash[dash_idx]
+                                            {
+                                                phase -= line_dash[dash_idx];
+                                                dash_idx = (dash_idx + 1) % line_dash.len();
+                                            }
+                                            let mut rem = (line_dash[dash_idx] - phase).max(0.0);
+
+                                            // Edges clockwise matching Cairo/framebuffer: Top, Right, Bottom, Left
+                                            let edges = [
+                                                (0u8, r.width),
+                                                (1u8, r.height),
+                                                (2u8, r.width),
+                                                (3u8, r.height),
+                                            ];
+                                            for (edge_id, edge_len) in edges {
+                                                if edge_len <= 1e-4 {
+                                                    continue;
+                                                }
+                                                let mut cursor = 0.0_f32;
+                                                while cursor < edge_len {
+                                                    if rem <= 1e-4 {
+                                                        dash_idx = (dash_idx + 1) % line_dash.len();
+                                                        rem = line_dash[dash_idx];
+                                                        if rem <= 1e-4 {
+                                                            break;
+                                                        }
+                                                    }
+                                                    let step = rem.min(edge_len - cursor);
+                                                    if dash_idx.is_multiple_of(2) && step > 1e-4 {
+                                                        let s0 = cursor;
+                                                        let s1 = cursor + step;
+                                                        let seg_rect = match edge_id {
+                                                            0 => Rect::new(
+                                                                r.x + s0,
+                                                                r.y - half,
+                                                                s1 - s0,
+                                                                lw,
+                                                            ),
+                                                            1 => Rect::new(
+                                                                r.x + r.width - half,
+                                                                r.y + s0,
+                                                                lw,
+                                                                s1 - s0,
+                                                            ),
+                                                            2 => Rect::new(
+                                                                r.x + r.width - s1,
+                                                                r.y + r.height - half,
+                                                                s1 - s0,
+                                                                lw,
+                                                            ),
+                                                            _ => Rect::new(
+                                                                r.x - half,
+                                                                r.y + r.height - s1,
+                                                                lw,
+                                                                s1 - s0,
+                                                            ),
+                                                        };
+                                                        batch.push(GpuQuadInstance::from_rect(
+                                                            transform_rect_fn(seg_rect),
+                                                            *color,
+                                                            canvas_clip,
+                                                        ));
+                                                    }
+                                                    cursor += step;
+                                                    rem -= step;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                                 _ => {}
@@ -1415,7 +1517,9 @@ impl GpuPathBatch {
                                     );
                                 }
                             }
-                            crate::canvas2d::CanvasCommand::ClearRect { .. }
+                            crate::canvas2d::CanvasCommand::SetLineCap(_)
+                            | crate::canvas2d::CanvasCommand::SetLineJoin(_)
+                            | crate::canvas2d::CanvasCommand::ClearRect { .. }
                             | crate::canvas2d::CanvasCommand::FillText { .. }
                             | crate::canvas2d::CanvasCommand::StrokeText { .. } => {}
                         }
@@ -2033,5 +2137,34 @@ mod tests {
             damaged_count < seg_count,
             "Damaged compilation should skip path outside damage rect"
         );
+    }
+
+    #[test]
+    fn test_gpu_batch_dashed_stroke_rect() {
+        let mut ctx = crate::canvas2d::Canvas2DContext::new(200.0, 200.0);
+        ctx.set_stroke_style(Color::rgb(255, 255, 255));
+        ctx.set_line_width(2.0);
+        ctx.save();
+        ctx.set_line_dash(&[10.0, 10.0]);
+        // 100x40 perimeter = 280 -> should emit multiple dash quads
+        ctx.stroke_rect(10.0, 10.0, 100.0, 40.0);
+        ctx.restore();
+        // After restore, dash is cleared -> single solid bordered StrokeRect quad
+        ctx.stroke_rect(10.0, 70.0, 100.0, 40.0);
+
+        let mut dl = DisplayList::new();
+        dl.push(DrawCommand::DrawCanvas2D {
+            bounds: Rect::new(0.0, 0.0, 200.0, 200.0),
+            commands: ctx.commands().to_vec(),
+        });
+
+        let batch = GpuBatch::from_display_list(&dl, 200.0, 200.0);
+        // Perimeter 280 with 10 on / 10 off produces 14 dash instances, plus 1 solid instance after restore = 15
+        assert_eq!(batch.instances.len(), 15);
+        // Solid last instance carries non-zero border_width
+        let last = batch.instances.last().unwrap();
+        assert!(last.border_width[0] > 1.5);
+        // Dash instances are solid fill rects with border_width == 0
+        assert_eq!(batch.instances[0].border_width, [0.0; 4]);
     }
 }

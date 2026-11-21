@@ -2138,6 +2138,8 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                     cr.clip();
                     cr.translate(bounds.x as f64, bounds.y as f64);
                     cr.set_dash(&[], 0.0);
+                    cr.set_line_cap(cairo::LineCap::Butt);
+                    cr.set_line_join(cairo::LineJoin::Miter);
                     let mut save_depth = 0usize;
 
                     let emit_canvas_verbs =
@@ -2256,6 +2258,32 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                                         segments.iter().map(|&d| d as f64).collect();
                                     cr.set_dash(&dashes, *offset as f64);
                                 }
+                            }
+                            strata_render::canvas2d::CanvasCommand::SetLineCap(cap) => {
+                                cr.set_line_cap(match cap {
+                                    strata_render::canvas2d::CanvasLineCap::Butt => {
+                                        cairo::LineCap::Butt
+                                    }
+                                    strata_render::canvas2d::CanvasLineCap::Round => {
+                                        cairo::LineCap::Round
+                                    }
+                                    strata_render::canvas2d::CanvasLineCap::Square => {
+                                        cairo::LineCap::Square
+                                    }
+                                });
+                            }
+                            strata_render::canvas2d::CanvasCommand::SetLineJoin(join) => {
+                                cr.set_line_join(match join {
+                                    strata_render::canvas2d::CanvasLineJoin::Miter => {
+                                        cairo::LineJoin::Miter
+                                    }
+                                    strata_render::canvas2d::CanvasLineJoin::Round => {
+                                        cairo::LineJoin::Round
+                                    }
+                                    strata_render::canvas2d::CanvasLineJoin::Bevel => {
+                                        cairo::LineJoin::Bevel
+                                    }
+                                });
                             }
                             strata_render::canvas2d::CanvasCommand::ClipPath { verbs } => {
                                 emit_canvas_verbs(cr, verbs);

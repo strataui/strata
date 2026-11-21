@@ -7,7 +7,8 @@ use std::sync::Arc;
 use strata_dom::{Attribute, ClassList, NodeBlueprint, Tag, View};
 use strata_macro::component;
 pub use strata_render::canvas2d::{
-    Canvas2DContext, CanvasCommand, CanvasPathVerb, CanvasTextAlign, CanvasTextBaseline,
+    Canvas2DContext, CanvasCommand, CanvasLineCap, CanvasLineJoin, CanvasPathVerb, CanvasTextAlign,
+    CanvasTextBaseline, CanvasTextMetrics, IntoRoundRectRadii,
 };
 
 /// Declarative Immediate-Mode 2D Vector Canvas Component.
