@@ -289,4 +289,102 @@ fn gtk_launch_with_frame_runs_10ms_interval_and_reinvokes_root() {
         "idle GTK window should wake only for the scheduled close timeout, got {} ticks",
         idle_ticks.get()
     );
+
+    // Phase 3: Programmatic Signal::set inside on_frame returning FrameOutcome::Unchanged
+    // and standalone mark_dirty() must wake immediately and rebuild root via AnimationTick.
+    let _ = strata_dom::reactive::take_dirty_signals();
+    let frame_sig = Signal::new(0usize);
+    let sig_root_calls = Rc::new(Cell::new(0usize));
+    let step = Rc::new(Cell::new(0usize));
+
+    let phase3_root = {
+        let sig = frame_sig.clone();
+        let calls = sig_root_calls.clone();
+        move || {
+            calls.set(calls.get() + 1);
+            counter_view(sig.get())
+        }
+    };
+    let phase3_config = strata_platform::WindowConfig {
+        title: "signal_wakeup_gtk_test".to_string(),
+        width: 240,
+        height: 160,
+        ..Default::default()
+    };
+    let phase3_res = launch_gtk_with_frame(
+        phase3_root,
+        phase3_config,
+        |_ev, _rt| false,
+        Some(Duration::from_millis(20)),
+        move |_info, _rt| {
+            let n = step.get();
+            step.set(n + 1);
+            match n {
+                0 => frame_sig.set(7),
+                1 => strata_dom::reactive::mark_dirty(),
+                _ => strata_platform::gtk_close(),
+            }
+            FrameOutcome::Unchanged
+        },
+    );
+    assert!(phase3_res.is_ok(), "GTK signal wakeup test failed: {:?}", phase3_res);
+    assert!(
+        sig_root_calls.get() >= 3,
+        "initial build + Signal::set + mark_dirty with FrameOutcome::Unchanged must trigger rebuilds, got {} root calls",
+        sig_root_calls.get()
+    );
+}
+
+#[test]
+fn native_animation_tick_rebuilds_on_programmatic_signal_and_mark_dirty() {
+    let _ = strata_dom::reactive::take_dirty_signals();
+    let sig = Signal::new(1i32);
+    let mut rt = AppRuntime::from_root(
+        || counter_view(sig.get() as usize),
+        200.0,
+        100.0,
+        1.0,
+    );
+    let _ = strata_dom::reactive::take_dirty_signals();
+
+    let mut compositor = strata_render::SwapchainCompositor::new(200, 100, 1.0);
+    let mut presenter = strata_render::SoftwareSurfacePresenter::new(
+        200,
+        100,
+        strata_render::SwapchainFormat::Bgra8Unorm,
+    );
+    let mut eh = |_: &strata_platform::PlatformEvent, _: &mut AppRuntime| false;
+
+    // Idle AnimationTick must NOT request rebuild
+    let (reb0, _, _) = strata::runtime::platforms::dispatch_native_platform_event(
+        &strata_platform::PlatformEvent::AnimationTick,
+        &mut rt,
+        &mut compositor,
+        &mut presenter,
+        &mut eh,
+    );
+    assert!(!reb0);
+
+    // Mutate signal outside any user input -> AnimationTick must request rebuild
+    sig.set(5);
+    let (reb1, red1, _) = strata::runtime::platforms::dispatch_native_platform_event(
+        &strata_platform::PlatformEvent::AnimationTick,
+        &mut rt,
+        &mut compositor,
+        &mut presenter,
+        &mut eh,
+    );
+    assert!(reb1 && red1);
+
+    let _ = strata_dom::reactive::take_dirty_signals();
+    strata_dom::reactive::mark_dirty();
+    let (reb2, red2, _) = strata::runtime::platforms::dispatch_native_platform_event(
+        &strata_platform::PlatformEvent::AnimationTick,
+        &mut rt,
+        &mut compositor,
+        &mut presenter,
+        &mut eh,
+    );
+    assert!(reb2 && red2);
+    let _ = strata_dom::reactive::take_dirty_signals();
 }

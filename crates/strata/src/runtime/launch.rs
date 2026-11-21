@@ -236,6 +236,9 @@ pub(crate) fn compute_next_wakeup(
     if let Some(d) = rt.next_hover_tooltip_due_in() {
         consider(d);
     }
+    if strata_dom::reactive::has_dirty_signals() {
+        consider(std::time::Duration::ZERO);
+    }
     let uncapped = uncapped_present || rt.has_uncapped_canvas3d();
     if rt.has_active_animations()
         || rt.active_smooth_scroll.is_some()
@@ -472,7 +475,6 @@ where
     );
     initial_runtime.apply_window_config(&config);
     let runtime = std::rc::Rc::new(std::cell::RefCell::new(initial_runtime));
-    let _ = strata_dom::reactive::take_dirty_signals();
 
     let transparent_bg = config.transparent
         || config.decoration == strata_platform::WindowDecoration::FramelessTransparent;
@@ -597,8 +599,12 @@ where
             if crate::mcp_bridge::drain_and_execute_mcp_requests(&mut rt) {
                 needs_rebuild = true;
             }
-            if invoke_user_event_hook(event, &mut rt, &mut *event_handler_event.borrow_mut()) {
+            let hook_signals_before = strata_dom::reactive::has_dirty_signals();
+            if invoke_user_event_hook(event, &mut rt, &mut *event_handler_event.borrow_mut())
+                || (!hook_signals_before && strata_dom::reactive::has_dirty_signals())
+            {
                 needs_rebuild = true;
+                needs_redraw = true;
             }
             if let strata_platform::PlatformEvent::WindowResized { width, height } = event {
                 let wf = (*width).max(1) as f32;
@@ -706,6 +712,10 @@ where
                             needs_redraw = true;
                         }
                     }
+                }
+                if strata_dom::reactive::has_dirty_signals() {
+                    needs_rebuild = true;
+                    needs_redraw = true;
                 }
             }
             if let strata_platform::PlatformEvent::DoubleClick { button, x, y } = event {
@@ -956,6 +966,7 @@ where
                 return (false, false);
             }
             if runtime_event.borrow_mut().sync_dynamic_text() {
+                let _ = strata_dom::reactive::take_dirty_signals();
                 if !matches!(event, strata_platform::PlatformEvent::CursorLeft)
                     && (matches!(
                         event,
@@ -1132,4 +1143,55 @@ where
 
     let _ = crate::mcp_bridge::start_mcp_dev_listener(None);
     strata_platform::launch_gtk_window_with_scheduler(&config, on_draw, on_event, next_wakeup)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_next_wakeup;
+    use std::time::Duration;
+    use strata_dom::{mark_dirty, reactive::take_dirty_signals, reset_component_hooks, Signal};
+    use strata_macro::rsx;
+
+    #[test]
+    fn compute_next_wakeup_wakes_immediately_on_dirty_signals_and_mark_dirty() {
+        reset_component_hooks();
+        let _ = take_dirty_signals();
+
+        let sig = Signal::new(0i32);
+        let rt = crate::AppRuntime::from_root(
+            || {
+                let v = sig.get();
+                rsx! { <div>{format!("{v}")}</div> }
+            },
+            200.0,
+            100.0,
+            1.0,
+        );
+
+        let _ = take_dirty_signals();
+        assert_eq!(
+            compute_next_wakeup(&rt, None, false),
+            None,
+            "idle runtime without dirty signals or timers should not schedule wakeup"
+        );
+
+        // Programmatic signal mutation must request an immediate wakeup even with a future frame deadline.
+        sig.set(42);
+        assert_eq!(
+            compute_next_wakeup(&rt, Some(Duration::from_secs(5)), false),
+            Some(Duration::ZERO),
+            "Signal::set must override future idle/frame deadlines with Duration::ZERO"
+        );
+
+        assert!(take_dirty_signals());
+        assert_eq!(compute_next_wakeup(&rt, None, false), None);
+
+        // Explicit mark_dirty() must also request immediate wakeup.
+        mark_dirty();
+        assert_eq!(
+            compute_next_wakeup(&rt, None, false),
+            Some(Duration::ZERO)
+        );
+        let _ = take_dirty_signals();
+    }
 }

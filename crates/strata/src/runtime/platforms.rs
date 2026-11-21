@@ -137,6 +137,10 @@ where
             if scroll_changed || anim_changed || caret_changed || tooltip_changed || mcp_changed {
                 needs_redraw = true;
             }
+            if strata_dom::reactive::has_dirty_signals() {
+                needs_rebuild = true;
+                needs_redraw = true;
+            }
         }
         strata_platform::PlatformEvent::DoubleClick { button, x, y } => {
             let _btn_idx = button.to_button_index();
@@ -495,7 +499,7 @@ where
         let scroll_changed = runtime.poll_smooth_scroll();
         let caret_changed = runtime.poll_caret_blink();
         let timers_fired = strata_js::web::tick_timers() > 0;
-        if timers_fired {
+        if timers_fired || strata_dom::reactive::has_dirty_signals() {
             needs_rebuild = true;
             needs_redraw = true;
         }
@@ -505,6 +509,7 @@ where
 
         if needs_rebuild {
             if runtime.sync_dynamic_text() {
+                let _ = strata_dom::reactive::take_dirty_signals();
                 runtime.mark_paint_dirty();
                 let _ = runtime.render_frame(&mut compositor, &mut presenter, false);
                 let _ = window.present_surface(
