@@ -20,6 +20,13 @@ pub fn drain_edit_commands_queue() -> Vec<EditCommand> {
 impl AppRuntime {
     /// Applies one editing command to the focused text input. Returns true when something changed.
     pub fn apply_edit_command(&mut self, cmd: EditCommand) -> bool {
+        let is_password = self
+            .active_focus
+            .as_ref()
+            .is_some_and(|a| self.active_input_is_password(a));
+        if is_password && matches!(cmd, EditCommand::Copy | EditCommand::Cut) {
+            return false;
+        }
         let Some(active) = self.active_focus.as_mut() else {
             return false;
         };

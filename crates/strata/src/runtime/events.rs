@@ -95,6 +95,16 @@ impl AppRuntime {
                 } else {
                     target.current_value.clone()
                 };
+                let is_password = self.input_is_password(
+                    target.input_index,
+                    target.input_id.as_deref(),
+                    target.entity_id,
+                );
+                let measure_val = if is_password {
+                    Self::mask_password_text(&text_val)
+                } else {
+                    text_val
+                };
                 let content_box_width = target.content_box_width;
                 let rel_x = if px < target.content_box_x {
                     0.0
@@ -105,7 +115,7 @@ impl AppRuntime {
                     px - target.content_box_x
                 };
                 let char_idx = Self::calculate_exact_char_index_at_offset(
-                    &text_val,
+                    &measure_val,
                     rel_x,
                     target.font_size,
                     target.line_height,
@@ -148,7 +158,11 @@ impl AppRuntime {
                             active.state.update_selection_drag(char_idx);
                             self.drag_selection_active = true;
                         } else if click_count == 2 {
-                            active.state.select_word_at_index(char_idx);
+                            if is_password {
+                                active.state.select_all();
+                            } else {
+                                active.state.select_word_at_index(char_idx);
+                            }
                             self.drag_selection_active = false;
                         } else if click_count == 3 {
                             active.state.select_line_at_index(char_idx);
@@ -183,7 +197,11 @@ impl AppRuntime {
                 }
 
                 if click_count == 2 {
-                    state.select_word_at_index(char_idx);
+                    if is_password {
+                        state.select_all();
+                    } else {
+                        state.select_word_at_index(char_idx);
+                    }
                     self.drag_selection_active = false;
                 } else if click_count == 3 {
                     state.select_line_at_index(char_idx);
@@ -345,6 +363,10 @@ impl AppRuntime {
     pub fn dispatch_pointer_move_action(&mut self, px: f32, py: f32) -> PointerMoveAction {
         let mut selection_dragged = false;
         if self.drag_selection_active {
+            let is_password = self
+                .active_focus
+                .as_ref()
+                .is_some_and(|a| self.active_input_is_password(a));
             if let Some(ref mut active) = self.active_focus {
                 let mut current_idx = 0;
                 let target_idx = active.input_index;
@@ -368,8 +390,14 @@ impl AppRuntime {
                 if let Some(layout) = layout_opt {
                     let rel_x = (px - layout.geometry.content_box.x).max(0.0);
                     let is_mono = strata_layout::is_monospace_family(layout.style.font_family);
+                    let raw_text = active.state.text.get();
+                    let measure_text = if is_password {
+                        Self::mask_password_text(&raw_text)
+                    } else {
+                        raw_text
+                    };
                     let char_idx = Self::calculate_exact_char_index_at_offset(
-                        &active.state.text.get(),
+                        &measure_text,
                         rel_x,
                         layout.style.font_size,
                         layout.style.line_height,

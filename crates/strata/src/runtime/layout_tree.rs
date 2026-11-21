@@ -1708,6 +1708,32 @@ impl AppRuntime {
         Some(LayoutNode::with_svg_items(style.clone(), svg_items).with_entity_id(entity_id))
     }
 
+    /// Standard bullet glyph (`U+2022`) rendered in place of characters for `<input type="password">`.
+    pub(crate) const PASSWORD_MASK_CHAR: char = '\u{2022}';
+
+    /// Returns `true` when an element's attributes include `type="password"` (case-insensitive).
+    pub(crate) fn is_password_input_attrs(attributes: &[strata_dom::Attribute]) -> bool {
+        attributes.iter().any(|attr| {
+            matches!(
+                attr,
+                strata_dom::Attribute::Property { key, value }
+                    if key.eq_ignore_ascii_case("type")
+                        && value.trim().eq_ignore_ascii_case("password")
+            )
+        })
+    }
+
+    /// Replaces each Unicode scalar value in `text` with [`Self::PASSWORD_MASK_CHAR`] (`•`),
+    /// preserving exact 1-to-1 character indexing with `TextInputState`.
+    pub(crate) fn mask_password_text(text: &str) -> String {
+        let count = text.chars().count();
+        let mut masked = String::with_capacity(count * Self::PASSWORD_MASK_CHAR.len_utf8());
+        for _ in 0..count {
+            masked.push(Self::PASSWORD_MASK_CHAR);
+        }
+        masked
+    }
+
     #[inline(never)]
     fn build_input_leaf_node(
         attributes: &[strata_dom::Attribute],
@@ -1717,6 +1743,7 @@ impl AppRuntime {
         if style.cursor == strata_style::types::Cursor::Default {
             style.cursor = strata_style::types::Cursor::Text;
         }
+        let is_password = Self::is_password_input_attrs(attributes);
         let mut value_text = None;
         let mut placeholder_text = None;
         for attr in attributes {
@@ -1739,14 +1766,19 @@ impl AppRuntime {
             style.height = Dimension::Px(text_h + style.padding.top + style.padding.bottom);
         }
         if let Some(val) = value_text {
-            let approx_width = (val.len() as f32 * char_w).max(40.0);
+            let display_val = if is_password {
+                Self::mask_password_text(&val)
+            } else {
+                val
+            };
+            let approx_width = (display_val.chars().count() as f32 * char_w).max(40.0);
             if style.width == Dimension::Auto && style.flex_grow <= 0.0 {
                 style.width =
                     Dimension::Px(approx_width + style.padding.left + style.padding.right);
             }
-            LayoutNode::with_text(style, val).with_entity_id(entity_id)
+            LayoutNode::with_text(style, display_val).with_entity_id(entity_id)
         } else if let Some(ph) = placeholder_text {
-            let approx_width = (ph.len() as f32 * char_w).max(40.0);
+            let approx_width = (ph.chars().count() as f32 * char_w).max(40.0);
             if style.width == Dimension::Auto && style.flex_grow <= 0.0 {
                 style.width =
                     Dimension::Px(approx_width + style.padding.left + style.padding.right);

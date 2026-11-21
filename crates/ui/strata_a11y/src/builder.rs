@@ -164,6 +164,7 @@ impl A11yTreeBuilder {
                 let mut step_val: Option<f64> = None;
                 let mut is_tabindex_focusable = false;
 
+                let mut is_password_input = false;
                 for attr in attributes {
                     if let Attribute::Property { key, value } = attr {
                         match key.as_str() {
@@ -193,9 +194,23 @@ impl A11yTreeBuilder {
                                     }
                                 }
                             }
+                            k if k.eq_ignore_ascii_case("type") => {
+                                is_password_input = value.trim().eq_ignore_ascii_case("password");
+                            }
                             _ => {}
                         }
                     }
+                }
+
+                if matches!(tag, Tag::Input) && is_password_input {
+                    val_str = val_str.map(|v| {
+                        let count = v.chars().count();
+                        let mut masked = String::with_capacity(count * '\u{2022}'.len_utf8());
+                        for _ in 0..count {
+                            masked.push('\u{2022}');
+                        }
+                        masked
+                    });
                 }
 
                 // 2. Resolve Role

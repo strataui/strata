@@ -25,6 +25,41 @@ impl AppRuntime {
         }
     }
 
+    /// Returns `true` when the `<input>` identified by `(input_index, input_id, entity_id)`
+    /// currently carries `type="password"` in `self.root_blueprint`.
+    pub(crate) fn input_is_password(
+        &self,
+        input_index: usize,
+        input_id: Option<&str>,
+        entity_id: Option<strata_primitives::EntityId>,
+    ) -> bool {
+        let mut bp_counter = 0;
+        let bp = entity_id
+            .and_then(|eid| self.root_blueprint.find_by_entity_id(eid))
+            .or_else(|| {
+                Self::find_input_blueprint(
+                    &self.root_blueprint,
+                    input_index,
+                    input_id,
+                    &mut bp_counter,
+                )
+            });
+        matches!(
+            bp,
+            Some(NodeBlueprint::Element { tag: Tag::Input, attributes, .. })
+                if Self::is_password_input_attrs(attributes)
+        )
+    }
+
+    /// Returns `true` when `active` currently points to an `<input type="password">`.
+    pub(crate) fn active_input_is_password(&self, active: &ActiveInput) -> bool {
+        self.input_is_password(
+            active.input_index,
+            active.input_id.as_deref(),
+            active.entity_id,
+        )
+    }
+
     /// Synchronizes the active focused text input's live buffer and styling into the layout tree.
     pub fn sync_active_input_layout(&mut self) {
         let Some(ref active) = self.active_focus else {
@@ -33,6 +68,8 @@ impl AppRuntime {
         let target_idx = active.input_index;
         let target_id = active.input_id.clone();
         let target_entity_id = active.entity_id;
+        let is_password =
+            self.input_is_password(target_idx, target_id.as_deref(), target_entity_id);
         let mut counter = 0;
         let text_val = active.state.text.get();
 
@@ -55,12 +92,17 @@ impl AppRuntime {
         if let Some(layout) = layout_match {
             let is_mono = strata_layout::is_monospace_family(layout.style.font_family);
             if !text_val.is_empty() {
-                layout.text = Some(text_val.clone());
+                let display_val = if is_password {
+                    Self::mask_password_text(&text_val)
+                } else {
+                    text_val
+                };
+                layout.text = Some(display_val.clone());
                 if let Some(c) = layout.style.caret_color {
                     layout.style.color = c;
                 }
                 let (tw, th) = strata_layout::text::measure_text_bounds_with_family(
-                    &text_val,
+                    &display_val,
                     layout.style.font_size,
                     layout.style.line_height,
                     None,
@@ -166,6 +208,7 @@ impl AppRuntime {
         let mut current_idx = 0;
         let target_idx = active.input_index;
         let target_id = active.input_id.as_deref();
+        let is_password = self.input_is_password(target_idx, target_id, active.entity_id);
 
         let layout_by_entity = if let Some(eid) = active.entity_id {
             self.layout_root.find_by_entity_id(eid)
@@ -198,7 +241,12 @@ impl AppRuntime {
         if caret_color.a == 0 {
             caret_color = strata_style::types::Color::new(236, 233, 225, 255);
         }
-        let text = active.state.text.get();
+        let raw_text = active.state.text.get();
+        let text = if is_password {
+            Self::mask_password_text(&raw_text)
+        } else {
+            raw_text
+        };
         let total_chars = text.chars().count();
         let cursor_idx = active.state.cursor_index.get().min(total_chars);
 
@@ -305,6 +353,7 @@ impl AppRuntime {
         let mut current_idx = 0;
         let target_idx = active.input_index;
         let target_id = active.input_id.as_deref();
+        let is_password = self.input_is_password(target_idx, target_id, active.entity_id);
 
         let layout_by_entity = if let Some(eid) = active.entity_id {
             self.layout_root.find_by_entity_id(eid)
@@ -330,7 +379,12 @@ impl AppRuntime {
         let line_height = layout.style.line_height;
         let is_mono = strata_layout::is_monospace_family(layout.style.font_family);
         let font_family = layout.style.font_family;
-        let text = active.state.text.get();
+        let raw_text = active.state.text.get();
+        let text = if is_password {
+            Self::mask_password_text(&raw_text)
+        } else {
+            raw_text
+        };
         let total_chars = text.chars().count();
         let cursor_idx = active.state.cursor_index.get().min(total_chars);
 
@@ -388,10 +442,14 @@ impl AppRuntime {
                 rect.height.round() as i32,
             );
             if let Some(ref active) = self.active_focus {
-                window.set_ime_surrounding_text(
-                    &active.state.text.get(),
-                    active.state.cursor_index.get() as i32,
-                );
+                if self.active_input_is_password(active) {
+                    window.set_ime_surrounding_text("", 0);
+                } else {
+                    window.set_ime_surrounding_text(
+                        &active.state.text.get(),
+                        active.state.cursor_index.get() as i32,
+                    );
+                }
             }
         } else {
             window.reset_ime();
@@ -410,10 +468,14 @@ impl AppRuntime {
                     rect.height.round() as i32,
                 );
                 if let Some(ref active) = self.active_focus {
-                    strata_platform::gtk_set_ime_surrounding_text(
-                        &active.state.text.get(),
-                        active.state.cursor_index.get() as i32,
-                    );
+                    if self.active_input_is_password(active) {
+                        strata_platform::gtk_set_ime_surrounding_text("", 0);
+                    } else {
+                        strata_platform::gtk_set_ime_surrounding_text(
+                            &active.state.text.get(),
+                            active.state.cursor_index.get() as i32,
+                        );
+                    }
                 }
             } else {
                 strata_platform::gtk_reset_ime();
