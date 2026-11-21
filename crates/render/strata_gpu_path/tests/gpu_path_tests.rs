@@ -372,3 +372,55 @@ fn test_standard_ascii_analytical_glyph_cache() {
         .expect("SDF must evaluate");
     assert!(sdf_o.is_finite());
 }
+
+#[test]
+fn test_stroke_cap_join_flags_miter_and_dash_offset() {
+    use strata_gpu_path::{
+        dash_quadratics_with_offset, expand_stroke_quadratics, stroke_style_flags, LineCap,
+        LineJoin, Point2D, QuadraticBezier, StrokeOptions, FLAG_CAP_ROUND, FLAG_CAP_SQUARE,
+        FLAG_END_OPEN, FLAG_JOIN_BEVEL, FLAG_JOIN_ROUND, FLAG_START_OPEN, FLAG_STROKE,
+        WGSL_ANALYTICAL_PATH_RASTER_SHADER,
+    };
+
+    assert!(WGSL_ANALYTICAL_PATH_RASTER_SHADER.contains("sd_triangle"));
+
+    let f1 = stroke_style_flags(LineCap::Round, LineJoin::Bevel, false, true, true);
+    assert_eq!(
+        f1,
+        FLAG_STROKE | FLAG_CAP_ROUND | FLAG_JOIN_BEVEL | FLAG_START_OPEN | FLAG_END_OPEN
+    );
+    let f2 = stroke_style_flags(LineCap::Square, LineJoin::Round, false, true, false);
+    assert_eq!(f2, FLAG_STROKE | FLAG_CAP_SQUARE | FLAG_JOIN_ROUND | FLAG_START_OPEN);
+
+    // Miter join expansion must emit corner extension past Bevel chord
+    let q0 = QuadraticBezier::new(
+        Point2D::new(0.0, 50.0),
+        Point2D::new(25.0, 50.0),
+        Point2D::new(50.0, 50.0),
+    );
+    let q1 = QuadraticBezier::new(
+        Point2D::new(50.0, 50.0),
+        Point2D::new(50.0, 75.0),
+        Point2D::new(50.0, 100.0),
+    );
+    let miter_out = expand_stroke_quadratics(
+        &[q0, q1],
+        &StrokeOptions::new(10.0).with_join(LineJoin::Miter),
+    );
+    let bevel_out = expand_stroke_quadratics(
+        &[q0, q1],
+        &StrokeOptions::new(10.0).with_join(LineJoin::Bevel),
+    );
+    assert!(miter_out.len() > bevel_out.len());
+
+    // Dash offset shifts starting segment
+    let line = [QuadraticBezier::new(
+        Point2D::new(0.0, 0.0),
+        Point2D::new(50.0, 0.0),
+        Point2D::new(100.0, 0.0),
+    )];
+    let d0 = dash_quadratics_with_offset(&line, &[10.0, 10.0], 0.0);
+    let d10 = dash_quadratics_with_offset(&line, &[10.0, 10.0], 10.0);
+    assert!((d0[0][0].p0.x - 0.0).abs() < 0.01);
+    assert!((d10[0][0].p0.x - 10.0).abs() < 0.01);
+}

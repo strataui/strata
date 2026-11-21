@@ -10,6 +10,52 @@ pub const FLAG_STROKE: u32 = 1 << 1;
 pub const FLAG_EVEN_ODD: u32 = 1 << 2;
 /// Flag indicating that the path segment is closed.
 pub const FLAG_CLOSED: u32 = 1 << 3;
+/// Flag indicating round stroke end caps (when paired with `FLAG_START_OPEN` / `FLAG_END_OPEN`).
+pub const FLAG_CAP_ROUND: u32 = 1 << 4;
+/// Flag indicating square stroke end caps (when paired with `FLAG_START_OPEN` / `FLAG_END_OPEN`).
+pub const FLAG_CAP_SQUARE: u32 = 1 << 5;
+/// Flag indicating round corner joins.
+pub const FLAG_JOIN_ROUND: u32 = 1 << 6;
+/// Flag indicating bevel corner joins (both `FLAG_JOIN_ROUND` and `FLAG_JOIN_BEVEL` clear = miter).
+pub const FLAG_JOIN_BEVEL: u32 = 1 << 7;
+/// Flag indicating this segment's start endpoint (`p0`) is an open subpath/dash cap.
+pub const FLAG_START_OPEN: u32 = 1 << 8;
+/// Flag indicating this segment's end endpoint (`p2`) is an open subpath/dash cap.
+pub const FLAG_END_OPEN: u32 = 1 << 9;
+/// Flag indicating `(p0, p1, p2)` encodes a filled 2D triangle (e.g. bevel/miter join wedge or clip).
+pub const FLAG_TRIANGLE: u32 = 1 << 10;
+
+/// Encodes `LineCap`, `LineJoin`, closure, and open-endpoint bits into a `GpuPathSegment::flags` bitmask.
+#[inline]
+pub fn stroke_style_flags(
+    cap: crate::stroke::LineCap,
+    join: crate::stroke::LineJoin,
+    closed: bool,
+    start_open: bool,
+    end_open: bool,
+) -> u32 {
+    let mut flags = FLAG_STROKE;
+    if closed {
+        flags |= FLAG_CLOSED;
+    }
+    match cap {
+        crate::stroke::LineCap::Butt => {}
+        crate::stroke::LineCap::Round => flags |= FLAG_CAP_ROUND,
+        crate::stroke::LineCap::Square => flags |= FLAG_CAP_SQUARE,
+    }
+    match join {
+        crate::stroke::LineJoin::Miter => {}
+        crate::stroke::LineJoin::Round => flags |= FLAG_JOIN_ROUND,
+        crate::stroke::LineJoin::Bevel => flags |= FLAG_JOIN_BEVEL,
+    }
+    if start_open {
+        flags |= FLAG_START_OPEN;
+    }
+    if end_open {
+        flags |= FLAG_END_OPEN;
+    }
+    flags
+}
 
 /// 64-byte aligned raw cubic curve input data fed into WebGPU compute pipelines.
 #[repr(C)]

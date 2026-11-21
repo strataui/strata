@@ -102,9 +102,11 @@ struct Uniforms {
 fn vs_main(model: VertexInput, instance: InstanceInput) -> VertexOutput {
     var out: VertexOutput;
 
-    // Compute axis-aligned bounding box of the quadratic curve expanded by stroke width
-    let min_xy = min(min(instance.p0, instance.p1), instance.p2) - vec2<f32>(instance.stroke_width + 1.0);
-    let max_xy = max(max(instance.p0, instance.p1), instance.p2) + vec2<f32>(instance.stroke_width + 1.0);
+    // Compute axis-aligned bounding box of the quadratic curve or triangle expanded cleanly
+    let is_triangle = (instance.flags & 1024u) != 0u;
+    let expand = select(instance.stroke_width * 1.5 + 2.0, 2.0, is_triangle);
+    let min_xy = min(min(instance.p0, instance.p1), instance.p2) - vec2<f32>(expand);
+    let max_xy = max(max(instance.p0, instance.p1), instance.p2) + vec2<f32>(expand);
     let size = max_xy - min_xy;
     
     // Transform unit quad to pixel coordinates
@@ -133,10 +135,7 @@ fn sd_quadratic_bezier(p: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>
     let c = p0 - p;
 
     let dot_aa = dot(a, a);
-    let dot_ab = dot(a, b);
     let dot_ac = dot(a, c);
-    let dot_bb = dot(b, b);
-    let dot_bc = dot(b, c);
 
     var min_dist_sq = min(dot(p - p0, p - p0), dot(p - p2, p - p2));
 
@@ -149,8 +148,42 @@ fn sd_quadratic_bezier(p: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>
     return sqrt(min_dist_sq);
 }
 
+// Signed distance from point P to 2D triangle (p0, p1, p2) (< 0 inside, > 0 outside)
+fn sd_triangle(p: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> f32 {
+    let e0 = p1 - p0;
+    let e1 = p2 - p1;
+    let e2 = p0 - p2;
+    let v0 = p - p0;
+    let v1 = p - p1;
+    let v2 = p - p2;
+    let pq0 = v0 - e0 * clamp(dot(v0, e0) / max(dot(e0, e0), 1e-6), 0.0, 1.0);
+    let pq1 = v1 - e1 * clamp(dot(v1, e1) / max(dot(e1, e1), 1e-6), 0.0, 1.0);
+    let pq2 = v2 - e2 * clamp(dot(v2, e2) / max(dot(e2, e2), 1e-6), 0.0, 1.0);
+    let s = sign(e0.x * e2.y - e0.y * e2.x);
+    let d = min(
+        min(
+            vec2<f32>(dot(pq0, pq0), s * (v0.x * e0.y - v0.y * e0.x)),
+            vec2<f32>(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x))
+        ),
+        vec2<f32>(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x))
+    );
+    if (d.y > 0.0) {
+        return -sqrt(d.x);
+    }
+    return sqrt(d.x);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    if ((in.flags & 1024u) != 0u) {
+        let tri_dist = sd_triangle(in.pixel_coords, in.p0, in.p1, in.p2);
+        let alpha = clamp(0.5 - tri_dist, 0.0, 1.0);
+        if (alpha <= 0.0) {
+            discard;
+        }
+        return vec4<f32>(in.color.rgb, in.color.a * alpha);
+    }
+
     let dist = sd_quadratic_bezier(in.pixel_coords, in.p0, in.p1, in.p2);
 
     let is_stroke = (in.flags & 2u) != 0u;
@@ -158,7 +191,59 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     if (is_stroke) {
         let half_width = max(in.stroke_width * 0.5, 0.5);
-        let stroke_dist = abs(dist) - half_width;
+        var stroke_dist = dist - half_width;
+
+        let span = in.p2 - in.p0;
+        let span_sq = dot(span, span);
+        let d10 = in.p1 - in.p0;
+        let d21 = in.p2 - in.p1;
+        let has_dir = span_sq > 1e-6 || dot(d10, d10) > 1e-6 || dot(d21, d21) > 1e-6;
+        if (has_dir) {
+            let cap_round = (in.flags & 16u) != 0u;
+            let cap_square = (in.flags & 32u) != 0u;
+            let start_open = (in.flags & 256u) != 0u;
+            let end_open = (in.flags & 512u) != 0u;
+
+            let raw_t0 = select(span, d10, dot(d10, d10) > 1e-6);
+            let t0 = normalize(raw_t0);
+            let raw_t1 = select(span, d21, dot(d21, d21) > 1e-6);
+            let t1 = normalize(raw_t1);
+
+            let dp0 = in.pixel_coords - in.p0;
+            let s0 = dot(dp0, t0);
+            let start_round = start_open && cap_round;
+            if (!start_round) {
+                let n0 = vec2<f32>(-t0.y, t0.x);
+                let u0 = abs(dot(dp0, n0));
+                let ext0 = select(0.0, half_width, start_open && cap_square);
+                let end_plane_0 = -s0 - ext0;
+                if (s0 < 0.0) {
+                    let q0 = vec2<f32>(end_plane_0, u0 - half_width);
+                    let box0 = length(max(q0, vec2<f32>(0.0, 0.0))) + min(max(q0.x, q0.y), 0.0);
+                    stroke_dist = max(stroke_dist, box0);
+                } else {
+                    stroke_dist = max(stroke_dist, end_plane_0);
+                }
+            }
+
+            let dp2 = in.pixel_coords - in.p2;
+            let s1 = dot(dp2, t1);
+            let end_round = end_open && cap_round;
+            if (!end_round) {
+                let n1 = vec2<f32>(-t1.y, t1.x);
+                let u1 = abs(dot(dp2, n1));
+                let ext1 = select(0.0, half_width, end_open && cap_square);
+                let end_plane_1 = s1 - ext1;
+                if (s1 > 0.0) {
+                    let q1 = vec2<f32>(end_plane_1, u1 - half_width);
+                    let box1 = length(max(q1, vec2<f32>(0.0, 0.0))) + min(max(q1.x, q1.y), 0.0);
+                    stroke_dist = max(stroke_dist, box1);
+                } else {
+                    stroke_dist = max(stroke_dist, end_plane_1);
+                }
+            }
+        }
+
         alpha = clamp(0.5 - stroke_dist, 0.0, 1.0);
     } else {
         // Fill mode: distance field threshold

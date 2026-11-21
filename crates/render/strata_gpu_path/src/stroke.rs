@@ -116,26 +116,75 @@ pub fn expand_stroke_quadratics(
         inner_curves.push(inner);
     }
 
+    let push_outline_join = |result: &mut Vec<QuadraticBezier>,
+                             cur_end: Point2D,
+                             next_start: Point2D,
+                             junction: Point2D,
+                             t0: Point2D,
+                             t1: Point2D| {
+        if cur_end.distance_squared(next_start) <= 1e-4 {
+            return;
+        }
+        match options.join {
+            LineJoin::Bevel => {
+                let mid = cur_end.lerp(next_start, 0.5);
+                result.push(QuadraticBezier::new(cur_end, mid, next_start));
+            }
+            LineJoin::Miter => {
+                let denom = t0.x * t1.y - t0.y * t1.x;
+                let miter_pt = if denom.abs() > 1e-4 {
+                    let dx = next_start.x - cur_end.x;
+                    let dy = next_start.y - cur_end.y;
+                    let s = (dx * t1.y - dy * t1.x) / denom;
+                    let u = (t0.x * dy - t0.y * dx) / denom;
+                    if s >= 0.0 && u >= 0.0 {
+                        let candidate = Point2D::new(cur_end.x + s * t0.x, cur_end.y + s * t0.y);
+                        let dist = ((candidate.x - junction.x).powi(2)
+                            + (candidate.y - junction.y).powi(2))
+                        .sqrt();
+                        if dist <= half_width * options.miter_limit.max(1.0) {
+                            Some(candidate)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if let Some(apex) = miter_pt {
+                    result.push(QuadraticBezier::new(cur_end, cur_end.lerp(apex, 0.5), apex));
+                    result.push(QuadraticBezier::new(
+                        apex,
+                        apex.lerp(next_start, 0.5),
+                        next_start,
+                    ));
+                } else {
+                    let mid = cur_end.lerp(next_start, 0.5);
+                    result.push(QuadraticBezier::new(cur_end, mid, next_start));
+                }
+            }
+            LineJoin::Round => {
+                result.push(QuadraticBezier::new(cur_end, junction, next_start));
+            }
+        }
+    };
+
     let mut result = Vec::new();
 
     // 1. Forward outer curves with joins
     for i in 0..outer_curves.len() {
         result.push(outer_curves[i]);
         if i + 1 < outer_curves.len() {
-            let cur_end = outer_curves[i].p2;
-            let next_start = outer_curves[i + 1].p0;
-            if cur_end.distance_squared(next_start) > 1e-4 {
-                match options.join {
-                    LineJoin::Bevel | LineJoin::Miter => {
-                        let mid = cur_end.lerp(next_start, 0.5);
-                        result.push(QuadraticBezier::new(cur_end, mid, next_start));
-                    }
-                    LineJoin::Round => {
-                        let orig_junction = quads[i].p2;
-                        result.push(QuadraticBezier::new(cur_end, orig_junction, next_start));
-                    }
-                }
-            }
+            push_outline_join(
+                &mut result,
+                outer_curves[i].p2,
+                outer_curves[i + 1].p0,
+                quads[i].p2,
+                quads[i].tangent(1.0),
+                quads[i + 1].tangent(0.0),
+            );
         }
     }
 
@@ -178,11 +227,23 @@ pub fn expand_stroke_quadratics(
         }
     }
 
-    // 3. Reversed inner curves
+    // 3. Reversed inner curves with symmetric joins
     for i in (0..inner_curves.len()).rev() {
         let q = inner_curves[i];
         let reversed = QuadraticBezier::new(q.p2, q.p1, q.p0);
         result.push(reversed);
+        if i > 0 {
+            let t_prev = quads[i].tangent(0.0);
+            let t_next = quads[i - 1].tangent(1.0);
+            push_outline_join(
+                &mut result,
+                inner_curves[i].p0,
+                inner_curves[i - 1].p2,
+                quads[i - 1].p2,
+                Point2D::new(-t_prev.x, -t_prev.y),
+                Point2D::new(-t_next.x, -t_next.y),
+            );
+        }
     }
 
     // 4. Start cap connecting inner to outer
@@ -264,13 +325,25 @@ fn quadratic_arc_length(q: &QuadraticBezier) -> f32 {
 }
 
 /// Subdivides a sequence of quadratic Bézier curves into contiguous "on" dash sub-paths
-/// according to an SVG `stroke-dasharray` pattern.
+/// according to an SVG `stroke-dasharray` pattern with phase offset `0.0`.
 pub fn dash_quadratics(
     quads: &[QuadraticBezier],
     dasharray: &[f32],
 ) -> Vec<Vec<QuadraticBezier>> {
-    let mut pattern: Vec<f32> = dasharray.iter().copied().filter(|&d| d > 0.0).collect();
-    if pattern.is_empty() || quads.is_empty() {
+    dash_quadratics_with_offset(quads, dasharray, 0.0)
+}
+
+/// Subdivides a sequence of quadratic Bézier curves into contiguous "on" dash sub-paths
+/// according to a `dasharray` pattern and phase `offset` (Canvas2D `lineDashOffset` / SVG
+/// `stroke-dashoffset`).
+pub fn dash_quadratics_with_offset(
+    quads: &[QuadraticBezier],
+    dasharray: &[f32],
+    offset: f32,
+) -> Vec<Vec<QuadraticBezier>> {
+    let mut pattern: Vec<f32> = dasharray.iter().copied().filter(|&d| d >= 0.0 && d.is_finite()).collect();
+    let period: f32 = pattern.iter().copied().sum();
+    if pattern.is_empty() || period <= 1e-4 || quads.is_empty() {
         return if quads.is_empty() {
             Vec::new()
         } else {
@@ -281,12 +354,25 @@ pub fn dash_quadratics(
         let copy = pattern.clone();
         pattern.extend(copy);
     }
+    let period: f32 = pattern.iter().copied().sum();
+
+    let mut phase = if offset.is_finite() {
+        offset.rem_euclid(period)
+    } else {
+        0.0
+    };
+    let mut start_idx = 0usize;
+    while start_idx < pattern.len() && phase >= pattern[start_idx] {
+        phase -= pattern[start_idx];
+        start_idx = (start_idx + 1) % pattern.len();
+    }
+    let start_rem = (pattern[start_idx] - phase).max(0.0);
 
     let mut out: Vec<Vec<QuadraticBezier>> = Vec::new();
     let mut current_dash: Vec<QuadraticBezier> = Vec::new();
-    let mut dash_idx = 0usize;
-    let mut dash_remaining = pattern[0];
-    let mut is_draw = true;
+    let mut dash_idx = start_idx;
+    let mut dash_remaining = start_rem;
+    let mut is_draw = dash_idx % 2 == 0;
     let mut prev_end: Option<Point2D> = None;
 
     for q in quads {
@@ -295,9 +381,9 @@ pub fn dash_quadratics(
                 if !current_dash.is_empty() {
                     out.push(std::mem::take(&mut current_dash));
                 }
-                dash_idx = 0;
-                dash_remaining = pattern[0];
-                is_draw = true;
+                dash_idx = start_idx;
+                dash_remaining = start_rem;
+                is_draw = dash_idx % 2 == 0;
             }
         }
         prev_end = Some(q.p2);
@@ -309,6 +395,17 @@ pub fn dash_quadratics(
         let mut t_cur = 0.0f32;
         let mut len_left = seg_len;
         while len_left > 1e-4 {
+            if dash_remaining <= 1e-4 {
+                dash_idx = (dash_idx + 1) % pattern.len();
+                dash_remaining = pattern[dash_idx];
+                is_draw = dash_idx % 2 == 0;
+                if !is_draw && !current_dash.is_empty() {
+                    out.push(std::mem::take(&mut current_dash));
+                }
+                if dash_remaining <= 1e-4 {
+                    break;
+                }
+            }
             let take = len_left.min(dash_remaining);
             let dt = (take / seg_len).clamp(0.0, 1.0 - t_cur);
             let t_next = (t_cur + dt).min(1.0);

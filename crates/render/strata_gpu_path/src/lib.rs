@@ -12,8 +12,9 @@ pub mod stroke;
 
 pub use buffer::{GpuCurveInstance, PathCommandBuffer};
 pub use compute::{
-    CurveComputeDispatcher, GpuPathSegment, GpuPathUniforms, RawCurveInput, FLAG_CLOSED,
-    FLAG_EVEN_ODD, FLAG_FILL, FLAG_STROKE,
+    stroke_style_flags, CurveComputeDispatcher, GpuPathSegment, GpuPathUniforms, RawCurveInput,
+    FLAG_CAP_ROUND, FLAG_CAP_SQUARE, FLAG_CLOSED, FLAG_END_OPEN, FLAG_EVEN_ODD, FLAG_FILL,
+    FLAG_JOIN_BEVEL, FLAG_JOIN_ROUND, FLAG_START_OPEN, FLAG_STROKE, FLAG_TRIANGLE,
 };
 pub use curve::{CubicBezier, Point2D, QuadraticBezier, Rect2D};
 pub use font_cache::{AnalyticGlyph, AnalyticGlyphCache};
@@ -32,6 +33,6 @@ pub use shaders::{
     WGSL_PATH_COMPUTE_FLATTEN_SHADER,
 };
 pub use stroke::{
-    dash_quadratics, expand_stroke_quadratics, offset_quadratic, quadratic_subcurve, unit_normal,
-    LineCap, LineJoin, StrokeOptions,
+    dash_quadratics, dash_quadratics_with_offset, expand_stroke_quadratics, offset_quadratic,
+    quadratic_subcurve, unit_normal, LineCap, LineJoin, StrokeOptions,
 };
