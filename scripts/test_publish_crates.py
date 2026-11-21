@@ -681,6 +681,52 @@ class PublishCratesTests(unittest.TestCase):
             self.assertFalse((idx / "st" / "ra" / "strata-ui-platform").exists())
             self.assertTrue((idx / "se" / "rd" / "serde").exists())
 
+    def test_load_local_package_contents_resolves_external_readme_and_license(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg_dir = root / "crates" / "demo"
+            (pkg_dir / "src").mkdir(parents=True)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["crates/demo"]\n[workspace.package]\nlicense-file = "LICENSE-MIT"\n',
+                encoding="utf-8",
+            )
+            (root / "README.md").write_text("# Root Readme\n", encoding="utf-8")
+            (root / "LICENSE-MIT").write_text("MIT License\n", encoding="utf-8")
+            manifest = pkg_dir / "Cargo.toml"
+            manifest.write_text(
+                '[package]\nname = "demo"\nversion = "0.1.0"\nreadme = "../../README.md"\nlicense-file.workspace = true\n',
+                encoding="utf-8",
+            )
+            (pkg_dir / "src" / "lib.rs").write_text("pub fn ok() {}\n", encoding="utf-8")
+            crate = publish_crates.WorkspaceCrate(
+                name="demo",
+                version="0.1.0",
+                manifest_path=manifest,
+                pkg_dir=pkg_dir,
+                workspace_deps=(),
+            )
+            fake_list = subprocess.CompletedProcess(
+                args=["cargo", "package", "--list"],
+                returncode=0,
+                stdout="Cargo.toml\nLICENSE-MIT\nREADME.md\nsrc/lib.rs\n",
+                stderr="",
+            )
+            with mock.patch.object(publish_crates.subprocess, "run", return_value=fake_list):
+                files, _ = publish_crates.load_local_package_contents(root, crate)
+
+            self.assertEqual(
+                files["README.md"],
+                publish_crates._sha256_bytes(b"# Root Readme\n"),
+            )
+            self.assertEqual(
+                files["LICENSE-MIT"],
+                publish_crates._sha256_bytes(b"MIT License\n"),
+            )
+            self.assertEqual(
+                files["src/lib.rs"],
+                publish_crates._sha256_bytes(b"pub fn ok() {}\n"),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
