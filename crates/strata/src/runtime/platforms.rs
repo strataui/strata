@@ -514,8 +514,7 @@ where
                 );
             } else if let Some(ref mut f) = root_fn {
                 let _ = strata_dom::reactive::take_dirty_signals();
-                let new_view = f();
-                runtime.update_view(new_view);
+                runtime.update_root(|| f());
                 let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
                 let _ = window.present_surface(
                     &presenter.backing_buffer,
@@ -608,7 +607,7 @@ where
         config.title
     );
     let x11_window = strata_platform::x11_window::X11Window::new(config.clone())?;
-    let view = root_fn();
+    let view = strata_dom::with_root_component_scope(|| root_fn());
     let width = config.width as f32;
     let height = config.height as f32;
     let mut runtime = AppRuntime::new(view, width, height, 1.0);
@@ -653,7 +652,7 @@ where
         config.title
     );
     let wayland_window = strata_platform::WaylandWindow::new(config.clone())?;
-    let view = root_fn();
+    let view = strata_dom::with_root_component_scope(|| root_fn());
     let width = config.width as f32;
     let height = config.height as f32;
     let dpr = wayland_window.scale_factor();
@@ -699,7 +698,7 @@ where
         config.title
     );
     let win32_window = strata_platform::Win32Window::new(config.clone())?;
-    let view = root_fn();
+    let view = strata_dom::with_root_component_scope(|| root_fn());
     let width = config.width as f32;
     let height = config.height as f32;
     let dpr = win32_window.scale_factor();
@@ -745,7 +744,7 @@ where
         config.title
     );
     let macos_window = strata_platform::MacOsWindow::new(config.clone())?;
-    let view = root_fn();
+    let view = strata_dom::with_root_component_scope(|| root_fn());
     let width = config.width as f32;
     let height = config.height as f32;
     let dpr = macos_window.scale_factor();
@@ -792,7 +791,7 @@ where
     E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
 {
     let android_window = strata_platform::AndroidWindow::new(native_window, config.clone())?;
-    let view = root_fn();
+    let view = strata_dom::with_root_component_scope(|| root_fn());
     let width = config.width as f32;
     let height = config.height as f32;
     let dpr = android_window.scale_factor();
@@ -834,7 +833,7 @@ where
     E: FnMut(&strata_platform::PlatformEvent, &mut AppRuntime) -> bool + 'static,
 {
     let ios_window = strata_platform::IosWindow::new(config.clone())?;
-    let view = root_fn();
+    let view = strata_dom::with_root_component_scope(|| root_fn());
     let width = config.width as f32;
     let height = config.height as f32;
     let dpr = ios_window.scale_factor();

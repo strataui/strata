@@ -271,10 +271,9 @@ where
         config.title
     );
     let mut window = strata_platform::MockPlatformWindow::new(config.clone());
-    let view = root_fn();
     let width = config.width as f32;
     let height = config.height as f32;
-    let mut runtime = AppRuntime::new(view, width, height, 1.0);
+    let mut runtime = AppRuntime::from_root(|| root_fn(), width, height, 1.0);
     runtime.apply_window_config(&config);
     let mut presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
@@ -325,8 +324,7 @@ pub fn launch_headless<F>(root: F, width: f32, height: f32) -> AppRuntime
 where
     F: FnOnce() -> View + 'static,
 {
-    let view = root();
-    AppRuntime::new(view, width, height, 1.0)
+    AppRuntime::from_root(root, width, height, 1.0)
 }
 
 /// Launches a live interactive Strata window with surface presentation and frame pacing.
@@ -341,10 +339,9 @@ where
         "[+] Launching Strata Live Native Window: \"{}\"...",
         config.title
     );
-    let view = root();
     let width = config.width as f32;
     let height = config.height as f32;
-    let mut runtime = AppRuntime::new(view, width, height, 1.0);
+    let mut runtime = AppRuntime::from_root(root, width, height, 1.0);
     runtime.apply_window_config(&config);
 
     let mut window = LivePlatformWindow::new(config.clone());
@@ -467,9 +464,12 @@ where
     let event_handler_rc = std::rc::Rc::new(std::cell::RefCell::new(event_handler));
 
     let _ = strata_dom::reactive::take_dirty_signals();
-    let initial_view = (root_fn_rc.borrow_mut())();
-    let mut initial_runtime =
-        AppRuntime::new(initial_view, config.width as f32, config.height as f32, 1.0);
+    let mut initial_runtime = AppRuntime::from_root(
+        || (root_fn_rc.borrow_mut())(),
+        config.width as f32,
+        config.height as f32,
+        1.0,
+    );
     initial_runtime.apply_window_config(&config);
     let runtime = std::rc::Rc::new(std::cell::RefCell::new(initial_runtime));
     let _ = strata_dom::reactive::take_dirty_signals();
@@ -505,8 +505,9 @@ where
         }
         if resize_fired {
             let _ = strata_dom::reactive::take_dirty_signals();
-            let new_view = (root_fn_draw.borrow_mut())();
-            runtime_draw.borrow_mut().update_view(new_view);
+            runtime_draw
+                .borrow_mut()
+                .update_root(|| (root_fn_draw.borrow_mut())());
         }
         let mut rt = runtime_draw.borrow_mut();
         // Repaints with no state change (expose, focus) reuse the compiled list.
@@ -968,7 +969,8 @@ where
                 (true, true)
             } else {
                 let _ = strata_dom::reactive::take_dirty_signals();
-                let new_view = (root_fn_event.borrow_mut())();
+                let new_view =
+                    strata_dom::with_root_component_scope(|| (root_fn_event.borrow_mut())());
                 let mut rt = runtime_event.borrow_mut();
                 rt.update_view(new_view);
                 if !matches!(event, strata_platform::PlatformEvent::CursorLeft)

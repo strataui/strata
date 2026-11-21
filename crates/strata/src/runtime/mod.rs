@@ -232,6 +232,22 @@ pub(crate) fn perf_count_blueprint_nodes(node: &NodeBlueprint) -> usize {
 }
 
 impl AppRuntime {
+    /// Builds a root [`View`] inside an implicit root component scope (when no outer `#[component]`
+    /// scope is active) and mounts a new [`AppRuntime`].
+    ///
+    /// Prefer this over [`Self::new`] when rendering plain closures containing unkeyed top-level
+    /// sibling components (`|| rsx! { <> <Child /> <Child /> </> }`) so siblings receive distinct
+    /// hook slots and run `use_effect` unmount cleanups when toggled off.
+    pub fn from_root<F: FnOnce() -> View>(
+        root: F,
+        viewport_width: f32,
+        viewport_height: f32,
+        dpr: f32,
+    ) -> Self {
+        let root_view = strata_dom::with_root_component_scope(root);
+        Self::new(root_view, viewport_width, viewport_height, dpr)
+    }
+
     /// Creates and mounts a new application runtime from a root view.
     pub fn new(root_view: View, viewport_width: f32, viewport_height: f32, dpr: f32) -> Self {
         #[cfg(target_os = "linux")]
@@ -1040,6 +1056,14 @@ impl AppRuntime {
             }
             _ => None,
         }
+    }
+
+    /// Re-evaluates a root [`View`] closure inside an implicit root component scope (when no outer
+    /// `#[component]` scope is active) and updates the runtime tree cleanly, preserving top-level
+    /// unkeyed sibling isolation and triggering unmount cleanups.
+    pub fn update_root<F: FnOnce() -> View>(&mut self, root: F) {
+        let new_view = strata_dom::with_root_component_scope(root);
+        self.update_view(new_view);
     }
 
     /// Updates the application root view, incrementally reconciling unchanged subtrees

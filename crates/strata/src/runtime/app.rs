@@ -366,10 +366,9 @@ impl StrataAppBuilder {
     }
 
     pub fn build<F: FnOnce() -> View>(self, root: F) -> StrataApp {
-        let view = root();
         let width = self.window_config.width as f32;
         let height = self.window_config.height as f32;
-        let mut runtime = AppRuntime::new(view, width, height, self.dpr);
+        let mut runtime = AppRuntime::from_root(root, width, height, self.dpr);
         runtime.apply_window_config(&self.window_config);
         let presenter = SoftwareSurfacePresenter::new(
             self.window_config.width,

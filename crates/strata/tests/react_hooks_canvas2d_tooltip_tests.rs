@@ -4,9 +4,11 @@ use std::time::Duration;
 use strata::prelude::*;
 use strata::render::canvas2d::{CanvasCommand, CanvasPathVerb};
 use strata::render::compositor::DrawCommand;
-use strata::render::{FrameBuffer, GpuPathPipeline, GpuSlugTextPipeline};
+use strata::render::{FrameBuffer, GpuBatch, GpuPathPipeline, GpuSlugTextPipeline};
 use strata::style::types::Color;
-use strata_ui::canvas::{Canvas2D, Canvas2DContext, CanvasTextAlign, CanvasTextBaseline};
+use strata_ui::canvas::{
+    Canvas2D, Canvas2DContext, CanvasLineCap, CanvasLineJoin, CanvasTextAlign, CanvasTextBaseline,
+};
 
 // ---------------------------------------------------------------------------
 // 1. Generic #[component], Option<String> literals, #[prop(default)], {..props}
@@ -496,4 +498,348 @@ fn test_hover_tooltip_delay_and_style_via_window_config_and_builder() {
     // Lowering delay at runtime via helper should allow immediate activation.
     app2.runtime.set_hover_tooltip_delay_ms(0);
     assert!(app2.runtime.poll_hover_tooltip());
+}
+
+// ---------------------------------------------------------------------------
+// 7. Top-level unkeyed sibling isolation & unmount cleanup without outer #[component]
+// ---------------------------------------------------------------------------
+
+#[component]
+fn UnkeyedSiblingCounter(
+    initial: i32,
+    state_out: Rc<Cell<i32>>,
+    setter_out: Rc<std::cell::RefCell<Option<WriteSignal<i32>>>>,
+    cleanups: Rc<Cell<usize>>,
+) -> View {
+    let (val, set_val) = use_state(|| initial);
+    state_out.set(val.get());
+    *setter_out.borrow_mut() = Some(set_val);
+
+    use_effect(move || {
+        let c = cleanups.clone();
+        Some(Box::new(move || {
+            c.set(c.get() + 1);
+        }))
+    });
+
+    let label = format!("count:{}", val.get());
+    rsx! { <span class="text-xs">{label}</span> }
+}
+
+#[test]
+fn top_level_unkeyed_siblings_isolate_hooks_and_run_unmount_cleanup() {
+    reset_component_hooks();
+
+    let s1_out = Rc::new(Cell::new(0));
+    let s2_out = Rc::new(Cell::new(0));
+    let set1_slot = Rc::new(std::cell::RefCell::new(None::<WriteSignal<i32>>));
+    let set2_slot = Rc::new(std::cell::RefCell::new(None::<WriteSignal<i32>>));
+    let cleanups1 = Rc::new(Cell::new(0usize));
+    let cleanups2 = Rc::new(Cell::new(0usize));
+    let show_second = Rc::new(Cell::new(true));
+
+    let build_root = {
+        let s1 = s1_out.clone();
+        let s2 = s2_out.clone();
+        let set1 = set1_slot.clone();
+        let set2 = set2_slot.clone();
+        let c1 = cleanups1.clone();
+        let c2 = cleanups2.clone();
+        let show = show_second.clone();
+        move || {
+            rsx! {
+                <div class="w-[300px] h-[100px] flex flex-row">
+                    <UnkeyedSiblingCounter
+                        initial={10}
+                        state_out={s1.clone()}
+                        setter_out={set1.clone()}
+                        cleanups={c1.clone()}
+                    />
+                    {if show.get() {
+                        rsx! {
+                            <UnkeyedSiblingCounter
+                                initial={99}
+                                state_out={s2.clone()}
+                                setter_out={set2.clone()}
+                                cleanups={c2.clone()}
+                            />
+                        }.root
+                    } else {
+                        NodeBlueprint::Fragment(vec![])
+                    }}
+                </div>
+            }
+        }
+    };
+
+    // Plain closure passed to AppRuntime::from_root (no outer #[component])
+    let mut rt = strata::AppRuntime::from_root(&build_root, 300.0, 100.0, 1.0);
+    assert_eq!(s1_out.get(), 10);
+    assert_eq!(s2_out.get(), 99);
+    assert_eq!(cleanups1.get(), 0);
+    assert_eq!(cleanups2.get(), 0);
+
+    // Mutate only the first sibling's state and re-render via update_root
+    set1_slot.borrow().as_ref().unwrap().set(15);
+    rt.update_root(&build_root);
+    assert_eq!(s1_out.get(), 15, "first sibling state updated");
+    assert_eq!(
+        s2_out.get(),
+        99,
+        "second unkeyed top-level sibling must not collide with first sibling's hook slot"
+    );
+    assert_eq!(cleanups1.get(), 0);
+    assert_eq!(cleanups2.get(), 0);
+
+    // Toggle second sibling off -> its unmount cleanup runs immediately, first stays mounted
+    show_second.set(false);
+    rt.update_root(&build_root);
+    assert_eq!(cleanups1.get(), 0);
+    assert_eq!(
+        cleanups2.get(),
+        1,
+        "toggling off top-level unkeyed sibling must run use_effect unmount cleanup"
+    );
+
+    // Also verify launch_headless isolates unkeyed top-level siblings
+    reset_component_hooks();
+    let h1 = Rc::new(Cell::new(0));
+    let h2 = Rc::new(Cell::new(0));
+    let h1c = h1.clone();
+    let h2c = h2.clone();
+    let dummy_s1 = Rc::new(std::cell::RefCell::new(None));
+    let dummy_s2 = Rc::new(std::cell::RefCell::new(None));
+    let dummy_c1 = Rc::new(Cell::new(0));
+    let dummy_c2 = Rc::new(Cell::new(0));
+    let _rt2 = strata::launch_headless(
+        move || {
+            rsx! {
+                <>
+                    <UnkeyedSiblingCounter
+                        initial={7}
+                        state_out={h1c.clone()}
+                        setter_out={dummy_s1.clone()}
+                        cleanups={dummy_c1.clone()}
+                    />
+                    <UnkeyedSiblingCounter
+                        initial={42}
+                        state_out={h2c.clone()}
+                        setter_out={dummy_s2.clone()}
+                        cleanups={dummy_c2.clone()}
+                    />
+                </>
+            }
+        },
+        200.0,
+        100.0,
+    );
+    assert_eq!(h1.get(), 7);
+    assert_eq!(h2.get(), 42);
+    reset_component_hooks();
+}
+
+// ---------------------------------------------------------------------------
+// 8. use_reducer preserves Rc::ptr_eq dispatch identity across renders
+// ---------------------------------------------------------------------------
+
+#[component]
+fn ReducerIdentityTester(
+    multiplier: i32,
+    dispatches: Rc<std::cell::RefCell<Vec<Rc<dyn Fn(i32)>>>>,
+    state_out: Rc<Cell<i32>>,
+) -> View {
+    let (val, dispatch) = use_reducer(
+        move |state: &i32, delta: i32| *state + delta * multiplier,
+        0,
+    );
+    dispatches.borrow_mut().push(dispatch);
+    state_out.set(val.get());
+    rsx! { <span>{format!("{}", val.get())}</span> }
+}
+
+#[test]
+fn use_reducer_preserves_dispatch_identity_and_uses_latest_reducer_closure() {
+    reset_component_hooks();
+
+    let dispatches: Rc<std::cell::RefCell<Vec<Rc<dyn Fn(i32)>>>> =
+        Rc::new(std::cell::RefCell::new(Vec::new()));
+    let state_out = Rc::new(Cell::new(0));
+
+    let _ = with_root_component_scope(|| {
+        rsx! {
+            <ReducerIdentityTester
+                multiplier={1}
+                dispatches={dispatches.clone()}
+                state_out={state_out.clone()}
+            />
+        }
+    });
+    assert_eq!(state_out.get(), 0);
+
+    let _ = with_root_component_scope(|| {
+        rsx! {
+            <ReducerIdentityTester
+                multiplier={10}
+                dispatches={dispatches.clone()}
+                state_out={state_out.clone()}
+            />
+        }
+    });
+
+    {
+        let ds = dispatches.borrow();
+        assert_eq!(ds.len(), 2);
+        assert!(
+            Rc::ptr_eq(&ds[0], &ds[1]),
+            "dispatch Rc identity must stay stable across re-renders"
+        );
+        // Dispatching through the original handle invokes the updated multiplier=10 reducer.
+        ds[0](3);
+    }
+
+    let _ = with_root_component_scope(|| {
+        rsx! {
+            <ReducerIdentityTester
+                multiplier={10}
+                dispatches={dispatches.clone()}
+                state_out={state_out.clone()}
+            />
+        }
+    });
+    assert_eq!(state_out.get(), 30);
+    reset_component_hooks();
+}
+
+// ---------------------------------------------------------------------------
+// 9. use_memo_with_deps memoization over plain props
+// ---------------------------------------------------------------------------
+
+#[component]
+fn MemoDepsComponent(
+    a: i32,
+    b: i32,
+    runs: Rc<Cell<usize>>,
+    value_out: Rc<Cell<i32>>,
+) -> View {
+    let computed = use_memo_with_deps((a, b), |&(x, y)| {
+        runs.set(runs.get() + 1);
+        x * 100 + y
+    });
+    value_out.set(computed);
+    rsx! { <span>{format!("{computed}")}</span> }
+}
+
+#[test]
+fn use_memo_with_deps_caches_and_recomputes_on_dep_change() {
+    reset_component_hooks();
+    let runs = Rc::new(Cell::new(0));
+    let out = Rc::new(Cell::new(0));
+
+    let _ = with_root_component_scope(|| {
+        rsx! { <MemoDepsComponent a={2} b={5} runs={runs.clone()} value_out={out.clone()} /> }
+    });
+    assert_eq!(runs.get(), 1);
+    assert_eq!(out.get(), 205);
+
+    // Same deps -> cached
+    let _ = with_root_component_scope(|| {
+        rsx! { <MemoDepsComponent a={2} b={5} runs={runs.clone()} value_out={out.clone()} /> }
+    });
+    assert_eq!(runs.get(), 1);
+    assert_eq!(out.get(), 205);
+
+    // Different deps -> recomputed once
+    let _ = with_root_component_scope(|| {
+        rsx! { <MemoDepsComponent a={2} b={9} runs={runs.clone()} value_out={out.clone()} /> }
+    });
+    assert_eq!(runs.get(), 2);
+    assert_eq!(out.get(), 209);
+
+    let _ = with_root_component_scope(|| {
+        rsx! { <MemoDepsComponent a={2} b={9} runs={runs.clone()} value_out={out.clone()} /> }
+    });
+    assert_eq!(runs.get(), 2);
+    assert_eq!(out.get(), 209);
+    reset_component_hooks();
+}
+
+// ---------------------------------------------------------------------------
+// 10. <ErrorBoundary><Child /></ErrorBoundary> lazy child catching + non-'static borrow
+// ---------------------------------------------------------------------------
+
+#[component]
+fn PanickingBorrowChild(tag: String, should_panic: bool) -> View {
+    if should_panic {
+        panic!("lazy-child-boom:{tag}");
+    }
+    rsx! { <span>{tag}</span> }
+}
+
+#[test]
+fn error_boundary_lazily_catches_direct_jsx_children_without_render_prop() {
+    let local_suffix = String::from("pin-42");
+
+    let view = rsx! {
+        <ErrorBoundary
+            fallback={Rc::new(|info: ErrorBoundaryInfo| {
+                let msg = format!("caught:{}", info.message);
+                rsx! { <span class="text-red-400">{msg}</span> }
+            })}
+        >
+            <PanickingBorrowChild
+                tag={format!("node-{}", local_suffix.as_str())}
+                should_panic={true}
+            />
+        </ErrorBoundary>
+    };
+
+    let rt = AppRuntime::new(view, 300.0, 100.0, 1.0);
+    assert!(
+        rt.find_by_text("caught:lazy-child-boom:node-pin-42").is_some(),
+        "expected ErrorBoundary direct children to be lowered lazily and catch panic"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 11. Canvas2D measure_text, round_rect, line_cap/line_join & GpuBatch dashed StrokeRect
+// ---------------------------------------------------------------------------
+
+#[test]
+fn canvas2d_extended_apis_and_gpu_batch_dashed_stroke_rect_parity() {
+    let view = rsx! {
+        <div class="w-[320px] h-[160px]">
+            <Canvas2D
+                width={300.0}
+                height={140.0}
+                on_draw={Some(Rc::new(move |ctx: &mut Canvas2DContext| {
+                    ctx.set_font("bold 12px monospace");
+                    let m = ctx.measure_text("CLK_OUT");
+                    assert!(m.width > 0.0 && m.height > 0.0);
+
+                    ctx.set_line_cap(CanvasLineCap::Round);
+                    ctx.set_line_join(CanvasLineJoin::Bevel);
+                    ctx.set_fill_style(Color::rgba(30, 41, 59, 255));
+                    ctx.begin_path();
+                    ctx.round_rect(8.0, 8.0, m.width + 12.0, m.height + 6.0, 6.0);
+                    ctx.fill();
+
+                    ctx.save();
+                    ctx.set_line_dash(&[8.0, 4.0]);
+                    ctx.set_stroke_style(Color::rgb(56, 189, 248));
+                    ctx.set_line_width(2.0);
+                    ctx.stroke_rect(20.0, 40.0, 120.0, 60.0);
+                    ctx.restore();
+                }))}
+            />
+        </div>
+    };
+
+    let rt = AppRuntime::new(view, 320.0, 160.0, 1.0);
+    let batch = GpuBatch::from_display_list(&rt.display_list, 320.0, 160.0);
+    // Container div + dashed StrokeRect edges emit multiple dash quad instances in GpuBatch
+    assert!(
+        batch.instances.len() > 4,
+        "GpuBatch should expand dashed CanvasCommand::StrokeRect into dash quads, got {}",
+        batch.instances.len()
+    );
 }
