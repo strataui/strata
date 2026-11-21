@@ -304,10 +304,15 @@ pub fn execute_mcp_command_core(
             });
 
             let focus_info = runtime.active_focus.as_ref().map(|a| {
+                let text = if runtime.active_input_is_password(a) {
+                    AppRuntime::mask_password_text(&a.state.text.get())
+                } else {
+                    a.state.text.get()
+                };
                 json!({
                     "input_index": a.input_index,
                     "input_id": a.input_id,
-                    "text": a.state.text.get(),
+                    "text": text,
                     "cursor": a.state.cursor_index.get(),
                 })
             });
