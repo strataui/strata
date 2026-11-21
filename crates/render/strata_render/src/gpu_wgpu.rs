@@ -6523,6 +6523,30 @@ impl Wgpu3DRenderer {
         );
     }
 
+    /// Renders `scene` into `target_view` inside `viewport` without clearing prior color pixels,
+    /// allowing previously rendered 2D UI layers behind the 3D viewport to remain intact.
+    pub fn render_scene_preserving_color_to_view(
+        &mut self,
+        scene: &Scene3D,
+        target_view: &wgpu::TextureView,
+        target_width: u32,
+        target_height: u32,
+        viewport: Option<[f32; 4]>,
+        unlimited_upload_budget: bool,
+    ) {
+        self.render_scene_to_view_internal(
+            scene,
+            target_view,
+            target_width,
+            target_height,
+            viewport,
+            unlimited_upload_budget,
+            false,
+            true,
+            None,
+        );
+    }
+
     /// Renders multiple 3D viewports (`(viewport_rect, scene)`) sequentially into `target_view`
     /// without clearing prior viewports, and composites `overlay_bind_group` once on the final pass.
     pub fn render_viewports_and_overlay_to_view(

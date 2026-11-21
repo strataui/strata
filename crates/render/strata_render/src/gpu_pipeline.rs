@@ -108,7 +108,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(out_rgb, out_a);
     }
 
-    return vec4<f32>(in.color.rgb, in.color.a * coverage);
+    let out_a = in.color.a * coverage;
+    return vec4<f32>(in.color.rgb * out_a, out_a);
 }
 "#;
 
@@ -132,6 +133,17 @@ pub const QUAD_VERTICES: [GpuVertex; 6] = [
     GpuVertex::new(0.0, 1.0),
     GpuVertex::new(0.0, 1.0),
     GpuVertex::new(1.0, 0.0),
+    GpuVertex::new(1.0, 1.0),
+];
+
+/// Six vertices composing two triangles for a signed unit quad `[-1, -1]` to `[1, 1]`,
+/// matching [`strata_gpu_path::WGSL_ANALYTICAL_PATH_RASTER_SHADER`].
+pub const SIGNED_QUAD_VERTICES: [GpuVertex; 6] = [
+    GpuVertex::new(-1.0, -1.0),
+    GpuVertex::new(1.0, -1.0),
+    GpuVertex::new(-1.0, 1.0),
+    GpuVertex::new(-1.0, 1.0),
+    GpuVertex::new(1.0, -1.0),
     GpuVertex::new(1.0, 1.0),
 ];
 
@@ -675,6 +687,128 @@ fn resolve_or_push_clip_mask(
     }
 }
 
+#[inline]
+fn apply_color_opacity(c: Color, alpha_mul: f32) -> Color {
+    if (alpha_mul - 1.0).abs() <= 1e-4 {
+        return c;
+    }
+    let (r, g, b, a) = c.to_f32();
+    Color::from_f32(r, g, b, (a * alpha_mul).clamp(0.0, 1.0))
+}
+
+fn rounded_rect_subpath(bounds: Rect, radius: BorderRadius) -> Vec<(f32, f32)> {
+    let hw = bounds.width * 0.5;
+    let hh = bounds.height * 0.5;
+    let max_r = hw.min(hh).max(0.0);
+    let r_tl = radius.top_left.clamp(0.0, max_r);
+    let r_tr = radius.top_right.clamp(0.0, max_r);
+    let r_br = radius.bottom_right.clamp(0.0, max_r);
+    let r_bl = radius.bottom_left.clamp(0.0, max_r);
+
+    let mut pts = Vec::with_capacity(32);
+    let corners = [
+        (
+            bounds.x + bounds.width - r_tr,
+            bounds.y + r_tr,
+            r_tr,
+            -std::f32::consts::FRAC_PI_2,
+            0.0,
+        ),
+        (
+            bounds.x + bounds.width - r_br,
+            bounds.y + bounds.height - r_br,
+            r_br,
+            0.0,
+            std::f32::consts::FRAC_PI_2,
+        ),
+        (
+            bounds.x + r_bl,
+            bounds.y + bounds.height - r_bl,
+            r_bl,
+            std::f32::consts::FRAC_PI_2,
+            std::f32::consts::PI,
+        ),
+        (
+            bounds.x + r_tl,
+            bounds.y + r_tl,
+            r_tl,
+            std::f32::consts::PI,
+            std::f32::consts::PI * 1.5,
+        ),
+    ];
+    for (cx, cy, r, a0, a1) in corners {
+        if r <= 0.25 {
+            pts.push((cx, cy));
+        } else {
+            let steps = 6usize;
+            for i in 0..=steps {
+                let a = a0 + (a1 - a0) * (i as f32 / steps as f32);
+                pts.push((cx + r * a.cos(), cy + r * a.sin()));
+            }
+        }
+    }
+    pts
+}
+
+fn compute_dashed_stroke_rect_segments(
+    r: Rect,
+    lw: f32,
+    line_dash: &[f32],
+    dash_offset: f32,
+) -> Vec<Rect> {
+    let mut out = Vec::new();
+    let period: f32 = line_dash.iter().copied().sum();
+    if line_dash.is_empty() || period <= 1e-4 || lw <= 0.0 || r.width <= 0.0 || r.height <= 0.0 {
+        return out;
+    }
+    let half = lw * 0.5;
+    let mut phase = dash_offset.rem_euclid(period);
+    let mut dash_idx = 0usize;
+    while dash_idx < line_dash.len() && phase >= line_dash[dash_idx] {
+        phase -= line_dash[dash_idx];
+        dash_idx = (dash_idx + 1) % line_dash.len();
+    }
+    let mut rem = (line_dash[dash_idx] - phase).max(0.0);
+
+    // Edges clockwise matching Cairo/framebuffer: Top, Right, Bottom, Left
+    let edges = [
+        (0u8, r.width),
+        (1u8, r.height),
+        (2u8, r.width),
+        (3u8, r.height),
+    ];
+    for (edge_id, edge_len) in edges {
+        if edge_len <= 1e-4 {
+            continue;
+        }
+        let mut cursor = 0.0_f32;
+        while cursor < edge_len {
+            if rem <= 1e-4 {
+                dash_idx = (dash_idx + 1) % line_dash.len();
+                rem = line_dash[dash_idx];
+                if rem <= 1e-4 {
+                    break;
+                }
+            }
+            let step = rem.min(edge_len - cursor);
+            if dash_idx.is_multiple_of(2) && step > 1e-4 {
+                let s0 = cursor;
+                let s1 = cursor + step;
+                let seg_rect = match edge_id {
+                    0 => Rect::new(r.x + s0, r.y - half, s1 - s0, lw),
+                    1 => Rect::new(r.x + r.width - half, r.y + s0, lw, s1 - s0),
+                    2 => Rect::new(r.x + r.width - s1, r.y + r.height - half, s1 - s0, lw),
+                    _ => Rect::new(r.x - half, r.y + r.height - s1, lw, s1 - s0),
+                };
+                out.push(seg_rect);
+            }
+            cursor += step;
+            rem -= step;
+        }
+    }
+    out
+}
+
 /// Batch collection of GPU instanced quads ready for upload to GPU buffers.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct GpuBatch {
@@ -1086,104 +1220,40 @@ impl GpuBatch {
                                             }
                                         } else if *line_width > 0.0 && r.width > 0.0 && r.height > 0.0
                                         {
-                                            let lw = *line_width;
-                                            let half = lw * 0.5;
-                                            let mut phase = dash_offset.rem_euclid(period);
-                                            let mut dash_idx = 0usize;
-                                            while dash_idx < line_dash.len()
-                                                && phase >= line_dash[dash_idx]
-                                            {
-                                                phase -= line_dash[dash_idx];
-                                                dash_idx = (dash_idx + 1) % line_dash.len();
-                                            }
-                                            let mut rem = (line_dash[dash_idx] - phase).max(0.0);
-
-                                            // Edges clockwise matching Cairo/framebuffer: Top, Right, Bottom, Left
-                                            let edges = [
-                                                (0u8, r.width),
-                                                (1u8, r.height),
-                                                (2u8, r.width),
-                                                (3u8, r.height),
-                                            ];
-                                            for (edge_id, edge_len) in edges {
-                                                if edge_len <= 1e-4 {
-                                                    continue;
-                                                }
-                                                let mut cursor = 0.0_f32;
-                                                while cursor < edge_len {
-                                                    if rem <= 1e-4 {
-                                                        dash_idx = (dash_idx + 1) % line_dash.len();
-                                                        rem = line_dash[dash_idx];
-                                                        if rem <= 1e-4 {
-                                                            break;
-                                                        }
-                                                    }
-                                                    let step = rem.min(edge_len - cursor);
-                                                    if dash_idx.is_multiple_of(2) && step > 1e-4 {
-                                                        let s0 = cursor;
-                                                        let s1 = cursor + step;
-                                                        let seg_rect = match edge_id {
-                                                            0 => Rect::new(
-                                                                r.x + s0,
-                                                                r.y - half,
-                                                                s1 - s0,
-                                                                lw,
-                                                            ),
-                                                            1 => Rect::new(
-                                                                r.x + r.width - half,
-                                                                r.y + s0,
-                                                                lw,
-                                                                s1 - s0,
-                                                            ),
-                                                            2 => Rect::new(
-                                                                r.x + r.width - s1,
-                                                                r.y + r.height - half,
-                                                                s1 - s0,
-                                                                lw,
-                                                            ),
-                                                            _ => Rect::new(
-                                                                r.x - half,
-                                                                r.y + r.height - s1,
-                                                                lw,
-                                                                s1 - s0,
-                                                            ),
-                                                        };
-                                                        let t_seg = transform_rect_fn(seg_rect);
-                                                        if t_seg.intersect(canvas_clip).is_some() {
-                                                            let (emit, mask) = if clip_polys
-                                                                .is_empty()
-                                                            {
-                                                                (true, None)
-                                                            } else {
-                                                                match rect_relation_to_clip_polys(
-                                                                    t_seg,
-                                                                    &clip_polys,
-                                                                ) {
-                                                                    ClipContainment::Outside => {
-                                                                        (false, None)
-                                                                    }
-                                                                    ClipContainment::Inside => {
-                                                                        (true, None)
-                                                                    }
-                                                                    ClipContainment::Partial => {
-                                                                        (true, clip_mask_id)
-                                                                    }
-                                                                }
-                                                            };
-                                                            if emit {
-                                                                batch.push_with_clip(
-                                                                    GpuQuadInstance::from_rect(
-                                                                        t_seg,
-                                                                        *color,
-                                                                        canvas_clip,
-                                                                    ),
-                                                                    mask,
-                                                                );
+                                            for seg_rect in compute_dashed_stroke_rect_segments(
+                                                r,
+                                                *line_width,
+                                                &line_dash,
+                                                dash_offset,
+                                            ) {
+                                                let t_seg = transform_rect_fn(seg_rect);
+                                                if t_seg.intersect(canvas_clip).is_some() {
+                                                    let (emit, mask) = if clip_polys.is_empty() {
+                                                        (true, None)
+                                                    } else {
+                                                        match rect_relation_to_clip_polys(
+                                                            t_seg,
+                                                            &clip_polys,
+                                                        ) {
+                                                            ClipContainment::Outside => {
+                                                                (false, None)
+                                                            }
+                                                            ClipContainment::Inside => (true, None),
+                                                            ClipContainment::Partial => {
+                                                                (true, clip_mask_id)
                                                             }
                                                         }
+                                                    };
+                                                    if emit {
+                                                        batch.push_with_clip(
+                                                            GpuQuadInstance::from_rect(
+                                                                t_seg,
+                                                                *color,
+                                                                canvas_clip,
+                                                            ),
+                                                            mask,
+                                                        );
                                                     }
-                                                    cursor += step;
-                                                    rem -= step;
                                                 }
                                             }
                                         }
@@ -1246,6 +1316,118 @@ impl GpuSlugTextPipeline {
         self.buffer.is_fence_synchronized(fence)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn push_text_run(
+        &mut self,
+        text: &str,
+        start_x: f32,
+        start_y: f32,
+        font_size: f32,
+        x_squeeze: f32,
+        color: Color,
+        clip_rect: Rect,
+    ) -> usize {
+        let (r, g, b, a) = color.to_f32();
+        let color_f32 = [r, g, b, a];
+        let clip_r = strata_gpu_path::Rect2D::new(
+            clip_rect.x,
+            clip_rect.y,
+            clip_rect.x + clip_rect.width,
+            clip_rect.y + clip_rect.height,
+        );
+        let mut cursor_x = start_x;
+        let cursor_y = start_y;
+        let mut pushed = 0usize;
+
+        for ch in text.chars() {
+            if let Some(glyph) = self.glyph_cache.get(ch) {
+                let glyph_w = glyph.advance_width * font_size * x_squeeze;
+                let glyph_h = font_size;
+                let screen_bounds = strata_gpu_path::Rect2D::new(
+                    cursor_x,
+                    cursor_y,
+                    cursor_x + glyph_w,
+                    cursor_y + glyph_h,
+                );
+                if clip_rect
+                    .intersect(Rect::new(cursor_x, cursor_y, glyph_w, glyph_h))
+                    .is_some()
+                    && self
+                        .buffer
+                        .push_glyph(glyph, screen_bounds, color_f32, clip_r)
+                {
+                    self.total_glyphs += 1;
+                    pushed += 1;
+                }
+                cursor_x += glyph_w;
+            } else {
+                cursor_x += font_size * 0.5 * x_squeeze;
+            }
+        }
+        pushed
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_canvas_text(
+        &mut self,
+        bounds: Rect,
+        text: &str,
+        x: f32,
+        y: f32,
+        color: Color,
+        font_size: f32,
+        text_align: crate::canvas2d::CanvasTextAlign,
+        text_baseline: crate::canvas2d::CanvasTextBaseline,
+        max_width: Option<f32>,
+        canvas_clip: Rect,
+    ) -> (usize, Rect) {
+        let scale = font_size;
+        let raw_w: f32 = text
+            .chars()
+            .map(|ch| {
+                self.glyph_cache
+                    .get(ch)
+                    .map(|g| g.advance_width * scale)
+                    .unwrap_or(scale * 0.5)
+            })
+            .sum();
+        let x_squeeze = match max_width {
+            Some(mw) if mw > 0.0 && raw_w > mw => mw / raw_w,
+            _ => 1.0,
+        };
+        let total_w = raw_w * x_squeeze;
+        let cursor_x = bounds.x
+            + match text_align {
+                crate::canvas2d::CanvasTextAlign::Left | crate::canvas2d::CanvasTextAlign::Start => {
+                    x
+                }
+                crate::canvas2d::CanvasTextAlign::Center => x - total_w * 0.5,
+                crate::canvas2d::CanvasTextAlign::Right | crate::canvas2d::CanvasTextAlign::End => {
+                    x - total_w
+                }
+            };
+        let cursor_y = bounds.y
+            + match text_baseline {
+                crate::canvas2d::CanvasTextBaseline::Top
+                | crate::canvas2d::CanvasTextBaseline::Hanging => y,
+                crate::canvas2d::CanvasTextBaseline::Middle => y - scale * 0.5,
+                crate::canvas2d::CanvasTextBaseline::Bottom
+                | crate::canvas2d::CanvasTextBaseline::Ideographic => y - scale,
+                crate::canvas2d::CanvasTextBaseline::Alphabetic => y - scale * 0.8,
+            };
+        let run_rect = Rect::new(cursor_x, cursor_y, total_w.max(1.0), scale.max(1.0));
+        let pushed = self.push_text_run(
+            text,
+            cursor_x,
+            cursor_y,
+            scale,
+            x_squeeze,
+            color,
+            canvas_clip,
+        );
+        (pushed, run_rect)
+    }
+
     /// Compiles all DrawText commands in a DisplayList into the Slug GPU buffer.
     pub fn compile_display_list(
         &mut self,
@@ -1266,83 +1448,27 @@ impl GpuSlugTextPipeline {
                     color,
                     ..
                 } => {
-                    let (r, g, b, a) = color.to_f32();
-                    let color_f32 = [r, g, b, a];
-                    let mut cursor_x = origin.0;
-                    let cursor_y = origin.1;
-
-                    for ch in text.chars() {
-                        if let Some(glyph) = self.glyph_cache.get(ch) {
-                            let scale = *font_size;
-                            let glyph_w = glyph.advance_width * scale;
-                            let glyph_h = scale;
-                            let screen_bounds = strata_gpu_path::Rect2D::new(
-                                cursor_x,
-                                cursor_y,
-                                cursor_x + glyph_w,
-                                cursor_y + glyph_h,
-                            );
-
-                            let clip_r = strata_gpu_path::Rect2D::new(
-                                default_clip.x,
-                                default_clip.y,
-                                default_clip.x + default_clip.width,
-                                default_clip.y + default_clip.height,
-                            );
-
-                            if default_clip
-                                .intersect(Rect::new(cursor_x, cursor_y, glyph_w, glyph_h))
-                                .is_some()
-                            {
-                                self.buffer
-                                    .push_glyph(glyph, screen_bounds, color_f32, clip_r);
-                                self.total_glyphs += 1;
-                            }
-                            cursor_x += glyph_w;
-                        } else {
-                            cursor_x += *font_size * 0.5;
-                        }
-                    }
+                    self.push_text_run(
+                        text,
+                        origin.0,
+                        origin.1,
+                        *font_size,
+                        1.0,
+                        *color,
+                        default_clip,
+                    );
                 }
                 DrawCommand::DrawTextFragments { fragments } => {
                     for frag in fragments {
-                        let (r, g, b, a) = frag.style.color.to_f32();
-                        let color_f32 = [r, g, b, a];
-                        let mut cursor_x = frag.bounds.x;
-                        let cursor_y = frag.bounds.y;
-
-                        for ch in frag.text.chars() {
-                            if let Some(glyph) = self.glyph_cache.get(ch) {
-                                let scale = frag.style.font_size;
-                                let glyph_w = glyph.advance_width * scale;
-                                let glyph_h = scale;
-                                let screen_bounds = strata_gpu_path::Rect2D::new(
-                                    cursor_x,
-                                    cursor_y,
-                                    cursor_x + glyph_w,
-                                    cursor_y + glyph_h,
-                                );
-
-                                let clip_r = strata_gpu_path::Rect2D::new(
-                                    default_clip.x,
-                                    default_clip.y,
-                                    default_clip.x + default_clip.width,
-                                    default_clip.y + default_clip.height,
-                                );
-
-                                if default_clip
-                                    .intersect(Rect::new(cursor_x, cursor_y, glyph_w, glyph_h))
-                                    .is_some()
-                                {
-                                    self.buffer
-                                        .push_glyph(glyph, screen_bounds, color_f32, clip_r);
-                                    self.total_glyphs += 1;
-                                }
-                                cursor_x += glyph_w;
-                            } else {
-                                cursor_x += frag.style.font_size * 0.5;
-                            }
-                        }
+                        self.push_text_run(
+                            &frag.text,
+                            frag.bounds.x,
+                            frag.bounds.y,
+                            frag.style.font_size,
+                            1.0,
+                            frag.style.color,
+                            default_clip,
+                        );
                     }
                 }
                 DrawCommand::DrawCanvas2D { bounds, commands } => {
@@ -1394,85 +1520,18 @@ impl GpuSlugTextPipeline {
                                 let Some(canvas_clip) = active_clip else {
                                     continue;
                                 };
-                                let scale = *font_size;
-                                let raw_w: f32 = text
-                                    .chars()
-                                    .map(|ch| {
-                                        self.glyph_cache
-                                            .get(ch)
-                                            .map(|g| g.advance_width * scale)
-                                            .unwrap_or(scale * 0.5)
-                                    })
-                                    .sum();
-                                let x_squeeze = match max_width {
-                                    Some(mw) if *mw > 0.0 && raw_w > *mw => *mw / raw_w,
-                                    _ => 1.0,
-                                };
-                                let total_w = raw_w * x_squeeze;
-                                let mut cursor_x = bounds.x
-                                    + match text_align {
-                                        crate::canvas2d::CanvasTextAlign::Left
-                                        | crate::canvas2d::CanvasTextAlign::Start => *x,
-                                        crate::canvas2d::CanvasTextAlign::Center => {
-                                            *x - total_w * 0.5
-                                        }
-                                        crate::canvas2d::CanvasTextAlign::Right
-                                        | crate::canvas2d::CanvasTextAlign::End => *x - total_w,
-                                    };
-                                let cursor_y = bounds.y
-                                    + match text_baseline {
-                                        crate::canvas2d::CanvasTextBaseline::Top
-                                        | crate::canvas2d::CanvasTextBaseline::Hanging => *y,
-                                        crate::canvas2d::CanvasTextBaseline::Middle => {
-                                            *y - scale * 0.5
-                                        }
-                                        crate::canvas2d::CanvasTextBaseline::Bottom
-                                        | crate::canvas2d::CanvasTextBaseline::Ideographic => {
-                                            *y - scale
-                                        }
-                                        crate::canvas2d::CanvasTextBaseline::Alphabetic => {
-                                            *y - scale * 0.8
-                                        }
-                                    };
-
-                                let (r, g, b, a) = color.to_f32();
-                                let color_f32 = [r, g, b, a];
-                                let clip_r = strata_gpu_path::Rect2D::new(
-                                    canvas_clip.x,
-                                    canvas_clip.y,
-                                    canvas_clip.x + canvas_clip.width,
-                                    canvas_clip.y + canvas_clip.height,
+                                self.push_canvas_text(
+                                    *bounds,
+                                    text,
+                                    *x,
+                                    *y,
+                                    *color,
+                                    *font_size,
+                                    *text_align,
+                                    *text_baseline,
+                                    *max_width,
+                                    canvas_clip,
                                 );
-
-                                for ch in text.chars() {
-                                    if let Some(glyph) = self.glyph_cache.get(ch) {
-                                        let glyph_w = glyph.advance_width * scale * x_squeeze;
-                                        let glyph_h = scale;
-                                        let screen_bounds = strata_gpu_path::Rect2D::new(
-                                            cursor_x,
-                                            cursor_y,
-                                            cursor_x + glyph_w,
-                                            cursor_y + glyph_h,
-                                        );
-                                        if canvas_clip
-                                            .intersect(Rect::new(
-                                                cursor_x, cursor_y, glyph_w, glyph_h,
-                                            ))
-                                            .is_some()
-                                        {
-                                            self.buffer.push_glyph(
-                                                glyph,
-                                                screen_bounds,
-                                                color_f32,
-                                                clip_r,
-                                            );
-                                            self.total_glyphs += 1;
-                                        }
-                                        cursor_x += glyph_w;
-                                    } else {
-                                        cursor_x += scale * 0.5 * x_squeeze;
-                                    }
-                                }
                             }
                             _ => {}
                         }
@@ -1665,6 +1724,204 @@ fn subpaths_from_path_verbs(
         result.push((cur_sub, false));
     }
     result
+}
+
+fn circle_to_quads(cx: f32, cy: f32, r: f32) -> Vec<strata_gpu_path::QuadraticBezier> {
+    let segs = 8usize;
+    let mut circle_quads = Vec::with_capacity(segs);
+    for i in 0..segs {
+        let a0 = (i as f32 / segs as f32) * std::f32::consts::TAU;
+        let a1 = ((i + 1) as f32 / segs as f32) * std::f32::consts::TAU;
+        let am = (a0 + a1) * 0.5;
+        let cos_half = ((a1 - a0) * 0.5).cos().max(0.1);
+        let p0 = strata_gpu_path::Point2D::new(cx + r * a0.cos(), cy + r * a0.sin());
+        let p2 = strata_gpu_path::Point2D::new(cx + r * a1.cos(), cy + r * a1.sin());
+        let p1 = strata_gpu_path::Point2D::new(
+            cx + (r / cos_half) * am.cos(),
+            cy + (r / cos_half) * am.sin(),
+        );
+        circle_quads.push(strata_gpu_path::QuadraticBezier::new(p0, p1, p2));
+    }
+    circle_quads
+}
+
+fn canvas_path_verbs_to_quad_subpaths(
+    verbs: &[crate::canvas2d::CanvasPathVerb],
+    ox: f32,
+    oy: f32,
+) -> Vec<(Vec<strata_gpu_path::QuadraticBezier>, bool)> {
+    let mut subpaths: Vec<(Vec<strata_gpu_path::QuadraticBezier>, bool)> = Vec::new();
+    let mut cur_sub = Vec::new();
+    let mut start = strata_gpu_path::Point2D::new(ox, oy);
+    let mut cur = start;
+    let mut has_current = false;
+    for v in verbs {
+        match *v {
+            crate::canvas2d::CanvasPathVerb::MoveTo(x, y) => {
+                if !cur_sub.is_empty() {
+                    subpaths.push((std::mem::take(&mut cur_sub), false));
+                }
+                cur = strata_gpu_path::Point2D::new(ox + x, oy + y);
+                start = cur;
+                has_current = true;
+            }
+            crate::canvas2d::CanvasPathVerb::LineTo(x, y) => {
+                let next = strata_gpu_path::Point2D::new(ox + x, oy + y);
+                cur_sub.push(strata_gpu_path::QuadraticBezier::new(
+                    cur,
+                    cur.lerp(next, 0.5),
+                    next,
+                ));
+                cur = next;
+                has_current = true;
+            }
+            crate::canvas2d::CanvasPathVerb::QuadraticCurveTo { cpx, cpy, x, y } => {
+                let cp = strata_gpu_path::Point2D::new(ox + cpx, oy + cpy);
+                let next = strata_gpu_path::Point2D::new(ox + x, oy + y);
+                cur_sub.push(strata_gpu_path::QuadraticBezier::new(cur, cp, next));
+                cur = next;
+                has_current = true;
+            }
+            crate::canvas2d::CanvasPathVerb::BezierCurveTo {
+                cp1x,
+                cp1y,
+                cp2x,
+                cp2y,
+                x,
+                y,
+            } => {
+                let cp1 = strata_gpu_path::Point2D::new(ox + cp1x, oy + cp1y);
+                let cp2 = strata_gpu_path::Point2D::new(ox + cp2x, oy + cp2y);
+                let next = strata_gpu_path::Point2D::new(ox + x, oy + y);
+                let cubic = strata_gpu_path::CubicBezier::new(cur, cp1, cp2, next);
+                cur_sub.extend(cubic.to_quadratics(0.25));
+                cur = next;
+                has_current = true;
+            }
+            crate::canvas2d::CanvasPathVerb::Arc {
+                cx,
+                cy,
+                radius,
+                start_angle,
+                end_angle,
+                counter_clockwise,
+            } => {
+                let acx = ox + cx;
+                let acy = oy + cy;
+                let mut sweep = end_angle - start_angle;
+                if counter_clockwise && sweep > 0.0 {
+                    sweep -= std::f32::consts::TAU;
+                } else if !counter_clockwise && sweep < 0.0 {
+                    sweep += std::f32::consts::TAU;
+                }
+                let arc_start = strata_gpu_path::Point2D::new(
+                    acx + radius * start_angle.cos(),
+                    acy + radius * start_angle.sin(),
+                );
+                if !has_current {
+                    start = arc_start;
+                    cur = arc_start;
+                    has_current = true;
+                } else if cur.distance_squared(arc_start) > 1e-4 {
+                    cur_sub.push(strata_gpu_path::QuadraticBezier::new(
+                        cur,
+                        cur.lerp(arc_start, 0.5),
+                        arc_start,
+                    ));
+                    cur = arc_start;
+                }
+                let steps = ((sweep.abs() / std::f32::consts::FRAC_PI_4).ceil() as usize)
+                    .clamp(4, 16);
+                for i in 0..steps {
+                    let t0 = start_angle + sweep * (i as f32 / steps as f32);
+                    let t1 = start_angle + sweep * ((i + 1) as f32 / steps as f32);
+                    let tm = (t0 + t1) * 0.5;
+                    let cos_h = ((t1 - t0) * 0.5).cos().max(0.1);
+                    let p0 = strata_gpu_path::Point2D::new(
+                        acx + radius * t0.cos(),
+                        acy + radius * t0.sin(),
+                    );
+                    let p2 = strata_gpu_path::Point2D::new(
+                        acx + radius * t1.cos(),
+                        acy + radius * t1.sin(),
+                    );
+                    let p1 = strata_gpu_path::Point2D::new(
+                        acx + (radius / cos_h) * tm.cos(),
+                        acy + (radius / cos_h) * tm.sin(),
+                    );
+                    cur_sub.push(strata_gpu_path::QuadraticBezier::new(p0, p1, p2));
+                    cur = p2;
+                }
+            }
+            crate::canvas2d::CanvasPathVerb::Close => {
+                if has_current && cur.distance_squared(start) > 1e-4 {
+                    cur_sub.push(strata_gpu_path::QuadraticBezier::new(
+                        cur,
+                        cur.lerp(start, 0.5),
+                        start,
+                    ));
+                    cur = start;
+                }
+                if !cur_sub.is_empty() {
+                    subpaths.push((std::mem::take(&mut cur_sub), true));
+                }
+            }
+        }
+    }
+    if !cur_sub.is_empty() {
+        subpaths.push((cur_sub, false));
+    }
+    subpaths
+}
+
+fn flatten_quad_subpaths(
+    subpaths: &[(Vec<strata_gpu_path::QuadraticBezier>, bool)],
+    steps_per_curve: usize,
+) -> Vec<Vec<(f32, f32)>> {
+    let steps = steps_per_curve.max(1);
+    let mut polys = Vec::with_capacity(subpaths.len());
+    for (quads, _) in subpaths {
+        if quads.is_empty() {
+            continue;
+        }
+        let mut pts = Vec::with_capacity(quads.len() * steps + 1);
+        for (qi, q) in quads.iter().enumerate() {
+            let a = (q.p0.x - 2.0 * q.p1.x + q.p2.x).hypot(q.p0.y - 2.0 * q.p1.y + q.p2.y);
+            let seg_steps = if a <= 1e-3 { 1 } else { steps };
+            let start_step = if qi == 0 { 0 } else { 1 };
+            for s in start_step..=seg_steps {
+                let t = s as f32 / seg_steps as f32;
+                let u = 1.0 - t;
+                let px = u * u * q.p0.x + 2.0 * u * t * q.p1.x + t * t * q.p2.x;
+                let py = u * u * q.p0.y + 2.0 * u * t * q.p1.y + t * t * q.p2.y;
+                pts.push((px, py));
+            }
+        }
+        if pts.len() >= 3 {
+            polys.push(pts);
+        }
+    }
+    polys
+}
+
+fn poly_layers_bbox(subpaths: &[Vec<(f32, f32)>]) -> Option<Rect> {
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for sub in subpaths {
+        for &(x, y) in sub {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    if min_x.is_finite() && min_y.is_finite() && max_x > min_x && max_y > min_y {
+        Some(Rect::new(min_x, min_y, max_x - min_x, max_y - min_y))
+    } else {
+        None
+    }
 }
 
 /// Batch collection of GPU instanced path segments ready for upload to storage/vertex buffers.
@@ -2430,32 +2687,8 @@ impl GpuPathBatch {
                                 stroke_color,
                                 line_width,
                             } => {
-                                let cx = ox + center.0;
-                                let cy = oy + center.1;
-                                let r = *radius;
-                                let segs = 8usize;
-                                let mut circle_quads = Vec::with_capacity(segs);
-                                for i in 0..segs {
-                                    let a0 = (i as f32 / segs as f32) * std::f32::consts::TAU;
-                                    let a1 =
-                                        ((i + 1) as f32 / segs as f32) * std::f32::consts::TAU;
-                                    let am = (a0 + a1) * 0.5;
-                                    let cos_half = ((a1 - a0) * 0.5).cos().max(0.1);
-                                    let p0 = strata_gpu_path::Point2D::new(
-                                        cx + r * a0.cos(),
-                                        cy + r * a0.sin(),
-                                    );
-                                    let p2 = strata_gpu_path::Point2D::new(
-                                        cx + r * a1.cos(),
-                                        cy + r * a1.sin(),
-                                    );
-                                    let p1 = strata_gpu_path::Point2D::new(
-                                        cx + (r / cos_half) * am.cos(),
-                                        cy + (r / cos_half) * am.sin(),
-                                    );
-                                    circle_quads
-                                        .push(strata_gpu_path::QuadraticBezier::new(p0, p1, p2));
-                                }
+                                let circle_quads =
+                                    circle_to_quads(ox + center.0, oy + center.1, *radius);
                                 if let Some(fc) = fill_color {
                                     batch.emit_fill_quads(
                                         &circle_quads,
@@ -2491,163 +2724,7 @@ impl GpuPathBatch {
                                 stroke_color,
                                 line_width,
                             } => {
-                                let mut subpaths: Vec<(
-                                    Vec<strata_gpu_path::QuadraticBezier>,
-                                    bool,
-                                )> = Vec::new();
-                                let mut cur_sub = Vec::new();
-                                let mut start = strata_gpu_path::Point2D::new(ox, oy);
-                                let mut cur = start;
-                                let mut has_current = false;
-                                for v in verbs {
-                                    match *v {
-                                        crate::canvas2d::CanvasPathVerb::MoveTo(x, y) => {
-                                            if !cur_sub.is_empty() {
-                                                subpaths
-                                                    .push((std::mem::take(&mut cur_sub), false));
-                                            }
-                                            cur = strata_gpu_path::Point2D::new(ox + x, oy + y);
-                                            start = cur;
-                                            has_current = true;
-                                        }
-                                        crate::canvas2d::CanvasPathVerb::LineTo(x, y) => {
-                                            let next =
-                                                strata_gpu_path::Point2D::new(ox + x, oy + y);
-                                            cur_sub.push(strata_gpu_path::QuadraticBezier::new(
-                                                cur,
-                                                cur.lerp(next, 0.5),
-                                                next,
-                                            ));
-                                            cur = next;
-                                            has_current = true;
-                                        }
-                                        crate::canvas2d::CanvasPathVerb::QuadraticCurveTo {
-                                            cpx,
-                                            cpy,
-                                            x,
-                                            y,
-                                        } => {
-                                            let cp =
-                                                strata_gpu_path::Point2D::new(ox + cpx, oy + cpy);
-                                            let next =
-                                                strata_gpu_path::Point2D::new(ox + x, oy + y);
-                                            cur_sub.push(strata_gpu_path::QuadraticBezier::new(
-                                                cur, cp, next,
-                                            ));
-                                            cur = next;
-                                            has_current = true;
-                                        }
-                                        crate::canvas2d::CanvasPathVerb::BezierCurveTo {
-                                            cp1x,
-                                            cp1y,
-                                            cp2x,
-                                            cp2y,
-                                            x,
-                                            y,
-                                        } => {
-                                            let cp1 = strata_gpu_path::Point2D::new(
-                                                ox + cp1x,
-                                                oy + cp1y,
-                                            );
-                                            let cp2 = strata_gpu_path::Point2D::new(
-                                                ox + cp2x,
-                                                oy + cp2y,
-                                            );
-                                            let next =
-                                                strata_gpu_path::Point2D::new(ox + x, oy + y);
-                                            let cubic = strata_gpu_path::CubicBezier::new(
-                                                cur, cp1, cp2, next,
-                                            );
-                                            cur_sub.extend(cubic.to_quadratics(0.25));
-                                            cur = next;
-                                            has_current = true;
-                                        }
-                                        crate::canvas2d::CanvasPathVerb::Arc {
-                                            cx,
-                                            cy,
-                                            radius,
-                                            start_angle,
-                                            end_angle,
-                                            counter_clockwise,
-                                        } => {
-                                            let acx = ox + cx;
-                                            let acy = oy + cy;
-                                            let mut sweep = end_angle - start_angle;
-                                            if counter_clockwise && sweep > 0.0 {
-                                                sweep -= std::f32::consts::TAU;
-                                            } else if !counter_clockwise && sweep < 0.0 {
-                                                sweep += std::f32::consts::TAU;
-                                            }
-                                            let arc_start = strata_gpu_path::Point2D::new(
-                                                acx + radius * start_angle.cos(),
-                                                acy + radius * start_angle.sin(),
-                                            );
-                                            if !has_current {
-                                                start = arc_start;
-                                                cur = arc_start;
-                                                has_current = true;
-                                            } else if cur.distance_squared(arc_start) > 1e-4 {
-                                                cur_sub.push(
-                                                    strata_gpu_path::QuadraticBezier::new(
-                                                        cur,
-                                                        cur.lerp(arc_start, 0.5),
-                                                        arc_start,
-                                                    ),
-                                                );
-                                                cur = arc_start;
-                                            }
-                                            let steps = ((sweep.abs()
-                                                / std::f32::consts::FRAC_PI_4)
-                                                .ceil()
-                                                as usize)
-                                                .clamp(4, 16);
-                                            for i in 0..steps {
-                                                let t0 = start_angle
-                                                    + sweep * (i as f32 / steps as f32);
-                                                let t1 = start_angle
-                                                    + sweep * ((i + 1) as f32 / steps as f32);
-                                                let tm = (t0 + t1) * 0.5;
-                                                let cos_h = ((t1 - t0) * 0.5).cos().max(0.1);
-                                                let p0 = strata_gpu_path::Point2D::new(
-                                                    acx + radius * t0.cos(),
-                                                    acy + radius * t0.sin(),
-                                                );
-                                                let p2 = strata_gpu_path::Point2D::new(
-                                                    acx + radius * t1.cos(),
-                                                    acy + radius * t1.sin(),
-                                                );
-                                                let p1 = strata_gpu_path::Point2D::new(
-                                                    acx + (radius / cos_h) * tm.cos(),
-                                                    acy + (radius / cos_h) * tm.sin(),
-                                                );
-                                                cur_sub.push(
-                                                    strata_gpu_path::QuadraticBezier::new(
-                                                        p0, p1, p2,
-                                                    ),
-                                                );
-                                                cur = p2;
-                                            }
-                                        }
-                                        crate::canvas2d::CanvasPathVerb::Close => {
-                                            if has_current && cur.distance_squared(start) > 1e-4 {
-                                                cur_sub.push(
-                                                    strata_gpu_path::QuadraticBezier::new(
-                                                        cur,
-                                                        cur.lerp(start, 0.5),
-                                                        start,
-                                                    ),
-                                                );
-                                                cur = start;
-                                            }
-                                            if !cur_sub.is_empty() {
-                                                subpaths.push((std::mem::take(&mut cur_sub), true));
-                                            }
-                                        }
-                                    }
-                                }
-                                if !cur_sub.is_empty() {
-                                    subpaths.push((cur_sub, false));
-                                }
+                                let subpaths = canvas_path_verbs_to_quad_subpaths(verbs, ox, oy);
 
                                 if let Some(fc) = fill_color {
                                     for (sub, closed) in &subpaths {
@@ -3272,7 +3349,1047 @@ impl GpuBatchCollector {
 
         Ok(self.summary)
     }
+
+    /// Updates viewport dimensions for subsequent batch compilations.
+    pub fn resize(&mut self, viewport_width: f32, viewport_height: f32) {
+        self.viewport_width = viewport_width;
+        self.viewport_height = viewport_height;
+    }
+
+    /// Compiles a `DisplayList` into coalesced painter's-order hardware GPU batches
+    /// (`GpuBatch`, `GpuPathBatch`, `GpuSlugTextPipeline`, `GpuClipMask`s, and `DrawViewport3D` split points),
+    /// eliminating duplicate `FillRect`/`StrokeRect` emission and triangulating/stencil-filling closed vector shapes.
+    pub fn collect_hardware_frame(
+        &mut self,
+        list: &DisplayList,
+        damage: Option<Rect>,
+    ) -> Hardware2DFrame {
+        self.quad_batch.clear();
+        self.path_batch.clear();
+        self.text_pipeline.clear();
+
+        let glyph_cache = std::mem::take(&mut self.text_pipeline.glyph_cache);
+        let text = GpuSlugTextPipeline {
+            glyph_cache,
+            buffer: strata_gpu_path::SlugGlyphBuffer::new(),
+            total_glyphs: 0,
+            total_curves: 0,
+        };
+        let mut frame = Hardware2DFrame {
+            quads: GpuBatch::with_capacity(list.len()),
+            paths: GpuPathBatch::new(),
+            text,
+            items: Vec::with_capacity(list.len().min(64)),
+            clip_masks: Vec::new(),
+            summary: GpuBatchSummary::default(),
+        };
+
+        let viewport_rect = Rect::new(0.0, 0.0, self.viewport_width, self.viewport_height);
+        let default_clip = damage.unwrap_or(viewport_rect);
+        let mut builder = HardwareFrameBuilder {
+            frame: &mut frame,
+            viewport_rect,
+            default_clip,
+            clip_stack: Vec::new(),
+            poly_clip_stack: Vec::new(),
+            poly_mask_id: None,
+            transform_stack: Vec::new(),
+            opacity_stack: Vec::new(),
+            cur_alpha: 1.0,
+        };
+        builder.compile_list(list);
+
+        frame.text.total_curves = frame.text.buffer.curves.len();
+        let draw_calls = frame.count_draw_calls();
+        frame.summary = GpuBatchSummary {
+            total_commands: list.len(),
+            quad_instances: frame.quads.len(),
+            slug_glyphs: frame.text.total_glyphs,
+            path_segments: frame.paths.len(),
+            total_draw_calls: draw_calls,
+        };
+
+        // Keep legacy collector state in sync without cloning large vector buffers.
+        self.text_pipeline.glyph_cache = frame.text.glyph_cache.clone();
+        self.summary = frame.summary;
+        frame
+    }
 }
+
+/// Alias matching hardware swapchain batch collection across `strata_render` and `strata_platform`.
+pub type UnifiedGpuCollector = GpuBatchCollector;
+
+/// GPU primitive kind for a coalesced hardware draw call inside [`Hardware2DFrame`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HardwareDrawOpKind {
+    Quads,
+    Paths,
+    Text,
+}
+
+/// Contiguous range `[start..end)` of batched GPU instances/segments sharing clip mask and scissor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HardwareDrawOp {
+    pub kind: HardwareDrawOpKind,
+    pub start: usize,
+    pub end: usize,
+    pub clip_mask: Option<usize>,
+    pub scissor_rect: Option<Rect>,
+}
+
+/// Ordered hardware render step preserving exact Z-order across 2D GPU batches and 3D viewports.
+#[derive(Debug, Clone)]
+pub enum HardwareRenderItem {
+    Batch(HardwareDrawOp),
+    Viewport3D {
+        bounds: Rect,
+        scene: std::sync::Arc<crate::scene3d::Scene3D>,
+    },
+}
+
+/// Complete compiled hardware 2D/3D frame ready for live `wgpu` swapchain or offscreen execution.
+#[derive(Debug, Clone, Default)]
+pub struct Hardware2DFrame {
+    pub quads: GpuBatch,
+    pub paths: GpuPathBatch,
+    pub text: GpuSlugTextPipeline,
+    pub items: Vec<HardwareRenderItem>,
+    pub clip_masks: Vec<GpuClipMask>,
+    pub summary: GpuBatchSummary,
+}
+
+impl Hardware2DFrame {
+    /// Counts hardware draw calls including stencil clip mask passes and batched content spans.
+    pub fn count_draw_calls(&self) -> usize {
+        let mut calls = 0usize;
+        let mut active_mask: Option<usize> = None;
+        for item in &self.items {
+            match item {
+                HardwareRenderItem::Batch(op) => {
+                    if let Some(mask_id) = op.clip_mask {
+                        if active_mask != Some(mask_id) {
+                            if let Some(mask) = self.clip_masks.get(mask_id) {
+                                calls += mask
+                                    .stencil_layers
+                                    .iter()
+                                    .filter(|l| !l.is_empty())
+                                    .count();
+                            }
+                            active_mask = Some(mask_id);
+                        }
+                    }
+                    calls += 1;
+                }
+                HardwareRenderItem::Viewport3D { .. } => {
+                    calls += 1;
+                    active_mask = None;
+                }
+            }
+        }
+        calls
+    }
+}
+
+struct HardwareFrameBuilder<'a> {
+    frame: &'a mut Hardware2DFrame,
+    viewport_rect: Rect,
+    default_clip: Rect,
+    clip_stack: Vec<(Rect, bool)>,
+    poly_clip_stack: Vec<Vec<Vec<(f32, f32)>>>,
+    poly_mask_id: Option<usize>,
+    transform_stack: Vec<strata_primitives::geom::Matrix4x4>,
+    opacity_stack: Vec<f32>,
+    cur_alpha: f32,
+}
+
+impl<'a> HardwareFrameBuilder<'a> {
+    #[inline]
+    fn current_clip(&self) -> Option<Rect> {
+        match self.clip_stack.last() {
+            Some((r, _)) => r.intersect(self.default_clip),
+            None => Some(self.default_clip),
+        }
+    }
+
+    #[inline]
+    fn transform_rect(&self, r: Rect) -> Rect {
+        if let Some(mat) = self.transform_stack.last() {
+            if !mat.is_identity() {
+                let (x, y, w, h) = mat.transform_bounds(r.x, r.y, r.width, r.height);
+                return Rect::new(x, y, w, h);
+            }
+        }
+        r
+    }
+
+    fn transform_subpaths(&self, subs: Vec<Vec<(f32, f32)>>) -> Vec<Vec<(f32, f32)>> {
+        if let Some(mat) = self.transform_stack.last() {
+            if !mat.is_identity() {
+                return subs
+                    .into_iter()
+                    .map(|sub| {
+                        sub.into_iter()
+                            .map(|(x, y)| mat.transform_point(x, y))
+                            .collect()
+                    })
+                    .collect();
+            }
+        }
+        subs
+    }
+
+    fn record_op(
+        &mut self,
+        kind: HardwareDrawOpKind,
+        start: usize,
+        end: usize,
+        clip_mask: Option<usize>,
+        scissor_rect: Option<Rect>,
+    ) {
+        if end <= start {
+            return;
+        }
+        if let Some(HardwareRenderItem::Batch(prev)) = self.frame.items.last_mut() {
+            if prev.kind == kind
+                && prev.clip_mask == clip_mask
+                && prev.scissor_rect == scissor_rect
+                && prev.end == start
+            {
+                prev.end = end;
+                return;
+            }
+        }
+        self.frame.items.push(HardwareRenderItem::Batch(HardwareDrawOp {
+            kind,
+            start,
+            end,
+            clip_mask,
+            scissor_rect,
+        }));
+    }
+
+    #[inline]
+    fn scissor_for(&self, clip: Rect) -> Option<Rect> {
+        if clip == self.viewport_rect {
+            None
+        } else {
+            Some(clip)
+        }
+    }
+
+    fn push_clipped_quad(
+        &mut self,
+        instance: GpuQuadInstance,
+        rect: Rect,
+        clip_polys: &[Vec<Vec<(f32, f32)>>],
+        clip_mask_id: Option<usize>,
+    ) {
+        let mask = if clip_polys.is_empty() {
+            None
+        } else {
+            match rect_relation_to_clip_polys(rect, clip_polys) {
+                ClipContainment::Outside => return,
+                ClipContainment::Inside => None,
+                ClipContainment::Partial => clip_mask_id,
+            }
+        };
+        let start = self.frame.quads.len();
+        self.frame.quads.push_with_clip(instance, mask);
+        let end = self.frame.quads.len();
+        self.record_op(HardwareDrawOpKind::Quads, start, end, mask, None);
+    }
+
+    fn emit_stencil_fill(
+        &mut self,
+        fill_polys: Vec<Vec<(f32, f32)>>,
+        fill_color: Color,
+        active_clip: Rect,
+        parent_clip_polys: &[Vec<Vec<(f32, f32)>>],
+    ) {
+        let Some(poly_bbox) = poly_layers_bbox(&fill_polys) else {
+            return;
+        };
+        let Some(clipped_bbox) = poly_bbox.intersect(active_clip) else {
+            return;
+        };
+        if !parent_clip_polys.is_empty()
+            && rect_relation_to_clip_polys(clipped_bbox, parent_clip_polys)
+                == ClipContainment::Outside
+        {
+            return;
+        }
+        let mut layers = Vec::with_capacity(parent_clip_polys.len() + 1);
+        layers.extend_from_slice(parent_clip_polys);
+        layers.push(fill_polys);
+        let Some(mask_id) =
+            resolve_or_push_clip_mask(&mut self.frame.clip_masks, Some(clipped_bbox), &layers)
+        else {
+            return;
+        };
+        let col = apply_color_opacity(fill_color, self.cur_alpha);
+        let start = self.frame.quads.len();
+        self.frame
+            .quads
+            .push_with_clip(GpuQuadInstance::from_rect(clipped_bbox, col, active_clip), Some(mask_id));
+        let end = self.frame.quads.len();
+        self.record_op(HardwareDrawOpKind::Quads, start, end, Some(mask_id), None);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_paths_with_op(
+        &mut self,
+        quads: &[strata_gpu_path::QuadraticBezier],
+        closed: bool,
+        sw: f32,
+        color: Color,
+        cap: strata_gpu_path::LineCap,
+        join: strata_gpu_path::LineJoin,
+        miter_limit: f32,
+        dashes: &[f32],
+        dash_offset: f32,
+        extra_flags: u32,
+        active_clip: Rect,
+        clip_polys: &[Vec<Vec<(f32, f32)>>],
+        clip_mask_id: Option<usize>,
+    ) {
+        let start = self.frame.paths.len();
+        let before_spans = self.frame.paths.clip_spans.len();
+        let col = apply_color_opacity(color, self.cur_alpha);
+        self.frame.paths.emit_subpath_strokes(
+            quads,
+            closed,
+            sw,
+            col,
+            cap,
+            join,
+            miter_limit,
+            dashes,
+            dash_offset,
+            extra_flags,
+            Some(active_clip),
+            clip_polys,
+            clip_mask_id,
+        );
+        let end = self.frame.paths.len();
+        if end <= start {
+            return;
+        }
+        let scissor = self.scissor_for(active_clip);
+        let spans = &self.frame.paths.clip_spans;
+        if !spans.is_empty() {
+            let scan_from = before_spans.saturating_sub(1);
+            let mut local_ops: Vec<(usize, usize, Option<usize>)> = Vec::new();
+            for span in &spans[scan_from..] {
+                if span.end <= start || span.start >= end {
+                    continue;
+                }
+                local_ops.push((span.start.max(start), span.end.min(end), span.clip_mask));
+            }
+            for (s0, s1, mask) in local_ops {
+                self.record_op(HardwareDrawOpKind::Paths, s0, s1, mask, scissor);
+            }
+        } else {
+            self.record_op(HardwareDrawOpKind::Paths, start, end, None, scissor);
+        }
+    }
+
+    fn emit_text_with_clip(
+        &mut self,
+        start: usize,
+        end: usize,
+        run_bounds: Rect,
+        active_clip: Rect,
+        clip_polys: &[Vec<Vec<(f32, f32)>>],
+        clip_mask_id: Option<usize>,
+    ) {
+        if end <= start {
+            return;
+        }
+        let mask = if clip_polys.is_empty() {
+            None
+        } else {
+            match rect_relation_to_clip_polys(run_bounds, clip_polys) {
+                ClipContainment::Outside => {
+                    self.frame.text.buffer.instances.truncate(start);
+                    self.frame.text.total_glyphs = self.frame.text.buffer.instances.len();
+                    return;
+                }
+                ClipContainment::Inside => None,
+                ClipContainment::Partial => clip_mask_id,
+            }
+        };
+        let scissor = self.scissor_for(active_clip);
+        self.record_op(HardwareDrawOpKind::Text, start, end, mask, scissor);
+    }
+
+    fn compile_list(&mut self, list: &DisplayList) {
+        for cmd in list.commands() {
+            match cmd {
+                DrawCommand::PushClip { bounds, radius } => {
+                    let tb = self.transform_rect(*bounds);
+                    let combined = match self.clip_stack.last() {
+                        Some((prev, _)) => prev.intersect(tb).unwrap_or(Rect::zero()),
+                        None => tb,
+                    };
+                    let has_radius = radius.top_left > 0.5
+                        || radius.top_right > 0.5
+                        || radius.bottom_right > 0.5
+                        || radius.bottom_left > 0.5;
+                    if has_radius && tb.width > 0.0 && tb.height > 0.0 {
+                        self.poly_clip_stack.push(vec![rounded_rect_subpath(tb, *radius)]);
+                        self.poly_mask_id = resolve_or_push_clip_mask(
+                            &mut self.frame.clip_masks,
+                            combined.intersect(self.default_clip),
+                            &self.poly_clip_stack,
+                        );
+                    }
+                    self.clip_stack.push((combined, has_radius));
+                    continue;
+                }
+                DrawCommand::PopClip => {
+                    if let Some((_, had_poly)) = self.clip_stack.pop() {
+                        if had_poly {
+                            self.poly_clip_stack.pop();
+                            let active = self.current_clip();
+                            self.poly_mask_id = resolve_or_push_clip_mask(
+                                &mut self.frame.clip_masks,
+                                active,
+                                &self.poly_clip_stack,
+                            );
+                        }
+                    }
+                    continue;
+                }
+                DrawCommand::PushTransform { matrix } => {
+                    let combined = match self.transform_stack.last() {
+                        Some(prev) => prev.multiply(matrix),
+                        None => *matrix,
+                    };
+                    self.transform_stack.push(combined);
+                    continue;
+                }
+                DrawCommand::PopTransform => {
+                    self.transform_stack.pop();
+                    continue;
+                }
+                DrawCommand::PushOpacity { alpha } => {
+                    self.opacity_stack.push(self.cur_alpha);
+                    self.cur_alpha = (self.cur_alpha * alpha).clamp(0.0, 1.0);
+                    continue;
+                }
+                DrawCommand::PopOpacity => {
+                    if let Some(prev) = self.opacity_stack.pop() {
+                        self.cur_alpha = prev;
+                    }
+                    continue;
+                }
+                DrawCommand::DrawViewport3D { bounds, scene } => {
+                    if bounds.width > 0.0 && bounds.height > 0.0 {
+                        self.frame.items.push(HardwareRenderItem::Viewport3D {
+                            bounds: self.transform_rect(*bounds),
+                            scene: std::sync::Arc::clone(scene),
+                        });
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+
+            let Some(current_clip) = self.current_clip() else {
+                continue;
+            };
+            if let Some(b) = cmd.bounds() {
+                if self.transform_rect(b).intersect(current_clip).is_none() {
+                    continue;
+                }
+            }
+
+            let root_polys = self.poly_clip_stack.clone();
+            let root_mask = self.poly_mask_id;
+            match cmd {
+                DrawCommand::DrawRect { bounds, color } => {
+                    let tr = self.transform_rect(*bounds);
+                    let col = apply_color_opacity(*color, self.cur_alpha);
+                    self.push_clipped_quad(
+                        GpuQuadInstance::from_rect(tr, col, current_clip),
+                        tr,
+                        &root_polys,
+                        root_mask,
+                    );
+                }
+                DrawCommand::DrawRoundedRect {
+                    bounds,
+                    color,
+                    border_radius,
+                    border_width,
+                    border_color,
+                } => {
+                    let tr = self.transform_rect(*bounds);
+                    let col = apply_color_opacity(*color, self.cur_alpha);
+                    let bcol = border_color.map(|c| apply_color_opacity(c, self.cur_alpha));
+                    self.push_clipped_quad(
+                        GpuQuadInstance::from_rounded_rect(
+                            tr,
+                            col,
+                            *border_radius,
+                            *border_width,
+                            bcol,
+                            current_clip,
+                        ),
+                        tr,
+                        &root_polys,
+                        root_mask,
+                    );
+                }
+                DrawCommand::DrawBorder {
+                    bounds,
+                    widths,
+                    color,
+                    border_radius,
+                    ..
+                } => {
+                    let tr = self.transform_rect(*bounds);
+                    let bcol = apply_color_opacity(*color, self.cur_alpha);
+                    self.push_clipped_quad(
+                        GpuQuadInstance::from_rounded_rect(
+                            tr,
+                            Color::TRANSPARENT,
+                            *border_radius,
+                            *widths,
+                            Some(bcol),
+                            current_clip,
+                        ),
+                        tr,
+                        &root_polys,
+                        root_mask,
+                    );
+                }
+                DrawCommand::DrawText {
+                    origin,
+                    text,
+                    font_size,
+                    color,
+                    ..
+                } => {
+                    let col = apply_color_opacity(*color, self.cur_alpha);
+                    let start = self.frame.text.buffer.instances.len();
+                    self.frame.text.push_text_run(
+                        text,
+                        origin.0,
+                        origin.1,
+                        *font_size,
+                        1.0,
+                        col,
+                        current_clip,
+                    );
+                    let end = self.frame.text.buffer.instances.len();
+                    let run_rect = Rect::new(
+                        origin.0,
+                        origin.1,
+                        (text.len() as f32 * font_size).max(1.0),
+                        font_size.max(1.0),
+                    );
+                    self.emit_text_with_clip(
+                        start,
+                        end,
+                        run_rect,
+                        current_clip,
+                        &root_polys,
+                        root_mask,
+                    );
+                }
+                DrawCommand::DrawTextFragments { fragments } => {
+                    for frag in fragments {
+                        let col = apply_color_opacity(frag.style.color, self.cur_alpha);
+                        let start = self.frame.text.buffer.instances.len();
+                        self.frame.text.push_text_run(
+                            &frag.text,
+                            frag.bounds.x,
+                            frag.bounds.y,
+                            frag.style.font_size,
+                            1.0,
+                            col,
+                            current_clip,
+                        );
+                        let end = self.frame.text.buffer.instances.len();
+                        self.emit_text_with_clip(
+                            start,
+                            end,
+                            frag.bounds,
+                            current_clip,
+                            &root_polys,
+                            root_mask,
+                        );
+                    }
+                }
+                DrawCommand::DrawGpuPath {
+                    path,
+                    stroke,
+                    fill_color,
+                    stroke_color,
+                    ..
+                } => {
+                    let subpaths = subpaths_from_path_verbs(&path.verbs, 0.0, 0.0, 1.0, 1.0, 0.25);
+                    if let Some(fc) = fill_color {
+                        let polys = flatten_quad_subpaths(&subpaths, 6);
+                        self.emit_stencil_fill(polys, *fc, current_clip, &root_polys);
+                    }
+                    if let Some(sc) = stroke_color {
+                        let sw = stroke.map(|s| s.width).unwrap_or(1.0);
+                        let cap = stroke.map(|s| s.cap).unwrap_or_default();
+                        let join = stroke.map(|s| s.join).unwrap_or_default();
+                        let miter = stroke.map(|s| s.miter_limit).unwrap_or(4.0);
+                        let even_odd =
+                            if path.fill_rule == Some(strata_gpu_path::FillRule::EvenOdd) {
+                                strata_gpu_path::FLAG_EVEN_ODD
+                            } else {
+                                0
+                            };
+                        for (sub, closed) in &subpaths {
+                            self.emit_paths_with_op(
+                                sub,
+                                *closed,
+                                sw,
+                                *sc,
+                                cap,
+                                join,
+                                miter,
+                                &[],
+                                0.0,
+                                even_odd,
+                                current_clip,
+                                &root_polys,
+                                root_mask,
+                            );
+                        }
+                    }
+                }
+                DrawCommand::DrawSvgPath {
+                    bounds,
+                    path_data,
+                    stroke_color,
+                    fill_color,
+                    stroke_width,
+                    stroke_linecap,
+                    stroke_linejoin,
+                    stroke_dasharray,
+                    fill_rule,
+                    view_box,
+                } => {
+                    let sx = if view_box.0 > 0.0 {
+                        bounds.width / view_box.0
+                    } else {
+                        1.0
+                    };
+                    let sy = if view_box.1 > 0.0 {
+                        bounds.height / view_box.1
+                    } else {
+                        1.0
+                    };
+                    let avg_scale = ((sx + sy) * 0.5).max(0.001);
+                    let parsed = strata_gpu_path::PathBuilder::from_svg(path_data);
+                    let subpaths = subpaths_from_path_verbs(
+                        &parsed.verbs,
+                        bounds.x,
+                        bounds.y,
+                        sx,
+                        sy,
+                        0.25,
+                    );
+                    if let Some(fc) = fill_color {
+                        let polys = flatten_quad_subpaths(&subpaths, 6);
+                        self.emit_stencil_fill(polys, *fc, current_clip, &root_polys);
+                    }
+                    if let Some(sc) = stroke_color {
+                        let sw = *stroke_width * avg_scale;
+                        let cap = layout_cap_to_gpu(*stroke_linecap);
+                        let join = layout_join_to_gpu(*stroke_linejoin);
+                        let even_odd = if *fill_rule == strata_layout::FillRule::EvenOdd {
+                            strata_gpu_path::FLAG_EVEN_ODD
+                        } else {
+                            0
+                        };
+                        let scaled_dashes: Vec<f32> =
+                            stroke_dasharray.iter().map(|&d| d * avg_scale).collect();
+                        for (sub, closed) in &subpaths {
+                            self.emit_paths_with_op(
+                                sub,
+                                *closed,
+                                sw,
+                                *sc,
+                                cap,
+                                join,
+                                4.0,
+                                &scaled_dashes,
+                                0.0,
+                                even_odd,
+                                current_clip,
+                                &root_polys,
+                                root_mask,
+                            );
+                        }
+                    }
+                }
+                DrawCommand::DrawCanvas2D { bounds, commands } => {
+                    if let Some(base_clip) = self.transform_rect(*bounds).intersect(current_clip) {
+                        self.compile_canvas_commands(bounds, commands, base_clip);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn compile_canvas_commands(
+        &mut self,
+        bounds: &Rect,
+        commands: &[crate::canvas2d::CanvasCommand],
+        base_clip: Rect,
+    ) {
+        let ox = bounds.x;
+        let oy = bounds.y;
+        let mut active_clip = Some(base_clip);
+        let mut line_dash: Vec<f32> = Vec::new();
+        let mut dash_offset: f32 = 0.0;
+        let mut line_cap = strata_gpu_path::LineCap::Butt;
+        let mut line_join = strata_gpu_path::LineJoin::Miter;
+        let mut clip_polys = self.poly_clip_stack.clone();
+        let mut clip_mask_id = resolve_or_push_clip_mask(
+            &mut self.frame.clip_masks,
+            active_clip,
+            &clip_polys,
+        );
+        #[allow(clippy::type_complexity)]
+        let mut state_stack: Vec<(
+            Option<Rect>,
+            Vec<f32>,
+            f32,
+            strata_gpu_path::LineCap,
+            strata_gpu_path::LineJoin,
+            Vec<Vec<Vec<(f32, f32)>>>,
+            Option<usize>,
+        )> = Vec::new();
+
+        for ccmd in commands {
+            match ccmd {
+                crate::canvas2d::CanvasCommand::Save => {
+                    state_stack.push((
+                        active_clip,
+                        line_dash.clone(),
+                        dash_offset,
+                        line_cap,
+                        line_join,
+                        clip_polys.clone(),
+                        clip_mask_id,
+                    ));
+                }
+                crate::canvas2d::CanvasCommand::Restore => {
+                    if let Some((
+                        prev_clip,
+                        prev_dash,
+                        prev_offset,
+                        prev_cap,
+                        prev_join,
+                        prev_polys,
+                        prev_mask,
+                    )) = state_stack.pop()
+                    {
+                        active_clip = prev_clip;
+                        line_dash = prev_dash;
+                        dash_offset = prev_offset;
+                        line_cap = prev_cap;
+                        line_join = prev_join;
+                        clip_polys = prev_polys;
+                        clip_mask_id = prev_mask;
+                    }
+                }
+                crate::canvas2d::CanvasCommand::SetLineDash { segments, offset } => {
+                    line_dash = segments
+                        .iter()
+                        .copied()
+                        .filter(|d| d.is_finite() && *d >= 0.0)
+                        .collect();
+                    if line_dash.len() % 2 == 1 {
+                        let dup = line_dash.clone();
+                        line_dash.extend(dup);
+                    }
+                    dash_offset = if offset.is_finite() { *offset } else { 0.0 };
+                }
+                crate::canvas2d::CanvasCommand::SetLineCap(cap) => {
+                    line_cap = layout_cap_to_gpu(*cap);
+                }
+                crate::canvas2d::CanvasCommand::SetLineJoin(join) => {
+                    line_join = layout_join_to_gpu(*join);
+                }
+                crate::canvas2d::CanvasCommand::ClipPath { verbs } => {
+                    let subpaths = self.transform_subpaths(
+                        crate::canvas2d::flatten_canvas_verbs(verbs, ox, oy),
+                    );
+                    if !subpaths.is_empty() {
+                        if let Some(tb) = poly_layers_bbox(&subpaths) {
+                            active_clip = active_clip.and_then(|c| c.intersect(tb));
+                        }
+                        if !subpaths_are_axis_aligned_rect(&subpaths) {
+                            clip_polys.push(subpaths);
+                            clip_mask_id = resolve_or_push_clip_mask(
+                                &mut self.frame.clip_masks,
+                                active_clip,
+                                &clip_polys,
+                            );
+                        }
+                    }
+                }
+                crate::canvas2d::CanvasCommand::FillRect { bounds: rb, color } => {
+                    let Some(canvas_clip) = active_clip else {
+                        continue;
+                    };
+                    let tr = self.transform_rect(Rect::new(
+                        ox + rb.x,
+                        oy + rb.y,
+                        rb.width,
+                        rb.height,
+                    ));
+                    if tr.intersect(canvas_clip).is_none() {
+                        continue;
+                    }
+                    let col = apply_color_opacity(*color, self.cur_alpha);
+                    self.push_clipped_quad(
+                        GpuQuadInstance::from_rect(tr, col, canvas_clip),
+                        tr,
+                        &clip_polys,
+                        clip_mask_id,
+                    );
+                }
+                crate::canvas2d::CanvasCommand::StrokeRect {
+                    bounds: rb,
+                    color,
+                    line_width,
+                } => {
+                    let Some(canvas_clip) = active_clip else {
+                        continue;
+                    };
+                    let r = Rect::new(ox + rb.x, oy + rb.y, rb.width, rb.height);
+                    let period: f32 = line_dash.iter().copied().sum();
+                    if line_cap == strata_gpu_path::LineCap::Butt
+                        && line_join == strata_gpu_path::LineJoin::Miter
+                    {
+                        if line_dash.is_empty() || period <= 1e-4 {
+                            let tr = self.transform_rect(r);
+                            if tr.intersect(canvas_clip).is_some() {
+                                let col = apply_color_opacity(*color, self.cur_alpha);
+                                self.push_clipped_quad(
+                                    GpuQuadInstance::from_rounded_rect(
+                                        tr,
+                                        Color::TRANSPARENT,
+                                        BorderRadius::default(),
+                                        EdgeInsets::all(*line_width),
+                                        Some(col),
+                                        canvas_clip,
+                                    ),
+                                    tr,
+                                    &clip_polys,
+                                    clip_mask_id,
+                                );
+                            }
+                        } else {
+                            let col = apply_color_opacity(*color, self.cur_alpha);
+                            for seg_rect in compute_dashed_stroke_rect_segments(
+                                r,
+                                *line_width,
+                                &line_dash,
+                                dash_offset,
+                            ) {
+                                let t_seg = self.transform_rect(seg_rect);
+                                if t_seg.intersect(canvas_clip).is_some() {
+                                    self.push_clipped_quad(
+                                        GpuQuadInstance::from_rect(t_seg, col, canvas_clip),
+                                        t_seg,
+                                        &clip_polys,
+                                        clip_mask_id,
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        let p0 = strata_gpu_path::Point2D::new(r.x, r.y);
+                        let p1 = strata_gpu_path::Point2D::new(r.x + r.width, r.y);
+                        let p2 = strata_gpu_path::Point2D::new(r.x + r.width, r.y + r.height);
+                        let p3 = strata_gpu_path::Point2D::new(r.x, r.y + r.height);
+                        let rect_quads = [
+                            strata_gpu_path::QuadraticBezier::new(p0, p0.lerp(p1, 0.5), p1),
+                            strata_gpu_path::QuadraticBezier::new(p1, p1.lerp(p2, 0.5), p2),
+                            strata_gpu_path::QuadraticBezier::new(p2, p2.lerp(p3, 0.5), p3),
+                            strata_gpu_path::QuadraticBezier::new(p3, p3.lerp(p0, 0.5), p0),
+                        ];
+                        self.emit_paths_with_op(
+                            &rect_quads,
+                            true,
+                            *line_width,
+                            *color,
+                            line_cap,
+                            line_join,
+                            10.0,
+                            &line_dash,
+                            dash_offset,
+                            0,
+                            canvas_clip,
+                            &clip_polys,
+                            clip_mask_id,
+                        );
+                    }
+                }
+                crate::canvas2d::CanvasCommand::DrawLine {
+                    p0,
+                    p1,
+                    color,
+                    line_width,
+                } => {
+                    let Some(canvas_clip) = active_clip else {
+                        continue;
+                    };
+                    let a = strata_gpu_path::Point2D::new(ox + p0.0, oy + p0.1);
+                    let b = strata_gpu_path::Point2D::new(ox + p1.0, oy + p1.1);
+                    let q = strata_gpu_path::QuadraticBezier::new(a, a.lerp(b, 0.5), b);
+                    self.emit_paths_with_op(
+                        &[q],
+                        false,
+                        *line_width,
+                        *color,
+                        line_cap,
+                        line_join,
+                        10.0,
+                        &line_dash,
+                        dash_offset,
+                        0,
+                        canvas_clip,
+                        &clip_polys,
+                        clip_mask_id,
+                    );
+                }
+                crate::canvas2d::CanvasCommand::DrawCircle {
+                    center,
+                    radius,
+                    fill_color,
+                    stroke_color,
+                    line_width,
+                } => {
+                    let Some(canvas_clip) = active_clip else {
+                        continue;
+                    };
+                    let circle_quads = circle_to_quads(ox + center.0, oy + center.1, *radius);
+                    if let Some(fc) = fill_color {
+                        let polys = flatten_quad_subpaths(&[(circle_quads.clone(), true)], 4);
+                        self.emit_stencil_fill(polys, *fc, canvas_clip, &clip_polys);
+                    }
+                    if let Some(sc) = stroke_color {
+                        self.emit_paths_with_op(
+                            &circle_quads,
+                            true,
+                            *line_width,
+                            *sc,
+                            line_cap,
+                            line_join,
+                            10.0,
+                            &line_dash,
+                            dash_offset,
+                            0,
+                            canvas_clip,
+                            &clip_polys,
+                            clip_mask_id,
+                        );
+                    }
+                }
+                crate::canvas2d::CanvasCommand::DrawPath {
+                    verbs,
+                    fill_color,
+                    stroke_color,
+                    line_width,
+                } => {
+                    let Some(canvas_clip) = active_clip else {
+                        continue;
+                    };
+                    let subpaths = canvas_path_verbs_to_quad_subpaths(verbs, ox, oy);
+                    if let Some(fc) = fill_color {
+                        let polys = flatten_quad_subpaths(&subpaths, 6);
+                        self.emit_stencil_fill(polys, *fc, canvas_clip, &clip_polys);
+                    }
+                    if let Some(sc) = stroke_color {
+                        for (sub, closed) in &subpaths {
+                            self.emit_paths_with_op(
+                                sub,
+                                *closed,
+                                *line_width,
+                                *sc,
+                                line_cap,
+                                line_join,
+                                10.0,
+                                &line_dash,
+                                dash_offset,
+                                0,
+                                canvas_clip,
+                                &clip_polys,
+                                clip_mask_id,
+                            );
+                        }
+                    }
+                }
+                crate::canvas2d::CanvasCommand::FillText {
+                    text,
+                    x,
+                    y,
+                    color,
+                    font_size,
+                    text_align,
+                    text_baseline,
+                    max_width,
+                    ..
+                }
+                | crate::canvas2d::CanvasCommand::StrokeText {
+                    text,
+                    x,
+                    y,
+                    color,
+                    font_size,
+                    text_align,
+                    text_baseline,
+                    max_width,
+                    ..
+                } => {
+                    let Some(canvas_clip) = active_clip else {
+                        continue;
+                    };
+                    let col = apply_color_opacity(*color, self.cur_alpha);
+                    let start = self.frame.text.buffer.instances.len();
+                    let (_, run_rect) = self.frame.text.push_canvas_text(
+                        *bounds,
+                        text,
+                        *x,
+                        *y,
+                        col,
+                        *font_size,
+                        *text_align,
+                        *text_baseline,
+                        *max_width,
+                        canvas_clip,
+                    );
+                    let end = self.frame.text.buffer.instances.len();
+                    self.emit_text_with_clip(
+                        start,
+                        end,
+                        run_rect,
+                        canvas_clip,
+                        &clip_polys,
+                        clip_mask_id,
+                    );
+                }
+                crate::canvas2d::CanvasCommand::ClearRect { .. } => {}
+            }
+        }
+    }
+}
+
+#[cfg(feature = "wgpu-backend")]
+pub use crate::wgpu_2d::{GpuStencilClipPipeline, Wgpu2DRenderer};
 
 #[cfg(test)]
 mod tests {
@@ -3617,5 +4734,264 @@ mod tests {
         let dispatched = collector.dispatch(&mut dev, None).expect("dispatch");
         assert_eq!(dispatched.total_draw_calls, summary.total_draw_calls);
         assert!(GpuRenderPipeline::new_stencil_clip_pipeline(200.0, 200.0).is_ok());
+    }
+
+    #[test]
+    fn test_unified_gpu_collector_hardware_frame_ordering_and_stencil_masks() {
+        let mut collector = UnifiedGpuCollector::new(240.0, 240.0);
+
+        let mut canvas = crate::canvas2d::Canvas2DContext::new(240.0, 240.0);
+        canvas.set_fill_style(Color::rgb(20, 40, 80));
+        canvas.fill_rect(0.0, 0.0, 240.0, 240.0);
+        canvas.save();
+        canvas.set_stroke_style(Color::rgb(255, 200, 0));
+        canvas.set_line_width(6.0);
+        canvas.set_line_cap(crate::canvas2d::CanvasLineCap::Round);
+        canvas.set_line_join(crate::canvas2d::CanvasLineJoin::Bevel);
+        canvas.begin_path();
+        canvas.move_to(20.0, 40.0);
+        canvas.line_to(100.0, 40.0);
+        canvas.line_to(100.0, 120.0);
+        canvas.stroke();
+        canvas.restore();
+        canvas.set_fill_style(Color::rgb(12, 12, 16));
+        canvas.fill_rect(60.0, 30.0, 60.0, 24.0);
+        canvas.set_fill_style(Color::WHITE);
+        canvas.fill_text("A", 70.0, 46.0);
+
+        let scene = crate::scene3d::Scene3D::new();
+        let mut dl = DisplayList::new();
+        dl.push(DrawCommand::DrawRect {
+            bounds: Rect::new(0.0, 0.0, 240.0, 240.0),
+            color: Color::rgb(10, 12, 18),
+        });
+        dl.push(DrawCommand::DrawViewport3D {
+            bounds: Rect::new(120.0, 20.0, 100.0, 100.0),
+            scene: std::sync::Arc::new(scene),
+        });
+        dl.push(DrawCommand::DrawCanvas2D {
+            bounds: Rect::new(0.0, 0.0, 240.0, 240.0),
+            commands: canvas.commands().to_vec(),
+        });
+
+        let frame = collector.collect_hardware_frame(&dl, None);
+        // Order: bg DrawRect (Quads) -> Viewport3D -> FillRect (Quads) -> Path stroke (Paths) -> badge FillRect (Quads) -> FillText (Text)
+        assert!(frame.items.len() >= 6);
+        assert!(matches!(
+            frame.items[0],
+            HardwareRenderItem::Batch(HardwareDrawOp {
+                kind: HardwareDrawOpKind::Quads,
+                ..
+            })
+        ));
+        assert!(matches!(
+            frame.items[1],
+            HardwareRenderItem::Viewport3D { .. }
+        ));
+        // Capped path stroke is preserved strictly between FillRect #1 and badge FillRect #2!
+        let path_pos = frame
+            .items
+            .iter()
+            .position(|it| {
+                matches!(
+                    it,
+                    HardwareRenderItem::Batch(HardwareDrawOp {
+                        kind: HardwareDrawOpKind::Paths,
+                        ..
+                    })
+                )
+            })
+            .expect("path stroke op");
+        let text_pos = frame
+            .items
+            .iter()
+            .position(|it| {
+                matches!(
+                    it,
+                    HardwareRenderItem::Batch(HardwareDrawOp {
+                        kind: HardwareDrawOpKind::Text,
+                        ..
+                    })
+                )
+            })
+            .expect("slug text op");
+        assert!(path_pos < text_pos);
+        // Canvas FillRect must NOT emit duplicate segments in paths batch
+        assert!(!frame.paths.segments.is_empty());
+        assert_eq!(
+            frame.quads.len(),
+            3,
+            "bg rect + canvas FillRect + badge FillRect"
+        );
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    #[test]
+    fn test_wgpu_2d_renderer_stencil_clip_dashed_stroke_caps_joins_and_slug_pixels() {
+        let instance = wgpu::Instance::default();
+        let Ok((_adapter, device, queue)) = crate::gpu_wgpu::request_working_adapter_and_device(
+            &instance,
+            None,
+            "strata_render_2d_test_device",
+        ) else {
+            return;
+        };
+
+        let mut renderer = Wgpu2DRenderer::from_device(
+            std::sync::Arc::new(device),
+            std::sync::Arc::new(queue),
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
+        let mut collector = UnifiedGpuCollector::new(240.0, 240.0);
+
+        let mut ctx = crate::canvas2d::Canvas2DContext::new(240.0, 240.0);
+        // 1. Diagonal triangle clip (0,0)-(100,0)-(0,100) + crossing blue FillRect
+        ctx.save();
+        ctx.begin_path();
+        ctx.move_to(0.0, 0.0);
+        ctx.line_to(100.0, 0.0);
+        ctx.line_to(0.0, 100.0);
+        ctx.close_path();
+        ctx.clip();
+        ctx.set_fill_style(Color::rgb(0, 120, 255));
+        ctx.fill_rect(0.0, 0.0, 100.0, 100.0);
+        ctx.restore();
+
+        // 2. Circular clip aperture at (170, 55), radius 30 + full AABB green FillRect
+        ctx.save();
+        ctx.begin_path();
+        ctx.arc(170.0, 55.0, 30.0, 0.0, std::f32::consts::TAU, false);
+        ctx.clip();
+        ctx.set_fill_style(Color::rgb(0, 220, 80));
+        ctx.fill_rect(140.0, 25.0, 60.0, 60.0);
+        ctx.restore();
+
+        // 3. Dashed StrokeRect [12, 12] from x=20..120 at y=140, width=4 (dash on [20..32], gap on [36..42])
+        ctx.save();
+        ctx.set_stroke_style(Color::rgb(255, 60, 60));
+        ctx.set_line_width(4.0);
+        ctx.set_line_dash(&[12.0, 12.0]);
+        ctx.stroke_rect(20.0, 140.0, 100.0, 30.0);
+        ctx.restore();
+
+        // 4. Straight horizontal+vertical stroke with Round cap + Miter join
+        ctx.save();
+        ctx.set_stroke_style(Color::rgb(255, 220, 0));
+        ctx.set_line_width(10.0);
+        ctx.set_line_cap(crate::canvas2d::CanvasLineCap::Round);
+        ctx.set_line_join(crate::canvas2d::CanvasLineJoin::Miter);
+        ctx.begin_path();
+        ctx.move_to(150.0, 150.0);
+        ctx.line_to(200.0, 150.0);
+        ctx.line_to(200.0, 200.0);
+        ctx.stroke();
+        ctx.restore();
+
+        // 5. Slug glyph "H" rendered in bright cyan
+        let mut dl = DisplayList::new();
+        dl.push(DrawCommand::DrawCanvas2D {
+            bounds: Rect::new(0.0, 0.0, 240.0, 240.0),
+            commands: ctx.commands().to_vec(),
+        });
+        dl.push(DrawCommand::DrawText {
+            origin: (20.0, 195.0),
+            bounds_width: None,
+            bounds_height: None,
+            text_align: strata_style::TextAlign::Left,
+            text: "H".to_string(),
+            font_size: 24.0,
+            line_height: 1.2,
+            font_weight: strata_style::FontWeight::Bold,
+            color: Color::rgb(0, 240, 240),
+            is_monospace: false,
+            font_family: strata_primitives::atom::AtomId::NULL,
+        });
+
+        let (summary, pixels) = renderer
+            .render_display_list_offscreen(
+                &mut collector,
+                &dl,
+                240,
+                240,
+                1.0,
+                [0.0, 0.0, 0.0, 1.0],
+                None,
+                true,
+            )
+            .expect("wgpu 2D offscreen render");
+        assert!(summary.quad_instances >= 10);
+        assert!(summary.path_segments > 0);
+        assert!(summary.slug_glyphs > 0);
+
+        let px = |x: usize, y: usize| -> [u8; 4] {
+            let idx = (y * 240 + x) * 4;
+            [pixels[idx], pixels[idx + 1], pixels[idx + 2], pixels[idx + 3]]
+        };
+
+        // Diagonal triangle clip: (20,20) inside (blue), (75,75) inside AABB but outside diagonal (black!)
+        let diag_in = px(20, 20);
+        assert!(
+            diag_in[2] > 200 && diag_in[0] < 20,
+            "inside diagonal clip should be blue: {:?}",
+            diag_in
+        );
+        let diag_out = px(75, 75);
+        assert_eq!(
+            diag_out,
+            [0, 0, 0, 255],
+            "outside diagonal clip must remain cleared background via stencil"
+        );
+
+        // Circular clip: (170,55) inside (green), (143,28) in circle AABB corner outside radius 30 (black!)
+        let circ_in = px(170, 55);
+        assert!(
+            circ_in[1] > 180 && circ_in[0] < 20,
+            "inside circular clip should be green: {:?}",
+            circ_in
+        );
+        let circ_corner = px(143, 28);
+        assert_eq!(
+            circ_corner,
+            [0, 0, 0, 255],
+            "outside circular clip must remain black via stencil"
+        );
+
+        // Dashed StrokeRect: dash on [20..32] at (25, 140) is red; gap [32..44] at (38, 140) is black
+        let dash_on = px(25, 140);
+        assert!(
+            dash_on[0] > 200 && dash_on[1] < 80,
+            "dash segment should be red: {:?}",
+            dash_on
+        );
+        assert_eq!(px(38, 140), [0, 0, 0, 255], "dash gap must stay background");
+
+        // Round cap + Miter join stroke: midpoint (175, 150) & miter apex (203, 147) & round cap tail (147, 150)
+        assert!(
+            px(175, 150)[0] > 200 && px(175, 150)[1] > 180,
+            "straight segment midpoint must be filled"
+        );
+        assert!(
+            px(147, 150)[0] > 150,
+            "Round cap extends past x=150: {:?}",
+            px(147, 150)
+        );
+        assert!(
+            px(203, 147)[0] > 150,
+            "Miter outer corner reaches outside corner apex: {:?}",
+            px(203, 147)
+        );
+
+        // Slug glyph "H" should light up at least one cyan pixel inside [20..44, 195..220]
+        let mut lit_glyph = false;
+        for y in 195..220 {
+            for x in 20..44 {
+                let p = px(x, y);
+                if p[1] > 150 && p[2] > 150 {
+                    lit_glyph = true;
+                    break;
+                }
+            }
+        }
+        assert!(lit_glyph, "Slug font shader should rasterize visible glyph pixels");
     }
 }

@@ -131,19 +131,43 @@ fn vs_main(model: VertexInput, instance: InstanceInput) -> VertexOutput {
 // Distance from point P to quadratic Bézier curve segment B(t)
 fn sd_quadratic_bezier(p: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> f32 {
     let a = p0 - 2.0 * p1 + p2;
-    let b = 2.0 * (p1 - p0);
-    let c = p0 - p;
-
     let dot_aa = dot(a, a);
-    let dot_ac = dot(a, c);
+    if (dot_aa <= 1e-4) {
+        let v = p2 - p0;
+        let vv = dot(v, v);
+        let t_lin = select(0.0, clamp(dot(p - p0, v) / max(vv, 1e-6), 0.0, 1.0), vv > 1e-6);
+        let proj = p0 + t_lin * v;
+        return length(p - proj);
+    }
 
-    var min_dist_sq = min(dot(p - p0, p - p0), dot(p - p2, p - p2));
+    var best_t = 0.0;
+    var min_dist_sq = dot(p - p0, p - p0);
+    for (var s = 1; s <= 4; s = s + 1) {
+        let ts = f32(s) * 0.25;
+        let us = 1.0 - ts;
+        let ps = us * us * p0 + 2.0 * us * ts * p1 + ts * ts * p2;
+        let d_sq = dot(p - ps, p - ps);
+        if (d_sq < min_dist_sq) {
+            min_dist_sq = d_sq;
+            best_t = ts;
+        }
+    }
 
-    // Approximate closest t via clamped parameter sample
-    let t_approx = clamp(-dot_ac / max(dot_aa, 1e-4), 0.0, 1.0);
-    let u = 1.0 - t_approx;
-    let pt = u * u * p0 + 2.0 * u * t_approx * p1 + t_approx * t_approx * p2;
-    min_dist_sq = min(min_dist_sq, dot(p - pt, p - pt));
+    var t = best_t;
+    for (var iter = 0; iter < 3; iter = iter + 1) {
+        let u = 1.0 - t;
+        let pt = u * u * p0 + 2.0 * u * t * p1 + t * t * p2;
+        let d1 = 2.0 * u * (p1 - p0) + 2.0 * t * (p2 - p1);
+        let diff = pt - p;
+        let f = dot(diff, d1);
+        let df = dot(d1, d1) + 2.0 * dot(diff, a);
+        if (abs(df) > 1e-4) {
+            t = clamp(t - f / df, 0.0, 1.0);
+        }
+        let u2 = 1.0 - t;
+        let pt2 = u2 * u2 * p0 + 2.0 * u2 * t * p1 + t * t * p2;
+        min_dist_sq = min(min_dist_sq, dot(p - pt2, p - pt2));
+    }
 
     return sqrt(min_dist_sq);
 }
@@ -204,9 +228,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let start_open = (in.flags & 256u) != 0u;
             let end_open = (in.flags & 512u) != 0u;
 
-            let raw_t0 = select(span, d10, dot(d10, d10) > 1e-6);
+            let raw_t0 = select(select(d21, span, span_sq > 1e-6), d10, dot(d10, d10) > 1e-6);
             let t0 = normalize(raw_t0);
-            let raw_t1 = select(span, d21, dot(d21, d21) > 1e-6);
+            let raw_t1 = select(select(d10, span, span_sq > 1e-6), d21, dot(d21, d21) > 1e-6);
             let t1 = normalize(raw_t1);
 
             let dp0 = in.pixel_coords - in.p0;

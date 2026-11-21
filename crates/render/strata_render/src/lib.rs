@@ -45,6 +45,8 @@ pub mod terrain3d;
 pub mod texture3d;
 pub mod texture_atlas;
 pub mod tiling;
+#[cfg(feature = "wgpu-backend")]
+pub mod wgpu_2d;
 
 // Re-exports
 pub use canvas2d::{
@@ -72,8 +74,11 @@ pub use gpu_pipeline::{
     GpuPathBatch, GpuPathPipeline, GpuPresentationPipeline, GpuPrimitiveTopology, GpuQuadInstance,
     GpuRenderPipeline, GpuShaderCompiler, GpuShaderModule, GpuSlugTextPipeline, GpuUniforms,
     GpuVertex, GpuVertexAttribute, GpuVertexBufferLayout, GpuVertexFormat, GpuVertexStepMode,
-    QUAD_VERTICES, WGSL_ANALYTICAL_QUAD_SHADER, WGSL_STENCIL_CLIP_SHADER,
+    Hardware2DFrame, HardwareDrawOp, HardwareDrawOpKind, HardwareRenderItem, UnifiedGpuCollector,
+    QUAD_VERTICES, SIGNED_QUAD_VERTICES, WGSL_ANALYTICAL_QUAD_SHADER, WGSL_STENCIL_CLIP_SHADER,
 };
+#[cfg(feature = "wgpu-backend")]
+pub use wgpu_2d::{GpuStencilClipPipeline, Wgpu2DRenderer};
 pub use kinetic_scroll::{
     KineticScrollController, ScrollAxis, DEFAULT_FRICTION, REST_VELOCITY_THRESHOLD,
     RUBBER_BAND_MAX_LIMIT, SPRING_DAMPING, SPRING_STIFFNESS,
