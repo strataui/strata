@@ -33,6 +33,7 @@ impl View {
 }
 
 pub mod classes;
+pub mod error_boundary;
 pub mod events;
 pub mod hooks;
 pub mod ir;
@@ -42,6 +43,7 @@ pub mod spring;
 pub mod text_input;
 
 pub use classes::{standard_class_index, ClassBitmask, ClassIter, ClassList, STANDARD_CLASSES};
+pub use error_boundary::{ErrorBoundary, ErrorBoundaryBuilder, ErrorBoundaryInfo};
 pub use events::{Event, EventDispatcher, EventPhase, EventType};
 pub use hooks::*;
 pub use ir::{
@@ -53,14 +55,59 @@ pub use portal::{
     PortalBuilder,
 };
 pub use reactive::{
-    batch, clear_persistent_signals, create_signal, has_dirty_signals, mark_dirty,
-    take_dirty_signals, untrack, use_effect, use_memo, use_persistent_signal, use_signal,
-    use_state, Effect, Memo, ReactiveRuntime, ReadSignal, ScopeId, SetSignal, Signal, SignalId,
-    SubscriberId, WriteSignal,
+    batch, clear_persistent_signals, create_context, create_signal, has_dirty_signals, mark_dirty,
+    provide_context, reset_component_hooks, take_dirty_signals, untrack, use_callback, use_context,
+    use_effect, use_effect_with_deps, use_id, use_memo, use_persistent_signal, use_reducer,
+    use_reducer_init, use_ref, use_signal, use_state, with_component_key, ComponentScopeGuard,
+    Context, Effect, EffectGuard, IntoInitialState, Memo, ReactiveRuntime, ReadSignal, Ref,
+    ScopeId, SetSignal, Signal, SignalId, SubscriberId, WriteSignal,
 };
 pub use spring::{SpringConfig, SpringSignal};
 pub use strata_primitives::EntityId;
 pub use text_input::{InputKey, InputKeyResult, InputModifiers, TextInputState};
+
+/// Ergonomic conversion into `Option<String>` for `#[component]` builder setters.
+///
+/// Accepts string literals (`"hello"`), `String`, `&String`, `Cow<'_, str>`, `Option<String>`,
+/// and bare `None` without `.to_string()` boilerplate or type-inference ambiguity on `None`.
+pub trait IntoOptionalString {
+    fn into_optional_string(self) -> Option<String>;
+}
+
+impl IntoOptionalString for String {
+    #[inline]
+    fn into_optional_string(self) -> Option<String> {
+        Some(self)
+    }
+}
+
+impl IntoOptionalString for &str {
+    #[inline]
+    fn into_optional_string(self) -> Option<String> {
+        Some(self.to_string())
+    }
+}
+
+impl IntoOptionalString for &String {
+    #[inline]
+    fn into_optional_string(self) -> Option<String> {
+        Some(self.clone())
+    }
+}
+
+impl IntoOptionalString for std::borrow::Cow<'_, str> {
+    #[inline]
+    fn into_optional_string(self) -> Option<String> {
+        Some(self.into_owned())
+    }
+}
+
+impl IntoOptionalString for Option<String> {
+    #[inline]
+    fn into_optional_string(self) -> Option<String> {
+        self
+    }
+}
 
 /// Trait abstracting event handlers accepting `()` or `(Event)`.
 pub trait EventHandlerMarker<Args> {

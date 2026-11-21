@@ -765,6 +765,7 @@ pub type CleanupFn = Option<Box<dyn FnOnce()>>;
 pub type CleanupCell = Rc<RefCell<CleanupFn>>;
 
 /// Reactive effect executing side-effects when subscribed signals mutate.
+#[derive(Clone)]
 pub struct Effect {
     subscriber_id: SubscriberId,
     disposed: Rc<Cell<bool>>,
@@ -858,10 +859,431 @@ impl Drop for EffectGuard {
     }
 }
 
-// Ergonomic Hooks
+// ============================================================================
+// Component-Scoped Hook Cursor Stack & Lifecycle Management
+// ============================================================================
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ComponentSegment {
+    component_id: String,
+    instance_key: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ComponentPath(Vec<ComponentSegment>);
+
+struct PendingHookSlot;
+
+struct ComponentInstance {
+    slots: Vec<Box<dyn std::any::Any>>,
+    mounted_children: std::collections::HashSet<ComponentPath>,
+}
+
+impl ComponentInstance {
+    fn new() -> Self {
+        Self {
+            slots: Vec::new(),
+            mounted_children: std::collections::HashSet::new(),
+        }
+    }
+}
+
+struct ActiveComponentFrame {
+    path: ComponentPath,
+    hook_cursor: usize,
+    child_ordinals: std::collections::HashMap<String, usize>,
+    visited_children: std::collections::HashSet<ComponentPath>,
+    provided_context_count: usize,
+}
+
+struct HookStoreState {
+    instances: std::collections::HashMap<ComponentPath, ComponentInstance>,
+    active_stack: Vec<ActiveComponentFrame>,
+    pending_key: Option<String>,
+    next_hook_id: usize,
+}
+
+impl HookStoreState {
+    fn new() -> Self {
+        Self {
+            instances: std::collections::HashMap::new(),
+            active_stack: Vec::new(),
+            pending_key: None,
+            next_hook_id: 0,
+        }
+    }
+}
+
+struct ContextEntry {
+    context_id: u64,
+    value: Box<dyn std::any::Any>,
+}
+
+thread_local! {
+    static HOOK_STORE: RefCell<HookStoreState> = RefCell::new(HookStoreState::new());
+    static CONTEXT_STACK: RefCell<Vec<ContextEntry>> = const { RefCell::new(Vec::new()) };
+    static NEXT_CONTEXT_ID: Cell<u64> = const { Cell::new(1) };
+}
+
+/// RAII guard emitted automatically at the top of every `#[component]` function body.
+///
+/// Tracks the component's hierarchical instance identity, resets its hook cursor to `0`
+/// for the current render pass, pops component-scoped context providers on exit, and
+/// disposes unmounted child component subtrees (running their `use_effect` cleanups)
+/// when the render finishes without unwinding.
+pub struct ComponentScopeGuard {
+    _private: (),
+}
+
+impl ComponentScopeGuard {
+    /// Enters a component render scope for `component_id`.
+    pub fn enter(component_id: &'static str) -> Self {
+        HOOK_STORE.with(|store| {
+            let mut st = store.borrow_mut();
+            let explicit_key = st.pending_key.take();
+
+            let path = if let Some(parent) = st.active_stack.last_mut() {
+                let instance_key = match explicit_key {
+                    Some(k) => format!("k:{k}"),
+                    None => {
+                        let ord = parent
+                            .child_ordinals
+                            .entry(component_id.to_string())
+                            .or_insert(0);
+                        let current = *ord;
+                        *ord += 1;
+                        format!("#{current}")
+                    }
+                };
+                let mut segs = parent.path.0.clone();
+                segs.push(ComponentSegment {
+                    component_id: component_id.to_string(),
+                    instance_key,
+                });
+                let child_path = ComponentPath(segs);
+                parent.visited_children.insert(child_path.clone());
+                child_path
+            } else {
+                let instance_key = match explicit_key {
+                    Some(k) => format!("k:{k}"),
+                    None => "#0".to_string(),
+                };
+                ComponentPath(vec![ComponentSegment {
+                    component_id: component_id.to_string(),
+                    instance_key,
+                }])
+            };
+
+            st.instances
+                .entry(path.clone())
+                .or_insert_with(ComponentInstance::new);
+
+            st.active_stack.push(ActiveComponentFrame {
+                path,
+                hook_cursor: 0,
+                child_ordinals: std::collections::HashMap::new(),
+                visited_children: std::collections::HashSet::new(),
+                provided_context_count: 0,
+            });
+        });
+
+        Self { _private: () }
+    }
+}
+
+fn collect_unmounted_subtree(
+    instances: &mut std::collections::HashMap<ComponentPath, ComponentInstance>,
+    root: &ComponentPath,
+    out: &mut Vec<ComponentInstance>,
+) {
+    if let Some(inst) = instances.remove(root) {
+        let children: Vec<ComponentPath> = inst.mounted_children.iter().cloned().collect();
+        out.push(inst);
+        for child in children {
+            collect_unmounted_subtree(instances, &child, out);
+        }
+    }
+}
+
+impl Drop for ComponentScopeGuard {
+    fn drop(&mut self) {
+        let unwinding = std::thread::panicking();
+        let (pop_contexts, evicted) = HOOK_STORE.with(|store| {
+            let mut st = store.borrow_mut();
+            let Some(frame) = st.active_stack.pop() else {
+                return (0usize, Vec::new());
+            };
+            let mut evicted = Vec::new();
+            if !unwinding {
+                let prev_children = st
+                    .instances
+                    .get_mut(&frame.path)
+                    .map(|inst| {
+                        std::mem::replace(&mut inst.mounted_children, frame.visited_children.clone())
+                    })
+                    .unwrap_or_default();
+                for stale in prev_children {
+                    if !frame.visited_children.contains(&stale) {
+                        collect_unmounted_subtree(&mut st.instances, &stale, &mut evicted);
+                    }
+                }
+            }
+            (frame.provided_context_count, evicted)
+        });
+
+        if pop_contexts > 0 {
+            CONTEXT_STACK.with(|stack| {
+                let mut stack = stack.borrow_mut();
+                let new_len = stack.len().saturating_sub(pop_contexts);
+                stack.truncate(new_len);
+            });
+        }
+
+        // Drop evicted component instances OUTSIDE any HOOK_STORE borrow so `use_effect`
+        // cleanup callbacks can freely inspect or update signals without borrow conflicts.
+        drop(evicted);
+    }
+}
+
+/// Assigns an explicit reconciliation key to the immediate child component rendered inside `f`,
+/// preserving its hook state across list reorderings.
+pub fn with_component_key<R>(key: impl std::fmt::Display, f: impl FnOnce() -> R) -> R {
+    struct KeyRestoreGuard(Option<String>);
+    impl Drop for KeyRestoreGuard {
+        fn drop(&mut self) {
+            let prev = self.0.take();
+            let _ = HOOK_STORE.try_with(|store| {
+                if let Ok(mut st) = store.try_borrow_mut() {
+                    st.pending_key = prev;
+                }
+            });
+        }
+    }
+
+    let prev = HOOK_STORE.with(|store| store.borrow_mut().pending_key.replace(key.to_string()));
+    let _guard = KeyRestoreGuard(prev);
+    f()
+}
+
+/// Clears all persisted component-scoped hook state and runs pending effect cleanups on this
+/// thread. Intended for test isolation or full application resets.
+pub fn reset_component_hooks() {
+    let evicted: Vec<ComponentInstance> = HOOK_STORE.with(|store| {
+        let mut st = store.borrow_mut();
+        st.active_stack.clear();
+        st.pending_key = None;
+        st.next_hook_id = 0;
+        st.instances.drain().map(|(_, inst)| inst).collect()
+    });
+    CONTEXT_STACK.with(|stack| stack.borrow_mut().clear());
+    drop(evicted);
+}
+
+/// Looks up or initializes the current hook slot for the active component frame.
+///
+/// Returns `None` when called outside any `#[component]` scope so standalone unit tests
+/// and top-level state builders continue working without a component frame.
+fn use_hook_slot_cloned<T: Clone + 'static>(init: impl FnOnce() -> T) -> Option<T> {
+    enum Lookup<T> {
+        NoScope,
+        Hit(T),
+        Miss(ComponentPath, usize),
+    }
+
+    let lookup = HOOK_STORE.with(|store| {
+        let mut st = store.borrow_mut();
+        let Some(frame) = st.active_stack.last_mut() else {
+            return Lookup::NoScope;
+        };
+        let path = frame.path.clone();
+        let idx = frame.hook_cursor;
+        frame.hook_cursor += 1;
+
+        let inst = st
+            .instances
+            .entry(path.clone())
+            .or_insert_with(ComponentInstance::new);
+
+        if idx < inst.slots.len() && !inst.slots[idx].is::<PendingHookSlot>() {
+            let existing = inst.slots[idx]
+                .downcast_ref::<T>()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Strata Rules of Hooks violation at slot #{idx} in component `{}`: hook type mismatch across renders (avoid calling hooks conditionally).",
+                        path.0
+                            .last()
+                            .map(|s| s.component_id.as_str())
+                            .unwrap_or("<root>")
+                    )
+                })
+                .clone();
+            Lookup::Hit(existing)
+        } else {
+            while inst.slots.len() <= idx {
+                inst.slots.push(Box::new(PendingHookSlot));
+            }
+            Lookup::Miss(path, idx)
+        }
+    });
+
+    match lookup {
+        Lookup::NoScope => None,
+        Lookup::Hit(val) => Some(val),
+        Lookup::Miss(path, idx) => {
+            // Run `init()` completely outside any HOOK_STORE borrow so closures may
+            // read/write signals, access context, or construct reactive subscribers safely.
+            let val = init();
+            HOOK_STORE.with(|store| {
+                let mut st = store.borrow_mut();
+                if let Some(inst) = st.instances.get_mut(&path) {
+                    if idx < inst.slots.len() {
+                        inst.slots[idx] = Box::new(val.clone());
+                    }
+                }
+            });
+            Some(val)
+        }
+    }
+}
+
+/// Like [`use_hook_slot_cloned`], but falls back directly to `init()` when outside a
+/// `#[component]` scope so non-`Clone` `FnOnce` initializers are only moved once.
+fn use_hook_slot_or_init<T: Clone + 'static>(init: impl FnOnce() -> T) -> T {
+    enum Lookup<T> {
+        NoScope,
+        Hit(T),
+        Miss(ComponentPath, usize),
+    }
+
+    let lookup = HOOK_STORE.with(|store| {
+        let mut st = store.borrow_mut();
+        let Some(frame) = st.active_stack.last_mut() else {
+            return Lookup::NoScope;
+        };
+        let path = frame.path.clone();
+        let idx = frame.hook_cursor;
+        frame.hook_cursor += 1;
+
+        let inst = st
+            .instances
+            .entry(path.clone())
+            .or_insert_with(ComponentInstance::new);
+
+        if idx < inst.slots.len() && !inst.slots[idx].is::<PendingHookSlot>() {
+            let existing = inst.slots[idx]
+                .downcast_ref::<T>()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Strata Rules of Hooks violation at slot #{idx} in component `{}`: hook type mismatch across renders (avoid calling hooks conditionally).",
+                        path.0
+                            .last()
+                            .map(|s| s.component_id.as_str())
+                            .unwrap_or("<root>")
+                    )
+                })
+                .clone();
+            Lookup::Hit(existing)
+        } else {
+            while inst.slots.len() <= idx {
+                inst.slots.push(Box::new(PendingHookSlot));
+            }
+            Lookup::Miss(path, idx)
+        }
+    });
+
+    match lookup {
+        Lookup::NoScope => init(),
+        Lookup::Hit(val) => val,
+        Lookup::Miss(path, idx) => {
+            let val = init();
+            HOOK_STORE.with(|store| {
+                let mut st = store.borrow_mut();
+                if let Some(inst) = st.instances.get_mut(&path) {
+                    if idx < inst.slots.len() {
+                        inst.slots[idx] = Box::new(val.clone());
+                    }
+                }
+            });
+            val
+        }
+    }
+}
+
+/// Owned wrapper stored inside a component's hook slot so unmounting the component
+/// automatically disposes its `Effect` and executes the cleanup closure.
+#[derive(Clone)]
+struct OwnedComponentEffect {
+    effect: Effect,
+    _owner: Rc<EffectDropGuard>,
+}
+
+struct EffectDropGuard(Effect);
+
+impl Drop for EffectDropGuard {
+    fn drop(&mut self) {
+        self.0.dispose();
+    }
+}
+
+/// Owned wrapper for dependency-tracked `use_effect_with_deps` cleanup closures.
+struct OwnedDepsEffect<D> {
+    deps: Rc<RefCell<D>>,
+    cleanup: CleanupCell,
+    _owner: Rc<CleanupDropGuard>,
+}
+
+impl<D> Clone for OwnedDepsEffect<D> {
+    fn clone(&self) -> Self {
+        Self {
+            deps: Rc::clone(&self.deps),
+            cleanup: Rc::clone(&self.cleanup),
+            _owner: Rc::clone(&self._owner),
+        }
+    }
+}
+
+struct CleanupDropGuard(CleanupCell);
+
+impl Drop for CleanupDropGuard {
+    fn drop(&mut self) {
+        if let Ok(mut cell) = self.0.try_borrow_mut() {
+            if let Some(clean) = cell.take() {
+                clean();
+            }
+        }
+    }
+}
+
+/// Trait allowing [`use_state`] to accept either a direct initial value (`use_state(0)`)
+/// or a lazy initializer closure (`use_state(|| expensive())`), matching React's `useState`.
+pub trait IntoInitialState<T, Marker = ()> {
+    fn into_initial_state(self) -> T;
+}
+
+impl<T> IntoInitialState<T, ()> for T {
+    #[inline]
+    fn into_initial_state(self) -> T {
+        self
+    }
+}
+
+impl<T, F: FnOnce() -> T> IntoInitialState<T, ((),)> for F {
+    #[inline]
+    fn into_initial_state(self) -> T {
+        self()
+    }
+}
+
+// ============================================================================
+// Ergonomic Component Hooks
+// ============================================================================
+
+/// Creates or retrieves a component-scoped reactive [`Signal`].
+///
+/// Inside a `#[component]`, the signal persists across re-renders at this hook cursor slot;
+/// outside any component scope, allocates a fresh standalone `Signal`.
 pub fn use_signal<T: Clone + 'static>(initial: T) -> Signal<T> {
-    Signal::new(initial)
+    use_hook_slot_or_init(|| Signal::new(initial))
 }
 
 thread_local! {
@@ -869,12 +1291,10 @@ thread_local! {
         RefCell::new(std::collections::HashMap::new());
 }
 
-/// Returns a signal that survives root re-invocation, identified by `key`.
+/// Returns a signal that survives root re-invocation, identified by an explicit `key`.
 ///
-/// Component bodies run again on every rebuild, so `use_signal` creates fresh state each
-/// time. This looks `key` up in a per-thread store and only calls `init` the first time.
-/// Keys must be unique per logical piece of state; components derive them from an `id`
-/// prop. Asking for the same key with a different type panics, since that is a key clash.
+/// Useful when sharing keyed state across disconnected subtrees or outside `#[component]`.
+/// Asking for the same key with a different type panics, since that is a key clash.
 pub fn use_persistent_signal<T: Clone + 'static>(key: &str, init: impl FnOnce() -> T) -> Signal<T> {
     PERSISTENT_SIGNALS.with(|store| {
         let mut store = store.borrow_mut();
@@ -890,25 +1310,356 @@ pub fn use_persistent_signal<T: Clone + 'static>(key: &str, init: impl FnOnce() 
     })
 }
 
-/// Drops all persistent signals on this thread. Intended for tests.
+/// Drops all persistent signals and component-scoped hooks on this thread. Intended for tests.
 pub fn clear_persistent_signals() {
     PERSISTENT_SIGNALS.with(|store| store.borrow_mut().clear());
+    reset_component_hooks();
 }
 
-pub fn use_state<T: Clone + 'static>(init: impl FnOnce() -> T) -> (Signal<T>, Signal<T>) {
-    let s = Signal::new(init());
-    (s.clone(), s)
+/// React-style component-scoped state hook returning decoupled `(ReadSignal<T>, WriteSignal<T>)`.
+///
+/// Accepts either a direct value (`use_state(0)`) or a lazy initializer closure
+/// (`use_state(|| compute_initial())`). Inside a `#[component]`, the initializer runs only on
+/// mount and the underlying signal persists across re-renders via the component hook cursor.
+pub fn use_state<T: Clone + 'static, M>(
+    initial: impl IntoInitialState<T, M>,
+) -> (ReadSignal<T>, WriteSignal<T>) {
+    let sig = use_hook_slot_or_init(|| Signal::new(initial.into_initial_state()));
+    sig.split()
 }
 
+/// Component-scoped derived [`Memo`] that persists its reactive subscription across re-renders
+/// and unregisters automatically when the component unmounts.
 pub fn use_memo<T: Clone + PartialEq + 'static>(compute: impl FnMut() -> T + 'static) -> Memo<T> {
-    Memo::new(compute)
+    use_hook_slot_or_init(|| Memo::new(compute))
 }
 
+/// Component-scoped reactive [`Effect`] that tracks read signals, runs cleanup before each
+/// re-execution, avoids duplicate registrations across re-renders, and automatically runs its
+/// cleanup closure when the owning component unmounts.
 pub fn use_effect<F>(effect_fn: F) -> Effect
 where
     F: FnMut() -> Option<Box<dyn FnOnce()>> + 'static,
 {
-    Effect::new(effect_fn)
+    let mut effect_opt = Some(effect_fn);
+    if let Some(owned) = use_hook_slot_cloned(|| {
+        let eff = Effect::new(effect_opt.take().unwrap());
+        OwnedComponentEffect {
+            effect: eff.clone(),
+            _owner: Rc::new(EffectDropGuard(eff)),
+        }
+    }) {
+        owned.effect
+    } else {
+        Effect::new(effect_opt.take().unwrap())
+    }
+}
+
+/// React-style dependency-array effect hook.
+///
+/// Runs `effect_fn(&deps)` on mount and whenever `deps` changes (`PartialEq`) across component
+/// re-renders, invoking the prior cleanup closure before re-running and again on unmount.
+pub fn use_effect_with_deps<D, F>(deps: D, effect_fn: F)
+where
+    D: PartialEq + 'static,
+    F: FnOnce(&D) -> Option<Box<dyn FnOnce()>>,
+{
+    let mut effect_opt = Some(effect_fn);
+    let mut deps_opt = Some(deps);
+
+    if let Some(slot) = use_hook_slot_cloned(|| {
+        let initial_deps = deps_opt.take().unwrap();
+        let initial_clean = (effect_opt.take().unwrap())(&initial_deps);
+        let cleanup: CleanupCell = Rc::new(RefCell::new(initial_clean));
+        OwnedDepsEffect {
+            deps: Rc::new(RefCell::new(initial_deps)),
+            cleanup: cleanup.clone(),
+            _owner: Rc::new(CleanupDropGuard(cleanup)),
+        }
+    }) {
+        // If `effect_opt` is still `Some`, this is a re-render (slot already existed on mount).
+        if let (Some(new_deps), Some(run_fn)) = (deps_opt.take(), effect_opt.take()) {
+            let changed = *slot.deps.borrow() != new_deps;
+            if changed {
+                let prev_clean = slot.cleanup.borrow_mut().take();
+                if let Some(clean) = prev_clean {
+                    clean();
+                }
+                let next_clean = run_fn(&new_deps);
+                *slot.deps.borrow_mut() = new_deps;
+                *slot.cleanup.borrow_mut() = next_clean;
+            }
+        }
+    } else if let (Some(d), Some(run_fn)) = (deps_opt.take(), effect_opt.take()) {
+        // Standalone execution outside any component scope: run immediately.
+        let _ = run_fn(&d);
+    }
+}
+
+/// React-style `useReducer` hook returning `(ReadSignal<S>, Rc<dyn Fn(A)>)`.
+///
+/// Persists state in a component hook slot and applies `reducer(&current_state, action)`
+/// whenever the returned dispatch function is invoked.
+pub fn use_reducer<S, A, R>(reducer: R, initial_state: S) -> (ReadSignal<S>, Rc<dyn Fn(A)>)
+where
+    S: Clone + 'static,
+    A: 'static,
+    R: FnMut(&S, A) -> S + 'static,
+{
+    use_reducer_init(reducer, initial_state, |s| s)
+}
+
+/// React-style 3-argument `useReducer` hook with lazy state initialization (`init(initial_arg)`).
+pub fn use_reducer_init<S, A, I, R, F>(
+    reducer: R,
+    initial_arg: I,
+    init: F,
+) -> (ReadSignal<S>, Rc<dyn Fn(A)>)
+where
+    S: Clone + 'static,
+    A: 'static,
+    R: FnMut(&S, A) -> S + 'static,
+    F: FnOnce(I) -> S,
+{
+    let state_sig = use_hook_slot_or_init(|| Signal::new(init(initial_arg)));
+    let reducer_cell = Rc::new(RefCell::new(reducer));
+    let dispatch_sig = state_sig.clone();
+    let dispatch: Rc<dyn Fn(A)> = Rc::new(move |action: A| {
+        let current = dispatch_sig.untracked_get();
+        let next = (reducer_cell.borrow_mut())(&current, action);
+        dispatch_sig.set(next);
+    });
+    (state_sig.split().0, dispatch)
+}
+
+/// Mutable, non-reactive reference container persisted across component re-renders (React `useRef`).
+///
+/// Mutating a [`Ref`] never marks the reactive graph dirty or triggers a re-render.
+pub struct Ref<T> {
+    inner: Rc<RefCell<T>>,
+}
+
+impl<T> Clone for Ref<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Rc::clone(&self.inner),
+        }
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for Ref<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ref")
+            .field("current", &*self.inner.borrow())
+            .finish()
+    }
+}
+
+impl<T: 'static> Ref<T> {
+    pub fn new(initial: T) -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(initial)),
+        }
+    }
+
+    pub fn get(&self) -> T
+    where
+        T: Clone,
+    {
+        self.inner.borrow().clone()
+    }
+
+    pub fn set(&self, value: T) {
+        *self.inner.borrow_mut() = value;
+    }
+
+    pub fn replace(&self, value: T) -> T {
+        std::mem::replace(&mut *self.inner.borrow_mut(), value)
+    }
+
+    pub fn borrow(&self) -> std::cell::Ref<'_, T> {
+        self.inner.borrow()
+    }
+
+    pub fn borrow_mut(&self) -> std::cell::RefMut<'_, T> {
+        self.inner.borrow_mut()
+    }
+
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        f(&*self.inner.borrow())
+    }
+
+    pub fn with_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        f(&mut *self.inner.borrow_mut())
+    }
+}
+
+/// React-style `useRef` hook returning a mutable [`Ref<T>`] that persists across re-renders
+/// without triggering reactive updates.
+pub fn use_ref<T: 'static>(initial: T) -> Ref<T> {
+    use_hook_slot_or_init(|| Ref::new(initial))
+}
+
+/// React-style `useCallback` hook that memoizes a closure `Rc<F>` across re-renders while
+/// `deps` remains equal (`PartialEq`).
+///
+/// When `deps` is unchanged, the returned `Rc<F>` preserves exact pointer identity (`Rc::ptr_eq`).
+pub fn use_callback<D, F>(deps: D, callback: F) -> Rc<F>
+where
+    D: PartialEq + 'static,
+    F: 'static,
+{
+    let mut deps_opt = Some(deps);
+    let mut cb_opt = Some(callback);
+
+    if let Some(cell) = use_hook_slot_cloned(|| {
+        Rc::new(RefCell::new((
+            deps_opt.take().unwrap(),
+            Rc::new(cb_opt.take().unwrap()),
+        )))
+    }) {
+        if let (Some(new_deps), Some(new_cb)) = (deps_opt.take(), cb_opt.take()) {
+            let mut guard = cell.borrow_mut();
+            if guard.0 != new_deps {
+                guard.0 = new_deps;
+                guard.1 = Rc::new(new_cb);
+            }
+            return Rc::clone(&guard.1);
+        }
+        return Rc::clone(&cell.borrow().1);
+    }
+
+    Rc::new(cb_opt.take().unwrap())
+}
+
+/// React-style `useId` hook generating a stable unique identifier (e.g. `":r0:"`) that persists
+/// across re-renders of the same component instance and is unique across sibling instances.
+pub fn use_id() -> String {
+    let alloc = || {
+        HOOK_STORE.with(|store| {
+            let mut st = store.borrow_mut();
+            let id = st.next_hook_id;
+            st.next_hook_id += 1;
+            format!(":r{id}:")
+        })
+    };
+    use_hook_slot_cloned(alloc).unwrap_or_else(alloc)
+}
+
+// ============================================================================
+// React-Style Context API (`create_context` / `provide_context` / `use_context`)
+// ============================================================================
+
+/// Typed context handle created by [`create_context`].
+///
+/// Provide values to descendant components either via [`provide_context`] (scoped to the
+/// enclosing `#[component]`) or [`Context::provide`] (scoped to an explicit closure).
+pub struct Context<T: Clone + 'static> {
+    id: u64,
+    default_value: Rc<T>,
+}
+
+impl<T: Clone + 'static> Clone for Context<T> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            default_value: Rc::clone(&self.default_value),
+        }
+    }
+}
+
+impl<T: Clone + std::fmt::Debug + 'static> std::fmt::Debug for Context<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Context")
+            .field("id", &self.id)
+            .field("default_value", &*self.default_value)
+            .finish()
+    }
+}
+
+impl<T: Clone + 'static> Context<T> {
+    /// Returns this context's unique identifier.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Returns a clone of the default fallback value supplied at creation time.
+    pub fn default_value(&self) -> T {
+        (*self.default_value).clone()
+    }
+
+    /// Provides `value` to all components evaluated within `f`, restoring the previous
+    /// context value automatically even if `f` unwinds.
+    pub fn provide<R>(&self, value: T, f: impl FnOnce() -> R) -> R {
+        struct ContextPopGuard;
+        impl Drop for ContextPopGuard {
+            fn drop(&mut self) {
+                let _ = CONTEXT_STACK.try_with(|stack| {
+                    if let Ok(mut st) = stack.try_borrow_mut() {
+                        st.pop();
+                    }
+                });
+            }
+        }
+
+        CONTEXT_STACK.with(|stack| {
+            stack.borrow_mut().push(ContextEntry {
+                context_id: self.id,
+                value: Box::new(value),
+            });
+        });
+        let _guard = ContextPopGuard;
+        f()
+    }
+}
+
+/// Creates a new typed [`Context<T>`] with a fallback `default_value`.
+pub fn create_context<T: Clone + 'static>(default_value: T) -> Context<T> {
+    let id = NEXT_CONTEXT_ID.with(|next| {
+        let id = next.get();
+        next.set(id + 1);
+        id
+    });
+    Context {
+        id,
+        default_value: Rc::new(default_value),
+    }
+}
+
+/// Provides `value` for `context` to all child components rendered in the remainder of the
+/// current `#[component]` scope.
+///
+/// The provided entry is automatically popped when the enclosing `#[component]` finishes
+/// rendering. Outside a `#[component]` scope, prefer [`Context::provide`].
+pub fn provide_context<T: Clone + 'static>(context: &Context<T>, value: T) {
+    CONTEXT_STACK.with(|stack| {
+        stack.borrow_mut().push(ContextEntry {
+            context_id: context.id,
+            value: Box::new(value),
+        });
+    });
+    HOOK_STORE.with(|store| {
+        let mut st = store.borrow_mut();
+        if let Some(frame) = st.active_stack.last_mut() {
+            frame.provided_context_count += 1;
+        }
+    });
+}
+
+/// Reads the nearest ancestor value provided for `context`, or its default value when no
+/// ancestor provider is active.
+pub fn use_context<T: Clone + 'static>(context: &Context<T>) -> T {
+    CONTEXT_STACK.with(|stack| {
+        let stack = stack.borrow();
+        for entry in stack.iter().rev() {
+            if entry.context_id == context.id {
+                if let Some(val) = entry.value.downcast_ref::<T>() {
+                    return val.clone();
+                }
+            }
+        }
+        context.default_value()
+    })
 }
 
 pub fn batch<R>(f: impl FnOnce() -> R) -> R {
