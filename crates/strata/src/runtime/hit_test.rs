@@ -345,6 +345,87 @@ impl AppRuntime {
         test_self(bp, layout, px, py)
     }
 
+    pub(crate) fn is_portal_backdrop_bp(bp: &NodeBlueprint) -> bool {
+        if let NodeBlueprint::Element { attributes, .. } = bp {
+            attributes.iter().any(|a| {
+                matches!(
+                    a,
+                    strata_dom::Attribute::Property { key, value }
+                        if key == "data-portal-backdrop" && value == "true"
+                )
+            })
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn top_layer_portal_node_is_visual_content(
+        bp: &NodeBlueprint,
+        layout: &LayoutNode,
+        px: f32,
+        py: f32,
+        depth: usize,
+    ) -> bool {
+        if depth >= 256
+            || layout.style.display == strata_style::types::Display::None
+            || layout.style.visibility == strata_style::types::Visibility::Hidden
+            || layout.style.pointer_events == strata_style::types::PointerEvents::None
+        {
+            return false;
+        }
+        if Self::is_portal_backdrop_bp(bp) {
+            return false;
+        }
+        let (px, py) = Self::unproject_point(layout, px, py);
+        let in_box = layout.geometry.border_box.contains_point(px, py);
+        if in_box {
+            for (_idx, child_bp, child_layout) in Self::paired_blueprint_children(bp, layout) {
+                if Self::top_layer_portal_node_is_visual_content(
+                    child_bp,
+                    child_layout,
+                    px,
+                    py,
+                    depth + 1,
+                ) {
+                    return true;
+                }
+            }
+            if depth > 0
+                || layout.style.background_color.is_some_and(|c| c.a > 0)
+                || !layout.style.box_shadow.is_empty()
+            {
+                return true;
+            }
+        } else {
+            for (_idx, child_bp, child_layout) in Self::paired_blueprint_children(bp, layout) {
+                if Self::top_layer_portal_node_is_visual_content(
+                    child_bp,
+                    child_layout,
+                    px,
+                    py,
+                    depth + 1,
+                ) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub(crate) fn point_hits_non_backdrop_top_layer_portal(&self, px: f32, py: f32) -> bool {
+        let mut top_layer_portals = Vec::new();
+        Self::collect_top_layer_portals(
+            &self.root_blueprint,
+            &self.layout_root,
+            &mut top_layer_portals,
+            0,
+        );
+        top_layer_portals.into_iter().rev().any(|(p_bp, p_layout)| {
+            !Self::is_portal_backdrop_bp(p_bp)
+                && Self::top_layer_portal_node_is_visual_content(p_bp, p_layout, px, py, 0)
+        })
+    }
+
     fn hit_test_stacking_context_with<'a, T, F>(
         bp: &'a NodeBlueprint,
         layout: &'a LayoutNode,
@@ -364,11 +445,21 @@ impl AppRuntime {
         if depth == 0 {
             let mut top_layer_portals = Vec::new();
             Self::collect_top_layer_portals(bp, layout, &mut top_layer_portals, 0);
+            let mut blocked_backdrops = false;
             for &(p_bp, p_layout) in top_layer_portals.iter().rev() {
+                let is_backdrop = Self::is_portal_backdrop_bp(p_bp);
+                if blocked_backdrops && is_backdrop {
+                    continue;
+                }
                 if let Some(hit) =
                     Self::hit_test_stacking_context_with(p_bp, p_layout, px, py, &[], 1, test_self)
                 {
                     return Some(hit);
+                }
+                if !is_backdrop
+                    && Self::top_layer_portal_node_is_visual_content(p_bp, p_layout, px, py, 0)
+                {
+                    blocked_backdrops = true;
                 }
             }
         }

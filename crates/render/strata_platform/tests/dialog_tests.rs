@@ -59,8 +59,11 @@ fn test_pick_folder_options_builder() {
     );
 }
 
+static DIALOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn test_dialog_mock_responses() {
+    let _guard = DIALOG_TEST_LOCK.lock().unwrap();
     // 1. Open file mock
     set_dialog_mock_response(Some(DialogMockResponse::OpenFile(Some(PathBuf::from(
         "/mock/path/main.rs",
@@ -112,6 +115,7 @@ fn test_dialog_mock_responses() {
 
 #[test]
 fn test_dialog_headless_fallback() {
+    let _guard = DIALOG_TEST_LOCK.lock().unwrap();
     set_dialog_mock_response(None);
     // In headless test environments without active GTK display, open_file returns None safely
     let file = open_file(OpenFileOptions::new());
@@ -120,3 +124,85 @@ fn test_dialog_headless_fallback() {
         assert_eq!(file, None);
     }
 }
+
+#[test]
+fn test_dialog_async_apis_deliver_mock_and_headless_responses() {
+    use std::sync::{Arc, Mutex};
+    use strata_platform::dialog::{
+        open_file_async, open_multiple_files_async, pick_folder_async, save_file_async,
+    };
+
+    let _guard = DIALOG_TEST_LOCK.lock().unwrap();
+
+    // 1. open_file_async
+    set_dialog_mock_response(Some(DialogMockResponse::OpenFile(Some(PathBuf::from(
+        "/mock/async/design.svg",
+    )))));
+    let opened = Arc::new(Mutex::new(None));
+    let opened_cb = Arc::clone(&opened);
+    open_file_async(OpenFileOptions::new(), move |res| {
+        *opened_cb.lock().unwrap() = Some(res);
+    });
+    assert_eq!(
+        *opened.lock().unwrap(),
+        Some(Some(PathBuf::from("/mock/async/design.svg")))
+    );
+
+    // 2. open_multiple_files_async
+    set_dialog_mock_response(Some(DialogMockResponse::OpenFiles(vec![
+        PathBuf::from("/mock/async/a.pcb"),
+        PathBuf::from("/mock/async/b.pcb"),
+    ])));
+    let opened_multi = Arc::new(Mutex::new(None));
+    let opened_multi_cb = Arc::clone(&opened_multi);
+    open_multiple_files_async(OpenFileOptions::new().with_multiple(true), move |res| {
+        *opened_multi_cb.lock().unwrap() = Some(res);
+    });
+    assert_eq!(
+        *opened_multi.lock().unwrap(),
+        Some(vec![
+            PathBuf::from("/mock/async/a.pcb"),
+            PathBuf::from("/mock/async/b.pcb"),
+        ])
+    );
+
+    // 3. save_file_async
+    set_dialog_mock_response(Some(DialogMockResponse::SaveFile(Some(PathBuf::from(
+        "/mock/async/export.json",
+    )))));
+    let saved = Arc::new(Mutex::new(None));
+    let saved_cb = Arc::clone(&saved);
+    save_file_async(SaveFileOptions::new().with_default_name("export.json"), move |res| {
+        *saved_cb.lock().unwrap() = Some(res);
+    });
+    assert_eq!(
+        *saved.lock().unwrap(),
+        Some(Some(PathBuf::from("/mock/async/export.json")))
+    );
+
+    // 4. pick_folder_async
+    set_dialog_mock_response(Some(DialogMockResponse::PickFolder(Some(PathBuf::from(
+        "/mock/async/project",
+    )))));
+    let picked = Arc::new(Mutex::new(None));
+    let picked_cb = Arc::clone(&picked);
+    pick_folder_async(PickFolderOptions::new(), move |res| {
+        *picked_cb.lock().unwrap() = Some(res);
+    });
+    assert_eq!(
+        *picked.lock().unwrap(),
+        Some(Some(PathBuf::from("/mock/async/project")))
+    );
+
+    // 5. Headless / uninitialized GTK fallback invokes callback cleanly without blocking or panicking
+    set_dialog_mock_response(None);
+    if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        let headless_res = Arc::new(Mutex::new(None));
+        let headless_cb = Arc::clone(&headless_res);
+        open_file_async(OpenFileOptions::new(), move |res| {
+            *headless_cb.lock().unwrap() = Some(res);
+        });
+        assert_eq!(*headless_res.lock().unwrap(), Some(None));
+    }
+}
+

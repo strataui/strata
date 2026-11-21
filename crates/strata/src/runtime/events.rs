@@ -105,14 +105,29 @@ impl AppRuntime {
                 } else {
                     text_val
                 };
+                let active_scroll_x = self
+                    .active_focus
+                    .as_ref()
+                    .and_then(|active| {
+                        let current_key = active
+                            .input_id
+                            .clone()
+                            .unwrap_or_else(|| format!("input:{}", active.input_index));
+                        if current_key == target_key {
+                            Some(active.state.scroll_x.get())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0.0);
                 let content_box_width = target.content_box_width;
                 let rel_x = if px < target.content_box_x {
-                    0.0
+                    (active_scroll_x + (px - target.content_box_x)).max(0.0)
                 } else if content_box_width > 0.0 && px > target.content_box_x + content_box_width
                 {
                     100000.0
                 } else {
-                    px - target.content_box_x
+                    (px - target.content_box_x + active_scroll_x).max(0.0)
                 };
                 let char_idx = Self::calculate_exact_char_index_at_offset(
                     &measure_val,
@@ -233,6 +248,7 @@ impl AppRuntime {
                 self.sync_active_input_layout();
                 input_handled = true;
             } else if let Some(active) = self.active_focus.take() {
+                active.state.scroll_x.set(0.0);
                 let key = active
                     .input_id
                     .clone()
@@ -252,7 +268,7 @@ impl AppRuntime {
 
         // Also dispatch PointerDown and MouseDown to DOM listeners
         let pre_open_outside_ids = strata_dom::hooks::snapshot_open_click_outside_ids();
-        let mut inside_click_stopped = false;
+        let mut inside_click_stopped = self.point_hits_non_backdrop_top_layer_portal(px, py);
         self.pointer_capture_target = None;
         let mut dom_handled = false;
         let mut captured_target: Option<(Vec<usize>, bool)> = None;
@@ -388,7 +404,8 @@ impl AppRuntime {
                 });
 
                 if let Some(layout) = layout_opt {
-                    let rel_x = (px - layout.geometry.content_box.x).max(0.0);
+                    let scroll_x = active.state.scroll_x.get();
+                    let rel_x = (px - layout.geometry.content_box.x + scroll_x).max(0.0);
                     let is_mono = strata_layout::is_monospace_family(layout.style.font_family);
                     let raw_text = active.state.text.get();
                     let measure_text = if is_password {
@@ -406,6 +423,8 @@ impl AppRuntime {
                     );
                     active.state.cursor_index.set(char_idx);
                     self.reset_caret_blink();
+                    self.sync_active_input_layout();
+                    self.mark_paint_dirty();
                     selection_dragged = true;
                 }
             }
@@ -917,14 +936,28 @@ impl AppRuntime {
         }
     }
 
+    fn dispatch_global_shortcut_for_key(
+        key: strata_platform::KeyCode,
+        modifiers: strata_platform::Modifiers,
+    ) -> bool {
+        let dom_key = Self::keycode_to_dom_key(key, false);
+        strata_dom::hooks::dispatch_global_keydown(
+            &dom_key,
+            modifiers.ctrl,
+            modifiers.shift,
+            modifiers.alt,
+            modifiers.meta,
+        )
+    }
+
     fn dispatch_dom_key_event(
         &self,
         event_type: strata_dom::EventType,
         key: strata_platform::KeyCode,
         modifiers: strata_platform::Modifiers,
-    ) -> bool {
+    ) -> (bool, bool) {
         let Some(ref path) = self.current_focus_path else {
-            return false;
+            return (false, false);
         };
         let mut chain: Vec<&NodeBlueprint> = Vec::with_capacity(path.len() + 1);
         let mut cur = &self.root_blueprint;
@@ -955,22 +988,29 @@ impl AppRuntime {
         ev.meta_key = modifiers.meta;
 
         let mut handled = false;
+        let mut default_prevented = false;
         for bp in chain.into_iter().rev() {
             if let NodeBlueprint::Element { attributes, .. } = bp {
                 for attr in attributes {
                     if let strata_dom::Attribute::EventListener { event, handler } = attr {
                         if *event == event_type {
-                            handler(ev.clone());
+                            let call_ev = ev.clone();
+                            let prevented_cell = call_ev.default_prevented.clone();
+                            let stopped_cell = call_ev.propagation_stopped.clone();
+                            handler(call_ev);
                             handled = true;
-                            if ev.propagation_stopped.get() {
-                                return true;
+                            if prevented_cell.get() {
+                                default_prevented = true;
+                            }
+                            if stopped_cell.get() {
+                                return (true, true);
                             }
                         }
                     }
                 }
             }
         }
-        handled
+        (handled, default_prevented)
     }
 
     /// Dispatches keyboard events to the active focused input element, returning a fine-grained KeyDispatchResult.
@@ -978,8 +1018,15 @@ impl AppRuntime {
         if self.active_focus.is_none() {
             match event {
                 PlatformEvent::KeyDown { key, modifiers } => {
-                    if self.dispatch_dom_key_event(strata_dom::EventType::KeyDown, *key, *modifiers)
-                    {
+                    let (dom_handled, dom_suppressed) = self.dispatch_dom_key_event(
+                        strata_dom::EventType::KeyDown,
+                        *key,
+                        *modifiers,
+                    );
+                    if dom_suppressed {
+                        return KeyDispatchResult::NeedsRebuild;
+                    }
+                    if Self::dispatch_global_shortcut_for_key(*key, *modifiers) || dom_handled {
                         return KeyDispatchResult::NeedsRebuild;
                     }
                     let (px, py) = self.last_mouse_pos;
@@ -1005,7 +1052,10 @@ impl AppRuntime {
                     }
                 }
                 PlatformEvent::KeyUp { key, modifiers } => {
-                    if self.dispatch_dom_key_event(strata_dom::EventType::KeyUp, *key, *modifiers) {
+                    if self
+                        .dispatch_dom_key_event(strata_dom::EventType::KeyUp, *key, *modifiers)
+                        .0
+                    {
                         return KeyDispatchResult::NeedsRebuild;
                     }
                 }
@@ -1059,7 +1109,7 @@ impl AppRuntime {
                 let mut blur = false;
 
                 let is_cmd = modifiers.ctrl || modifiers.meta;
-                if is_cmd {
+                if is_cmd && !modifiers.alt {
                     let cmd = match key {
                         strata_platform::KeyCode::KeyA => Some(EditCommand::SelectAll),
                         strata_platform::KeyCode::KeyC => Some(EditCommand::Copy),
@@ -1078,6 +1128,7 @@ impl AppRuntime {
                         if res {
                             return match cmd {
                                 EditCommand::SelectAll | EditCommand::Copy => {
+                                    self.mark_paint_dirty();
                                     KeyDispatchResult::RedrawOnly
                                 }
                                 _ => KeyDispatchResult::NeedsRebuild,
@@ -1086,6 +1137,28 @@ impl AppRuntime {
                             return KeyDispatchResult::Ignored;
                         }
                     }
+                }
+
+                let is_global_candidate = is_cmd
+                    || modifiers.alt
+                    || matches!(
+                        key,
+                        strata_platform::KeyCode::Escape
+                            | strata_platform::KeyCode::F1
+                            | strata_platform::KeyCode::F2
+                            | strata_platform::KeyCode::F3
+                            | strata_platform::KeyCode::F4
+                            | strata_platform::KeyCode::F5
+                            | strata_platform::KeyCode::F6
+                            | strata_platform::KeyCode::F7
+                            | strata_platform::KeyCode::F8
+                            | strata_platform::KeyCode::F9
+                            | strata_platform::KeyCode::F10
+                            | strata_platform::KeyCode::F11
+                            | strata_platform::KeyCode::F12
+                    );
+                if is_global_candidate && Self::dispatch_global_shortcut_for_key(*key, *modifiers) {
+                    return KeyDispatchResult::NeedsRebuild;
                 }
 
                 let active = self.active_focus.as_mut().unwrap();
@@ -1151,6 +1224,8 @@ impl AppRuntime {
                 }
 
                 if nav_or_sel {
+                    self.sync_active_input_layout();
+                    self.mark_paint_dirty();
                     return KeyDispatchResult::RedrawOnly;
                 }
 
@@ -1172,10 +1247,15 @@ impl AppRuntime {
                 }
 
                 if blur {
+                    active.state.scroll_x.set(0.0);
                     if let Some(ref on_blur) = active.on_blur {
                         on_blur(strata_dom::Event::new(strata_dom::EventType::Blur));
                     }
                     self.active_focus = None;
+                    return KeyDispatchResult::NeedsRebuild;
+                }
+
+                if Self::dispatch_global_shortcut_for_key(*key, *modifiers) {
                     return KeyDispatchResult::NeedsRebuild;
                 }
 

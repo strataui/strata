@@ -60,7 +60,8 @@ pub use cursor_theme::{CursorBitmap, CursorTheme};
 #[cfg(any(test, feature = "test-internals"))]
 pub use dialog::set_dialog_mock_response;
 pub use dialog::{
-    open_file, open_multiple_files, pick_folder, save_file, show_message_box, DialogFilter,
+    open_file, open_file_async, open_multiple_files, open_multiple_files_async, pick_folder,
+    pick_folder_async, save_file, save_file_async, show_message_box, DialogFilter,
     DialogMockResponse, MessageBoxButtons, MessageBoxResult, MessageBoxType, OpenFileOptions,
     PickFolderOptions, SaveFileOptions,
 };

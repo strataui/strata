@@ -1501,7 +1501,13 @@ impl Compositor {
             let line_height = node.style.line_height;
             let font_weight = node.style.font_weight;
             let color = node.style.color;
-            let bounds_width = if node.geometry.content_box.width > 0.0 {
+            let is_nowrap = matches!(
+                node.style.white_space,
+                strata_style::types::WhiteSpace::NoWrap | strata_style::types::WhiteSpace::Pre
+            );
+            let is_monospace = strata_layout::is_monospace_family(node.style.font_family);
+            let text_align = node.style.text_align;
+            let bounds_width = if node.geometry.content_box.width > 0.0 && !is_nowrap {
                 Some(node.geometry.content_box.width)
             } else {
                 None
@@ -1511,10 +1517,69 @@ impl Compositor {
             } else {
                 None
             };
-            let text_align = node.style.text_align;
-            let is_monospace = strata_layout::is_monospace_family(node.style.font_family);
+
+            let scroll_x = node.geometry.scroll_offset.x;
+            let align_offset = if is_nowrap
+                && node.geometry.content_box.width > 0.0
+                && scroll_x == 0.0
+                && !matches!(
+                    text_align,
+                    strata_style::types::TextAlign::Left | strata_style::types::TextAlign::Justify
+                ) {
+                let (tw, _) = strata_layout::text::measure_text_bounds_styled_with_family(
+                    text,
+                    font_size,
+                    line_height,
+                    None,
+                    is_monospace,
+                    node.style.font_family,
+                    font_weight,
+                    node.style.font_style,
+                );
+                match text_align {
+                    strata_style::types::TextAlign::Center => {
+                        ((node.geometry.content_box.width - tw) / 2.0).max(0.0)
+                    }
+                    strata_style::types::TextAlign::Right => {
+                        (node.geometry.content_box.width - tw).max(0.0)
+                    }
+                    _ => 0.0,
+                }
+            } else {
+                0.0
+            };
+
+            let clip_rect = if node.style.overflow_x != Overflow::Visible
+                || node.style.overflow_y != Overflow::Visible
+                || scroll_x != 0.0
+            {
+                let c = if node.geometry.content_box.width > 0.0
+                    && node.geometry.content_box.height > 0.0
+                {
+                    node.geometry.content_box
+                } else {
+                    bounds
+                };
+                if c.width > 0.0 && c.height > 0.0 {
+                    Some(c)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Some(cr) = clip_rect {
+                list.push(DrawCommand::PushClip {
+                    bounds: cr,
+                    radius: BorderRadius::all(0.0),
+                });
+            }
             list.push(DrawCommand::DrawText {
-                origin: (node.geometry.content_box.x, node.geometry.content_box.y),
+                origin: (
+                    node.geometry.content_box.x + align_offset - scroll_x,
+                    node.geometry.content_box.y,
+                ),
                 bounds_width,
                 bounds_height,
                 text_align,
@@ -1526,6 +1591,9 @@ impl Compositor {
                 is_monospace,
                 font_family: node.style.font_family,
             });
+            if clip_rect.is_some() {
+                list.push(DrawCommand::PopClip);
+            }
         }
 
         // SVG Vector Path & Text content on this node

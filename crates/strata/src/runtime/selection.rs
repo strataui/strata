@@ -60,7 +60,62 @@ impl AppRuntime {
         )
     }
 
-    /// Synchronizes the active focused text input's live buffer and styling into the layout tree.
+    /// Computes `(align_offset, scroll_x, cursor_x_offset)` for a single-line input so the
+    /// active caret remains visible within `content_w`.
+    pub(crate) fn compute_input_text_metrics(
+        text: &str,
+        cursor_idx: usize,
+        prev_scroll_x: f32,
+        content_w: f32,
+        text_align: strata_style::types::TextAlign,
+        font_size: f32,
+        line_height: f32,
+        is_mono: bool,
+        font_family: strata_primitives::AtomId,
+    ) -> (f32, f32, f32) {
+        let total_chars = text.chars().count();
+        let clamped_cursor = cursor_idx.min(total_chars);
+        let (full_w, _) = strata_layout::text::measure_text_bounds_with_family(
+            text,
+            font_size,
+            line_height,
+            None,
+            is_mono,
+            font_family,
+        );
+        let prefix: String = text.chars().take(clamped_cursor).collect();
+        let (cursor_w, _) = strata_layout::text::measure_text_bounds_with_family(
+            &prefix,
+            font_size,
+            line_height,
+            None,
+            is_mono,
+            font_family,
+        );
+
+        let caret_w = 2.0f32;
+        let visible_w = (content_w - caret_w).max(0.0);
+        if content_w <= 0.0 || full_w <= visible_w {
+            let align_offset = match text_align {
+                strata_style::types::TextAlign::Center => ((content_w - full_w) / 2.0).max(0.0),
+                strata_style::types::TextAlign::Right => (content_w - full_w).max(0.0),
+                _ => 0.0,
+            };
+            return (align_offset, 0.0, cursor_w);
+        }
+
+        let max_scroll_x = (full_w - visible_w).max(0.0);
+        let mut next_scroll_x = prev_scroll_x;
+        if cursor_w < next_scroll_x {
+            next_scroll_x = cursor_w;
+        } else if cursor_w > next_scroll_x + visible_w {
+            next_scroll_x = cursor_w - visible_w;
+        }
+        (0.0, next_scroll_x.clamp(0.0, max_scroll_x), cursor_w)
+    }
+
+    /// Synchronizes the active focused text input's live buffer, single-line scroll offset,
+    /// and styling into the layout tree.
     pub fn sync_active_input_layout(&mut self) {
         let Some(ref active) = self.active_focus else {
             return;
@@ -72,6 +127,8 @@ impl AppRuntime {
             self.input_is_password(target_idx, target_id.as_deref(), target_entity_id);
         let mut counter = 0;
         let text_val = active.state.text.get();
+        let cursor_idx = active.state.cursor_index.get();
+        let prev_scroll_x = active.state.scroll_x.get();
 
         let layout_by_entity = if let Some(eid) = target_entity_id {
             self.layout_root.find_by_entity_id_mut(eid)
@@ -89,6 +146,7 @@ impl AppRuntime {
             ),
         };
 
+        let mut next_scroll_x = 0.0f32;
         if let Some(layout) = layout_match {
             let is_mono = strata_layout::is_monospace_family(layout.style.font_family);
             if !text_val.is_empty() {
@@ -109,9 +167,25 @@ impl AppRuntime {
                     is_mono,
                     layout.style.font_family,
                 );
-                layout.geometry.content_box.width = tw.max(layout.geometry.content_box.width);
+                if layout.geometry.content_box.width <= 0.0 {
+                    layout.geometry.content_box.width = tw;
+                }
                 layout.geometry.content_box.height = th.max(layout.geometry.content_box.height);
+                let (_, computed_scroll_x, _) = Self::compute_input_text_metrics(
+                    &display_val,
+                    cursor_idx,
+                    prev_scroll_x,
+                    layout.geometry.content_box.width,
+                    layout.style.text_align,
+                    layout.style.font_size,
+                    layout.style.line_height,
+                    is_mono,
+                    layout.style.font_family,
+                );
+                next_scroll_x = computed_scroll_x;
+                layout.geometry.scroll_offset.x = next_scroll_x;
             } else {
+                layout.geometry.scroll_offset.x = 0.0;
                 let mut ph = None;
                 let mut bp_counter = 0;
                 let bp_match = if let Some(eid) = target_entity_id {
@@ -147,6 +221,9 @@ impl AppRuntime {
             }
         }
 
+        if let Some(ref active) = self.active_focus {
+            active.state.scroll_x.set(next_scroll_x);
+        }
         self.update_gtk_ime_location();
     }
 
@@ -249,95 +326,89 @@ impl AppRuntime {
         };
         let total_chars = text.chars().count();
         let cursor_idx = active.state.cursor_index.get().min(total_chars);
+        let prev_scroll_x = active.state.scroll_x.get();
 
-        // Alignment offset for text-align: center / right
-        let align_offset = match layout.style.text_align {
-            strata_style::types::TextAlign::Center => {
-                let (tw, _) = strata_layout::text::measure_text_bounds_with_family(
-                    &text,
-                    font_size,
-                    line_height,
-                    None,
-                    is_mono,
-                    font_family,
-                );
-                ((content_box.width - tw) / 2.0).max(0.0)
-            }
-            strata_style::types::TextAlign::Right => {
-                let (tw, _) = strata_layout::text::measure_text_bounds_with_family(
-                    &text,
-                    font_size,
-                    line_height,
-                    None,
-                    is_mono,
-                    font_family,
-                );
-                (content_box.width - tw).max(0.0)
-            }
-            _ => 0.0,
-        };
+        let (align_offset, scroll_x, cursor_w) = Self::compute_input_text_metrics(
+            &text,
+            cursor_idx,
+            prev_scroll_x,
+            content_box.width,
+            layout.style.text_align,
+            font_size,
+            line_height,
+            is_mono,
+            font_family,
+        );
+        active.state.scroll_x.set(scroll_x);
 
         let caret_w = 2.0f32;
         let caret_h = (font_size * 1.2).min(content_box.height).max(14.0);
         let caret_y = content_box.y + ((content_box.height - caret_h) / 2.0).max(0.0);
 
-        // 1. Selection range highlight (CSS ::selection)
-        if let Some((start, end)) = active.state.selection_range() {
+        let selection_rect = active.state.selection_range().and_then(|(start, end)| {
             let start_clamped = start.min(total_chars);
             let end_clamped = end.min(total_chars);
-            if start_clamped < end_clamped {
-                let start_prefix: String = text.chars().take(start_clamped).collect();
-                let (start_w, _) = strata_layout::text::measure_text_bounds_with_family(
-                    &start_prefix,
-                    font_size,
-                    line_height,
-                    None,
-                    is_mono,
-                    font_family,
-                );
-                let sel_slice: String = text
-                    .chars()
-                    .skip(start_clamped)
-                    .take(end_clamped - start_clamped)
-                    .collect();
-                let (sel_w, _) = strata_layout::text::measure_text_bounds_with_family(
-                    &sel_slice,
-                    font_size,
-                    line_height,
-                    None,
-                    is_mono,
-                    font_family,
-                );
-
-                let sel_h = (font_size * 1.25).min(content_box.height);
-                let sel_y = content_box.y + ((content_box.height - sel_h) / 2.0).max(0.0);
-                let sel_x = content_box.x + align_offset + start_w;
-
-                self.display_list
-                    .push(strata_render::compositor::DrawCommand::DrawRect {
-                        bounds: strata_layout::Rect::new(sel_x, sel_y, sel_w, sel_h),
-                        color: strata_style::types::Color::rgba(59, 130, 246, 120), // Standard CSS selection blue
-                    });
+            if start_clamped >= end_clamped {
+                return None;
             }
-        }
-
-        // 2. Visible Caret Line Cursor (CSS caret-color, blinking, and insertion cursor)
-        let has_sel = active.state.has_selection();
-        let elapsed_ms = self.caret_blink_epoch.elapsed().as_millis();
-        let is_blink_on = (elapsed_ms / 530).is_multiple_of(2);
-
-        if !has_sel && is_blink_on {
-            let prefix: String = text.chars().take(cursor_idx).collect();
-            let (cursor_w, _) = strata_layout::text::measure_text_bounds_with_family(
-                &prefix,
+            let start_prefix: String = text.chars().take(start_clamped).collect();
+            let (start_w, _) = strata_layout::text::measure_text_bounds_with_family(
+                &start_prefix,
                 font_size,
                 line_height,
                 None,
                 is_mono,
                 font_family,
             );
-            let caret_x = (content_box.x + align_offset + cursor_w)
-                .min(content_box.x + content_box.width - caret_w);
+            let sel_slice: String = text
+                .chars()
+                .skip(start_clamped)
+                .take(end_clamped - start_clamped)
+                .collect();
+            let (sel_w, _) = strata_layout::text::measure_text_bounds_with_family(
+                &sel_slice,
+                font_size,
+                line_height,
+                None,
+                is_mono,
+                font_family,
+            );
+
+            let sel_h = (font_size * 1.25).min(content_box.height);
+            let sel_y = content_box.y + ((content_box.height - sel_h) / 2.0).max(0.0);
+            let sel_x = content_box.x + align_offset + start_w - scroll_x;
+            Some(strata_layout::Rect::new(sel_x, sel_y, sel_w, sel_h))
+        });
+
+        let has_sel = active.state.has_selection();
+        let elapsed_ms = self.caret_blink_epoch.elapsed().as_millis();
+        let is_blink_on = (elapsed_ms / 530).is_multiple_of(2);
+        let draw_caret = !has_sel && is_blink_on;
+
+        if selection_rect.is_none() && !draw_caret {
+            return;
+        }
+
+        self.display_list
+            .push(strata_render::compositor::DrawCommand::PushClip {
+                bounds: content_box,
+                radius: strata_style::types::BorderRadius::all(0.0),
+            });
+
+        // 1. Selection range highlight (CSS ::selection)
+        if let Some(sel_bounds) = selection_rect {
+            self.display_list
+                .push(strata_render::compositor::DrawCommand::DrawRect {
+                    bounds: sel_bounds,
+                    color: strata_style::types::Color::rgba(59, 130, 246, 120), // Standard CSS selection blue
+                });
+        }
+
+        // 2. Visible Caret Line Cursor (CSS caret-color, blinking, and insertion cursor)
+        if draw_caret {
+            let max_caret_x = content_box.x + (content_box.width - caret_w).max(0.0);
+            let caret_x =
+                (content_box.x + align_offset + cursor_w - scroll_x).clamp(content_box.x, max_caret_x);
 
             self.display_list
                 .push(strata_render::compositor::DrawCommand::DrawRect {
@@ -345,6 +416,9 @@ impl AppRuntime {
                     color: caret_color,
                 });
         }
+
+        self.display_list
+            .push(strata_render::compositor::DrawCommand::PopClip);
     }
 
     /// Computes the exact bounding box of the active text caret if an input is currently focused.
@@ -388,46 +462,24 @@ impl AppRuntime {
         let total_chars = text.chars().count();
         let cursor_idx = active.state.cursor_index.get().min(total_chars);
 
-        let align_offset = match layout.style.text_align {
-            strata_style::types::TextAlign::Center => {
-                let (tw, _) = strata_layout::text::measure_text_bounds_with_family(
-                    &text,
-                    font_size,
-                    line_height,
-                    None,
-                    is_mono,
-                    font_family,
-                );
-                ((content_box.width - tw) / 2.0).max(0.0)
-            }
-            strata_style::types::TextAlign::Right => {
-                let (tw, _) = strata_layout::text::measure_text_bounds_with_family(
-                    &text,
-                    font_size,
-                    line_height,
-                    None,
-                    is_mono,
-                    font_family,
-                );
-                (content_box.width - tw).max(0.0)
-            }
-            _ => 0.0,
-        };
+        let (align_offset, scroll_x, cursor_w) = Self::compute_input_text_metrics(
+            &text,
+            cursor_idx,
+            active.state.scroll_x.get(),
+            content_box.width,
+            layout.style.text_align,
+            font_size,
+            line_height,
+            is_mono,
+            font_family,
+        );
 
         let caret_w = 2.0f32;
         let caret_h = (font_size * 1.2).min(content_box.height).max(14.0);
         let caret_y = content_box.y + ((content_box.height - caret_h) / 2.0).max(0.0);
-        let prefix: String = text.chars().take(cursor_idx).collect();
-        let (cursor_w, _) = strata_layout::text::measure_text_bounds_with_family(
-            &prefix,
-            font_size,
-            line_height,
-            None,
-            is_mono,
-            font_family,
-        );
-        let caret_x = (content_box.x + align_offset + cursor_w)
-            .min(content_box.x + content_box.width - caret_w);
+        let max_caret_x = content_box.x + (content_box.width - caret_w).max(0.0);
+        let caret_x =
+            (content_box.x + align_offset + cursor_w - scroll_x).clamp(content_box.x, max_caret_x);
 
         Some(strata_layout::Rect::new(caret_x, caret_y, caret_w, caret_h))
     }

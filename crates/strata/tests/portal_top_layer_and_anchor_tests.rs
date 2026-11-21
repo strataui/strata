@@ -434,3 +434,260 @@ fn test_path_qualified_strata_dom_portal_renders_and_dispatches_clicks() {
     runtime.dispatch_mouse_click(anchored_box.x + 20.0, anchored_box.y + 30.0, 0, 1);
     assert_eq!(anchored_clicks.get(), 1);
 }
+
+#[test]
+fn portal_scrollbar_uses_post_translation_bounds_clips_display_list_and_drags() {
+    let mut runtime = AppRuntime::new(
+        rsx! {
+            <div class="w-[800px] h-[400px] p-5 bg-[#09090b]">
+                <div class="w-[240px] h-[80px] ml-[400px] mt-[20px] overflow-hidden">
+                    <button id="scroll-menu-trig" class="w-[120px] h-[30px] bg-[#2563eb]">
+                        {"Open Scrolled Menu"}
+                    </button>
+                    <Portal anchor="scroll-menu-trig" placement="bottom-start" offset={6.0}>
+                        <div
+                            id="portal-scroll-list"
+                            class="flex flex-col w-[180px] h-[120px] overflow-y-auto bg-[#18181b]"
+                        >
+                            <div class="h-[60px] w-full shrink-0" />
+                            <div class="h-[60px] w-full shrink-0" />
+                            <div class="h-[60px] w-full shrink-0" />
+                            <div class="h-[60px] w-full shrink-0" />
+                            <div class="h-[60px] w-full shrink-0" />
+                            <div class="h-[60px] w-full shrink-0" />
+                        </div>
+                    </Portal>
+                </div>
+            </div>
+        },
+        800.0,
+        400.0,
+        1.0,
+    );
+
+    let list_box = find_node_by_element_id(&runtime.layout_root, "portal-scroll-list")
+        .expect("portal-scroll-list must exist")
+        .geometry
+        .border_box;
+    assert!(
+        list_box.x > 400.0 && list_box.y >= 60.0,
+        "expected portal list anchored past x=400, got {:?}",
+        list_box
+    );
+
+    let bar = runtime
+        .active_scrollbars
+        .iter()
+        .find(|b| (b.bounds.x - list_box.x).abs() < 2.0)
+        .cloned()
+        .expect("portal scrollbar must reflect post-translation portal coordinates");
+    assert!(bar.is_top_layer);
+    assert!(
+        (bar.bounds.y - list_box.y).abs() < 2.0
+            && (bar.thumb_bounds.x - list_box.x) > 100.0
+            && (bar.clip_bounds.height - list_box.height).abs() < 2.0,
+        "portal scrollbar track/thumb/clip {:?} / {:?} must align with translated list_box {:?}",
+        bar.thumb_bounds,
+        bar.clip_bounds,
+        list_box
+    );
+
+    // Rendered scrollbar thumb must be clipped to `bar.clip_bounds`
+    runtime.compile_display_list();
+    let clip_idx = runtime
+        .display_list
+        .commands
+        .iter()
+        .rposition(|cmd| matches!(
+            cmd,
+            strata::render::compositor::DrawCommand::PushClip { bounds, .. }
+                if (bounds.x - bar.clip_bounds.x).abs() < 1.0
+                    && (bounds.y - bar.clip_bounds.y).abs() < 1.0
+                    && (bounds.height - bar.clip_bounds.height).abs() < 1.0
+        ))
+        .expect("portal scrollbar must push clip_bounds before drawing thumb");
+    assert!(
+        matches!(
+            runtime.display_list.commands.get(clip_idx + 1),
+            Some(strata::render::compositor::DrawCommand::DrawRoundedRect { .. })
+        ) && matches!(
+            runtime.display_list.commands.get(clip_idx + 2),
+            Some(strata::render::compositor::DrawCommand::PopClip)
+        ),
+        "portal scrollbar thumb DrawRoundedRect must be directly wrapped in PushClip/PopClip"
+    );
+
+    // Thumb press works at translated coordinates and dragging scrolls the portal list
+    let tx = bar.thumb_bounds.x + bar.thumb_bounds.width * 0.5;
+    let ty = bar.thumb_bounds.y + bar.thumb_bounds.height * 0.5;
+    assert!(!runtime.check_scrollbar_thumb_press(10.0, 10.0));
+    assert!(runtime.check_scrollbar_thumb_press(tx, ty));
+    assert!(runtime.poll_scrollbar_drag(tx, ty + 40.0));
+    let new_scroll = runtime
+        .active_scrollbars
+        .iter()
+        .find(|b| (b.bounds.x - list_box.x).abs() < 2.0)
+        .unwrap()
+        .scroll_y;
+    assert!(new_scroll > 0.0, "dragging portal thumb must scroll list");
+}
+
+#[test]
+fn dropdown_portal_escapes_scrolled_tab_bar_and_handles_click_outside_cleanly() {
+    let dismiss_count = Rc::new(Cell::new(0usize));
+    let outside_hook_count = Rc::new(Cell::new(0usize));
+    let dc = Rc::clone(&dismiss_count);
+    let oc = Rc::clone(&outside_hook_count);
+
+    let is_open = Signal::new(true);
+    let _outside_handle = use_click_outside(is_open.clone(), move || {
+        oc.set(oc.get() + 1);
+    });
+
+    #[component]
+    fn ScrolledTabDropdownView(dismiss_count: Rc<Cell<usize>>) -> View {
+        let dropdown = create_dropdown_portal(
+            "scrolled-tab-btn",
+            "bottom-start",
+            4.0,
+            move |_e: Event| dismiss_count.set(dismiss_count.get() + 1),
+            rsx! {
+                <div id="portal-panel-padding" class="p-4 w-[140px] h-[60px] bg-[#1e293b]">
+                    <div id="portal-panel-inner" class="w-[60px] h-[20px] bg-[#38bdf8]" />
+                </div>
+            },
+        );
+        rsx! {
+            <div class="w-[500px] h-[300px] bg-[#0f172a]">
+                <div id="scrolled-tabs" class="flex flex-row w-[220px] h-[40px] overflow-x-auto">
+                    <div class="w-[140px] h-[40px] shrink-0" />
+                    <button id="scrolled-tab-btn" class="w-[100px] h-[32px] shrink-0 bg-[#334155]">
+                        {"Menu"}
+                    </button>
+                    <div class="w-[140px] h-[40px] shrink-0" />
+                </div>
+                {dropdown}
+            </div>
+        }
+    }
+
+    let mut runtime = AppRuntime::new(ScrolledTabDropdownView(dc), 500.0, 300.0, 1.0);
+
+    // Horizontally scroll the tab bar by 80px so `scrolled-tab-btn` moves left onto screen (x=60)
+    assert!(runtime.scroll_to_by_id("scrolled-tabs", 80.0, 0.0));
+    let trig_box = find_node_by_element_id(&runtime.layout_root, "scrolled-tab-btn")
+        .expect("scrolled-tab-btn")
+        .geometry
+        .border_box;
+    let panel_box = find_node_by_element_id(&runtime.layout_root, "portal-panel-padding")
+        .expect("portal-panel-padding")
+        .geometry
+        .border_box;
+
+    assert!(
+        (panel_box.x - trig_box.x).abs() <= 2.0
+            && (panel_box.y - (trig_box.y + trig_box.height + 4.0)).abs() <= 2.0
+            && panel_box.y + panel_box.height > 40.0,
+        "portal panel {:?} must track horizontally scrolled trigger {:?} and escape 40px tab bar clip",
+        panel_box,
+        trig_box
+    );
+
+    // Clicking non-clickable padding inside the portal content must NOT trigger backdrop dismiss or click_outside
+    runtime.step_event(&strata_platform::PlatformEvent::MouseDown {
+        button: strata_platform::MouseButton::Left,
+        x: panel_box.x + 2.0,
+        y: panel_box.y + 2.0,
+    });
+    runtime.step_event(&strata_platform::PlatformEvent::MouseUp {
+        button: strata_platform::MouseButton::Left,
+        x: panel_box.x + 2.0,
+        y: panel_box.y + 2.0,
+    });
+    assert_eq!(dismiss_count.get(), 0);
+    assert_eq!(outside_hook_count.get(), 0);
+
+    // Clicking empty viewport outside the portal fires backdrop dismiss and use_click_outside cleanly
+    runtime.step_event(&strata_platform::PlatformEvent::MouseDown {
+        button: strata_platform::MouseButton::Left,
+        x: 420.0,
+        y: 220.0,
+    });
+    runtime.step_event(&strata_platform::PlatformEvent::MouseUp {
+        button: strata_platform::MouseButton::Left,
+        x: 420.0,
+        y: 220.0,
+    });
+    assert_eq!(dismiss_count.get(), 1);
+    assert_eq!(outside_hook_count.get(), 1);
+}
+
+#[test]
+fn global_keydown_hook_dispatches_on_runtime_keydown_and_respects_focused_input() {
+    use strata_platform::{KeyCode, Modifiers, PlatformEvent};
+
+    let escape_count = Rc::new(Cell::new(0usize));
+    let shortcut_count = Rc::new(Cell::new(0usize));
+    let ec = Rc::clone(&escape_count);
+    let sc = Rc::clone(&shortcut_count);
+
+    let _esc_handle = use_keyboard_shortcut("Escape", move || {
+        ec.set(ec.get() + 1);
+    });
+    let _cmd_k_handle = use_keyboard_shortcut("Ctrl+K", move || {
+        sc.set(sc.get() + 1);
+    });
+
+    #[component]
+    fn GlobalKeyView() -> View {
+        rsx! {
+            <div class="w-[400px] h-[160px] p-4 bg-[#111827]">
+                <input id="shortcut-input" type="text" value="" class="w-[200px] h-[32px]" />
+            </div>
+        }
+    }
+
+    let mut runtime = AppRuntime::new(GlobalKeyView(), 400.0, 160.0, 1.0);
+    assert!(runtime.active_focus.is_none());
+
+    // 1. With no element focused, global Escape & Ctrl+K shortcuts dispatch cleanly
+    assert!(runtime.step_event(&PlatformEvent::KeyDown {
+        key: KeyCode::Escape,
+        modifiers: Modifiers::default(),
+    }));
+    assert_eq!(escape_count.get(), 1);
+
+    assert!(runtime.step_event(&PlatformEvent::KeyDown {
+        key: KeyCode::KeyK,
+        modifiers: Modifiers {
+            ctrl: true,
+            ..Default::default()
+        },
+    }));
+    assert_eq!(shortcut_count.get(), 1);
+
+    // 2. Focus the input: printable typing still edits the input, and Ctrl+K global shortcut still fires
+    let input_box = find_node_by_element_id(&runtime.layout_root, "shortcut-input")
+        .expect("shortcut-input")
+        .geometry
+        .content_box;
+    runtime.dispatch_pointer_down(input_box.x + 8.0, input_box.y + 8.0);
+    runtime.dispatch_pointer_up(input_box.x + 8.0, input_box.y + 8.0);
+    assert!(runtime.active_focus.is_some());
+
+    runtime.step_event(&PlatformEvent::ReceivedCharacter('x'));
+    assert_eq!(
+        runtime.active_focus.as_ref().unwrap().state.text.get(),
+        "x"
+    );
+
+    runtime.step_event(&PlatformEvent::KeyDown {
+        key: KeyCode::KeyK,
+        modifiers: Modifiers {
+            ctrl: true,
+            ..Default::default()
+        },
+    });
+    assert_eq!(shortcut_count.get(), 2);
+}
+

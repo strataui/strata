@@ -848,4 +848,106 @@ fn test_native_dom_drag_and_drop_lifecycle_with_data_transfer() {
     assert_eq!(events.last().map(String::as_str), Some("dragend"));
 }
 
+#[test]
+fn test_unhovered_wheel_and_scroll_actions_do_not_fallback_to_largest_container() {
+    let mut runtime = AppRuntime::new(
+        rsx! {
+            <div class="flex flex-row w-[800px] h-[200px] bg-black">
+                <div id="nonscroll-chrome" class="w-[400px] h-[200px] bg-neutral-900" />
+                <div id="large-side-panel" class="flex flex-col w-[400px] h-[200px] overflow-y-auto bg-neutral-800">
+                    <div class="h-[800px] w-full shrink-0" />
+                </div>
+            </div>
+        },
+        800.0,
+        200.0,
+        1.0,
+    );
+
+    assert_eq!(runtime.active_scrollbars.len(), 1);
+    assert_eq!(runtime.active_scrollbars[0].scroll_y, 0.0);
+
+    // Cursor is at (100, 100) over the non-scrollable chrome pane — NOT over `large-side-panel`.
+    // None of the scroll entry points may fall back to scrolling `large-side-panel`.
+    assert!(!runtime.dispatch_scroll(100.0, 100.0, 0.0, 120.0));
+    assert_eq!(runtime.active_scrollbars[0].scroll_y, 0.0);
+
+    assert_eq!(
+        runtime.dispatch_smooth_scroll_action(100.0, 100.0, 0.0, 120.0),
+        (false, false)
+    );
+    assert_eq!(runtime.active_scrollbars[0].scroll_y, 0.0);
+
+    assert!(!runtime.scroll_to_top(100.0, 100.0));
+    assert!(!runtime.scroll_to_bottom(100.0, 100.0));
+    assert_eq!(runtime.active_scrollbars[0].scroll_y, 0.0);
+
+    // Moving the pointer inside `large-side-panel` (x=550, y=100) scrolls that container normally.
+    assert!(runtime.dispatch_scroll(550.0, 100.0, 0.0, 120.0));
+    assert_eq!(runtime.active_scrollbars[0].scroll_y, 120.0);
+}
+
+#[test]
+fn test_wheel_default_prevented_suppresses_container_scroll_and_horizontal_wheel_works() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use strata_dom::Event;
+
+    let wheel_calls = Rc::new(Cell::new(0usize));
+    let wheel_cb = Rc::clone(&wheel_calls);
+
+    let mut runtime = AppRuntime::new(
+        rsx! {
+            <div
+                id="prevented-scroller"
+                class="flex flex-col w-[300px] h-[200px] overflow-y-auto"
+                onwheel={move |e: Event| {
+                    wheel_cb.set(wheel_cb.get() + 1);
+                    e.prevent_default();
+                }}
+            >
+                <div class="h-[800px] w-full shrink-0" />
+            </div>
+        },
+        300.0,
+        200.0,
+        1.0,
+    );
+
+    runtime.last_mouse_pos = (150.0, 100.0);
+    runtime.step_event(&PlatformEvent::Scroll {
+        delta_x: 0.0,
+        delta_y: 120.0,
+        is_momentum: false,
+    });
+    assert_eq!(wheel_calls.get(), 1);
+    assert_eq!(
+        runtime.active_scrollbars[0].scroll_y, 0.0,
+        "e.prevent_default() inside onwheel must suppress native container scroll"
+    );
+
+    // Horizontal wheel scrolling on an `overflow-x-auto` tab bar
+    let mut tab_rt = AppRuntime::new(
+        rsx! {
+            <div id="tab-strip" class="flex flex-row w-[200px] h-[48px] overflow-x-auto">
+                <div id="tab-0" class="w-[120px] h-[48px] shrink-0" />
+                <div id="tab-1" class="w-[120px] h-[48px] shrink-0" />
+                <div id="tab-2" class="w-[120px] h-[48px] shrink-0" />
+            </div>
+        },
+        400.0,
+        100.0,
+        1.0,
+    );
+    let initial_x = tab_rt.layout_root.children[0].geometry.border_box.x;
+    assert_eq!(initial_x, 0.0);
+    assert!(tab_rt.dispatch_scroll(50.0, 24.0, 90.0, 0.0));
+    let scrolled_x = tab_rt.layout_root.children[0].geometry.border_box.x;
+    assert!(
+        (scrolled_x + 90.0).abs() < 1.5,
+        "expected tab-0 shifted left by 90px after horizontal wheel, got x={scrolled_x}"
+    );
+}
+
+
 

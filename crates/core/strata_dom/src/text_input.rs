@@ -53,6 +53,7 @@ pub struct TextInputState {
     pub cursor_index: Signal<usize>,
     pub selection_anchor: Signal<Option<usize>>,
     pub is_focused: Signal<bool>,
+    pub scroll_x: std::cell::Cell<f32>,
     undo_stack: Vec<(String, usize)>,
     redo_stack: Vec<(String, usize)>,
 }
@@ -75,6 +76,7 @@ impl TextInputState {
             cursor_index,
             selection_anchor,
             is_focused,
+            scroll_x: std::cell::Cell::new(0.0),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         }

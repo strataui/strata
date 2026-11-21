@@ -429,6 +429,7 @@ where
         "fixed inset-0",
         vec![
             Attribute::property("data-portal", "true"),
+            Attribute::property("data-portal-backdrop", "true"),
             Attribute::event_listener(EventType::Click, move |ev: Event| {
                 on_dismiss.call_handler(ev);
             }),

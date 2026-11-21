@@ -74,6 +74,20 @@ pub struct KeyChord {
 }
 
 impl KeyChord {
+    fn normalize_key_token(raw: &str) -> String {
+        if raw == " " {
+            return "space".to_string();
+        }
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "space" | "spacebar" if raw == " " || raw.eq_ignore_ascii_case("space") || raw.eq_ignore_ascii_case("spacebar") => {
+                "space".to_string()
+            }
+            "esc" | "escape" => "escape".to_string(),
+            "return" | "enter" => "enter".to_string(),
+            other => other.to_string(),
+        }
+    }
+
     /// Parses a string like "Ctrl+Shift+P", "Cmd+K", or "Escape".
     pub fn parse(s: &str) -> Self {
         let mut ctrl = false;
@@ -83,13 +97,17 @@ impl KeyChord {
         let mut key = String::new();
 
         for part in s.split('+') {
+            if part == " " {
+                key = "space".to_string();
+                continue;
+            }
             let p = part.trim();
             match p.to_ascii_lowercase().as_str() {
                 "ctrl" | "control" => ctrl = true,
                 "shift" => shift = true,
                 "alt" | "option" => alt = true,
                 "cmd" | "command" | "meta" | "super" => meta = true,
-                other => key = other.to_ascii_lowercase(),
+                other => key = Self::normalize_key_token(other),
             }
         }
 
@@ -104,7 +122,8 @@ impl KeyChord {
 
     /// Evaluates if an incoming keystroke matches this key chord.
     pub fn matches(&self, key: &str, ctrl: bool, shift: bool, alt: bool, meta: bool) -> bool {
-        self.key.eq_ignore_ascii_case(key)
+        let incoming = Self::normalize_key_token(key);
+        self.key.eq_ignore_ascii_case(&incoming)
             && self.ctrl == ctrl
             && self.shift == shift
             && self.alt == alt

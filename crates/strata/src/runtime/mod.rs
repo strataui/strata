@@ -452,6 +452,7 @@ impl AppRuntime {
         }
         self.apply_viewport_clamps();
         self.apply_scroll_offsets();
+        self.sync_active_input_layout();
         self.dispatch_resize_observers();
         self.spatial_index
             .rebuild(&self.root_blueprint, &self.layout_root);

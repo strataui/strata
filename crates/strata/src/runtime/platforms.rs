@@ -9,6 +9,7 @@ pub(crate) fn resolved_cursor_at(
 ) -> strata_platform::window::CursorIcon {
     let is_over_scrollbar = runtime.active_scrollbars.iter().any(|bar| {
         bar.max_scroll_y > 1.0
+            && bar.clip_bounds.contains_point(x, y)
             && (x >= bar.track_bounds.x
                 && x <= bar.bounds.x + bar.bounds.width + 1.0
                 && y >= bar.track_bounds.y

@@ -1743,6 +1743,9 @@ impl AppRuntime {
         if style.cursor == strata_style::types::Cursor::Default {
             style.cursor = strata_style::types::Cursor::Text;
         }
+        style.white_space = strata_style::types::WhiteSpace::NoWrap;
+        style.overflow_x = strata_style::types::Overflow::Hidden;
+        style.overflow_y = strata_style::types::Overflow::Hidden;
         let is_password = Self::is_password_input_attrs(attributes);
         let mut value_text = None;
         let mut placeholder_text = None;

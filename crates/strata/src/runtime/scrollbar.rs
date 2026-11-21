@@ -13,15 +13,19 @@ impl AppRuntime {
             .is_some_and(|t| t.elapsed().as_millis() < 700);
 
         for bar in &self.active_scrollbars {
-            if bar.max_scroll_y <= 1.0 {
+            if bar.max_scroll_y <= 1.0
+                || bar.clip_bounds.width <= 0.0
+                || bar.clip_bounds.height <= 0.0
+            {
                 continue;
             }
-            let is_hovered = bar.thumb_bounds.contains_point(mx, my)
-                || bar.track_bounds.contains_point(mx, my)
-                || (mx >= bar.track_bounds.x
-                    && mx <= bar.bounds.x + bar.bounds.width + 1.0
-                    && my >= bar.track_bounds.y
-                    && my <= bar.track_bounds.y + bar.track_bounds.height);
+            let is_hovered = bar.clip_bounds.contains_point(mx, my)
+                && (bar.thumb_bounds.contains_point(mx, my)
+                    || bar.track_bounds.contains_point(mx, my)
+                    || (mx >= bar.track_bounds.x
+                        && mx <= bar.bounds.x + bar.bounds.width + 1.0
+                        && my >= bar.track_bounds.y
+                        && my <= bar.track_bounds.y + bar.track_bounds.height));
             let is_active = is_dragging || is_hovered || is_kinetic || is_recent_scroll;
             let alpha = if is_active { 150u8 } else { 60u8 };
 
@@ -29,9 +33,24 @@ impl AppRuntime {
             if is_active {
                 let expand_px = 2.0;
                 thumb_bounds.x = (thumb_bounds.x - expand_px).max(bar.bounds.x);
-                thumb_bounds.width += expand_px;
+                thumb_bounds.width =
+                    (thumb_bounds.width + expand_px).min((bar.bounds.x + bar.bounds.width) - thumb_bounds.x);
+            }
+            let min_y = bar.track_bounds.y;
+            let max_y = bar.track_bounds.y + bar.track_bounds.height;
+            let clamped_top = thumb_bounds.y.clamp(min_y, max_y);
+            let clamped_bot = (thumb_bounds.y + thumb_bounds.height).clamp(clamped_top, max_y);
+            thumb_bounds.y = clamped_top;
+            thumb_bounds.height = clamped_bot - clamped_top;
+            if thumb_bounds.width <= 0.0 || thumb_bounds.height <= 0.0 {
+                continue;
             }
 
+            self.display_list
+                .push(strata_render::compositor::DrawCommand::PushClip {
+                    bounds: bar.clip_bounds,
+                    radius: bar.border_radius,
+                });
             self.display_list
                 .push(strata_render::compositor::DrawCommand::DrawRoundedRect {
                     bounds: thumb_bounds,
@@ -40,13 +59,19 @@ impl AppRuntime {
                     border_width: strata_style::types::EdgeInsets::all(0.0),
                     border_color: None,
                 });
+            self.display_list
+                .push(strata_render::compositor::DrawCommand::PopClip);
         }
     }
 
     /// Checks if a pointer press landed on any active scrollbar thumb or track and starts dragging.
     pub fn check_scrollbar_thumb_press(&mut self, px: f32, py: f32) -> bool {
-        for bar in &self.active_scrollbars {
-            if bar.max_scroll_y <= 1.0 {
+        for bar in self.active_scrollbars.iter().rev() {
+            if bar.max_scroll_y <= 1.0
+                || bar.clip_bounds.width <= 0.0
+                || bar.clip_bounds.height <= 0.0
+                || !bar.clip_bounds.contains_point(px, py)
+            {
                 continue;
             }
 

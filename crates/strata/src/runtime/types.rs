@@ -47,6 +47,9 @@ impl std::fmt::Debug for ActiveInput {
 #[derive(Debug, Clone)]
 pub struct ActiveScrollbar {
     pub bounds: strata_layout::Rect,
+    pub clip_bounds: strata_layout::Rect,
+    pub border_radius: strata_style::types::BorderRadius,
+    pub is_top_layer: bool,
     pub track_bounds: strata_layout::Rect,
     pub thumb_bounds: strata_layout::Rect,
     pub scroll_y: f32,

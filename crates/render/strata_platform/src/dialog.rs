@@ -317,27 +317,209 @@ pub fn show_message_box(
     }
 }
 
+/// Non-blocking single-file open dialog safe to call inside UI event handlers without nesting `dialog.run()`.
+pub fn open_file_async<F>(options: OpenFileOptions, callback: F)
+where
+    F: FnOnce(Option<PathBuf>) + 'static,
+{
+    if let Some(DialogMockResponse::OpenFile(path)) = check_mock_response() {
+        callback(path);
+        return;
+    }
+
+    #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
+    {
+        linux_backend::open_file_async(&options, callback);
+    }
+    #[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
+    {
+        callback(open_file(options));
+    }
+}
+
+/// Non-blocking multi-file open dialog safe to call inside UI event handlers without nesting `dialog.run()`.
+pub fn open_multiple_files_async<F>(options: OpenFileOptions, callback: F)
+where
+    F: FnOnce(Vec<PathBuf>) + 'static,
+{
+    if let Some(DialogMockResponse::OpenFiles(paths)) = check_mock_response() {
+        callback(paths);
+        return;
+    }
+
+    #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
+    {
+        linux_backend::open_multiple_files_async(&options, callback);
+    }
+    #[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
+    {
+        callback(open_multiple_files(options));
+    }
+}
+
+/// Non-blocking file save dialog safe to call inside UI event handlers without nesting `dialog.run()`.
+pub fn save_file_async<F>(options: SaveFileOptions, callback: F)
+where
+    F: FnOnce(Option<PathBuf>) + 'static,
+{
+    if let Some(DialogMockResponse::SaveFile(path)) = check_mock_response() {
+        callback(path);
+        return;
+    }
+
+    #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
+    {
+        linux_backend::save_file_async(&options, callback);
+    }
+    #[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
+    {
+        callback(save_file(options));
+    }
+}
+
+/// Non-blocking folder selection dialog safe to call inside UI event handlers without nesting `dialog.run()`.
+pub fn pick_folder_async<F>(options: PickFolderOptions, callback: F)
+where
+    F: FnOnce(Option<PathBuf>) + 'static,
+{
+    if let Some(DialogMockResponse::PickFolder(path)) = check_mock_response() {
+        callback(path);
+        return;
+    }
+
+    #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
+    {
+        linux_backend::pick_folder_async(&options, callback);
+    }
+    #[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
+    {
+        callback(pick_folder(options));
+    }
+}
+
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 mod linux_backend {
     use super::*;
     use gtk::prelude::*;
+    use std::cell::RefCell;
     use std::path::PathBuf;
+    use std::rc::Rc;
+
+    fn active_parent_window() -> Option<gtk::Window> {
+        let windows: Vec<gtk::Window> = gtk::Window::list_toplevels()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Window>().ok())
+            .collect();
+        windows
+            .iter()
+            .find(|w| w.is_visible() && w.is_active())
+            .cloned()
+            .or_else(|| windows.into_iter().find(|w| w.is_visible()))
+    }
+
+    fn create_file_chooser(
+        title: &str,
+        action: gtk::FileChooserAction,
+        accept_label: &str,
+        filters: &[DialogFilter],
+        starting_directory: Option<&PathBuf>,
+    ) -> gtk::FileChooserNative {
+        let parent = active_parent_window();
+        let dialog = gtk::FileChooserNative::new(
+            Some(title),
+            parent.as_ref(),
+            action,
+            Some(accept_label),
+            Some("Cancel"),
+        );
+        apply_filters(&dialog, filters);
+        if let Some(dir) = starting_directory {
+            dialog.set_current_folder(dir);
+        }
+        dialog
+    }
+
+    fn build_open_dialog(options: &OpenFileOptions, multiple: bool) -> gtk::FileChooserNative {
+        let default_title = if multiple { "Open Files" } else { "Open File" };
+        let dialog = create_file_chooser(
+            options.title.as_deref().unwrap_or(default_title),
+            gtk::FileChooserAction::Open,
+            "Open",
+            &options.filters,
+            options.starting_directory.as_ref(),
+        );
+        if multiple {
+            dialog.set_select_multiple(true);
+        }
+        dialog
+    }
+
+    fn build_save_dialog(options: &SaveFileOptions) -> gtk::FileChooserNative {
+        let dialog = create_file_chooser(
+            options.title.as_deref().unwrap_or("Save File"),
+            gtk::FileChooserAction::Save,
+            "Save",
+            &options.filters,
+            options.starting_directory.as_ref(),
+        );
+        dialog.set_do_overwrite_confirmation(true);
+        if let Some(name) = &options.default_name {
+            dialog.set_current_name(name);
+        }
+        dialog
+    }
+
+    fn build_folder_dialog(options: &PickFolderOptions) -> gtk::FileChooserNative {
+        create_file_chooser(
+            options.title.as_deref().unwrap_or("Select Folder"),
+            gtk::FileChooserAction::SelectFolder,
+            "Select",
+            &[],
+            options.starting_directory.as_ref(),
+        )
+    }
+
+    fn run_native_dialog_async<T: 'static>(
+        dialog: gtk::FileChooserNative,
+        on_accept: impl FnOnce(&gtk::FileChooserNative) -> T + 'static,
+        empty: impl FnOnce() -> T + 'static,
+        callback: impl FnOnce(T) + 'static,
+    ) {
+        if !gtk::is_initialized() {
+            callback(empty());
+            return;
+        }
+        // Keep a strong handle to the native dialog until the user picks or cancels,
+        // and use non-blocking show() + connect_response so we never enter a nested
+        // gtk::dialog::run() loop while AppRuntime event borrows are active.
+        let keep_dlg = Rc::new(RefCell::new(Some(dialog.clone())));
+        let accept_cell = Rc::new(RefCell::new(Some(on_accept)));
+        let empty_cell = Rc::new(RefCell::new(Some(empty)));
+        let cb_cell = Rc::new(RefCell::new(Some(callback)));
+
+        let keep_dlg_cb = keep_dlg.clone();
+        dialog.connect_response(move |dlg, response| {
+            let value = if response == gtk::ResponseType::Accept {
+                accept_cell.borrow_mut().take().map(|f| f(dlg))
+            } else {
+                empty_cell.borrow_mut().take().map(|f| f())
+            };
+            dlg.hide();
+            dlg.destroy();
+            let _ = keep_dlg_cb.borrow_mut().take();
+            if let (Some(v), Some(cb)) = (value, cb_cell.borrow_mut().take()) {
+                cb(v);
+                crate::gtk_window::post_platform_event(crate::events::PlatformEvent::AnimationTick);
+            }
+        });
+        dialog.show();
+    }
 
     pub fn open_file(options: &OpenFileOptions) -> Option<PathBuf> {
         if !gtk::is_initialized() {
             return None;
         }
-        let dialog = gtk::FileChooserNative::new(
-            Some(options.title.as_deref().unwrap_or("Open File")),
-            None::<&gtk::Window>,
-            gtk::FileChooserAction::Open,
-            Some("Open"),
-            Some("Cancel"),
-        );
-        apply_filters(&dialog, &options.filters);
-        if let Some(dir) = &options.starting_directory {
-            dialog.set_current_folder(dir);
-        }
+        let dialog = build_open_dialog(options, false);
         let response = dialog.run();
         if response == gtk::ResponseType::Accept {
             dialog.filename()
@@ -350,18 +532,7 @@ mod linux_backend {
         if !gtk::is_initialized() {
             return Vec::new();
         }
-        let dialog = gtk::FileChooserNative::new(
-            Some(options.title.as_deref().unwrap_or("Open Files")),
-            None::<&gtk::Window>,
-            gtk::FileChooserAction::Open,
-            Some("Open"),
-            Some("Cancel"),
-        );
-        dialog.set_select_multiple(true);
-        apply_filters(&dialog, &options.filters);
-        if let Some(dir) = &options.starting_directory {
-            dialog.set_current_folder(dir);
-        }
+        let dialog = build_open_dialog(options, true);
         let response = dialog.run();
         if response == gtk::ResponseType::Accept {
             dialog.filenames()
@@ -374,21 +545,7 @@ mod linux_backend {
         if !gtk::is_initialized() {
             return None;
         }
-        let dialog = gtk::FileChooserNative::new(
-            Some(options.title.as_deref().unwrap_or("Save File")),
-            None::<&gtk::Window>,
-            gtk::FileChooserAction::Save,
-            Some("Save"),
-            Some("Cancel"),
-        );
-        dialog.set_do_overwrite_confirmation(true);
-        apply_filters(&dialog, &options.filters);
-        if let Some(dir) = &options.starting_directory {
-            dialog.set_current_folder(dir);
-        }
-        if let Some(name) = &options.default_name {
-            dialog.set_current_name(name);
-        }
+        let dialog = build_save_dialog(options);
         let response = dialog.run();
         if response == gtk::ResponseType::Accept {
             dialog.filename()
@@ -401,22 +558,77 @@ mod linux_backend {
         if !gtk::is_initialized() {
             return None;
         }
-        let dialog = gtk::FileChooserNative::new(
-            Some(options.title.as_deref().unwrap_or("Select Folder")),
-            None::<&gtk::Window>,
-            gtk::FileChooserAction::SelectFolder,
-            Some("Select"),
-            Some("Cancel"),
-        );
-        if let Some(dir) = &options.starting_directory {
-            dialog.set_current_folder(dir);
-        }
+        let dialog = build_folder_dialog(options);
         let response = dialog.run();
         if response == gtk::ResponseType::Accept {
             dialog.filename()
         } else {
             None
         }
+    }
+
+    pub fn open_file_async<F: FnOnce(Option<PathBuf>) + 'static>(
+        options: &OpenFileOptions,
+        callback: F,
+    ) {
+        if !gtk::is_initialized() {
+            callback(None);
+            return;
+        }
+        run_native_dialog_async(
+            build_open_dialog(options, false),
+            |dlg| dlg.filename(),
+            || None,
+            callback,
+        );
+    }
+
+    pub fn open_multiple_files_async<F: FnOnce(Vec<PathBuf>) + 'static>(
+        options: &OpenFileOptions,
+        callback: F,
+    ) {
+        if !gtk::is_initialized() {
+            callback(Vec::new());
+            return;
+        }
+        run_native_dialog_async(
+            build_open_dialog(options, true),
+            |dlg| dlg.filenames(),
+            Vec::new,
+            callback,
+        );
+    }
+
+    pub fn save_file_async<F: FnOnce(Option<PathBuf>) + 'static>(
+        options: &SaveFileOptions,
+        callback: F,
+    ) {
+        if !gtk::is_initialized() {
+            callback(None);
+            return;
+        }
+        run_native_dialog_async(
+            build_save_dialog(options),
+            |dlg| dlg.filename(),
+            || None,
+            callback,
+        );
+    }
+
+    pub fn pick_folder_async<F: FnOnce(Option<PathBuf>) + 'static>(
+        options: &PickFolderOptions,
+        callback: F,
+    ) {
+        if !gtk::is_initialized() {
+            callback(None);
+            return;
+        }
+        run_native_dialog_async(
+            build_folder_dialog(options),
+            |dlg| dlg.filename(),
+            || None,
+            callback,
+        );
     }
 
     pub fn show_message_box(
@@ -441,7 +653,7 @@ mod linux_backend {
             MessageBoxButtons::YesNoCancel => gtk::ButtonsType::None,
         };
         let dialog = gtk::MessageDialog::new(
-            None::<&gtk::Window>,
+            active_parent_window().as_ref(),
             gtk::DialogFlags::MODAL,
             message_type,
             buttons_type,
