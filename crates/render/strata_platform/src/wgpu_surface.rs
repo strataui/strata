@@ -4,10 +4,16 @@
 //! persistent cached 2D HUD overlay compositing (`ui_overlay_texture`), and graceful fallback
 //! when running headless without a windowing GPU surface.
 
-use crate::surface::PresentMode;
+use crate::surface::{PresentError, PresentMode, SurfaceConfig, SurfacePresenter};
 use std::sync::Arc;
+use strata_layout::Rect;
+use strata_render::compositor::DisplayList;
 use strata_render::gpu_wgpu::Wgpu3DRenderer;
 use strata_render::scene3d::Scene3D;
+use strata_render::{
+    GpuBatchSummary, GpuStencilClipPipeline, Hardware2DFrame, HardwareRenderItem,
+    UnifiedGpuCollector, Wgpu2DRenderer,
+};
 
 #[inline]
 fn surface_perf_logging_enabled() -> bool {
@@ -64,14 +70,29 @@ struct CachedOverlayTexture {
     bind_group: wgpu::BindGroup,
 }
 
-/// Hardware `wgpu` window surface presenter managing 3D rendering + cached 2D HUD compositing.
+struct DisplayOffscreenTarget {
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    color: wgpu::Texture,
+    view: wgpu::TextureView,
+    readback: wgpu::Buffer,
+    padded_bytes_per_row: u32,
+}
+
+/// Hardware `wgpu` window surface presenter managing 3D rendering, hardware 2D/stencil-clip
+/// [`Wgpu2DRenderer`] batches, and cached 2D HUD compositing.
 pub struct WgpuWindowPresenter {
     _instance: wgpu::Instance,
     surface: Option<wgpu::Surface<'static>>,
     surface_config: Option<wgpu::SurfaceConfiguration>,
     renderer: Wgpu3DRenderer,
+    renderer_2d: Wgpu2DRenderer,
+    collector: UnifiedGpuCollector,
+    last_batch_summary: GpuBatchSummary,
     present_mode: PresentMode,
     ui_overlay: Option<CachedOverlayTexture>,
+    display_offscreen: Option<DisplayOffscreenTarget>,
 }
 
 impl WgpuWindowPresenter {
@@ -84,18 +105,22 @@ impl WgpuWindowPresenter {
             "strata_platform_wgpu_device",
         )?;
 
-        let renderer = Wgpu3DRenderer::from_device(
-            Arc::new(device),
-            Arc::new(queue),
-            wgpu::TextureFormat::Bgra8Unorm,
-        );
+        let dev_arc = Arc::new(device);
+        let queue_arc = Arc::new(queue);
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+        let renderer = Wgpu3DRenderer::from_device(Arc::clone(&dev_arc), Arc::clone(&queue_arc), format);
+        let renderer_2d = Wgpu2DRenderer::from_device(dev_arc, queue_arc, format);
         Ok(Self {
             _instance: instance,
             surface: None,
             surface_config: None,
             renderer,
+            renderer_2d,
+            collector: UnifiedGpuCollector::new(1280.0, 800.0),
+            last_batch_summary: GpuBatchSummary::default(),
             present_mode,
             ui_overlay: None,
+            display_offscreen: None,
         })
     }
 
@@ -162,14 +187,21 @@ impl WgpuWindowPresenter {
         };
         surface.configure(&device, &cfg);
 
-        let renderer = Wgpu3DRenderer::from_device(Arc::new(device), Arc::new(queue), format);
+        let dev_arc = Arc::new(device);
+        let queue_arc = Arc::new(queue);
+        let renderer = Wgpu3DRenderer::from_device(Arc::clone(&dev_arc), Arc::clone(&queue_arc), format);
+        let renderer_2d = Wgpu2DRenderer::from_device(dev_arc, queue_arc, format);
         Ok(Self {
             _instance: instance,
             surface: Some(surface),
             surface_config: Some(cfg),
             renderer,
+            renderer_2d,
+            collector: UnifiedGpuCollector::new(width.max(1) as f32, height.max(1) as f32),
+            last_batch_summary: GpuBatchSummary::default(),
             present_mode,
             ui_overlay: None,
+            display_offscreen: None,
         })
     }
 
@@ -177,8 +209,35 @@ impl WgpuWindowPresenter {
         &mut self.renderer
     }
 
+    pub fn renderer_2d(&self) -> &Wgpu2DRenderer {
+        &self.renderer_2d
+    }
+
+    pub fn renderer_2d_mut(&mut self) -> &mut Wgpu2DRenderer {
+        &mut self.renderer_2d
+    }
+
+    pub fn batch_collector(&self) -> &UnifiedGpuCollector {
+        &self.collector
+    }
+
+    pub fn last_batch_summary(&self) -> GpuBatchSummary {
+        self.last_batch_summary
+    }
+
+    pub fn stencil_clip_pipeline(&self) -> &GpuStencilClipPipeline {
+        self.renderer_2d.stencil_clip_pipeline()
+    }
+
     pub fn active_wgpu_present_mode(&self) -> Option<wgpu::PresentMode> {
         self.surface_config.as_ref().map(|c| c.present_mode)
+    }
+
+    pub fn surface_size(&self) -> (u32, u32) {
+        self.surface_config
+            .as_ref()
+            .map(|c| (c.width, c.height))
+            .unwrap_or((0, 0))
     }
 
     pub fn has_surface(&self) -> bool {
@@ -459,6 +518,340 @@ impl WgpuWindowPresenter {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn render_hybrid_frame_to_view(
+        &mut self,
+        frame: &Hardware2DFrame,
+        target_view: &wgpu::TextureView,
+        target_w: u32,
+        target_h: u32,
+        logical_w: f32,
+        logical_h: f32,
+        dpr: f32,
+        clear_color: [f32; 4],
+        damage: Option<Rect>,
+    ) {
+        self.renderer_2d
+            .prepare_frame(frame, logical_w, logical_h, dpr);
+
+        let sx = target_w as f32 / logical_w.max(1.0);
+        let sy = target_h as f32 / logical_h.max(1.0);
+        let mut has_drawn = false;
+        let mut idx = 0usize;
+        let n = frame.items.len();
+
+        while idx < n {
+            match &frame.items[idx] {
+                HardwareRenderItem::Batch(_) => {
+                    let start = idx;
+                    while idx < n && matches!(frame.items[idx], HardwareRenderItem::Batch(_)) {
+                        idx += 1;
+                    }
+                    let clear = if !has_drawn { Some(clear_color) } else { None };
+                    self.renderer_2d.render_batch_slice_to_view(
+                        frame,
+                        start..idx,
+                        target_view,
+                        target_w,
+                        target_h,
+                        logical_w,
+                        logical_h,
+                        clear,
+                        damage,
+                    );
+                    has_drawn = true;
+                }
+                HardwareRenderItem::Viewport3D { bounds, scene } => {
+                    let vp = [
+                        bounds.x * sx,
+                        bounds.y * sy,
+                        bounds.width * sx,
+                        bounds.height * sy,
+                    ];
+                    if !has_drawn {
+                        self.renderer.render_scene_and_overlay_to_view(
+                            scene,
+                            target_view,
+                            target_w,
+                            target_h,
+                            Some(vp),
+                            false,
+                            None,
+                        );
+                    } else {
+                        self.renderer.render_scene_preserving_color_to_view(
+                            scene,
+                            target_view,
+                            target_w,
+                            target_h,
+                            Some(vp),
+                            false,
+                        );
+                    }
+                    has_drawn = true;
+                    idx += 1;
+                }
+            }
+        }
+
+        if !has_drawn {
+            self.renderer_2d.render_batch_slice_to_view(
+                frame,
+                0..0,
+                target_view,
+                target_w,
+                target_h,
+                logical_w,
+                logical_h,
+                Some(clear_color),
+                damage,
+            );
+        }
+    }
+
+    /// Presents an entire `DisplayList` (2D quads, vector paths with caps/joins, dashed strokes,
+    /// Slug text, polygonal [`GpuStencilClipPipeline`] masks, and any interleaved `DrawViewport3D`)
+    /// directly onto the hardware `wgpu::Surface` swapchain via [`UnifiedGpuCollector`] + [`Wgpu2DRenderer`].
+    pub fn present_display_list_to_surface(
+        &mut self,
+        list: &DisplayList,
+        logical_width: f32,
+        logical_height: f32,
+        dpr: f32,
+        damage: Option<Rect>,
+        clear_color: [f32; 4],
+    ) -> Result<GpuBatchSummary, String> {
+        let Some(ref surface) = self.surface else {
+            return Err("no active wgpu swapchain surface".to_string());
+        };
+        let Some(ref cfg) = self.surface_config else {
+            return Err("surface not configured".to_string());
+        };
+        let target_w = cfg.width;
+        let target_h = cfg.height;
+
+        let lw = logical_width.max(1.0);
+        let lh = logical_height.max(1.0);
+        self.collector.resize(lw, lh);
+        let frame = self.collector.collect_hardware_frame(list, damage);
+        self.last_batch_summary = frame.summary;
+
+        let output = match surface.get_current_texture() {
+            Ok(frame_tex) => frame_tex,
+            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+                surface.configure(self.renderer.device(), cfg);
+                surface
+                    .get_current_texture()
+                    .map_err(|e| format!("acquire surface texture failed: {e}"))?
+            }
+            Err(e) => return Err(format!("acquire surface texture failed: {e}")),
+        };
+        let view = output.texture.create_view(&Default::default());
+        self.render_hybrid_frame_to_view(
+            &frame,
+            &view,
+            target_w,
+            target_h,
+            lw,
+            lh,
+            dpr,
+            clear_color,
+            damage,
+        );
+        output.present();
+        Ok(frame.summary)
+    }
+
+    /// Presents the cached `ui_overlay` texture directly onto the swapchain surface.
+    pub fn present_overlay_to_surface(&mut self, clear_color: [f32; 4]) -> Result<(), String> {
+        let Some(ref surface) = self.surface else {
+            return Err("no active wgpu swapchain surface".to_string());
+        };
+        let Some(ref cfg) = self.surface_config else {
+            return Err("surface not configured".to_string());
+        };
+        let output = match surface.get_current_texture() {
+            Ok(frame_tex) => frame_tex,
+            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+                surface.configure(self.renderer.device(), cfg);
+                surface
+                    .get_current_texture()
+                    .map_err(|e| format!("acquire surface texture failed: {e}"))?
+            }
+            Err(e) => return Err(format!("acquire surface texture failed: {e}")),
+        };
+        let view = output.texture.create_view(&Default::default());
+        let empty = Hardware2DFrame::default();
+        self.renderer_2d.render_batch_slice_to_view(
+            &empty,
+            0..0,
+            &view,
+            cfg.width,
+            cfg.height,
+            cfg.width.max(1) as f32,
+            cfg.height.max(1) as f32,
+            Some(clear_color),
+            None,
+        );
+        if let Some(ref ov) = self.ui_overlay {
+            self.renderer
+                .composite_overlay_to_view(&view, &ov.bind_group);
+        }
+        output.present();
+        Ok(())
+    }
+
+    /// Renders a `DisplayList` (pure 2D or hybrid 3D+2D) via [`UnifiedGpuCollector`],
+    /// [`GpuStencilClipPipeline`], and [`Wgpu2DRenderer`] into an offscreen BGRA8 target,
+    /// returning raw BGRA8 pixels when `readback` is `true`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_display_list_offscreen_bgra(
+        &mut self,
+        list: &DisplayList,
+        width: u32,
+        height: u32,
+        dpr: f32,
+        damage: Option<Rect>,
+        clear_color: [f32; 4],
+        readback: bool,
+    ) -> Result<(GpuBatchSummary, Vec<u8>), String> {
+        let w = width.max(1);
+        let h = height.max(1);
+        let lw = w as f32 / dpr.max(0.1);
+        let lh = h as f32 / dpr.max(0.1);
+        self.collector.resize(lw, lh);
+        let frame = self.collector.collect_hardware_frame(list, damage);
+        self.last_batch_summary = frame.summary;
+
+        let has_3d = frame
+            .items
+            .iter()
+            .any(|it| matches!(it, HardwareRenderItem::Viewport3D { .. }));
+        if !has_3d {
+            return self.renderer_2d.render_display_list_offscreen(
+                &mut self.collector,
+                list,
+                w,
+                h,
+                dpr,
+                clear_color,
+                damage,
+                readback,
+            );
+        }
+
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let unpadded = w * 4;
+        let padded = unpadded.div_ceil(align) * align;
+        let format = self.renderer_2d.color_format();
+        let recreate = self
+            .display_offscreen
+            .as_ref()
+            .is_none_or(|o| o.width != w || o.height != h || o.format != format);
+        if recreate {
+            let dev = self.renderer_2d.device();
+            let color = dev.create_texture(&wgpu::TextureDescriptor {
+                label: Some("strata_hybrid_offscreen_color"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = color.create_view(&Default::default());
+            let rb = dev.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("strata_hybrid_offscreen_readback"),
+                size: (padded * h) as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            self.display_offscreen = Some(DisplayOffscreenTarget {
+                width: w,
+                height: h,
+                format,
+                color,
+                view,
+                readback: rb,
+                padded_bytes_per_row: padded,
+            });
+        }
+
+        let target_view = self.display_offscreen.as_ref().unwrap().view.clone();
+        self.render_hybrid_frame_to_view(
+            &frame,
+            &target_view,
+            w,
+            h,
+            lw,
+            lh,
+            dpr,
+            clear_color,
+            damage,
+        );
+
+        let dev = self.renderer_2d.device();
+        if !readback {
+            dev.poll(wgpu::Maintain::Wait);
+            return Ok((frame.summary, Vec::new()));
+        }
+
+        let off = self.display_offscreen.as_ref().unwrap();
+        let mut enc = dev.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("strata_hybrid_readback_encoder"),
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &off.color,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &off.readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(off.padded_bytes_per_row),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.renderer_2d.queue().submit(Some(enc.finish()));
+
+        let slice = off.readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        dev.poll(wgpu::Maintain::Wait);
+        rx.recv()
+            .map_err(|e| format!("hybrid readback recv error: {e}"))?
+            .map_err(|e| format!("hybrid readback map error: {e:?}"))?;
+
+        let data = slice.get_mapped_range();
+        let mut out = vec![0u8; (w * h * 4) as usize];
+        let row_len = w as usize * 4;
+        for row in 0..h as usize {
+            let src_start = row * off.padded_bytes_per_row as usize;
+            let dst_start = row * row_len;
+            out[dst_start..dst_start + row_len]
+                .copy_from_slice(&data[src_start..src_start + row_len]);
+        }
+        drop(data);
+        off.readback.unmap();
+        Ok((frame.summary, out))
+    }
+
     /// Offscreen render returning BGRA8 pixels (or empty vec if `readback == false`).
     pub fn render_offscreen_bgra(
         &mut self,
@@ -473,6 +866,210 @@ impl WgpuWindowPresenter {
 
     pub fn present_mode(&self) -> PresentMode {
         self.present_mode
+    }
+}
+
+/// Hardware `wgpu` Swapchain Presenter wiring [`UnifiedGpuCollector`],
+/// [`GpuStencilClipPipeline`], and [`Wgpu2DRenderer`] into `strata_platform`'s swapchain layer.
+pub struct WgpuSwapchainPresenter {
+    config: SurfaceConfig,
+    presenter: WgpuWindowPresenter,
+    pub presented_frames: u64,
+    pub damage_clipped_frames: u64,
+    upload_scratch: Vec<u8>,
+}
+
+impl WgpuSwapchainPresenter {
+    /// Creates a headless/offscreen hardware GPU swapchain presenter.
+    pub fn new_offscreen(config: SurfaceConfig) -> Result<Self, String> {
+        let presenter = WgpuWindowPresenter::new_offscreen(config.present_mode)?;
+        Ok(Self {
+            config,
+            presenter,
+            presented_frames: 0,
+            damage_clipped_frames: 0,
+            upload_scratch: Vec::new(),
+        })
+    }
+
+    /// Creates a hardware GPU swapchain presenter bound directly to a native window handle pair.
+    ///
+    /// # Safety
+    /// `window_handle` and `display_handle` must remain valid for the lifetime of this presenter.
+    pub unsafe fn from_raw_handles(
+        window_handle: raw_window_handle::RawWindowHandle,
+        display_handle: raw_window_handle::RawDisplayHandle,
+        config: SurfaceConfig,
+    ) -> Result<Self, String> {
+        let (pw, ph) = config.physical_size();
+        let presenter = unsafe {
+            WgpuWindowPresenter::from_raw_handles(
+                window_handle,
+                display_handle,
+                pw.max(1),
+                ph.max(1),
+                config.present_mode,
+            )?
+        };
+        Ok(Self {
+            config,
+            presenter,
+            presented_frames: 0,
+            damage_clipped_frames: 0,
+            upload_scratch: Vec::new(),
+        })
+    }
+
+    #[inline]
+    pub fn config(&self) -> &SurfaceConfig {
+        &self.config
+    }
+
+    #[inline]
+    pub fn presenter(&self) -> &WgpuWindowPresenter {
+        &self.presenter
+    }
+
+    #[inline]
+    pub fn presenter_mut(&mut self) -> &mut WgpuWindowPresenter {
+        &mut self.presenter
+    }
+
+    #[inline]
+    pub fn batch_collector(&self) -> &UnifiedGpuCollector {
+        self.presenter.batch_collector()
+    }
+
+    #[inline]
+    pub fn last_batch_summary(&self) -> GpuBatchSummary {
+        self.presenter.last_batch_summary()
+    }
+
+    #[inline]
+    pub fn stencil_clip_pipeline(&self) -> &GpuStencilClipPipeline {
+        self.presenter.stencil_clip_pipeline()
+    }
+
+    /// Compiles and presents a `DisplayList` directly via `Wgpu2DRenderer` + `GpuStencilClipPipeline`
+    /// onto the configured swapchain (or offscreen target when headless).
+    pub fn present_display_list(
+        &mut self,
+        list: &DisplayList,
+        damage: Option<Rect>,
+        clear_color: [f32; 4],
+    ) -> Result<GpuBatchSummary, PresentError> {
+        let (pw, ph) = self.config.physical_size();
+        let summary = if self.presenter.has_surface() {
+            self.presenter
+                .present_display_list_to_surface(
+                    list,
+                    self.config.width.max(1) as f32,
+                    self.config.height.max(1) as f32,
+                    self.config.scale_factor,
+                    damage,
+                    clear_color,
+                )
+                .map_err(PresentError::Custom)?
+        } else {
+            let (s, _) = self
+                .presenter
+                .render_display_list_offscreen_bgra(
+                    list,
+                    pw.max(1),
+                    ph.max(1),
+                    self.config.scale_factor,
+                    damage,
+                    clear_color,
+                    false,
+                )
+                .map_err(PresentError::Custom)?;
+            s
+        };
+        self.presented_frames += 1;
+        if damage.is_some() {
+            self.damage_clipped_frames += 1;
+        }
+        Ok(summary)
+    }
+
+    /// Renders a `DisplayList` into BGRA8 pixels via the GPU 2D + stencil clip + 3D pipelines.
+    pub fn render_display_list_to_bgra(
+        &mut self,
+        list: &DisplayList,
+        damage: Option<Rect>,
+        clear_color: [f32; 4],
+    ) -> Result<(GpuBatchSummary, Vec<u8>), PresentError> {
+        let (pw, ph) = self.config.physical_size();
+        let res = self
+            .presenter
+            .render_display_list_offscreen_bgra(
+                list,
+                pw.max(1),
+                ph.max(1),
+                self.config.scale_factor,
+                damage,
+                clear_color,
+                true,
+            )
+            .map_err(PresentError::Custom)?;
+        self.presented_frames += 1;
+        if damage.is_some() {
+            self.damage_clipped_frames += 1;
+        }
+        Ok(res)
+    }
+}
+
+impl SurfacePresenter for WgpuSwapchainPresenter {
+    fn present(
+        &mut self,
+        buffer: &strata_render::FrameBuffer,
+        damage: Option<Rect>,
+    ) -> Result<(), PresentError> {
+        let w = buffer.width as u32;
+        let h = buffer.height as u32;
+        let expected = buffer.width * buffer.height * 4;
+        if buffer.pixels.len() < expected || w == 0 || h == 0 {
+            return Err(PresentError::BufferTooSmall);
+        }
+
+        // Convert RGBA8 FrameBuffer pixels into BGRA8 matching WgpuWindowPresenter overlay format.
+        self.upload_scratch.resize(expected, 0);
+        for (dst, src) in self
+            .upload_scratch
+            .chunks_exact_mut(4)
+            .zip(buffer.pixels[..expected].chunks_exact(4))
+        {
+            dst[0] = src[2];
+            dst[1] = src[1];
+            dst[2] = src[0];
+            dst[3] = src[3];
+        }
+        self.presenter
+            .upload_ui_overlay_bgra(w, h, &self.upload_scratch);
+        if self.presenter.has_surface() {
+            self.presenter
+                .present_overlay_to_surface([0.0, 0.0, 0.0, 1.0])
+                .map_err(PresentError::Custom)?;
+        }
+        self.presented_frames += 1;
+        if damage.is_some() {
+            self.damage_clipped_frames += 1;
+        }
+        Ok(())
+    }
+
+    fn resize(&mut self, width: u32, height: u32) -> Result<(), PresentError> {
+        self.config.width = width.max(1);
+        self.config.height = height.max(1);
+        let (pw, ph) = self.config.physical_size();
+        self.presenter.resize(pw.max(1), ph.max(1));
+        Ok(())
+    }
+
+    fn surface_size(&self) -> (u32, u32) {
+        let (pw, ph) = self.config.physical_size();
+        (pw.max(1), ph.max(1))
     }
 }
 

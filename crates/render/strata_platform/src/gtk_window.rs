@@ -3183,6 +3183,7 @@ thread_local! {
     static EVENT_DISPATCH_CALLBACK: std::cell::RefCell<Option<Box<dyn Fn(crate::events::PlatformEvent) -> bool>>> = const { std::cell::RefCell::new(None) };
     static DRAWING_AREA_HANDLE: std::cell::RefCell<Option<gtk::DrawingArea>> = const { std::cell::RefCell::new(None) };
     static ACTIVE_PRESENT_MODE: std::cell::Cell<crate::surface::PresentMode> = const { std::cell::Cell::new(crate::surface::PresentMode::Fifo) };
+    static GPU_2D_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
@@ -3972,7 +3973,8 @@ mod gtk_gpu_x11 {
             }
         }
 
-        if viewports.is_empty() {
+        let gpu_2d = super::gtk_gpu_2d_enabled();
+        if viewports.is_empty() && !gpu_2d {
             GPU_SURFACE_STATE.with(|slot| {
                 if let Some(ref mut state) = *slot.borrow_mut() {
                     state.set_mapped(false);
@@ -4012,6 +4014,34 @@ mod gtk_gpu_x11 {
             };
             state.resize(w, h);
             state.set_mapped(true);
+
+            if gpu_2d {
+                let clear_color = if transparent_bg {
+                    [0.0, 0.0, 0.0, 0.0]
+                } else {
+                    [0.035, 0.035, 0.043, 1.0]
+                };
+                if state
+                    .presenter
+                    .present_display_list_to_surface(
+                        list,
+                        width.max(1.0),
+                        height.max(1.0),
+                        1.0,
+                        None,
+                        clear_color,
+                    )
+                    .is_ok()
+                {
+                    state.last_viewports = viewports;
+                    state.overlay_uploaded = true;
+                    return true;
+                }
+                if viewports.is_empty() {
+                    state.set_mapped(false);
+                    return false;
+                }
+            }
 
             if overlay_dirty || !state.overlay_uploaded {
                 let t_ov0 = std::time::Instant::now();
@@ -4157,6 +4187,29 @@ pub fn gtk_gpu_surface_is_active() -> bool {
     {
         false
     }
+}
+
+/// Enables or disables direct GPU 2D swapchain presentation (`UnifiedGpuCollector` +
+/// `GpuStencilClipPipeline` + `Wgpu2DRenderer`) on the GTK live window surface.
+///
+/// Defaults to `false` (unless `STRATA_GPU_2D=1`/`true`) so desktop GTK keeps Cairo + Pango
+/// for 2D/UI while allowing full GPU 2D swapchain presentation to be opted in cleanly.
+pub fn gtk_set_gpu_2d_enabled(enabled: bool) {
+    GPU_2D_ENABLED.with(|f| f.set(enabled));
+}
+
+/// Returns `true` when full GPU 2D swapchain presentation is enabled for GTK live windows.
+pub fn gtk_gpu_2d_enabled() -> bool {
+    if GPU_2D_ENABLED.with(|f| f.get()) {
+        return true;
+    }
+    static ENV_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENV_ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("STRATA_GPU_2D").ok().as_deref(),
+            Some("1" | "true" | "TRUE" | "yes" | "on")
+        )
+    })
 }
 
 /// Posts a platform event to the running GTK application event loop from any background thread.
