@@ -24,7 +24,7 @@ categories = ["gui", "web-programming", "rendering"]
 
 [workspace.dependencies]
 # Facade
-strata-ui = { path = "crates/strata", version = "0.1.1" }
+strata-ui = { path = "crates/strata", version = "0.1.2" }
 
 # Core
 strata-primitives = { path = "crates/core/strata_primitives", version = "0.1.0" }
