@@ -2,7 +2,7 @@
 
 use crate::ast::*;
 use crate::cursor::TokenCursor;
-use proc_macro::{Delimiter, TokenStream};
+use proc_macro::{Delimiter, Spacing, TokenStream, TokenTree};
 
 const VOID_TAGS: &[&str] = &[
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
@@ -75,6 +75,9 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
 
     let mut path = vec![first_ident];
     while cursor.peek_punct(':') && cursor.peek_punct_at(1, ':') {
+        if cursor.peek_punct_at(2, '<') {
+            break;
+        }
         cursor.consume_punct(':');
         cursor.consume_punct(':');
         let next_id = cursor
@@ -84,6 +87,13 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
     }
 
     let is_custom_component = leading_colon || path.len() > 1 || segment_starts_uppercase(&path[0]);
+
+    // Optional generic arguments on custom components: `<List<String> ... />` or `<List::<String> ... />`
+    let generics = if is_custom_component {
+        parse_optional_tag_generics(cursor)?
+    } else {
+        None
+    };
 
     // Parse attributes
     let attributes = parse_attributes(cursor)?;
@@ -96,6 +106,7 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
             return Ok(RsxNode::Component(RsxComponent {
                 leading_colon,
                 path,
+                generics,
                 props: attributes,
                 children: Vec::new(),
                 self_closing: true,
@@ -181,6 +192,9 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
             if let Some(id) = cursor.consume_ident() {
                 close_path.push(id);
                 while cursor.peek_punct(':') && cursor.peek_punct_at(1, ':') {
+                    if cursor.peek_punct_at(2, '<') {
+                        break;
+                    }
                     cursor.consume_punct(':');
                     cursor.consume_punct(':');
                     if let Some(next_id) = cursor.consume_ident() {
@@ -190,6 +204,9 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
                     }
                 }
             }
+
+            // Allow optional generic args on closing tag (e.g. `</List<String>>` or `</List>`).
+            let _ = parse_optional_tag_generics(cursor);
 
             if cursor.consume_punct('>') {
                 if close_leading_colon == leading_colon && close_path == path {
@@ -213,6 +230,7 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
         Ok(RsxNode::Component(RsxComponent {
             leading_colon,
             path,
+            generics,
             props: attributes,
             children,
             self_closing: false,
@@ -225,6 +243,45 @@ fn parse_tag_or_fragment(cursor: &mut TokenCursor, depth: usize) -> Result<RsxNo
             self_closing: false,
         }))
     }
+}
+
+fn parse_optional_tag_generics(cursor: &mut TokenCursor) -> Result<Option<String>, String> {
+    let saved = cursor.current_pos();
+    if cursor.peek_punct(':') && cursor.peek_punct_at(1, ':') && cursor.peek_punct_at(2, '<') {
+        cursor.consume_punct(':');
+        cursor.consume_punct(':');
+    } else if !cursor.peek_punct('<') {
+        return Ok(None);
+    }
+
+    if !cursor.consume_punct('<') {
+        cursor.set_pos(saved);
+        return Ok(None);
+    }
+
+    let mut depth = 1usize;
+    let mut out = String::from("<");
+    while !cursor.is_eof() && depth > 0 {
+        if cursor.peek_punct('<') {
+            depth += 1;
+        } else if cursor.peek_punct('>') {
+            depth -= 1;
+        }
+        if let Some(tok) = cursor.next() {
+            let is_joint = matches!(
+                &tok,
+                TokenTree::Punct(p) if p.spacing() == Spacing::Joint || p.as_char() == '\''
+            );
+            out.push_str(&tok.to_string());
+            if depth > 0 && !is_joint {
+                out.push(' ');
+            }
+        }
+    }
+    if depth != 0 {
+        return Err("Unclosed generic argument list `<...>` on component tag".to_string());
+    }
+    Ok(Some(out))
 }
 
 fn push_child_node(children: &mut Vec<RsxNode>, next_node: RsxNode) {
@@ -274,6 +331,31 @@ fn parse_attributes(cursor: &mut TokenCursor) -> Result<Vec<RsxAttribute>, Strin
     while !cursor.is_eof() {
         if cursor.peek_punct('>') || (cursor.peek_punct('/') && cursor.peek_punct_at(1, '>')) {
             break;
+        }
+
+        // JSX spread syntax: `{..props}`
+        if cursor.peek_group(Delimiter::Brace).is_some() {
+            let g = cursor.consume_group(Delimiter::Brace).unwrap();
+            let mut inner = TokenCursor::new(g.stream());
+            if inner.peek_punct('.') && inner.peek_punct_at(1, '.') {
+                inner.consume_punct('.');
+                inner.consume_punct('.');
+                let mut rest = TokenStream::new();
+                while let Some(tok) = inner.next() {
+                    rest.extend(std::iter::once(tok));
+                }
+                if rest.is_empty() {
+                    return Err("Expected expression after `{..` in spread attribute".to_string());
+                }
+                attrs.push(RsxAttribute {
+                    name: "..".to_string(),
+                    value: RsxAttrValue::Spread(rest),
+                });
+                continue;
+            }
+            return Err(
+                "Expected spread expression `{..expr}` inside tag attribute list".to_string(),
+            );
         }
 
         // Attribute name (can contain hyphens like `stroke-width`, `data-state`)

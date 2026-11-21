@@ -634,3 +634,395 @@ fn test_component_rc_closure_and_inline_closure_coercion() {
     assert_eq!(seen_num.get(), 40);
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct NonDefaultRow {
+    id: u32,
+    label: String,
+}
+
+#[component]
+pub fn GenericList<T>(
+    items: Vec<T>,
+    title: Option<String>,
+    #[prop(default = "empty")] empty_label: String,
+    #[prop(default)] compact: bool,
+    render_item: Option<Rc<dyn Fn(&T) -> View>>,
+) -> View
+where
+    T: Clone + std::fmt::Debug + 'static,
+{
+    let heading = title.unwrap_or_else(|| "List".to_string());
+    let rendered: Vec<NodeBlueprint> = if items.is_empty() {
+        vec![NodeBlueprint::text(empty_label)]
+    } else if let Some(ref render) = render_item {
+        items.iter().map(|it| render(it).root).collect()
+    } else {
+        items
+            .iter()
+            .map(|it| NodeBlueprint::text(format!("{:?}", it)))
+            .collect()
+    };
+    let cls = if compact { "list compact" } else { "list" };
+    rsx! {
+        <div class={cls} data-heading={heading}>
+            {rendered}
+        </div>
+    }
+}
+
+#[component]
+pub fn SpreadCard(
+    title: Option<String>,
+    subtitle: Option<String>,
+    #[prop(default = 1)] level: u8,
+) -> View {
+    rsx! {
+        <div
+            data-title={title.unwrap_or_default()}
+            data-subtitle={subtitle.unwrap_or_default()}
+            data-level={level}
+        />
+    }
+}
+
+#[test]
+fn test_generic_component_option_string_defaults_and_spread() {
+    // 1. Generic component with non-Default T, Option<String> literal, #[prop(default)], and inferred closure
+    let rows = vec![
+        NonDefaultRow {
+            id: 1,
+            label: "Alpha".to_string(),
+        },
+        NonDefaultRow {
+            id: 2,
+            label: "Beta".to_string(),
+        },
+    ];
+    let v = rsx! {
+        <GenericList
+            items={rows}
+            title="Inventory"
+            render_item={move |row| rsx! { <span>{format!("{}:{}", row.id, row.label)}</span> }}
+        />
+    };
+    let debug = format!("{:?}", v.root);
+    assert!(debug.contains("Inventory"));
+    assert!(debug.contains("1:Alpha"));
+    assert!(debug.contains("2:Beta"));
+    assert!(!debug.contains("compact"));
+
+    // 2. Explicit generic turbofish `<GenericList<String> ... />` with defaults triggered
+    let v_empty = rsx! {
+        <GenericList<String> items={Vec::new()} title={None} compact />
+    };
+    let debug_empty = format!("{:?}", v_empty.root);
+    assert!(debug_empty.contains("empty"));
+    assert!(debug_empty.contains("compact"));
+    assert!(debug_empty.contains("List"));
+
+    // 3. JSX `{..props}` spread on component (later props override earlier spread, and spread overrides earlier defaults)
+    let base = SpreadCard::builder().title("Base Title").subtitle("Base Sub");
+    let v_override = rsx! {
+        <SpreadCard {..base} title="Override Title" />
+    };
+    let d1 = format!("{:?}", v_override.root);
+    assert!(d1.contains("Override Title"), "d1={d1}");
+    assert!(d1.contains("Base Sub"), "d1={d1}");
+
+    let overrides = SpreadCard::builder().subtitle("Override Sub").level(3u8);
+    let v_after = rsx! {
+        <SpreadCard title="Kept Title" subtitle="Default Sub" {..overrides} />
+    };
+    let d2 = format!("{:?}", v_after.root);
+    assert!(d2.contains("Kept Title"), "d2={d2}");
+    assert!(d2.contains("Override Sub"), "d2={d2}");
+    assert!(d2.contains("\"3\""), "d2={d2}");
+
+    // 4. JSX `{..attrs}` spread on native HTML element
+    let extra = vec![
+        Attribute::property("data-a", "1"),
+        Attribute::property("data-b", "2"),
+    ];
+    let v_el = rsx! {
+        <div id="root" {..extra} data-c="3" />
+    };
+    if let NodeBlueprint::Element { attributes, .. } = v_el.root {
+        let pairs: Vec<(&str, &str)> = attributes
+            .iter()
+            .filter_map(|a| match a {
+                Attribute::Property { key, value } => Some((key.as_str(), value.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![("id", "root"), ("data-a", "1"), ("data-b", "2"), ("data-c", "3")]
+        );
+    } else {
+        panic!("Expected Element");
+    }
+}
+
+#[test]
+fn test_component_scoped_hooks_context_and_error_boundary() {
+    use std::cell::{Cell, RefCell};
+    use strata_dom::{
+        create_context, provide_context, reset_component_hooks, use_callback, use_context,
+        use_effect, use_effect_with_deps, use_id, use_memo, use_reducer, use_ref, use_state,
+        Context, ErrorBoundary, ReadSignal, WriteSignal,
+    };
+
+    reset_component_hooks();
+
+    // Shared test handles
+    let mount_count = Rc::new(Cell::new(0usize));
+    let cleanup_count = Rc::new(Cell::new(0usize));
+    let effect_runs = Rc::new(Cell::new(0usize));
+    let deps_runs = Rc::new(Cell::new(0usize));
+    let deps_cleanups = Rc::new(Cell::new(0usize));
+    let captured_setters: Rc<RefCell<Vec<WriteSignal<i32>>>> = Rc::new(RefCell::new(Vec::new()));
+    let captured_ids: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let captured_cb_ptrs: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
+
+    let theme_ctx: Context<String> = create_context("light".to_string());
+
+    #[component]
+    fn StatefulLeaf(
+        dep_ver: i32,
+        theme_ctx: Context<String>,
+        mount_count: Rc<Cell<usize>>,
+        cleanup_count: Rc<Cell<usize>>,
+        effect_runs: Rc<Cell<usize>>,
+        deps_runs: Rc<Cell<usize>>,
+        deps_cleanups: Rc<Cell<usize>>,
+        captured_setters: Rc<RefCell<Vec<WriteSignal<i32>>>>,
+        captured_ids: Rc<RefCell<Vec<String>>>,
+        captured_cb_ptrs: Rc<RefCell<Vec<usize>>>,
+    ) -> View {
+        let (count, set_count): (ReadSignal<i32>, WriteSignal<i32>) = use_state(10);
+        let doubled = use_memo({
+            let c = count.clone();
+            move || c.get() * 2
+        });
+        let render_ref = use_ref(0usize);
+        render_ref.with_mut(|n| *n += 1);
+        let stable_id = use_id();
+        let cb = use_callback(dep_ver, move |x: i32| x + dep_ver);
+        let theme = use_context(&theme_ctx);
+
+        let (reduced, dispatch) = use_reducer(|state: &i32, delta: i32| *state + delta, 100);
+        if render_ref.get() == 1 {
+            mount_count.set(mount_count.get() + 1);
+            dispatch(5);
+        }
+
+        let eff_runs = effect_runs.clone();
+        let eff_clean = cleanup_count.clone();
+        let c_for_eff = count.clone();
+        use_effect(move || {
+            let _ = c_for_eff.get();
+            eff_runs.set(eff_runs.get() + 1);
+            let cl = eff_clean.clone();
+            Some(Box::new(move || cl.set(cl.get() + 1)) as Box<dyn FnOnce()>)
+        });
+
+        let dr = deps_runs.clone();
+        let dc = deps_cleanups.clone();
+        use_effect_with_deps(dep_ver, move |_| {
+            dr.set(dr.get() + 1);
+            let cl = dc.clone();
+            Some(Box::new(move || cl.set(cl.get() + 1)) as Box<dyn FnOnce()>)
+        });
+
+        captured_setters.borrow_mut().push(set_count);
+        captured_ids.borrow_mut().push(stable_id.clone());
+        captured_cb_ptrs
+            .borrow_mut()
+            .push(Rc::as_ptr(&cb) as *const () as usize);
+
+        rsx! {
+            <div
+                id={stable_id}
+                data-count={count.get()}
+                data-doubled={doubled.get()}
+                data-renders={render_ref.get()}
+                data-reduced={reduced.get()}
+                data-theme={theme}
+            />
+        }
+    }
+
+    #[component]
+    fn HostApp(
+        show_second: bool,
+        dep_ver: i32,
+        theme_ctx: Context<String>,
+        mount_count: Rc<Cell<usize>>,
+        cleanup_count: Rc<Cell<usize>>,
+        effect_runs: Rc<Cell<usize>>,
+        deps_runs: Rc<Cell<usize>>,
+        deps_cleanups: Rc<Cell<usize>>,
+        captured_setters: Rc<RefCell<Vec<WriteSignal<i32>>>>,
+        captured_ids: Rc<RefCell<Vec<String>>>,
+        captured_cb_ptrs: Rc<RefCell<Vec<usize>>>,
+    ) -> View {
+        provide_context(&theme_ctx, "dark".to_string());
+        let second = if show_second {
+            rsx! {
+                <StatefulLeaf
+                    key="second"
+                    dep_ver={dep_ver}
+                    theme_ctx={theme_ctx.clone()}
+                    mount_count={mount_count.clone()}
+                    cleanup_count={cleanup_count.clone()}
+                    effect_runs={effect_runs.clone()}
+                    deps_runs={deps_runs.clone()}
+                    deps_cleanups={deps_cleanups.clone()}
+                    captured_setters={captured_setters.clone()}
+                    captured_ids={captured_ids.clone()}
+                    captured_cb_ptrs={captured_cb_ptrs.clone()}
+                />
+            }
+        } else {
+            rsx! { <></> }
+        };
+        rsx! {
+            <div>
+                <StatefulLeaf
+                    key="first"
+                    dep_ver={dep_ver}
+                    theme_ctx={theme_ctx}
+                    mount_count={mount_count}
+                    cleanup_count={cleanup_count}
+                    effect_runs={effect_runs}
+                    deps_runs={deps_runs}
+                    deps_cleanups={deps_cleanups}
+                    captured_setters={captured_setters}
+                    captured_ids={captured_ids}
+                    captured_cb_ptrs={captured_cb_ptrs}
+                />
+                {second}
+            </div>
+        }
+    }
+
+    // Render 1: both siblings mount with independent state, stable IDs, and inherited "dark" context
+    let v1 = HostApp(
+        true,
+        1,
+        theme_ctx.clone(),
+        mount_count.clone(),
+        cleanup_count.clone(),
+        effect_runs.clone(),
+        deps_runs.clone(),
+        deps_cleanups.clone(),
+        captured_setters.clone(),
+        captured_ids.clone(),
+        captured_cb_ptrs.clone(),
+    );
+    let d1 = format!("{:?}", v1.root);
+    assert!(d1.contains("dark"));
+    assert!(d1.contains("\"105\"")); // reducer initial 100 + 5
+    assert_eq!(mount_count.get(), 2);
+    assert_eq!(effect_runs.get(), 2);
+    assert_eq!(deps_runs.get(), 2);
+    assert_ne!(captured_ids.borrow()[0], captured_ids.borrow()[1]);
+
+    // Mutate only the first sibling's state via WriteSignal
+    captured_setters.borrow()[0].set(42);
+    assert_eq!(effect_runs.get(), 3, "tracked effect must re-run on signal write");
+    assert_eq!(cleanup_count.get(), 1, "prior effect cleanup must run before re-execution");
+
+    // Render 2 (same dep_ver=1): state persists (42 vs 10), memo updates (84 vs 20),
+    // use_id & use_callback pointer identity stay identical, no duplicate effects!
+    let first_id_r1 = captured_ids.borrow()[0].clone();
+    let first_cb_r1 = captured_cb_ptrs.borrow()[0];
+    captured_setters.borrow_mut().clear();
+    captured_ids.borrow_mut().clear();
+    captured_cb_ptrs.borrow_mut().clear();
+
+    let v2 = HostApp(
+        true,
+        1,
+        theme_ctx.clone(),
+        mount_count.clone(),
+        cleanup_count.clone(),
+        effect_runs.clone(),
+        deps_runs.clone(),
+        deps_cleanups.clone(),
+        captured_setters.clone(),
+        captured_ids.clone(),
+        captured_cb_ptrs.clone(),
+    );
+    let d2 = format!("{:?}", v2.root);
+    assert!(d2.contains("\"42\"") && d2.contains("\"84\""), "first persisted: {d2}");
+    assert!(d2.contains("\"10\"") && d2.contains("\"20\""), "second independent: {d2}");
+    assert_eq!(mount_count.get(), 2, "must not remount");
+    assert_eq!(effect_runs.get(), 3, "must not register duplicate effects on re-render");
+    assert_eq!(deps_runs.get(), 2, "unchanged deps must not re-run use_effect_with_deps");
+    assert_eq!(captured_ids.borrow()[0], first_id_r1);
+    assert_eq!(captured_cb_ptrs.borrow()[0], first_cb_r1);
+
+    // Render 3: change dep_ver=2 AND unmount second sibling ->
+    // second's effect + deps cleanups run, first's use_effect_with_deps cleans up and re-runs,
+    // first's use_callback allocates a new Rc.
+    captured_cb_ptrs.borrow_mut().clear();
+    let _v3 = HostApp(
+        false,
+        2,
+        theme_ctx.clone(),
+        mount_count.clone(),
+        cleanup_count.clone(),
+        effect_runs.clone(),
+        deps_runs.clone(),
+        deps_cleanups.clone(),
+        captured_setters.clone(),
+        captured_ids.clone(),
+        captured_cb_ptrs.clone(),
+    );
+    assert_eq!(cleanup_count.get(), 2, "unmounted sibling effect cleanup must run");
+    assert_eq!(deps_runs.get(), 3, "first sibling deps effect re-runs on dep change");
+    assert_eq!(deps_cleanups.get(), 2, "both first (dep change) and second (unmount) deps cleanups run");
+    assert_ne!(captured_cb_ptrs.borrow()[0], first_cb_r1);
+
+    // Context default value outside provider
+    assert_eq!(use_context(&theme_ctx), "light");
+
+    // ErrorBoundary: catches render panic, latches fallback, and recovers on reset()
+    let should_panic = Rc::new(Cell::new(true));
+    let reset_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+
+    let render_boundary = |sp: &Rc<Cell<bool>>, rh: &Rc<RefCell<Option<Rc<dyn Fn()>>>>| {
+        let sp = sp.clone();
+        let rh = rh.clone();
+        rsx! {
+            <ErrorBoundary
+                key="eb-test"
+                render={move || {
+                    if sp.get() {
+                        panic!("boom during render");
+                    }
+                    rsx! { <span>"Recovered OK"</span> }
+                }}
+                fallback={move |err| {
+                    *rh.borrow_mut() = Some(err.reset.clone());
+                    rsx! { <div class="fallback">{format!("Caught: {}", err.message)}</div> }
+                }}
+            />
+        }
+    };
+
+    let eb1 = render_boundary(&should_panic, &reset_handle);
+    assert!(format!("{:?}", eb1.root).contains("Caught: boom during render"));
+
+    // Flip flag and call reset() -> ErrorBoundary retries and renders recovered UI
+    should_panic.set(false);
+    let reset_fn = reset_handle.borrow().clone().expect("reset callback");
+    reset_fn();
+    let eb2 = render_boundary(&should_panic, &reset_handle);
+    assert!(format!("{:?}", eb2.root).contains("Recovered OK"));
+
+    reset_component_hooks();
+}
+
+

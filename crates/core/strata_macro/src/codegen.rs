@@ -125,17 +125,25 @@ fn lower_element(el: &RsxElement, errors: &mut Vec<String>) -> String {
                         stream
                     );
                 }
-                RsxAttrValue::Flag => {}
+                RsxAttrValue::Flag | RsxAttrValue::Spread(_) => {}
             }
         } else {
             other_attrs.push(attr);
         }
     }
 
-    // Lower attributes and event listeners
+    // Lower attributes, event listeners, and `{..attrs}` spreads
+    let has_spread = other_attrs
+        .iter()
+        .any(|a| matches!(a.value, RsxAttrValue::Spread(_)));
     let mut attrs_code = Vec::new();
+    let mut spread_stmts = Vec::new();
     for attr in other_attrs {
-        if attr.name.starts_with("on") {
+        if let RsxAttrValue::Spread(stream) = &attr.value {
+            spread_stmts.push(format!("__attrs.extend({});", stream));
+            continue;
+        }
+        let item_expr = if attr.name.starts_with("on") {
             let event_name = normalize_event_name(&attr.name);
             let event_type = match event_name.as_str() {
                 "onclick" => "strata_dom::EventType::Click".to_string(),
@@ -196,41 +204,49 @@ fn lower_element(el: &RsxElement, errors: &mut Vec<String>) -> String {
                     } else {
                         "event_listener"
                     };
-                    attrs_code.push(format!(
-                        "strata_dom::Attribute::{}({}, {})",
-                        method, event_type, stream
-                    ));
+                    format!("strata_dom::Attribute::{}({}, {})", method, event_type, stream)
                 }
-                RsxAttrValue::Literal(_) | RsxAttrValue::Flag => {
+                RsxAttrValue::Literal(_) | RsxAttrValue::Flag | RsxAttrValue::Spread(_) => {
                     errors.push(format!(
                         "event attribute `{}` requires a callable expression, e.g. `{0}={{|_event| {{}}}}`; a literal string or flag is not a handler",
                         attr.name
                     ));
+                    continue;
                 }
             }
         } else {
             match &attr.value {
                 RsxAttrValue::Literal(s) => {
-                    attrs_code.push(format!(
-                        "strata_dom::Attribute::property({:?}, {:?})",
-                        attr.name, s
-                    ));
+                    format!("strata_dom::Attribute::property({:?}, {:?})", attr.name, s)
                 }
                 RsxAttrValue::Expression(stream) => {
-                    attrs_code.push(format!(
+                    format!(
                         "strata_dom::Attribute::property({:?}, ({}).to_string())",
                         attr.name, stream
-                    ));
+                    )
                 }
                 RsxAttrValue::Flag => {
-                    attrs_code.push(format!(
-                        "strata_dom::Attribute::property({:?}, \"true\")",
-                        attr.name
-                    ));
+                    format!("strata_dom::Attribute::property({:?}, \"true\")", attr.name)
                 }
+                RsxAttrValue::Spread(_) => unreachable!(),
             }
+        };
+
+        if has_spread {
+            spread_stmts.push(format!("__attrs.push({});", item_expr));
+        } else {
+            attrs_code.push(item_expr);
         }
     }
+
+    let attrs_expr = if has_spread {
+        format!(
+            "{{ let mut __attrs: Vec<strata_dom::Attribute> = Vec::new(); {} __attrs }}",
+            spread_stmts.join(" ")
+        )
+    } else {
+        format!("vec![{}]", attrs_code.join(", "))
+    };
 
     // Lower children
     let mut children_code = Vec::new();
@@ -239,10 +255,10 @@ fn lower_element(el: &RsxElement, errors: &mut Vec<String>) -> String {
     }
 
     format!(
-        "strata_dom::NodeBlueprint::element({}, {}, vec![{}], vec![{}])",
+        "strata_dom::NodeBlueprint::element({}, {}, {}, vec![{}])",
         tag_code,
         classes_code,
-        attrs_code.join(", "),
+        attrs_expr,
         children_code.join(", ")
     )
 }
@@ -276,14 +292,18 @@ fn lower_component(comp: &RsxComponent, errors: &mut Vec<String>) -> String {
         return lower_positional_call(&full_path, comp, errors);
     }
 
-    // Case B: PascalCase component (bare `<Portal>`, `<ToastHost />`, or path-qualified
-    // `<strata_dom::Portal>`, `<::strata_dom::Portal>`, `<crate::ui::Modal>`, `<self::Card>`,
-    // `<super::Dialog>`): always uses companion builder (`#full_path::builder()...build()`),
-    // even when 0 props and 0 children are supplied, so components with optional parameters work
-    // as self-closing `<MyComponent />` tags.
+    // Case B: PascalCase component (bare `<Portal>`, `<ToastHost />`, generic `<List<String> />`,
+    // or path-qualified `<strata_dom::Portal>`, `<::strata_dom::Portal>`, `<crate::ui::Modal>`,
+    // `<self::Card>`, `<super::Dialog>`): always uses companion builder
+    // (`#full_path[::#generics]::builder()...build()`), even when 0 props and 0 children are
+    // supplied, so components with optional parameters work as self-closing `<MyComponent />` tags.
     let mut builder_calls = Vec::new();
 
     for prop in &comp.props {
+        if let RsxAttrValue::Spread(stream) = &prop.value {
+            builder_calls.push(format!(".__spread({})", stream));
+            continue;
+        }
         // Convert hyphenated props e.g. foo-bar to snake_case foo_bar
         let prop_name = prop.name.replace('-', "_");
         match &prop.value {
@@ -306,6 +326,7 @@ fn lower_component(comp: &RsxComponent, errors: &mut Vec<String>) -> String {
             RsxAttrValue::Flag => {
                 builder_calls.push(format!(".{}(true)", prop_name));
             }
+            RsxAttrValue::Spread(_) => unreachable!(),
         }
     }
 
@@ -317,9 +338,14 @@ fn lower_component(comp: &RsxComponent, errors: &mut Vec<String>) -> String {
         builder_calls.push(format!(".children(vec![{}])", children_code.join(", ")));
     }
 
+    let builder_prefix = match &comp.generics {
+        Some(g) => format!("{}::{}", full_path, g),
+        None => full_path,
+    };
+
     format!(
         "strata_dom::IntoNodeBlueprint::into_node_blueprint({}::builder(){}.build())",
-        full_path,
+        builder_prefix,
         builder_calls.join("")
     )
 }
@@ -494,6 +520,12 @@ fn lower_positional_call(full_path: &str, comp: &RsxComponent, errors: &mut Vec<
             RsxAttrValue::Literal(s) => arg_exprs.push(format!("{:?}", s)),
             RsxAttrValue::Expression(stream) => arg_exprs.push(format!("{}", stream)),
             RsxAttrValue::Flag => arg_exprs.push("true".to_string()),
+            RsxAttrValue::Spread(_) => {
+                errors.push(format!(
+                    "spread attributes `{{..expr}}` are only supported on elements and `#[component]` builders, not positional call `{}`",
+                    full_path
+                ));
+            }
         }
     }
     if !comp.children.is_empty() {
@@ -503,9 +535,13 @@ fn lower_positional_call(full_path: &str, comp: &RsxComponent, errors: &mut Vec<
         }
         arg_exprs.push(format!("vec![{}]", children_code.join(", ")));
     }
+    let call_prefix = match &comp.generics {
+        Some(g) => format!("{}::{}", full_path, g),
+        None => full_path.to_string(),
+    };
     format!(
         "strata_dom::IntoNodeBlueprint::into_node_blueprint({}({}))",
-        full_path,
+        call_prefix,
         arg_exprs.join(", ")
     )
 }
@@ -555,6 +591,7 @@ mod tests {
         let nodes = vec![RsxNode::Component(RsxComponent {
             leading_colon: false,
             path: vec!["strata_dom".to_string(), "Portal".to_string()],
+            generics: None,
             props: vec![RsxAttribute {
                 name: "anchor".to_string(),
                 value: RsxAttrValue::Literal("trigger-btn".to_string()),
@@ -574,6 +611,7 @@ mod tests {
         let nodes = vec![RsxNode::Component(RsxComponent {
             leading_colon: false,
             path: vec!["strata_dom".to_string(), "Portal".to_string()],
+            generics: None,
             props: vec![],
             children: vec![RsxNode::Text("Top layer".to_string())],
             self_closing: false,
@@ -590,6 +628,7 @@ mod tests {
         let empty_nodes = vec![RsxNode::Component(RsxComponent {
             leading_colon: false,
             path: vec!["strata_dom".to_string(), "Portal".to_string()],
+            generics: None,
             props: vec![],
             children: vec![],
             self_closing: true,
@@ -605,6 +644,7 @@ mod tests {
         let root_nodes = vec![RsxNode::Component(RsxComponent {
             leading_colon: true,
             path: vec!["strata_dom".to_string(), "Portal".to_string()],
+            generics: None,
             props: vec![],
             children: vec![RsxNode::Text("Global".to_string())],
             self_closing: false,
@@ -625,6 +665,7 @@ mod tests {
                 "Icons".to_string(),
                 "Plus".to_string(),
             ],
+            generics: None,
             props: vec![],
             children: vec![],
             self_closing: true,
@@ -638,6 +679,7 @@ mod tests {
         let fn_nodes = vec![RsxNode::Component(RsxComponent {
             leading_colon: false,
             path: vec!["helpers".to_string(), "render_badge".to_string()],
+            generics: None,
             props: vec![RsxAttribute {
                 name: "label".to_string(),
                 value: RsxAttrValue::Literal("v1".to_string()),

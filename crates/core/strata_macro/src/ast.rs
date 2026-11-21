@@ -25,6 +25,7 @@ pub struct RsxElement {
 pub struct RsxComponent {
     pub leading_colon: bool,
     pub path: Vec<String>,
+    pub generics: Option<String>,
     pub props: Vec<RsxAttribute>,
     pub children: Vec<RsxNode>,
     pub self_closing: bool,
@@ -63,4 +64,5 @@ pub enum RsxAttrValue {
     Literal(String),
     Expression(TokenStream),
     Flag,
+    Spread(TokenStream),
 }
