@@ -15,39 +15,43 @@ Strata is a ground-up universal presentation engine and reactive user interface 
 
 Unlike Electron, Tauri, or React Native, **Strata's core presentation engine never spawns an embedded browser engine, WebView, CEF instance, or V8 JavaScript runtime** for native UI rendering. Instead, Strata implements a complete, spec-compliant layout engine, cascading style system, and presentation pipeline directly in safe Rust. (Optional companion harnesses such as `strata_chromium_surface` exist strictly for legacy web embedding and automated cross-engine visual parity verification).
 
-```
-                      ┌────────────────────────────────────────┐
-                      │          Strata Application            │
-                      │   (Components, RSX, Tailwind Classes)   │
-                      └───────────────────┬────────────────────┘
-                                          │
-                   ┌──────────────────────┴──────────────────────┐
-                   │                                             │
-      ┌────────────▼──────────┐                     ┌────────────▼──────────┐
-      │   strata_dom / IR     │                     │     strata_style      │
-      │  (Reactive Signals,   │                     │  (Tailwind JIT,       │
-      │   64-Byte UiIrNode)   │                     │   SIMD Style Masks)   │
-      └────────────┬──────────┘                     └────────────┬──────────┘
-                   │                                             │
-                   └──────────────────────┬──────────────────────┘
-                                          │
-                      ┌───────────────────▼────────────────────┐
-                      │             strata_layout              │
-                      │  (W3C Box Model, Flexbox, CSS Grid)    │
-                      └───────────────────┬────────────────────┘
-                                          │
-                      ┌───────────────────▼────────────────────┐
-                      │             strata_render              │
-                      │ (Display List, Stacking Context, Pass) │
-                      └───────────────────┬────────────────────┘
-                                          │
-      ┌──────────────────┬────────────────┼──────────────────┬─────────────────┐
-      │                  │                │                  │                 │
-┌─────▼──────┐     ┌─────▼──────┐   ┌─────▼──────┐     ┌─────▼──────┐    ┌─────▼──────┐
-│   Linux    │     │  Headless  │   │  Terminal  │     │   macOS    │    │  Windows   │
-│ GTK/Cairo  │     │ Framebuffer│   │    TUI     │     │   Cocoa    │    │   Win32    │
-│ [Verified] │     │ [Verified] │   │ [Verified] │     │ [Bringup]  │    │ [Bringup]  │
-└────────────┘     └────────────┘   └────────────┘     └────────────┘    └────────────┘
+```mermaid
+flowchart TD
+    App["Strata Application<br/>Components, RSX, Tailwind Classes"]
+    Dom["strata_dom / IR<br/>Reactive Signals, 64-Byte UiIrNode"]
+    Style["strata_style<br/>Tailwind JIT, SIMD Style Masks"]
+    Layout["strata_layout<br/>W3C Box Model, Flexbox, CSS Grid"]
+    Render["strata_render<br/>Display List, Stacking Context, Pass"]
+
+    App --> Dom
+    App --> Style
+    Dom --> Layout
+    Style --> Layout
+    Layout --> Render
+
+    subgraph Targets["Presentation Targets"]
+        Linux["Linux<br/>GTK / Cairo<br/>Verified"]
+        Headless["Headless<br/>Framebuffer<br/>Verified"]
+        Terminal["Terminal<br/>TUI<br/>Verified"]
+        MacOS["macOS<br/>Cocoa<br/>Bringup"]
+        Windows["Windows<br/>Win32<br/>Bringup"]
+    end
+
+    Render --> Linux
+    Render --> Headless
+    Render --> Terminal
+    Render --> MacOS
+    Render --> Windows
+
+    classDef app fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#f8fafc
+    classDef core fill:#0f172a,stroke:#64748b,stroke-width:1.5px,color:#e2e8f0
+    classDef verified fill:#052e16,stroke:#22c55e,stroke-width:1.5px,color:#dcfce7
+    classDef bringup fill:#1c1917,stroke:#f59e0b,stroke-width:1.5px,stroke-dasharray:4 4,color:#fef3c7
+
+    class App app
+    class Dom,Style,Layout,Render core
+    class Linux,Headless,Terminal verified
+    class MacOS,Windows bringup
 ```
 
 ---
