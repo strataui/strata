@@ -48,7 +48,9 @@ pub mod tiling;
 
 // Re-exports
 pub use canvas2d::{
-    rasterize_canvas_commands, Canvas2DContext, CanvasCommand, CanvasPathVerb, Transform2D,
+    canvas_verbs_bounds, flatten_canvas_verbs, parse_canvas_font, rasterize_canvas_commands,
+    Canvas2DContext, CanvasCommand, CanvasPathVerb, CanvasTextAlign, CanvasTextBaseline,
+    Transform2D,
 };
 pub use compositor::{Compositor, DamageTracker, DisplayList, DrawCommand};
 pub use custom_shader::{

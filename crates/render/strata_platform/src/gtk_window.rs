@@ -2137,8 +2137,130 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                     );
                     cr.clip();
                     cr.translate(bounds.x as f64, bounds.y as f64);
+                    cr.set_dash(&[], 0.0);
+                    let mut save_depth = 0usize;
+
+                    let emit_canvas_verbs =
+                        |cr: &cairo::Context,
+                         verbs: &[strata_render::canvas2d::CanvasPathVerb]| {
+                            cr.new_path();
+                            let mut cur = (0.0_f64, 0.0_f64);
+                            let mut start = (0.0_f64, 0.0_f64);
+                            for v in verbs {
+                                match *v {
+                                    strata_render::canvas2d::CanvasPathVerb::MoveTo(x, y) => {
+                                        cur = (x as f64, y as f64);
+                                        start = cur;
+                                        cr.move_to(cur.0, cur.1);
+                                    }
+                                    strata_render::canvas2d::CanvasPathVerb::LineTo(x, y) => {
+                                        cur = (x as f64, y as f64);
+                                        cr.line_to(cur.0, cur.1);
+                                    }
+                                    strata_render::canvas2d::CanvasPathVerb::QuadraticCurveTo {
+                                        cpx,
+                                        cpy,
+                                        x,
+                                        y,
+                                    } => {
+                                        // Exact degree elevation from quadratic (cur, cp, p2) to cubic
+                                        let qx = cpx as f64;
+                                        let qy = cpy as f64;
+                                        let ex = x as f64;
+                                        let ey = y as f64;
+                                        let cp1x = cur.0 + (2.0 / 3.0) * (qx - cur.0);
+                                        let cp1y = cur.1 + (2.0 / 3.0) * (qy - cur.1);
+                                        let cp2x = ex + (2.0 / 3.0) * (qx - ex);
+                                        let cp2y = ey + (2.0 / 3.0) * (qy - ey);
+                                        cr.curve_to(cp1x, cp1y, cp2x, cp2y, ex, ey);
+                                        cur = (ex, ey);
+                                    }
+                                    strata_render::canvas2d::CanvasPathVerb::BezierCurveTo {
+                                        cp1x,
+                                        cp1y,
+                                        cp2x,
+                                        cp2y,
+                                        x,
+                                        y,
+                                    } => {
+                                        let ex = x as f64;
+                                        let ey = y as f64;
+                                        cr.curve_to(
+                                            cp1x as f64,
+                                            cp1y as f64,
+                                            cp2x as f64,
+                                            cp2y as f64,
+                                            ex,
+                                            ey,
+                                        );
+                                        cur = (ex, ey);
+                                    }
+                                    strata_render::canvas2d::CanvasPathVerb::Arc {
+                                        cx,
+                                        cy,
+                                        radius,
+                                        start_angle,
+                                        end_angle,
+                                        counter_clockwise,
+                                    } => {
+                                        if counter_clockwise {
+                                            cr.arc_negative(
+                                                cx as f64,
+                                                cy as f64,
+                                                radius as f64,
+                                                start_angle as f64,
+                                                end_angle as f64,
+                                            );
+                                        } else {
+                                            cr.arc(
+                                                cx as f64,
+                                                cy as f64,
+                                                radius as f64,
+                                                start_angle as f64,
+                                                end_angle as f64,
+                                            );
+                                        }
+                                        cur = (
+                                            cx as f64 + radius as f64 * (end_angle as f64).cos(),
+                                            cy as f64 + radius as f64 * (end_angle as f64).sin(),
+                                        );
+                                    }
+                                    strata_render::canvas2d::CanvasPathVerb::Close => {
+                                        cr.close_path();
+                                        cur = start;
+                                    }
+                                }
+                            }
+                        };
+
                     for ccmd in commands {
                         match ccmd {
+                            strata_render::canvas2d::CanvasCommand::Save => {
+                                let _ = cr.save();
+                                save_depth += 1;
+                            }
+                            strata_render::canvas2d::CanvasCommand::Restore => {
+                                if save_depth > 0 {
+                                    let _ = cr.restore();
+                                    save_depth -= 1;
+                                }
+                            }
+                            strata_render::canvas2d::CanvasCommand::SetLineDash {
+                                segments,
+                                offset,
+                            } => {
+                                if segments.is_empty() {
+                                    cr.set_dash(&[], 0.0);
+                                } else {
+                                    let dashes: Vec<f64> =
+                                        segments.iter().map(|&d| d as f64).collect();
+                                    cr.set_dash(&dashes, *offset as f64);
+                                }
+                            }
+                            strata_render::canvas2d::CanvasCommand::ClipPath { verbs } => {
+                                emit_canvas_verbs(cr, verbs);
+                                cr.clip();
+                            }
                             strata_render::canvas2d::CanvasCommand::FillRect {
                                 bounds: rb,
                                 color,
@@ -2252,46 +2374,7 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                                 stroke_color,
                                 line_width,
                             } => {
-                                cr.new_path();
-                                for v in verbs {
-                                    match *v {
-                                        strata_render::canvas2d::CanvasPathVerb::MoveTo(x, y) => {
-                                            cr.move_to(x as f64, y as f64);
-                                        }
-                                        strata_render::canvas2d::CanvasPathVerb::LineTo(x, y) => {
-                                            cr.line_to(x as f64, y as f64);
-                                        }
-                                        strata_render::canvas2d::CanvasPathVerb::Arc {
-                                            cx,
-                                            cy,
-                                            radius,
-                                            start_angle,
-                                            end_angle,
-                                            counter_clockwise,
-                                        } => {
-                                            if counter_clockwise {
-                                                cr.arc_negative(
-                                                    cx as f64,
-                                                    cy as f64,
-                                                    radius as f64,
-                                                    start_angle as f64,
-                                                    end_angle as f64,
-                                                );
-                                            } else {
-                                                cr.arc(
-                                                    cx as f64,
-                                                    cy as f64,
-                                                    radius as f64,
-                                                    start_angle as f64,
-                                                    end_angle as f64,
-                                                );
-                                            }
-                                        }
-                                        strata_render::canvas2d::CanvasPathVerb::Close => {
-                                            cr.close_path();
-                                        }
-                                    }
-                                }
+                                emit_canvas_verbs(cr, verbs);
                                 if let Some(fc) = fill_color {
                                     cr.set_source_rgba(
                                         fc.r() as f64,
@@ -2316,7 +2399,127 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                                     let _ = cr.stroke();
                                 }
                             }
+                            strata_render::canvas2d::CanvasCommand::FillText {
+                                text,
+                                x,
+                                y,
+                                color,
+                                font_size,
+                                font_family,
+                                font_weight,
+                                italic,
+                                text_align,
+                                text_baseline,
+                                max_width,
+                                ..
+                            }
+                            | strata_render::canvas2d::CanvasCommand::StrokeText {
+                                text,
+                                x,
+                                y,
+                                color,
+                                font_size,
+                                font_family,
+                                font_weight,
+                                italic,
+                                text_align,
+                                text_baseline,
+                                max_width,
+                                ..
+                            } => {
+                                let stroke_lw = match ccmd {
+                                    strata_render::canvas2d::CanvasCommand::StrokeText {
+                                        line_width,
+                                        ..
+                                    } => Some(*line_width as f64),
+                                    _ => None,
+                                };
+                                let layout =
+                                    shared_layout.get_or_insert_with(|| create_parity_layout(cr));
+                                layout.set_width(-1);
+                                layout.set_alignment(pango::Alignment::Left);
+                                layout.set_justify(false);
+                                let mut font_desc = pango::FontDescription::new();
+                                font_desc.set_family(font_family);
+                                font_desc.set_absolute_size(
+                                    (*font_size as f64).max(1.0) * pango::SCALE as f64,
+                                );
+                                font_desc.set_weight(pango::Weight::__Unknown(*font_weight as i32));
+                                font_desc.set_style(if *italic {
+                                    pango::Style::Italic
+                                } else {
+                                    pango::Style::Normal
+                                });
+                                layout.set_font_description(Some(&font_desc));
+                                layout.set_text(text);
+
+                                let (pw, ph) = layout.size();
+                                let w_px = pw as f64 / pango::SCALE as f64;
+                                let h_px = ph as f64 / pango::SCALE as f64;
+                                let baseline_px = layout.baseline() as f64 / pango::SCALE as f64;
+
+                                let scale_x = match max_width {
+                                    Some(mw) if w_px > (*mw as f64) && w_px > 0.0 => {
+                                        (*mw as f64) / w_px
+                                    }
+                                    _ => 1.0,
+                                };
+                                let eff_w = w_px * scale_x;
+
+                                let tx = match text_align {
+                                    strata_render::canvas2d::CanvasTextAlign::Left
+                                    | strata_render::canvas2d::CanvasTextAlign::Start => *x as f64,
+                                    strata_render::canvas2d::CanvasTextAlign::Center => {
+                                        *x as f64 - eff_w * 0.5
+                                    }
+                                    strata_render::canvas2d::CanvasTextAlign::Right
+                                    | strata_render::canvas2d::CanvasTextAlign::End => {
+                                        *x as f64 - eff_w
+                                    }
+                                };
+                                let ty = match text_baseline {
+                                    strata_render::canvas2d::CanvasTextBaseline::Top
+                                    | strata_render::canvas2d::CanvasTextBaseline::Hanging => {
+                                        *y as f64
+                                    }
+                                    strata_render::canvas2d::CanvasTextBaseline::Middle => {
+                                        *y as f64 - h_px * 0.5
+                                    }
+                                    strata_render::canvas2d::CanvasTextBaseline::Bottom
+                                    | strata_render::canvas2d::CanvasTextBaseline::Ideographic => {
+                                        *y as f64 - h_px
+                                    }
+                                    strata_render::canvas2d::CanvasTextBaseline::Alphabetic => {
+                                        *y as f64 - baseline_px
+                                    }
+                                };
+
+                                let _ = cr.save();
+                                cr.set_source_rgba(
+                                    color.r() as f64,
+                                    color.g() as f64,
+                                    color.b() as f64,
+                                    color.a() as f64,
+                                );
+                                cr.translate(tx, ty);
+                                if (scale_x - 1.0).abs() > 1e-4 {
+                                    cr.scale(scale_x, 1.0);
+                                }
+                                if let Some(lw) = stroke_lw {
+                                    cr.new_path();
+                                    pangocairo::functions::layout_path(cr, layout);
+                                    cr.set_line_width(lw);
+                                    let _ = cr.stroke();
+                                } else {
+                                    pangocairo::functions::show_layout(cr, layout);
+                                }
+                                let _ = cr.restore();
+                            }
                         }
+                    }
+                    while save_depth > 0 {
+                        let _ = cr.restore();
+                        save_depth -= 1;
                     }
                     let _ = cr.restore();
                 }
