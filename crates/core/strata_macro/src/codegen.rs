@@ -330,13 +330,38 @@ fn lower_component(comp: &RsxComponent, errors: &mut Vec<String>) -> String {
         }
     }
 
-    if !comp.children.is_empty() {
+    let is_error_boundary = comp.path.last().is_some_and(|s| s == "ErrorBoundary");
+    let has_explicit_render = comp.props.iter().any(|p| {
+        let norm = p.name.replace('-', "_");
+        norm == "render" || norm == "render_fn"
+    });
+    let lazy_error_boundary_children =
+        is_error_boundary && !comp.children.is_empty() && !has_explicit_render;
+
+    let finish_call = if lazy_error_boundary_children {
         let mut children_code = Vec::new();
         for child in &comp.children {
             children_code.push(lower_node(child, errors));
         }
-        builder_calls.push(format!(".children(vec![{}])", children_code.join(", ")));
-    }
+        let body = if children_code.len() == 1 {
+            format!("strata_dom::View::new({})", children_code[0])
+        } else {
+            format!(
+                "strata_dom::View::new(strata_dom::NodeBlueprint::fragment(vec![{}]))",
+                children_code.join(", ")
+            )
+        };
+        format!(".build_with_render(|| {{ {} }})", body)
+    } else {
+        if !comp.children.is_empty() {
+            let mut children_code = Vec::new();
+            for child in &comp.children {
+                children_code.push(lower_node(child, errors));
+            }
+            builder_calls.push(format!(".children(vec![{}])", children_code.join(", ")));
+        }
+        ".build()".to_string()
+    };
 
     let builder_prefix = match &comp.generics {
         Some(g) => format!("{}::{}", full_path, g),
@@ -344,9 +369,10 @@ fn lower_component(comp: &RsxComponent, errors: &mut Vec<String>) -> String {
     };
 
     format!(
-        "strata_dom::IntoNodeBlueprint::into_node_blueprint({}::builder(){}.build())",
+        "strata_dom::IntoNodeBlueprint::into_node_blueprint({}::builder(){}{})",
         builder_prefix,
-        builder_calls.join("")
+        builder_calls.join(""),
+        finish_call
     )
 }
 
