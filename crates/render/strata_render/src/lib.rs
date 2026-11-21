@@ -49,9 +49,9 @@ pub mod tiling;
 // Re-exports
 pub use canvas2d::{
     canvas_verbs_bounds, flatten_canvas_verbs, measure_canvas_text_metrics, parse_canvas_font,
-    rasterize_canvas_commands, Canvas2DContext, CanvasCommand, CanvasLineCap, CanvasLineJoin,
-    CanvasPathVerb, CanvasTextAlign, CanvasTextBaseline, CanvasTextMetrics, IntoRoundRectRadii,
-    Transform2D,
+    point_in_subpaths_even_odd, rasterize_canvas_commands, Canvas2DContext, CanvasCommand,
+    CanvasLineCap, CanvasLineJoin, CanvasPathVerb, CanvasTextAlign, CanvasTextBaseline,
+    CanvasTextMetrics, IntoRoundRectRadii, Transform2D,
 };
 pub use compositor::{Compositor, DamageTracker, DisplayList, DrawCommand};
 pub use custom_shader::{
@@ -67,11 +67,12 @@ pub use geometry3d::{
     Vertex3D,
 };
 pub use gpu_pipeline::{
-    GpuBatch, GpuBatchCollector, GpuBatchSummary, GpuCompareFunction, GpuDepthStencilState,
+    rect_relation_to_clip_polys, ClipContainment, GpuBatch, GpuBatchCollector, GpuBatchSummary,
+    GpuClipMask, GpuClipSpan, GpuClipVertex, GpuCompareFunction, GpuDepthStencilState,
     GpuPathBatch, GpuPathPipeline, GpuPresentationPipeline, GpuPrimitiveTopology, GpuQuadInstance,
     GpuRenderPipeline, GpuShaderCompiler, GpuShaderModule, GpuSlugTextPipeline, GpuUniforms,
     GpuVertex, GpuVertexAttribute, GpuVertexBufferLayout, GpuVertexFormat, GpuVertexStepMode,
-    QUAD_VERTICES, WGSL_ANALYTICAL_QUAD_SHADER,
+    QUAD_VERTICES, WGSL_ANALYTICAL_QUAD_SHADER, WGSL_STENCIL_CLIP_SHADER,
 };
 pub use kinetic_scroll::{
     KineticScrollController, ScrollAxis, DEFAULT_FRICTION, REST_VELOCITY_THRESHOLD,

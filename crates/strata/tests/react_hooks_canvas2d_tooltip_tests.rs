@@ -842,4 +842,81 @@ fn canvas2d_extended_apis_and_gpu_batch_dashed_stroke_rect_parity() {
         "GpuBatch should expand dashed CanvasCommand::StrokeRect into dash quads, got {}",
         batch.instances.len()
     );
+
+    // GpuPathPipeline must honor SetLineCap(Round) & SetLineJoin(Bevel)
+    let mut path_pipe = GpuPathPipeline::new(320.0, 160.0);
+    let seg_count = path_pipe.compile_frame(&rt.display_list, None);
+    assert!(seg_count > 0);
+}
+
+#[test]
+fn gpu_pipelines_apply_set_line_cap_join_and_non_rectangular_clip_paths() {
+    let view = rsx! {
+        <div class="w-[240px] h-[240px]">
+            <Canvas2D
+                width={240.0}
+                height={240.0}
+                on_draw={Some(Rc::new(|ctx: &mut Canvas2DContext| {
+                    // Open Round-capped / Bevel-joined CAD trace
+                    ctx.set_stroke_style(Color::rgb(0, 255, 180));
+                    ctx.set_line_width(8.0);
+                    ctx.set_line_cap(CanvasLineCap::Round);
+                    ctx.set_line_join(CanvasLineJoin::Bevel);
+                    ctx.begin_path();
+                    ctx.move_to(20.0, 40.0);
+                    ctx.line_to(90.0, 40.0);
+                    ctx.line_to(90.0, 110.0);
+                    ctx.stroke();
+
+                    // Circular CAD aperture clip
+                    ctx.save();
+                    ctx.begin_path();
+                    ctx.arc(160.0, 160.0, 40.0, 0.0, std::f32::consts::TAU, false);
+                    ctx.clip();
+                    // Outside circle inside its AABB [120..200, 120..200] -> culled
+                    ctx.set_fill_style(Color::rgb(255, 0, 0));
+                    ctx.fill_rect(121.0, 121.0, 6.0, 6.0);
+                    // Crosses circular boundary -> stencil masked
+                    ctx.set_fill_style(Color::rgb(0, 140, 255));
+                    ctx.fill_rect(120.0, 120.0, 80.0, 80.0);
+                    ctx.restore();
+                }))}
+            />
+        </div>
+    };
+
+    let rt = AppRuntime::new(view, 240.0, 240.0, 1.0);
+    let batch = GpuBatch::from_display_list(&rt.display_list, 240.0, 240.0);
+    assert!(batch.has_stencil_clips());
+    let (r_red, g_red, b_red, a_red) = Color::rgb(255, 0, 0).to_f32();
+    let red_c = [r_red, g_red, b_red, a_red];
+    assert_eq!(
+        batch.instances.iter().filter(|i| i.color == red_c).count(),
+        0,
+        "red rect strictly outside circular clip aperture must be culled"
+    );
+    let (br, bg, bb, ba) = Color::rgb(0, 140, 255).to_f32();
+    let blue_idx = batch
+        .instances
+        .iter()
+        .position(|i| i.color == [br, bg, bb, ba])
+        .expect("crossing blue FillRect must be emitted");
+    let mask = batch
+        .clip_mask_for_instance(blue_idx)
+        .expect("circle clip quad must bind stencil mask");
+    assert!(mask.contains_point(160.0, 160.0));
+    assert!(!mask.contains_point(122.0, 122.0));
+
+    let mut path_pipe = GpuPathPipeline::new(240.0, 240.0);
+    let n = path_pipe.compile_frame(&rt.display_list, None);
+    assert!(n >= 3);
+    assert!(path_pipe.batch.segments.iter().any(|s| {
+        (s.flags & strata::render::gpu_path::FLAG_CAP_ROUND) != 0
+            && (s.flags & strata::render::gpu_path::FLAG_JOIN_BEVEL) != 0
+    }));
+    assert!(path_pipe
+        .batch
+        .segments
+        .iter()
+        .any(|s| (s.flags & strata::render::gpu_path::FLAG_TRIANGLE) != 0));
 }

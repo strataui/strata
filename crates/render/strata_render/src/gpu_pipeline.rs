@@ -231,10 +231,458 @@ impl GpuUniforms {
     }
 }
 
+/// Embedded WGSL shader for non-rectangular polygonal clip stencil masks.
+pub const WGSL_STENCIL_CLIP_SHADER: &str = r#"
+struct VertexInput {
+    @location(0) position: vec2<f32>,
+};
+
+struct Uniforms {
+    viewport_size: vec2<f32>,
+    _padding: vec2<f32>,
+};
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+@vertex
+fn vs_main(model: VertexInput) -> @builtin(position) vec4<f32> {
+    let ndc_x = (model.position.x / uniforms.viewport_size.x) * 2.0 - 1.0;
+    let ndc_y = 1.0 - (model.position.y / uniforms.viewport_size.y) * 2.0;
+    return vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+    // Stencil clip passes disable color writes and update the stencil attachment directly.
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+}
+"#;
+
+/// 2D vertex coordinate for triangulated GPU stencil clip mask geometry.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GpuClipVertex {
+    pub position: [f32; 2],
+}
+
+impl GpuClipVertex {
+    pub const BYTE_SIZE: usize = std::mem::size_of::<Self>();
+
+    #[inline]
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { position: [x, y] }
+    }
+
+    #[inline]
+    pub fn slice_to_bytes(slice: &[Self]) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * Self::BYTE_SIZE)
+        }
+    }
+}
+
+/// Spatial containment relation of a primitive or quad against an active polygonal clip stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipContainment {
+    /// Primitive lies completely outside at least one clip layer (cullable).
+    Outside,
+    /// Primitive crosses a non-rectangular clip boundary (requires stencil masking).
+    Partial,
+    /// Primitive lies strictly inside every active clip layer (no stencil needed).
+    Inside,
+}
+
+/// Compiled polygonal/stencil clip mask for circular, rounded, or arbitrary CAD clip paths.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GpuClipMask {
+    /// Conservative axis-aligned bounding box of the intersected clip region.
+    pub bounds: Rect,
+    /// Active non-rectangular clip layers; each layer contains closed/open subpaths evaluated even-odd.
+    pub layers: Vec<Vec<Vec<(f32, f32)>>>,
+    /// Triangulated vertex triplets per clip layer (3 vertices per triangle) for GPU stencil passes.
+    pub stencil_layers: Vec<Vec<GpuClipVertex>>,
+}
+
+impl GpuClipMask {
+    /// Constructs and triangulates a stencil clip mask from a stack of subpath layers.
+    pub fn from_layers(bounds: Rect, layers: Vec<Vec<Vec<(f32, f32)>>>) -> Self {
+        let stencil_layers = layers
+            .iter()
+            .map(|subpaths| {
+                let mut verts = Vec::new();
+                for sub in subpaths {
+                    verts.extend(triangulate_subpath_pts(sub));
+                }
+                verts
+            })
+            .collect();
+        Self {
+            bounds,
+            layers,
+            stencil_layers,
+        }
+    }
+
+    /// Returns `true` if `(x, y)` passes the intersected AABB and all even-odd polygon layers.
+    #[inline]
+    pub fn contains_point(&self, x: f32, y: f32) -> bool {
+        if x < self.bounds.x
+            || x >= self.bounds.max_x()
+            || y < self.bounds.y
+            || y >= self.bounds.max_y()
+        {
+            return false;
+        }
+        self.layers
+            .iter()
+            .all(|poly| crate::canvas2d::point_in_subpaths_even_odd(poly, x, y))
+    }
+
+    /// Evaluates containment of `rect` against all clip layers in this mask.
+    #[inline]
+    pub fn rect_containment(&self, rect: Rect) -> ClipContainment {
+        if self.bounds.intersect(rect).is_none() {
+            return ClipContainment::Outside;
+        }
+        rect_relation_to_clip_polys(rect, &self.layers)
+    }
+
+    /// Total number of stencil triangle vertices across all active clip layers.
+    #[inline]
+    pub fn total_stencil_vertices(&self) -> usize {
+        self.stencil_layers.iter().map(|v| v.len()).sum()
+    }
+}
+
+/// Maps a contiguous slice `[start..end)` of batched GPU primitives to an optional [`GpuClipMask`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GpuClipSpan {
+    pub start: usize,
+    pub end: usize,
+    pub clip_mask: Option<usize>,
+}
+
+#[inline]
+fn orient2d(a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> f32 {
+    (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+}
+
+#[inline]
+fn on_segment_bbox(a: (f32, f32), b: (f32, f32), p: (f32, f32)) -> bool {
+    p.0 >= a.0.min(b.0) - 1e-4
+        && p.0 <= a.0.max(b.0) + 1e-4
+        && p.1 >= a.1.min(b.1) - 1e-4
+        && p.1 <= a.1.max(b.1) + 1e-4
+}
+
+fn segments_intersect_2d(
+    a0: (f32, f32),
+    a1: (f32, f32),
+    b0: (f32, f32),
+    b1: (f32, f32),
+) -> bool {
+    let o1 = orient2d(a0, a1, b0);
+    let o2 = orient2d(a0, a1, b1);
+    let o3 = orient2d(b0, b1, a0);
+    let o4 = orient2d(b0, b1, a1);
+    if ((o1 > 1e-4 && o2 < -1e-4) || (o1 < -1e-4 && o2 > 1e-4))
+        && ((o3 > 1e-4 && o4 < -1e-4) || (o3 < -1e-4 && o4 > 1e-4))
+    {
+        return true;
+    }
+    (o1.abs() <= 1e-4 && on_segment_bbox(a0, a1, b0))
+        || (o2.abs() <= 1e-4 && on_segment_bbox(a0, a1, b1))
+        || (o3.abs() <= 1e-4 && on_segment_bbox(b0, b1, a0))
+        || (o4.abs() <= 1e-4 && on_segment_bbox(b0, b1, a1))
+}
+
+fn subpaths_are_axis_aligned_rect(subpaths: &[Vec<(f32, f32)>]) -> bool {
+    if subpaths.len() != 1 {
+        return false;
+    }
+    let raw = &subpaths[0];
+    let mut pts: Vec<(f32, f32)> = Vec::with_capacity(raw.len());
+    for &p in raw {
+        if pts
+            .last()
+            .is_none_or(|&prev| (p.0 - prev.0).hypot(p.1 - prev.1) > 1e-3)
+        {
+            pts.push(p);
+        }
+    }
+    if pts.len() >= 2 {
+        let first = pts[0];
+        let last = *pts.last().unwrap();
+        if (first.0 - last.0).hypot(first.1 - last.1) <= 1e-3 {
+            pts.pop();
+        }
+    }
+    if pts.len() != 4 {
+        return false;
+    }
+    let mut prev_horiz: Option<bool> = None;
+    for i in 0..4 {
+        let a = pts[i];
+        let b = pts[(i + 1) % 4];
+        let dx = (b.0 - a.0).abs();
+        let dy = (b.1 - a.1).abs();
+        let is_horiz = if dy <= 1e-3 && dx > 1e-3 {
+            true
+        } else if dx <= 1e-3 && dy > 1e-3 {
+            false
+        } else {
+            return false;
+        };
+        if prev_horiz == Some(is_horiz) {
+            return false;
+        }
+        prev_horiz = Some(is_horiz);
+    }
+    true
+}
+
+#[inline]
+fn point_in_triangle_ccw(p: (f32, f32), a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> bool {
+    orient2d(a, b, p) >= -1e-4 && orient2d(b, c, p) >= -1e-4 && orient2d(c, a, p) >= -1e-4
+}
+
+fn triangulate_subpath_pts(raw_pts: &[(f32, f32)]) -> Vec<GpuClipVertex> {
+    let mut pts: Vec<(f32, f32)> = Vec::with_capacity(raw_pts.len());
+    for &p in raw_pts {
+        if pts
+            .last()
+            .is_none_or(|&prev| (p.0 - prev.0).hypot(p.1 - prev.1) > 1e-4)
+        {
+            pts.push(p);
+        }
+    }
+    if pts.len() >= 2 {
+        let first = pts[0];
+        let last = *pts.last().unwrap();
+        if (first.0 - last.0).hypot(first.1 - last.1) <= 1e-4 {
+            pts.pop();
+        }
+    }
+    let n = pts.len();
+    if n < 3 {
+        return Vec::new();
+    }
+
+    let mut area2 = 0.0_f32;
+    for i in 0..n {
+        let a = pts[i];
+        let b = pts[(i + 1) % n];
+        area2 += a.0 * b.1 - b.0 * a.1;
+    }
+    if area2.abs() <= 1e-4 {
+        return Vec::new();
+    }
+    if area2 < 0.0 {
+        pts.reverse();
+    }
+
+    let mut out = Vec::with_capacity((n - 2) * 3);
+    let mut indices: Vec<usize> = (0..n).collect();
+    let mut guard = 0usize;
+    let max_iters = n * n;
+
+    while indices.len() > 3 && guard < max_iters {
+        guard += 1;
+        let m = indices.len();
+        let mut clipped = false;
+        for i in 0..m {
+            let i_prev = indices[(i + m - 1) % m];
+            let i_curr = indices[i];
+            let i_next = indices[(i + 1) % m];
+            let a = pts[i_prev];
+            let b = pts[i_curr];
+            let c = pts[i_next];
+            if orient2d(a, b, c) <= 1e-5 {
+                continue;
+            }
+            let mut empty = true;
+            for (k_idx, &idx) in indices.iter().enumerate() {
+                if k_idx == (i + m - 1) % m || k_idx == i || k_idx == (i + 1) % m {
+                    continue;
+                }
+                if point_in_triangle_ccw(pts[idx], a, b, c) {
+                    empty = false;
+                    break;
+                }
+            }
+            if empty {
+                out.push(GpuClipVertex::new(a.0, a.1));
+                out.push(GpuClipVertex::new(b.0, b.1));
+                out.push(GpuClipVertex::new(c.0, c.1));
+                indices.remove(i);
+                clipped = true;
+                break;
+            }
+        }
+        if !clipped {
+            // Self-intersecting subpath fallback: centroid fan pairs cleanly with Invert even-odd stencil.
+            out.clear();
+            let inv = 1.0 / (n as f32);
+            let mut cx = 0.0_f32;
+            let mut cy = 0.0_f32;
+            for &(px, py) in &pts {
+                cx += px;
+                cy += py;
+            }
+            cx *= inv;
+            cy *= inv;
+            for i in 0..n {
+                let a = pts[i];
+                let b = pts[(i + 1) % n];
+                out.push(GpuClipVertex::new(cx, cy));
+                out.push(GpuClipVertex::new(a.0, a.1));
+                out.push(GpuClipVertex::new(b.0, b.1));
+            }
+            return out;
+        }
+    }
+
+    if indices.len() == 3 {
+        let a = pts[indices[0]];
+        let b = pts[indices[1]];
+        let c = pts[indices[2]];
+        out.push(GpuClipVertex::new(a.0, a.1));
+        out.push(GpuClipVertex::new(b.0, b.1));
+        out.push(GpuClipVertex::new(c.0, c.1));
+    }
+    out
+}
+
+/// Evaluates whether axis-aligned `r` is completely outside, partially clipped by, or strictly
+/// inside a stack of non-rectangular clip subpath layers (`even-odd` fill per layer).
+pub fn rect_relation_to_clip_polys(
+    r: Rect,
+    clip_polys: &[Vec<Vec<(f32, f32)>>],
+) -> ClipContainment {
+    if clip_polys.is_empty() {
+        return ClipContainment::Inside;
+    }
+    if r.width <= 0.0 || r.height <= 0.0 {
+        return ClipContainment::Outside;
+    }
+
+    let x0 = r.x;
+    let y0 = r.y;
+    let x1 = r.max_x();
+    let y1 = r.max_y();
+    let rect_edges = [
+        ((x0, y0), (x1, y0)),
+        ((x1, y0), (x1, y1)),
+        ((x1, y1), (x0, y1)),
+        ((x0, y1), (x0, y0)),
+    ];
+    let samples = [
+        (x0, y0),
+        (x1, y0),
+        (x1, y1),
+        (x0, y1),
+        ((x0 + x1) * 0.5, (y0 + y1) * 0.5),
+    ];
+
+    let mut all_inside = true;
+    for poly in clip_polys {
+        let mut any_vertex_in_rect = false;
+        let mut any_edge_cross = false;
+
+        'poly_scan: for sub in poly {
+            if sub.len() < 2 {
+                continue;
+            }
+            for &v in sub {
+                if v.0 > x0 + 1e-4 && v.0 < x1 - 1e-4 && v.1 > y0 + 1e-4 && v.1 < y1 - 1e-4 {
+                    any_vertex_in_rect = true;
+                    break 'poly_scan;
+                }
+            }
+            let closed_sub = sub.len() >= 3;
+            let edge_count = if closed_sub { sub.len() } else { sub.len() - 1 };
+            for i in 0..edge_count {
+                let a = sub[i];
+                let b = sub[(i + 1) % sub.len()];
+                for &(e0, e1) in &rect_edges {
+                    if segments_intersect_2d(a, b, e0, e1) {
+                        any_edge_cross = true;
+                        break 'poly_scan;
+                    }
+                }
+            }
+        }
+
+        if any_vertex_in_rect || any_edge_cross {
+            all_inside = false;
+            continue;
+        }
+
+        let mut inside_count = 0usize;
+        for &(sx, sy) in &samples {
+            if crate::canvas2d::point_in_subpaths_even_odd(poly, sx, sy) {
+                inside_count += 1;
+            }
+        }
+        if inside_count == 0 {
+            return ClipContainment::Outside;
+        }
+        if inside_count < samples.len() {
+            all_inside = false;
+        }
+    }
+
+    if all_inside {
+        ClipContainment::Inside
+    } else {
+        ClipContainment::Partial
+    }
+}
+
+fn push_clip_span(spans: &mut Vec<GpuClipSpan>, count: usize, index: usize, mask: Option<usize>) {
+    if let Some(last) = spans.last_mut() {
+        if last.end == index && last.clip_mask == mask {
+            last.end = index + count;
+            return;
+        }
+    }
+    spans.push(GpuClipSpan {
+        start: index,
+        end: index + count,
+        clip_mask: mask,
+    });
+}
+
+fn resolve_or_push_clip_mask(
+    masks: &mut Vec<GpuClipMask>,
+    active_clip: Option<Rect>,
+    clip_polys: &[Vec<Vec<(f32, f32)>>],
+) -> Option<usize> {
+    if clip_polys.is_empty() {
+        return None;
+    }
+    let bounds = active_clip?;
+    if let Some((idx, _)) = masks
+        .iter()
+        .enumerate()
+        .find(|(_, m)| m.bounds == bounds && m.layers == clip_polys)
+    {
+        Some(idx)
+    } else {
+        let idx = masks.len();
+        masks.push(GpuClipMask::from_layers(bounds, clip_polys.to_vec()));
+        Some(idx)
+    }
+}
+
 /// Batch collection of GPU instanced quads ready for upload to GPU buffers.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct GpuBatch {
     pub instances: Vec<GpuQuadInstance>,
+    /// Compiled non-rectangular/stencil clip masks referenced by [`Self::clip_spans`].
+    pub clip_masks: Vec<GpuClipMask>,
+    /// Contiguous instance ranges mapped to their active optional stencil clip mask index.
+    pub clip_spans: Vec<GpuClipSpan>,
 }
 
 impl GpuBatch {
@@ -245,17 +693,45 @@ impl GpuBatch {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             instances: Vec::with_capacity(capacity),
+            clip_masks: Vec::new(),
+            clip_spans: Vec::new(),
         }
     }
 
     #[inline]
     pub fn push(&mut self, instance: GpuQuadInstance) {
+        self.push_with_clip(instance, None);
+    }
+
+    /// Pushes a quad instance associated with an optional non-rectangular stencil clip mask index.
+    #[inline]
+    pub fn push_with_clip(&mut self, instance: GpuQuadInstance, clip_mask: Option<usize>) {
+        let idx = self.instances.len();
         self.instances.push(instance);
+        if clip_mask.is_some() || !self.clip_spans.is_empty() {
+            push_clip_span(&mut self.clip_spans, 1, idx, clip_mask);
+        }
+    }
+
+    #[inline]
+    pub fn has_stencil_clips(&self) -> bool {
+        !self.clip_masks.is_empty()
+    }
+
+    /// Returns the stencil clip mask governing `instance_index`, if any.
+    pub fn clip_mask_for_instance(&self, instance_index: usize) -> Option<&GpuClipMask> {
+        let span = self
+            .clip_spans
+            .iter()
+            .find(|s| instance_index >= s.start && instance_index < s.end)?;
+        span.clip_mask.and_then(|id| self.clip_masks.get(id))
     }
 
     #[inline]
     pub fn clear(&mut self) {
         self.instances.clear();
+        self.clip_masks.clear();
+        self.clip_spans.clear();
     }
 
     #[inline]
@@ -389,7 +865,33 @@ impl GpuBatch {
                         let mut active_clip = Some(base_clip);
                         let mut line_dash: Vec<f32> = Vec::new();
                         let mut dash_offset: f32 = 0.0;
-                        let mut state_stack: Vec<(Option<Rect>, Vec<f32>, f32)> = Vec::new();
+                        let mut clip_polys: Vec<Vec<Vec<(f32, f32)>>> = Vec::new();
+                        let mut clip_mask_id: Option<usize> = None;
+                        #[allow(clippy::type_complexity)]
+                        let mut state_stack: Vec<(
+                            Option<Rect>,
+                            Vec<f32>,
+                            f32,
+                            Vec<Vec<Vec<(f32, f32)>>>,
+                            Option<usize>,
+                        )> = Vec::new();
+
+                        let transform_subpaths = |subs: Vec<Vec<(f32, f32)>>| -> Vec<Vec<(f32, f32)>> {
+                            if let Some(mat) = active_matrix {
+                                if !mat.is_identity() {
+                                    return subs
+                                        .into_iter()
+                                        .map(|sub| {
+                                            sub.into_iter()
+                                                .map(|(x, y)| mat.transform_point(x, y))
+                                                .collect()
+                                        })
+                                        .collect();
+                                }
+                            }
+                            subs
+                        };
+
                         for ccmd in commands {
                             match ccmd {
                                 crate::canvas2d::CanvasCommand::Save => {
@@ -397,15 +899,24 @@ impl GpuBatch {
                                         active_clip,
                                         line_dash.clone(),
                                         dash_offset,
+                                        clip_polys.clone(),
+                                        clip_mask_id,
                                     ));
                                 }
                                 crate::canvas2d::CanvasCommand::Restore => {
-                                    if let Some((prev_clip, prev_dash, prev_offset)) =
-                                        state_stack.pop()
+                                    if let Some((
+                                        prev_clip,
+                                        prev_dash,
+                                        prev_offset,
+                                        prev_polys,
+                                        prev_mask,
+                                    )) = state_stack.pop()
                                     {
                                         active_clip = prev_clip;
                                         line_dash = prev_dash;
                                         dash_offset = prev_offset;
+                                        clip_polys = prev_polys;
+                                        clip_mask_id = prev_mask;
                                     }
                                 }
                                 crate::canvas2d::CanvasCommand::SetLineDash {
@@ -424,11 +935,46 @@ impl GpuBatch {
                                     dash_offset = if offset.is_finite() { *offset } else { 0.0 };
                                 }
                                 crate::canvas2d::CanvasCommand::ClipPath { verbs } => {
-                                    if let Some(vbbox) =
-                                        crate::canvas2d::canvas_verbs_bounds(verbs, bounds.x, bounds.y)
-                                    {
-                                        let tb = transform_rect_fn(vbbox);
-                                        active_clip = active_clip.and_then(|c| c.intersect(tb));
+                                    let subpaths = transform_subpaths(
+                                        crate::canvas2d::flatten_canvas_verbs(
+                                            verbs, bounds.x, bounds.y,
+                                        ),
+                                    );
+                                    if !subpaths.is_empty() {
+                                        let mut min_x = f32::INFINITY;
+                                        let mut min_y = f32::INFINITY;
+                                        let mut max_x = f32::NEG_INFINITY;
+                                        let mut max_y = f32::NEG_INFINITY;
+                                        for sub in &subpaths {
+                                            for &(x, y) in sub {
+                                                min_x = min_x.min(x);
+                                                min_y = min_y.min(y);
+                                                max_x = max_x.max(x);
+                                                max_y = max_y.max(y);
+                                            }
+                                        }
+                                        if min_x.is_finite()
+                                            && min_y.is_finite()
+                                            && max_x >= min_x
+                                            && max_y >= min_y
+                                        {
+                                            let tb = Rect::new(
+                                                min_x,
+                                                min_y,
+                                                max_x - min_x,
+                                                max_y - min_y,
+                                            );
+                                            active_clip =
+                                                active_clip.and_then(|c| c.intersect(tb));
+                                        }
+                                        if !subpaths_are_axis_aligned_rect(&subpaths) {
+                                            clip_polys.push(subpaths);
+                                            clip_mask_id = resolve_or_push_clip_mask(
+                                                &mut batch.clip_masks,
+                                                active_clip,
+                                                &clip_polys,
+                                            );
+                                        }
                                     }
                                 }
                                 crate::canvas2d::CanvasCommand::FillRect {
@@ -436,17 +982,30 @@ impl GpuBatch {
                                     color,
                                 } => {
                                     if let Some(canvas_clip) = active_clip {
-                                        let r = Rect::new(
+                                        let r = transform_rect_fn(Rect::new(
                                             bounds.x + rb.x,
                                             bounds.y + rb.y,
                                             rb.width,
                                             rb.height,
-                                        );
-                                        batch.push(GpuQuadInstance::from_rect(
-                                            transform_rect_fn(r),
-                                            *color,
-                                            canvas_clip,
                                         ));
+                                        if r.intersect(canvas_clip).is_none() {
+                                            continue;
+                                        }
+                                        let (emit, mask) = if clip_polys.is_empty() {
+                                            (true, None)
+                                        } else {
+                                            match rect_relation_to_clip_polys(r, &clip_polys) {
+                                                ClipContainment::Outside => (false, None),
+                                                ClipContainment::Inside => (true, None),
+                                                ClipContainment::Partial => (true, clip_mask_id),
+                                            }
+                                        };
+                                        if emit {
+                                            batch.push_with_clip(
+                                                GpuQuadInstance::from_rect(r, *color, canvas_clip),
+                                                mask,
+                                            );
+                                        }
                                     }
                                 }
                                 crate::canvas2d::CanvasCommand::StrokeRect {
@@ -463,14 +1022,68 @@ impl GpuBatch {
                                         );
                                         let period: f32 = line_dash.iter().copied().sum();
                                         if line_dash.is_empty() || period <= 1e-4 {
-                                            batch.push(GpuQuadInstance::from_rounded_rect(
-                                                transform_rect_fn(r),
-                                                Color::TRANSPARENT,
-                                                BorderRadius::default(),
-                                                EdgeInsets::all(*line_width),
-                                                Some(*color),
-                                                canvas_clip,
-                                            ));
+                                            let tr = transform_rect_fn(r);
+                                            let lw = *line_width;
+                                            let (emit, mask) = if clip_polys.is_empty() {
+                                                (tr.intersect(canvas_clip).is_some(), None)
+                                            } else {
+                                                let half = lw * 0.5;
+                                                let edge_rects = [
+                                                    Rect::new(tr.x, tr.y - half, tr.width, lw),
+                                                    Rect::new(
+                                                        tr.x + tr.width - half,
+                                                        tr.y,
+                                                        lw,
+                                                        tr.height,
+                                                    ),
+                                                    Rect::new(
+                                                        tr.x,
+                                                        tr.y + tr.height - half,
+                                                        tr.width,
+                                                        lw,
+                                                    ),
+                                                    Rect::new(tr.x - half, tr.y, lw, tr.height),
+                                                ];
+                                                let mut any_in = false;
+                                                let mut all_strictly_in = true;
+                                                for er in edge_rects {
+                                                    match rect_relation_to_clip_polys(
+                                                        er,
+                                                        &clip_polys,
+                                                    ) {
+                                                        ClipContainment::Outside => {
+                                                            all_strictly_in = false;
+                                                        }
+                                                        ClipContainment::Inside => {
+                                                            any_in = true;
+                                                        }
+                                                        ClipContainment::Partial => {
+                                                            any_in = true;
+                                                            all_strictly_in = false;
+                                                        }
+                                                    }
+                                                }
+                                                if !any_in {
+                                                    (false, None)
+                                                } else if all_strictly_in {
+                                                    (true, None)
+                                                } else {
+                                                    (true, clip_mask_id)
+                                                }
+                                            };
+                                            if emit {
+                                                batch.push_with_clip(
+                                                    GpuQuadInstance::from_rounded_rect(
+                                                        tr,
+                                                        Color::TRANSPARENT,
+                                                        BorderRadius::default(),
+                                                        EdgeInsets::all(lw),
+                                                        Some(*color),
+                                                        canvas_clip,
+                                                    ),
+                                                    mask,
+                                                );
+                                            }
                                         } else if *line_width > 0.0 && r.width > 0.0 && r.height > 0.0
                                         {
                                             let lw = *line_width;
@@ -535,11 +1148,39 @@ impl GpuBatch {
                                                                 s1 - s0,
                                                             ),
                                                         };
-                                                        batch.push(GpuQuadInstance::from_rect(
-                                                            transform_rect_fn(seg_rect),
-                                                            *color,
-                                                            canvas_clip,
-                                                        ));
+                                                        let t_seg = transform_rect_fn(seg_rect);
+                                                        if t_seg.intersect(canvas_clip).is_some() {
+                                                            let (emit, mask) = if clip_polys
+                                                                .is_empty()
+                                                            {
+                                                                (true, None)
+                                                            } else {
+                                                                match rect_relation_to_clip_polys(
+                                                                    t_seg,
+                                                                    &clip_polys,
+                                                                ) {
+                                                                    ClipContainment::Outside => {
+                                                                        (false, None)
+                                                                    }
+                                                                    ClipContainment::Inside => {
+                                                                        (true, None)
+                                                                    }
+                                                                    ClipContainment::Partial => {
+                                                                        (true, clip_mask_id)
+                                                                    }
+                                                                }
+                                                            };
+                                                            if emit {
+                                                                batch.push_with_clip(
+                                                                    GpuQuadInstance::from_rect(
+                                                                        t_seg,
+                                                                        *color,
+                                                                        canvas_clip,
+                                                                    ),
+                                                                    mask,
+                                                                );
+                                                            }
+                                                        }
                                                     }
                                                     cursor += step;
                                                     rem -= step;
@@ -925,10 +1566,115 @@ impl GpuPresentationPipeline {
     }
 }
 
+#[inline]
+fn layout_cap_to_gpu(cap: strata_layout::StrokeLineCap) -> strata_gpu_path::LineCap {
+    match cap {
+        strata_layout::StrokeLineCap::Butt => strata_gpu_path::LineCap::Butt,
+        strata_layout::StrokeLineCap::Round => strata_gpu_path::LineCap::Round,
+        strata_layout::StrokeLineCap::Square => strata_gpu_path::LineCap::Square,
+    }
+}
+
+#[inline]
+fn layout_join_to_gpu(join: strata_layout::StrokeLineJoin) -> strata_gpu_path::LineJoin {
+    match join {
+        strata_layout::StrokeLineJoin::Miter => strata_gpu_path::LineJoin::Miter,
+        strata_layout::StrokeLineJoin::Round => strata_gpu_path::LineJoin::Round,
+        strata_layout::StrokeLineJoin::Bevel => strata_gpu_path::LineJoin::Bevel,
+    }
+}
+
+#[inline]
+fn quad_world_bounds(q: &strata_gpu_path::QuadraticBezier, pad: f32) -> Rect {
+    let min_x = q.p0.x.min(q.p1.x).min(q.p2.x) - pad;
+    let max_x = q.p0.x.max(q.p1.x).max(q.p2.x) + pad;
+    let min_y = q.p0.y.min(q.p1.y).min(q.p2.y) - pad;
+    let max_y = q.p0.y.max(q.p1.y).max(q.p2.y) + pad;
+    Rect::new(
+        min_x,
+        min_y,
+        (max_x - min_x).max(1.0),
+        (max_y - min_y).max(1.0),
+    )
+}
+
+#[inline]
+fn subpaths_from_path_verbs(
+    verbs: &[strata_gpu_path::PathVerb],
+    ox: f32,
+    oy: f32,
+    sx: f32,
+    sy: f32,
+    tolerance: f32,
+) -> Vec<(Vec<strata_gpu_path::QuadraticBezier>, bool)> {
+    let mut result = Vec::new();
+    let mut cur_sub = Vec::new();
+    let mut cur = strata_gpu_path::Point2D::new(ox, oy);
+    let mut start = cur;
+
+    let map_pt = |p: strata_gpu_path::Point2D| {
+        strata_gpu_path::Point2D::new(ox + p.x * sx, oy + p.y * sy)
+    };
+
+    for &v in verbs {
+        match v {
+            strata_gpu_path::PathVerb::MoveTo(p) => {
+                if !cur_sub.is_empty() {
+                    result.push((std::mem::take(&mut cur_sub), false));
+                }
+                cur = map_pt(p);
+                start = cur;
+            }
+            strata_gpu_path::PathVerb::LineTo(p) => {
+                let next = map_pt(p);
+                cur_sub.push(strata_gpu_path::QuadraticBezier::new(
+                    cur,
+                    cur.lerp(next, 0.5),
+                    next,
+                ));
+                cur = next;
+            }
+            strata_gpu_path::PathVerb::QuadTo(p1, p2) => {
+                let cp = map_pt(p1);
+                let next = map_pt(p2);
+                cur_sub.push(strata_gpu_path::QuadraticBezier::new(cur, cp, next));
+                cur = next;
+            }
+            strata_gpu_path::PathVerb::CubicTo(p1, p2, p3) => {
+                let cubic =
+                    strata_gpu_path::CubicBezier::new(cur, map_pt(p1), map_pt(p2), map_pt(p3));
+                cur_sub.extend(cubic.to_quadratics(tolerance));
+                cur = map_pt(p3);
+            }
+            strata_gpu_path::PathVerb::Close => {
+                if cur.distance_squared(start) > 1e-4 {
+                    cur_sub.push(strata_gpu_path::QuadraticBezier::new(
+                        cur,
+                        cur.lerp(start, 0.5),
+                        start,
+                    ));
+                    cur = start;
+                }
+                if !cur_sub.is_empty() {
+                    result.push((std::mem::take(&mut cur_sub), true));
+                }
+            }
+        }
+    }
+    if !cur_sub.is_empty() {
+        result.push((cur_sub, false));
+    }
+    result
+}
+
 /// Batch collection of GPU instanced path segments ready for upload to storage/vertex buffers.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct GpuPathBatch {
     pub segments: Vec<strata_gpu_path::GpuPathSegment>,
+    /// Compiled non-rectangular/stencil clip masks referenced by [`Self::clip_spans`].
+    pub clip_masks: Vec<GpuClipMask>,
+    /// Contiguous segment ranges mapped to their active optional stencil clip mask index.
+    pub clip_spans: Vec<GpuClipSpan>,
 }
 
 impl GpuPathBatch {
@@ -939,17 +1685,49 @@ impl GpuPathBatch {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             segments: Vec::with_capacity(capacity),
+            clip_masks: Vec::new(),
+            clip_spans: Vec::new(),
         }
     }
 
     #[inline]
     pub fn push(&mut self, segment: strata_gpu_path::GpuPathSegment) {
+        self.push_with_clip(segment, None);
+    }
+
+    /// Pushes a path segment associated with an optional non-rectangular stencil clip mask index.
+    #[inline]
+    pub fn push_with_clip(
+        &mut self,
+        segment: strata_gpu_path::GpuPathSegment,
+        clip_mask: Option<usize>,
+    ) {
+        let idx = self.segments.len();
         self.segments.push(segment);
+        if clip_mask.is_some() || !self.clip_spans.is_empty() {
+            push_clip_span(&mut self.clip_spans, 1, idx, clip_mask);
+        }
+    }
+
+    #[inline]
+    pub fn has_stencil_clips(&self) -> bool {
+        !self.clip_masks.is_empty()
+    }
+
+    /// Returns the stencil clip mask governing `segment_index`, if any.
+    pub fn clip_mask_for_segment(&self, segment_index: usize) -> Option<&GpuClipMask> {
+        let span = self
+            .clip_spans
+            .iter()
+            .find(|s| segment_index >= s.start && segment_index < s.end)?;
+        span.clip_mask.and_then(|id| self.clip_masks.get(id))
     }
 
     #[inline]
     pub fn clear(&mut self) {
         self.segments.clear();
+        self.clip_masks.clear();
+        self.clip_spans.clear();
     }
 
     #[inline]
@@ -965,6 +1743,327 @@ impl GpuPathBatch {
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {
         strata_gpu_path::GpuPathSegment::slice_to_bytes(&self.segments)
+    }
+
+    fn emit_clipped_segment(
+        &mut self,
+        seg: strata_gpu_path::GpuPathSegment,
+        q_bbox: Rect,
+        clip: Rect,
+        clip_polys: &[Vec<Vec<(f32, f32)>>],
+        clip_mask_id: Option<usize>,
+    ) {
+        if q_bbox.intersect(clip).is_none() {
+            return;
+        }
+        let (emit, mask) = if clip_polys.is_empty() {
+            (true, None)
+        } else {
+            match rect_relation_to_clip_polys(q_bbox, clip_polys) {
+                ClipContainment::Outside => (false, None),
+                ClipContainment::Inside => (true, None),
+                ClipContainment::Partial => (true, clip_mask_id),
+            }
+        };
+        if emit {
+            self.push_with_clip(seg, mask);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_corner_join(
+        &mut self,
+        q0: &strata_gpu_path::QuadraticBezier,
+        q1: &strata_gpu_path::QuadraticBezier,
+        sw: f32,
+        c: [f32; 4],
+        join: strata_gpu_path::LineJoin,
+        miter_limit: f32,
+        extra_flags: u32,
+        clip: Rect,
+        clip_polys: &[Vec<Vec<(f32, f32)>>],
+        clip_mask_id: Option<usize>,
+    ) {
+        let j = q0.p2;
+        let raw_t0 = q0.tangent(1.0);
+        let raw_t0 = if raw_t0.x * raw_t0.x + raw_t0.y * raw_t0.y > 1e-6 {
+            raw_t0
+        } else {
+            strata_gpu_path::Point2D::new(q0.p2.x - q0.p0.x, q0.p2.y - q0.p0.y)
+        };
+        let len0 = (raw_t0.x * raw_t0.x + raw_t0.y * raw_t0.y).sqrt();
+        let raw_t1 = q1.tangent(0.0);
+        let raw_t1 = if raw_t1.x * raw_t1.x + raw_t1.y * raw_t1.y > 1e-6 {
+            raw_t1
+        } else {
+            strata_gpu_path::Point2D::new(q1.p2.x - q1.p0.x, q1.p2.y - q1.p0.y)
+        };
+        let len1 = (raw_t1.x * raw_t1.x + raw_t1.y * raw_t1.y).sqrt();
+        if len0 <= 1e-5 || len1 <= 1e-5 {
+            return;
+        }
+        let t0 = strata_gpu_path::Point2D::new(raw_t0.x / len0, raw_t0.y / len0);
+        let t1 = strata_gpu_path::Point2D::new(raw_t1.x / len1, raw_t1.y / len1);
+        let dot_t = t0.x * t1.x + t0.y * t1.y;
+        if dot_t > 0.995 {
+            return;
+        }
+
+        let half_w = sw * 0.5;
+        let join_bbox = Rect::new(
+            j.x - half_w * miter_limit.max(1.0) - 2.0,
+            j.y - half_w * miter_limit.max(1.0) - 2.0,
+            (half_w * miter_limit.max(1.0) + 2.0) * 2.0,
+            (half_w * miter_limit.max(1.0) + 2.0) * 2.0,
+        );
+
+        let join_flag_bit = match join {
+            strata_gpu_path::LineJoin::Miter => 0,
+            strata_gpu_path::LineJoin::Round => strata_gpu_path::FLAG_JOIN_ROUND,
+            strata_gpu_path::LineJoin::Bevel => strata_gpu_path::FLAG_JOIN_BEVEL,
+        };
+
+        if join == strata_gpu_path::LineJoin::Round {
+            let deg = strata_gpu_path::QuadraticBezier::new(j, j, j);
+            let seg = strata_gpu_path::GpuPathSegment::from_quadratic(
+                &deg,
+                sw,
+                strata_gpu_path::FLAG_STROKE
+                    | strata_gpu_path::FLAG_CAP_ROUND
+                    | strata_gpu_path::FLAG_START_OPEN
+                    | strata_gpu_path::FLAG_END_OPEN
+                    | join_flag_bit
+                    | extra_flags,
+                c,
+                0.0,
+            );
+            self.emit_clipped_segment(seg, join_bbox, clip, clip_polys, clip_mask_id);
+            return;
+        }
+
+        let cross = t0.x * t1.y - t0.y * t1.x;
+        if cross.abs() < 1e-4 {
+            return;
+        }
+        let sign = if cross > 0.0 { -1.0 } else { 1.0 };
+        let n0x = sign * (-t0.y);
+        let n0y = sign * t0.x;
+        let n1x = sign * (-t1.y);
+        let n1y = sign * t1.x;
+        let a = strata_gpu_path::Point2D::new(j.x + n0x * half_w, j.y + n0y * half_w);
+        let b = strata_gpu_path::Point2D::new(j.x + n1x * half_w, j.y + n1y * half_w);
+        if a.distance_squared(b) <= 0.04 {
+            return;
+        }
+
+        let sum_x = n0x + n1x;
+        let sum_y = n0y + n1y;
+        let sum_len = sum_x.hypot(sum_y);
+        if sum_len <= 1e-5 {
+            return;
+        }
+        let miter_ratio = 2.0 / sum_len;
+        if join == strata_gpu_path::LineJoin::Miter && miter_ratio <= miter_limit.max(1.0) {
+            let denom = 1.0 + n0x * n1x + n0y * n1y;
+            if denom > 1e-4 {
+                let m_scale = half_w / denom;
+                let m = strata_gpu_path::Point2D::new(j.x + sum_x * m_scale, j.y + sum_y * m_scale);
+                let q_a = strata_gpu_path::QuadraticBezier::new(j, a, m);
+                let q_b = strata_gpu_path::QuadraticBezier::new(j, m, b);
+                let flags = strata_gpu_path::FLAG_FILL | strata_gpu_path::FLAG_TRIANGLE | extra_flags;
+                self.emit_clipped_segment(
+                    strata_gpu_path::GpuPathSegment::from_quadratic(&q_a, sw, flags, c, 0.0),
+                    quad_world_bounds(&q_a, 2.0),
+                    clip,
+                    clip_polys,
+                    clip_mask_id,
+                );
+                self.emit_clipped_segment(
+                    strata_gpu_path::GpuPathSegment::from_quadratic(&q_b, sw, flags, c, 0.0),
+                    quad_world_bounds(&q_b, 2.0),
+                    clip,
+                    clip_polys,
+                    clip_mask_id,
+                );
+                return;
+            }
+        }
+
+        let q_bev = strata_gpu_path::QuadraticBezier::new(j, a, b);
+        let flags = strata_gpu_path::FLAG_FILL
+            | strata_gpu_path::FLAG_JOIN_BEVEL
+            | strata_gpu_path::FLAG_TRIANGLE
+            | extra_flags;
+        self.emit_clipped_segment(
+            strata_gpu_path::GpuPathSegment::from_quadratic(&q_bev, sw, flags, c, 0.0),
+            quad_world_bounds(&q_bev, 2.0),
+            clip,
+            clip_polys,
+            clip_mask_id,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_subpath_strokes(
+        &mut self,
+        quads: &[strata_gpu_path::QuadraticBezier],
+        closed: bool,
+        sw: f32,
+        col: Color,
+        cap: strata_gpu_path::LineCap,
+        join: strata_gpu_path::LineJoin,
+        miter_limit: f32,
+        dash: &[f32],
+        dash_offset: f32,
+        extra_flags: u32,
+        clip_opt: Option<Rect>,
+        clip_polys: &[Vec<Vec<(f32, f32)>>],
+        clip_mask_id: Option<usize>,
+    ) {
+        let Some(clip) = clip_opt else {
+            return;
+        };
+        if quads.is_empty() {
+            return;
+        }
+        let (cr, cg, cb, ca) = col.to_f32();
+        let c = [cr, cg, cb, ca];
+        let pad = sw * 1.5 + 2.0;
+
+        let dash_period: f32 = dash.iter().copied().filter(|&d| d >= 0.0 && d.is_finite()).sum();
+        if dash.iter().any(|&d| d > 0.0) && dash_period > 1e-4 {
+            for dash_sub in strata_gpu_path::dash_quadratics_with_offset(quads, dash, dash_offset) {
+                let n = dash_sub.len();
+                if n == 0 {
+                    continue;
+                }
+                for (i, q) in dash_sub.iter().enumerate() {
+                    let flags = strata_gpu_path::stroke_style_flags(
+                        cap,
+                        join,
+                        false,
+                        i == 0,
+                        i + 1 == n,
+                    ) | extra_flags;
+                    let seg = strata_gpu_path::GpuPathSegment::from_quadratic(q, sw, flags, c, 0.0);
+                    self.emit_clipped_segment(
+                        seg,
+                        quad_world_bounds(q, pad),
+                        clip,
+                        clip_polys,
+                        clip_mask_id,
+                    );
+                }
+                for i in 0..n.saturating_sub(1) {
+                    self.emit_corner_join(
+                        &dash_sub[i],
+                        &dash_sub[i + 1],
+                        sw,
+                        c,
+                        join,
+                        miter_limit,
+                        extra_flags,
+                        clip,
+                        clip_polys,
+                        clip_mask_id,
+                    );
+                }
+            }
+            return;
+        }
+
+        // Split into connected runs cleanly in case `quads` holds multiple disconnected subpaths.
+        let mut run_start = 0usize;
+        for idx in 1..=quads.len() {
+            let disconnected = idx == quads.len()
+                || quads[idx - 1]
+                    .p2
+                    .distance_squared(quads[idx].p0)
+                    > 1e-3;
+            if disconnected {
+                let run = &quads[run_start..idx];
+                let n = run.len();
+                let is_loop = closed
+                    && n >= 2
+                    && run.last().unwrap().p2.distance_squared(run[0].p0) <= 1e-3;
+                for (i, q) in run.iter().enumerate() {
+                    let start_open = !is_loop && i == 0;
+                    let end_open = !is_loop && i + 1 == n;
+                    let flags = strata_gpu_path::stroke_style_flags(
+                        cap,
+                        join,
+                        is_loop,
+                        start_open,
+                        end_open,
+                    ) | extra_flags;
+                    let seg = strata_gpu_path::GpuPathSegment::from_quadratic(q, sw, flags, c, 0.0);
+                    self.emit_clipped_segment(
+                        seg,
+                        quad_world_bounds(q, pad),
+                        clip,
+                        clip_polys,
+                        clip_mask_id,
+                    );
+                }
+                for i in 0..n.saturating_sub(1) {
+                    self.emit_corner_join(
+                        &run[i],
+                        &run[i + 1],
+                        sw,
+                        c,
+                        join,
+                        miter_limit,
+                        extra_flags,
+                        clip,
+                        clip_polys,
+                        clip_mask_id,
+                    );
+                }
+                if is_loop {
+                    self.emit_corner_join(
+                        &run[n - 1],
+                        &run[0],
+                        sw,
+                        c,
+                        join,
+                        miter_limit,
+                        extra_flags,
+                        clip,
+                        clip_polys,
+                        clip_mask_id,
+                    );
+                }
+                run_start = idx;
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_fill_quads(
+        &mut self,
+        quads: &[strata_gpu_path::QuadraticBezier],
+        sw: f32,
+        col: Color,
+        extra_flags: u32,
+        clip_opt: Option<Rect>,
+        clip_polys: &[Vec<Vec<(f32, f32)>>],
+        clip_mask_id: Option<usize>,
+    ) {
+        let Some(clip) = clip_opt else {
+            return;
+        };
+        let (cr, cg, cb, ca) = col.to_f32();
+        let c = [cr, cg, cb, ca];
+        for q in quads {
+            let seg = strata_gpu_path::GpuPathSegment::from_quadratic(
+                q,
+                sw,
+                strata_gpu_path::FLAG_FILL | extra_flags,
+                c,
+                0.0,
+            );
+            self.emit_clipped_segment(seg, quad_world_bounds(q, 2.0), clip, clip_polys, clip_mask_id);
+        }
     }
 
     /// Compiles vector paths from a DisplayList into GPU path segments.
@@ -1020,35 +2119,54 @@ impl GpuPathBatch {
                     if bounds.intersect(current_clip).is_none() {
                         continue;
                     }
-
-                    let quads = path.to_quadratics(0.25);
-                    let mut flags = 0;
-                    if fill_color.is_some() {
-                        flags |= strata_gpu_path::FLAG_FILL;
-                    }
-                    if stroke_color.is_some() {
-                        flags |= strata_gpu_path::FLAG_STROKE;
-                    }
-                    if path.fill_rule == Some(strata_gpu_path::FillRule::EvenOdd) {
-                        flags |= strata_gpu_path::FLAG_EVEN_ODD;
-                    }
-
-                    let color_f32 = if let Some(fc) = fill_color {
-                        let (r, g, b, a) = fc.to_f32();
-                        [r, g, b, a]
-                    } else if let Some(sc) = stroke_color {
-                        let (r, g, b, a) = sc.to_f32();
-                        [r, g, b, a]
+                    let even_odd = if path.fill_rule == Some(strata_gpu_path::FillRule::EvenOdd) {
+                        strata_gpu_path::FLAG_EVEN_ODD
                     } else {
-                        [1.0, 1.0, 1.0, 1.0]
+                        0
                     };
-
+                    let subpaths = subpaths_from_path_verbs(&path.verbs, 0.0, 0.0, 1.0, 1.0, 0.25);
                     let stroke_w = stroke.map(|s| s.width).unwrap_or(1.0);
+                    let cap = stroke.map(|s| s.cap).unwrap_or_default();
+                    let join = stroke.map(|s| s.join).unwrap_or_default();
+                    let miter_limit = stroke.map(|s| s.miter_limit).unwrap_or(4.0);
 
-                    for q in quads {
-                        batch.push(strata_gpu_path::GpuPathSegment::from_quadratic(
-                            &q, stroke_w, flags, color_f32, 0.0,
-                        ));
+                    if let Some(fc) = fill_color {
+                        for (sub, closed) in &subpaths {
+                            let closed_flag = if *closed {
+                                strata_gpu_path::FLAG_CLOSED
+                            } else {
+                                0
+                            };
+                            batch.emit_fill_quads(
+                                sub,
+                                stroke_w,
+                                *fc,
+                                even_odd | closed_flag,
+                                Some(current_clip),
+                                &[],
+                                None,
+                            );
+                        }
+                    }
+
+                    if let Some(sc) = stroke_color {
+                        for (sub, closed) in &subpaths {
+                            batch.emit_subpath_strokes(
+                                sub,
+                                *closed,
+                                stroke_w,
+                                *sc,
+                                cap,
+                                join,
+                                miter_limit,
+                                &[],
+                                0.0,
+                                even_odd,
+                                Some(current_clip),
+                                &[],
+                                None,
+                            );
+                        }
                     }
                 }
                 DrawCommand::DrawSvgPath {
@@ -1057,10 +2175,11 @@ impl GpuPathBatch {
                     stroke_color,
                     fill_color,
                     stroke_width,
+                    stroke_linecap,
+                    stroke_linejoin,
                     stroke_dasharray,
                     fill_rule,
                     view_box,
-                    ..
                 } => {
                     if bounds.intersect(current_clip).is_none() {
                         continue;
@@ -1077,78 +2196,62 @@ impl GpuPathBatch {
                     };
                     let avg_scale = ((scale_x + scale_y) * 0.5).max(0.001);
                     let parsed = strata_gpu_path::PathBuilder::from_svg(path_data);
-                    let quads: Vec<strata_gpu_path::QuadraticBezier> = parsed
-                        .to_quadratics(0.25)
-                        .into_iter()
-                        .map(|q| {
-                            strata_gpu_path::QuadraticBezier::new(
-                                strata_gpu_path::Point2D::new(
-                                    bounds.x + q.p0.x * scale_x,
-                                    bounds.y + q.p0.y * scale_y,
-                                ),
-                                strata_gpu_path::Point2D::new(
-                                    bounds.x + q.p1.x * scale_x,
-                                    bounds.y + q.p1.y * scale_y,
-                                ),
-                                strata_gpu_path::Point2D::new(
-                                    bounds.x + q.p2.x * scale_x,
-                                    bounds.y + q.p2.y * scale_y,
-                                ),
-                            )
-                        })
-                        .collect();
+                    let subpaths = subpaths_from_path_verbs(
+                        &parsed.verbs,
+                        bounds.x,
+                        bounds.y,
+                        scale_x,
+                        scale_y,
+                        0.25,
+                    );
 
                     let even_odd = if *fill_rule == strata_layout::FillRule::EvenOdd {
                         strata_gpu_path::FLAG_EVEN_ODD
                     } else {
                         0
                     };
+                    let sw = *stroke_width * avg_scale;
+                    let cap = layout_cap_to_gpu(*stroke_linecap);
+                    let join = layout_join_to_gpu(*stroke_linejoin);
 
                     if let Some(fc) = fill_color {
-                        let (r, g, b, a) = fc.to_f32();
-                        let flags = strata_gpu_path::FLAG_FILL | even_odd;
-                        for q in &quads {
-                            batch.push(strata_gpu_path::GpuPathSegment::from_quadratic(
-                                q,
-                                *stroke_width * avg_scale,
-                                flags,
-                                [r, g, b, a],
-                                0.0,
-                            ));
+                        for (sub, closed) in &subpaths {
+                            let closed_flag = if *closed {
+                                strata_gpu_path::FLAG_CLOSED
+                            } else {
+                                0
+                            };
+                            batch.emit_fill_quads(
+                                sub,
+                                sw,
+                                *fc,
+                                even_odd | closed_flag,
+                                Some(current_clip),
+                                &[],
+                                None,
+                            );
                         }
                     }
 
                     if let Some(sc) = stroke_color {
-                        let (r, g, b, a) = sc.to_f32();
-                        let flags = strata_gpu_path::FLAG_STROKE | even_odd;
-                        let sw = *stroke_width * avg_scale;
-                        let has_dashes = stroke_dasharray.iter().any(|&d| d > 0.0);
-                        if has_dashes {
-                            let scaled_dashes: Vec<f32> =
-                                stroke_dasharray.iter().map(|&d| d * avg_scale).collect();
-                            for dash_sub in
-                                strata_gpu_path::dash_quadratics(&quads, &scaled_dashes)
-                            {
-                                for q in &dash_sub {
-                                    batch.push(strata_gpu_path::GpuPathSegment::from_quadratic(
-                                        q,
-                                        sw,
-                                        flags,
-                                        [r, g, b, a],
-                                        0.0,
-                                    ));
-                                }
-                            }
-                        } else {
-                            for q in &quads {
-                                batch.push(strata_gpu_path::GpuPathSegment::from_quadratic(
-                                    q,
-                                    sw,
-                                    flags,
-                                    [r, g, b, a],
-                                    0.0,
-                                ));
-                            }
+                        let scaled_dashes: Vec<f32> =
+                            stroke_dasharray.iter().map(|&d| d * avg_scale).collect();
+                        for (sub, closed) in &subpaths {
+                            batch.emit_subpath_strokes(
+                                sub,
+                                *closed,
+                                sw,
+                                *sc,
+                                cap,
+                                join,
+                                4.0,
+                                &scaled_dashes,
+                                0.0,
+                                even_odd,
+                                Some(current_clip),
+                                &[],
+                                None,
+                            );
                         }
                     }
                 }
@@ -1160,89 +2263,21 @@ impl GpuPathBatch {
                     let oy = bounds.y;
                     let mut active_clip = Some(base_clip);
                     let mut line_dash: Vec<f32> = Vec::new();
-                    let mut state_stack: Vec<(Option<Rect>, Vec<f32>)> = Vec::new();
-
-                    let quad_intersects_clip = |q: &strata_gpu_path::QuadraticBezier,
-                                                clip: Rect,
-                                                pad: f32|
-                     -> bool {
-                        let min_x = q.p0.x.min(q.p1.x).min(q.p2.x) - pad;
-                        let max_x = q.p0.x.max(q.p1.x).max(q.p2.x) + pad;
-                        let min_y = q.p0.y.min(q.p1.y).min(q.p2.y) - pad;
-                        let max_y = q.p0.y.max(q.p1.y).max(q.p2.y) + pad;
-                        clip.intersect(Rect::new(
-                            min_x,
-                            min_y,
-                            (max_x - min_x).max(1.0),
-                            (max_y - min_y).max(1.0),
-                        ))
-                        .is_some()
-                    };
-
-                    let push_stroke_quads = |batch: &mut Self,
-                                             quads: &[strata_gpu_path::QuadraticBezier],
-                                             sw: f32,
-                                             col: Color,
-                                             dash: &[f32],
-                                             clip_opt: Option<Rect>| {
-                        let Some(clip) = clip_opt else {
-                            return;
-                        };
-                        let (cr, cg, cb, ca) = col.to_f32();
-                        let c = [cr, cg, cb, ca];
-                        let pad = sw.max(1.0);
-                        let has_dashes = dash.iter().any(|&d| d > 0.0);
-                        if has_dashes {
-                            for dash_sub in strata_gpu_path::dash_quadratics(quads, dash) {
-                                for q in &dash_sub {
-                                    if quad_intersects_clip(q, clip, pad) {
-                                        batch.push(
-                                            strata_gpu_path::GpuPathSegment::from_quadratic(
-                                                q,
-                                                sw,
-                                                strata_gpu_path::FLAG_STROKE,
-                                                c,
-                                                0.0,
-                                            ),
-                                        );
-                                    }
-                                }
-                            }
-                        } else {
-                            for q in quads {
-                                if quad_intersects_clip(q, clip, pad) {
-                                    batch.push(strata_gpu_path::GpuPathSegment::from_quadratic(
-                                        q,
-                                        sw,
-                                        strata_gpu_path::FLAG_STROKE,
-                                        c,
-                                        0.0,
-                                    ));
-                                }
-                            }
-                        }
-                    };
-
-                    let push_fill_quads = |batch: &mut Self,
-                                           quads: &[strata_gpu_path::QuadraticBezier],
-                                           sw: f32,
-                                           col: Color,
-                                           clip_opt: Option<Rect>| {
-                        if clip_opt.is_none() {
-                            return;
-                        }
-                        let (cr, cg, cb, ca) = col.to_f32();
-                        let c = [cr, cg, cb, ca];
-                        for q in quads {
-                            batch.push(strata_gpu_path::GpuPathSegment::from_quadratic(
-                                q,
-                                sw,
-                                strata_gpu_path::FLAG_FILL,
-                                c,
-                                0.0,
-                            ));
-                        }
-                    };
+                    let mut dash_offset: f32 = 0.0;
+                    let mut line_cap = strata_gpu_path::LineCap::Butt;
+                    let mut line_join = strata_gpu_path::LineJoin::Miter;
+                    let mut clip_polys: Vec<Vec<Vec<(f32, f32)>>> = Vec::new();
+                    let mut clip_mask_id: Option<usize> = None;
+                    #[allow(clippy::type_complexity)]
+                    let mut state_stack: Vec<(
+                        Option<Rect>,
+                        Vec<f32>,
+                        f32,
+                        strata_gpu_path::LineCap,
+                        strata_gpu_path::LineJoin,
+                        Vec<Vec<Vec<(f32, f32)>>>,
+                        Option<usize>,
+                    )> = Vec::new();
 
                     let rect_quads = |r: Rect| -> [strata_gpu_path::QuadraticBezier; 4] {
                         let p0 = strata_gpu_path::Point2D::new(ox + r.x, oy + r.y);
@@ -1261,22 +2296,62 @@ impl GpuPathBatch {
                     for ccmd in commands {
                         match ccmd {
                             crate::canvas2d::CanvasCommand::Save => {
-                                state_stack.push((active_clip, line_dash.clone()));
+                                state_stack.push((
+                                    active_clip,
+                                    line_dash.clone(),
+                                    dash_offset,
+                                    line_cap,
+                                    line_join,
+                                    clip_polys.clone(),
+                                    clip_mask_id,
+                                ));
                             }
                             crate::canvas2d::CanvasCommand::Restore => {
-                                if let Some((prev_clip, prev_dash)) = state_stack.pop() {
+                                if let Some((
+                                    prev_clip,
+                                    prev_dash,
+                                    prev_offset,
+                                    prev_cap,
+                                    prev_join,
+                                    prev_polys,
+                                    prev_mask,
+                                )) = state_stack.pop()
+                                {
                                     active_clip = prev_clip;
                                     line_dash = prev_dash;
+                                    dash_offset = prev_offset;
+                                    line_cap = prev_cap;
+                                    line_join = prev_join;
+                                    clip_polys = prev_polys;
+                                    clip_mask_id = prev_mask;
                                 }
                             }
-                            crate::canvas2d::CanvasCommand::SetLineDash { segments, .. } => {
+                            crate::canvas2d::CanvasCommand::SetLineDash { segments, offset } => {
                                 line_dash = segments.clone();
+                                dash_offset = *offset;
+                            }
+                            crate::canvas2d::CanvasCommand::SetLineCap(cap) => {
+                                line_cap = layout_cap_to_gpu(*cap);
+                            }
+                            crate::canvas2d::CanvasCommand::SetLineJoin(join) => {
+                                line_join = layout_join_to_gpu(*join);
                             }
                             crate::canvas2d::CanvasCommand::ClipPath { verbs } => {
-                                if let Some(vbbox) =
-                                    crate::canvas2d::canvas_verbs_bounds(verbs, ox, oy)
-                                {
-                                    active_clip = active_clip.and_then(|c| c.intersect(vbbox));
+                                let subpaths = crate::canvas2d::flatten_canvas_verbs(verbs, ox, oy);
+                                if !subpaths.is_empty() {
+                                    if let Some(vbbox) =
+                                        crate::canvas2d::canvas_verbs_bounds(verbs, ox, oy)
+                                    {
+                                        active_clip = active_clip.and_then(|c| c.intersect(vbbox));
+                                    }
+                                    if !subpaths_are_axis_aligned_rect(&subpaths) {
+                                        clip_polys.push(subpaths);
+                                        clip_mask_id = resolve_or_push_clip_mask(
+                                            &mut batch.clip_masks,
+                                            active_clip,
+                                            &clip_polys,
+                                        );
+                                    }
                                 }
                             }
                             crate::canvas2d::CanvasCommand::FillRect {
@@ -1290,7 +2365,15 @@ impl GpuPathBatch {
                                     .is_some()
                                 {
                                     let quads = rect_quads(*rb);
-                                    push_fill_quads(&mut batch, &quads, 1.0, *color, active_clip);
+                                    batch.emit_fill_quads(
+                                        &quads,
+                                        1.0,
+                                        *color,
+                                        strata_gpu_path::FLAG_CLOSED,
+                                        active_clip,
+                                        &clip_polys,
+                                        clip_mask_id,
+                                    );
                                 }
                             }
                             crate::canvas2d::CanvasCommand::StrokeRect {
@@ -1299,13 +2382,20 @@ impl GpuPathBatch {
                                 line_width,
                             } => {
                                 let quads = rect_quads(*rb);
-                                push_stroke_quads(
-                                    &mut batch,
+                                batch.emit_subpath_strokes(
                                     &quads,
+                                    true,
                                     *line_width,
                                     *color,
+                                    line_cap,
+                                    line_join,
+                                    10.0,
                                     &line_dash,
+                                    dash_offset,
+                                    0,
                                     active_clip,
+                                    &clip_polys,
+                                    clip_mask_id,
                                 );
                             }
                             crate::canvas2d::CanvasCommand::DrawLine {
@@ -1317,13 +2407,20 @@ impl GpuPathBatch {
                                 let a = strata_gpu_path::Point2D::new(ox + p0.0, oy + p0.1);
                                 let b = strata_gpu_path::Point2D::new(ox + p1.0, oy + p1.1);
                                 let q = strata_gpu_path::QuadraticBezier::new(a, a.lerp(b, 0.5), b);
-                                push_stroke_quads(
-                                    &mut batch,
+                                batch.emit_subpath_strokes(
                                     &[q],
+                                    false,
                                     *line_width,
                                     *color,
+                                    line_cap,
+                                    line_join,
+                                    10.0,
                                     &line_dash,
+                                    dash_offset,
+                                    0,
                                     active_clip,
+                                    &clip_polys,
+                                    clip_mask_id,
                                 );
                             }
                             crate::canvas2d::CanvasCommand::DrawCircle {
@@ -1360,22 +2457,31 @@ impl GpuPathBatch {
                                         .push(strata_gpu_path::QuadraticBezier::new(p0, p1, p2));
                                 }
                                 if let Some(fc) = fill_color {
-                                    push_fill_quads(
-                                        &mut batch,
+                                    batch.emit_fill_quads(
                                         &circle_quads,
                                         *line_width,
                                         *fc,
+                                        strata_gpu_path::FLAG_CLOSED,
                                         active_clip,
+                                        &clip_polys,
+                                        clip_mask_id,
                                     );
                                 }
                                 if let Some(sc) = stroke_color {
-                                    push_stroke_quads(
-                                        &mut batch,
+                                    batch.emit_subpath_strokes(
                                         &circle_quads,
+                                        true,
                                         *line_width,
                                         *sc,
+                                        line_cap,
+                                        line_join,
+                                        10.0,
                                         &line_dash,
+                                        dash_offset,
+                                        0,
                                         active_clip,
+                                        &clip_polys,
+                                        clip_mask_id,
                                     );
                                 }
                             }
@@ -1385,24 +2491,35 @@ impl GpuPathBatch {
                                 stroke_color,
                                 line_width,
                             } => {
+                                let mut subpaths: Vec<(
+                                    Vec<strata_gpu_path::QuadraticBezier>,
+                                    bool,
+                                )> = Vec::new();
+                                let mut cur_sub = Vec::new();
                                 let mut start = strata_gpu_path::Point2D::new(ox, oy);
                                 let mut cur = start;
-                                let mut path_quads = Vec::new();
+                                let mut has_current = false;
                                 for v in verbs {
                                     match *v {
                                         crate::canvas2d::CanvasPathVerb::MoveTo(x, y) => {
+                                            if !cur_sub.is_empty() {
+                                                subpaths
+                                                    .push((std::mem::take(&mut cur_sub), false));
+                                            }
                                             cur = strata_gpu_path::Point2D::new(ox + x, oy + y);
                                             start = cur;
+                                            has_current = true;
                                         }
                                         crate::canvas2d::CanvasPathVerb::LineTo(x, y) => {
                                             let next =
                                                 strata_gpu_path::Point2D::new(ox + x, oy + y);
-                                            path_quads.push(strata_gpu_path::QuadraticBezier::new(
+                                            cur_sub.push(strata_gpu_path::QuadraticBezier::new(
                                                 cur,
                                                 cur.lerp(next, 0.5),
                                                 next,
                                             ));
                                             cur = next;
+                                            has_current = true;
                                         }
                                         crate::canvas2d::CanvasPathVerb::QuadraticCurveTo {
                                             cpx,
@@ -1414,10 +2531,11 @@ impl GpuPathBatch {
                                                 strata_gpu_path::Point2D::new(ox + cpx, oy + cpy);
                                             let next =
                                                 strata_gpu_path::Point2D::new(ox + x, oy + y);
-                                            path_quads.push(strata_gpu_path::QuadraticBezier::new(
+                                            cur_sub.push(strata_gpu_path::QuadraticBezier::new(
                                                 cur, cp, next,
                                             ));
                                             cur = next;
+                                            has_current = true;
                                         }
                                         crate::canvas2d::CanvasPathVerb::BezierCurveTo {
                                             cp1x,
@@ -1440,8 +2558,9 @@ impl GpuPathBatch {
                                             let cubic = strata_gpu_path::CubicBezier::new(
                                                 cur, cp1, cp2, next,
                                             );
-                                            path_quads.extend(cubic.to_quadratics(0.25));
+                                            cur_sub.extend(cubic.to_quadratics(0.25));
                                             cur = next;
+                                            has_current = true;
                                         }
                                         crate::canvas2d::CanvasPathVerb::Arc {
                                             cx,
@@ -1459,12 +2578,36 @@ impl GpuPathBatch {
                                             } else if !counter_clockwise && sweep < 0.0 {
                                                 sweep += std::f32::consts::TAU;
                                             }
-                                            let steps = 8usize;
+                                            let arc_start = strata_gpu_path::Point2D::new(
+                                                acx + radius * start_angle.cos(),
+                                                acy + radius * start_angle.sin(),
+                                            );
+                                            if !has_current {
+                                                start = arc_start;
+                                                cur = arc_start;
+                                                has_current = true;
+                                            } else if cur.distance_squared(arc_start) > 1e-4 {
+                                                cur_sub.push(
+                                                    strata_gpu_path::QuadraticBezier::new(
+                                                        cur,
+                                                        cur.lerp(arc_start, 0.5),
+                                                        arc_start,
+                                                    ),
+                                                );
+                                                cur = arc_start;
+                                            }
+                                            let steps = ((sweep.abs()
+                                                / std::f32::consts::FRAC_PI_4)
+                                                .ceil()
+                                                as usize)
+                                                .clamp(4, 16);
                                             for i in 0..steps {
-                                                let t0 =
-                                                    start_angle + sweep * (i as f32 / steps as f32);
+                                                let t0 = start_angle
+                                                    + sweep * (i as f32 / steps as f32);
                                                 let t1 = start_angle
                                                     + sweep * ((i + 1) as f32 / steps as f32);
+                                                let tm = (t0 + t1) * 0.5;
+                                                let cos_h = ((t1 - t0) * 0.5).cos().max(0.1);
                                                 let p0 = strata_gpu_path::Point2D::new(
                                                     acx + radius * t0.cos(),
                                                     acy + radius * t0.sin(),
@@ -1473,19 +2616,21 @@ impl GpuPathBatch {
                                                     acx + radius * t1.cos(),
                                                     acy + radius * t1.sin(),
                                                 );
-                                                path_quads.push(
+                                                let p1 = strata_gpu_path::Point2D::new(
+                                                    acx + (radius / cos_h) * tm.cos(),
+                                                    acy + (radius / cos_h) * tm.sin(),
+                                                );
+                                                cur_sub.push(
                                                     strata_gpu_path::QuadraticBezier::new(
-                                                        p0,
-                                                        p0.lerp(p2, 0.5),
-                                                        p2,
+                                                        p0, p1, p2,
                                                     ),
                                                 );
                                                 cur = p2;
                                             }
                                         }
                                         crate::canvas2d::CanvasPathVerb::Close => {
-                                            if cur.distance_squared(start) > 1e-4 {
-                                                path_quads.push(
+                                            if has_current && cur.distance_squared(start) > 1e-4 {
+                                                cur_sub.push(
                                                     strata_gpu_path::QuadraticBezier::new(
                                                         cur,
                                                         cur.lerp(start, 0.5),
@@ -1494,32 +2639,55 @@ impl GpuPathBatch {
                                                 );
                                                 cur = start;
                                             }
+                                            if !cur_sub.is_empty() {
+                                                subpaths.push((std::mem::take(&mut cur_sub), true));
+                                            }
                                         }
                                     }
                                 }
+                                if !cur_sub.is_empty() {
+                                    subpaths.push((cur_sub, false));
+                                }
+
                                 if let Some(fc) = fill_color {
-                                    push_fill_quads(
-                                        &mut batch,
-                                        &path_quads,
-                                        *line_width,
-                                        *fc,
-                                        active_clip,
-                                    );
+                                    for (sub, closed) in &subpaths {
+                                        let closed_flag = if *closed {
+                                            strata_gpu_path::FLAG_CLOSED
+                                        } else {
+                                            0
+                                        };
+                                        batch.emit_fill_quads(
+                                            sub,
+                                            *line_width,
+                                            *fc,
+                                            closed_flag,
+                                            active_clip,
+                                            &clip_polys,
+                                            clip_mask_id,
+                                        );
+                                    }
                                 }
                                 if let Some(sc) = stroke_color {
-                                    push_stroke_quads(
-                                        &mut batch,
-                                        &path_quads,
-                                        *line_width,
-                                        *sc,
-                                        &line_dash,
-                                        active_clip,
-                                    );
+                                    for (sub, closed) in &subpaths {
+                                        batch.emit_subpath_strokes(
+                                            sub,
+                                            *closed,
+                                            *line_width,
+                                            *sc,
+                                            line_cap,
+                                            line_join,
+                                            10.0,
+                                            &line_dash,
+                                            dash_offset,
+                                            0,
+                                            active_clip,
+                                            &clip_polys,
+                                            clip_mask_id,
+                                        );
+                                    }
                                 }
                             }
-                            crate::canvas2d::CanvasCommand::SetLineCap(_)
-                            | crate::canvas2d::CanvasCommand::SetLineJoin(_)
-                            | crate::canvas2d::CanvasCommand::ClearRect { .. }
+                            crate::canvas2d::CanvasCommand::ClearRect { .. }
                             | crate::canvas2d::CanvasCommand::FillText { .. }
                             | crate::canvas2d::CanvasCommand::StrokeText { .. } => {}
                         }
@@ -1879,6 +3047,38 @@ impl GpuRenderPipeline {
         })
     }
 
+    /// Constructs a hardware stencil clip pipeline binding `WGSL_STENCIL_CLIP_SHADER`.
+    pub fn new_stencil_clip_pipeline(
+        viewport_width: f32,
+        viewport_height: f32,
+    ) -> Result<Self, String> {
+        let _ = (viewport_width, viewport_height);
+        let compiler = GpuShaderCompiler::new();
+        let shader_module = compiler.compile(WGSL_STENCIL_CLIP_SHADER)?;
+
+        let vertex_layout = GpuVertexBufferLayout {
+            array_stride: GpuClipVertex::BYTE_SIZE as u64,
+            step_mode: GpuVertexStepMode::Vertex,
+            attributes: vec![GpuVertexAttribute {
+                format: GpuVertexFormat::Float32x2,
+                offset: 0,
+                shader_location: 0,
+            }],
+        };
+
+        Ok(Self {
+            shader_module,
+            vertex_layout,
+            instance_layout: None,
+            primitive_topology: GpuPrimitiveTopology::TriangleList,
+            depth_stencil: Some(GpuDepthStencilState {
+                format: crate::swapchain::SwapchainFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: GpuCompareFunction::Always,
+            }),
+        })
+    }
+
     /// Records an instanced draw command onto a command encoder.
     pub fn draw_instanced(
         &self,
@@ -1925,6 +3125,36 @@ impl GpuBatchCollector {
         }
     }
 
+    fn count_span_draw_calls(
+        total_items: usize,
+        spans: &[GpuClipSpan],
+        masks: &[GpuClipMask],
+    ) -> usize {
+        if total_items == 0 {
+            return 0;
+        }
+        if spans.is_empty() || masks.is_empty() {
+            return 1;
+        }
+        let mut calls = 0usize;
+        for span in spans {
+            if span.end <= span.start {
+                continue;
+            }
+            if let Some(mask_id) = span.clip_mask {
+                if let Some(mask) = masks.get(mask_id) {
+                    calls += mask
+                        .stencil_layers
+                        .iter()
+                        .filter(|layer| !layer.is_empty())
+                        .count();
+                }
+            }
+            calls += 1;
+        }
+        calls.max(1)
+    }
+
     /// Collects and batches all compatible primitives from a DisplayList.
     pub fn collect(&mut self, list: &DisplayList, damage: Option<Rect>) -> GpuBatchSummary {
         self.quad_batch = GpuBatch::from_display_list_damaged(
@@ -1949,15 +3179,19 @@ impl GpuBatchCollector {
         );
 
         let mut draw_calls = 0;
-        if !self.quad_batch.is_empty() {
-            draw_calls += 1;
-        }
+        draw_calls += Self::count_span_draw_calls(
+            self.quad_batch.len(),
+            &self.quad_batch.clip_spans,
+            &self.quad_batch.clip_masks,
+        );
         if glyph_count > 0 {
             draw_calls += 1;
         }
-        if !self.path_batch.is_empty() {
-            draw_calls += 1;
-        }
+        draw_calls += Self::count_span_draw_calls(
+            self.path_batch.len(),
+            &self.path_batch.clip_spans,
+            &self.path_batch.clip_masks,
+        );
 
         self.summary = GpuBatchSummary {
             total_commands: list.len(),
@@ -1968,6 +3202,37 @@ impl GpuBatchCollector {
         };
 
         self.summary
+    }
+
+    fn dispatch_masked_spans(
+        encoder: &mut crate::gpu_context::GpuCommandEncoder,
+        total_items: usize,
+        spans: &[GpuClipSpan],
+        masks: &[GpuClipMask],
+    ) {
+        if total_items == 0 {
+            return;
+        }
+        if spans.is_empty() || masks.is_empty() {
+            encoder.draw_instanced(6, total_items);
+            return;
+        }
+        for span in spans {
+            let count = span.end.saturating_sub(span.start);
+            if count == 0 {
+                continue;
+            }
+            if let Some(mask_id) = span.clip_mask {
+                if let Some(mask) = masks.get(mask_id) {
+                    for layer in &mask.stencil_layers {
+                        if !layer.is_empty() {
+                            encoder.draw_instanced(layer.len(), 1);
+                        }
+                    }
+                }
+            }
+            encoder.draw_instanced(6, count);
+        }
     }
 
     /// Dispatches all collected batches onto the GPU device in unified passes.
@@ -1986,15 +3251,21 @@ impl GpuBatchCollector {
         };
         encoder.begin_render_pass(pass);
 
-        if !self.quad_batch.is_empty() {
-            encoder.draw_instanced(6, self.quad_batch.len());
-        }
+        Self::dispatch_masked_spans(
+            &mut encoder,
+            self.quad_batch.len(),
+            &self.quad_batch.clip_spans,
+            &self.quad_batch.clip_masks,
+        );
         if self.summary.slug_glyphs > 0 {
             encoder.draw_instanced(6, self.summary.slug_glyphs);
         }
-        if !self.path_batch.is_empty() {
-            encoder.draw_instanced(6, self.path_batch.len());
-        }
+        Self::dispatch_masked_spans(
+            &mut encoder,
+            self.path_batch.len(),
+            &self.path_batch.clip_spans,
+            &self.path_batch.clip_masks,
+        );
 
         encoder.end_render_pass();
         device.submit(encoder);
@@ -2166,5 +3437,185 @@ mod tests {
         assert!(last.border_width[0] > 1.5);
         // Dash instances are solid fill rects with border_width == 0
         assert_eq!(batch.instances[0].border_width, [0.0; 4]);
+    }
+
+    #[test]
+    fn test_gpu_path_pipeline_set_line_cap_and_set_line_join() {
+        let build_corner = |cap: crate::canvas2d::CanvasLineCap, join: crate::canvas2d::CanvasLineJoin| {
+            let mut ctx = crate::canvas2d::Canvas2DContext::new(200.0, 200.0);
+            ctx.set_stroke_style(Color::rgb(0, 255, 128));
+            ctx.set_line_width(10.0);
+            ctx.save();
+            ctx.set_line_cap(cap);
+            ctx.set_line_join(join);
+            ctx.begin_path();
+            ctx.move_to(10.0, 30.0);
+            ctx.line_to(50.0, 30.0);
+            ctx.line_to(50.0, 70.0);
+            ctx.stroke();
+            ctx.restore();
+            // After restore, caps/joins revert to Butt / Miter
+            ctx.begin_path();
+            ctx.move_to(10.0, 100.0);
+            ctx.line_to(80.0, 100.0);
+            ctx.stroke();
+
+            let mut dl = DisplayList::new();
+            dl.push(DrawCommand::DrawCanvas2D {
+                bounds: Rect::new(0.0, 0.0, 200.0, 200.0),
+                commands: ctx.commands().to_vec(),
+            });
+            let mut pipe = GpuPathPipeline::new(200.0, 200.0);
+            pipe.compile_frame(&dl, None);
+            pipe.batch.segments
+        };
+
+        let segs_butt_miter =
+            build_corner(crate::canvas2d::CanvasLineCap::Butt, crate::canvas2d::CanvasLineJoin::Miter);
+        let segs_round_bevel =
+            build_corner(crate::canvas2d::CanvasLineCap::Round, crate::canvas2d::CanvasLineJoin::Bevel);
+        let segs_square_round =
+            build_corner(crate::canvas2d::CanvasLineCap::Square, crate::canvas2d::CanvasLineJoin::Round);
+
+        // Butt vs Round vs Square open cap flags on first segment of the polyline
+        assert_eq!(segs_butt_miter[0].flags & strata_gpu_path::FLAG_CAP_ROUND, 0);
+        assert_eq!(segs_butt_miter[0].flags & strata_gpu_path::FLAG_CAP_SQUARE, 0);
+        assert_ne!(segs_butt_miter[0].flags & strata_gpu_path::FLAG_START_OPEN, 0);
+
+        assert_ne!(segs_round_bevel[0].flags & strata_gpu_path::FLAG_CAP_ROUND, 0);
+        assert_ne!(segs_round_bevel[0].flags & strata_gpu_path::FLAG_JOIN_BEVEL, 0);
+        assert_ne!(segs_square_round[0].flags & strata_gpu_path::FLAG_CAP_SQUARE, 0);
+        assert_ne!(segs_square_round[0].flags & strata_gpu_path::FLAG_JOIN_ROUND, 0);
+
+        // Miter emits 2 FLAG_TRIANGLE corner wedges reaching apex (55, 25); Bevel emits 1 triangle; Round emits 1 disk
+        let miter_tris: Vec<_> = segs_butt_miter
+            .iter()
+            .filter(|s| (s.flags & strata_gpu_path::FLAG_TRIANGLE) != 0)
+            .collect();
+        assert_eq!(miter_tris.len(), 2);
+        assert!(miter_tris.iter().any(|s| s.p2 == [55.0, 25.0] || s.p1 == [55.0, 25.0]));
+
+        let bevel_tris: Vec<_> = segs_round_bevel
+            .iter()
+            .filter(|s| (s.flags & strata_gpu_path::FLAG_TRIANGLE) != 0)
+            .collect();
+        assert_eq!(bevel_tris.len(), 1);
+        assert_ne!(bevel_tris[0].flags & strata_gpu_path::FLAG_JOIN_BEVEL, 0);
+
+        let round_joins: Vec<_> = segs_square_round
+            .iter()
+            .filter(|s| s.p0 == [50.0, 30.0] && s.p2 == [50.0, 30.0])
+            .collect();
+        assert_eq!(round_joins.len(), 1);
+        assert_ne!(round_joins[0].flags & strata_gpu_path::FLAG_CAP_ROUND, 0);
+
+        // Restored final line segment must revert to Butt (no Round/Square cap flags)
+        let last_line_round_ctx = segs_round_bevel.last().unwrap();
+        assert_eq!(last_line_round_ctx.flags & strata_gpu_path::FLAG_CAP_ROUND, 0);
+        assert_eq!(last_line_round_ctx.flags & strata_gpu_path::FLAG_CAP_SQUARE, 0);
+    }
+
+    #[test]
+    fn test_gpu_non_rectangular_clip_path_parity_for_quads_and_paths() {
+        // 1. Diagonal triangle clip (0,0) -> (100,0) -> (0,100)
+        // AABB is [0,0,100,100], yet any rect with x+y > 100 lies outside the diagonal clip!
+        let mut ctx = crate::canvas2d::Canvas2DContext::new(200.0, 200.0);
+        ctx.save();
+        ctx.begin_path();
+        ctx.move_to(0.0, 0.0);
+        ctx.line_to(100.0, 0.0);
+        ctx.line_to(0.0, 100.0);
+        ctx.close_path();
+        ctx.clip();
+
+        // Inside AABB [0..100, 0..100], strictly OUTSIDE diagonal triangle -> must be culled!
+        ctx.set_fill_style(Color::rgb(255, 0, 0));
+        ctx.fill_rect(60.0, 60.0, 30.0, 30.0);
+
+        // Strictly INSIDE diagonal triangle ((5..25) -> max x+y = 50 < 100) -> no stencil mask needed
+        ctx.set_fill_style(Color::rgb(0, 255, 0));
+        ctx.fill_rect(5.0, 5.0, 20.0, 20.0);
+
+        // Crosses diagonal boundary -> requires triangulated stencil mask
+        ctx.set_fill_style(Color::rgb(0, 0, 255));
+        ctx.fill_rect(0.0, 0.0, 100.0, 100.0);
+
+        // Line strictly outside triangle -> culled by GpuPathBatch too
+        ctx.set_stroke_style(Color::rgb(255, 255, 0));
+        ctx.set_line_width(2.0);
+        ctx.begin_path();
+        ctx.move_to(65.0, 65.0);
+        ctx.line_to(90.0, 90.0);
+        ctx.stroke();
+
+        // Line inside/crossing triangle -> emitted with clip mask on partial span
+        ctx.begin_path();
+        ctx.move_to(10.0, 10.0);
+        ctx.line_to(80.0, 80.0);
+        ctx.stroke();
+        ctx.restore();
+
+        // Rectangular clip must NOT allocate stencil masks
+        ctx.save();
+        ctx.begin_path();
+        ctx.rect(110.0, 10.0, 50.0, 50.0);
+        ctx.clip();
+        ctx.fill_rect(115.0, 15.0, 20.0, 20.0);
+        ctx.restore();
+
+        // Circular aperture clip
+        ctx.save();
+        ctx.begin_path();
+        ctx.arc(150.0, 150.0, 30.0, 0.0, std::f32::consts::TAU, false);
+        ctx.clip();
+        // Corner of circle's AABB [120..180, 120..180] outside radius 30: dist from (150,150) to (122..126) is > 33!
+        ctx.fill_rect(121.0, 121.0, 4.0, 4.0);
+        // Crossing circle center
+        ctx.fill_rect(120.0, 120.0, 60.0, 60.0);
+        ctx.restore();
+
+        let mut dl = DisplayList::new();
+        dl.push(DrawCommand::DrawCanvas2D {
+            bounds: Rect::new(0.0, 0.0, 200.0, 200.0),
+            commands: ctx.commands().to_vec(),
+        });
+
+        let batch = GpuBatch::from_display_list(&dl, 200.0, 200.0);
+        assert!(batch.has_stencil_clips());
+        // Red (60,60) and corner-outside-circle (121,121) were culled -> 4 quads remain!
+        assert_eq!(batch.instances.len(), 4);
+        // Green (5,5) is strictly inside triangle -> no stencil mask
+        assert!(batch.clip_mask_for_instance(0).is_none());
+        // Blue (0,0,100,100) crosses diagonal -> stencil mask has vertices and accurate point test
+        let diag_mask = batch
+            .clip_mask_for_instance(1)
+            .expect("crossing quad should have diagonal stencil clip mask");
+        assert!(diag_mask.total_stencil_vertices() >= 3);
+        assert_eq!(diag_mask.total_stencil_vertices() % 3, 0);
+        assert!(diag_mask.contains_point(20.0, 20.0));
+        assert!(!diag_mask.contains_point(75.0, 75.0));
+
+        // Rect clip (instance 2) must be unmasked after restore()
+        assert!(batch.clip_mask_for_instance(2).is_none());
+
+        // Circular clip (instance 3)
+        let circle_mask = batch
+            .clip_mask_for_instance(3)
+            .expect("circle aperture should bind stencil mask");
+        assert!(circle_mask.contains_point(150.0, 150.0));
+        assert!(!circle_mask.contains_point(122.0, 122.0));
+
+        // GpuPathBatch also culls outside diagonal & circle clips and compiles stencil shader
+        let mut collector = GpuBatchCollector::new(200.0, 200.0);
+        let summary = collector.collect(&dl, None);
+        assert!(collector.path_batch.has_stencil_clips());
+        let mut dev = crate::gpu_context::GpuDevice::new(
+            200,
+            200,
+            crate::swapchain::SwapchainFormat::Rgba8Unorm,
+        );
+        let dispatched = collector.dispatch(&mut dev, None).expect("dispatch");
+        assert_eq!(dispatched.total_draw_calls, summary.total_draw_calls);
+        assert!(GpuRenderPipeline::new_stencil_clip_pipeline(200.0, 200.0).is_ok());
     }
 }

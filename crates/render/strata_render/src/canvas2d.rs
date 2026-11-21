@@ -1143,7 +1143,7 @@ struct RasterState {
     line_join: CanvasLineJoin,
 }
 
-fn point_in_subpaths_even_odd(subpaths: &[Vec<(f32, f32)>], px: f32, py: f32) -> bool {
+pub fn point_in_subpaths_even_odd(subpaths: &[Vec<(f32, f32)>], px: f32, py: f32) -> bool {
     let mut inside = false;
     for sub in subpaths {
         if sub.len() < 3 {
