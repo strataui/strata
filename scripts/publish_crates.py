@@ -352,6 +352,11 @@ def collect_dirty_crates(
                 readme_path = Path(os.path.normpath(pkg_dir / readme))
                 extra_files_to_pkgs.setdefault(readme_path, set()).add(pkg_name)
 
+            license_file = pkg.get("license_file")
+            if isinstance(license_file, str) and license_file:
+                license_path = Path(os.path.normpath(pkg_dir / license_file))
+                extra_files_to_pkgs.setdefault(license_path, set()).add(pkg_name)
+
             has_bin = False
             for target in pkg.get("targets", []):
                 src_path = target.get("src_path")
@@ -635,6 +640,55 @@ def extract_crate_archive(raw_tar_gz: bytes, name: str, version: str) -> tuple[d
     return files, cargo_orig
 
 
+def _external_manifest_file_map(
+    repo_root: Path,
+    crate: WorkspaceCrate,
+    raw_toml: bytes,
+) -> dict[str, Path]:
+    """Map archive root filenames (e.g. `README.md`, `LICENSE`) to external files referenced by `Cargo.toml`.
+
+    When a crate sets `readme = "../../README.md"` or `license-file = "../../LICENSE"` (or inherits
+    them via `.workspace = true`), `cargo package` copies those external files into the root of
+    the `.crate` archive under their basename, and `cargo package --list` reports those basenames
+    even though the file does not exist inside `crate.pkg_dir`.
+    """
+    try:
+        pkg = tomllib.loads(raw_toml.decode("utf-8")).get("package")
+    except Exception:
+        return {}
+    if not isinstance(pkg, dict):
+        return {}
+
+    ws_pkg: dict[str, object] | None = None
+    pkg_dir_resolved = crate.pkg_dir.resolve()
+    mapping: dict[str, Path] = {}
+
+    for field in ("readme", "license-file"):
+        val = pkg.get(field)
+        src: Path | None = None
+        if isinstance(val, str) and val:
+            src = Path(os.path.normpath(crate.pkg_dir / val))
+        elif isinstance(val, dict) and val.get("workspace") is True:
+            if ws_pkg is None:
+                ws_manifest = repo_root / "Cargo.toml"
+                try:
+                    ws_data = tomllib.loads(ws_manifest.read_text(encoding="utf-8"))
+                    loaded = ws_data.get("workspace", {}).get("package")
+                    ws_pkg = loaded if isinstance(loaded, dict) else {}
+                except Exception:
+                    ws_pkg = {}
+            ws_val = ws_pkg.get(field)
+            if isinstance(ws_val, str) and ws_val:
+                src = Path(os.path.normpath(repo_root / ws_val))
+
+        if src is None or not src.is_file():
+            continue
+        src_resolved = src.resolve()
+        if src_resolved != pkg_dir_resolved and pkg_dir_resolved not in src_resolved.parents:
+            mapping[src.name] = src
+    return mapping
+
+
 def load_local_package_contents(repo_root: Path, crate: WorkspaceCrate) -> tuple[dict[str, str], bytes]:
     """Return local `{relpath: sha256}` (via `cargo package --list --allow-dirty`) and `Cargo.toml` bytes."""
     res = subprocess.run(
@@ -647,15 +701,18 @@ def load_local_package_contents(repo_root: Path, crate: WorkspaceCrate) -> tuple
     if res.returncode != 0:
         raise RuntimeError(f"cargo package --list failed for {crate.name}: {res.stderr.strip()}")
 
+    raw_toml = crate.manifest_path.read_bytes()
+    external_files = _external_manifest_file_map(repo_root, crate, raw_toml)
+
     files: dict[str, str] = {}
     for rel in res.stdout.splitlines():
         rel = rel.strip()
         if not rel or rel in CARGO_GENERATED_FILES:
             continue
-        fp = crate.pkg_dir / rel
+        fp = external_files.get(rel) or (crate.pkg_dir / rel)
         if fp.is_file():
             files[rel] = _sha256_bytes(fp.read_bytes())
-    return files, crate.manifest_path.read_bytes()
+    return files, raw_toml
 
 
 def normalize_cargo_toml_for_diff(raw_toml: bytes) -> dict[str, object]:
