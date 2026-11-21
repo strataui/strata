@@ -184,9 +184,9 @@ pub use wayland_window::{WaylandDecoder, WaylandEncoder, WaylandEventLoop, Wayla
 #[cfg(windows)]
 pub use win32_window::{Win32EventLoop, Win32Window};
 pub use window::{
-    CursorIcon, EventLoop, EventLoopControl, LivePlatformWindow, MockEventLoop, MockPlatformWindow,
-    MonitorInfo, NativeSurfaceWindow, PlatformWindow, ThemeMode, WindowAnchor, WindowConfig,
-    WindowDecoration, WindowMode,
+    CursorIcon, EventLoop, EventLoopControl, HoverTooltipStyle, LivePlatformWindow, MockEventLoop,
+    MockPlatformWindow, MonitorInfo, NativeSurfaceWindow, PlatformWindow, ThemeMode, WindowAnchor,
+    WindowConfig, WindowDecoration, WindowMode,
 };
 pub use window_manager::{WindowId, WindowManager};
 #[cfg(target_os = "linux")]
@@ -270,9 +270,9 @@ pub mod prelude {
     #[cfg(windows)]
     pub use super::win32_window::{Win32EventLoop, Win32Window};
     pub use super::window::{
-        CursorIcon, EventLoop, EventLoopControl, LivePlatformWindow, MockEventLoop,
-        MockPlatformWindow, MonitorInfo, NativeSurfaceWindow, PlatformWindow, ThemeMode,
-        WindowAnchor, WindowConfig, WindowDecoration, WindowMode,
+        CursorIcon, EventLoop, EventLoopControl, HoverTooltipStyle, LivePlatformWindow,
+        MockEventLoop, MockPlatformWindow, MonitorInfo, NativeSurfaceWindow, PlatformWindow,
+        ThemeMode, WindowAnchor, WindowConfig, WindowDecoration, WindowMode,
     };
     #[cfg(target_os = "linux")]
     pub use super::x11_window::{PureX11Window, X11EventLoop, X11Window};

@@ -106,6 +106,122 @@ impl WindowAnchor {
     }
 }
 
+/// Visual styling and positioning configuration for native hover tooltips
+/// (`title` and button/image `alt` attributes).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HoverTooltipStyle {
+    /// Background fill color of the tooltip surface.
+    pub background_color: strata_style::types::Color,
+    /// Border stroke color of the tooltip surface.
+    pub border_color: strata_style::types::Color,
+    /// Foreground color of the tooltip text.
+    pub text_color: strata_style::types::Color,
+    /// Drop shadow color beneath the tooltip surface (alpha `0` disables the shadow).
+    pub shadow_color: strata_style::types::Color,
+    /// Font size in logical pixels.
+    pub font_size: f32,
+    /// Line-height multiplier relative to `font_size`.
+    pub line_height: f32,
+    /// Horizontal inner padding in logical pixels.
+    pub padding_x: f32,
+    /// Vertical inner padding in logical pixels.
+    pub padding_y: f32,
+    /// Corner border radius in logical pixels.
+    pub corner_radius: f32,
+    /// Border thickness in logical pixels (`0.0` disables the border).
+    pub border_width: f32,
+    /// Maximum text wrapping width in logical pixels.
+    pub max_width: f32,
+    /// Horizontal offset from the pointer anchor in logical pixels.
+    pub cursor_offset_x: f32,
+    /// Vertical offset from the pointer anchor in logical pixels.
+    pub cursor_offset_y: f32,
+}
+
+impl Default for HoverTooltipStyle {
+    fn default() -> Self {
+        Self {
+            background_color: strata_style::types::Color::new(18, 22, 29, 242),
+            border_color: strata_style::types::Color::new(255, 255, 255, 34),
+            text_color: strata_style::types::Color::new(241, 245, 249, 255),
+            shadow_color: strata_style::types::Color::new(0, 0, 0, 110),
+            font_size: 12.0,
+            line_height: 1.35,
+            padding_x: 9.0,
+            padding_y: 5.0,
+            corner_radius: 6.0,
+            border_width: 1.0,
+            max_width: 340.0,
+            cursor_offset_x: 12.0,
+            cursor_offset_y: 18.0,
+        }
+    }
+}
+
+impl HoverTooltipStyle {
+    /// Overrides the tooltip background fill color.
+    pub const fn with_background_color(mut self, color: strata_style::types::Color) -> Self {
+        self.background_color = color;
+        self
+    }
+
+    /// Overrides the tooltip border stroke color.
+    pub const fn with_border_color(mut self, color: strata_style::types::Color) -> Self {
+        self.border_color = color;
+        self
+    }
+
+    /// Overrides the tooltip text foreground color.
+    pub const fn with_text_color(mut self, color: strata_style::types::Color) -> Self {
+        self.text_color = color;
+        self
+    }
+
+    /// Overrides the tooltip drop-shadow color (use alpha `0` to disable shadow).
+    pub const fn with_shadow_color(mut self, color: strata_style::types::Color) -> Self {
+        self.shadow_color = color;
+        self
+    }
+
+    /// Overrides the tooltip font size in logical pixels.
+    pub const fn with_font_size(mut self, font_size: f32) -> Self {
+        self.font_size = font_size;
+        self
+    }
+
+    /// Overrides the horizontal and vertical inner padding in logical pixels.
+    pub const fn with_padding(mut self, padding_x: f32, padding_y: f32) -> Self {
+        self.padding_x = padding_x;
+        self.padding_y = padding_y;
+        self
+    }
+
+    /// Overrides the tooltip corner radius in logical pixels.
+    pub const fn with_corner_radius(mut self, corner_radius: f32) -> Self {
+        self.corner_radius = corner_radius;
+        self
+    }
+
+    /// Overrides the tooltip border width in logical pixels (`0.0` disables border).
+    pub const fn with_border_width(mut self, border_width: f32) -> Self {
+        self.border_width = border_width;
+        self
+    }
+
+    /// Overrides the maximum wrapping width in logical pixels.
+    pub const fn with_max_width(mut self, max_width: f32) -> Self {
+        self.max_width = max_width;
+        self
+    }
+
+    /// Overrides the cursor anchor offset `(x, y)` in logical pixels.
+    pub const fn with_cursor_offset(mut self, x: f32, y: f32) -> Self {
+        self.cursor_offset_x = x;
+        self.cursor_offset_y = y;
+        self
+    }
+}
+
 /// Configuration used when creating or reconfiguring a platform window.
 #[derive(Debug, Clone)]
 pub struct WindowConfig {
@@ -128,12 +244,34 @@ pub struct WindowConfig {
     pub vibrancy: crate::vibrancy::VibrancyEffect,
     /// Swapchain presentation mode (`Immediate` / `Mailbox` for uncapped 3D viewports, `Fifo` default).
     pub present_mode: crate::surface::PresentMode,
+    /// Pointer dwell delay before native hover tooltips (`title` / `alt`) become visible.
+    pub tooltip_delay: std::time::Duration,
+    /// Visual styling and offset configuration for native hover tooltips.
+    pub tooltip_style: HoverTooltipStyle,
 }
 
 impl WindowConfig {
     /// Sets swapchain present mode (e.g. `PresentMode::Immediate` for uncapped framerate).
     pub fn with_present_mode(mut self, present_mode: crate::surface::PresentMode) -> Self {
         self.present_mode = present_mode;
+        self
+    }
+
+    /// Configures the dwell delay before native hover tooltips become visible.
+    pub fn with_tooltip_delay(mut self, delay: std::time::Duration) -> Self {
+        self.tooltip_delay = delay;
+        self
+    }
+
+    /// Configures the dwell delay in milliseconds before native hover tooltips become visible.
+    pub fn with_tooltip_delay_ms(mut self, delay_ms: u64) -> Self {
+        self.tooltip_delay = std::time::Duration::from_millis(delay_ms);
+        self
+    }
+
+    /// Configures visual styling and offset for native hover tooltips.
+    pub fn with_tooltip_style(mut self, style: HoverTooltipStyle) -> Self {
+        self.tooltip_style = style;
         self
     }
 
@@ -231,6 +369,8 @@ impl Default for WindowConfig {
             single_instance_id: None,
             vibrancy: crate::vibrancy::VibrancyEffect::None,
             present_mode: crate::surface::PresentMode::Fifo,
+            tooltip_delay: std::time::Duration::from_millis(450),
+            tooltip_style: HoverTooltipStyle::default(),
         }
     }
 }

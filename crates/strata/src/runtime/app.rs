@@ -319,6 +319,24 @@ impl StrataAppBuilder {
         self
     }
 
+    /// Configures the pointer dwell delay before native hover tooltips (`title` / `alt`) appear.
+    pub fn with_tooltip_delay(mut self, delay: std::time::Duration) -> Self {
+        self.window_config.tooltip_delay = delay;
+        self
+    }
+
+    /// Configures the pointer dwell delay in milliseconds before native hover tooltips appear.
+    pub fn with_tooltip_delay_ms(mut self, delay_ms: u64) -> Self {
+        self.window_config.tooltip_delay = std::time::Duration::from_millis(delay_ms);
+        self
+    }
+
+    /// Configures visual styling and offset for native hover tooltips.
+    pub fn with_tooltip_style(mut self, style: strata_platform::HoverTooltipStyle) -> Self {
+        self.window_config.tooltip_style = style;
+        self
+    }
+
     pub fn on_start<F: FnMut(&mut AppRuntime) + 'static>(mut self, cb: F) -> Self {
         self.hooks.on_start = Some(Box::new(cb));
         self
@@ -351,7 +369,8 @@ impl StrataAppBuilder {
         let view = root();
         let width = self.window_config.width as f32;
         let height = self.window_config.height as f32;
-        let runtime = AppRuntime::new(view, width, height, self.dpr);
+        let mut runtime = AppRuntime::new(view, width, height, self.dpr);
+        runtime.apply_window_config(&self.window_config);
         let presenter = SoftwareSurfacePresenter::new(
             self.window_config.width,
             self.window_config.height,

@@ -91,6 +91,8 @@ pub struct AppRuntime {
     pub hover_tooltip_visible: bool,
     /// Dwell delay before a native hover tooltip becomes visible.
     pub hover_tooltip_delay: std::time::Duration,
+    /// Visual styling and offset configuration for native hover tooltips.
+    pub hover_tooltip_style: strata_platform::HoverTooltipStyle,
     /// Scroll offsets keyed by hierarchical tree path (e.g. [0, 1, 0]).
     pub scroll_offsets: std::collections::HashMap<Vec<usize>, (f32, f32)>,
     /// Scroll offsets keyed by element string ID (e.g. "browser-viewport-tab-1").
@@ -300,6 +302,7 @@ impl AppRuntime {
             hover_tooltip_since: None,
             hover_tooltip_visible: false,
             hover_tooltip_delay: std::time::Duration::from_millis(450),
+            hover_tooltip_style: strata_platform::HoverTooltipStyle::default(),
             scroll_offsets: std::collections::HashMap::new(),
             scroll_offsets_by_id: std::collections::HashMap::new(),
             active_scrollbars: Vec::new(),
@@ -364,6 +367,51 @@ impl AppRuntime {
         runtime.update_accessibility_tree();
         runtime.compile_display_list();
         runtime
+    }
+
+    /// Applies runtime-relevant preferences from a [`WindowConfig`] (such as native hover
+    /// tooltip dwell delay and styling).
+    pub fn apply_window_config(&mut self, config: &WindowConfig) -> &mut Self {
+        self.hover_tooltip_delay = config.tooltip_delay;
+        self.hover_tooltip_style = config.tooltip_style;
+        if self.hover_tooltip_visible {
+            self.paint_dirty = true;
+        }
+        self
+    }
+
+    /// Sets the pointer dwell delay before native hover tooltips (`title` / `alt`) become visible.
+    pub fn set_hover_tooltip_delay(&mut self, delay: std::time::Duration) -> &mut Self {
+        self.hover_tooltip_delay = delay;
+        self
+    }
+
+    /// Sets the pointer dwell delay in milliseconds before native hover tooltips become visible.
+    pub fn set_hover_tooltip_delay_ms(&mut self, delay_ms: u64) -> &mut Self {
+        self.hover_tooltip_delay = std::time::Duration::from_millis(delay_ms);
+        self
+    }
+
+    /// Returns the configured pointer dwell delay for native hover tooltips.
+    pub fn hover_tooltip_delay(&self) -> std::time::Duration {
+        self.hover_tooltip_delay
+    }
+
+    /// Sets visual styling and offset configuration for native hover tooltips.
+    pub fn set_hover_tooltip_style(
+        &mut self,
+        style: strata_platform::HoverTooltipStyle,
+    ) -> &mut Self {
+        self.hover_tooltip_style = style;
+        if self.hover_tooltip_visible {
+            self.paint_dirty = true;
+        }
+        self
+    }
+
+    /// Returns the active visual styling configuration for native hover tooltips.
+    pub fn hover_tooltip_style(&self) -> strata_platform::HoverTooltipStyle {
+        self.hover_tooltip_style
     }
 
     /// Re-evaluates layout and compiles display commands for the current frame.

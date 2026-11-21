@@ -275,6 +275,7 @@ where
     let width = config.width as f32;
     let height = config.height as f32;
     let mut runtime = AppRuntime::new(view, width, height, 1.0);
+    runtime.apply_window_config(&config);
     let mut presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
     let mut compositor = SwapchainCompositor::new(config.width, config.height, 1.0);
@@ -344,6 +345,7 @@ where
     let width = config.width as f32;
     let height = config.height as f32;
     let mut runtime = AppRuntime::new(view, width, height, 1.0);
+    runtime.apply_window_config(&config);
 
     let mut window = LivePlatformWindow::new(config.clone());
     let mut presenter =
@@ -466,12 +468,10 @@ where
 
     let _ = strata_dom::reactive::take_dirty_signals();
     let initial_view = (root_fn_rc.borrow_mut())();
-    let runtime = std::rc::Rc::new(std::cell::RefCell::new(AppRuntime::new(
-        initial_view,
-        config.width as f32,
-        config.height as f32,
-        1.0,
-    )));
+    let mut initial_runtime =
+        AppRuntime::new(initial_view, config.width as f32, config.height as f32, 1.0);
+    initial_runtime.apply_window_config(&config);
+    let runtime = std::rc::Rc::new(std::cell::RefCell::new(initial_runtime));
     let _ = strata_dom::reactive::take_dirty_signals();
 
     let transparent_bg = config.transparent

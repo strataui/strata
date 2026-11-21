@@ -611,7 +611,8 @@ where
     let view = root_fn();
     let width = config.width as f32;
     let height = config.height as f32;
-    let runtime = AppRuntime::new(view, width, height, 1.0);
+    let mut runtime = AppRuntime::new(view, width, height, 1.0);
+    runtime.apply_window_config(&config);
     let presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
     let compositor = SwapchainCompositor::new(config.width, config.height, 1.0);
@@ -656,7 +657,8 @@ where
     let width = config.width as f32;
     let height = config.height as f32;
     let dpr = wayland_window.scale_factor();
-    let runtime = AppRuntime::new(view, width, height, dpr);
+    let mut runtime = AppRuntime::new(view, width, height, dpr);
+    runtime.apply_window_config(&config);
     let presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
     let compositor = SwapchainCompositor::new(config.width, config.height, dpr);
@@ -701,7 +703,8 @@ where
     let width = config.width as f32;
     let height = config.height as f32;
     let dpr = win32_window.scale_factor();
-    let runtime = AppRuntime::new(view, width, height, dpr);
+    let mut runtime = AppRuntime::new(view, width, height, dpr);
+    runtime.apply_window_config(&config);
     let presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
     let compositor = SwapchainCompositor::new(config.width, config.height, dpr);
@@ -746,7 +749,8 @@ where
     let width = config.width as f32;
     let height = config.height as f32;
     let dpr = macos_window.scale_factor();
-    let runtime = AppRuntime::new(view, width, height, dpr);
+    let mut runtime = AppRuntime::new(view, width, height, dpr);
+    runtime.apply_window_config(&config);
     let presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
     let compositor = SwapchainCompositor::new(config.width, config.height, dpr);
@@ -792,7 +796,8 @@ where
     let width = config.width as f32;
     let height = config.height as f32;
     let dpr = android_window.scale_factor();
-    let runtime = AppRuntime::new(view, width, height, dpr);
+    let mut runtime = AppRuntime::new(view, width, height, dpr);
+    runtime.apply_window_config(&config);
     let presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
     let compositor = SwapchainCompositor::new(config.width, config.height, dpr);
@@ -833,7 +838,8 @@ where
     let width = config.width as f32;
     let height = config.height as f32;
     let dpr = ios_window.scale_factor();
-    let runtime = AppRuntime::new(view, width, height, dpr);
+    let mut runtime = AppRuntime::new(view, width, height, dpr);
+    runtime.apply_window_config(&config);
     let presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
     let compositor = SwapchainCompositor::new(config.width, config.height, dpr);

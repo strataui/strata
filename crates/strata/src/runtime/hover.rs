@@ -1349,14 +1349,17 @@ impl AppRuntime {
             return;
         }
 
-        let font_size = 12.0_f32;
-        let line_height = 1.35_f32;
+        let style = self.hover_tooltip_style;
+        let font_size = style.font_size.max(6.0);
+        let line_height = style.line_height.max(1.0);
         let font_family = strata_primitives::AtomId::FONT_SANS;
         let font_weight = strata_style::types::FontWeight::Normal;
-        let pad_x = 9.0_f32;
-        let pad_y = 5.0_f32;
+        let pad_x = style.padding_x.max(0.0);
+        let pad_y = style.padding_y.max(0.0);
         let margin = 6.0_f32;
-        let max_text_w = (self.viewport_width - pad_x * 2.0 - margin * 2.0).clamp(96.0, 340.0);
+        let max_allowed_w = style.max_width.max(24.0);
+        let max_text_w = (self.viewport_width - pad_x * 2.0 - margin * 2.0)
+            .clamp(24.0_f32.min(max_allowed_w), max_allowed_w);
 
         let (tw, th) = strata_layout::measure_text_bounds_styled_with_family(
             text,
@@ -1378,8 +1381,8 @@ impl AppRuntime {
             .min((self.viewport_height - margin * 2.0).max(22.0));
 
         let (ax, ay) = self.hover_tooltip_anchor;
-        let mut x = ax + 12.0;
-        let mut y = ay + 18.0;
+        let mut x = ax + style.cursor_offset_x;
+        let mut y = ay + style.cursor_offset_y;
         if x + box_w > self.viewport_width - margin {
             x = (self.viewport_width - margin - box_w).max(margin);
         }
@@ -1390,28 +1393,35 @@ impl AppRuntime {
         y = y.max(margin);
 
         let bounds = strata_layout::Rect::new(x, y, box_w, box_h);
-        let radius = strata_style::types::BorderRadius::all(6.0);
+        let radius = strata_style::types::BorderRadius::all(style.corner_radius.max(0.0));
 
-        self.display_list
-            .push(strata_render::compositor::DrawCommand::DrawShadow {
-                bounds,
-                shadow: strata_style::types::BoxShadow {
-                    offset_x: 0.0,
-                    offset_y: 4.0,
-                    blur_radius: 12.0,
-                    spread_radius: 0.0,
-                    color: strata_style::types::Color::new(0, 0, 0, 110),
-                    inset: false,
-                },
-                border_radius: radius,
-            });
+        if style.shadow_color.a > 0 {
+            self.display_list
+                .push(strata_render::compositor::DrawCommand::DrawShadow {
+                    bounds,
+                    shadow: strata_style::types::BoxShadow {
+                        offset_x: 0.0,
+                        offset_y: 4.0,
+                        blur_radius: 12.0,
+                        spread_radius: 0.0,
+                        color: style.shadow_color,
+                        inset: false,
+                    },
+                    border_radius: radius,
+                });
+        }
+        let border_w = style.border_width.max(0.0);
         self.display_list
             .push(strata_render::compositor::DrawCommand::DrawRoundedRect {
                 bounds,
-                color: strata_style::types::Color::new(18, 22, 29, 242),
+                color: style.background_color,
                 border_radius: radius,
-                border_width: strata_primitives::geom::EdgeInsets::all(1.0),
-                border_color: Some(strata_style::types::Color::new(255, 255, 255, 34)),
+                border_width: strata_primitives::geom::EdgeInsets::all(border_w),
+                border_color: if border_w > 0.0 {
+                    Some(style.border_color)
+                } else {
+                    None
+                },
             });
         self.display_list
             .push(strata_render::compositor::DrawCommand::DrawText {
@@ -1423,7 +1433,7 @@ impl AppRuntime {
                 font_size,
                 line_height,
                 font_weight,
-                color: strata_style::types::Color::new(241, 245, 249, 255),
+                color: style.text_color,
                 is_monospace: false,
                 font_family,
             });
