@@ -1025,4 +1025,123 @@ fn test_component_scoped_hooks_context_and_error_boundary() {
     reset_component_hooks();
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+struct CustomPanelOptions {
+    retries: u32,
+}
+
+#[component]
+fn NonOptionDefaultsPanel(
+    title: String,
+    subtitle: &'static str,
+    collapsed: bool,
+    columns: usize,
+    offset: i32,
+    opacity: f32,
+    items: Vec<String>,
+    class: strata_dom::ClassList,
+    #[prop(default = "p-4")] default_class: strata_dom::ClassList,
+    #[prop(default = "N/A")] fallback_note: String,
+    #[prop(default = 8)] gap: usize,
+    #[prop(default)] bordered: bool,
+    #[prop(default)] opts: CustomPanelOptions,
+    children: Vec<NodeBlueprint>,
+) -> View {
+    rsx! {
+        <div
+            data-cls-len={class.len().to_string()}
+            data-has-p2={class.contains("p-2").to_string()}
+            data-default-p4={default_class.contains("p-4").to_string()}
+            data-title={title}
+            data-subtitle={subtitle}
+            data-collapsed={collapsed.to_string()}
+            data-columns={columns.to_string()}
+            data-offset={offset.to_string()}
+            data-opacity={opacity.to_string()}
+            data-items-len={items.len().to_string()}
+            data-note={fallback_note}
+            data-gap={gap.to_string()}
+            data-bordered={bordered.to_string()}
+            data-retries={opts.retries.to_string()}
+            data-children-len={children.len().to_string()}
+        >
+            {children}
+        </div>
+    }
+}
+
+#[test]
+fn test_component_non_option_default_empty_values_and_prop_default_attrs() {
+    // Omitting all String, &str, bool, numeric, Vec, ClassList, and #[prop(default*)] props must
+    // NOT panic at runtime and must populate their empty/configured defaults cleanly.
+    let v_empty = rsx! { <NonOptionDefaultsPanel /> };
+    if let NodeBlueprint::Element { attributes, .. } = v_empty.root {
+        let get_attr = |k: &str| -> Option<String> {
+            attributes.iter().find_map(|a| match a {
+                Attribute::Property { key, value } if key == k => Some(value.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(get_attr("data-cls-len").as_deref(), Some("0"));
+        assert_eq!(get_attr("data-has-p2").as_deref(), Some("false"));
+        assert_eq!(get_attr("data-default-p4").as_deref(), Some("true"));
+        assert_eq!(get_attr("data-title").as_deref(), Some(""));
+        assert_eq!(get_attr("data-subtitle").as_deref(), Some(""));
+        assert_eq!(get_attr("data-collapsed").as_deref(), Some("false"));
+        assert_eq!(get_attr("data-columns").as_deref(), Some("0"));
+        assert_eq!(get_attr("data-offset").as_deref(), Some("0"));
+        assert_eq!(get_attr("data-opacity").as_deref(), Some("0"));
+        assert_eq!(get_attr("data-items-len").as_deref(), Some("0"));
+        assert_eq!(get_attr("data-note").as_deref(), Some("N/A"));
+        assert_eq!(get_attr("data-gap").as_deref(), Some("8"));
+        assert_eq!(get_attr("data-bordered").as_deref(), Some("false"));
+        assert_eq!(get_attr("data-retries").as_deref(), Some("0"));
+        assert_eq!(get_attr("data-children-len").as_deref(), Some("0"));
+    } else {
+        panic!("Expected Element");
+    }
+
+    // Explicit overrides still apply cleanly.
+    let v_set = rsx! {
+        <NonOptionDefaultsPanel
+            title="Thermal"
+            collapsed
+            columns={3}
+            offset={-4}
+            opacity={0.75}
+            items={vec!["a".to_string(), "b".to_string()]}
+            class="p-2"
+            bordered
+            opts={CustomPanelOptions { retries: 5 }}
+        >
+            <span>{"Child"}</span>
+        </NonOptionDefaultsPanel>
+    };
+    if let NodeBlueprint::Element { attributes, .. } = v_set.root {
+        let get_attr = |k: &str| -> Option<String> {
+            attributes.iter().find_map(|a| match a {
+                Attribute::Property { key, value } if key == k => Some(value.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(get_attr("data-cls-len").as_deref(), Some("1"));
+        assert_eq!(get_attr("data-has-p2").as_deref(), Some("true"));
+        assert_eq!(get_attr("data-default-p4").as_deref(), Some("true"));
+        assert_eq!(get_attr("data-title").as_deref(), Some("Thermal"));
+        assert_eq!(get_attr("data-collapsed").as_deref(), Some("true"));
+        assert_eq!(get_attr("data-columns").as_deref(), Some("3"));
+        assert_eq!(get_attr("data-offset").as_deref(), Some("-4"));
+        assert_eq!(get_attr("data-opacity").as_deref(), Some("0.75"));
+        assert_eq!(get_attr("data-items-len").as_deref(), Some("2"));
+        assert_eq!(get_attr("data-note").as_deref(), Some("N/A"));
+        assert_eq!(get_attr("data-gap").as_deref(), Some("8"));
+        assert_eq!(get_attr("data-bordered").as_deref(), Some("true"));
+        assert_eq!(get_attr("data-retries").as_deref(), Some("5"));
+        assert_eq!(get_attr("data-children-len").as_deref(), Some("1"));
+    } else {
+        panic!("Expected Element");
+    }
+}
+
+
 

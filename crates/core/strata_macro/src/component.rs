@@ -435,7 +435,7 @@ impl{impl_f_generics} {trait_name}{args_rc_fn} for std::rc::Rc<__F> {where_claus
             }
             build_args.push(match &param.default {
                 ParamDefault::Expr(expr) => {
-                    if is_plain_string(&param.ty) {
+                    if is_plain_string(&param.ty) || is_class_list(&param.ty) {
                         format!("self.{}.unwrap_or_else(|| ({expr}).into())", param.name)
                     } else {
                         format!("self.{}.unwrap_or_else(|| {expr})", param.name)
@@ -444,10 +444,16 @@ impl{impl_f_generics} {trait_name}{args_rc_fn} for std::rc::Rc<__F> {where_claus
                 ParamDefault::TraitDefault => {
                     format!("self.{}.unwrap_or_default()", param.name)
                 }
-                ParamDefault::None => format!(
-                    "self.{}.expect(\"Prop `{}` is required for <{}>\")",
-                    param.name, param.name, fn_name
-                ),
+                ParamDefault::None => {
+                    if is_implicit_default_type(&param.ty) {
+                        format!("self.{}.unwrap_or_default()", param.name)
+                    } else {
+                        format!(
+                            "self.{}.expect(\"Prop `{}` is required for <{}>\")",
+                            param.name, param.name, fn_name
+                        )
+                    }
+                }
             });
         }
     }
@@ -768,6 +774,34 @@ fn is_plain_string(ty: &str) -> bool {
         compact.as_str(),
         "String" | "std::string::String" | "alloc::string::String"
     )
+}
+
+fn is_class_list(ty: &str) -> bool {
+    let compact: String = ty.chars().filter(|c| !c.is_whitespace()).collect();
+    matches!(
+        compact.as_str(),
+        "ClassList" | "strata_dom::ClassList" | "strata::ClassList" | "strata::prelude::ClassList"
+    )
+}
+
+fn is_static_str_ref(ty: &str) -> bool {
+    let compact: String = ty.chars().filter(|c| !c.is_whitespace()).collect();
+    matches!(compact.as_str(), "&'staticstr" | "&str")
+}
+
+fn is_vec_type(ty: &str) -> bool {
+    let compact: String = ty.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.starts_with("Vec<")
+        || compact.starts_with("std::vec::Vec<")
+        || compact.starts_with("alloc::vec::Vec<")
+}
+
+fn is_implicit_default_type(ty: &str) -> bool {
+    is_plain_string(ty)
+        || is_numeric_or_bool_primitive(ty)
+        || is_static_str_ref(ty)
+        || is_vec_type(ty)
+        || is_class_list(ty)
 }
 
 fn is_numeric_or_bool_primitive(ty: &str) -> bool {

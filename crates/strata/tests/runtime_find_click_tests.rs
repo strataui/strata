@@ -124,6 +124,50 @@ fn title_query_matches_either_title_or_alt() {
     assert_eq!(rt.find_by_title("Store"), Some(vec![2]));
     assert!(rt.click_title("Save"));
     assert!(rt.click_title("Store"));
-    assert_eq!(dual.get(), 2);
+    assert!(dual.get() == 2);
     assert_eq!(rt.find_by_title("Other"), None);
+}
+
+#[test]
+fn find_and_click_by_text_and_title_contains_handles_formatted_strings() {
+    let metric_clicks = Rc::new(Cell::new(0u32));
+    let modal_metric_clicks = Rc::new(Cell::new(0u32));
+    let m1 = metric_clicks.clone();
+    let m2 = modal_metric_clicks.clone();
+
+    let temp = 312.456_f64;
+    let rt = AppRuntime::new(
+        rsx! {
+            <div class="relative flex flex-col w-[400px] h-[200px]">
+                <button class="w-[400px] h-[40px]" title="Thermal junction telemetry panel" onclick={move |_| m1.set(m1.get() + 1)}>
+                    {format!("Peak T_j = {:.2} K", temp)}
+                </button>
+                <button class="w-[400px] h-[40px]" onclick={move |_| m2.set(m2.get() + 1)}>
+                    <span>{format!("Secondary T_j = {:.2} K", temp + 10.0)}</span>
+                </button>
+            </div>
+        },
+        400.0,
+        200.0,
+        1.0,
+    );
+
+    assert_eq!(rt.find_by_text_contains("Peak T_j"), Some(vec![0]));
+    assert_eq!(rt.find_by_text_contains("312.46 K"), Some(vec![0]));
+    assert_eq!(rt.find_by_text_contains("T_j ="), Some(vec![0]));
+    assert_eq!(rt.find_last_by_text_contains("T_j ="), Some(vec![1, 0]));
+    assert_eq!(rt.find_by_text_contains("Missing prefix"), None);
+
+    assert_eq!(rt.find_by_title_contains("junction"), Some(vec![0]));
+    assert_eq!(rt.find_last_by_title_contains("telemetry"), Some(vec![0]));
+    assert_eq!(rt.find_by_title_contains("unknown"), None);
+
+    assert!(rt.click_text_contains("Peak T_j"));
+    assert!(rt.click_title_contains("junction"));
+    assert_eq!(metric_clicks.get(), 2);
+
+    assert!(rt.click_last_text_contains("T_j ="));
+    assert_eq!(modal_metric_clicks.get(), 1);
+    assert!(!rt.click_text_contains("Nonexistent"));
+    assert!(!rt.click_title_contains("Nonexistent"));
 }

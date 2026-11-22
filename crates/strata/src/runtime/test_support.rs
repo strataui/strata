@@ -42,6 +42,11 @@ impl NodeQuery {
         }
     }
 
+    /// Matches elements whose rendered text content contains `substring` (whitespace-normalized).
+    pub fn text_contains(substring: impl Into<String>) -> Self {
+        Self::text(substring).contains()
+    }
+
     /// Matches elements whose `title` attribute (or `alt` on `<button>` / `<img>`) equals `title`.
     ///
     /// `title` and `alt` are not prioritised here, unlike the hover tooltip (which prefers
@@ -53,6 +58,11 @@ impl NodeQuery {
             title: Some(title.into()),
             ..Self::default()
         }
+    }
+
+    /// Matches elements whose `title` (or `alt` on `<button>` / `<img>`) contains `substring`.
+    pub fn title_contains(substring: impl Into<String>) -> Self {
+        Self::title(substring).contains()
     }
 
     /// Additionally requires the element's rendered text content to match.
@@ -226,9 +236,19 @@ impl AppRuntime {
         self.find(&NodeQuery::text(text))
     }
 
+    /// Shorthand for `find(&NodeQuery::text_contains(substring))`.
+    pub fn find_by_text_contains(&self, substring: &str) -> Option<Vec<usize>> {
+        self.find(&NodeQuery::text_contains(substring))
+    }
+
     /// Shorthand for `find_last(&NodeQuery::text(text))`.
     pub fn find_last_by_text(&self, text: &str) -> Option<Vec<usize>> {
         self.find_last(&NodeQuery::text(text))
+    }
+
+    /// Shorthand for `find_last(&NodeQuery::text_contains(substring))`.
+    pub fn find_last_by_text_contains(&self, substring: &str) -> Option<Vec<usize>> {
+        self.find_last(&NodeQuery::text_contains(substring))
     }
 
     /// Shorthand for `find(&NodeQuery::title(title))`.
@@ -236,9 +256,19 @@ impl AppRuntime {
         self.find(&NodeQuery::title(title))
     }
 
+    /// Shorthand for `find(&NodeQuery::title_contains(substring))`.
+    pub fn find_by_title_contains(&self, substring: &str) -> Option<Vec<usize>> {
+        self.find(&NodeQuery::title_contains(substring))
+    }
+
     /// Shorthand for `find_last(&NodeQuery::title(title))`.
     pub fn find_last_by_title(&self, title: &str) -> Option<Vec<usize>> {
         self.find_last(&NodeQuery::title(title))
+    }
+
+    /// Shorthand for `find_last(&NodeQuery::title_contains(substring))`.
+    pub fn find_last_by_title_contains(&self, substring: &str) -> Option<Vec<usize>> {
+        self.find_last(&NodeQuery::title_contains(substring))
     }
 
     /// Rendered text content of the element at `path`, whitespace-normalized.
@@ -281,9 +311,19 @@ impl AppRuntime {
         self.click(&NodeQuery::text(text))
     }
 
+    /// Clicks the first element whose text contains `substring`.
+    pub fn click_text_contains(&self, substring: &str) -> bool {
+        self.click(&NodeQuery::text_contains(substring))
+    }
+
     /// Clicks the last (top-most) element whose text equals `text`.
     pub fn click_last_text(&self, text: &str) -> bool {
         self.click_last(&NodeQuery::text(text))
+    }
+
+    /// Clicks the last (top-most) element whose text contains `substring`.
+    pub fn click_last_text_contains(&self, substring: &str) -> bool {
+        self.click_last(&NodeQuery::text_contains(substring))
     }
 
     /// Clicks the first element whose `title` or (on button/img) `alt` equals `title`; either
@@ -292,9 +332,19 @@ impl AppRuntime {
         self.click(&NodeQuery::title(title))
     }
 
+    /// Clicks the first element whose `title` or (on button/img) `alt` contains `substring`.
+    pub fn click_title_contains(&self, substring: &str) -> bool {
+        self.click(&NodeQuery::title_contains(substring))
+    }
+
     /// Clicks the last (top-most) element whose `title` or (on button/img) `alt` equals `title`;
     /// either attribute may match. See [`NodeQuery::title`].
     pub fn click_last_title(&self, title: &str) -> bool {
         self.click_last(&NodeQuery::title(title))
+    }
+
+    /// Clicks the last (top-most) element whose `title` or (on button/img) `alt` contains `substring`.
+    pub fn click_last_title_contains(&self, substring: &str) -> bool {
+        self.click_last(&NodeQuery::title_contains(substring))
     }
 }
