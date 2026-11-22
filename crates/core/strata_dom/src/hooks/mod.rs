@@ -18,6 +18,6 @@ pub use media::{
 };
 pub use window::{
     clear_cursor_override, current_cursor, dispatch_global_keydown, set_current_cursor,
-    use_clipboard, use_cursor, use_keyboard_shortcut, ClipboardHandle, CursorIcon, KeyChord,
-    ShortcutHandle,
+    use_clipboard, use_cursor, use_keyboard_shortcut, use_shortcut, ClipboardHandle, CursorIcon,
+    KeyChord, ShortcutHandle,
 };

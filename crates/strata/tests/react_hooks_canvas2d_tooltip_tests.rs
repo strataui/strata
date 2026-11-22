@@ -920,3 +920,211 @@ fn gpu_pipelines_apply_set_line_cap_join_and_non_rectangular_clip_paths() {
         .iter()
         .any(|s| (s.flags & strata::render::gpu_path::FLAG_TRIANGLE) != 0));
 }
+
+// ---------------------------------------------------------------------------
+// 12. Responsive Canvas2D post-layout on_paint inside split/flex layout
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_responsive_canvas2d_on_paint_and_split_pane_resize() {
+    use std::cell::RefCell;
+    use strata_dom::ClassList;
+    use strata_platform::PlatformEvent;
+
+    let painted_bounds: Rc<RefCell<Vec<(f32, f32)>>> = Rc::new(RefCell::new(Vec::new()));
+    let painted_bounds_cb = Rc::clone(&painted_bounds);
+    let sidebar_width = Signal::new(200.0_f32);
+    let accent_color = Signal::new(Color::rgb(56, 189, 248));
+
+    let view = {
+        let sidebar_width = sidebar_width.clone();
+        let accent_color = accent_color.clone();
+        let painted_bounds_cb = Rc::clone(&painted_bounds_cb);
+        move || {
+            let side_style = format!("width: {}px; height: 100%;", sidebar_width.get());
+            let cls = ClassList::from(vec!["flex-1 h-full".to_string(), "min-w-0".to_string()]);
+            let pb = Rc::clone(&painted_bounds_cb);
+            let accent = accent_color.clone();
+
+            rsx! {
+                <div class="w-full h-full flex">
+                    <div id="left-pane" style={side_style} />
+                    <div class="flex-1 h-full flex">
+                        <Canvas2D
+                            id="cad-canvas"
+                            class={cls}
+                            responsive
+                            on_paint={move |ctx: &mut Canvas2DContext, w: f32, h: f32| {
+                                pb.borrow_mut().push((w, h));
+                                ctx.set_fill_style(accent.get());
+                                ctx.fill_rect(0.0, 0.0, w, h);
+                                ctx.set_stroke_style(Color::rgb(255, 255, 255));
+                                ctx.stroke_rect(2.0, 2.0, (w - 4.0).max(1.0), (h - 4.0).max(1.0));
+                            }}
+                        />
+                    </div>
+                </div>
+            }
+        }
+    };
+
+    let mut rt = AppRuntime::from_root(&view, 800.0, 400.0, 1.0);
+
+    // 1. Flex layout resolves Canvas2D to full 600x400 instead of 400x300 fixed fallback
+    let rect = rt
+        .query_element_rect("cad-canvas")
+        .expect("cad-canvas rect should exist");
+    assert!(
+        (rect.width - 600.0).abs() < 0.5 && (rect.height - 400.0).abs() < 0.5,
+        "Expected 600x400 responsive canvas bounds, got {}x{}",
+        rect.width,
+        rect.height
+    );
+
+    let find_canvas_cmd = |runtime: &AppRuntime| -> Option<(f32, f32, Color)> {
+        runtime.display_list.commands().iter().find_map(|c| match c {
+            DrawCommand::DrawCanvas2D { bounds, commands } => {
+                let fill = commands.iter().find_map(|cc| match cc {
+                    CanvasCommand::FillRect { color, .. } => Some(*color),
+                    _ => None,
+                })?;
+                Some((bounds.width, bounds.height, fill))
+            }
+            _ => None,
+        })
+    };
+
+    let (w0, h0, c0) = find_canvas_cmd(&rt).expect("Expected initial DrawCanvas2D command");
+    assert!((w0 - 598.0).abs() < 0.5 && (h0 - 398.0).abs() < 0.5);
+    assert_eq!(c0, Color::rgb(56, 189, 248));
+    assert_eq!(painted_bounds.borrow().last().copied(), Some((598.0, 398.0)));
+
+    // 2. Omitted fixed dimensions + window resize updates post-layout paint bounds
+    assert!(rt.step_event(&PlatformEvent::WindowResized {
+        width: 520,
+        height: 300,
+    }));
+    let rect_resized = rt
+        .query_element_rect("cad-canvas")
+        .expect("cad-canvas rect after resize");
+    assert!(
+        (rect_resized.width - 320.0).abs() < 0.5 && (rect_resized.height - 300.0).abs() < 0.5,
+        "Expected 320x300 after WindowResized, got {}x{}",
+        rect_resized.width,
+        rect_resized.height
+    );
+    let (w1, h1, _) = find_canvas_cmd(&rt).expect("Expected DrawCanvas2D after resize");
+    assert!((w1 - 318.0).abs() < 0.5 && (h1 - 298.0).abs() < 0.5);
+
+    // 3. Changing reactive sidebar width & accent color dynamically resizes and repaints
+    sidebar_width.set(120.0);
+    accent_color.set(Color::rgb(250, 204, 21));
+    rt.update_view(strata_dom::with_root_component_scope(&view));
+    let (w2, h2, c2) = find_canvas_cmd(&rt).expect("Expected DrawCanvas2D after split resize");
+    assert!((w2 - 398.0).abs() < 0.5 && (h2 - 298.0).abs() < 0.5);
+    assert_eq!(c2, Color::rgb(250, 204, 21));
+}
+
+#[test]
+fn test_omitted_width_height_canvas2d_respects_flex_without_400x300_inline_override() {
+    let seen = Rc::new(Cell::new((0.0_f32, 0.0_f32)));
+    let seen_cb = Rc::clone(&seen);
+
+    let view = rsx! {
+        <div class="w-[500px] h-[220px] flex">
+            <Canvas2D
+                id="flex-canvas"
+                class="flex-1 h-full border-0"
+                on_paint={move |ctx: &mut Canvas2DContext, w: f32, h: f32| {
+                    seen_cb.set((w, h));
+                    ctx.fill_rect(0.0, 0.0, w, h);
+                }}
+            />
+        </div>
+    };
+
+    let rt = AppRuntime::new(view, 500.0, 220.0, 1.0);
+    let rect = rt.query_element_rect("flex-canvas").unwrap();
+    assert!((rect.width - 500.0).abs() < 0.5);
+    assert!((rect.height - 220.0).abs() < 0.5);
+    assert_eq!(seen.get(), (500.0, 220.0));
+}
+
+#[component]
+fn E2ePanelShell(
+    title: String,
+    onclick: Option<Rc<dyn Fn(strata_dom::Event)>>,
+    children: View,
+) -> View {
+    let shortcut_flag = use_signal(false);
+    let sf = shortcut_flag.clone();
+    use_shortcut("Ctrl+Shift+M", move || sf.set(!sf.get()));
+
+    let active_cls = if shortcut_flag.get() { "active" } else { "idle" };
+    if let Some(cb) = onclick {
+        rsx! {
+            <div class="flex flex-col">
+                <button id="panel-btn" class={active_cls} onclick={cb}>{title}</button>
+                <div id="panel-body">{children}</div>
+            </div>
+        }
+    } else {
+        rsx! {
+            <div class="flex flex-col">
+                <button id="panel-btn" class={active_cls}>{title}</button>
+                <div id="panel-body">{children}</div>
+            </div>
+        }
+    }
+}
+
+#[test]
+fn test_component_children_view_typed_onclick_and_shortcut_unmount_in_app_runtime() {
+    use strata_dom::hooks::dispatch_global_keydown;
+    use strata_dom::reactive::reset_component_hooks;
+
+    reset_component_hooks();
+    let mounted = Signal::new(true);
+    let clicked = Rc::new(Cell::new(0.0_f64));
+    let clicked_cb = Rc::clone(&clicked);
+    let mounted_view = mounted.clone();
+
+    let build_root = move || {
+        let cb = Rc::clone(&clicked_cb);
+        if mounted_view.get() {
+            rsx! {
+                <div class="w-[300px] h-[160px]">
+                    <E2ePanelShell
+                        title="Run"
+                        onclick={move |ev: strata_dom::Event| cb.set(ev.client_x)}
+                    >
+                        <span>{"Child A"}</span>
+                        <span>{"Child B"}</span>
+                    </E2ePanelShell>
+                </div>
+            }
+        } else {
+            rsx! { <div class="w-[300px] h-[160px]"><span>{"Unmounted"}</span></div> }
+        }
+    };
+
+    let mut rt = AppRuntime::from_root(&build_root, 300.0, 160.0, 1.0);
+
+    assert!(rt.find_by_text("Run").is_some());
+    assert!(rt.find_by_text("Child A").is_some());
+    assert!(rt.find_by_text("Child B").is_some());
+
+    // Typed Event onclick fires with real pointer coordinates
+    assert!(rt.click_text("Run"));
+    assert!(clicked.get() > 0.0);
+
+    // Shortcut stays registered across re-render & unregisters cleanly when E2ePanelShell unmounts
+    rt.update_view(strata_dom::with_root_component_scope(&build_root));
+    assert!(dispatch_global_keydown("M", true, true, false, false));
+    mounted.set(false);
+    rt.update_view(strata_dom::with_root_component_scope(&build_root));
+    assert!(rt.find_by_text("Unmounted").is_some());
+    assert!(!dispatch_global_keydown("M", true, true, false, false));
+    reset_component_hooks();
+}
+

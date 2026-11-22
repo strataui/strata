@@ -903,6 +903,69 @@ impl Canvas2DContext {
     }
 }
 
+/// Thread-safe payload handle wrapping a UI-thread post-layout `on_paint` callback
+/// (`Rc<dyn Fn(&mut Canvas2DContext, f32, f32)>`).
+///
+/// Storing the `!Send` closure in a thread-local table keyed by an `Arc` drop-guard token allows
+/// callers to capture reactive [`Signal`](strata_dom::reactive::Signal)s and `Rc` handles freely
+/// while keeping `LayoutNode: Send + Sync` for parallel layout passes.
+#[derive(Debug)]
+pub struct Canvas2DPaintCallback {
+    token: u64,
+    origin_thread: std::thread::ThreadId,
+}
+
+type Canvas2DPaintFn = std::rc::Rc<dyn Fn(&mut Canvas2DContext, f32, f32)>;
+
+thread_local! {
+    static CANVAS2D_PAINT_HOOKS: std::cell::RefCell<std::collections::HashMap<u64, Canvas2DPaintFn>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+static NEXT_CANVAS2D_PAINT_TOKEN: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
+impl Canvas2DPaintCallback {
+    /// Registers a post-layout `on_paint` closure on the current thread and returns an `Arc`
+    /// handle suitable for `Attribute::scene_payload_arc` / `ViewportSceneHandle`.
+    pub fn new(cb: Canvas2DPaintFn) -> std::sync::Arc<Self> {
+        let token = NEXT_CANVAS2D_PAINT_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let origin_thread = std::thread::current().id();
+        CANVAS2D_PAINT_HOOKS.with(|hooks| {
+            hooks.borrow_mut().insert(token, cb);
+        });
+        std::sync::Arc::new(Self {
+            token,
+            origin_thread,
+        })
+    }
+
+    /// Invokes the registered paint closure with the resolved post-layout `(width, height)`
+    /// dimensions and returns the recorded [`CanvasCommand`] list.
+    pub fn paint(&self, width: f32, height: f32) -> Vec<CanvasCommand> {
+        let mut ctx = Canvas2DContext::new(width.max(0.0), height.max(0.0));
+        if std::thread::current().id() == self.origin_thread {
+            let cb_opt = CANVAS2D_PAINT_HOOKS.with(|hooks| hooks.borrow().get(&self.token).cloned());
+            if let Some(cb) = cb_opt {
+                cb(&mut ctx, width, height);
+            }
+        }
+        ctx.finish()
+    }
+}
+
+impl Drop for Canvas2DPaintCallback {
+    fn drop(&mut self) {
+        if std::thread::current().id() == self.origin_thread {
+            let _ = CANVAS2D_PAINT_HOOKS.try_with(|hooks| {
+                if let Ok(mut map) = hooks.try_borrow_mut() {
+                    map.remove(&self.token);
+                }
+            });
+        }
+    }
+}
+
 /// Flattens a slice of [`CanvasPathVerb`]s (including cubic/quadratic Bézier curves and arcs)
 /// into translated polyline subpaths `Vec<Vec<(f32, f32)>>`.
 pub fn flatten_canvas_verbs(

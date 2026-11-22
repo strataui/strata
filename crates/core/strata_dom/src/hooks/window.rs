@@ -131,35 +131,92 @@ impl KeyChord {
     }
 }
 
-/// Handle returned by `use_keyboard_shortcut` that unregisters the shortcut on drop.
-pub struct ShortcutHandle {
-    id: u32,
-}
+struct ShortcutDropGuard(u32);
 
-impl Drop for ShortcutHandle {
+impl Drop for ShortcutDropGuard {
     fn drop(&mut self) {
-        REGISTERED_SHORTCUTS.with(|s| {
-            s.borrow_mut().retain(|(id, _, _)| *id != self.id);
+        let _ = REGISTERED_SHORTCUTS.try_with(|s| {
+            if let Ok(mut list) = s.try_borrow_mut() {
+                list.retain(|(id, _, _)| *id != self.0);
+            }
         });
     }
 }
 
-/// Registers a global keyboard shortcut with an invoked callback.
-pub fn use_keyboard_shortcut<F: Fn() + 'static>(shortcut: &str, handler: F) -> ShortcutHandle {
-    let chord = KeyChord::parse(shortcut);
+#[derive(Clone)]
+struct ComponentShortcutSlot {
+    id: u32,
+    guard: Rc<ShortcutDropGuard>,
+}
+
+/// Handle returned by [`use_keyboard_shortcut`].
+///
+/// Outside a `#[component]` scope, dropping the handle unregisters the shortcut immediately.
+/// Inside a `#[component]` body, lifetime is bound to the component hook slot so dropping the
+/// handle at the end of `render` keeps the shortcut active until component unmount.
+pub struct ShortcutHandle {
+    _guard: Rc<ShortcutDropGuard>,
+}
+
+fn alloc_and_register_shortcut(chord: KeyChord, callback: Rc<dyn Fn()>) -> (u32, Rc<ShortcutDropGuard>) {
     let id = NEXT_SHORTCUT_ID.with(|n| {
         let mut val = n.borrow_mut();
         let cur = *val;
         *val += 1;
         cur
     });
-
-    let callback = Rc::new(handler);
     REGISTERED_SHORTCUTS.with(|s| {
         s.borrow_mut().push((id, chord, callback));
     });
+    (id, Rc::new(ShortcutDropGuard(id)))
+}
 
-    ShortcutHandle { id }
+/// Registers a global keyboard shortcut with an invoked callback.
+///
+/// Inside a `#[component]` render body, the shortcut is persisted in the component's hook slot,
+/// updated in place on re-renders (preventing duplicate registrations), and unregistered
+/// automatically when the component unmounts. Outside a component scope or inside an effect,
+/// returns an RAII [`ShortcutHandle`] whose `Drop` unregisters immediately.
+pub fn use_keyboard_shortcut<F: Fn() + 'static>(shortcut: &str, handler: F) -> ShortcutHandle {
+    let chord = KeyChord::parse(shortcut);
+    let callback: Rc<dyn Fn()> = Rc::new(handler);
+
+    if crate::reactive::in_component_hook_context() {
+        let mut init_args = Some((chord, Rc::clone(&callback)));
+        let slot = crate::reactive::use_hook_slot_cloned(|| {
+            let (init_chord, init_cb) = init_args.take().unwrap();
+            let (id, guard) = alloc_and_register_shortcut(init_chord, init_cb);
+            ComponentShortcutSlot { id, guard }
+        })
+        .expect("component hook context active");
+
+        if let Some((latest_chord, latest_cb)) = init_args.take() {
+            REGISTERED_SHORTCUTS.with(|s| {
+                let mut list = s.borrow_mut();
+                if let Some(entry) = list.iter_mut().find(|(id, _, _)| *id == slot.id) {
+                    entry.1 = latest_chord;
+                    entry.2 = latest_cb;
+                } else {
+                    list.push((slot.id, latest_chord, latest_cb));
+                }
+            });
+        }
+
+        return ShortcutHandle {
+            _guard: Rc::clone(&slot.guard),
+        };
+    }
+
+    let (_, guard) = alloc_and_register_shortcut(chord, callback);
+    ShortcutHandle { _guard: guard }
+}
+
+/// Component-ergonomic alias for [`use_keyboard_shortcut`] discarding the [`ShortcutHandle`].
+///
+/// Registers the shortcut on mount, refreshes the closure in place on re-render, and cleans up
+/// on component unmount.
+pub fn use_shortcut<F: Fn() + 'static>(shortcut: &str, handler: F) {
+    let _ = use_keyboard_shortcut(shortcut, handler);
 }
 
 /// Dispatches a keydown event through registered shortcuts.

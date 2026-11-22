@@ -149,13 +149,14 @@ pub mod prelude {
         use_color_scheme, use_context, use_contrast, use_cursor, use_effect, use_effect_with_deps,
         use_focus, use_focus_within, use_hover, use_id, use_keyboard_shortcut, use_media_query,
         use_memo, use_memo_with_deps, use_persistent_signal, use_press, use_reduced_motion,
-        use_reducer, use_reducer_init, use_ref, use_signal, use_state, with_component_key,
-        with_root_component_scope, AnchorPlacement,
-        Attribute, ClickOutsideHandle, ClipboardHandle, ColorScheme, Context, ContrastPreference,
-        CursorIcon, Effect, EffectGuard, ErrorBoundary, ErrorBoundaryBuilder, ErrorBoundaryInfo,
-        Event, EventType, FocusHandlers, HoverHandlers, IntoNodeBlueprint, KeyChord, Memo,
-        NodeBlueprint, Portal, PortalBuilder, PressHandlers, ProgrammaticScrollCommand,
-        ReadSignal, Ref, SetSignal, ShortcutHandle, Signal, Tag, View, WriteSignal,
+        use_reducer, use_reducer_init, use_ref, use_shortcut, use_signal, use_state,
+        with_component_key, with_root_component_scope, AnchorPlacement, Attribute,
+        ClickOutsideHandle, ClipboardHandle, ColorScheme, Context, ContrastPreference, CursorIcon,
+        Effect, EffectGuard, ErrorBoundary, ErrorBoundaryBuilder, ErrorBoundaryInfo, Event,
+        EventType, FocusHandlers, HoverHandlers, IntoChildren, IntoEffectCleanup,
+        IntoNodeBlueprint, KeyChord, Memo, NodeBlueprint, Portal, PortalBuilder, PressHandlers,
+        ProgrammaticScrollCommand, ReadSignal, Ref, SetSignal, ShortcutHandle, Signal, Tag, View,
+        WriteSignal,
     };
     pub use strata_js;
     pub use strata_js::{

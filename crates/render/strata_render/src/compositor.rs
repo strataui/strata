@@ -1460,6 +1460,15 @@ impl Compositor {
                         bounds: vp_bounds,
                         commands: (**cmds_arc).clone(),
                     });
+                } else if let Some(paint_cb) = handle
+                    .0
+                    .downcast_ref::<crate::canvas2d::Canvas2DPaintCallback>()
+                {
+                    let commands = paint_cb.paint(vp_bounds.width, vp_bounds.height);
+                    list.push(DrawCommand::DrawCanvas2D {
+                        bounds: vp_bounds,
+                        commands,
+                    });
                 }
             }
         }

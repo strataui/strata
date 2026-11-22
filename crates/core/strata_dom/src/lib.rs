@@ -32,6 +32,13 @@ impl View {
     }
 }
 
+impl Default for View {
+    #[inline]
+    fn default() -> Self {
+        Self::new(NodeBlueprint::Empty)
+    }
+}
+
 pub mod classes;
 pub mod error_boundary;
 pub mod events;
@@ -59,9 +66,9 @@ pub use reactive::{
     provide_context, reset_component_hooks, take_dirty_signals, untrack, use_callback, use_context,
     use_effect, use_effect_with_deps, use_id, use_memo, use_memo_with_deps, use_persistent_signal,
     use_reducer, use_reducer_init, use_ref, use_signal, use_state, with_component_key,
-    with_root_component_scope, ComponentScopeGuard, Context, Effect, EffectGuard, IntoInitialState,
-    Memo, ReactiveRuntime, ReadSignal, Ref, ScopeId, SetSignal, Signal, SignalId, SubscriberId,
-    WriteSignal,
+    with_root_component_scope, ComponentScopeGuard, Context, Effect, EffectGuard,
+    IntoEffectCleanup, IntoInitialState, Memo, ReactiveRuntime, ReadSignal, Ref, ScopeId, SetSignal,
+    Signal, SignalId, SubscriberId, WriteSignal,
 };
 pub use spring::{SpringConfig, SpringSignal};
 pub use strata_primitives::EntityId;
@@ -70,7 +77,7 @@ pub use text_input::{InputKey, InputKeyResult, InputModifiers, TextInputState};
 /// Ergonomic conversion into `Option<String>` for `#[component]` builder setters.
 ///
 /// Accepts string literals (`"hello"`), `String`, `&String`, `Cow<'_, str>`, `Option<String>`,
-/// and bare `None` without `.to_string()` boilerplate or type-inference ambiguity on `None`.
+/// and bare `None` without `.to_string()` boilerplate or type-inference ambiguity.
 pub trait IntoOptionalString {
     fn into_optional_string(self) -> Option<String>;
 }
@@ -107,6 +114,182 @@ impl IntoOptionalString for Option<String> {
     #[inline]
     fn into_optional_string(self) -> Option<String> {
         self
+    }
+}
+
+/// Converts RSX children lists (`Vec<NodeBlueprint>`), single `NodeBlueprint`, or `View` values
+/// into the `children` parameter type declared on a `#[component]` (`View`, `NodeBlueprint`,
+/// `Vec<NodeBlueprint>`, or their `Option<...>` forms).
+pub trait IntoChildren<Target> {
+    fn into_children(self) -> Target;
+}
+
+impl IntoChildren<Vec<NodeBlueprint>> for Vec<NodeBlueprint> {
+    #[inline]
+    fn into_children(self) -> Vec<NodeBlueprint> {
+        self
+    }
+}
+
+impl IntoChildren<Vec<NodeBlueprint>> for Option<Vec<NodeBlueprint>> {
+    #[inline]
+    fn into_children(self) -> Vec<NodeBlueprint> {
+        self.unwrap_or_default()
+    }
+}
+
+impl IntoChildren<Vec<NodeBlueprint>> for NodeBlueprint {
+    #[inline]
+    fn into_children(self) -> Vec<NodeBlueprint> {
+        match self {
+            NodeBlueprint::Empty => Vec::new(),
+            NodeBlueprint::Fragment(children) => children,
+            other => vec![other],
+        }
+    }
+}
+
+impl IntoChildren<Vec<NodeBlueprint>> for View {
+    #[inline]
+    fn into_children(self) -> Vec<NodeBlueprint> {
+        self.root.into_children()
+    }
+}
+
+impl IntoChildren<View> for View {
+    #[inline]
+    fn into_children(self) -> View {
+        self
+    }
+}
+
+impl IntoChildren<View> for NodeBlueprint {
+    #[inline]
+    fn into_children(self) -> View {
+        View::new(self)
+    }
+}
+
+impl IntoChildren<View> for Vec<NodeBlueprint> {
+    #[inline]
+    fn into_children(mut self) -> View {
+        match self.len() {
+            0 => View::new(NodeBlueprint::Empty),
+            1 => View::new(self.remove(0)),
+            _ => View::new(NodeBlueprint::Fragment(self)),
+        }
+    }
+}
+
+impl IntoChildren<View> for Option<Vec<NodeBlueprint>> {
+    #[inline]
+    fn into_children(self) -> View {
+        self.unwrap_or_default().into_children()
+    }
+}
+
+impl IntoChildren<NodeBlueprint> for NodeBlueprint {
+    #[inline]
+    fn into_children(self) -> NodeBlueprint {
+        self
+    }
+}
+
+impl IntoChildren<NodeBlueprint> for View {
+    #[inline]
+    fn into_children(self) -> NodeBlueprint {
+        self.root
+    }
+}
+
+impl IntoChildren<NodeBlueprint> for Vec<NodeBlueprint> {
+    #[inline]
+    fn into_children(self) -> NodeBlueprint {
+        IntoChildren::<View>::into_children(self).root
+    }
+}
+
+impl IntoChildren<Option<Vec<NodeBlueprint>>> for Option<Vec<NodeBlueprint>> {
+    #[inline]
+    fn into_children(self) -> Option<Vec<NodeBlueprint>> {
+        self
+    }
+}
+
+impl IntoChildren<Option<Vec<NodeBlueprint>>> for Vec<NodeBlueprint> {
+    #[inline]
+    fn into_children(self) -> Option<Vec<NodeBlueprint>> {
+        Some(self)
+    }
+}
+
+impl IntoChildren<Option<Vec<NodeBlueprint>>> for View {
+    #[inline]
+    fn into_children(self) -> Option<Vec<NodeBlueprint>> {
+        Some(self.into_children())
+    }
+}
+
+impl IntoChildren<Option<Vec<NodeBlueprint>>> for NodeBlueprint {
+    #[inline]
+    fn into_children(self) -> Option<Vec<NodeBlueprint>> {
+        Some(self.into_children())
+    }
+}
+
+impl IntoChildren<Option<View>> for Option<View> {
+    #[inline]
+    fn into_children(self) -> Option<View> {
+        self
+    }
+}
+
+impl IntoChildren<Option<View>> for View {
+    #[inline]
+    fn into_children(self) -> Option<View> {
+        Some(self)
+    }
+}
+
+impl IntoChildren<Option<View>> for Vec<NodeBlueprint> {
+    #[inline]
+    fn into_children(self) -> Option<View> {
+        Some(self.into_children())
+    }
+}
+
+impl IntoChildren<Option<View>> for NodeBlueprint {
+    #[inline]
+    fn into_children(self) -> Option<View> {
+        Some(View::new(self))
+    }
+}
+
+impl IntoChildren<Option<NodeBlueprint>> for Option<NodeBlueprint> {
+    #[inline]
+    fn into_children(self) -> Option<NodeBlueprint> {
+        self
+    }
+}
+
+impl IntoChildren<Option<NodeBlueprint>> for NodeBlueprint {
+    #[inline]
+    fn into_children(self) -> Option<NodeBlueprint> {
+        Some(self)
+    }
+}
+
+impl IntoChildren<Option<NodeBlueprint>> for Vec<NodeBlueprint> {
+    #[inline]
+    fn into_children(self) -> Option<NodeBlueprint> {
+        Some(self.into_children())
+    }
+}
+
+impl IntoChildren<Option<NodeBlueprint>> for View {
+    #[inline]
+    fn into_children(self) -> Option<NodeBlueprint> {
+        Some(self.root)
     }
 }
 
@@ -328,6 +511,13 @@ impl std::fmt::Debug for NodeBlueprint {
             Self::Fragment(c) => f.debug_tuple("Fragment").field(c).finish(),
             Self::Empty => write!(f, "Empty"),
         }
+    }
+}
+
+impl Default for NodeBlueprint {
+    #[inline]
+    fn default() -> Self {
+        Self::Empty
     }
 }
 

@@ -282,17 +282,29 @@ pub fn expand_component(_attr: TokenStream, item: TokenStream) -> TokenStream {
             param.name
         ));
 
-        if param.name == "onclick" {
+        let rc_fn_bound = extract_rc_dyn_fn_bound(&param.ty, param.is_option);
+
+        if param.name == "onclick" && rc_fn_bound.as_deref().is_some_and(is_unit_fn_bound) {
             builder_fields.push("pub onclick: Option<std::rc::Rc<dyn Fn()>>,".to_string());
             builder_setters.push(format!(
                 "#[allow(dead_code)]\n    {vis}fn onclick<Args>(mut self, handler: impl strata_dom::EventHandlerMarker<Args> + 'static) -> Self {{\n        self.onclick = Some(std::rc::Rc::new(move || handler.call_handler(strata_dom::Event::default())));\n        self\n    }}\n\n    #[allow(dead_code)]\n    {vis}fn onclick_fn(mut self, handler: impl Fn() + 'static) -> Self {{\n        self.onclick = Some(std::rc::Rc::new(handler));\n        self\n    }}",
                 vis = vis,
             ));
-            build_args.push(match &param.default {
-                ParamDefault::Expr(expr) => format!("self.onclick.or_else(|| ({expr}).into())"),
-                ParamDefault::TraitDefault | ParamDefault::None => "self.onclick".to_string(),
-            });
-        } else if let Some(fn_bound) = extract_rc_dyn_fn_bound(&param.ty, param.is_option) {
+            if param.is_option {
+                build_args.push(match &param.default {
+                    ParamDefault::Expr(expr) => format!("self.onclick.or_else(|| ({expr}).into())"),
+                    ParamDefault::TraitDefault | ParamDefault::None => "self.onclick".to_string(),
+                });
+            } else {
+                build_args.push(match &param.default {
+                    ParamDefault::Expr(expr) => format!("self.onclick.unwrap_or_else(|| ({expr}))"),
+                    ParamDefault::TraitDefault | ParamDefault::None => format!(
+                        "self.onclick.expect(\"Prop `{}` is required for <{}>\")",
+                        param.name, fn_name
+                    ),
+                });
+            }
+        } else if let Some(fn_bound) = rc_fn_bound {
             let trait_name = format!("__{}_{}_IntoCallback", fn_name, param.name);
             let trait_decl_generics = parsed_generics.trait_generics_with_marker();
             let args_unit = parsed_generics.trait_args_with_marker("()");
@@ -397,12 +409,20 @@ impl{impl_f_generics} {trait_name}{args_rc_fn} for std::rc::Rc<__F> {where_claus
             });
         } else if param.is_option {
             builder_fields.push(format!("pub {}: {},", param.name, param.ty));
-            builder_setters.push(format!(
-                "#[allow(dead_code)]\n    {vis}fn {name}(mut self, val: impl Into<{ty}>) -> Self {{\n        self.{name} = val.into();\n        self\n    }}",
-                vis = vis,
-                name = param.name,
-                ty = param.ty,
-            ));
+            if param.name == "children" && is_children_convertible_type(&param.ty) {
+                builder_setters.push(format!(
+                    "#[allow(dead_code)]\n    {vis}fn children(mut self, val: impl strata_dom::IntoChildren<{ty}>) -> Self {{\n        self.children = val.into_children();\n        self\n    }}",
+                    vis = vis,
+                    ty = param.ty,
+                ));
+            } else {
+                builder_setters.push(format!(
+                    "#[allow(dead_code)]\n    {vis}fn {name}(mut self, val: impl Into<{ty}>) -> Self {{\n        self.{name} = val.into();\n        self\n    }}",
+                    vis = vis,
+                    name = param.name,
+                    ty = param.ty,
+                ));
+            }
             build_args.push(match &param.default {
                 ParamDefault::Expr(expr) => {
                     let trimmed = expr.trim();
@@ -418,7 +438,13 @@ impl{impl_f_generics} {trait_name}{args_rc_fn} for std::rc::Rc<__F> {where_claus
             });
         } else {
             builder_fields.push(format!("pub {}: Option<{}>,", param.name, param.ty));
-            if is_numeric_or_bool_primitive(&param.ty) {
+            if param.name == "children" && is_children_convertible_type(&param.ty) {
+                builder_setters.push(format!(
+                    "#[allow(dead_code)]\n    {vis}fn children(mut self, val: impl strata_dom::IntoChildren<{ty}>) -> Self {{\n        self.children = Some(val.into_children());\n        self\n    }}",
+                    vis = vis,
+                    ty = param.ty,
+                ));
+            } else if is_numeric_or_bool_primitive(&param.ty) {
                 builder_setters.push(format!(
                     "#[allow(dead_code)]\n    {vis}fn {name}(mut self, val: {ty}) -> Self {{\n        self.{name} = Some(val);\n        self\n    }}",
                     vis = vis,
@@ -802,6 +828,65 @@ fn is_implicit_default_type(ty: &str) -> bool {
         || is_static_str_ref(ty)
         || is_vec_type(ty)
         || is_class_list(ty)
+        || is_view_type(ty)
+        || is_node_blueprint_type(ty)
+}
+
+fn is_view_type(ty: &str) -> bool {
+    let compact: String = ty.chars().filter(|c| !c.is_whitespace()).collect();
+    matches!(
+        compact.as_str(),
+        "View" | "strata_dom::View" | "strata::View" | "strata::prelude::View"
+    )
+}
+
+fn is_node_blueprint_type(ty: &str) -> bool {
+    let compact: String = ty.chars().filter(|c| !c.is_whitespace()).collect();
+    matches!(
+        compact.as_str(),
+        "NodeBlueprint"
+            | "strata_dom::NodeBlueprint"
+            | "strata::NodeBlueprint"
+            | "strata::prelude::NodeBlueprint"
+    )
+}
+
+fn is_children_convertible_type(ty: &str) -> bool {
+    let trimmed = ty.trim();
+    if is_view_type(trimmed) || is_node_blueprint_type(trimmed) {
+        return true;
+    }
+    let compact: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
+    if compact.starts_with("Vec<NodeBlueprint>")
+        || compact.starts_with("std::vec::Vec<NodeBlueprint>")
+        || compact.starts_with("Vec<strata_dom::NodeBlueprint>")
+        || compact.starts_with("std::vec::Vec<strata_dom::NodeBlueprint>")
+    {
+        return true;
+    }
+    if let Some(inner) = strip_single_generic_wrapper(
+        trimmed,
+        &[
+            "Option",
+            "std::option::Option",
+            "std :: option :: Option",
+            "core::option::Option",
+            "core :: option :: Option",
+        ],
+    ) {
+        return is_children_convertible_type(inner);
+    }
+    false
+}
+
+fn is_unit_fn_bound(bound: &str) -> bool {
+    let compact: String = bound.chars().filter(|c| !c.is_whitespace()).collect();
+    compact == "Fn()"
+        || compact.starts_with("Fn()+")
+        || compact == "std::ops::Fn()"
+        || compact.starts_with("std::ops::Fn()+")
+        || compact == "core::ops::Fn()"
+        || compact.starts_with("core::ops::Fn()+")
 }
 
 fn is_numeric_or_bool_primitive(ty: &str) -> bool {

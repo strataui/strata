@@ -584,6 +584,9 @@ impl AppRuntime {
                                     Vec<strata_render::canvas2d::CanvasCommand>,
                                 >>()
                                 .is_some()
+                            || payload
+                                .downcast_ref::<strata_render::canvas2d::Canvas2DPaintCallback>()
+                                .is_some()
                         {
                             return Some(std::sync::Arc::clone(payload));
                         }

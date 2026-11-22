@@ -1143,5 +1143,239 @@ fn test_component_non_option_default_empty_values_and_prop_default_attrs() {
     }
 }
 
+#[component]
+fn TypedEventButton(
+    label: String,
+    onclick: Option<Rc<dyn Fn(strata_dom::Event)>>,
+) -> View {
+    if let Some(cb) = onclick {
+        rsx! { <button onclick={cb}>{label}</button> }
+    } else {
+        rsx! { <button>{label}</button> }
+    }
+}
 
+#[component]
+fn IndexedActionButton(index: usize, onclick: Rc<dyn Fn(usize)>) -> View {
+    rsx! {
+        <button data-idx={index.to_string()} onclick={move || onclick(index)}>
+            {"Act"}
+        </button>
+    }
+}
 
+#[component]
+fn UnitActionButtonOptional(onclick: Option<Rc<dyn Fn()>>) -> View {
+    if let Some(cb) = onclick {
+        rsx! { <button onclick={cb}>{"OptUnit"}</button> }
+    } else {
+        rsx! { <button>{"OptUnitNone"}</button> }
+    }
+}
+
+#[component]
+fn UnitActionButtonRequired(onclick: Rc<dyn Fn()>) -> View {
+    rsx! { <button onclick={onclick}>{"ReqUnit"}</button> }
+}
+
+#[test]
+fn test_component_typed_and_unit_onclick_callbacks() {
+    let clicked_x = Rc::new(Cell::new(0.0_f64));
+    let clicked_x_cb = Rc::clone(&clicked_x);
+    let view_typed = rsx! {
+        <TypedEventButton
+            label="Fire"
+            onclick={move |ev: strata_dom::Event| clicked_x_cb.set(ev.client_x)}
+        />
+    };
+    if let NodeBlueprint::Element { attributes, .. } = view_typed.root {
+        let handler = attributes
+            .iter()
+            .find_map(|a| match a {
+                Attribute::EventListener {
+                    event: EventType::Click,
+                    handler,
+                } => Some(Rc::clone(handler)),
+                _ => None,
+            })
+            .expect("Expected EventType::Click handler");
+        let mut ev = strata_dom::Event::default();
+        ev.client_x = 128.5;
+        handler(ev);
+        assert!((clicked_x.get() - 128.5).abs() < 1e-6);
+    } else {
+        panic!("Expected Element");
+    }
+
+    // Omitted Option<Rc<dyn Fn(Event)>> compiles and defaults to None
+    let view_omitted = rsx! { <TypedEventButton label="Idle" /> };
+    assert!(matches!(view_omitted.root, NodeBlueprint::Element { .. }));
+
+    // Typed non-Option Rc<dyn Fn(usize)> onclick
+    let seen_idx = Rc::new(Cell::new(0usize));
+    let seen_idx_cb = Rc::clone(&seen_idx);
+    let view_indexed = rsx! {
+        <IndexedActionButton
+            index={42}
+            onclick={move |idx: usize| seen_idx_cb.set(idx)}
+        />
+    };
+    if let NodeBlueprint::Element { attributes, .. } = view_indexed.root {
+        let handler = attributes
+            .iter()
+            .find_map(|a| match a {
+                Attribute::EventListener {
+                    event: EventType::Click,
+                    handler,
+                } => Some(Rc::clone(handler)),
+                _ => None,
+            })
+            .expect("Expected EventType::Click handler");
+        handler(strata_dom::Event::default());
+        assert_eq!(seen_idx.get(), 42);
+    } else {
+        panic!("Expected Element");
+    }
+
+    // Both optional and required unit onclick callbacks continue to work with || closures
+    let opt_count = Rc::new(Cell::new(0usize));
+    let opt_cb = Rc::clone(&opt_count);
+    let req_count = Rc::new(Cell::new(0usize));
+    let req_cb = Rc::clone(&req_count);
+    let v_units = rsx! {
+        <div>
+            <UnitActionButtonOptional onclick={move || opt_cb.set(opt_cb.get() + 1)} />
+            <UnitActionButtonRequired onclick={move || req_cb.set(req_cb.get() + 1)} />
+        </div>
+    };
+    if let NodeBlueprint::Element { children, .. } = v_units.root {
+        for child in children {
+            if let NodeBlueprint::Element { attributes, .. } = child {
+                for a in attributes {
+                    if let Attribute::EventListener {
+                        event: EventType::Click,
+                        handler,
+                    } = a
+                    {
+                        handler(strata_dom::Event::default());
+                    }
+                }
+            }
+        }
+        assert_eq!(opt_count.get(), 1);
+        assert_eq!(req_count.get(), 1);
+    } else {
+        panic!("Expected Element");
+    }
+}
+
+#[component]
+fn ViewSlotCard(title: String, children: View) -> View {
+    rsx! {
+        <div class="card">
+            <h3>{title}</h3>
+            <div class="body">{children}</div>
+        </div>
+    }
+}
+
+#[component]
+fn OptViewSlotCard(children: Option<View>) -> View {
+    rsx! {
+        <div class="opt-card">
+            {children.unwrap_or_else(|| rsx! { <span>{"Fallback"}</span> })}
+        </div>
+    }
+}
+
+#[component]
+fn SingleNodeSlotCard(children: NodeBlueprint) -> View {
+    rsx! {
+        <div class="node-card">{children}</div>
+    }
+}
+
+#[test]
+fn test_component_children_view_and_node_blueprint_support() {
+    // Multi-child passed to children: View -> wraps into Fragment in .body
+    let v_multi = rsx! {
+        <ViewSlotCard title="Multi">
+            <span>{"One"}</span>
+            <span>{"Two"}</span>
+        </ViewSlotCard>
+    };
+    if let NodeBlueprint::Element { children, .. } = v_multi.root {
+        assert_eq!(children.len(), 2);
+        if let NodeBlueprint::Element { children: body_children, .. } = &children[1] {
+            assert_eq!(body_children.len(), 1);
+            if let NodeBlueprint::Fragment(inner) = &body_children[0] {
+                assert_eq!(inner.len(), 2);
+            } else {
+                panic!("Expected Fragment for 2 children in View, got {:?}", body_children[0]);
+            }
+        } else {
+            panic!("Expected .body Element");
+        }
+    } else {
+        panic!("Expected Element");
+    }
+
+    // Omitted children on children: View defaults cleanly to NodeBlueprint::Empty
+    let v_empty = rsx! { <ViewSlotCard title="Empty" /> };
+    if let NodeBlueprint::Element { children, .. } = v_empty.root {
+        if let NodeBlueprint::Element { children: body_children, .. } = &children[1] {
+            assert!(matches!(body_children.as_slice(), [NodeBlueprint::Empty]));
+        } else {
+            panic!("Expected .body Element");
+        }
+    } else {
+        panic!("Expected Element");
+    }
+
+    // children: Option<View> omitted vs provided
+    let v_opt_none = rsx! { <OptViewSlotCard /> };
+    if let NodeBlueprint::Element { children, .. } = v_opt_none.root {
+        assert!(matches!(
+            &children[0],
+            NodeBlueprint::Element { tag: Tag::Span, .. }
+        ));
+    } else {
+        panic!("Expected Element");
+    }
+
+    let v_opt_some = rsx! {
+        <OptViewSlotCard>
+            <p>{"Provided"}</p>
+        </OptViewSlotCard>
+    };
+    if let NodeBlueprint::Element { children, .. } = v_opt_some.root {
+        assert!(matches!(
+            &children[0],
+            NodeBlueprint::Element { tag: Tag::P, .. }
+        ));
+    } else {
+        panic!("Expected Element");
+    }
+
+    // children: NodeBlueprint single child & omitted
+    let v_node_single = rsx! {
+        <SingleNodeSlotCard>
+            <span>{"Leaf"}</span>
+        </SingleNodeSlotCard>
+    };
+    if let NodeBlueprint::Element { children, .. } = v_node_single.root {
+        assert!(matches!(
+            &children[0],
+            NodeBlueprint::Element { tag: Tag::Span, .. }
+        ));
+    } else {
+        panic!("Expected Element");
+    }
+
+    let v_node_empty = rsx! { <SingleNodeSlotCard /> };
+    if let NodeBlueprint::Element { children, .. } = v_node_empty.root {
+        assert!(matches!(&children[0], NodeBlueprint::Empty));
+    } else {
+        panic!("Expected Element");
+    }
+}

@@ -219,3 +219,97 @@ fn test_window_cursor_keyboard_shortcut_and_clipboard() {
     assert_eq!(clipboard.text.get(), "Copy test string");
     assert_eq!((clipboard.read_text)(), "Copy test string");
 }
+
+#[test]
+fn test_component_scoped_keyboard_shortcut_and_effect_cleanup_ergonomics() {
+    use std::cell::RefCell;
+    use strata_dom::reactive::{
+        reset_component_hooks, use_effect_with_deps, use_signal, with_root_component_scope,
+        ComponentScopeGuard,
+    };
+
+    reset_component_hooks();
+
+    let hits = Rc::new(RefCell::new(Vec::<usize>::new()));
+    let shortcut2_count = Rc::new(Cell::new(0usize));
+    let effect_runs = Rc::new(Cell::new(0usize));
+    let effect_cleanups = Rc::new(RefCell::new(Vec::<String>::new()));
+
+    let render_panel = |round: usize, chord2: &'static str, step: usize| {
+        let hits_r = Rc::clone(&hits);
+        let sc2_r = Rc::clone(&shortcut2_count);
+        let er_r = Rc::clone(&effect_runs);
+        let ec_r = Rc::clone(&effect_cleanups);
+
+        with_root_component_scope(|| {
+            let _comp = ComponentScopeGuard::enter("ShortcutPanel");
+
+            // Drop the temporary handle at the end of render; component hook slot keeps it alive
+            // and updates chord/handler in place across re-renders without duplicates.
+            let _h = use_keyboard_shortcut("Ctrl+Shift+Y", move || {
+                hits_r.borrow_mut().push(round);
+            });
+
+            // Convenience unit alias
+            use_shortcut(chord2, move || {
+                sc2_r.set(sc2_r.get() + round);
+            });
+
+            // Effect returning () -> no trailing None required!
+            use_effect_with_deps(step, |&s| {
+                er_r.set(s * 10);
+            });
+
+            // Effect returning concrete Box::new(...) -> no `as Box<dyn FnOnce()>` cast required!
+            let ec_box = Rc::clone(&ec_r);
+            use_effect_with_deps(step, move |&s| {
+                Box::new(move || ec_box.borrow_mut().push(format!("box:{s}")))
+            });
+
+            // Effect inside another effect still uses RAII drop instead of component hook slot
+            // (must not shift hook indices of subsequent use_signal).
+            use_effect_with_deps((), |_| {
+                let _ephemeral = use_keyboard_shortcut("Ctrl+Alt+E", || {});
+            });
+
+            let state = use_signal(round);
+            state.get()
+        })
+    };
+
+    // Mount render 1
+    assert_eq!(render_panel(1, "Ctrl+Alt+K", 1), 1);
+    assert_eq!(effect_runs.get(), 10);
+    assert!(effect_cleanups.borrow().is_empty());
+
+    // Surviving render drop: shortcuts stay registered after render_panel returns
+    assert!(dispatch_global_keydown("Y", true, true, false, false));
+    assert!(dispatch_global_keydown("K", true, false, true, false));
+    assert_eq!(*hits.borrow(), vec![1]);
+    assert_eq!(shortcut2_count.get(), 1);
+
+    // Re-render with round=2 and changed chord2="Ctrl+Shift+U"
+    assert_eq!(render_panel(2, "Ctrl+Shift+U", 2), 1);
+    assert_eq!(effect_runs.get(), 20);
+    assert_eq!(*effect_cleanups.borrow(), vec!["box:1".to_string()]);
+
+    // Updating in place refreshes closure (pushes 2, not stale 1) and replaces old chord2
+    assert!(dispatch_global_keydown("Y", true, true, false, false));
+    assert!(!dispatch_global_keydown("K", true, false, true, false));
+    assert!(dispatch_global_keydown("U", true, true, false, false));
+    assert_eq!(*hits.borrow(), vec![1, 2]);
+    assert_eq!(shortcut2_count.get(), 3); // 1 + 2
+
+    // Ephemeral shortcut registered & dropped inside use_effect_with_deps did NOT leak
+    assert!(!dispatch_global_keydown("E", true, false, true, false));
+
+    // Component unmount unregisters shortcuts and runs pending effect cleanups
+    reset_component_hooks();
+    assert!(!dispatch_global_keydown("Y", true, true, false, false));
+    assert!(!dispatch_global_keydown("U", true, true, false, false));
+    assert_eq!(
+        *effect_cleanups.borrow(),
+        vec!["box:1".to_string(), "box:2".to_string()]
+    );
+}
+

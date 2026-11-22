@@ -808,7 +808,10 @@ impl Effect {
             }
 
             // Run effect
-            let next_clean = effect_fn();
+            let next_clean = {
+                let _effect_guard = EffectBodyGuard::enter();
+                effect_fn()
+            };
             if let Ok(mut cleanup) = cleanup_runner.try_borrow_mut() {
                 *cleanup = next_clean;
             }
@@ -1095,11 +1098,43 @@ pub fn reset_component_hooks() {
     drop(evicted);
 }
 
+thread_local! {
+    static EFFECT_BODY_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+struct EffectBodyGuard;
+
+impl EffectBodyGuard {
+    #[inline]
+    fn enter() -> Self {
+        EFFECT_BODY_DEPTH.with(|d| d.set(d.get() + 1));
+        Self
+    }
+}
+
+impl Drop for EffectBodyGuard {
+    #[inline]
+    fn drop(&mut self) {
+        let _ = EFFECT_BODY_DEPTH.try_with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
+/// Returns `true` when executing directly inside a `#[component]` render body (not inside an
+/// `Effect` or `use_effect_with_deps` callback where hook slots must not be allocated).
+#[inline]
+pub(crate) fn in_component_hook_context() -> bool {
+    let in_effect = EFFECT_BODY_DEPTH.with(|d| d.get() > 0);
+    if in_effect {
+        return false;
+    }
+    HOOK_STORE.with(|store| !store.borrow().active_stack.is_empty())
+}
+
 /// Looks up or initializes the current hook slot for the active component frame.
 ///
 /// Returns `None` when called outside any `#[component]` scope so standalone unit tests
 /// and top-level state builders continue working without a component frame.
-fn use_hook_slot_cloned<T: Clone + 'static>(init: impl FnOnce() -> T) -> Option<T> {
+pub(crate) fn use_hook_slot_cloned<T: Clone + 'static>(init: impl FnOnce() -> T) -> Option<T> {
     enum Lookup<T> {
         NoScope,
         Hit(T),
@@ -1405,21 +1440,64 @@ where
     }
 }
 
+/// Converts the return value of a [`use_effect_with_deps`] callback into an optional cleanup closure.
+///
+/// Implemented for `()` (no cleanup, eliminating trailing `None`),
+/// `Option<Box<dyn FnOnce()>>` (backward compatible), `Box<dyn FnOnce()>`, and `Box<F>` for any
+/// `F: FnOnce() + 'static` without requiring manual trait-object casts.
+pub trait IntoEffectCleanup {
+    fn into_effect_cleanup(self) -> Option<Box<dyn FnOnce()>>;
+}
+
+impl IntoEffectCleanup for () {
+    #[inline]
+    fn into_effect_cleanup(self) -> Option<Box<dyn FnOnce()>> {
+        None
+    }
+}
+
+impl IntoEffectCleanup for Option<Box<dyn FnOnce()>> {
+    #[inline]
+    fn into_effect_cleanup(self) -> Option<Box<dyn FnOnce()>> {
+        self
+    }
+}
+
+impl IntoEffectCleanup for Box<dyn FnOnce()> {
+    #[inline]
+    fn into_effect_cleanup(self) -> Option<Box<dyn FnOnce()>> {
+        Some(self)
+    }
+}
+
+impl<F: FnOnce() + 'static> IntoEffectCleanup for Box<F> {
+    #[inline]
+    fn into_effect_cleanup(self) -> Option<Box<dyn FnOnce()>> {
+        Some(self)
+    }
+}
+
 /// React-style dependency-array effect hook.
 ///
 /// Runs `effect_fn(&deps)` on mount and whenever `deps` changes (`PartialEq`) across component
 /// re-renders, invoking the prior cleanup closure before re-running and again on unmount.
-pub fn use_effect_with_deps<D, F>(deps: D, effect_fn: F)
+/// Callbacks may return `()` (no cleanup), `Box::new(move || ...)` / `Box<dyn FnOnce()>`,
+/// or `Option<Box<dyn FnOnce()>>`.
+pub fn use_effect_with_deps<D, R, F>(deps: D, effect_fn: F)
 where
     D: PartialEq + 'static,
-    F: FnOnce(&D) -> Option<Box<dyn FnOnce()>>,
+    R: IntoEffectCleanup,
+    F: FnOnce(&D) -> R,
 {
     let mut effect_opt = Some(effect_fn);
     let mut deps_opt = Some(deps);
 
     if let Some(slot) = use_hook_slot_cloned(|| {
         let initial_deps = deps_opt.take().unwrap();
-        let initial_clean = (effect_opt.take().unwrap())(&initial_deps);
+        let initial_clean = {
+            let _effect_guard = EffectBodyGuard::enter();
+            (effect_opt.take().unwrap())(&initial_deps).into_effect_cleanup()
+        };
         let cleanup: CleanupCell = Rc::new(RefCell::new(initial_clean));
         OwnedDepsEffect {
             deps: Rc::new(RefCell::new(initial_deps)),
@@ -1435,14 +1513,18 @@ where
                 if let Some(clean) = prev_clean {
                     clean();
                 }
-                let next_clean = run_fn(&new_deps);
+                let next_clean = {
+                    let _effect_guard = EffectBodyGuard::enter();
+                    run_fn(&new_deps).into_effect_cleanup()
+                };
                 *slot.deps.borrow_mut() = new_deps;
                 *slot.cleanup.borrow_mut() = next_clean;
             }
         }
     } else if let (Some(d), Some(run_fn)) = (deps_opt.take(), effect_opt.take()) {
         // Standalone execution outside any component scope: run immediately.
-        let _ = run_fn(&d);
+        let _effect_guard = EffectBodyGuard::enter();
+        let _ = run_fn(&d).into_effect_cleanup();
     }
 }
 
