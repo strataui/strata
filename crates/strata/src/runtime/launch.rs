@@ -171,7 +171,9 @@ where
 ///
 /// On Linux GTK windows, `on_frame` is driven by the unified window scheduler at
 /// `interval` (or ~16 ms when `None`). Returning [`FrameOutcome::Dirty`] re-invokes
-/// `root_fn` and repaints; returning [`FrameOutcome::Unchanged`] skips rebuild and paint.
+/// `root_fn` and repaints; returning [`FrameOutcome::RepaintCanvas3D`] repaints
+/// retained `Canvas3D` viewports without rebuilding the DOM; returning
+/// [`FrameOutcome::Unchanged`] skips rebuild and paint.
 pub fn launch_with_frame<F, E, H>(
     root_fn: F,
     config: WindowConfig,
@@ -707,9 +709,15 @@ where
                             command_count: rt.display_list.commands.len(),
                             dt: elapsed,
                         };
-                        if cb(info, &mut rt).is_dirty() {
-                            needs_rebuild = true;
-                            needs_redraw = true;
+                        match cb(info, &mut rt) {
+                            FrameOutcome::Dirty => {
+                                needs_rebuild = true;
+                                needs_redraw = true;
+                            }
+                            FrameOutcome::RepaintCanvas3D => {
+                                rt.mark_viewport_3d_dirty();
+                            }
+                            FrameOutcome::Unchanged => {}
                         }
                     }
                 }

@@ -843,6 +843,8 @@ pub struct RetainedCameraUniforms {
     pub cloud_tint_rgb: [f32; 3],
     /// Weather-driven overhead 2.5D cloud coverage boost (`0.0..=1.0`).
     pub cloud_25d_cover_boost: f32,
+    /// Flat 2D map morph factor (`0.0` = 3D/2.5D perspective scene, `1.0` = flat 2D map imagery).
+    pub map_2d_morph: f32,
 }
 
 impl Default for RetainedCameraUniforms {
@@ -890,6 +892,7 @@ impl Default for RetainedCameraUniforms {
             weather_haze: 0.0,
             cloud_tint_rgb: [1.0, 1.0, 1.0],
             cloud_25d_cover_boost: 0.0,
+            map_2d_morph: 0.0,
         }
     }
 }

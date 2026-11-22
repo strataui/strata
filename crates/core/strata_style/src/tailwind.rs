@@ -1777,6 +1777,37 @@ impl TailwindEngine {
             }];
             return;
         }
+        if let Some(raw_list) = class
+            .strip_prefix("transition-[")
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            let (dur, easing, delay, behavior) = style
+                .transitions
+                .first()
+                .map(|s| (s.duration_ms, s.timing_function, s.delay_ms, s.behavior))
+                .unwrap_or((
+                    150.0,
+                    TransitionEasing::CubicBezier(0.4, 0.0, 0.2, 1.0),
+                    0.0,
+                    TransitionBehavior::Normal,
+                ));
+            let specs: Vec<TransitionSpec> = raw_list
+                .split(',')
+                .map(|part| part.trim())
+                .filter(|part| !part.is_empty())
+                .map(|part| TransitionSpec {
+                    property: TransitionProperty::parse(part),
+                    duration_ms: dur,
+                    timing_function: easing,
+                    delay_ms: delay,
+                    behavior,
+                })
+                .collect();
+            if !specs.is_empty() {
+                style.transitions = specs;
+                return;
+            }
+        }
 
         if let Some(dur_str) = class.strip_prefix("duration-") {
             let dur_ms = match dur_str {

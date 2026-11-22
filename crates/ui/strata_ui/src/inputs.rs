@@ -523,7 +523,7 @@ pub fn Select(
                 let highlighted = i == active_idx;
                 let pick = pick.clone();
                 let row_class = format!(
-                    "px-3.5 py-2 text-sm cursor-pointer {}",
+                    "px-3.5 py-2 text-sm whitespace-nowrap cursor-pointer {}",
                     if highlighted {
                         "bg-neutral-800 text-white"
                     } else {

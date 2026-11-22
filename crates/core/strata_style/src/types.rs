@@ -820,11 +820,22 @@ pub enum TransitionProperty {
     Transform,
     Width,
     Height,
+    MinWidth,
+    MaxWidth,
+    MinHeight,
+    MaxHeight,
     Margin,
     Padding,
     BorderColor,
     BorderWidth,
     BorderRadius,
+    Flex,
+    FlexGrow,
+    FlexShrink,
+    FlexBasis,
+    Gap,
+    GapRow,
+    GapCol,
     BoxShadow,
     Filter,
     BackdropFilter,
@@ -847,11 +858,22 @@ impl TransitionProperty {
             "transform" => Self::Transform,
             "width" => Self::Width,
             "height" => Self::Height,
+            "min-width" => Self::MinWidth,
+            "max-width" => Self::MaxWidth,
+            "min-height" => Self::MinHeight,
+            "max-height" => Self::MaxHeight,
             "margin" => Self::Margin,
             "padding" => Self::Padding,
             "border-color" => Self::BorderColor,
             "border-width" => Self::BorderWidth,
             "border-radius" => Self::BorderRadius,
+            "flex" => Self::Flex,
+            "flex-grow" => Self::FlexGrow,
+            "flex-shrink" => Self::FlexShrink,
+            "flex-basis" => Self::FlexBasis,
+            "gap" => Self::Gap,
+            "row-gap" | "gap-row" => Self::GapRow,
+            "column-gap" | "gap-col" => Self::GapCol,
             "box-shadow" => Self::BoxShadow,
             "filter" => Self::Filter,
             "backdrop-filter" => Self::BackdropFilter,
@@ -874,11 +896,27 @@ impl TransitionProperty {
             Self::Transform => target == "transform",
             Self::Width => target == "width",
             Self::Height => target == "height",
+            Self::MinWidth => target == "min-width",
+            Self::MaxWidth => target == "max-width",
+            Self::MinHeight => target == "min-height",
+            Self::MaxHeight => target == "max-height",
             Self::Margin => target.starts_with("margin"),
             Self::Padding => target.starts_with("padding"),
             Self::BorderColor => target.starts_with("border-color"),
             Self::BorderWidth => target.starts_with("border-width"),
             Self::BorderRadius => target.starts_with("border-radius"),
+            Self::Flex => {
+                target == "flex"
+                    || target == "flex-grow"
+                    || target == "flex-shrink"
+                    || target == "flex-basis"
+            }
+            Self::FlexGrow => target == "flex-grow",
+            Self::FlexShrink => target == "flex-shrink",
+            Self::FlexBasis => target == "flex-basis",
+            Self::Gap => target == "gap" || target == "row-gap" || target == "column-gap",
+            Self::GapRow => target == "row-gap",
+            Self::GapCol => target == "column-gap",
             Self::BoxShadow => target == "box-shadow",
             Self::Filter => target == "filter",
             Self::BackdropFilter => target == "backdrop-filter",
@@ -888,6 +926,30 @@ impl TransitionProperty {
             Self::ViewTransitionName => target == "view-transition-name",
             Self::Custom(c) => c.eq_ignore_ascii_case(target),
         }
+    }
+
+    /// Returns `true` when animating or transitioning this property affects box layout/reflow.
+    #[inline]
+    pub fn is_layout_affecting(&self) -> bool {
+        matches!(
+            self,
+            Self::Width
+                | Self::Height
+                | Self::MinWidth
+                | Self::MaxWidth
+                | Self::MinHeight
+                | Self::MaxHeight
+                | Self::Margin
+                | Self::Padding
+                | Self::BorderWidth
+                | Self::Flex
+                | Self::FlexGrow
+                | Self::FlexShrink
+                | Self::FlexBasis
+                | Self::Gap
+                | Self::GapRow
+                | Self::GapCol
+        )
     }
 
     /// Returns the canonical CSS property name string.
@@ -901,11 +963,22 @@ impl TransitionProperty {
             Self::Transform => "transform",
             Self::Width => "width",
             Self::Height => "height",
+            Self::MinWidth => "min-width",
+            Self::MaxWidth => "max-width",
+            Self::MinHeight => "min-height",
+            Self::MaxHeight => "max-height",
             Self::Margin => "margin",
             Self::Padding => "padding",
             Self::BorderColor => "border-color",
             Self::BorderWidth => "border-width",
             Self::BorderRadius => "border-radius",
+            Self::Flex => "flex",
+            Self::FlexGrow => "flex-grow",
+            Self::FlexShrink => "flex-shrink",
+            Self::FlexBasis => "flex-basis",
+            Self::Gap => "gap",
+            Self::GapRow => "row-gap",
+            Self::GapCol => "column-gap",
             Self::BoxShadow => "box-shadow",
             Self::Filter => "filter",
             Self::BackdropFilter => "backdrop-filter",

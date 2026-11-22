@@ -749,18 +749,29 @@ impl AnimationManager {
     pub fn has_layout_affecting_animations(&self) -> bool {
         self.node_animations.values().any(|list| {
             list.iter().filter(|anim| !anim.is_finished).any(|anim| {
-                anim.current_values.keys().any(|property| {
-                    matches!(
-                        property,
-                        TransitionProperty::Width
-                            | TransitionProperty::Height
-                            | TransitionProperty::Margin
-                            | TransitionProperty::Padding
-                            | TransitionProperty::BorderWidth
-                    )
-                })
+                anim.current_values
+                    .keys()
+                    .any(|property| property.is_layout_affecting())
             })
         })
+    }
+
+    /// Returns all node IDs currently driven by a layout-affecting keyframe animation.
+    pub fn layout_affecting_node_ids(&self) -> Vec<u64> {
+        self.node_animations
+            .iter()
+            .filter_map(|(&node_id, list)| {
+                if list.iter().filter(|a| !a.is_finished).any(|a| {
+                    a.current_values
+                        .keys()
+                        .any(|property| property.is_layout_affecting())
+                }) {
+                    Some(node_id)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Returns true if there are any active time-based animations (requiring continuous timer ticks).

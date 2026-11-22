@@ -423,3 +423,85 @@ fn test_single_line_input_nowrap_clip_and_caret_follow_scroll_x() {
     assert!(runtime.active_focus.is_none());
 }
 
+#[test]
+fn test_multiple_inputs_with_empty_id_attribute_never_collide() {
+    let mut runtime = AppRuntime::new(
+        rsx! {
+            <div class="flex flex-col gap-2 w-[320px] h-[160px] p-3">
+                <input id="" type="text" value="first" class="w-[200px] h-[28px]" />
+                <input id="" type="text" value="second" class="w-[200px] h-[28px]" />
+            </div>
+        },
+        320.0,
+        160.0,
+        1.0,
+    );
+
+    // Focus the second empty-id input and type '!'
+    let mut c1 = 0;
+    let second_box = AppRuntime::find_input_layout(
+        &runtime.root_blueprint,
+        &runtime.layout_root,
+        1,
+        None,
+        &mut c1,
+    )
+    .expect("second input layout")
+    .geometry
+    .content_box;
+
+    runtime.dispatch_pointer_down(second_box.x + 8.0, second_box.y + 8.0);
+    runtime.dispatch_pointer_up(second_box.x + 8.0, second_box.y + 8.0);
+    let active_second = runtime.active_focus.as_ref().expect("second input focused");
+    assert_eq!(active_second.input_index, 1);
+    assert_eq!(active_second.input_id, None, "empty id must resolve to None");
+    runtime.step_event(&PlatformEvent::KeyDown {
+        key: strata_platform::KeyCode::End,
+        modifiers: Modifiers::default(),
+    });
+    runtime.step_event(&PlatformEvent::ReceivedCharacter('!'));
+    assert_eq!(
+        runtime.active_focus.as_ref().unwrap().state.text.get(),
+        "second!"
+    );
+
+    // Focus the first empty-id input: must NOT inherit "second!" and must preserve "first"
+    let mut c0 = 0;
+    let first_box = AppRuntime::find_input_layout(
+        &runtime.root_blueprint,
+        &runtime.layout_root,
+        0,
+        None,
+        &mut c0,
+    )
+    .expect("first input layout")
+    .geometry
+    .content_box;
+
+    runtime.dispatch_pointer_down(first_box.x + 8.0, first_box.y + 8.0);
+    runtime.dispatch_pointer_up(first_box.x + 8.0, first_box.y + 8.0);
+    let active_first = runtime.active_focus.as_ref().expect("first input focused");
+    assert_eq!(active_first.input_index, 0);
+    assert_eq!(active_first.input_id, None);
+    assert_eq!(active_first.state.text.get(), "first");
+
+    runtime.step_event(&PlatformEvent::KeyDown {
+        key: strata_platform::KeyCode::End,
+        modifiers: Modifiers::default(),
+    });
+    runtime.step_event(&PlatformEvent::ReceivedCharacter('?'));
+    assert_eq!(
+        runtime.active_focus.as_ref().unwrap().state.text.get(),
+        "first?"
+    );
+
+    // Switching back to the second input preserves its edited "second!" buffer
+    runtime.dispatch_pointer_down(second_box.x + 8.0, second_box.y + 8.0);
+    runtime.dispatch_pointer_up(second_box.x + 8.0, second_box.y + 8.0);
+    assert_eq!(
+        runtime.active_focus.as_ref().unwrap().state.text.get(),
+        "second!"
+    );
+}
+
+

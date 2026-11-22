@@ -22,6 +22,26 @@ impl AppRuntime {
         None
     }
 
+    fn input_blueprint_matches_target(
+        attributes: &[strata_dom::Attribute],
+        this_idx: usize,
+        target_index: usize,
+        target_id: Option<&str>,
+    ) -> bool {
+        if let Some(tid) = target_id.filter(|s| !s.is_empty()) {
+            for attr in attributes {
+                if let strata_dom::Attribute::Property { key, value } = attr {
+                    if key == "id" && !value.is_empty() && value == tid {
+                        return true;
+                    }
+                }
+            }
+            false
+        } else {
+            this_idx == target_index
+        }
+    }
+
     pub(crate) fn collect_input_candidates(
         blueprint: &NodeBlueprint,
         layout: &LayoutNode,
@@ -67,7 +87,7 @@ impl AppRuntime {
                             strata_dom::Attribute::Property { key, value } => {
                                 if key == "value" {
                                     current_value = value.clone();
-                                } else if key == "id" {
+                                } else if key == "id" && !value.is_empty() {
                                     input_id = Some(value.clone());
                                 }
                             }
@@ -203,25 +223,12 @@ impl AppRuntime {
                     let this_idx = *counter;
                     *counter += 1;
 
-                    let mut matches_id = false;
-                    if let Some(tid) = target_id {
-                        for attr in attributes {
-                            if let strata_dom::Attribute::Property { key, value } = attr {
-                                if key == "id" && value == tid {
-                                    matches_id = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    let is_match = if target_id.is_some() {
-                        matches_id
-                    } else {
-                        this_idx == target_index
-                    };
-
-                    if is_match {
+                    if Self::input_blueprint_matches_target(
+                        attributes,
+                        this_idx,
+                        target_index,
+                        target_id,
+                    ) {
                         return Some(layout);
                     }
                 }
@@ -303,25 +310,12 @@ impl AppRuntime {
                     let this_idx = *counter;
                     *counter += 1;
 
-                    let mut matches_id = false;
-                    if let Some(tid) = target_id {
-                        for attr in attributes {
-                            if let strata_dom::Attribute::Property { key, value } = attr {
-                                if key == "id" && value == tid {
-                                    matches_id = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    let is_match = if target_id.is_some() {
-                        matches_id
-                    } else {
-                        this_idx == target_index
-                    };
-
-                    if is_match {
+                    if Self::input_blueprint_matches_target(
+                        attributes,
+                        this_idx,
+                        target_index,
+                        target_id,
+                    ) {
                         return Some(layout);
                     }
                 }
@@ -401,25 +395,12 @@ impl AppRuntime {
                     let this_idx = *counter;
                     *counter += 1;
 
-                    let mut matches_id = false;
-                    if let Some(tid) = target_id {
-                        for attr in attributes {
-                            if let strata_dom::Attribute::Property { key, value } = attr {
-                                if key == "id" && value == tid {
-                                    matches_id = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    let is_match = if target_id.is_some() {
-                        matches_id
-                    } else {
-                        this_idx == target_index
-                    };
-
-                    if is_match {
+                    if Self::input_blueprint_matches_target(
+                        attributes,
+                        this_idx,
+                        target_index,
+                        target_id,
+                    ) {
                         return Some(blueprint);
                     }
                 }

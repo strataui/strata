@@ -388,3 +388,40 @@ fn native_animation_tick_rebuilds_on_programmatic_signal_and_mark_dirty() {
     assert!(reb2 && red2);
     let _ = strata_dom::reactive::take_dirty_signals();
 }
+
+#[test]
+fn frame_outcome_repaint_canvas_3d_marks_viewport_without_dom_rebuild() {
+    assert!(!FrameOutcome::Unchanged.is_dirty());
+    assert!(!FrameOutcome::Unchanged.needs_any_repaint());
+    assert!(!FrameOutcome::RepaintCanvas3D.is_dirty());
+    assert!(FrameOutcome::RepaintCanvas3D.is_canvas3d_dirty());
+    assert!(FrameOutcome::RepaintCanvas3D.needs_any_repaint());
+    assert!(FrameOutcome::Dirty.is_dirty());
+    assert!(FrameOutcome::Dirty.needs_any_repaint());
+
+    let mut rt = AppRuntime::new(counter_view(0), 200.0, 100.0, 1.0);
+    let _ = rt.compile_display_list_if_dirty();
+    let baseline_skipped = rt.compiles_skipped();
+
+    let cb = |_info: AppFrameInfo, _rt: &mut AppRuntime| FrameOutcome::RepaintCanvas3D;
+    let info = AppFrameInfo {
+        frame_index: 1,
+        viewport_width: 200.0,
+        viewport_height: 100.0,
+        dpr: 1.0,
+        command_count: rt.display_list.commands.len(),
+        dt: Duration::from_millis(16),
+    };
+    let outcome = cb(info, &mut rt);
+    assert!(!outcome.is_dirty());
+    if outcome.is_canvas3d_dirty() {
+        rt.mark_viewport_3d_dirty();
+    }
+    assert!(rt.poll_retained_3d_dirty());
+    assert!(
+        !rt.compile_display_list_if_dirty(),
+        "RepaintCanvas3D must not mark 2D DOM/display-list dirty"
+    );
+    assert_eq!(rt.compiles_skipped(), baseline_skipped + 1);
+}
+

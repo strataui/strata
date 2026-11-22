@@ -244,6 +244,7 @@ pub struct PortalBuilder {
     shift: Option<bool>,
     padding: Option<f32>,
     match_width: Option<bool>,
+    min_width_from_anchor: Option<bool>,
     class: Option<ClassList>,
     style: Option<String>,
     onclick: Option<Attribute>,
@@ -303,6 +304,11 @@ impl PortalBuilder {
 
     pub fn match_width(mut self, match_width: impl IntoPortalBool) -> Self {
         self.match_width = Some(match_width.into_portal_bool());
+        self
+    }
+
+    pub fn min_width_from_anchor(mut self, min_width_from_anchor: impl IntoPortalBool) -> Self {
+        self.min_width_from_anchor = Some(min_width_from_anchor.into_portal_bool());
         self
     }
 
@@ -371,6 +377,12 @@ impl PortalBuilder {
                 if match_width { "true" } else { "false" },
             ));
         }
+        if let Some(min_width_from_anchor) = self.min_width_from_anchor {
+            attrs.push(Attribute::property(
+                "data-portal-min-width",
+                if min_width_from_anchor { "true" } else { "false" },
+            ));
+        }
         if let Some(style) = self.style {
             attrs.push(Attribute::property("style", style));
         }
@@ -436,6 +448,13 @@ where
         ],
         Vec::new(),
     );
-    let anchored_menu = create_anchored_portal(anchor_id, placement, offset, menu).root;
+    let anchored_menu = Portal::builder()
+        .anchor(anchor_id.into())
+        .placement(placement)
+        .offset(offset)
+        .min_width_from_anchor(true)
+        .children(vec![menu.into_node_blueprint()])
+        .build()
+        .root;
     View::new(NodeBlueprint::Fragment(vec![backdrop, anchored_menu]))
 }

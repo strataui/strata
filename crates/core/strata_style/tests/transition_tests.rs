@@ -265,3 +265,34 @@ fn test_transition_manager_lifecycle_and_retargeting() {
     manager.apply_to_style(node_id, &mut final_style);
     assert_eq!(final_style.opacity, 1.0);
 }
+
+#[test]
+fn test_tailwind_arbitrary_layout_transition_list_and_cross_unit_dimension_interp() {
+    let style = TailwindEngine::resolve_classes("duration-300 transition-[width,height,flex-grow,gap]");
+    assert_eq!(style.transitions.len(), 4);
+    assert_eq!(style.transitions[0].property, TransitionProperty::Width);
+    assert_eq!(style.transitions[1].property, TransitionProperty::Height);
+    assert_eq!(style.transitions[2].property, TransitionProperty::FlexGrow);
+    assert_eq!(style.transitions[3].property, TransitionProperty::Gap);
+    assert!(style.transitions.iter().all(|s| s.property.is_layout_affecting()));
+    assert!(style.transitions.iter().all(|s| (s.duration_ms - 300.0).abs() < 1e-3));
+
+    // Zero Px <-> Rem cross-unit interpolation & Px <-> Rem interpolation
+    assert_eq!(
+        interpolate_dimension(&Dimension::Px(0.0), &Dimension::Rem(10.0), 0.5),
+        Dimension::Px(80.0)
+    );
+    assert_eq!(
+        interpolate_dimension(&Dimension::Px(0.0), &Dimension::Percent(80.0), 0.5),
+        Dimension::Percent(40.0)
+    );
+    assert_eq!(
+        interpolate_dimension(&Dimension::Percent(80.0), &Dimension::Px(0.0), 0.25),
+        Dimension::Percent(60.0)
+    );
+    assert_eq!(
+        interpolate_dimension(&Dimension::Px(16.0), &Dimension::Rem(2.0), 0.5),
+        Dimension::Px(24.0)
+    );
+}
+

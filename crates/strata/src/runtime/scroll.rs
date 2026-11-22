@@ -557,6 +557,7 @@ impl AppRuntime {
             };
 
             let mut active_box = cur_box;
+            let max_vp_width = (viewport_rect.width - 2.0 * spec.viewport_padding).max(0.0);
             if spec.match_width && (active_box.width - anchor_rect.width).abs() > 0.5 {
                 let prior = self
                     .applied_portal_offsets
@@ -575,6 +576,54 @@ impl AppRuntime {
                         true,
                     );
                     active_box = target.geometry.border_box;
+                }
+            } else if !spec.match_width && spec.min_width_from_anchor {
+                let target_min_w = if max_vp_width > 0.0 {
+                    anchor_rect.width.min(max_vp_width)
+                } else {
+                    anchor_rect.width
+                };
+                let existing_min_px = match Self::get_layout_node_mut(&mut self.layout_root, &portal_path)
+                    .map(|n| n.style.min_width)
+                {
+                    Some(strata_style::types::Dimension::Px(px)) => px,
+                    _ => 0.0,
+                };
+                let needs_min_resize =
+                    active_box.width + 0.5 < target_min_w || existing_min_px < target_min_w - 0.5;
+                let needs_max_cap = max_vp_width > 0.0 && active_box.width > max_vp_width + 0.5;
+                if needs_min_resize || needs_max_cap {
+                    let prior = self
+                        .applied_portal_offsets
+                        .remove(&portal_path)
+                        .unwrap_or((0.0, 0.0));
+                    if let Some(target) =
+                        Self::get_layout_node_mut(&mut self.layout_root, &portal_path)
+                    {
+                        if prior.0.abs() > 0.0001 || prior.1.abs() > 0.0001 {
+                            target.translate(-prior.0, -prior.1);
+                        }
+                        if target_min_w > existing_min_px {
+                            target.style.min_width =
+                                strata_style::types::Dimension::Px(target_min_w);
+                        }
+                        if max_vp_width > 0.0
+                            && matches!(
+                                target.style.max_width,
+                                strata_style::types::Dimension::Auto
+                            )
+                        {
+                            target.style.max_width =
+                                strata_style::types::Dimension::Px(max_vp_width);
+                        }
+                        strata_layout::solve_out_of_flow_box(
+                            target,
+                            viewport_rect,
+                            viewport_rect,
+                            true,
+                        );
+                        active_box = target.geometry.border_box;
+                    }
                 }
             }
 

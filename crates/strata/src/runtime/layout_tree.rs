@@ -987,6 +987,7 @@ impl AppRuntime {
         let mut shift_opt: Option<bool> = None;
         let mut padding_opt: Option<f32> = None;
         let mut match_width_opt: Option<bool> = None;
+        let mut min_width_from_anchor_opt: Option<bool> = None;
         let mut inline_style_raw: Option<&str> = None;
 
         for attr in attributes {
@@ -1051,6 +1052,12 @@ impl AppRuntime {
                             "true" | "1" | "yes" | "on"
                         ));
                     }
+                    "data-portal-min-width" => {
+                        min_width_from_anchor_opt = Some(matches!(
+                            v.to_ascii_lowercase().as_str(),
+                            "true" | "1" | "yes" | "on"
+                        ));
+                    }
                     "style" => {
                         inline_style_raw = Some(v);
                     }
@@ -1085,6 +1092,7 @@ impl AppRuntime {
                 shift: shift_opt.unwrap_or(true),
                 viewport_padding: padding_opt.unwrap_or(8.0),
                 match_width: match_width_opt.unwrap_or(false),
+                min_width_from_anchor: min_width_from_anchor_opt.unwrap_or(false),
             })
         });
 

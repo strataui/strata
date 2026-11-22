@@ -169,6 +169,7 @@ struct GpuCameraUniforms {
     atmo_25d_params: [f32; 4],    // x = realistic_25d_sky, y = night_stars_25d, z = terrain_25d_lighting, w = terrain_25d_shadows
     weather_opt_params: [f32; 4], // x = weather_darkness, y = weather_cloud_cover, z = weather_haze, w = shadow_radius_m
     cloud_tint_params: [f32; 4],  // xyz = cloud_tint_rgb, w = cloud_25d_cover_boost
+    view_flags: [f32; 4],         // x = map_2d_morph (0..1), yzw = reserved
 }
 
 fn dot3_f64(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -450,6 +451,7 @@ impl GpuCameraUniforms {
                 cam.cloud_tint_rgb[2].clamp(0.0, 2.0),
                 cam.cloud_25d_cover_boost.clamp(0.0, 1.0),
             ],
+            view_flags: [cam.map_2d_morph.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
         }
     }
 }
@@ -690,6 +692,7 @@ struct GpuCameraUniforms {
     atmo_25d_params: vec4<f32>,
     weather_opt_params: vec4<f32>,
     cloud_tint_params: vec4<f32>,
+    view_flags: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> cam: GpuCameraUniforms;
@@ -1033,6 +1036,7 @@ struct GpuCameraUniforms {
     atmo_25d_params: vec4<f32>,
     weather_opt_params: vec4<f32>,
     cloud_tint_params: vec4<f32>,
+    view_flags: vec4<f32>,
 }
 
 struct GpuStar {
@@ -1142,6 +1146,7 @@ struct GpuCameraUniforms {
     atmo_25d_params: vec4<f32>,
     weather_opt_params: vec4<f32>,
     cloud_tint_params: vec4<f32>,
+    view_flags: vec4<f32>,
 }
 
 struct GpuOceanUniforms {
@@ -1195,38 +1200,7 @@ struct TerrainVsOut {
     @location(7) night_uv: vec2<f32>,
     @location(8) @interpolate(flat) night_layer: u32,
     @location(9) land_uv_approx: vec2<f32>,
-}
-
-@vertex
-fn vs_terrain(
-    @builtin(vertex_index) local_v: u32,
-    @builtin(instance_index) inst_id: u32,
-) -> TerrainVsOut {
-    let inst = instances[inst_id];
-    let v = vertices[inst.tile_meta.x + local_v];
-    let center_rel = (inst.center_high.xyz - cam.eye_high.xyz)
-                   + (inst.center_low.xyz - cam.eye_low.xyz);
-    let world_rel = center_rel + v.pos_u.xyz;
-    let raw_uv = vec2<f32>(v.pos_u.w, v.norm_v.w);
-    let ecef_p = (inst.center_high.xyz + inst.center_low.xyz) + v.pos_u.xyz;
-    let dv = normalize(ecef_p);
-
-    var out: TerrainVsOut;
-    out.clip_pos = cam.view_proj_rte * vec4<f32>(world_rel, 1.0);
-    out.normal = normalize(v.norm_v.xyz);
-    out.uv = mix(inst.uv_rect.xy, inst.uv_rect.zw, raw_uv);
-    out.tint = inst.tint;
-    out.tex_layer = inst.tile_meta.y;
-    out.unlit = inst.tile_meta.z;
-    out.ecef_pos = ecef_p;
-    out.view_rel = world_rel;
-    out.night_uv = mix(inst.night_uv_rect.xy, inst.night_uv_rect.zw, raw_uv);
-    out.night_layer = inst.tile_meta.w;
-    out.land_uv_approx = vec2<f32>(
-        atan2(dv.y, dv.x) * 0.15915494309 + 0.5,
-        clamp(0.5 - asin(clamp(dv.z, -1.0, 1.0)) * 0.31830988618, 0.001, 0.999),
-    );
-    return out;
+    @location(10) world_mod_256: vec3<f32>,
 }
 
 fn hash21(p: vec2<f32>) -> f32 {
@@ -1244,6 +1218,168 @@ fn vnoise2(x: vec2<f32>) -> f32 {
     let n01 = hash21(i + vec2<f32>(0.0, 1.0));
     let n11 = hash21(i + vec2<f32>(1.0, 1.0));
     return mix(mix(n00, n10, u.x), mix(n01, n11, u.x), u.y);
+}
+
+// Returns Gerstner trochoidal wave displacement vec3(disp_east_m, disp_north_m, disp_up_m).
+fn eval_ocean_vertex_train(
+    pos_en: vec2<f32>,
+    wind_dir: vec2<f32>,
+    wind_speed: f32,
+    t: f32,
+    wave_scale: f32,
+    sample_scale_m: f32,
+    shoal_boost: f32,
+) -> vec3<f32> {
+    let dir0 = normalize(wind_dir);
+    let perp0 = vec2<f32>(-dir0.y, dir0.x);
+
+    let warp_en = vec2<f32>(
+        vnoise2(pos_en * 0.0045 + vec2<f32>(0.0, t * 0.03)) - 0.5,
+        vnoise2(pos_en * 0.0045 + vec2<f32>(19.3, -t * 0.025)) - 0.5,
+    ) * 18.0;
+    let p_eff = pos_en + warp_en;
+
+    let beaufort = clamp((wind_speed - 0.5) / 14.0, 0.06, 2.2);
+    let len_wind = mix(0.42, 1.85, clamp(wind_speed / 18.0, 0.0, 1.4));
+    let offshore_atten = mix(1.0, 0.42, shoal_boost);
+
+    var angs = array<f32, 4>(0.0, 0.24, -0.31, 0.56);
+    var wls = array<f32, 4>(138.0, 82.0, 47.0, 26.0);
+    var amps = array<f32, 4>(0.056, 0.048, 0.040, 0.032);
+    var phases = array<f32, 4>(0.0, 1.41, 2.83, 4.19);
+
+    var disp = vec3<f32>(0.0);
+    for (var i: u32 = 0u; i < 4u; i = i + 1u) {
+        let wl = max((wls[i] * len_wind) / max(wave_scale, 0.15), 4.0);
+        let aa_vs = 1.0 - smoothstep(wl * 0.28, wl * 0.95, sample_scale_m);
+        if (aa_vs > 0.008) {
+            let ca = cos(angs[i]);
+            let sa = sin(angs[i]);
+            let d = dir0 * ca + perp0 * sa;
+            let k = 6.2831853 / wl;
+            let omega = sqrt(9.81 * k);
+            let ph = dot(d, p_eff) * k - omega * t + phases[i];
+            let steep = amps[i] * beaufort * offshore_atten * aa_vs;
+            let amp_m = (steep / k) * 0.52;
+            let q_m = amp_m * 0.55;
+            disp.x += d.x * (cos(ph) * q_m);
+            disp.y += d.y * (cos(ph) * q_m);
+            disp.z += sin(ph) * amp_m;
+        }
+    }
+    return disp;
+}
+
+@vertex
+fn vs_terrain(
+    @builtin(vertex_index) local_v: u32,
+    @builtin(instance_index) inst_id: u32,
+) -> TerrainVsOut {
+    let inst = instances[inst_id];
+    let v = vertices[inst.tile_meta.x + local_v];
+    let center_rel = (inst.center_high.xyz - cam.eye_high.xyz)
+                   + (inst.center_low.xyz - cam.eye_low.xyz);
+    var world_rel = center_rel + v.pos_u.xyz;
+    let raw_uv = vec2<f32>(v.pos_u.w, v.norm_v.w);
+    var ecef_p = (inst.center_high.xyz + inst.center_low.xyz) + v.pos_u.xyz;
+    let dv = normalize(ecef_p);
+    let land_uv = vec2<f32>(
+        atan2(dv.y, dv.x) * 0.15915494309 + 0.5,
+        clamp(0.5 - asin(clamp(dv.z, -1.0, 1.0)) * 0.31830988618, 0.001, 0.999),
+    );
+
+    let map_2d = clamp(cam.view_flags.x, 0.0, 1.0);
+    let ocean_on = ocean.origin_high.w * ocean.origin_low.w * (1.0 - map_2d);
+    if (ocean_on > 0.002 && inst.tile_meta.z == 0u) {
+        let cam_minus_orig = (cam.eye_high.xyz - ocean.origin_high.xyz)
+                           + (cam.eye_low.xyz - ocean.origin_low.xyz);
+        let p_rel_orig = world_rel + cam_minus_orig;
+        let east_v = ocean.basis_east.xyz;
+        let north_v = ocean.basis_north.xyz;
+        let up_v = ocean.basis_up.xyz;
+        let pos_en = vec2<f32>(dot(p_rel_orig, east_v), dot(p_rel_orig, north_v));
+        let rel_h = dot(p_rel_orig, up_v);
+        let eye_pos = cam.eye_high.xyz + cam.eye_low.xyz;
+        let eye_r = length(eye_pos);
+        let blend_25d = clamp(cam.env_params.z, 0.0, 1.0) * (1.0 - map_2d);
+        let curve_sag = select(0.0, 1.0, eye_r > 1000000.0)
+            * (1.0 - blend_25d)
+            * dot(pos_en, pos_en)
+            / (2.0 * 6378137.0);
+        let sea_elev = rel_h + curve_sag;
+        let elev_water = 1.0 - smoothstep(-0.25, 2.2, sea_elev);
+        let env_mask_vs = textureSampleLevel(land_mask_tex, terrain_sampler, land_uv, 0.0).r;
+        let open_ocean_vs = 1.0 - smoothstep(0.08, 0.42, env_mask_vs);
+
+        let half_span = max(ocean.coastal_params.y, 50.0);
+        let sdf_uv = (pos_en - ocean.coastal_params.zw) / (2.0 * half_span) + vec2<f32>(0.5);
+        let in_sdf = smoothstep(0.01, 0.09, sdf_uv.x) * (1.0 - smoothstep(0.91, 0.99, sdf_uv.x))
+                   * smoothstep(0.01, 0.09, sdf_uv.y) * (1.0 - smoothstep(0.91, 0.99, sdf_uv.y));
+        let sdf_s = textureSampleLevel(
+            coastal_sdf_tex,
+            coastal_sdf_sampler,
+            clamp(sdf_uv, vec2<f32>(0.002), vec2<f32>(0.998)),
+            0.0,
+        );
+        let use_sdf = ocean.blend_params.w * in_sdf;
+        let shore_dist_norm = mix(1.0, sdf_s.g, use_sdf);
+        let shore_taper = mix(1.0, smoothstep(0.02, 0.16, shore_dist_norm), use_sdf);
+        let shoal_boost = use_sdf * (1.0 - smoothstep(0.04, 0.45, shore_dist_norm));
+        let water_vs = clamp(mix(open_ocean_vs, sdf_s.r, use_sdf) * elev_water * shore_taper, 0.0, 1.0);
+
+        if (water_vs > 0.005) {
+            let view_dist = length(world_rel);
+            let sample_scale_m = max(view_dist * 0.022, 1.0);
+            let wave_strength = ocean.basis_east.w;
+            let wave_scale = ocean.basis_north.w;
+            let wa = ocean.blend_params.x;
+            let wb = ocean.blend_params.y;
+            let w_sum = max(wa + wb, 1e-4);
+            var disp_enu = vec3<f32>(0.0);
+            if (wa > 0.002) {
+                disp_enu += eval_ocean_vertex_train(
+                    pos_en,
+                    ocean.train_a.xy,
+                    ocean.train_a.z,
+                    ocean.train_a.w,
+                    wave_scale,
+                    sample_scale_m,
+                    shoal_boost,
+                ) * wa;
+            }
+            if (wb > 0.002) {
+                disp_enu += eval_ocean_vertex_train(
+                    pos_en,
+                    ocean.train_b.xy,
+                    ocean.train_b.z,
+                    ocean.train_b.w,
+                    wave_scale,
+                    sample_scale_m,
+                    shoal_boost,
+                ) * wb;
+            }
+            disp_enu = (disp_enu / w_sum) * wave_strength * water_vs * ocean_on * ocean.blend_params.z;
+            let disp_world = east_v * disp_enu.x + north_v * disp_enu.y + up_v * disp_enu.z;
+            world_rel += disp_world;
+            ecef_p += disp_world;
+        }
+    }
+
+    let mod_base = floor(inst.center_high.xyz * (1.0 / 256.0)) * 256.0;
+    var out: TerrainVsOut;
+    out.clip_pos = cam.view_proj_rte * vec4<f32>(world_rel, 1.0);
+    out.normal = normalize(v.norm_v.xyz);
+    out.uv = mix(inst.uv_rect.xy, inst.uv_rect.zw, raw_uv);
+    out.tint = inst.tint;
+    out.tex_layer = inst.tile_meta.y;
+    out.unlit = inst.tile_meta.z;
+    out.ecef_pos = ecef_p;
+    out.view_rel = world_rel;
+    out.night_uv = mix(inst.night_uv_rect.xy, inst.night_uv_rect.zw, raw_uv);
+    out.night_layer = inst.tile_meta.w;
+    out.land_uv_approx = land_uv;
+    out.world_mod_256 = (inst.center_high.xyz - mod_base) + inst.center_low.xyz + v.pos_u.xyz;
+    return out;
 }
 
 fn sample_shadow_pcf(world_rel: vec3<f32>, n_mesh: vec3<f32>, sun_dir: vec3<f32>, shadow_radius: f32) -> f32 {
@@ -1371,8 +1507,56 @@ fn eval_ocean_train(
     return vec3<f32>(slope.x, slope.y, crest_acc);
 }
 
+fn hash31(p: vec3<f32>) -> f32 {
+    var q = fract(p * vec3<f32>(0.1031, 0.1030, 0.0973));
+    q += dot(q, q.yxz + 33.33);
+    return fract((q.x + q.y) * q.z);
+}
+
+fn vnoise3_periodic(p_mod_256: vec3<f32>, period: f32) -> f32 {
+    let x = p_mod_256 * (period * (1.0 / 256.0));
+    let i0 = floor(x);
+    let f = fract(x);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = i0 - floor(i0 / period) * period;
+    let i1_raw = i0 + vec3<f32>(1.0);
+    let b = i1_raw - floor(i1_raw / period) * period;
+
+    let c000 = hash31(vec3<f32>(a.x, a.y, a.z));
+    let c100 = hash31(vec3<f32>(b.x, a.y, a.z));
+    let c010 = hash31(vec3<f32>(a.x, b.y, a.z));
+    let c110 = hash31(vec3<f32>(b.x, b.y, a.z));
+    let c001 = hash31(vec3<f32>(a.x, a.y, b.z));
+    let c101 = hash31(vec3<f32>(b.x, a.y, b.z));
+    let c011 = hash31(vec3<f32>(a.x, b.y, b.z));
+    let c111 = hash31(vec3<f32>(b.x, b.y, b.z));
+
+    let x00 = mix(c000, c100, u.x);
+    let x10 = mix(c010, c110, u.x);
+    let x01 = mix(c001, c101, u.x);
+    let x11 = mix(c011, c111, u.x);
+    return mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
+}
+
+fn eval_micro_height(p_mod_256: vec3<f32>, raw_px_m: f32) -> f32 {
+    let w8 = 1.0 - smoothstep(1.2, 4.0, raw_px_m);
+    let w2 = 1.0 - smoothstep(0.32, 1.0, raw_px_m);
+    let w05 = 1.0 - smoothstep(0.08, 0.30, raw_px_m);
+    let w01 = 1.0 - smoothstep(0.02, 0.08, raw_px_m);
+    var h = (vnoise3_periodic(p_mod_256, 32.0) - 0.5) * 0.44 * w8;
+    h += (vnoise3_periodic(p_mod_256, 128.0) - 0.5) * 0.30 * w2;
+    if (w05 > 0.01) {
+        h += (vnoise3_periodic(p_mod_256, 512.0) - 0.5) * 0.18 * w05;
+    }
+    if (w01 > 0.01) {
+        h += (vnoise3_periodic(p_mod_256, 2048.0) - 0.5) * 0.10 * w01;
+    }
+    return h;
+}
+
 fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
-    if (in.unlit != 0u) {
+    let map_2d = clamp(cam.view_flags.x, 0.0, 1.0);
+    if (in.unlit != 0u || map_2d >= 0.99) {
         return base;
     }
 
@@ -1382,7 +1566,7 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
 
     let dn_strength = clamp(cam.env_params.x, 0.0, 1.0);
     let city_strength = max(cam.env_params.y, 0.0);
-    let blend_25d = clamp(cam.env_params.z, 0.0, 1.0);
+    let blend_25d = clamp(cam.env_params.z, 0.0, 1.0) * (1.0 - map_2d);
     let real_sky_w = clamp(cam.atmo_25d_params.x, 0.0, 1.0);
     let night_star_w = clamp(cam.atmo_25d_params.y, 0.0, 1.0);
     let lit_25d_w = clamp(cam.atmo_25d_params.z, 0.0, 1.0);
@@ -1396,10 +1580,10 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
     let eye_r = length(eye_pos);
     let local_up = select(vec3<f32>(0.0, 1.0, 0.0), d, eye_r > 1000000.0);
     let ndotl = dot(local_up, sun_dir);
-    let slope_ndotl = max(dot(n_mesh, sun_dir), 0.0);
 
     // Keep derivatives & texture lookups in uniform control flow for WGSL validation.
-    let px_m = max(length(fwidth(in.view_rel)), 0.15);
+    let raw_px_m = length(fwidth(in.view_rel));
+    let px_m = max(raw_px_m, 0.15);
     var u = fract(in.land_uv_approx.x);
     var v = in.land_uv_approx.y;
     if ((d.x < -0.5 && abs(d.y) < 0.14) || abs(d.z) > 0.95) {
@@ -1410,6 +1594,32 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
     let env_mask = textureSampleLevel(land_mask_tex, terrain_sampler, vec2<f32>(u, v), env_lod);
     let on_land = smoothstep(0.18, 0.55, env_mask.r);
 
+    // Close-ground (< ~50-80m) procedural micro-albedo grain & micro-normal bump on land surfaces.
+    let is_water_est = clamp(
+        (1.0 - smoothstep(0.08, 0.42, env_mask.r))
+            + select(0.0, 0.85, (base.b - base.r > 0.015) && env_mask.r < 0.65),
+        0.0,
+        1.0,
+    );
+    let micro_w = (1.0 - smoothstep(0.05, 0.80, raw_px_m)) * (1.0 - is_water_est) * (1.0 - map_2d);
+    var n_lit = n_mesh;
+    var base_micro_rgb = base.rgb;
+    if (micro_w > 0.005) {
+        let up_ref = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(n_mesh.y) > 0.9);
+        let t_e = normalize(cross(up_ref, n_mesh));
+        let t_n = cross(n_mesh, t_e);
+        let h0 = eval_micro_height(in.world_mod_256, raw_px_m);
+        let eps = max(raw_px_m * 0.75, 0.06);
+        let he = eval_micro_height(in.world_mod_256 + t_e * eps, raw_px_m);
+        let hn = eval_micro_height(in.world_mod_256 + t_n * eps, raw_px_m);
+        let slope_e = ((he - h0) / eps) * 0.16 * micro_w;
+        let slope_n = ((hn - h0) / eps) * 0.16 * micro_w;
+        n_lit = normalize(n_mesh - t_e * slope_e - t_n * slope_n);
+        let albedo_mod = 1.0 + h0 * (0.24 * micro_w);
+        base_micro_rgb = clamp(base.rgb * albedo_mod, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    let slope_ndotl = max(dot(n_lit, sun_dir), 0.0);
+
     // Hardware 9-tap PCF directional shadow sampling (uniform control flow).
     var shadow_factor = 1.0;
     if (shadow_w > 0.001) {
@@ -1418,7 +1628,7 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
     }
 
     // --- Orbital 3D lighting ---
-    let slope_shade = clamp(1.0 + (dot(n_mesh, sun_dir) - ndotl) * 0.35 * blend_25d, 0.82, 1.18);
+    let slope_shade = clamp(1.0 + (dot(n_lit, sun_dir) - ndotl) * 0.35 * blend_25d, 0.82, 1.18);
     let terminator = smoothstep(-0.14, 0.16, ndotl);
     let tn = ndotl * 7.5;
     let twilight = exp(-tn * tn) * vec3<f32>(0.42, 0.18, 0.06);
@@ -1446,7 +1656,7 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
         let slope_term = clamp(slope_ndotl / max(sun_elev, 0.28), 0.0, 1.38);
         let direct_sun = sun_tint * (0.76 * slope_term * direct_intensity * shadow_factor);
 
-        let sky_hemi = 0.5 + 0.5 * dot(n_mesh, local_up);
+        let sky_hemi = 0.5 + 0.5 * dot(n_lit, local_up);
         let day_amb = mix(vec3<f32>(0.22, 0.28, 0.40), vec3<f32>(0.34, 0.42, 0.54), sky_hemi)
             * mix(1.0, 0.72, weather_dark);
         let sunset_amb = vec3<f32>(0.30, 0.22, 0.26) * golden_t * 0.55;
@@ -1457,10 +1667,10 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
         lit = mix(lit, lit_25d, local_lit_blend);
     }
 
-    var rgb = base.rgb * lit + atmo_rim * dn_strength;
+    var rgb = base_micro_rgb * lit + atmo_rim * dn_strength;
 
     // --- GPU-Native Directional Ocean Waves + Optional Coastal Periodic Surf ---
-    let ocean_on = ocean.origin_high.w * ocean.origin_low.w;
+    let ocean_on = ocean.origin_high.w * ocean.origin_low.w * (1.0 - map_2d);
     if (ocean_on > 0.002) {
         // Compute high-precision RTE local tangent coordinates relative to ocean origin.
         let cam_minus_orig = (cam.eye_high.xyz - ocean.origin_high.xyz)
@@ -1744,6 +1954,10 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
         rgb = mix(rgb, horizon_haze_col, aerial_haze);
     }
 
+    if (map_2d > 0.001) {
+        rgb = mix(rgb, base.rgb, smoothstep(0.55, 0.98, map_2d));
+    }
+
     return vec4<f32>(rgb, base.a);
 }
 
@@ -1785,6 +1999,7 @@ struct GpuCameraUniforms {
     atmo_25d_params: vec4<f32>,
     weather_opt_params: vec4<f32>,
     cloud_tint_params: vec4<f32>,
+    view_flags: vec4<f32>,
 }
 
 struct GpuTileVertex {
@@ -1840,6 +2055,7 @@ struct GpuCameraUniforms {
     atmo_25d_params: vec4<f32>,
     weather_opt_params: vec4<f32>,
     cloud_tint_params: vec4<f32>,
+    view_flags: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> cam: GpuCameraUniforms;
@@ -2167,6 +2383,7 @@ struct GpuCameraUniforms {
     atmo_25d_params: vec4<f32>,
     weather_opt_params: vec4<f32>,
     cloud_tint_params: vec4<f32>,
+    view_flags: vec4<f32>,
 }
 
 struct GpuDynamicUniforms {
@@ -2239,6 +2456,7 @@ struct GpuCameraUniforms {
     atmo_25d_params: vec4<f32>,
     weather_opt_params: vec4<f32>,
     cloud_tint_params: vec4<f32>,
+    view_flags: vec4<f32>,
 }
 
 struct GpuGeoInstance {
@@ -2392,6 +2610,7 @@ struct GpuCameraUniforms {
     atmo_25d_params: vec4<f32>,
     weather_opt_params: vec4<f32>,
     cloud_tint_params: vec4<f32>,
+    view_flags: vec4<f32>,
 }
 
 struct GpuGeoInstance {
@@ -2442,6 +2661,7 @@ struct GpuCameraUniforms {
     atmo_25d_params: vec4<f32>,
     weather_opt_params: vec4<f32>,
     cloud_tint_params: vec4<f32>,
+    view_flags: vec4<f32>,
 }
 
 struct GpuParticleLayerUniforms {
@@ -2989,8 +3209,18 @@ struct GpuImageryAtlas {
 }
 
 impl GpuImageryAtlas {
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue, layers: u32) -> Self {
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layers: u32,
+        color_format: wgpu::TextureFormat,
+    ) -> Self {
         let layers = layers.max(16);
+        let format = if color_format.is_srgb() {
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("strata_earth_imagery_atlas"),
             size: wgpu::Extent3d {
@@ -3001,7 +3231,7 @@ impl GpuImageryAtlas {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -4287,7 +4517,7 @@ impl Wgpu3DRenderer {
 
         let slab = GpuTileSlabAllocator::new(&device, 262_144);
         let atlas_layers = MAX_ATLAS_LAYERS.min(device.limits().max_texture_array_layers.max(1));
-        let atlas = GpuImageryAtlas::new(&device, &queue, atlas_layers);
+        let atlas = GpuImageryAtlas::new(&device, &queue, atlas_layers, color_format);
 
         let terrain_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("strata_3d_terrain_sampler"),
@@ -4763,13 +4993,13 @@ impl Wgpu3DRenderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 4,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 5,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: true },
                             view_dimension: wgpu::TextureViewDimension::D2,
@@ -4810,7 +5040,7 @@ impl Wgpu3DRenderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -4820,7 +5050,7 @@ impl Wgpu3DRenderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -4830,7 +5060,7 @@ impl Wgpu3DRenderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },

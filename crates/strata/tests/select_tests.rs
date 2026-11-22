@@ -262,3 +262,48 @@ fn select_portal_tracks_scrolled_container_position() {
         listbox_rect
     );
 }
+
+#[test]
+fn select_popover_expands_wider_than_narrow_trigger_and_stays_single_line() {
+    clear_persistent_signals();
+    let narrow_root = || {
+        rsx! {
+            <div class="w-[84px] h-[240px] p-1">
+                <Select
+                    id="narrow-sel"
+                    options={vec![
+                        SelectOption::new("3d", "Seamless 2.5D Globe"),
+                        SelectOption::new("2d", "2D Flat Imagery Mode"),
+                    ]}
+                />
+            </div>
+        }
+    };
+    let mut runtime = AppRuntime::new(narrow_root(), 420.0, 240.0, 1.0);
+    runtime.tick_frame();
+
+    let trigger_rect = find_rect_by_role(&runtime.root_blueprint, &runtime.layout_root, "combobox")
+        .expect("trigger combobox rect");
+    assert!(trigger_rect.width <= 84.0);
+    click(
+        &mut runtime,
+        trigger_rect.x + trigger_rect.width * 0.5,
+        trigger_rect.y + trigger_rect.height * 0.5,
+    );
+    runtime.update_view(narrow_root());
+
+    let listbox_rect = find_rect_by_role(&runtime.root_blueprint, &runtime.layout_root, "listbox")
+        .expect("listbox rect when open");
+    assert!(
+        listbox_rect.width >= 160.0 && listbox_rect.width > trigger_rect.width + 50.0,
+        "Select popover must expand wider than narrow trigger (trigger={:?}, listbox={:?})",
+        trigger_rect,
+        listbox_rect
+    );
+    assert!(
+        listbox_rect.height < 96.0,
+        "single-line options must not wrap excessively (listbox={:?})",
+        listbox_rect
+    );
+}
+

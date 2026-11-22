@@ -846,11 +846,18 @@ impl AppRuntime {
         let transplanted = Self::transplant_layout_state(&mut previous, &mut self.layout_root);
         let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
         self.sync_tree_animations(now_ms);
-        if transplanted && !self.transition_manager.has_layout_affecting_transitions() {
+        let mut layout_node_ids = self.transition_manager.layout_affecting_node_ids();
+        layout_node_ids.extend(self.animation_manager.layout_affecting_node_ids());
+        let has_layout_transition = self.transition_manager.has_layout_affecting_transitions()
+            || self.animation_manager.has_layout_affecting_animations();
+        if transplanted && !has_layout_transition {
             strata_layout::box_model::refresh_inline_fragment_styles(&mut self.layout_root);
         } else {
             self.applied_scroll_offsets.clear();
             self.applied_portal_offsets.clear();
+            if has_layout_transition {
+                self.invalidate_layout_for_node_ids(&layout_node_ids);
+            }
             let localized_layout = if let Some(ref path) = self.current_hover_path {
                 self.layout_root.compute_subgrid_or_boundary_layout(path)
             } else {

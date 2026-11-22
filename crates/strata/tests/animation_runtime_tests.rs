@@ -365,3 +365,61 @@ fn test_unmounted_transition_is_pruned_and_active_schedules_16ms_sleep() {
         "Unmounting an element with an in-flight transition must prune its transition"
     );
 }
+
+#[test]
+fn test_transition_width_to_zero_and_rem_reflows_flex_siblings_smoothly() {
+    #[component]
+    fn DockApp(open: bool) -> View {
+        let dock_cls = if open {
+            "w-60 h-[200px] shrink-0 transition-[width] duration-150"
+        } else {
+            "w-0 h-[200px] shrink-0 overflow-hidden transition-[width] duration-150"
+        };
+        rsx! {
+            <div class="flex flex-row w-[480px] h-[200px]">
+                <div key="dock-panel" class={dock_cls}>"Dock"</div>
+                <div key="main-pane" class="flex-1 h-[200px]">"Main"</div>
+            </div>
+        }
+    }
+
+    let mut runtime = AppRuntime::new(DockApp(true), 480.0, 200.0, 1.0);
+    let dock_open_w = runtime.layout_root.children[0].geometry.border_box.width;
+    let main_open_x = runtime.layout_root.children[1].geometry.border_box.x;
+    assert!((dock_open_w - 240.0).abs() < 1.0, "w-60 = 240px");
+    assert!((main_open_x - 240.0).abs() < 1.0);
+
+    // Toggle w-60 -> w-0 (Rem(15.0) -> Px(0.0)) and tick once mid-transition.
+    runtime.update_view(DockApp(false));
+    assert!(
+        runtime.has_active_animations(),
+        "transition-[width] must start a width transition from w-60 to w-0"
+    );
+
+    std::thread::sleep(Duration::from_millis(45));
+    assert!(runtime.poll_animations());
+    let dock_mid_w = runtime.layout_root.children[0].geometry.border_box.width;
+    let main_mid = runtime.layout_root.children[1].geometry.border_box;
+    assert!(
+        dock_mid_w > 10.0 && dock_mid_w < 230.0,
+        "sidebar width must interpolate cleanly between 240 and 0, got {dock_mid_w}"
+    );
+    assert!(
+        (main_mid.x - dock_mid_w).abs() < 1.0
+            && (main_mid.width - (480.0 - dock_mid_w)).abs() < 1.0,
+        "flex-1 sibling must reflow smoothly alongside transitioning sidebar (dock={dock_mid_w}, main={main_mid:?})"
+    );
+
+    // Finish transition and verify sibling settles to full 480px width.
+    std::thread::sleep(Duration::from_millis(140));
+    let _ = runtime.poll_animations();
+    let dock_end_w = runtime.layout_root.children[0].geometry.border_box.width;
+    let main_end = runtime.layout_root.children[1].geometry.border_box;
+    assert!(dock_end_w < 0.5, "settled dock width must reach 0, got {dock_end_w}");
+    assert!(
+        (main_end.width - 480.0).abs() < 1.0,
+        "settled main pane must expand to full 480px, got {:?}",
+        main_end
+    );
+}
+

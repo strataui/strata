@@ -401,10 +401,13 @@ impl AppRuntime {
             return false;
         }
 
-        // Capture this before advancing: a transition or animation that finishes on this
-        // tick is removed/settled by `advance`, but the final layout value it produced still
-        // has to be laid out once.
-        let layout_affecting = self.transition_manager.has_layout_affecting_transitions()
+        // Capture layout-affecting node IDs before advancing: a transition or animation that
+        // finishes on this tick is removed/settled by `advance`, but the final layout value it
+        // produced still has to be laid out once with invalidated ancestor/sibling caches.
+        let mut layout_node_ids = self.transition_manager.layout_affecting_node_ids();
+        layout_node_ids.extend(self.animation_manager.layout_affecting_node_ids());
+        let layout_affecting = !layout_node_ids.is_empty()
+            || self.transition_manager.has_layout_affecting_transitions()
             || self.animation_manager.has_layout_affecting_animations();
 
         let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
@@ -427,6 +430,7 @@ impl AppRuntime {
         // values onto the existing layout tree. Only properties that feed box layout require
         // a fresh layout pass; everything else just needs the display list recompiled.
         if layout_affecting {
+            self.invalidate_layout_for_node_ids(&layout_node_ids);
             self.tick_frame();
         } else {
             strata_layout::box_model::refresh_inline_fragment_styles(&mut self.layout_root);
@@ -434,6 +438,40 @@ impl AppRuntime {
         }
 
         true
+    }
+
+    /// Invalidates cached layout geometry for each layout-animating node's ancestors and
+    /// parent container subtree so flex/grid/percentage siblings reflow smoothly on tick.
+    pub(crate) fn invalidate_layout_for_node_ids(&mut self, node_ids: &[u64]) {
+        if node_ids.is_empty() {
+            self.layout_root.invalidate_cache();
+            return;
+        }
+
+        let mut invalidated_parents: std::collections::HashSet<Vec<usize>> =
+            std::collections::HashSet::with_capacity(node_ids.len());
+        for &node_id in node_ids {
+            let Some(path) = self.node_paths.get(&node_id).cloned() else {
+                self.layout_root.invalidate_cache();
+                return;
+            };
+            self.layout_root.invalidate_ancestors(&path);
+            let parent_path: Vec<usize> = if path.is_empty() {
+                Vec::new()
+            } else {
+                path[..path.len() - 1].to_vec()
+            };
+            if invalidated_parents.insert(parent_path.clone()) {
+                if let Some(parent_node) =
+                    Self::find_layout_node_mut(&mut self.layout_root, &parent_path)
+                {
+                    parent_node.invalidate_cache();
+                } else {
+                    self.layout_root.invalidate_cache();
+                    return;
+                }
+            }
+        }
     }
 
     /// Dispatches a synthetic W3C animation lifecycle event to matching RSX element event listeners.

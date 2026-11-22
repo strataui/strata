@@ -691,3 +691,57 @@ fn global_keydown_hook_dispatches_on_runtime_keydown_and_respects_focused_input(
     assert_eq!(shortcut_count.get(), 2);
 }
 
+#[test]
+fn solve_anchored_position_four_way_fallback_covers_corners_and_cross_axis() {
+    use strata_layout::{solve_anchored_position, AnchorPlacement, Rect};
+
+    let vp = Rect::new(0.0, 0.0, 300.0, 280.0);
+
+    // 1. With shift=false, right-edge anchor flips alignment cleanly to BottomEnd
+    let (x1, y1, p1) = solve_anchored_position(
+        Rect::new(240.0, 16.0, 52.0, 28.0),
+        140.0,
+        90.0,
+        AnchorPlacement::BottomStart,
+        4.0,
+        true,
+        false,
+        8.0,
+        vp,
+    );
+    assert_eq!(p1, AnchorPlacement::BottomEnd);
+    assert!(x1 >= 8.0 && x1 + 140.0 <= 292.0 && y1 >= 44.0);
+
+    // 2. With shift=false, bottom-right corner anchor flips diagonally to TopEnd
+    let (x2, y2, p2) = solve_anchored_position(
+        Rect::new(240.0, 240.0, 52.0, 28.0),
+        140.0,
+        90.0,
+        AnchorPlacement::BottomStart,
+        4.0,
+        true,
+        false,
+        8.0,
+        vp,
+    );
+    assert_eq!(p2, AnchorPlacement::TopEnd);
+    assert!(x2 >= 8.0 && x2 + 140.0 <= 292.0 && y2 + 90.0 <= 240.0);
+
+    // 3. Very short viewport where neither BottomStart nor TopStart fits -> 4-way falls back to RightStart
+    let short_vp = Rect::new(0.0, 0.0, 400.0, 120.0);
+    let (x3, y3, p3) = solve_anchored_position(
+        Rect::new(80.0, 16.0, 60.0, 28.0),
+        110.0,
+        90.0,
+        AnchorPlacement::BottomStart,
+        4.0,
+        true,
+        true,
+        8.0,
+        short_vp,
+    );
+    assert_eq!(p3, AnchorPlacement::RightStart);
+    assert!(x3 >= 144.0 && y3 >= 8.0 && y3 + 90.0 <= 112.0);
+}
+
+

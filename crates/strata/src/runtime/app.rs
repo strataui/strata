@@ -14,13 +14,27 @@ pub fn app() -> StrataAppBuilder {
 pub enum FrameOutcome {
     #[default]
     Unchanged,
+    /// Re-invokes the root view closure, relayouts, and repaints the full frame.
     Dirty,
+    /// Marks retained `Canvas3D` viewports dirty so 3D scenes repaint without
+    /// rebuilding the DOM tree or UI layout caches.
+    RepaintCanvas3D,
 }
 
 impl FrameOutcome {
-    /// Returns `true` when the callback modified application state and needs a redraw.
+    /// Returns `true` when the callback modified application state and needs a full UI rebuild.
     pub fn is_dirty(self) -> bool {
         matches!(self, Self::Dirty)
+    }
+
+    /// Returns `true` when only retained 3D viewports need repainting.
+    pub fn is_canvas3d_dirty(self) -> bool {
+        matches!(self, Self::RepaintCanvas3D)
+    }
+
+    /// Returns `true` when either a full rebuild or a `Canvas3D`-only repaint is requested.
+    pub fn needs_any_repaint(self) -> bool {
+        !matches!(self, Self::Unchanged)
     }
 }
 

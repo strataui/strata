@@ -352,60 +352,265 @@ pub fn solve_anchored_position(
     let max_x = (viewport.x + viewport.width - padding).max(min_x);
     let max_y = (viewport.y + viewport.height - padding).max(min_y);
 
+    let axis_score = |cand: AnchorPlacement, cx: f32, cy: f32| -> f32 {
+        let left_ov = (min_x - cx).max(0.0);
+        let right_ov = (cx + floating_w - max_x).max(0.0);
+        let top_ov = (min_y - cy).max(0.0);
+        let bottom_ov = (cy + floating_h - max_y).max(0.0);
+        if !shift {
+            return left_ov + right_ov + top_ov + bottom_ov;
+        }
+        // When shift is enabled, cross-axis overflow (e.g. horizontal clamp on Bottom*) is resolved
+        // cleanly by viewport clamping unless another primary/cardinal side fits with zero overflow.
+        let cross_fits = left_ov <= 0.001 && right_ov <= 0.001;
+        let vert_fits = top_ov <= 0.001 && bottom_ov <= 0.001;
+        match cand {
+            AnchorPlacement::Bottom
+            | AnchorPlacement::BottomStart
+            | AnchorPlacement::BottomEnd
+            | AnchorPlacement::Top
+            | AnchorPlacement::TopStart
+            | AnchorPlacement::TopEnd => {
+                let main_ov = top_ov + bottom_ov;
+                if main_ov <= 0.001 && cross_fits {
+                    0.0
+                } else {
+                    main_ov
+                }
+            }
+            AnchorPlacement::Left
+            | AnchorPlacement::LeftStart
+            | AnchorPlacement::LeftEnd
+            | AnchorPlacement::Right
+            | AnchorPlacement::RightStart
+            | AnchorPlacement::RightEnd => {
+                let main_ov = left_ov + right_ov;
+                if main_ov <= 0.001 && vert_fits {
+                    0.0
+                } else {
+                    main_ov + (top_ov + bottom_ov) * 0.25
+                }
+            }
+        }
+    };
+
+    let candidates: [AnchorPlacement; 6] = if shift {
+        match placement {
+            AnchorPlacement::BottomStart => [
+                AnchorPlacement::BottomStart,
+                AnchorPlacement::TopStart,
+                AnchorPlacement::RightStart,
+                AnchorPlacement::LeftStart,
+                AnchorPlacement::BottomEnd,
+                AnchorPlacement::TopEnd,
+            ],
+            AnchorPlacement::BottomEnd => [
+                AnchorPlacement::BottomEnd,
+                AnchorPlacement::TopEnd,
+                AnchorPlacement::LeftEnd,
+                AnchorPlacement::RightEnd,
+                AnchorPlacement::BottomStart,
+                AnchorPlacement::TopStart,
+            ],
+            AnchorPlacement::Bottom => [
+                AnchorPlacement::Bottom,
+                AnchorPlacement::Top,
+                AnchorPlacement::Right,
+                AnchorPlacement::Left,
+                AnchorPlacement::BottomStart,
+                AnchorPlacement::BottomEnd,
+            ],
+            AnchorPlacement::TopStart => [
+                AnchorPlacement::TopStart,
+                AnchorPlacement::BottomStart,
+                AnchorPlacement::RightStart,
+                AnchorPlacement::LeftStart,
+                AnchorPlacement::TopEnd,
+                AnchorPlacement::BottomEnd,
+            ],
+            AnchorPlacement::TopEnd => [
+                AnchorPlacement::TopEnd,
+                AnchorPlacement::BottomEnd,
+                AnchorPlacement::LeftEnd,
+                AnchorPlacement::RightEnd,
+                AnchorPlacement::TopStart,
+                AnchorPlacement::BottomStart,
+            ],
+            AnchorPlacement::Top => [
+                AnchorPlacement::Top,
+                AnchorPlacement::Bottom,
+                AnchorPlacement::Right,
+                AnchorPlacement::Left,
+                AnchorPlacement::TopStart,
+                AnchorPlacement::TopEnd,
+            ],
+            AnchorPlacement::RightStart => [
+                AnchorPlacement::RightStart,
+                AnchorPlacement::LeftStart,
+                AnchorPlacement::BottomStart,
+                AnchorPlacement::TopStart,
+                AnchorPlacement::RightEnd,
+                AnchorPlacement::LeftEnd,
+            ],
+            AnchorPlacement::RightEnd => [
+                AnchorPlacement::RightEnd,
+                AnchorPlacement::LeftEnd,
+                AnchorPlacement::BottomEnd,
+                AnchorPlacement::TopEnd,
+                AnchorPlacement::RightStart,
+                AnchorPlacement::LeftStart,
+            ],
+            AnchorPlacement::Right => [
+                AnchorPlacement::Right,
+                AnchorPlacement::Left,
+                AnchorPlacement::Bottom,
+                AnchorPlacement::Top,
+                AnchorPlacement::RightStart,
+                AnchorPlacement::RightEnd,
+            ],
+            AnchorPlacement::LeftStart => [
+                AnchorPlacement::LeftStart,
+                AnchorPlacement::RightStart,
+                AnchorPlacement::BottomStart,
+                AnchorPlacement::TopStart,
+                AnchorPlacement::LeftEnd,
+                AnchorPlacement::RightEnd,
+            ],
+            AnchorPlacement::LeftEnd => [
+                AnchorPlacement::LeftEnd,
+                AnchorPlacement::RightEnd,
+                AnchorPlacement::BottomEnd,
+                AnchorPlacement::TopEnd,
+                AnchorPlacement::LeftStart,
+                AnchorPlacement::RightStart,
+            ],
+            AnchorPlacement::Left => [
+                AnchorPlacement::Left,
+                AnchorPlacement::Right,
+                AnchorPlacement::Bottom,
+                AnchorPlacement::Top,
+                AnchorPlacement::LeftStart,
+                AnchorPlacement::LeftEnd,
+            ],
+        }
+    } else {
+        match placement {
+            AnchorPlacement::BottomStart => [
+                AnchorPlacement::BottomStart,
+                AnchorPlacement::TopStart,
+                AnchorPlacement::BottomEnd,
+                AnchorPlacement::TopEnd,
+                AnchorPlacement::RightStart,
+                AnchorPlacement::LeftStart,
+            ],
+            AnchorPlacement::BottomEnd => [
+                AnchorPlacement::BottomEnd,
+                AnchorPlacement::TopEnd,
+                AnchorPlacement::BottomStart,
+                AnchorPlacement::TopStart,
+                AnchorPlacement::LeftEnd,
+                AnchorPlacement::RightEnd,
+            ],
+            AnchorPlacement::Bottom => [
+                AnchorPlacement::Bottom,
+                AnchorPlacement::Top,
+                AnchorPlacement::BottomStart,
+                AnchorPlacement::BottomEnd,
+                AnchorPlacement::Right,
+                AnchorPlacement::Left,
+            ],
+            AnchorPlacement::TopStart => [
+                AnchorPlacement::TopStart,
+                AnchorPlacement::BottomStart,
+                AnchorPlacement::TopEnd,
+                AnchorPlacement::BottomEnd,
+                AnchorPlacement::RightStart,
+                AnchorPlacement::LeftStart,
+            ],
+            AnchorPlacement::TopEnd => [
+                AnchorPlacement::TopEnd,
+                AnchorPlacement::BottomEnd,
+                AnchorPlacement::TopStart,
+                AnchorPlacement::BottomStart,
+                AnchorPlacement::LeftEnd,
+                AnchorPlacement::RightEnd,
+            ],
+            AnchorPlacement::Top => [
+                AnchorPlacement::Top,
+                AnchorPlacement::Bottom,
+                AnchorPlacement::TopStart,
+                AnchorPlacement::TopEnd,
+                AnchorPlacement::Right,
+                AnchorPlacement::Left,
+            ],
+            AnchorPlacement::RightStart => [
+                AnchorPlacement::RightStart,
+                AnchorPlacement::LeftStart,
+                AnchorPlacement::RightEnd,
+                AnchorPlacement::LeftEnd,
+                AnchorPlacement::BottomStart,
+                AnchorPlacement::TopStart,
+            ],
+            AnchorPlacement::RightEnd => [
+                AnchorPlacement::RightEnd,
+                AnchorPlacement::LeftEnd,
+                AnchorPlacement::RightStart,
+                AnchorPlacement::LeftStart,
+                AnchorPlacement::BottomEnd,
+                AnchorPlacement::TopEnd,
+            ],
+            AnchorPlacement::Right => [
+                AnchorPlacement::Right,
+                AnchorPlacement::Left,
+                AnchorPlacement::RightStart,
+                AnchorPlacement::RightEnd,
+                AnchorPlacement::Bottom,
+                AnchorPlacement::Top,
+            ],
+            AnchorPlacement::LeftStart => [
+                AnchorPlacement::LeftStart,
+                AnchorPlacement::RightStart,
+                AnchorPlacement::LeftEnd,
+                AnchorPlacement::RightEnd,
+                AnchorPlacement::BottomStart,
+                AnchorPlacement::TopStart,
+            ],
+            AnchorPlacement::LeftEnd => [
+                AnchorPlacement::LeftEnd,
+                AnchorPlacement::RightEnd,
+                AnchorPlacement::LeftStart,
+                AnchorPlacement::RightStart,
+                AnchorPlacement::BottomEnd,
+                AnchorPlacement::TopEnd,
+            ],
+            AnchorPlacement::Left => [
+                AnchorPlacement::Left,
+                AnchorPlacement::Right,
+                AnchorPlacement::LeftStart,
+                AnchorPlacement::LeftEnd,
+                AnchorPlacement::Bottom,
+                AnchorPlacement::Top,
+            ],
+        }
+    };
+
     let mut chosen = placement;
     let (mut x, mut y) = chosen.raw_coords(anchor, floating_w, floating_h, offset);
 
     if flip {
-        match placement {
-            AnchorPlacement::Bottom | AnchorPlacement::BottomStart | AnchorPlacement::BottomEnd => {
-                if y + floating_h > max_y {
-                    let opp = placement.opposite();
-                    let (ox, oy) = opp.raw_coords(anchor, floating_w, floating_h, offset);
-                    let space_above = anchor.y - min_y;
-                    let space_below = max_y - (anchor.y + anchor.height);
-                    if oy >= min_y || space_above > space_below {
-                        chosen = opp;
-                        x = ox;
-                        y = oy;
-                    }
-                }
-            }
-            AnchorPlacement::Top | AnchorPlacement::TopStart | AnchorPlacement::TopEnd => {
-                if y < min_y {
-                    let opp = placement.opposite();
-                    let (ox, oy) = opp.raw_coords(anchor, floating_w, floating_h, offset);
-                    let space_above = anchor.y - min_y;
-                    let space_below = max_y - (anchor.y + anchor.height);
-                    if oy + floating_h <= max_y || space_below > space_above {
-                        chosen = opp;
-                        x = ox;
-                        y = oy;
-                    }
-                }
-            }
-            AnchorPlacement::Right | AnchorPlacement::RightStart | AnchorPlacement::RightEnd => {
-                if x + floating_w > max_x {
-                    let opp = placement.opposite();
-                    let (ox, oy) = opp.raw_coords(anchor, floating_w, floating_h, offset);
-                    let space_left = anchor.x - min_x;
-                    let space_right = max_x - (anchor.x + anchor.width);
-                    if ox >= min_x || space_left > space_right {
-                        chosen = opp;
-                        x = ox;
-                        y = oy;
-                    }
-                }
-            }
-            AnchorPlacement::Left | AnchorPlacement::LeftStart | AnchorPlacement::LeftEnd => {
-                if x < min_x {
-                    let opp = placement.opposite();
-                    let (ox, oy) = opp.raw_coords(anchor, floating_w, floating_h, offset);
-                    let space_left = anchor.x - min_x;
-                    let space_right = max_x - (anchor.x + anchor.width);
-                    if ox + floating_w <= max_x || space_right > space_left {
-                        chosen = opp;
-                        x = ox;
-                        y = oy;
+        let eval_len = if shift { 4 } else { candidates.len() };
+        let mut best_score = axis_score(chosen, x, y);
+        if best_score > 0.001 {
+            for &cand in &candidates[1..eval_len] {
+                let (cx, cy) = cand.raw_coords(anchor, floating_w, floating_h, offset);
+                let score = axis_score(cand, cx, cy);
+                if score + 0.001 < best_score {
+                    best_score = score;
+                    chosen = cand;
+                    x = cx;
+                    y = cy;
+                    if best_score <= 0.001 {
+                        break;
                     }
                 }
             }
@@ -432,6 +637,7 @@ pub struct PortalAnchorSpec {
     pub shift: bool,
     pub viewport_padding: f32,
     pub match_width: bool,
+    pub min_width_from_anchor: bool,
 }
 
 impl PortalAnchorSpec {
@@ -444,6 +650,7 @@ impl PortalAnchorSpec {
             shift: true,
             viewport_padding: 8.0,
             match_width: false,
+            min_width_from_anchor: false,
         }
     }
 }

@@ -83,6 +83,44 @@ pub fn interpolate_color(from: Color, to: Color, t: f32) -> Color {
 /// Linearly interpolates between two Dimensions if unit types match.
 pub fn interpolate_dimension(from: &Dimension, to: &Dimension, t: f32) -> Dimension {
     let t = t.clamp(0.0, 1.0);
+    if t <= 0.0 {
+        return *from;
+    }
+    if t >= 1.0 {
+        return *to;
+    }
+
+    fn is_zero_dim(d: &Dimension) -> bool {
+        matches!(
+            d,
+            Dimension::Px(v)
+                | Dimension::Percent(v)
+                | Dimension::Rem(v)
+                | Dimension::Em(v)
+                | Dimension::Vw(v)
+                | Dimension::Vh(v)
+                if *v == 0.0
+        )
+    }
+
+    fn scale_dim(d: &Dimension, factor: f32) -> Option<Dimension> {
+        Some(match *d {
+            Dimension::Px(v) => Dimension::Px(v * factor),
+            Dimension::Percent(v) => Dimension::Percent(v * factor),
+            Dimension::Rem(v) => Dimension::Rem(v * factor),
+            Dimension::Em(v) => Dimension::Em(v * factor),
+            Dimension::Vw(v) => Dimension::Vw(v * factor),
+            Dimension::Vh(v) => Dimension::Vh(v * factor),
+            Dimension::Auto
+            | Dimension::FitContent(_)
+            | Dimension::MinContent
+            | Dimension::MaxContent
+            | Dimension::Calc(_) => {
+                return None;
+            }
+        })
+    }
+
     match (from, to) {
         (Dimension::Px(a), Dimension::Px(b)) => Dimension::Px(a + (b - a) * t),
         (Dimension::Percent(a), Dimension::Percent(b)) => Dimension::Percent(a + (b - a) * t),
@@ -90,6 +128,13 @@ pub fn interpolate_dimension(from: &Dimension, to: &Dimension, t: f32) -> Dimens
         (Dimension::Em(a), Dimension::Em(b)) => Dimension::Em(a + (b - a) * t),
         (Dimension::Vw(a), Dimension::Vw(b)) => Dimension::Vw(a + (b - a) * t),
         (Dimension::Vh(a), Dimension::Vh(b)) => Dimension::Vh(a + (b - a) * t),
+        (Dimension::Px(a), Dimension::Rem(b)) => Dimension::Px(a + (b * 16.0 - a) * t),
+        (Dimension::Rem(a), Dimension::Px(b)) => {
+            let a_px = a * 16.0;
+            Dimension::Px(a_px + (b - a_px) * t)
+        }
+        _ if is_zero_dim(from) => scale_dim(to, t).unwrap_or(*from),
+        _ if is_zero_dim(to) => scale_dim(from, 1.0 - t).unwrap_or(*to),
         _ => {
             if t < 0.5 {
                 *from
@@ -466,6 +511,10 @@ pub fn extract_animatable_value(
         TransitionProperty::Opacity => Some(AnimatableValue::Number(style.opacity)),
         TransitionProperty::Width => Some(AnimatableValue::Dimension(style.width)),
         TransitionProperty::Height => Some(AnimatableValue::Dimension(style.height)),
+        TransitionProperty::MinWidth => Some(AnimatableValue::Dimension(style.min_width)),
+        TransitionProperty::MaxWidth => Some(AnimatableValue::Dimension(style.max_width)),
+        TransitionProperty::MinHeight => Some(AnimatableValue::Dimension(style.min_height)),
+        TransitionProperty::MaxHeight => Some(AnimatableValue::Dimension(style.max_height)),
         TransitionProperty::Margin => Some(AnimatableValue::EdgeInsets(style.margin)),
         TransitionProperty::Padding => Some(AnimatableValue::EdgeInsets(style.padding)),
         TransitionProperty::BorderColor => style.border_color.map(AnimatableValue::Color),
@@ -473,6 +522,12 @@ pub fn extract_animatable_value(
         TransitionProperty::BorderRadius => {
             Some(AnimatableValue::BorderRadius(style.border_radius))
         }
+        TransitionProperty::FlexGrow => Some(AnimatableValue::Number(style.flex_grow)),
+        TransitionProperty::FlexShrink => Some(AnimatableValue::Number(style.flex_shrink)),
+        TransitionProperty::FlexBasis => Some(AnimatableValue::Dimension(style.flex_basis)),
+        TransitionProperty::Gap => Some(AnimatableValue::Number(style.gap)),
+        TransitionProperty::GapRow => Some(AnimatableValue::Number(style.gap_row)),
+        TransitionProperty::GapCol => Some(AnimatableValue::Number(style.gap_col)),
         TransitionProperty::BoxShadow => Some(AnimatableValue::BoxShadow(style.box_shadow.clone())),
         TransitionProperty::Transform => Some(AnimatableValue::Transform(style.transform.clone())),
         TransitionProperty::ClipPath => style.clip_path.clone().map(AnimatableValue::ClipPath),
@@ -494,6 +549,10 @@ pub fn apply_animatable_value(
         (TransitionProperty::Opacity, AnimatableValue::Number(n)) => style.opacity = *n,
         (TransitionProperty::Width, AnimatableValue::Dimension(d)) => style.width = *d,
         (TransitionProperty::Height, AnimatableValue::Dimension(d)) => style.height = *d,
+        (TransitionProperty::MinWidth, AnimatableValue::Dimension(d)) => style.min_width = *d,
+        (TransitionProperty::MaxWidth, AnimatableValue::Dimension(d)) => style.max_width = *d,
+        (TransitionProperty::MinHeight, AnimatableValue::Dimension(d)) => style.min_height = *d,
+        (TransitionProperty::MaxHeight, AnimatableValue::Dimension(d)) => style.max_height = *d,
         (TransitionProperty::Margin, AnimatableValue::EdgeInsets(m)) => style.margin = *m,
         (TransitionProperty::Padding, AnimatableValue::EdgeInsets(p)) => style.padding = *p,
         (TransitionProperty::BorderColor, AnimatableValue::Color(c)) => {
@@ -504,6 +563,24 @@ pub fn apply_animatable_value(
         }
         (TransitionProperty::BorderRadius, AnimatableValue::BorderRadius(r)) => {
             style.border_radius = *r;
+        }
+        (TransitionProperty::FlexGrow, AnimatableValue::Number(n)) => {
+            style.flex_grow = n.max(0.0);
+        }
+        (TransitionProperty::FlexShrink, AnimatableValue::Number(n)) => {
+            style.flex_shrink = n.max(0.0);
+        }
+        (TransitionProperty::FlexBasis, AnimatableValue::Dimension(d)) => {
+            style.flex_basis = *d;
+        }
+        (TransitionProperty::Gap, AnimatableValue::Number(n)) => {
+            style.gap = n.max(0.0);
+        }
+        (TransitionProperty::GapRow, AnimatableValue::Number(n)) => {
+            style.gap_row = n.max(0.0);
+        }
+        (TransitionProperty::GapCol, AnimatableValue::Number(n)) => {
+            style.gap_col = n.max(0.0);
         }
         (TransitionProperty::BoxShadow, AnimatableValue::BoxShadow(s)) => {
             style.box_shadow = s.clone();
@@ -527,7 +604,26 @@ pub fn find_transition_spec<'a>(
     if let Some(spec) = specs.iter().find(|s| &s.property == prop) {
         return Some(spec);
     }
-    // 2. Fallback to 'all'
+    // 2. Shorthand family matches (`flex` -> flex-grow/shrink/basis, `gap` -> row-gap/column-gap)
+    match prop {
+        TransitionProperty::FlexGrow
+        | TransitionProperty::FlexShrink
+        | TransitionProperty::FlexBasis => {
+            if let Some(spec) = specs
+                .iter()
+                .find(|s| s.property == TransitionProperty::Flex)
+            {
+                return Some(spec);
+            }
+        }
+        TransitionProperty::GapRow | TransitionProperty::GapCol => {
+            if let Some(spec) = specs.iter().find(|s| s.property == TransitionProperty::Gap) {
+                return Some(spec);
+            }
+        }
+        _ => {}
+    }
+    // 3. Fallback to 'all'
     if let Some(spec) = specs.iter().find(|s| s.property == TransitionProperty::All) {
         return Some(spec);
     }
@@ -564,17 +660,23 @@ impl TransitionManager {
     /// box layout, so the layout tree must be recomputed as the value changes.
     pub fn has_layout_affecting_transitions(&self) -> bool {
         self.node_transitions.values().any(|list| {
-            list.iter().any(|transition| {
-                matches!(
-                    transition.property,
-                    TransitionProperty::Width
-                        | TransitionProperty::Height
-                        | TransitionProperty::Margin
-                        | TransitionProperty::Padding
-                        | TransitionProperty::BorderWidth
-                )
-            })
+            list.iter()
+                .any(|transition| transition.property.is_layout_affecting())
         })
+    }
+
+    /// Returns all node IDs that currently have an active layout-affecting transition.
+    pub fn layout_affecting_node_ids(&self) -> Vec<u64> {
+        self.node_transitions
+            .iter()
+            .filter_map(|(&node_id, list)| {
+                if list.iter().any(|t| t.property.is_layout_affecting()) {
+                    Some(node_id)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Diffs the previous computed style against the new style for `node_id`,
@@ -598,11 +700,21 @@ impl TransitionManager {
             TransitionProperty::Opacity,
             TransitionProperty::Width,
             TransitionProperty::Height,
+            TransitionProperty::MinWidth,
+            TransitionProperty::MaxWidth,
+            TransitionProperty::MinHeight,
+            TransitionProperty::MaxHeight,
             TransitionProperty::Margin,
             TransitionProperty::Padding,
             TransitionProperty::BorderColor,
             TransitionProperty::BorderWidth,
             TransitionProperty::BorderRadius,
+            TransitionProperty::FlexGrow,
+            TransitionProperty::FlexShrink,
+            TransitionProperty::FlexBasis,
+            TransitionProperty::Gap,
+            TransitionProperty::GapRow,
+            TransitionProperty::GapCol,
             TransitionProperty::BoxShadow,
             TransitionProperty::Transform,
         ];

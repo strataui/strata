@@ -1137,6 +1137,266 @@ fn wgpu_geo_textures_vertex_colors_back_to_front_alpha_vram_eviction_and_multi_v
     );
 }
 
+#[test]
+fn wgpu_2d_unlit_imagery_preserves_exact_brightness_across_srgb_and_non_srgb_swapchains() {
+    let w = 64u32;
+    let h = 64u32;
+    let tile_rgb = [180u8, 140, 100];
+    let tile_px = [tile_rgb[0], tile_rgb[1], tile_rgb[2], 255].repeat(256 * 256);
+    let tex = Arc::new(RetainedTileTexture {
+        id: 777,
+        revision: 1,
+        width: 256,
+        height: 256,
+        rgba8: Arc::new(tile_px),
+    });
+
+    // Horizontal XZ tile at Y = 0.0 (grid_res=2 winding matching Wgpu3DRenderer terrain index buffer)
+    let tile_id = TileKeyId::new(10, 0, 0, 0);
+    let mesh = Arc::new(RetainedTileMesh {
+        key: tile_id,
+        revision: 1,
+        center_ecef: [0.0, 0.0, 0.0],
+        grid_res: 2,
+        has_skirts: false,
+        vertices: Arc::new(vec![
+            RteTileVertex::new([-5000.0, 0.0, 5000.0], [0.0, 1.0, 0.0], [0.0, 1.0]),
+            RteTileVertex::new([5000.0, 0.0, 5000.0], [0.0, 1.0, 0.0], [1.0, 1.0]),
+            RteTileVertex::new([-5000.0, 0.0, -5000.0], [0.0, 1.0, 0.0], [0.0, 0.0]),
+            RteTileVertex::new([5000.0, 0.0, -5000.0], [0.0, 1.0, 0.0], [1.0, 0.0]),
+        ]),
+        bounding_radius: 7500.0,
+    });
+
+    // Camera ~4,240m away (> 3,500m aerial haze onset and within camera_uniforms far=5,000m) with zeroed sky_bottom in 2D mode
+    let mut cam = camera_uniforms([0.0, 4_200.0, 600.0], [0.0, 0.0, 0.0], w, h);
+    cam.background = Background3D::Solid(Color::rgba(0, 0, 0, 255));
+    cam.day_night_strength = 0.0;
+    cam.local_25d_blend = 0.0;
+    cam.map_2d_morph = 1.0;
+
+    for (fmt, unlit) in [
+        (wgpu::TextureFormat::Bgra8Unorm, true),
+        (wgpu::TextureFormat::Bgra8Unorm, false),
+        (wgpu::TextureFormat::Bgra8UnormSrgb, true),
+        (wgpu::TextureFormat::Bgra8UnormSrgb, false),
+    ] {
+        let Ok(mut renderer) = Wgpu3DRenderer::new_headless(fmt) else {
+            return;
+        };
+        let frame = Arc::new(RetainedTerrainFrame {
+            camera: cam,
+            geometry_revision: 1,
+            meshes: vec![Arc::clone(&mesh)],
+            textures: vec![Arc::clone(&tex)],
+            instances: vec![RetainedTileInstance {
+                key: tile_id,
+                mesh_revision: 1,
+                center_ecef: [0.0, 0.0, 0.0],
+                texture_id: Some(777),
+                texture_revision: 1,
+                uv_rect: [0.0, 0.0, 1.0, 1.0],
+                tint: [1.0, 1.0, 1.0, 1.0],
+                unlit,
+                night_texture_id: None,
+                night_texture_revision: 0,
+                night_uv_rect: [0.0, 0.0, 1.0, 1.0],
+            }],
+            ..Default::default()
+        });
+        let retained = RetainedScene3D::new(cam);
+        retained.update_terrain(frame);
+        let scene = Scene3D::new().with_retained_handle(retained);
+        let bgra = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
+        let c = ((h / 2) * w + (w / 2)) as usize * 4;
+        let (r, g, b) = (bgra[c + 2], bgra[c + 1], bgra[c]);
+        assert!(
+            (r as i32 - tile_rgb[0] as i32).abs() <= 2
+                && (g as i32 - tile_rgb[1] as i32).abs() <= 2
+                && (b as i32 - tile_rgb[2] as i32).abs() <= 2,
+            "2D tile on {fmt:?} (unlit={unlit}) must preserve exact imagery RGB {tile_rgb:?} without gamma/haze darkening, got ({r}, {g}, {b})"
+        );
+    }
+}
+
+#[test]
+fn wgpu_3d_ocean_vertex_wave_displacement_and_close_ground_micro_detail() {
+    use strata_render::scene3d::{RetainedOceanSurface, RetainedOceanWaveTrain};
+
+    let Ok(mut renderer) = Wgpu3DRenderer::new_headless(wgpu::TextureFormat::Bgra8Unorm) else {
+        return;
+    };
+    let w = 96u32;
+    let h = 96u32;
+
+    // Flat uniform grey-brown swatch for close-ground (<50m) procedural micro-detail test.
+    let swatch_rgba = vec![140u8, 132, 118, 255].repeat(64 * 64);
+    let land_tex = Arc::new(RetainedTileTexture {
+        id: 888,
+        revision: 1,
+        width: 64,
+        height: 64,
+        rgba8: Arc::new(swatch_rgba),
+    });
+    // Deep ocean blue swatch for ocean wave displacement & shading test.
+    let ocean_rgba = vec![24u8, 62, 115, 255].repeat(64 * 64);
+    let ocean_tex = Arc::new(RetainedTileTexture {
+        id: 889,
+        revision: 1,
+        width: 64,
+        height: 64,
+        rgba8: Arc::new(ocean_rgba),
+    });
+
+    // Subdivided sea-level / flat land tile grid on XZ plane (Y = 0.0, normal +Y)
+    let grid = 17u32;
+    let span = 200.0f32;
+    let mut verts = Vec::with_capacity((grid * grid) as usize);
+    for r in 0..grid {
+        let v = r as f32 / (grid - 1) as f32;
+        let vz = (0.5 - v) * span;
+        for c in 0..grid {
+            let u = c as f32 / (grid - 1) as f32;
+            let vx = (u - 0.5) * span;
+            verts.push(RteTileVertex::new([vx, 0.0, vz], [0.0, 1.0, 0.0], [u, v]));
+        }
+    }
+    let key = TileKeyId::new(15, 0, 0, 0);
+    let mesh = Arc::new(RetainedTileMesh {
+        key,
+        revision: 1,
+        center_ecef: [0.0, 0.0, 0.0],
+        grid_res: grid,
+        has_skirts: false,
+        vertices: Arc::new(verts),
+        bounding_radius: 150.0,
+    });
+
+    // 1. Ocean wave test: oblique view over ocean tile at t=0.0 vs t=3.0 (plus 2D bypass check)
+    let mut base_ocean_cam = camera_uniforms([0.0, 26.0, 70.0], [0.0, 0.0, -10.0], w, h);
+    base_ocean_cam.sun_dir = [0.35, 0.58, 0.72];
+    base_ocean_cam.sun_color = [1.0, 0.96, 0.90];
+    base_ocean_cam.ambient_color = [0.25, 0.30, 0.38];
+    base_ocean_cam.day_night_strength = 1.0;
+    base_ocean_cam.local_25d_blend = 1.0;
+    base_ocean_cam.realistic_25d_sky = 1.0;
+    base_ocean_cam.terrain_25d_lighting = 1.0;
+
+    let render_ocean_at = |renderer: &mut Wgpu3DRenderer, t: f32, map_2d: f32| {
+        let mut cam = base_ocean_cam;
+        cam.time_s = t;
+        cam.map_2d_morph = map_2d;
+        let frame = Arc::new(RetainedTerrainFrame {
+            camera: cam,
+            geometry_revision: 1,
+            meshes: vec![Arc::clone(&mesh)],
+            textures: vec![Arc::clone(&ocean_tex)],
+            instances: vec![RetainedTileInstance {
+                key,
+                mesh_revision: 1,
+                center_ecef: [0.0, 0.0, 0.0],
+                texture_id: Some(889),
+                texture_revision: 1,
+                uv_rect: [0.0, 0.0, 1.0, 1.0],
+                tint: [1.0, 1.0, 1.0, 1.0],
+                unlit: false,
+                night_texture_id: None,
+                night_texture_revision: 0,
+                night_uv_rect: [0.0, 0.0, 1.0, 1.0],
+            }],
+            ocean: Some(Arc::new(RetainedOceanSurface {
+                enabled: true,
+                alt_fade: 1.0,
+                wave_strength: 2.4,
+                wave_scale: 1.0,
+                glint_intensity: 1.6,
+                origin_ecef: [0.0, 0.0, 0.0],
+                basis_east: [1.0, 0.0, 0.0],
+                basis_north: [0.0, 0.0, -1.0],
+                basis_up: [0.0, 1.0, 0.0],
+                train_a: RetainedOceanWaveTrain {
+                    dir_en: [0.8, 0.6],
+                    wind_speed_mps: 20.0,
+                    phase_time_s: t,
+                    weight: 1.0,
+                },
+                opacity: 1.0,
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+        let retained = RetainedScene3D::new(cam);
+        retained.update_terrain(frame);
+        let scene = Scene3D::new().with_retained_handle(retained);
+        renderer.render_offscreen(&scene, w, h, true, true).unwrap()
+    };
+
+    let px_t0 = render_ocean_at(&mut renderer, 0.0, 0.0);
+    let px_t3 = render_ocean_at(&mut renderer, 3.0, 0.0);
+    assert_ne!(
+        px_t0, px_t3,
+        "continuous 3D ocean waves must animate vertex & normal pixels across time_s"
+    );
+
+    // 2D mode must completely suppress ocean animation & lighting on the exact same scene
+    let px_2d_0 = render_ocean_at(&mut renderer, 0.0, 1.0);
+    let px_2d_3 = render_ocean_at(&mut renderer, 3.0, 1.0);
+    assert_eq!(
+        px_2d_0, px_2d_3,
+        "Mode2D (map_2d_morph = 1.0) must bypass ocean wave shading completely"
+    );
+
+    // 2. Close-ground (<50m) procedural micro-detail test without ocean overlay
+    let mut close_cam = camera_uniforms([0.0, 18.0, 8.0], [0.0, 0.0, 0.0], w, h);
+    close_cam.sun_dir = [0.6, 0.68, 0.4];
+    close_cam.day_night_strength = 1.0;
+    close_cam.local_25d_blend = 1.0;
+    close_cam.terrain_25d_lighting = 1.0;
+
+    let close_frame = Arc::new(RetainedTerrainFrame {
+        camera: close_cam,
+        geometry_revision: 1,
+        meshes: vec![mesh],
+        textures: vec![land_tex],
+        instances: vec![RetainedTileInstance {
+            key,
+            mesh_revision: 1,
+            center_ecef: [0.0, 0.0, 0.0],
+            texture_id: Some(888),
+            texture_revision: 1,
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
+            tint: [1.0, 1.0, 1.0, 1.0],
+            unlit: false,
+            night_texture_id: None,
+            night_texture_revision: 0,
+            night_uv_rect: [0.0, 0.0, 1.0, 1.0],
+        }],
+        ..Default::default()
+    });
+    let close_retained = RetainedScene3D::new(close_cam);
+    close_retained.update_terrain(close_frame);
+    let close_scene = Scene3D::new().with_retained_handle(close_retained);
+    let close_px = renderer.render_offscreen(&close_scene, w, h, true, true).unwrap();
+    let mut min_l = 255i32;
+    let mut max_l = 0i32;
+    for y in 24..72 {
+        for x in 24..72 {
+            let idx = (y * w + x) as usize * 4;
+            let l = (close_px[idx + 2] as i32 * 3 + close_px[idx + 1] as i32 * 6 + close_px[idx] as i32) / 10;
+            min_l = min_l.min(l);
+            max_l = max_l.max(l);
+        }
+    }
+    assert!(
+        max_l - min_l >= 8,
+        "close-ground (<50m) shader must synthesize crisp surface micro-detail over flat swatch (spread {}..{})",
+        min_l,
+        max_l
+    );
+}
+
+
+
 
 
 
