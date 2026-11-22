@@ -875,7 +875,12 @@ impl AppRuntime {
                 }
             }
         }
-        self.spatial_index.sync_bounds(&self.layout_root);
+        if self.has_anchored_portals {
+            self.spatial_index.sync_bounds(&self.layout_root);
+        } else {
+            self.spatial_index
+                .sync_bounds_for_prefix(&self.layout_root, path);
+        }
         self.fire_scroll_event(
             path,
             new_scroll_x,
@@ -1302,8 +1307,15 @@ impl AppRuntime {
         {
             if let Some(mut tracker) = self.active_smooth_scroll.take() {
                 let dt_flick = now.duration_since(tracker.last_event_time).as_secs_f32();
-                let accel = if dt_flick < 0.20 {
-                    (1.0 + (0.12 / dt_flick.max(0.01)).min(2.5)).min(3.5)
+                let remaining = tracker.target_y - tracker.current_y;
+                let same_dir = remaining == 0.0 || (remaining > 0.0) == (delta_y > 0.0);
+                // Continuous touchpad / high-resolution streams emit <48px packets or arrive on a
+                // 2-18ms (60-500Hz) HID cadence; only discrete wheel flicks receive momentum.
+                let is_continuous_hid_cadence = dt_flick >= 0.002 && dt_flick < 0.018;
+                let is_discrete_flick =
+                    same_dir && delta_y.abs() >= 48.0 && !is_continuous_hid_cadence;
+                let accel = if is_discrete_flick && dt_flick < 0.20 {
+                    (1.0 + (0.05 / dt_flick.max(0.02)).min(1.3)).min(2.3)
                 } else {
                     1.0
                 };
@@ -1421,7 +1433,6 @@ impl AppRuntime {
 
         if !is_settled {
             self.active_smooth_scroll = Some(tracker);
-            redraw = true;
         }
 
         redraw

@@ -109,6 +109,45 @@ impl SpatialIndex {
         }
     }
 
+    /// Synchronizes cached entry bounding boxes only for descendants of `prefix`, avoiding
+    /// unrelated root-to-node layout walks on high-frequency smooth scroll ticks.
+    pub fn sync_bounds_for_prefix(&mut self, layout_root: &LayoutNode, prefix: &[usize]) {
+        if self.entries.is_empty() {
+            return;
+        }
+        if prefix.is_empty() {
+            self.sync_bounds(layout_root);
+            return;
+        }
+        let mut prefix_root = layout_root;
+        for &idx in prefix {
+            if let Some(child) = prefix_root.children.get(idx) {
+                prefix_root = child;
+            } else {
+                return;
+            }
+        }
+        let prefix_len = prefix.len();
+        for entry in &mut self.entries {
+            if entry.layout_path.len() <= prefix_len || !entry.layout_path.starts_with(prefix) {
+                continue;
+            }
+            let mut cur = prefix_root;
+            let mut valid = true;
+            for &idx in &entry.layout_path[prefix_len..] {
+                if let Some(child) = cur.children.get(idx) {
+                    cur = child;
+                } else {
+                    valid = false;
+                    break;
+                }
+            }
+            if valid {
+                entry.bounds = cur.geometry.border_box;
+            }
+        }
+    }
+
     fn collect_top_layer_portals<'a>(
         bp: &'a NodeBlueprint,
         layout: &'a LayoutNode,

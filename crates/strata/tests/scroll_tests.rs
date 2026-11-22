@@ -949,5 +949,110 @@ fn test_wheel_default_prevented_suppresses_container_scroll_and_horizontal_wheel
     );
 }
 
+#[test]
+fn test_smooth_scroll_continuous_deltas_no_runaway_flick_and_zero_delta_skips_redraw() {
+    let mut runtime = AppRuntime::new(
+        rsx! {
+            <div class="flex flex-row w-[800px] h-[400px]">
+                <div id="left-scroll" class="flex flex-col w-[400px] h-[400px] overflow-y-auto">
+                    <div id="row-0" class="h-[100px] w-full shrink-0" onclick={|_| {}} />
+                    <div class="h-[2400px] w-full shrink-0" />
+                </div>
+                <div id="right-sibling" class="w-[400px] h-[400px]" onclick={|_| {}} />
+            </div>
+        },
+        800.0,
+        400.0,
+        1.0,
+    );
+
+    let t0 = std::time::Instant::now();
+    // Initial zero-delta tick at exact start time produces dy == 0 and must not request a spurious redraw.
+    assert!(runtime.dispatch_smooth_scroll(200.0, 200.0, 0.0, 12.0));
+    if let Some(ref mut tr) = runtime.active_smooth_scroll {
+        tr.start_time = t0;
+        tr.last_event_time = t0;
+    }
+    assert!(
+        !runtime.poll_smooth_scroll_at(t0),
+        "Zero-displacement tick must not trigger redraw"
+    );
+    assert!(
+        runtime.active_smooth_scroll.is_some(),
+        "Tracker must remain armed after zero-displacement tick"
+    );
+
+    // Simulate a 120Hz touchpad stream of small continuous deltas (12px every 10ms):
+    // must accumulate linearly without 3.5x flick runaway.
+    for i in 1..=10 {
+        let ti = t0 + std::time::Duration::from_millis(i * 10);
+        runtime.poll_smooth_scroll_at(ti);
+        if let Some(ref mut tr) = runtime.active_smooth_scroll {
+            tr.last_event_time = std::time::Instant::now() - std::time::Duration::from_millis(10);
+        }
+        runtime.dispatch_smooth_scroll(200.0, 200.0, 0.0, 12.0);
+    }
+
+    let tracker = runtime.active_smooth_scroll.as_ref().unwrap();
+    let expected_sum = 11.0 * 12.0; // initial 12 + 10 steps * 12 = 132px
+    assert!(
+        (tracker.target_y - expected_sum).abs() < 0.1,
+        "Continuous touchpad stream must not over-accelerate: expected {expected_sum}, got {}",
+        tracker.target_y
+    );
+
+    // Settle and verify scrolled child bounds moved while sibling panel stays unaffected.
+    runtime.poll_smooth_scroll_at(std::time::Instant::now() + std::time::Duration::from_millis(500));
+    assert!((runtime.active_scrollbars[0].scroll_y - expected_sum).abs() < 0.05);
+    let scrolled_y = runtime.layout_root.children[0].children[0].geometry.border_box.y;
+    assert!((scrolled_y + expected_sum).abs() < 0.1);
+    assert_eq!(runtime.layout_root.children[1].geometry.border_box.x, 400.0);
+
+    // Direction reversal on discrete wheel must reset target without flick amplification.
+    let mut rev_rt = AppRuntime::new(
+        rsx! {
+            <div id="rev-scroll" class="flex flex-col w-[400px] h-[400px] overflow-y-auto">
+                <div class="h-[2000px] w-full shrink-0" />
+            </div>
+        },
+        400.0,
+        400.0,
+        1.0,
+    );
+    rev_rt.dispatch_smooth_scroll(200.0, 200.0, 0.0, 200.0);
+    if let Some(ref mut tr) = rev_rt.active_smooth_scroll {
+        tr.last_event_time = std::time::Instant::now() - std::time::Duration::from_millis(40);
+    }
+    rev_rt.dispatch_smooth_scroll(200.0, 200.0, 0.0, -64.0);
+    let rev_target = rev_rt.active_smooth_scroll.as_ref().unwrap().target_y;
+    assert!(
+        (rev_target - 136.0).abs() < 1.0,
+        "Reverse wheel notch must apply 1:1 (-64px) without flick amplification, got {rev_target}"
+    );
+
+    // High-frequency 125Hz (8ms) continuous fast-swipe packets >= 48px must still stay 1:1.
+    let mut hid_rt = AppRuntime::new(
+        rsx! {
+            <div id="hid-scroll" class="flex flex-col w-[400px] h-[400px] overflow-y-auto">
+                <div class="h-[2000px] w-full shrink-0" />
+            </div>
+        },
+        400.0,
+        400.0,
+        1.0,
+    );
+    hid_rt.dispatch_smooth_scroll(200.0, 200.0, 0.0, 55.0);
+    if let Some(ref mut tr) = hid_rt.active_smooth_scroll {
+        tr.last_event_time = std::time::Instant::now() - std::time::Duration::from_millis(8);
+    }
+    hid_rt.dispatch_smooth_scroll(200.0, 200.0, 0.0, 55.0);
+    let hid_target = hid_rt.active_smooth_scroll.as_ref().unwrap().target_y;
+    assert!(
+        (hid_target - 110.0).abs() < 0.5,
+        "8ms HID touchpad packet must accumulate 1:1 without flick amplification, got {hid_target}"
+    );
+}
+
+
 
 
