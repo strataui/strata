@@ -662,3 +662,66 @@ fn test_canvas3d_builder_parity_and_responsive_orbit_controls() {
     );
 }
 
+#[test]
+fn test_canvas3d_builder_zero_arg_closures_across_all_event_setters() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let fired: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+    let push = |tag: &'static str, log: &Rc<RefCell<Vec<&'static str>>>| {
+        let l = Rc::clone(log);
+        move || l.borrow_mut().push(tag)
+    };
+
+    let canvas = Canvas3D::builder()
+        .id("cad-3d-zero-arg")
+        .width(320.0)
+        .height(200.0)
+        .onpointerdown(push("pd", &fired))
+        .onmousedown(push("md", &fired))
+        .onpointermove(push("pm", &fired))
+        .onmousemove(push("mm", &fired))
+        .onpointerup(push("pu", &fired))
+        .onmouseup(push("mu", &fired))
+        .onwheel(push("wh", &fired))
+        .onresize(push("rs", &fired))
+        .onclick(push("ck", &fired))
+        .ondblclick(push("dc", &fired))
+        .oncontextmenu(push("cm", &fired))
+        .onmouseenter(push("me", &fired))
+        .onmouseleave(push("ml", &fired))
+        .build();
+
+    let view = rsx! {
+        <div class="w-[400px] h-[300px]">
+            {canvas}
+        </div>
+    };
+
+    let mut rt = AppRuntime::new(view, 400.0, 300.0, 1.0);
+    assert!(fired.borrow().contains(&"rs"));
+    fired.borrow_mut().clear();
+
+    rt.update_hover(100.0, 100.0);
+    assert!(rt.dispatch_pointer_down(100.0, 100.0));
+    assert!(rt.dispatch_pointer_move(110.0, 105.0));
+    assert!(rt.dispatch_pointer_up(110.0, 105.0));
+    assert!(rt.dispatch_mouse_click(110.0, 105.0, 0, 1));
+    assert!(rt.dispatch_dblclick(110.0, 105.0));
+    assert!(rt.dispatch_context_menu(110.0, 105.0));
+    assert!(rt.dispatch_scroll(110.0, 105.0, 0.0, 10.0));
+    rt.update_hover(380.0, 280.0);
+
+    let log = fired.borrow();
+    for expected in [
+        "me", "pd", "md", "pm", "mm", "pu", "mu", "ck", "dc", "cm", "wh", "ml",
+    ] {
+        assert!(
+            log.contains(&expected),
+            "Expected zero-arg handler `{expected}` to fire, got {:?}",
+            *log
+        );
+    }
+}
+
+

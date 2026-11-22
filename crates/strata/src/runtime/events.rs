@@ -2,6 +2,19 @@
 
 use super::*;
 
+#[derive(Default)]
+pub(crate) struct BubblingOutcome {
+    pub handled: bool,
+    pub default_prevented: bool,
+    pub propagation_stopped: bool,
+    pub capture_requested: Option<bool>,
+    pub capture_entity: Option<strata_primitives::EntityId>,
+    pub cursor_warp_requested: Option<(f64, f64)>,
+    pub target_entity: Option<strata_primitives::EntityId>,
+    pub chain_entities: Vec<strata_primitives::EntityId>,
+    pub invoked_entities: Vec<strata_primitives::EntityId>,
+}
+
 impl AppRuntime {
     /// Returns the currently active platform mouse cursor icon.
     pub fn current_cursor(&self) -> strata_platform::window::CursorIcon {
@@ -272,70 +285,52 @@ impl AppRuntime {
         self.pointer_capture_target = None;
         let mut dom_handled = false;
         let mut captured_target: Option<(Vec<usize>, bool)> = None;
-        if let Some((handler, target_box, eid)) = Self::hit_test_event_with_box_and_entity(
-            &self.root_blueprint,
-            &self.layout_root,
+        let pd_outcome = self.dispatch_bubbling_event_detailed_at(
+            strata_dom::EventType::PointerDown,
             px,
             py,
-            strata_dom::EventType::PointerDown,
-        ) {
-            let target_box_copy = *target_box;
-            let ev = self.create_mouse_event(
-                strata_dom::EventType::PointerDown,
-                px,
-                py,
-                button,
-                1,
-                Some(&target_box_copy),
-            );
-            let capture_req = ev.pointer_capture_requested.clone();
-            let stopped_cell = ev.propagation_stopped.clone();
-            let prevented_cell = ev.default_prevented.clone();
-            handler(ev);
+            button,
+            1,
+            |_| {},
+        );
+        if pd_outcome.handled {
             dom_handled = true;
-            if stopped_cell.get() || prevented_cell.get() {
+            if pd_outcome.propagation_stopped || pd_outcome.default_prevented {
                 inside_click_stopped = true;
             }
-            if let Some(target_path) = self.layout_root.find_path_by_entity_id(eid) {
-                match capture_req.get() {
-                    Some(true) => captured_target = Some((target_path, true)),
-                    Some(false) => {}
-                    None => captured_target = Some((target_path, false)),
+            if let Some(cap_eid) = pd_outcome.capture_entity.or(pd_outcome.target_entity) {
+                if let Some(target_path) = self.layout_root.find_path_by_entity_id(cap_eid) {
+                    match pd_outcome.capture_requested {
+                        Some(true) => captured_target = Some((target_path, true)),
+                        Some(false) => {}
+                        None => captured_target = Some((target_path, false)),
+                    }
                 }
             }
         }
-        if let Some((handler, target_box, eid)) = Self::hit_test_event_with_box_and_entity(
-            &self.root_blueprint,
-            &self.layout_root,
+        let md_outcome = self.dispatch_bubbling_event_detailed_at(
+            strata_dom::EventType::MouseDown,
             px,
             py,
-            strata_dom::EventType::MouseDown,
-        ) {
-            let target_box_copy = *target_box;
-            let ev = self.create_mouse_event(
-                strata_dom::EventType::MouseDown,
-                px,
-                py,
-                button,
-                1,
-                Some(&target_box_copy),
-            );
-            let capture_req = ev.pointer_capture_requested.clone();
-            let stopped_cell = ev.propagation_stopped.clone();
-            let prevented_cell = ev.default_prevented.clone();
-            handler(ev);
+            button,
+            1,
+            |_| {},
+        );
+        if md_outcome.handled {
             dom_handled = true;
-            if stopped_cell.get() || prevented_cell.get() {
+            if md_outcome.propagation_stopped || md_outcome.default_prevented {
                 inside_click_stopped = true;
             }
-            if let Some(target_path) = self.layout_root.find_path_by_entity_id(eid) {
-                match capture_req.get() {
-                    Some(true) => captured_target = Some((target_path, true)),
-                    Some(false) => captured_target = None,
-                    None if captured_target.is_none() => {
-                        captured_target = Some((target_path, false));
+            if let Some(cap_eid) = md_outcome.capture_entity.or(md_outcome.target_entity) {
+                if let Some(target_path) = self.layout_root.find_path_by_entity_id(cap_eid) {
+                    match md_outcome.capture_requested {
+                        Some(true) => captured_target = Some((target_path, true)),
+                        Some(false) => captured_target = None,
+                        None if captured_target.is_none() => {
+                            captured_target = Some((target_path, false));
+                        }
+                        None => {}
                     }
-                    None => {}
                 }
             }
         }
@@ -486,25 +481,20 @@ impl AppRuntime {
                     }
                 }
                 Some((ref cap_path, false)) => {
-                    let mut hit_eid = None;
-                    if let Some((handler, target_box, eid)) =
-                        Self::hit_test_event_with_box_and_entity(
-                            &self.root_blueprint,
-                            &self.layout_root,
-                            px,
-                            py,
-                            ev_type,
-                        )
-                    {
-                        hit_eid = Some(eid);
-                        let mut ev =
-                            self.create_mouse_event(ev_type, px, py, 0, 0, Some(target_box));
-                        ev.movement_x = movement_x;
-                        ev.movement_y = movement_y;
-                        let warp_req = ev.cursor_warp_requested.clone();
-                        handler(ev);
+                    let outcome = self.dispatch_bubbling_event_detailed_at(
+                        ev_type,
+                        px,
+                        py,
+                        0,
+                        0,
+                        |ev| {
+                            ev.movement_x = movement_x;
+                            ev.movement_y = movement_y;
+                        },
+                    );
+                    if outcome.handled {
                         dom_handled = true;
-                        if let Some(pos) = warp_req.get() {
+                        if let Some(pos) = outcome.cursor_warp_requested {
                             requested_warp = Some(pos);
                         }
                     }
@@ -514,7 +504,10 @@ impl AppRuntime {
                         cap_path,
                         ev_type,
                     ) {
-                        if hit_eid != Some(cap_eid) {
+                        let suppressed_by_bubble_stop = outcome.propagation_stopped
+                            && outcome.chain_entities.contains(&cap_eid);
+                        if !outcome.invoked_entities.contains(&cap_eid) && !suppressed_by_bubble_stop
+                        {
                             let target_box_copy = *target_box;
                             let mut ev = self.create_mouse_event(
                                 ev_type,
@@ -536,21 +529,20 @@ impl AppRuntime {
                     }
                 }
                 None => {
-                    if let Some((handler, target_box)) = Self::hit_test_event_with_box(
-                        &self.root_blueprint,
-                        &self.layout_root,
+                    let outcome = self.dispatch_bubbling_event_detailed_at(
+                        ev_type,
                         px,
                         py,
-                        ev_type,
-                    ) {
-                        let mut ev =
-                            self.create_mouse_event(ev_type, px, py, 0, 0, Some(target_box));
-                        ev.movement_x = movement_x;
-                        ev.movement_y = movement_y;
-                        let warp_req = ev.cursor_warp_requested.clone();
-                        handler(ev);
+                        0,
+                        0,
+                        |ev| {
+                            ev.movement_x = movement_x;
+                            ev.movement_y = movement_y;
+                        },
+                    );
+                    if outcome.handled {
                         dom_handled = true;
-                        if let Some(pos) = warp_req.get() {
+                        if let Some(pos) = outcome.cursor_warp_requested {
                             requested_warp = Some(pos);
                         }
                     }
@@ -703,20 +695,15 @@ impl AppRuntime {
                     }
                 }
                 Some((ref cap_path, false)) => {
-                    let mut hit_eid = None;
-                    if let Some((handler, target_box, eid)) =
-                        Self::hit_test_event_with_box_and_entity(
-                            &self.root_blueprint,
-                            &self.layout_root,
-                            px,
-                            py,
-                            ev_type,
-                        )
-                    {
-                        hit_eid = Some(eid);
-                        let ev =
-                            self.create_mouse_event(ev_type, px, py, button, 1, Some(target_box));
-                        handler(ev);
+                    let outcome = self.dispatch_bubbling_event_detailed_at(
+                        ev_type,
+                        px,
+                        py,
+                        button,
+                        1,
+                        |_| {},
+                    );
+                    if outcome.handled {
                         dom_handled = true;
                     }
                     if let Some((handler, target_box, cap_eid)) = Self::find_event_at_or_above_path(
@@ -725,7 +712,10 @@ impl AppRuntime {
                         cap_path,
                         ev_type,
                     ) {
-                        if hit_eid != Some(cap_eid) {
+                        let suppressed_by_bubble_stop = outcome.propagation_stopped
+                            && outcome.chain_entities.contains(&cap_eid);
+                        if !outcome.invoked_entities.contains(&cap_eid) && !suppressed_by_bubble_stop
+                        {
                             let ev = self.create_mouse_event(
                                 ev_type,
                                 px,
@@ -740,16 +730,15 @@ impl AppRuntime {
                     }
                 }
                 None => {
-                    if let Some((handler, target_box)) = Self::hit_test_event_with_box(
-                        &self.root_blueprint,
-                        &self.layout_root,
+                    let outcome = self.dispatch_bubbling_event_detailed_at(
+                        ev_type,
                         px,
                         py,
-                        ev_type,
-                    ) {
-                        let ev =
-                            self.create_mouse_event(ev_type, px, py, button, 1, Some(target_box));
-                        handler(ev);
+                        button,
+                        1,
+                        |_| {},
+                    );
+                    if outcome.handled {
                         dom_handled = true;
                     }
                 }
@@ -1399,6 +1388,143 @@ impl AppRuntime {
         Some(chain)
     }
 
+    /// Detailed outcome from a W3C bubbling DOM dispatch wave, preserving side-channel flags
+    /// (`pointer_capture_requested`, `cursor_warp_requested`, `stop_propagation`, `prevent_default`)
+    /// and invoked `EntityId`s for pointer-capture deduplication.
+    pub(crate) fn dispatch_bubbling_event_detailed_at(
+        &self,
+        event_type: strata_dom::EventType,
+        px: f32,
+        py: f32,
+        button: i16,
+        detail: i32,
+        configure: impl Fn(&mut strata_dom::Event),
+    ) -> BubblingOutcome {
+        let Some(chain) = self.hit_test_event_chain_at(px, py, event_type) else {
+            // Fallback when EntityIds are unassigned on synthetic test trees
+            if let Some((handler, target_box, eid)) = Self::hit_test_event_with_box_and_entity(
+                &self.root_blueprint,
+                &self.layout_root,
+                px,
+                py,
+                event_type,
+            ) {
+                let mut ev =
+                    self.create_mouse_event(event_type, px, py, button, detail, Some(target_box));
+                configure(&mut ev);
+                let prevented_cell = ev.default_prevented.clone();
+                let stopped_cell = ev.propagation_stopped.clone();
+                let capture_cell = ev.pointer_capture_requested.clone();
+                let warp_cell = ev.cursor_warp_requested.clone();
+                handler(ev);
+                let mut invoked_entities = Vec::new();
+                let mut chain_entities = Vec::new();
+                let target_entity = if eid.is_valid() {
+                    invoked_entities.push(eid);
+                    chain_entities.push(eid);
+                    Some(eid)
+                } else {
+                    None
+                };
+                return BubblingOutcome {
+                    handled: true,
+                    default_prevented: prevented_cell.get(),
+                    propagation_stopped: stopped_cell.get(),
+                    capture_requested: capture_cell.get(),
+                    capture_entity: target_entity,
+                    cursor_warp_requested: warp_cell.get(),
+                    target_entity,
+                    chain_entities,
+                    invoked_entities,
+                };
+            }
+            return BubblingOutcome::default();
+        };
+        let Some((_, target_layout)) = chain.last() else {
+            return BubblingOutcome::default();
+        };
+        let chain_entities: Vec<strata_primitives::EntityId> = chain
+            .iter()
+            .filter_map(|(_, l)| l.entity_id.is_valid().then_some(l.entity_id))
+            .collect();
+        let mut ev = self.create_mouse_event(
+            event_type,
+            px,
+            py,
+            button,
+            detail,
+            Some(&target_layout.geometry.border_box),
+        );
+        let target_entity = if target_layout.entity_id.is_valid() {
+            ev.target_id = u32::try_from(target_layout.entity_id.0).ok();
+            Some(target_layout.entity_id)
+        } else {
+            None
+        };
+        configure(&mut ev);
+
+        let mut handled = false;
+        let mut default_prevented = false;
+        let mut capture_requested = None;
+        let mut capture_entity = target_entity;
+        let mut invoked_entities = Vec::new();
+        let stopped_cell = ev.propagation_stopped.clone();
+        let prevented_cell = ev.default_prevented.clone();
+        let capture_cell = ev.pointer_capture_requested.clone();
+        let warp_cell = ev.cursor_warp_requested.clone();
+
+        for &(bp, node_layout) in chain.iter().rev() {
+            if let NodeBlueprint::Element { attributes, .. } = bp {
+                let current_eid = if node_layout.entity_id.is_valid() {
+                    u32::try_from(node_layout.entity_id.0).ok()
+                } else {
+                    None
+                };
+                let mut node_invoked = false;
+                for attr in attributes {
+                    if let strata_dom::Attribute::EventListener { event, handler } = attr {
+                        if *event == event_type {
+                            let prev_cap = capture_cell.get();
+                            let call_ev = ev.clone();
+                            call_ev.current_target_id.set(current_eid);
+                            handler(call_ev);
+                            handled = true;
+                            node_invoked = true;
+                            if prevented_cell.get() {
+                                default_prevented = true;
+                            }
+                            if let Some(cap) = capture_cell.get() {
+                                if capture_cell.get() != prev_cap || capture_requested.is_none() {
+                                    capture_requested = Some(cap);
+                                    if node_layout.entity_id.is_valid() {
+                                        capture_entity = Some(node_layout.entity_id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if node_invoked && node_layout.entity_id.is_valid() {
+                    invoked_entities.push(node_layout.entity_id);
+                }
+                if stopped_cell.get() {
+                    break;
+                }
+            }
+        }
+        BubblingOutcome {
+            handled,
+            default_prevented,
+            propagation_stopped: stopped_cell.get(),
+            capture_requested,
+            capture_entity,
+            cursor_warp_requested: warp_cell.get(),
+            target_entity,
+            chain_entities,
+            invoked_entities,
+        }
+    }
+
     /// Dispatches a synthetic mouse/wheel event for `event_type` at `(px, py)` starting from
     /// the front-most matching listener element and bubbling up through its ancestors, honoring
     /// `ev.stop_propagation()` and `ev.prevent_default()`.
@@ -1412,71 +1538,9 @@ impl AppRuntime {
         detail: i32,
         configure: impl Fn(&mut strata_dom::Event),
     ) -> (bool, bool) {
-        let Some(chain) = self.hit_test_event_chain_at(px, py, event_type) else {
-            // Fallback when EntityIds are unassigned on synthetic test trees
-            if let Some((handler, target_box)) = Self::hit_test_event_with_box(
-                &self.root_blueprint,
-                &self.layout_root,
-                px,
-                py,
-                event_type,
-            ) {
-                let mut ev =
-                    self.create_mouse_event(event_type, px, py, button, detail, Some(target_box));
-                configure(&mut ev);
-                let prevented_cell = ev.default_prevented.clone();
-                handler(ev);
-                return (true, prevented_cell.get());
-            }
-            return (false, false);
-        };
-        let Some((_, target_layout)) = chain.last() else {
-            return (false, false);
-        };
-        let mut ev = self.create_mouse_event(
-            event_type,
-            px,
-            py,
-            button,
-            detail,
-            Some(&target_layout.geometry.border_box),
-        );
-        if target_layout.entity_id.is_valid() {
-            ev.target_id = u32::try_from(target_layout.entity_id.0).ok();
-        }
-        configure(&mut ev);
-
-        let mut handled = false;
-        let mut default_prevented = false;
-        let stopped_cell = ev.propagation_stopped.clone();
-        let prevented_cell = ev.default_prevented.clone();
-
-        for &(bp, node_layout) in chain.iter().rev() {
-            if let NodeBlueprint::Element { attributes, .. } = bp {
-                let current_eid = if node_layout.entity_id.is_valid() {
-                    u32::try_from(node_layout.entity_id.0).ok()
-                } else {
-                    None
-                };
-                for attr in attributes {
-                    if let strata_dom::Attribute::EventListener { event, handler } = attr {
-                        if *event == event_type {
-                            let call_ev = ev.clone();
-                            call_ev.current_target_id.set(current_eid);
-                            handler(call_ev);
-                            handled = true;
-                            if prevented_cell.get() {
-                                default_prevented = true;
-                            }
-                        }
-                    }
-                }
-                if stopped_cell.get() {
-                    break;
-                }
-            }
-        }
-        (handled, default_prevented)
+        let outcome =
+            self.dispatch_bubbling_event_detailed_at(event_type, px, py, button, detail, configure);
+        (outcome.handled, outcome.default_prevented)
     }
 
     /// Dispatches a pointer click event at (x, y) coordinates into the application blueprint tree.

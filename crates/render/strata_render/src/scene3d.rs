@@ -2157,28 +2157,37 @@ impl Canvas3DBuilder {
         self
     }
 
-    pub fn onmousedown(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+    pub fn onmousedown<Args>(
+        self,
+        handler: impl strata_dom::EventHandlerMarker<Args> + 'static,
+    ) -> Self {
         self.push_event(strata_dom::EventType::MouseDown, handler)
     }
 
     pub fn onmousedown_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
-        self.onmousedown(handler)
+        self.push_event(strata_dom::EventType::MouseDown, handler)
     }
 
-    pub fn onmousemove(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+    pub fn onmousemove<Args>(
+        self,
+        handler: impl strata_dom::EventHandlerMarker<Args> + 'static,
+    ) -> Self {
         self.push_event(strata_dom::EventType::MouseMove, handler)
     }
 
     pub fn onmousemove_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
-        self.onmousemove(handler)
+        self.push_event(strata_dom::EventType::MouseMove, handler)
     }
 
-    pub fn onmouseup(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+    pub fn onmouseup<Args>(
+        self,
+        handler: impl strata_dom::EventHandlerMarker<Args> + 'static,
+    ) -> Self {
         self.push_event(strata_dom::EventType::MouseUp, handler)
     }
 
     pub fn onmouseup_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
-        self.onmouseup(handler)
+        self.push_event(strata_dom::EventType::MouseUp, handler)
     }
 
     pub fn onmouseenter<Args>(
@@ -2203,36 +2212,48 @@ impl Canvas3DBuilder {
         self.push_event(strata_dom::EventType::MouseLeave, handler)
     }
 
-    pub fn onwheel(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+    pub fn onwheel<Args>(
+        self,
+        handler: impl strata_dom::EventHandlerMarker<Args> + 'static,
+    ) -> Self {
         self.push_event(strata_dom::EventType::Wheel, handler)
     }
 
     pub fn onwheel_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
-        self.onwheel(handler)
+        self.push_event(strata_dom::EventType::Wheel, handler)
     }
 
-    pub fn onpointerdown(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+    pub fn onpointerdown<Args>(
+        self,
+        handler: impl strata_dom::EventHandlerMarker<Args> + 'static,
+    ) -> Self {
         self.push_event(strata_dom::EventType::PointerDown, handler)
     }
 
     pub fn onpointerdown_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
-        self.onpointerdown(handler)
+        self.push_event(strata_dom::EventType::PointerDown, handler)
     }
 
-    pub fn onpointermove(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+    pub fn onpointermove<Args>(
+        self,
+        handler: impl strata_dom::EventHandlerMarker<Args> + 'static,
+    ) -> Self {
         self.push_event(strata_dom::EventType::PointerMove, handler)
     }
 
     pub fn onpointermove_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
-        self.onpointermove(handler)
+        self.push_event(strata_dom::EventType::PointerMove, handler)
     }
 
-    pub fn onpointerup(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+    pub fn onpointerup<Args>(
+        self,
+        handler: impl strata_dom::EventHandlerMarker<Args> + 'static,
+    ) -> Self {
         self.push_event(strata_dom::EventType::PointerUp, handler)
     }
 
     pub fn onpointerup_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
-        self.onpointerup(handler)
+        self.push_event(strata_dom::EventType::PointerUp, handler)
     }
 
     pub fn onclick<Args>(self, handler: impl strata_dom::EventHandlerMarker<Args> + 'static) -> Self {
@@ -2265,12 +2286,15 @@ impl Canvas3DBuilder {
         self.push_event(strata_dom::EventType::ContextMenu, handler)
     }
 
-    pub fn onresize(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+    pub fn onresize<Args>(
+        self,
+        handler: impl strata_dom::EventHandlerMarker<Args> + 'static,
+    ) -> Self {
         self.push_event(strata_dom::EventType::Resize, handler)
     }
 
     pub fn onresize_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
-        self.onresize(handler)
+        self.push_event(strata_dom::EventType::Resize, handler)
     }
 
     /// Binds a persistent [`RetainedScene3D`] handle for out-of-band zero-rebuild GPU updates.

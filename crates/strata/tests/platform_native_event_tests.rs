@@ -464,7 +464,7 @@ fn test_right_click_dispatches_onmousedown_and_onmouseup_with_button_and_size() 
         .retained(retained)
         .width(640.0)
         .height(400.0)
-        .onmousedown(move |ev| {
+        .onmousedown(move |ev: Event| {
             log_down.borrow_mut().push((
                 "down",
                 ev.button,
@@ -474,7 +474,7 @@ fn test_right_click_dispatches_onmousedown_and_onmouseup_with_button_and_size() 
                 ev.height,
             ));
         })
-        .onmouseup(move |ev| {
+        .onmouseup(move |ev: Event| {
             log_up.borrow_mut().push((
                 "up",
                 ev.button,

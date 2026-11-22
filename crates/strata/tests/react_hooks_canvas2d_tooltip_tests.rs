@@ -1328,4 +1328,129 @@ fn test_w3c_bubbling_and_stop_propagation_across_click_dblclick_contextmenu_and_
     assert_eq!(outer_scroll_wheel_hit.get(), 1);
 }
 
+#[test]
+fn test_w3c_bubbling_and_stop_propagation_for_pointer_and_mouse_down_move_up() {
+    use std::cell::RefCell;
+
+    let trace: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+
+    let t = |tag: &'static str, trace: &Rc<RefCell<Vec<&'static str>>>, stop: bool, cap: bool| {
+        let tr = Rc::clone(trace);
+        move |ev: strata_dom::Event| {
+            if stop {
+                ev.stop_propagation();
+            }
+            if cap {
+                ev.set_pointer_capture(ev.pointer_id);
+            }
+            tr.borrow_mut().push(tag);
+        }
+    };
+
+    let view = rsx! {
+        <div class="w-[400px] h-[300px]">
+            <Canvas2D
+                id="cad-pointer"
+                class="w-[360px] h-[260px] flex flex-col gap-2 p-2"
+                onpointerdown={t("canvas-pd", &trace, false, false)}
+                onmousedown={t("canvas-md", &trace, false, false)}
+                onpointermove={t("canvas-pm", &trace, false, false)}
+                onmousemove={t("canvas-mm", &trace, false, false)}
+                onpointerup={t("canvas-pu", &trace, false, false)}
+                onmouseup={t("canvas-mu", &trace, false, false)}
+            >
+                <button
+                    id="ptr-bubble"
+                    class="w-[180px] h-[40px]"
+                    onpointerdown={t("child-pd", &trace, false, false)}
+                    onmousedown={t("child-md", &trace, false, false)}
+                    onpointermove={t("child-pm", &trace, false, false)}
+                    onmousemove={t("child-mm", &trace, false, false)}
+                    onpointerup={t("child-pu", &trace, false, false)}
+                    onmouseup={t("child-mu", &trace, false, false)}
+                >
+                    "Ptr Bubble"
+                </button>
+                <button
+                    id="ptr-stop"
+                    class="w-[180px] h-[40px]"
+                    onpointerdown={t("stop-pd", &trace, true, false)}
+                    onmousedown={t("stop-md", &trace, true, false)}
+                    onpointermove={t("stop-pm", &trace, true, false)}
+                    onmousemove={t("stop-mm", &trace, true, false)}
+                    onpointerup={t("stop-pu", &trace, true, false)}
+                    onmouseup={t("stop-mu", &trace, true, false)}
+                >
+                    "Ptr Stop"
+                </button>
+                <button
+                    id="ptr-capture"
+                    class="w-[180px] h-[40px]"
+                    onpointerdown={t("cap-pd", &trace, true, true)}
+                    onpointermove={t("cap-pm", &trace, true, false)}
+                    onpointerup={t("cap-pu", &trace, true, false)}
+                >
+                    "Ptr Capture"
+                </button>
+            </Canvas2D>
+        </div>
+    };
+
+    let mut rt = AppRuntime::new(view, 400.0, 300.0, 1.0);
+    let b_box = rt.query_element_rect("ptr-bubble").unwrap();
+    let s_box = rt.query_element_rect("ptr-stop").unwrap();
+    let c_box = rt.query_element_rect("ptr-capture").unwrap();
+
+    // 1. Non-captured PointerMove / MouseMove bubbles from child to parent Canvas2D
+    assert!(rt.dispatch_pointer_move(b_box.x + 10.0, b_box.y + 10.0));
+    assert_eq!(
+        trace.borrow().as_slice(),
+        &["child-pm", "canvas-pm", "child-mm", "canvas-mm"]
+    );
+    trace.borrow_mut().clear();
+
+    // 2. PointerDown -> PointerMove -> PointerUp bubbles cleanly without duplicate implicit-capture firing
+    assert!(rt.dispatch_pointer_down(b_box.x + 10.0, b_box.y + 10.0));
+    assert_eq!(
+        trace.borrow().as_slice(),
+        &["child-pd", "canvas-pd", "child-md", "canvas-md"]
+    );
+    trace.borrow_mut().clear();
+
+    assert!(rt.dispatch_pointer_move(b_box.x + 20.0, b_box.y + 15.0));
+    assert_eq!(
+        trace.borrow().as_slice(),
+        &["child-pm", "canvas-pm", "child-mm", "canvas-mm"]
+    );
+    trace.borrow_mut().clear();
+
+    assert!(rt.dispatch_pointer_up(b_box.x + 20.0, b_box.y + 15.0));
+    assert_eq!(
+        trace.borrow().as_slice(),
+        &["child-pu", "canvas-pu", "child-mu", "canvas-mu"]
+    );
+    trace.borrow_mut().clear();
+
+    // 3. stop_propagation() on nested child halts bubbling on down/move/up
+    assert!(rt.dispatch_pointer_down(s_box.x + 10.0, s_box.y + 10.0));
+    assert!(rt.dispatch_pointer_move(s_box.x + 20.0, s_box.y + 15.0));
+    assert!(rt.dispatch_pointer_up(s_box.x + 20.0, s_box.y + 15.0));
+    assert_eq!(
+        trace.borrow().as_slice(),
+        &["stop-pd", "stop-md", "stop-pm", "stop-mm", "stop-pu", "stop-mu"]
+    );
+    trace.borrow_mut().clear();
+
+    // 4. Explicit set_pointer_capture on child preserves capture precedence even over #ptr-stop bounds:
+    // #ptr-stop receives nothing; #ptr-capture receives Pointer* and falls through to #cad-pointer for Mouse*.
+    assert!(rt.dispatch_pointer_down(c_box.x + 10.0, c_box.y + 10.0));
+    assert!(rt.dispatch_pointer_move(s_box.x + 25.0, s_box.y + 20.0));
+    assert!(rt.dispatch_pointer_up(s_box.x + 25.0, s_box.y + 20.0));
+    assert_eq!(
+        trace.borrow().as_slice(),
+        &["cap-pd", "canvas-md", "cap-pm", "canvas-mm", "cap-pu", "canvas-mu"]
+    );
+}
+
+
 
