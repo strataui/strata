@@ -20,12 +20,13 @@ pub enum CursorIcon {
     RowResize,
 }
 
-type ShortcutEntry = (u32, KeyChord, Rc<dyn Fn()>);
+type ShortcutEntry = (KeyChord, Rc<dyn Fn()>);
+type CursorEntry = (CursorIcon, Signal<bool>);
 
 thread_local! {
     static MANUAL_CURSOR: RefCell<Signal<Option<CursorIcon>>> = RefCell::new(Signal::new(None));
-    static CURSOR_REQUESTS: RefCell<Vec<(CursorIcon, Signal<bool>)>> = const { RefCell::new(Vec::new()) };
-    static REGISTERED_SHORTCUTS: RefCell<Vec<ShortcutEntry>> = RefCell::new(Vec::new());
+    static CURSOR_REQUESTS: RefCell<Vec<(u32, CursorEntry)>> = const { RefCell::new(Vec::new()) };
+    static REGISTERED_SHORTCUTS: RefCell<Vec<(u32, ShortcutEntry)>> = RefCell::new(Vec::new());
     static NEXT_SHORTCUT_ID: RefCell<u32> = const { RefCell::new(1) };
     static CLIPBOARD_CONTENT: RefCell<Signal<String>> = RefCell::new(Signal::new(String::new()));
 }
@@ -37,7 +38,7 @@ pub fn current_cursor() -> CursorIcon {
     }
 
     CURSOR_REQUESTS.with(|reqs| {
-        for (icon, active) in reqs.borrow().iter().rev() {
+        for (_, (icon, active)) in reqs.borrow().iter().rev() {
             if active.get() {
                 return *icon;
             }
@@ -57,10 +58,21 @@ pub fn clear_cursor_override() {
 }
 
 /// Reactive hook that activates the specified pointer cursor whenever `active` signal evaluates to true.
+///
+/// Inside a `#[component]` render body, the cursor request is persisted in a component hook slot,
+/// updated in place on re-renders (preventing duplicate `CURSOR_REQUESTS` entries), and automatically
+/// removed when the component unmounts. Outside a component scope or inside an effect, registers an
+/// unscoped reactive cursor entry.
 pub fn use_cursor(icon: CursorIcon, active: Signal<bool>) {
-    CURSOR_REQUESTS.with(|reqs| {
-        reqs.borrow_mut().push((icon, active));
-    });
+    let entry: CursorEntry = (icon, active);
+    if crate::reactive::in_component_hook_context() {
+        let _ = upsert_component_entry(&CURSOR_REQUESTS, entry);
+    } else {
+        let id = alloc_registry_id();
+        CURSOR_REQUESTS.with(|reqs| {
+            reqs.borrow_mut().push((id, entry));
+        });
+    }
 }
 
 /// Representation of a parsed keyboard key chord.
@@ -131,22 +143,82 @@ impl KeyChord {
     }
 }
 
-struct ShortcutDropGuard(u32);
+struct ScopedEntryGuard<T: 'static> {
+    id: u32,
+    registry: &'static std::thread::LocalKey<RefCell<Vec<(u32, T)>>>,
+}
 
-impl Drop for ShortcutDropGuard {
+impl<T: 'static> Drop for ScopedEntryGuard<T> {
     fn drop(&mut self) {
-        let _ = REGISTERED_SHORTCUTS.try_with(|s| {
+        let _ = self.registry.try_with(|s| {
             if let Ok(mut list) = s.try_borrow_mut() {
-                list.retain(|(id, _, _)| *id != self.0);
+                list.retain(|(id, _)| *id != self.id);
             }
         });
     }
 }
 
-#[derive(Clone)]
-struct ComponentShortcutSlot {
+struct ComponentEntrySlot<T: 'static> {
     id: u32,
-    guard: Rc<ShortcutDropGuard>,
+    guard: Rc<ScopedEntryGuard<T>>,
+}
+
+impl<T: 'static> Clone for ComponentEntrySlot<T> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            guard: Rc::clone(&self.guard),
+        }
+    }
+}
+
+fn alloc_registry_id() -> u32 {
+    NEXT_SHORTCUT_ID.with(|n| {
+        let mut val = n.borrow_mut();
+        let cur = *val;
+        *val += 1;
+        cur
+    })
+}
+
+fn push_unscoped_entry<T: 'static>(
+    registry: &'static std::thread::LocalKey<RefCell<Vec<(u32, T)>>>,
+    value: T,
+) -> (u32, ScopedEntryGuard<T>) {
+    let id = alloc_registry_id();
+    registry.with(|s| {
+        s.borrow_mut().push((id, value));
+    });
+    (id, ScopedEntryGuard { id, registry })
+}
+
+fn upsert_component_entry<T: 'static>(
+    registry: &'static std::thread::LocalKey<RefCell<Vec<(u32, T)>>>,
+    value: T,
+) -> Rc<ScopedEntryGuard<T>> {
+    let mut init_val = Some(value);
+    let slot = crate::reactive::use_hook_slot_cloned(|| {
+        let initial = init_val.take().unwrap();
+        let (id, guard) = push_unscoped_entry(registry, initial);
+        ComponentEntrySlot {
+            id,
+            guard: Rc::new(guard),
+        }
+    })
+    .expect("component hook context active");
+
+    if let Some(latest) = init_val.take() {
+        registry.with(|s| {
+            let mut list = s.borrow_mut();
+            if let Some(entry) = list.iter_mut().find(|(id, _)| *id == slot.id) {
+                entry.1 = latest;
+            } else {
+                list.push((slot.id, latest));
+            }
+        });
+    }
+
+    Rc::clone(&slot.guard)
 }
 
 /// Handle returned by [`use_keyboard_shortcut`].
@@ -155,20 +227,7 @@ struct ComponentShortcutSlot {
 /// Inside a `#[component]` body, lifetime is bound to the component hook slot so dropping the
 /// handle at the end of `render` keeps the shortcut active until component unmount.
 pub struct ShortcutHandle {
-    _guard: Rc<ShortcutDropGuard>,
-}
-
-fn alloc_and_register_shortcut(chord: KeyChord, callback: Rc<dyn Fn()>) -> (u32, Rc<ShortcutDropGuard>) {
-    let id = NEXT_SHORTCUT_ID.with(|n| {
-        let mut val = n.borrow_mut();
-        let cur = *val;
-        *val += 1;
-        cur
-    });
-    REGISTERED_SHORTCUTS.with(|s| {
-        s.borrow_mut().push((id, chord, callback));
-    });
-    (id, Rc::new(ShortcutDropGuard(id)))
+    _guard: Rc<ScopedEntryGuard<ShortcutEntry>>,
 }
 
 /// Registers a global keyboard shortcut with an invoked callback.
@@ -178,36 +237,12 @@ fn alloc_and_register_shortcut(chord: KeyChord, callback: Rc<dyn Fn()>) -> (u32,
 /// automatically when the component unmounts. Outside a component scope or inside an effect,
 /// returns an RAII [`ShortcutHandle`] whose `Drop` unregisters immediately.
 pub fn use_keyboard_shortcut<F: Fn() + 'static>(shortcut: &str, handler: F) -> ShortcutHandle {
-    let chord = KeyChord::parse(shortcut);
-    let callback: Rc<dyn Fn()> = Rc::new(handler);
-
-    if crate::reactive::in_component_hook_context() {
-        let mut init_args = Some((chord, Rc::clone(&callback)));
-        let slot = crate::reactive::use_hook_slot_cloned(|| {
-            let (init_chord, init_cb) = init_args.take().unwrap();
-            let (id, guard) = alloc_and_register_shortcut(init_chord, init_cb);
-            ComponentShortcutSlot { id, guard }
-        })
-        .expect("component hook context active");
-
-        if let Some((latest_chord, latest_cb)) = init_args.take() {
-            REGISTERED_SHORTCUTS.with(|s| {
-                let mut list = s.borrow_mut();
-                if let Some(entry) = list.iter_mut().find(|(id, _, _)| *id == slot.id) {
-                    entry.1 = latest_chord;
-                    entry.2 = latest_cb;
-                } else {
-                    list.push((slot.id, latest_chord, latest_cb));
-                }
-            });
-        }
-
-        return ShortcutHandle {
-            _guard: Rc::clone(&slot.guard),
-        };
-    }
-
-    let (_, guard) = alloc_and_register_shortcut(chord, callback);
+    let entry: ShortcutEntry = (KeyChord::parse(shortcut), Rc::new(handler));
+    let guard = if crate::reactive::in_component_hook_context() {
+        upsert_component_entry(&REGISTERED_SHORTCUTS, entry)
+    } else {
+        Rc::new(push_unscoped_entry(&REGISTERED_SHORTCUTS, entry).1)
+    };
     ShortcutHandle { _guard: guard }
 }
 
@@ -225,7 +260,7 @@ pub fn dispatch_global_keydown(key: &str, ctrl: bool, shift: bool, alt: bool, me
     let mut handled = false;
     REGISTERED_SHORTCUTS.with(|s| {
         let list = s.borrow().clone();
-        for (_, chord, callback) in list {
+        for (_, (chord, callback)) in list {
             if chord.matches(key, ctrl, shift, alt, meta) {
                 callback();
                 handled = true;
@@ -266,3 +301,44 @@ pub fn use_clipboard() -> ClipboardHandle {
         read_text,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reactive::{
+        reset_component_hooks, with_root_component_scope, ComponentScopeGuard,
+    };
+
+    #[test]
+    fn test_component_use_cursor_does_not_leak_cursor_requests_across_rerenders_or_unmount() {
+        reset_component_hooks();
+        CURSOR_REQUESTS.with(|reqs| reqs.borrow_mut().clear());
+        clear_cursor_override();
+
+        let sig = Signal::new(true);
+        let render = |icon: CursorIcon| {
+            let sig_c = sig.clone();
+            with_root_component_scope(|| {
+                let _comp = ComponentScopeGuard::enter("CursorOwner");
+                use_cursor(icon, sig_c);
+            });
+        };
+
+        for _ in 0..25 {
+            render(CursorIcon::Grab);
+        }
+        assert_eq!(CURSOR_REQUESTS.with(|r| r.borrow().len()), 1);
+        assert_eq!(current_cursor(), CursorIcon::Grab);
+
+        // Updating icon updates the single slot in place without pushing a second entry
+        render(CursorIcon::ColResize);
+        assert_eq!(CURSOR_REQUESTS.with(|r| r.borrow().len()), 1);
+        assert_eq!(current_cursor(), CursorIcon::ColResize);
+
+        // Unmounting clears the entry completely
+        reset_component_hooks();
+        assert_eq!(CURSOR_REQUESTS.with(|r| r.borrow().len()), 0);
+        assert_eq!(current_cursor(), CursorIcon::Default);
+    }
+}
+

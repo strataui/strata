@@ -313,3 +313,59 @@ fn test_component_scoped_keyboard_shortcut_and_effect_cleanup_ergonomics() {
     );
 }
 
+#[test]
+fn test_component_scoped_use_cursor_persistence_and_unmount_cleanup() {
+    use strata_dom::reactive::{
+        reset_component_hooks, use_signal, with_root_component_scope, ComponentScopeGuard,
+    };
+
+    reset_component_hooks();
+    clear_cursor_override();
+
+    let parent_active = Signal::new(true);
+    let child_active = Signal::new(true);
+
+    let render_tree = |show_child: bool, child_icon: CursorIcon| {
+        let p_sig = parent_active.clone();
+        let c_sig = child_active.clone();
+        with_root_component_scope(|| {
+            let _parent = ComponentScopeGuard::enter("CursorParent");
+            use_cursor(CursorIcon::Pointer, p_sig);
+
+            let child_marker = if show_child {
+                let _child = ComponentScopeGuard::enter("CursorChild");
+                use_cursor(child_icon, c_sig);
+                let s = use_signal(7usize);
+                s.get()
+            } else {
+                0
+            };
+
+            let p_state = use_signal(99usize);
+            (p_state.get(), child_marker)
+        })
+    };
+
+    // 1. Mount parent + child: child cursor wins over parent
+    assert_eq!(render_tree(true, CursorIcon::Grab), (99, 7));
+    assert_eq!(current_cursor(), CursorIcon::Grab);
+
+    // 2. Re-render child with new icon updates in place; hook slots remain intact
+    assert_eq!(render_tree(true, CursorIcon::Crosshair), (99, 7));
+    assert_eq!(current_cursor(), CursorIcon::Crosshair);
+
+    // 3. Toggling child signal inactive falls back to parent cursor, and back to Crosshair when active
+    child_active.set(false);
+    assert_eq!(current_cursor(), CursorIcon::Pointer);
+    child_active.set(true);
+    assert_eq!(current_cursor(), CursorIcon::Crosshair);
+
+    // 4. Unmounting ONLY child via parent re-render removes child's CURSOR_REQUESTS entry even while child_active == true
+    assert_eq!(render_tree(false, CursorIcon::Crosshair), (99, 0));
+    assert_eq!(current_cursor(), CursorIcon::Pointer);
+
+    // 5. Full unmount removes parent entry as well
+    reset_component_hooks();
+    assert_eq!(current_cursor(), CursorIcon::Default);
+}
+
