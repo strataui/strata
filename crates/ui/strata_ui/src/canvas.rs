@@ -2,10 +2,12 @@
 
 #![allow(non_snake_case)]
 
-use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::Arc;
-use strata_dom::{Attribute, ClassList, Event, EventHandlerMarker, EventType, NodeBlueprint, Tag, View};
+use strata_dom::{
+    Attribute, ClassList, Event, EventHandlerMarker, EventType, IntoChildren, IntoClassList,
+    IntoOptionalString, NodeBlueprint, Tag, View,
+};
 pub use strata_render::canvas2d::{
     Canvas2DContext, Canvas2DPaintCallback, CanvasCommand, CanvasLineCap, CanvasLineJoin,
     CanvasPathVerb, CanvasTextAlign, CanvasTextBaseline, CanvasTextMetrics, IntoRoundRectRadii,
@@ -16,42 +18,9 @@ pub trait IntoCanvasClass {
     fn into_canvas_class_tokens(self) -> Vec<String>;
 }
 
-impl IntoCanvasClass for &str {
+impl<T: IntoClassList> IntoCanvasClass for T {
     fn into_canvas_class_tokens(self) -> Vec<String> {
-        self.split_whitespace().map(str::to_string).collect()
-    }
-}
-
-impl IntoCanvasClass for String {
-    fn into_canvas_class_tokens(self) -> Vec<String> {
-        self.split_whitespace().map(str::to_string).collect()
-    }
-}
-
-impl IntoCanvasClass for &String {
-    fn into_canvas_class_tokens(self) -> Vec<String> {
-        self.split_whitespace().map(str::to_string).collect()
-    }
-}
-
-impl IntoCanvasClass for Cow<'_, str> {
-    fn into_canvas_class_tokens(self) -> Vec<String> {
-        self.split_whitespace().map(str::to_string).collect()
-    }
-}
-
-impl IntoCanvasClass for ClassList {
-    fn into_canvas_class_tokens(self) -> Vec<String> {
-        self.iter()
-            .flat_map(|c| c.split_whitespace())
-            .map(str::to_string)
-            .collect()
-    }
-}
-
-impl IntoCanvasClass for Option<String> {
-    fn into_canvas_class_tokens(self) -> Vec<String> {
-        self.map_or_else(Vec::new, IntoCanvasClass::into_canvas_class_tokens)
+        self.into_class_list().iter().map(str::to_string).collect()
     }
 }
 
@@ -125,6 +94,7 @@ pub struct Canvas2DBuilder {
     pub class_tokens: Vec<String>,
     pub style: Option<String>,
     pub id: Option<String>,
+    pub title: Option<String>,
     pub __strata_key: Option<String>,
     pub on_draw: Option<Rc<dyn Fn(&mut Canvas2DContext)>>,
     pub on_paint: Option<Rc<dyn Fn(&mut Canvas2DContext, f32, f32)>>,
@@ -165,13 +135,18 @@ impl Canvas2DBuilder {
         self
     }
 
+    pub fn title(mut self, title: impl IntoOptionalString) -> Self {
+        self.title = title.into_optional_string();
+        self
+    }
+
     pub fn key(mut self, key: impl std::fmt::Display) -> Self {
         self.__strata_key = Some(key.to_string());
         self
     }
 
-    pub fn children(mut self, children: Vec<NodeBlueprint>) -> Self {
-        self.children = Some(children);
+    pub fn children(mut self, children: impl IntoChildren<Vec<NodeBlueprint>>) -> Self {
+        self.children = Some(children.into_children());
         self
     }
 
@@ -214,6 +189,22 @@ impl Canvas2DBuilder {
         self.push_event(EventType::Click, handler)
     }
 
+    pub fn ondblclick<Args>(self, handler: impl EventHandlerMarker<Args> + 'static) -> Self {
+        self.push_event(EventType::DblClick, handler)
+    }
+
+    pub fn ondblclick_fn(self, handler: impl Fn(Event) + 'static) -> Self {
+        self.push_event(EventType::DblClick, handler)
+    }
+
+    pub fn oncontextmenu<Args>(self, handler: impl EventHandlerMarker<Args> + 'static) -> Self {
+        self.push_event(EventType::ContextMenu, handler)
+    }
+
+    pub fn oncontextmenu_fn(self, handler: impl Fn(Event) + 'static) -> Self {
+        self.push_event(EventType::ContextMenu, handler)
+    }
+
     pub fn onmousedown<Args>(self, handler: impl EventHandlerMarker<Args> + 'static) -> Self {
         self.push_event(EventType::MouseDown, handler)
     }
@@ -236,6 +227,22 @@ impl Canvas2DBuilder {
 
     pub fn onmouseup_fn(self, handler: impl Fn(Event) + 'static) -> Self {
         self.push_event(EventType::MouseUp, handler)
+    }
+
+    pub fn onmouseenter<Args>(self, handler: impl EventHandlerMarker<Args> + 'static) -> Self {
+        self.push_event(EventType::MouseEnter, handler)
+    }
+
+    pub fn onmouseenter_fn(self, handler: impl Fn(Event) + 'static) -> Self {
+        self.push_event(EventType::MouseEnter, handler)
+    }
+
+    pub fn onmouseleave<Args>(self, handler: impl EventHandlerMarker<Args> + 'static) -> Self {
+        self.push_event(EventType::MouseLeave, handler)
+    }
+
+    pub fn onmouseleave_fn(self, handler: impl Fn(Event) + 'static) -> Self {
+        self.push_event(EventType::MouseLeave, handler)
     }
 
     pub fn onwheel<Args>(self, handler: impl EventHandlerMarker<Args> + 'static) -> Self {
@@ -270,6 +277,14 @@ impl Canvas2DBuilder {
         self.push_event(EventType::PointerUp, handler)
     }
 
+    pub fn onresize<Args>(self, handler: impl EventHandlerMarker<Args> + 'static) -> Self {
+        self.push_event(EventType::Resize, handler)
+    }
+
+    pub fn onresize_fn(self, handler: impl Fn(Event) + 'static) -> Self {
+        self.push_event(EventType::Resize, handler)
+    }
+
     pub fn build(self) -> View {
         let render = move || {
             let _scope = strata_dom::ComponentScopeGuard::enter(concat!(
@@ -278,10 +293,13 @@ impl Canvas2DBuilder {
             ));
             let is_responsive = self.responsive || (self.width.is_none() && self.height.is_none());
 
-            let mut attrs = Vec::with_capacity(6 + self.events.len());
+            let mut attrs = Vec::with_capacity(7 + self.events.len());
             attrs.push(Attribute::property("data-strata-canvas2d", "true"));
             if let Some(ref id) = self.id {
                 attrs.push(Attribute::property("id", id.clone()));
+            }
+            if let Some(ref title) = self.title {
+                attrs.push(Attribute::property("title", title.clone()));
             }
 
             let mut style_str = String::new();

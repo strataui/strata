@@ -545,3 +545,120 @@ fn test_canvas3d_retained_uncapped_skips_display_list_recompiles() {
         "all 10 camera-only updates must skip 2D DOM/layout/display-list compilation"
     );
 }
+
+#[test]
+fn test_canvas3d_builder_parity_and_responsive_orbit_controls() {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use strata::render::compositor::DrawCommand;
+    use strata::render::orbit_controls::OrbitControls;
+    use strata_platform::PlatformEvent;
+
+    let unit_clicks = Rc::new(Cell::new(0usize));
+    let dbl_clicks = Rc::new(Cell::new(0usize));
+    let ctx_menus = Rc::new(Cell::new(0usize));
+    let enters = Rc::new(Cell::new(0usize));
+    let leaves = Rc::new(Cell::new(0usize));
+    let orbit_thetas: Rc<RefCell<Vec<f32>>> = Rc::new(RefCell::new(Vec::new()));
+
+    let mut scene = Scene3D::new();
+    scene.camera = Camera3D::Perspective {
+        fov_horizontal_deg: 60.0,
+        near: 0.1,
+        far: 1000.0,
+        position: [0.0, 0.0, 20.0],
+        target: [0.0, 0.0, 0.0],
+    };
+
+    let build_root = {
+        let unit_c = Rc::clone(&unit_clicks);
+        let dbl_c = Rc::clone(&dbl_clicks);
+        let ctx_c = Rc::clone(&ctx_menus);
+        let ent_c = Rc::clone(&enters);
+        let lve_c = Rc::clone(&leaves);
+        let thetas = Rc::clone(&orbit_thetas);
+        let cls = String::from("flex-1 h-full");
+        rsx! {
+            <div class="w-full h-full flex">
+                <div class="w-[200px] h-full" />
+                <Canvas3D
+                    id="cad-3d"
+                    key="cad-3d-key"
+                    title="Perspective CAD View"
+                    class={cls}
+                    width={999.0}
+                    height={999.0}
+                    responsive={true}
+                    scene={scene}
+                    onclick={move || unit_c.set(unit_c.get() + 1)}
+                    ondblclick={move |_ev: Event| dbl_c.set(dbl_c.get() + 1)}
+                    oncontextmenu={move |_ev: Event| ctx_c.set(ctx_c.get() + 1)}
+                    onmouseenter={move |_ev: Event| ent_c.set(ent_c.get() + 1)}
+                    onmouseleave={move |_ev: Event| lve_c.set(lve_c.get() + 1)}
+                    on_camera_change={move |ctrl: &OrbitControls| {
+                        thetas.borrow_mut().push(ctrl.theta);
+                    }}
+                />
+            </div>
+        }
+    };
+
+    let mut runtime = AppRuntime::new(build_root, 800.0, 400.0, 1.0);
+    runtime.set_hover_tooltip_delay(std::time::Duration::ZERO);
+
+    // 1. `responsive(true)` omits width/height properties so flex sizes Canvas3D to 600x400 (not 999x999)
+    let rect = runtime.query_element_rect("cad-3d").expect("cad-3d rect");
+    assert!(
+        (rect.width - 600.0).abs() < 0.5 && (rect.height - 400.0).abs() < 0.5,
+        "Expected 600x400 flex size, got {}x{}",
+        rect.width,
+        rect.height
+    );
+
+    // 2. Title tooltip, mouseenter/mouseleave, 0-arg onclick, ondblclick, oncontextmenu
+    runtime.update_hover(350.0, 200.0);
+    assert_eq!(enters.get(), 1);
+    assert!(runtime.poll_hover_tooltip());
+    assert!(runtime.display_list.commands().iter().any(|c| matches!(
+        c,
+        DrawCommand::DrawText { text, .. } if text == "Perspective CAD View"
+    )));
+
+    assert!(runtime.dispatch_mouse_click(350.0, 200.0, 0, 1));
+    assert_eq!(unit_clicks.get(), 1);
+    assert!(runtime.dispatch_dblclick(350.0, 200.0));
+    assert_eq!(dbl_clicks.get(), 1);
+    assert!(runtime.dispatch_context_menu(350.0, 200.0));
+    assert_eq!(ctx_menus.get(), 1);
+
+    runtime.update_hover(50.0, 200.0);
+    assert_eq!(leaves.get(), 1);
+
+    // 3. `attach_orbit_controls_listeners` uses live `ev.width`/`ev.height`:
+    // Drag 50px on 600px-wide canvas vs 250px-wide canvas after WindowResized(450, 400).
+    runtime.dispatch_pointer_down(300.0, 200.0);
+    runtime.dispatch_pointer_move(350.0, 200.0);
+    runtime.dispatch_pointer_up(350.0, 200.0);
+    let theta_wide = *orbit_thetas.borrow().last().expect("wide orbit theta");
+
+    assert!(runtime.step_event(&PlatformEvent::WindowResized {
+        width: 450,
+        height: 400,
+    }));
+    let rect_narrow = runtime.query_element_rect("cad-3d").expect("narrow rect");
+    assert!((rect_narrow.width - 250.0).abs() < 0.5);
+
+    runtime.dispatch_pointer_down(300.0, 200.0);
+    runtime.dispatch_pointer_move(350.0, 200.0);
+    runtime.dispatch_pointer_up(350.0, 200.0);
+    let theta_after = *orbit_thetas.borrow().last().expect("narrow orbit theta");
+    let delta_wide = theta_wide.abs();
+    let delta_narrow = (theta_after - theta_wide).abs();
+    assert!(
+        delta_narrow > delta_wide * 2.0,
+        "Narrower responsive Canvas3D (250px) must rotate faster per pixel than 600px (narrow={}, wide={})",
+        delta_narrow,
+        delta_wide
+    );
+}
+

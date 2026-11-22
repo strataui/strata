@@ -653,12 +653,22 @@ impl AppRuntime {
 
                 let mut node =
                     LayoutNode::with_children(*style, child_nodes).with_entity_id(entity_id);
-                for attr in attributes {
-                    if let strata_dom::Attribute::ScenePayload(payload) = attr {
-                        node.scene_3d = Some(strata_layout::ViewportSceneHandle(
-                            std::sync::Arc::clone(payload),
-                        ));
-                        break;
+                if let Some(payload) = canvas2d_payload {
+                    node.scene_3d = Some(strata_layout::ViewportSceneHandle(payload));
+                } else if matches!(tag, Tag::Canvas | Tag::Custom("Canvas3D")) {
+                    if let Some(scene_arc) =
+                        strata_render::scene3d::extract_scene3d_arc_from_blueprint(blueprint)
+                    {
+                        node.scene_3d = Some(strata_layout::ViewportSceneHandle(scene_arc));
+                    }
+                } else {
+                    for attr in attributes {
+                        if let strata_dom::Attribute::ScenePayload(payload) = attr {
+                            node.scene_3d = Some(strata_layout::ViewportSceneHandle(
+                                std::sync::Arc::clone(payload),
+                            ));
+                            break;
+                        }
                     }
                 }
                 Self::apply_portal_and_anchor_metadata(&mut node, tag, attributes);
@@ -1861,10 +1871,7 @@ impl AppRuntime {
                 }
             }
         }
-        attributes.iter().any(|a| {
-            matches!(a, strata_dom::Attribute::ScenePayload(_))
-                || matches!(a, strata_dom::Attribute::Property { key, value } if key == "data-strata-canvas3d" && value == "true")
-        }) || children.iter().any(|c| match c {
+        let is_declarative_3d_child = |c: &NodeBlueprint| match c {
             NodeBlueprint::Element {
                 tag: Tag::Custom(name),
                 ..
@@ -1883,6 +1890,18 @@ impl AppRuntime {
                     | "StandardMaterial"
                     | "ShaderMaterial"
             ),
+            NodeBlueprint::Empty => true,
+            _ => false,
+        };
+        let has_dom_overlay_children = children.iter().any(|c| !is_declarative_3d_child(c));
+        if has_dom_overlay_children {
+            return false;
+        }
+        attributes.iter().any(|a| {
+            matches!(a, strata_dom::Attribute::ScenePayload(_))
+                || matches!(a, strata_dom::Attribute::Property { key, value } if key == "data-strata-canvas3d" && value == "true")
+        }) || children.iter().any(|c| match c {
+            NodeBlueprint::Element { .. } => is_declarative_3d_child(c),
             _ => false,
         })
     }

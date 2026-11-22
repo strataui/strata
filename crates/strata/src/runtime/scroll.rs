@@ -991,28 +991,17 @@ impl AppRuntime {
         if !Self::blueprint_has_wheel_listener(&self.root_blueprint) {
             return (false, false);
         }
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
-            &self.root_blueprint,
-            &self.layout_root,
+        self.dispatch_bubbling_event_at(
+            strata_dom::EventType::Wheel,
             px,
             py,
-            strata_dom::EventType::Wheel,
-        ) {
-            let mut ev = self.create_mouse_event(
-                strata_dom::EventType::Wheel,
-                px,
-                py,
-                0,
-                0,
-                Some(target_box),
-            );
-            ev.delta_x = delta_x as f64;
-            ev.delta_y = delta_y as f64;
-            let prevented_cell = ev.default_prevented.clone();
-            handler(ev);
-            return (true, prevented_cell.get());
-        }
-        (false, false)
+            0,
+            0,
+            |ev| {
+                ev.delta_x = delta_x as f64;
+                ev.delta_y = delta_y as f64;
+            },
+        )
     }
 
     /// Dispatches an immediate synchronous scroll wheel delta to the innermost scrollable container under (px, py).

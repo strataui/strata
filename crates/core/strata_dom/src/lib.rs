@@ -49,7 +49,9 @@ pub mod reactive;
 pub mod spring;
 pub mod text_input;
 
-pub use classes::{standard_class_index, ClassBitmask, ClassIter, ClassList, STANDARD_CLASSES};
+pub use classes::{
+    standard_class_index, ClassBitmask, ClassIter, ClassList, IntoClassList, STANDARD_CLASSES,
+};
 pub use error_boundary::{ErrorBoundary, ErrorBoundaryBuilder, ErrorBoundaryInfo};
 pub use events::{Event, EventDispatcher, EventPhase, EventType};
 pub use hooks::*;

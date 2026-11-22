@@ -1364,101 +1364,185 @@ impl AppRuntime {
             .is_some_and(path_is_canvas)
     }
 
+    /// Resolves the root-to-target `(NodeBlueprint, LayoutNode)` ancestor chain at `(px, py)`
+    /// for the front-most element registering a listener for `event_type`.
+    pub(crate) fn hit_test_event_chain_at(
+        &self,
+        px: f32,
+        py: f32,
+        event_type: strata_dom::EventType,
+    ) -> Option<Vec<(&NodeBlueprint, &LayoutNode)>> {
+        let (_, _, eid) = Self::hit_test_event_with_box_and_entity(
+            &self.root_blueprint,
+            &self.layout_root,
+            px,
+            py,
+            event_type,
+        )?;
+        let path = self.layout_root.find_path_by_entity_id(eid)?;
+        let mut chain = Vec::with_capacity(path.len() + 1);
+        let mut cur_bp = &self.root_blueprint;
+        let mut cur_layout = &self.layout_root;
+        chain.push((cur_bp, cur_layout));
+
+        for &idx in &path {
+            let paired = Self::paired_blueprint_children(cur_bp, cur_layout);
+            let Some((_, next_bp, next_layout)) =
+                paired.into_iter().find(|(child_idx, _, _)| *child_idx == idx)
+            else {
+                break;
+            };
+            cur_bp = next_bp;
+            cur_layout = next_layout;
+            chain.push((cur_bp, cur_layout));
+        }
+        Some(chain)
+    }
+
+    /// Dispatches a synthetic mouse/wheel event for `event_type` at `(px, py)` starting from
+    /// the front-most matching listener element and bubbling up through its ancestors, honoring
+    /// `ev.stop_propagation()` and `ev.prevent_default()`.
+    /// Returns `(any_listener_invoked, default_prevented)`.
+    pub(crate) fn dispatch_bubbling_event_at(
+        &self,
+        event_type: strata_dom::EventType,
+        px: f32,
+        py: f32,
+        button: i16,
+        detail: i32,
+        configure: impl Fn(&mut strata_dom::Event),
+    ) -> (bool, bool) {
+        let Some(chain) = self.hit_test_event_chain_at(px, py, event_type) else {
+            // Fallback when EntityIds are unassigned on synthetic test trees
+            if let Some((handler, target_box)) = Self::hit_test_event_with_box(
+                &self.root_blueprint,
+                &self.layout_root,
+                px,
+                py,
+                event_type,
+            ) {
+                let mut ev =
+                    self.create_mouse_event(event_type, px, py, button, detail, Some(target_box));
+                configure(&mut ev);
+                let prevented_cell = ev.default_prevented.clone();
+                handler(ev);
+                return (true, prevented_cell.get());
+            }
+            return (false, false);
+        };
+        let Some((_, target_layout)) = chain.last() else {
+            return (false, false);
+        };
+        let mut ev = self.create_mouse_event(
+            event_type,
+            px,
+            py,
+            button,
+            detail,
+            Some(&target_layout.geometry.border_box),
+        );
+        if target_layout.entity_id.is_valid() {
+            ev.target_id = u32::try_from(target_layout.entity_id.0).ok();
+        }
+        configure(&mut ev);
+
+        let mut handled = false;
+        let mut default_prevented = false;
+        let stopped_cell = ev.propagation_stopped.clone();
+        let prevented_cell = ev.default_prevented.clone();
+
+        for &(bp, node_layout) in chain.iter().rev() {
+            if let NodeBlueprint::Element { attributes, .. } = bp {
+                let current_eid = if node_layout.entity_id.is_valid() {
+                    u32::try_from(node_layout.entity_id.0).ok()
+                } else {
+                    None
+                };
+                for attr in attributes {
+                    if let strata_dom::Attribute::EventListener { event, handler } = attr {
+                        if *event == event_type {
+                            let call_ev = ev.clone();
+                            call_ev.current_target_id.set(current_eid);
+                            handler(call_ev);
+                            handled = true;
+                            if prevented_cell.get() {
+                                default_prevented = true;
+                            }
+                        }
+                    }
+                }
+                if stopped_cell.get() {
+                    break;
+                }
+            }
+        }
+        (handled, default_prevented)
+    }
+
     /// Dispatches a pointer click event at (x, y) coordinates into the application blueprint tree.
     /// Returns true if an event listener was invoked.
     pub fn dispatch_click(&self, px: f32, py: f32) -> bool {
         self.dispatch_mouse_click(px, py, 0, 1)
     }
 
-    /// Dispatches a mouse click event with specific button (0 = Left, 1 = Middle, 2 = Right) and detail.
+    /// Dispatches a mouse click event with specific button (0 = Left, 1 = Middle, 2 = Right) and detail,
+    /// bubbling from the hit target up its ancestor chain and honoring `stop_propagation()`.
     pub fn dispatch_mouse_click(&self, px: f32, py: f32, button: i16, detail: i32) -> bool {
-        let ev_type = if button == 0 {
-            strata_dom::EventType::Click
-        } else {
-            strata_dom::EventType::AuxClick
-        };
-
-        if let Some((handler, target_box)) =
-            Self::hit_test_event_with_box(&self.root_blueprint, &self.layout_root, px, py, ev_type)
-        {
-            let ev = self.create_mouse_event(ev_type, px, py, button, detail, Some(target_box));
-            handler(ev);
-            true
-        } else if button != 0 {
-            // Fallback to Click listener if AuxClick had no explicit listener
-            if let Some((handler, target_box)) = Self::hit_test_event_with_box(
-                &self.root_blueprint,
-                &self.layout_root,
-                px,
-                py,
+        if button == 0 {
+            self.dispatch_bubbling_event_at(
                 strata_dom::EventType::Click,
-            ) {
-                let ev = self.create_mouse_event(
-                    strata_dom::EventType::Click,
-                    px,
-                    py,
-                    button,
-                    detail,
-                    Some(target_box),
-                );
-                handler(ev);
-                true
-            } else {
-                false
+                px,
+                py,
+                button,
+                detail,
+                |_| {},
+            )
+            .0
+        } else {
+            let (aux_handled, _) = self.dispatch_bubbling_event_at(
+                strata_dom::EventType::AuxClick,
+                px,
+                py,
+                button,
+                detail,
+                |_| {},
+            );
+            if aux_handled {
+                return true;
             }
-        } else {
-            false
+            // Fallback to Click listener if AuxClick had no explicit listener on the ancestor chain
+            self.dispatch_bubbling_event_at(
+                strata_dom::EventType::Click,
+                px,
+                py,
+                button,
+                detail,
+                |_| {},
+            )
+            .0
         }
     }
 
-    /// Dispatches a standard W3C `dblclick` event at (x, y) coordinates to the nearest element with an `ondblclick` listener.
+    /// Dispatches a standard W3C `dblclick` event at (x, y) coordinates, bubbling from the
+    /// hit target up its ancestor chain and honoring `stop_propagation()`.
     pub fn dispatch_dblclick(&self, px: f32, py: f32) -> bool {
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
-            &self.root_blueprint,
-            &self.layout_root,
-            px,
-            py,
-            strata_dom::EventType::DblClick,
-        ) {
-            let ev = self.create_mouse_event(
-                strata_dom::EventType::DblClick,
-                px,
-                py,
-                0,
-                2,
-                Some(target_box),
-            );
-            handler(ev);
-            true
-        } else {
-            false
-        }
+        self.dispatch_bubbling_event_at(strata_dom::EventType::DblClick, px, py, 0, 2, |_| {})
+            .0
     }
 
-    /// Dispatches a W3C `contextmenu` event at (x, y) to the nearest element that registered
-    /// an `oncontextmenu` listener. Returns false (and leaves the platform default untouched)
-    /// when nothing at that point listens, so a context menu never appears on arbitrary surfaces.
+    /// Dispatches a W3C `contextmenu` event at (x, y), bubbling from the hit target up its
+    /// ancestor chain and honoring `stop_propagation()`. Returns false when nothing listens,
+    /// leaving platform default behavior untouched.
     pub fn dispatch_context_menu(&self, px: f32, py: f32) -> bool {
-        if let Some((handler, target_box)) = Self::hit_test_event_with_box(
-            &self.root_blueprint,
-            &self.layout_root,
+        self.dispatch_bubbling_event_at(
+            strata_dom::EventType::ContextMenu,
             px,
             py,
-            strata_dom::EventType::ContextMenu,
-        ) {
-            let ev = self.create_mouse_event(
-                strata_dom::EventType::ContextMenu,
-                px,
-                py,
-                2,
-                1,
-                Some(target_box),
-            );
-            handler(ev);
-            true
-        } else {
-            false
-        }
+            2,
+            1,
+            |_| {},
+        )
+        .0
     }
 
     /// Records a possible window drag when a primary press lands on a `data-app-region="drag"`

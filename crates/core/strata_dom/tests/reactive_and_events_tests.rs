@@ -72,7 +72,7 @@ fn test_effect_reactivity_and_cleanup() {
         let clean = clean_clone.clone();
         Some(Box::new(move || {
             clean.borrow_mut().push(current);
-        }))
+        }) as Box<dyn FnOnce()>)
     });
 
     assert_eq!(*history.borrow(), vec![0]);
@@ -483,3 +483,42 @@ fn test_self_referential_memo_cycle_resilience() {
     let val = memo.get();
     assert_eq!(val, 300); // 200 + cached 100
 }
+
+#[test]
+fn test_use_effect_symmetric_into_effect_cleanup_without_trailing_none() {
+    let sig = use_signal(1usize);
+    let log = Rc::new(RefCell::new(Vec::<String>::new()));
+
+    // 1. Unit () return: no trailing `None` needed
+    let sig_unit = sig.clone();
+    let log_unit = Rc::clone(&log);
+    let eff_unit = use_effect(move || {
+        let v = sig_unit.get();
+        log_unit.borrow_mut().push(format!("unit:{v}"));
+    });
+
+    // 2. Concrete Box::new(...) return: no `Some(...)` or `as Box<dyn FnOnce()>` needed
+    let sig_box = sig.clone();
+    let log_box = Rc::clone(&log);
+    let eff_box = use_effect(move || {
+        let v = sig_box.get();
+        let cleanup_log = Rc::clone(&log_box);
+        Box::new(move || cleanup_log.borrow_mut().push(format!("cleanup:{v}")))
+    });
+
+    assert_eq!(log.borrow().as_slice(), &["unit:1"]);
+
+    sig.set(2);
+    assert_eq!(
+        log.borrow().as_slice(),
+        &["unit:1", "unit:2", "cleanup:1"]
+    );
+
+    eff_box.dispose();
+    eff_unit.dispose();
+    assert_eq!(
+        log.borrow().as_slice(),
+        &["unit:1", "unit:2", "cleanup:1", "cleanup:2"]
+    );
+}
+

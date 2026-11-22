@@ -773,9 +773,10 @@ pub struct Effect {
 }
 
 impl Effect {
-    pub fn new<F>(mut effect_fn: F) -> Self
+    pub fn new<F, R>(mut effect_fn: F) -> Self
     where
-        F: FnMut() -> Option<Box<dyn FnOnce()>> + 'static,
+        F: FnMut() -> R + 'static,
+        R: IntoEffectCleanup,
     {
         let subscriber_id = ReactiveRuntime::alloc_subscriber_id();
         let cleanup: CleanupCell = Rc::new(RefCell::new(None));
@@ -810,7 +811,7 @@ impl Effect {
             // Run effect
             let next_clean = {
                 let _effect_guard = EffectBodyGuard::enter();
-                effect_fn()
+                effect_fn().into_effect_cleanup()
             };
             if let Ok(mut cleanup) = cleanup_runner.try_borrow_mut() {
                 *cleanup = next_clean;
@@ -1422,9 +1423,10 @@ where
 /// Component-scoped reactive [`Effect`] that tracks read signals, runs cleanup before each
 /// re-execution, avoids duplicate registrations across re-renders, and automatically runs its
 /// cleanup closure when the owning component unmounts.
-pub fn use_effect<F>(effect_fn: F) -> Effect
+pub fn use_effect<F, R>(effect_fn: F) -> Effect
 where
-    F: FnMut() -> Option<Box<dyn FnOnce()>> + 'static,
+    F: FnMut() -> R + 'static,
+    R: IntoEffectCleanup,
 {
     let mut effect_opt = Some(effect_fn);
     if let Some(owned) = use_hook_slot_cloned(|| {

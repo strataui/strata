@@ -519,7 +519,7 @@ fn UnkeyedSiblingCounter(
         let c = cleanups.clone();
         Some(Box::new(move || {
             c.set(c.get() + 1);
-        }))
+        }) as Box<dyn FnOnce()>)
     });
 
     let label = format!("count:{}", val.get());
@@ -1127,4 +1127,205 @@ fn test_component_children_view_typed_onclick_and_shortcut_unmount_in_app_runtim
     assert!(!dispatch_global_keydown("M", true, true, false, false));
     reset_component_hooks();
 }
+
+// ---------------------------------------------------------------------------
+// 13. Canvas2D title, contextmenu, dblclick, mouseenter, mouseleave
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_canvas2d_contextmenu_dblclick_mouseenter_mouseleave_and_title() {
+    let enters = Rc::new(Cell::new(0usize));
+    let leaves = Rc::new(Cell::new(0usize));
+    let dbls = Rc::new(Cell::new(0usize));
+    let menus = Rc::new(Cell::new(0usize));
+
+    let enters_cb = Rc::clone(&enters);
+    let leaves_cb = Rc::clone(&leaves);
+    let dbls_cb = Rc::clone(&dbls);
+    let menus_cb = Rc::clone(&menus);
+
+    let view = rsx! {
+        <div class="w-[400px] h-[240px] flex">
+            <Canvas2D
+                id="cad2d-events"
+                title="2D Schematic"
+                class="w-[240px] h-[160px]"
+                onmouseenter={move |_ev: strata_dom::Event| enters_cb.set(enters_cb.get() + 1)}
+                onmouseleave={move |_ev: strata_dom::Event| leaves_cb.set(leaves_cb.get() + 1)}
+                ondblclick={move |_ev: strata_dom::Event| dbls_cb.set(dbls_cb.get() + 1)}
+                oncontextmenu={move |_ev: strata_dom::Event| menus_cb.set(menus_cb.get() + 1)}
+            />
+        </div>
+    };
+
+    let mut rt = AppRuntime::new(view, 400.0, 240.0, 1.0);
+    rt.set_hover_tooltip_delay(Duration::ZERO);
+
+    rt.update_hover(80.0, 60.0);
+    assert_eq!(enters.get(), 1);
+    assert!(rt.poll_hover_tooltip());
+    assert!(rt.display_list.commands().iter().any(|c| matches!(
+        c,
+        DrawCommand::DrawText { text, .. } if text == "2D Schematic"
+    )));
+
+    assert!(rt.dispatch_dblclick(80.0, 60.0));
+    assert_eq!(dbls.get(), 1);
+
+    assert!(rt.dispatch_context_menu(80.0, 60.0));
+    assert_eq!(menus.get(), 1);
+
+    rt.update_hover(350.0, 200.0);
+    assert_eq!(leaves.get(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// 14. W3C bubbling and stop_propagation() across Click, DblClick, ContextMenu, Wheel
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_w3c_bubbling_and_stop_propagation_across_click_dblclick_contextmenu_and_wheel() {
+    use std::cell::RefCell;
+
+    let trace: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+    let outer_scroll_wheel_hit = Rc::new(Cell::new(0usize));
+
+    let t_outer_w = Rc::clone(&trace);
+    let outer_scroll_cb = Rc::clone(&outer_scroll_wheel_hit);
+
+    let t_c_clk = Rc::clone(&trace);
+    let t_c_aux = Rc::clone(&trace);
+    let t_c_dbl = Rc::clone(&trace);
+    let t_c_ctx = Rc::clone(&trace);
+    let t_c_whl = Rc::clone(&trace);
+
+    let t_b_clk = Rc::clone(&trace);
+    let t_b_aux = Rc::clone(&trace);
+    let t_b_dbl = Rc::clone(&trace);
+    let t_b_ctx = Rc::clone(&trace);
+    let t_b_whl = Rc::clone(&trace);
+
+    let t_s_clk = Rc::clone(&trace);
+    let t_s_aux = Rc::clone(&trace);
+    let t_s_dbl = Rc::clone(&trace);
+    let t_s_ctx = Rc::clone(&trace);
+    let t_s_whl = Rc::clone(&trace);
+
+    let view = rsx! {
+        <div
+            class="w-[400px] h-[300px] overflow-y-auto"
+            onwheel={move |_ev: strata_dom::Event| {
+                outer_scroll_cb.set(outer_scroll_cb.get() + 1);
+                t_outer_w.borrow_mut().push("outer-wheel");
+            }}
+        >
+            <div class="w-[400px] h-[600px]">
+                <Canvas2D
+                    id="cad-parent"
+                    class="w-[360px] h-[240px] flex flex-col gap-2 p-2"
+                    onclick={move |_ev: strata_dom::Event| t_c_clk.borrow_mut().push("canvas-click")}
+                    ondblclick={move |_ev: strata_dom::Event| t_c_dbl.borrow_mut().push("canvas-dbl")}
+                    oncontextmenu={move |_ev: strata_dom::Event| t_c_ctx.borrow_mut().push("canvas-ctx")}
+                    onwheel={move |_ev: strata_dom::Event| t_c_whl.borrow_mut().push("canvas-wheel")}
+                >
+                    <div
+                        class="w-[300px] h-[60px]"
+                        onauxclick={move |_ev: strata_dom::Event| t_c_aux.borrow_mut().push("wrap-aux")}
+                    >
+                        <button
+                            id="bubbling-child"
+                            class="w-[200px] h-[50px]"
+                            onclick={move |_ev: strata_dom::Event| t_b_clk.borrow_mut().push("child-click")}
+                            onauxclick={move |_ev: strata_dom::Event| t_b_aux.borrow_mut().push("child-aux")}
+                            ondblclick={move |_ev: strata_dom::Event| t_b_dbl.borrow_mut().push("child-dbl")}
+                            oncontextmenu={move |_ev: strata_dom::Event| t_b_ctx.borrow_mut().push("child-ctx")}
+                            onwheel={move |_ev: strata_dom::Event| t_b_whl.borrow_mut().push("child-wheel")}
+                        >
+                            "Bubble Child"
+                        </button>
+                    </div>
+                    <button
+                        id="stopping-child"
+                        class="w-[200px] h-[50px]"
+                        onclick={move |ev: strata_dom::Event| {
+                            ev.stop_propagation();
+                            t_s_clk.borrow_mut().push("stop-click");
+                        }}
+                        onauxclick={move |ev: strata_dom::Event| {
+                            ev.stop_propagation();
+                            t_s_aux.borrow_mut().push("stop-aux");
+                        }}
+                        ondblclick={move |ev: strata_dom::Event| {
+                            ev.stop_propagation();
+                            t_s_dbl.borrow_mut().push("stop-dbl");
+                        }}
+                        oncontextmenu={move |ev: strata_dom::Event| {
+                            ev.stop_propagation();
+                            t_s_ctx.borrow_mut().push("stop-ctx");
+                        }}
+                        onwheel={move |ev: strata_dom::Event| {
+                            ev.stop_propagation();
+                            ev.prevent_default();
+                            t_s_whl.borrow_mut().push("stop-wheel");
+                        }}
+                    >
+                        "Stop Child"
+                    </button>
+                </Canvas2D>
+            </div>
+        </div>
+    };
+
+    let mut rt = AppRuntime::new(view, 400.0, 300.0, 1.0);
+    let bubble_box = rt.query_element_rect("bubbling-child").unwrap();
+    let stop_box = rt.query_element_rect("stopping-child").unwrap();
+    let bx = bubble_box.x + 20.0;
+    let by = bubble_box.y + 20.0;
+    let sx = stop_box.x + 20.0;
+    let sy = stop_box.y + 20.0;
+
+    // 1. Without stop_propagation(), Click / AuxClick / DblClick / ContextMenu / Wheel bubble cleanly
+    assert!(rt.dispatch_mouse_click(bx, by, 0, 1));
+    assert!(rt.dispatch_mouse_click(bx, by, 1, 1));
+    assert!(rt.dispatch_dblclick(bx, by));
+    assert!(rt.dispatch_context_menu(bx, by));
+    assert!(rt.dispatch_scroll(bx, by, 0.0, 24.0));
+    assert_eq!(
+        trace.borrow().as_slice(),
+        &[
+            "child-click",
+            "canvas-click",
+            "child-aux",
+            "wrap-aux",
+            "child-dbl",
+            "canvas-dbl",
+            "child-ctx",
+            "canvas-ctx",
+            "child-wheel",
+            "canvas-wheel",
+            "outer-wheel",
+        ]
+    );
+    assert_eq!(outer_scroll_wheel_hit.get(), 1);
+
+    // 2. With stop_propagation() (and prevent_default() on Wheel), parent listeners stay quiet
+    trace.borrow_mut().clear();
+    assert!(rt.dispatch_mouse_click(sx, sy, 0, 1));
+    assert!(rt.dispatch_mouse_click(sx, sy, 1, 1));
+    assert!(rt.dispatch_dblclick(sx, sy));
+    assert!(rt.dispatch_context_menu(sx, sy));
+    assert!(rt.dispatch_scroll(sx, sy, 0.0, 24.0));
+    assert_eq!(
+        trace.borrow().as_slice(),
+        &[
+            "stop-click",
+            "stop-aux",
+            "stop-dbl",
+            "stop-ctx",
+            "stop-wheel",
+        ]
+    );
+    assert_eq!(outer_scroll_wheel_hit.get(), 1);
+}
+
 

@@ -2000,8 +2000,8 @@ pub fn attach_orbit_controls_listeners(
         }) => *fov_horizontal_deg,
         _ => 60.0,
     };
-    let vw = width.unwrap_or(800.0).max(1.0);
-    let vh = height.unwrap_or(600.0).max(1.0);
+    let fallback_vw = width.unwrap_or(800.0).max(1.0);
+    let fallback_vh = height.unwrap_or(600.0).max(1.0);
     let controls = Rc::new(RefCell::new(initial_controls));
 
     let ctrl_down = Rc::clone(&controls);
@@ -2024,6 +2024,16 @@ pub fn attach_orbit_controls_listeners(
                 let mut c = ctrl_move.borrow_mut();
                 let active = c.active_mode != crate::orbit_controls::OrbitInteractionMode::None;
                 if active {
+                    let vw = if ev.width > 0.0 {
+                        (ev.width as f32).max(1.0)
+                    } else {
+                        fallback_vw
+                    };
+                    let vh = if ev.height > 0.0 {
+                        (ev.height as f32).max(1.0)
+                    } else {
+                        fallback_vh
+                    };
                     c.on_pointer_move(ev.client_x as f32, ev.client_y as f32, vw, vh, fov_deg);
                 }
                 active
@@ -2064,9 +2074,12 @@ pub struct Canvas3DBuilder {
     pub scene: Option<std::sync::Arc<Scene3D>>,
     pub retained: Option<RetainedScene3D>,
     pub uncapped: bool,
+    pub responsive: bool,
     pub class: Option<strata_dom::ClassList>,
     pub style: Option<String>,
     pub id: Option<String>,
+    pub title: Option<String>,
+    pub __strata_key: Option<String>,
     pub width: Option<f32>,
     pub height: Option<f32>,
     pub on_camera_change: Option<std::rc::Rc<dyn Fn(&crate::orbit_controls::OrbitControls)>>,
@@ -2080,8 +2093,8 @@ impl Canvas3DBuilder {
         self
     }
 
-    pub fn class(mut self, class: impl Into<strata_dom::ClassList>) -> Self {
-        self.class = Some(class.into());
+    pub fn class(mut self, class: impl strata_dom::IntoClassList) -> Self {
+        self.class = Some(class.into_class_list());
         self
     }
 
@@ -2095,6 +2108,16 @@ impl Canvas3DBuilder {
         self
     }
 
+    pub fn title(mut self, title: impl strata_dom::IntoOptionalString) -> Self {
+        self.title = title.into_optional_string();
+        self
+    }
+
+    pub fn key(mut self, key: impl std::fmt::Display) -> Self {
+        self.__strata_key = Some(key.to_string());
+        self
+    }
+
     pub fn width(mut self, width: impl Into<Option<f32>>) -> Self {
         self.width = width.into();
         self
@@ -2102,6 +2125,13 @@ impl Canvas3DBuilder {
 
     pub fn height(mut self, height: impl Into<Option<f32>>) -> Self {
         self.height = height.into();
+        self
+    }
+
+    /// When `true`, omits inline `width`/`height` attributes so CSS/flex classes
+    /// (`w-full h-full`, `flex-1`, split panes) control the resolved viewport size.
+    pub fn responsive(mut self, responsive: bool) -> Self {
+        self.responsive = responsive;
         self
     }
 
@@ -2118,10 +2148,10 @@ impl Canvas3DBuilder {
         self
     }
 
-    fn push_event(
+    fn push_event<Args>(
         mut self,
         ty: strata_dom::EventType,
-        handler: impl Fn(strata_dom::Event) + 'static,
+        handler: impl strata_dom::EventHandlerMarker<Args> + 'static,
     ) -> Self {
         self.events.push(Attribute::event_listener(ty, handler));
         self
@@ -2149,6 +2179,28 @@ impl Canvas3DBuilder {
 
     pub fn onmouseup_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
         self.onmouseup(handler)
+    }
+
+    pub fn onmouseenter<Args>(
+        self,
+        handler: impl strata_dom::EventHandlerMarker<Args> + 'static,
+    ) -> Self {
+        self.push_event(strata_dom::EventType::MouseEnter, handler)
+    }
+
+    pub fn onmouseenter_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.push_event(strata_dom::EventType::MouseEnter, handler)
+    }
+
+    pub fn onmouseleave<Args>(
+        self,
+        handler: impl strata_dom::EventHandlerMarker<Args> + 'static,
+    ) -> Self {
+        self.push_event(strata_dom::EventType::MouseLeave, handler)
+    }
+
+    pub fn onmouseleave_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.push_event(strata_dom::EventType::MouseLeave, handler)
     }
 
     pub fn onwheel(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
@@ -2183,12 +2235,34 @@ impl Canvas3DBuilder {
         self.onpointerup(handler)
     }
 
-    pub fn onclick(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+    pub fn onclick<Args>(self, handler: impl strata_dom::EventHandlerMarker<Args> + 'static) -> Self {
         self.push_event(strata_dom::EventType::Click, handler)
     }
 
     pub fn onclick_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
-        self.onclick(handler)
+        self.push_event(strata_dom::EventType::Click, handler)
+    }
+
+    pub fn ondblclick<Args>(
+        self,
+        handler: impl strata_dom::EventHandlerMarker<Args> + 'static,
+    ) -> Self {
+        self.push_event(strata_dom::EventType::DblClick, handler)
+    }
+
+    pub fn ondblclick_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.push_event(strata_dom::EventType::DblClick, handler)
+    }
+
+    pub fn oncontextmenu<Args>(
+        self,
+        handler: impl strata_dom::EventHandlerMarker<Args> + 'static,
+    ) -> Self {
+        self.push_event(strata_dom::EventType::ContextMenu, handler)
+    }
+
+    pub fn oncontextmenu_fn(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
+        self.push_event(strata_dom::EventType::ContextMenu, handler)
     }
 
     pub fn onresize(self, handler: impl Fn(strata_dom::Event) + 'static) -> Self {
@@ -2211,68 +2285,88 @@ impl Canvas3DBuilder {
         self
     }
 
-    pub fn children(mut self, children: Vec<NodeBlueprint>) -> Self {
-        self.children = Some(children);
+    pub fn children(mut self, children: impl strata_dom::IntoChildren<Vec<NodeBlueprint>>) -> Self {
+        self.children = Some(children.into_children());
         self
     }
 
     pub fn build(self) -> View {
-        let mut attrs = Vec::with_capacity(5 + self.events.len());
-        attrs.push(Attribute::property("data-strata-canvas3d", "true"));
-        if self.uncapped {
-            attrs.push(Attribute::property("data-strata-uncapped", "true"));
-        }
-        if let Some(id) = self.id {
-            attrs.push(Attribute::property("id", id));
-        }
-        if let Some(w) = self.width {
-            attrs.push(Attribute::property("width", w.to_string()));
-        }
-        if let Some(h) = self.height {
-            attrs.push(Attribute::property("height", h.to_string()));
-        }
-        if let Some(style) = self.style {
-            attrs.push(Attribute::property("style", style));
-        }
-        attrs.extend(self.events);
-        let effective_scene = match (self.scene, self.retained) {
-            (Some(mut scene), Some(retained)) => {
-                if scene.retained_handle().is_none() {
-                    let s = std::sync::Arc::make_mut(&mut scene);
-                    s.set_retained_handle(Some(retained));
+        let render = move || {
+            let _scope = strata_dom::ComponentScopeGuard::enter(concat!(
+                module_path!(),
+                "::Canvas3D"
+            ));
+            let is_responsive =
+                self.responsive || (self.width.is_none() && self.height.is_none());
+
+            let mut attrs = Vec::with_capacity(6 + self.events.len());
+            attrs.push(Attribute::property("data-strata-canvas3d", "true"));
+            if self.uncapped {
+                attrs.push(Attribute::property("data-strata-uncapped", "true"));
+            }
+            if let Some(id) = self.id {
+                attrs.push(Attribute::property("id", id));
+            }
+            if let Some(title) = self.title {
+                attrs.push(Attribute::property("title", title));
+            }
+            if !is_responsive {
+                if let Some(w) = self.width {
+                    attrs.push(Attribute::property("width", w.to_string()));
                 }
-                Some(scene)
+                if let Some(h) = self.height {
+                    attrs.push(Attribute::property("height", h.to_string()));
+                }
             }
-            (Some(scene), None) => Some(scene),
-            (None, Some(retained)) => {
-                let mut scene = retained
-                    .fallback_scene()
-                    .map(|s| (*s).clone())
-                    .unwrap_or_default();
-                scene.set_retained_handle(Some(retained));
-                Some(std::sync::Arc::new(scene))
+            if let Some(style) = self.style {
+                attrs.push(Attribute::property("style", style));
             }
-            (None, None) => None,
+            attrs.extend(self.events);
+            let effective_scene = match (self.scene, self.retained) {
+                (Some(mut scene), Some(retained)) => {
+                    if scene.retained_handle().is_none() {
+                        let s = std::sync::Arc::make_mut(&mut scene);
+                        s.set_retained_handle(Some(retained));
+                    }
+                    Some(scene)
+                }
+                (Some(scene), None) => Some(scene),
+                (None, Some(retained)) => {
+                    let mut scene = retained
+                        .fallback_scene()
+                        .map(|s| (*s).clone())
+                        .unwrap_or_default();
+                    scene.set_retained_handle(Some(retained));
+                    Some(std::sync::Arc::new(scene))
+                }
+                (None, None) => None,
+            };
+            if let Some(cb) = self.on_camera_change {
+                attach_orbit_controls_listeners(
+                    &mut attrs,
+                    effective_scene.as_deref(),
+                    if is_responsive { None } else { self.width },
+                    if is_responsive { None } else { self.height },
+                    cb,
+                );
+            }
+            if let Some(scene) = effective_scene {
+                let payload: std::sync::Arc<dyn std::any::Any + Send + Sync> = scene;
+                attrs.push(Attribute::scene_payload_arc(payload));
+            }
+            View::new(NodeBlueprint::element(
+                Tag::Canvas,
+                self.class.unwrap_or_default(),
+                attrs,
+                self.children.unwrap_or_default(),
+            ))
         };
-        if let Some(cb) = self.on_camera_change {
-            attach_orbit_controls_listeners(
-                &mut attrs,
-                effective_scene.as_deref(),
-                self.width,
-                self.height,
-                cb,
-            );
+
+        if let Some(k) = self.__strata_key {
+            strata_dom::with_component_key(k, render)
+        } else {
+            render()
         }
-        if let Some(scene) = effective_scene {
-            let payload: std::sync::Arc<dyn std::any::Any + Send + Sync> = scene;
-            attrs.push(Attribute::scene_payload_arc(payload));
-        }
-        View::new(NodeBlueprint::element(
-            Tag::Canvas,
-            self.class.unwrap_or_default(),
-            attrs,
-            self.children.unwrap_or_default(),
-        ))
     }
 }
 

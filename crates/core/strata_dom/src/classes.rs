@@ -639,3 +639,62 @@ impl<'a> Iterator for ClassIter<'a> {
         }
     }
 }
+
+/// Ergonomic conversion into a tokenized [`ClassList`] for handwritten UI builders (`Canvas2D`, `Canvas3D`).
+///
+/// Accepts `&str`, `String`, `&String`, `Cow<'_, str>`, existing `ClassList`, `Option<String>`, and `None`,
+/// splitting whitespace-separated utility classes into distinct class tokens.
+pub trait IntoClassList {
+    fn into_class_list(self) -> ClassList;
+}
+
+impl IntoClassList for &str {
+    fn into_class_list(self) -> ClassList {
+        let tokens: Vec<String> = self.split_whitespace().map(str::to_string).collect();
+        if tokens.is_empty() {
+            ClassList::Empty
+        } else {
+            ClassList::Dynamic(tokens)
+        }
+    }
+}
+
+impl IntoClassList for String {
+    fn into_class_list(self) -> ClassList {
+        self.as_str().into_class_list()
+    }
+}
+
+impl IntoClassList for &String {
+    fn into_class_list(self) -> ClassList {
+        self.as_str().into_class_list()
+    }
+}
+
+impl IntoClassList for std::borrow::Cow<'_, str> {
+    fn into_class_list(self) -> ClassList {
+        self.as_ref().into_class_list()
+    }
+}
+
+impl IntoClassList for ClassList {
+    fn into_class_list(self) -> ClassList {
+        let tokens: Vec<String> = self
+            .iter()
+            .flat_map(|c| c.split_whitespace())
+            .map(str::to_string)
+            .collect();
+        if tokens.is_empty() {
+            ClassList::Empty
+        } else {
+            ClassList::Dynamic(tokens)
+        }
+    }
+}
+
+impl IntoClassList for Option<String> {
+    fn into_class_list(self) -> ClassList {
+        self.map_or(ClassList::Empty, IntoClassList::into_class_list)
+    }
+}
+
