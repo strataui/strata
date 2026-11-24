@@ -70,6 +70,45 @@ struct CachedOverlayTexture {
     bind_group: wgpu::BindGroup,
 }
 
+struct CachedScene3DTarget {
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    cache_key: u64,
+}
+
+fn compute_viewports_3d_cache_key(
+    viewports: &[([f32; 4], &Scene3D)],
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mix = |acc: &mut u64, v: u64| {
+        *acc ^= v;
+        *acc = acc.wrapping_mul(0x100_0000_01b3);
+    };
+    mix(&mut h, width as u64);
+    mix(&mut h, height as u64);
+    {
+        use std::hash::{Hash, Hasher};
+        let mut fmt_hasher = std::collections::hash_map::DefaultHasher::new();
+        format.hash(&mut fmt_hasher);
+        mix(&mut h, fmt_hasher.finish());
+    }
+    mix(&mut h, viewports.len() as u64);
+    for (vp, scene) in viewports {
+        for c in vp {
+            mix(&mut h, c.to_bits() as u64);
+        }
+        mix(&mut h, scene.cache_fingerprint());
+    }
+    h
+}
+
 struct DisplayOffscreenTarget {
     width: u32,
     height: u32,
@@ -81,7 +120,7 @@ struct DisplayOffscreenTarget {
 }
 
 /// Hardware `wgpu` window surface presenter managing 3D rendering, hardware 2D/stencil-clip
-/// [`Wgpu2DRenderer`] batches, and cached 2D HUD compositing.
+/// [`Wgpu2DRenderer`] batches, offscreen 3D scene caching, and cached 2D HUD compositing.
 pub struct WgpuWindowPresenter {
     _instance: wgpu::Instance,
     surface: Option<wgpu::Surface<'static>>,
@@ -92,6 +131,9 @@ pub struct WgpuWindowPresenter {
     last_batch_summary: GpuBatchSummary,
     present_mode: PresentMode,
     ui_overlay: Option<CachedOverlayTexture>,
+    scene3d_cache: Option<CachedScene3DTarget>,
+    scene3d_cache_hits: u64,
+    scene3d_cache_misses: u64,
     display_offscreen: Option<DisplayOffscreenTarget>,
 }
 
@@ -120,6 +162,9 @@ impl WgpuWindowPresenter {
             last_batch_summary: GpuBatchSummary::default(),
             present_mode,
             ui_overlay: None,
+            scene3d_cache: None,
+            scene3d_cache_hits: 0,
+            scene3d_cache_misses: 0,
             display_offscreen: None,
         })
     }
@@ -201,6 +246,9 @@ impl WgpuWindowPresenter {
             last_batch_summary: GpuBatchSummary::default(),
             present_mode,
             ui_overlay: None,
+            scene3d_cache: None,
+            scene3d_cache_hits: 0,
+            scene3d_cache_misses: 0,
             display_offscreen: None,
         })
     }
@@ -231,6 +279,141 @@ impl WgpuWindowPresenter {
 
     pub fn active_wgpu_present_mode(&self) -> Option<wgpu::PresentMode> {
         self.surface_config.as_ref().map(|c| c.present_mode)
+    }
+
+    /// Returns `(hits, misses)` for the offscreen `Scene3D` color attachment cache.
+    pub fn scene3d_cache_stats(&self) -> (u64, u64) {
+        (self.scene3d_cache_hits, self.scene3d_cache_misses)
+    }
+
+    /// Total allocated GPU VRAM bytes across 3D targets, tile atlases, 2D buffers, and cached overlays.
+    pub fn gpu_memory_bytes(&self) -> u64 {
+        let mut bytes = self.renderer.gpu_memory_bytes() + self.renderer_2d.gpu_memory_bytes();
+        if let Some(ref ov) = self.ui_overlay {
+            bytes += (ov.width as u64) * (ov.height as u64) * 4;
+        }
+        if let Some(ref s3d) = self.scene3d_cache {
+            bytes += (s3d.width as u64) * (s3d.height as u64) * 4;
+        }
+        if let Some(ref off) = self.display_offscreen {
+            bytes += (off.width as u64) * (off.height as u64) * 4
+                + (off.padded_bytes_per_row as u64) * (off.height as u64);
+        }
+        bytes
+    }
+
+    /// Snapshots hardware GPU pass timings, `Scene3D` cache hit/miss counts, and VRAM bytes.
+    pub fn gpu_telemetry(&mut self) -> crate::PlatformGpuTelemetry {
+        self.renderer.poll_gpu_timestamps();
+        let ts = self.renderer.last_gpu_pass_timings();
+        crate::PlatformGpuTelemetry {
+            gpu_timestamps_supported: ts.supported,
+            gpu_shadow_pass_us: ts.shadow_pass_us,
+            gpu_3d_pass_us: ts.total_3d_gpu_us,
+            gpu_2d_overlay_pass_us: ts.overlay_pass_us,
+            scene3d_cache_hits: self.scene3d_cache_hits,
+            scene3d_cache_misses: self.scene3d_cache_misses,
+            gpu_memory_bytes: self.gpu_memory_bytes(),
+        }
+    }
+
+    fn ensure_scene3d_cache(&mut self, width: u32, height: u32, format: wgpu::TextureFormat) {
+        let w = width.max(1);
+        let h = height.max(1);
+        let needs_alloc = self
+            .scene3d_cache
+            .as_ref()
+            .map(|c| c.width != w || c.height != h || c.format != format)
+            .unwrap_or(true);
+        if needs_alloc {
+            let texture = self.renderer.device().create_texture(&wgpu::TextureDescriptor {
+                label: Some("strata_cached_scene3d_color_tex"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            let bind_group = self.renderer.create_overlay_bind_group(&view);
+            self.scene3d_cache = Some(CachedScene3DTarget {
+                width: w,
+                height: h,
+                format,
+                _texture: texture,
+                view,
+                bind_group,
+                cache_key: 0,
+            });
+        }
+    }
+
+    /// Renders `viewports` using the offscreen `Scene3D` color attachment cache into `target_view`
+    /// and composites the optional 2D UI overlay on top. Returns `true` on a 3D cache hit.
+    pub fn render_viewports_cached_to_view(
+        &mut self,
+        viewports: &[([f32; 4], &Scene3D)],
+        target_view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        draw_overlay: bool,
+    ) -> bool {
+        let w = width.max(1);
+        let h = height.max(1);
+        let key = compute_viewports_3d_cache_key(viewports, w, h, format);
+        let cache_hit = self.scene3d_cache.as_ref().is_some_and(|c| {
+            c.width == w && c.height == h && c.format == format && c.cache_key == key
+        });
+        if cache_hit {
+            self.scene3d_cache_hits += 1;
+        } else {
+            self.scene3d_cache_misses += 1;
+            self.ensure_scene3d_cache(w, h, format);
+            if let Some(ref mut cache) = self.scene3d_cache {
+                if viewports.len() == 1 {
+                    let (vp, scene) = viewports[0];
+                    self.renderer.render_scene_and_overlay_to_view(
+                        scene,
+                        &cache.view,
+                        w,
+                        h,
+                        Some(vp),
+                        false,
+                        None,
+                    );
+                } else {
+                    self.renderer.render_viewports_and_overlay_to_view(
+                        viewports,
+                        &cache.view,
+                        w,
+                        h,
+                        false,
+                        None,
+                    );
+                }
+                cache.cache_key = key;
+            }
+        }
+        let ov_bg = if draw_overlay {
+            self.ui_overlay.as_ref().map(|ov| &ov.bind_group)
+        } else {
+            None
+        };
+        if let Some(ref cache) = self.scene3d_cache {
+            self.renderer.composite_cached_scene_and_overlay_to_view(
+                target_view,
+                &cache.bind_group,
+                ov_bg,
+            );
+        }
+        cache_hit
     }
 
     pub fn surface_size(&self) -> (u32, u32) {
@@ -424,63 +607,66 @@ impl WgpuWindowPresenter {
         viewports: &[([f32; 4], &Scene3D)],
         draw_overlay: bool,
     ) -> Result<(), String> {
+        self.present_viewports_to_surface_timed(viewports, draw_overlay)
+            .map(|_| ())
+    }
+
+    /// Presents one or more 3D viewports directly into the swapchain frame and returns
+    /// `(wgpu_submit_duration, swapchain_present_duration)`.
+    pub fn present_viewports_to_surface_timed(
+        &mut self,
+        viewports: &[([f32; 4], &Scene3D)],
+        draw_overlay: bool,
+    ) -> Result<(std::time::Duration, std::time::Duration), String> {
         if viewports.is_empty() {
             return Err("no 3D viewports to present".to_string());
         }
-        let Some(ref surface) = self.surface else {
-            return Err("no active wgpu swapchain surface".to_string());
-        };
-        let Some(ref cfg) = self.surface_config else {
-            return Err("surface not configured".to_string());
+        let (cfg_w, cfg_h, cfg_fmt) = {
+            let Some(ref cfg) = self.surface_config else {
+                return Err("surface not configured".to_string());
+            };
+            (cfg.width, cfg.height, cfg.format)
         };
         let perf = surface_perf_logging_enabled();
         let t0 = std::time::Instant::now();
-        let output = match surface.get_current_texture() {
-            Ok(frame) => frame,
-            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
-                surface.configure(self.renderer.device(), cfg);
-                surface
-                    .get_current_texture()
-                    .map_err(|e| format!("acquire surface texture failed: {e}"))?
+        let output = {
+            let Some(ref surface) = self.surface else {
+                return Err("no active wgpu swapchain surface".to_string());
+            };
+            let Some(ref cfg) = self.surface_config else {
+                return Err("surface not configured".to_string());
+            };
+            match surface.get_current_texture() {
+                Ok(frame) => frame,
+                Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+                    surface.configure(self.renderer.device(), cfg);
+                    surface
+                        .get_current_texture()
+                        .map_err(|e| format!("acquire surface texture failed: {e}"))?
+                }
+                Err(e) => return Err(format!("acquire surface texture failed: {e}")),
             }
-            Err(e) => return Err(format!("acquire surface texture failed: {e}")),
         };
         let t_acq = std::time::Instant::now();
         let view = output.texture.create_view(&Default::default());
-        let ov_bg = if draw_overlay {
-            self.ui_overlay.as_ref().map(|ov| &ov.bind_group)
-        } else {
-            None
-        };
-        if viewports.len() == 1 {
-            let (vp, scene) = viewports[0];
-            self.renderer.render_scene_and_overlay_to_view(
-                scene,
-                &view,
-                cfg.width,
-                cfg.height,
-                Some(vp),
-                false,
-                ov_bg,
-            );
-        } else {
-            self.renderer.render_viewports_and_overlay_to_view(
-                viewports,
-                &view,
-                cfg.width,
-                cfg.height,
-                false,
-                ov_bg,
-            );
-        }
+        let _cache_hit = self.render_viewports_cached_to_view(
+            viewports,
+            &view,
+            cfg_w,
+            cfg_h,
+            cfg_fmt,
+            draw_overlay,
+        );
         let t_3d = std::time::Instant::now();
         let t_ov = t_3d;
         output.present();
         let t_end = std::time::Instant::now();
+        let wgpu_submit_dur = t_3d.duration_since(t0);
+        let present_dur = t_end.duration_since(t_ov);
         if perf {
             let acq_ms = t_acq.duration_since(t0).as_secs_f64() * 1000.0;
             let r3d_ms = t_3d.duration_since(t_acq).as_secs_f64() * 1000.0;
-            let pres_ms = t_end.duration_since(t_ov).as_secs_f64() * 1000.0;
+            let pres_ms = present_dur.as_secs_f64() * 1000.0;
             let total_ms = t_end.duration_since(t0).as_secs_f64() * 1000.0;
             thread_local! {
                 static WIN_STATS: std::cell::Cell<(u32, f64, f64, f64, f64, f64, f64)> =
@@ -515,7 +701,7 @@ impl WgpuWindowPresenter {
                 );
             }
         }
-        Ok(())
+        Ok((wgpu_submit_dur, present_dur))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -621,6 +807,36 @@ impl WgpuWindowPresenter {
         damage: Option<Rect>,
         clear_color: [f32; 4],
     ) -> Result<GpuBatchSummary, String> {
+        self.present_display_list_to_surface_timed(
+            list,
+            logical_width,
+            logical_height,
+            dpr,
+            damage,
+            clear_color,
+        )
+        .map(|(summary, _, _, _)| summary)
+    }
+
+    /// Presents an entire `DisplayList` onto the swapchain and returns
+    /// `(summary, raster_2d_collect_dur, wgpu_submit_dur, swapchain_present_dur)`.
+    pub fn present_display_list_to_surface_timed(
+        &mut self,
+        list: &DisplayList,
+        logical_width: f32,
+        logical_height: f32,
+        dpr: f32,
+        damage: Option<Rect>,
+        clear_color: [f32; 4],
+    ) -> Result<
+        (
+            GpuBatchSummary,
+            std::time::Duration,
+            std::time::Duration,
+            std::time::Duration,
+        ),
+        String,
+    > {
         let Some(ref surface) = self.surface else {
             return Err("no active wgpu swapchain surface".to_string());
         };
@@ -630,12 +846,15 @@ impl WgpuWindowPresenter {
         let target_w = cfg.width;
         let target_h = cfg.height;
 
+        let t_collect0 = std::time::Instant::now();
         let lw = logical_width.max(1.0);
         let lh = logical_height.max(1.0);
         self.collector.resize(lw, lh);
         let frame = self.collector.collect_hardware_frame(list, damage);
         self.last_batch_summary = frame.summary;
+        let raster_2d_dur = t_collect0.elapsed();
 
+        let t_sub0 = std::time::Instant::now();
         let output = match surface.get_current_texture() {
             Ok(frame_tex) => frame_tex,
             Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
@@ -658,8 +877,11 @@ impl WgpuWindowPresenter {
             clear_color,
             damage,
         );
+        let wgpu_submit_dur = t_sub0.elapsed();
+        let t_pres0 = std::time::Instant::now();
         output.present();
-        Ok(frame.summary)
+        let present_dur = t_pres0.elapsed();
+        Ok((frame.summary, raster_2d_dur, wgpu_submit_dur, present_dur))
     }
 
     /// Presents the cached `ui_overlay` texture directly onto the swapchain surface.
@@ -862,6 +1084,112 @@ impl WgpuWindowPresenter {
     ) -> Result<Vec<u8>, String> {
         self.renderer
             .render_offscreen(scene, width, height, readback, true)
+    }
+
+    /// Renders 3D viewports through the offscreen Scene3D cache and composites the 2D UI overlay,
+    /// reading back BGRA8 pixels for headless verification and benchmarking.
+    pub fn render_viewports_cached_offscreen_bgra(
+        &mut self,
+        viewports: &[([f32; 4], &Scene3D)],
+        width: u32,
+        height: u32,
+        composite_overlay: bool,
+    ) -> Result<Vec<u8>, String> {
+        let w = width.max(1);
+        let h = height.max(1);
+        let fmt = self.renderer.color_format();
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded = (w * 4).div_ceil(align) * align;
+        let recreate = self
+            .display_offscreen
+            .as_ref()
+            .is_none_or(|o| o.width != w || o.height != h || o.format != fmt);
+        if recreate {
+            let dev = self.renderer.device();
+            let color = dev.create_texture(&wgpu::TextureDescriptor {
+                label: Some("strata_cached_3d_offscreen_color"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: fmt,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = color.create_view(&Default::default());
+            let rb = dev.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("strata_cached_3d_offscreen_readback"),
+                size: (padded * h) as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            self.display_offscreen = Some(DisplayOffscreenTarget {
+                width: w,
+                height: h,
+                format: fmt,
+                color,
+                view,
+                readback: rb,
+                padded_bytes_per_row: padded,
+            });
+        }
+        let target_view = self.display_offscreen.as_ref().unwrap().view.clone();
+        self.render_viewports_cached_to_view(viewports, &target_view, w, h, fmt, composite_overlay);
+
+        let dev = self.renderer.device();
+        let off = self.display_offscreen.as_ref().unwrap();
+        let mut enc = dev.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("strata_cached_3d_readback_encoder"),
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &off.color,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &off.readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(off.padded_bytes_per_row),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.renderer.queue().submit(Some(enc.finish()));
+
+        let slice = off.readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        dev.poll(wgpu::Maintain::Wait);
+        rx.recv()
+            .map_err(|e| format!("cached 3d readback recv error: {e}"))?
+            .map_err(|e| format!("cached 3d readback map error: {e:?}"))?;
+
+        let data = slice.get_mapped_range();
+        let mut out = vec![0u8; (w * h * 4) as usize];
+        let row_len = w as usize * 4;
+        for row in 0..h as usize {
+            let src_start = row * off.padded_bytes_per_row as usize;
+            let dst_start = row * row_len;
+            out[dst_start..dst_start + row_len]
+                .copy_from_slice(&data[src_start..src_start + row_len]);
+        }
+        drop(data);
+        off.readback.unmap();
+        Ok(out)
     }
 
     pub fn present_mode(&self) -> PresentMode {

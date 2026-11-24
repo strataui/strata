@@ -3694,6 +3694,7 @@ version = "0.1.0"
 dependencies = [
  "strata-dom",
  "strata-primitives",
+ "strata-web-api",
 ]
 
 [[package]]
@@ -3719,10 +3720,14 @@ dependencies = [
 name = "strata-editor"
 version = "0.1.0"
 dependencies = [
+ "regex",
  "serde",
  "serde_json",
  "strata-dom",
+ "strata-layout",
+ "strata-macro",
  "strata-primitives",
+ "strata-render",
  "strata-style",
  "strata-web-reader",
  "tree-sitter",

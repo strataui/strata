@@ -1340,12 +1340,55 @@ pub fn solve_block_with_exclusions_guarded(
         return;
     }
 
+    let inset_h = padding.left + padding.right + border.left + border.right;
+    let avail_border_w = (available_width - margin.left - margin.right).max(0.0);
+    let max_border_limit = if let Some(explicit_w) =
+        resolve_dimension_with_node(node.style.width, available_width, node)
+    {
+        let clamped = clamp_dimension_with_node(
+            explicit_w,
+            node.style.min_width,
+            node.style.max_width,
+            available_width,
+            node,
+        );
+        match node.style.box_sizing {
+            BoxSizing::BorderBox => clamped,
+            BoxSizing::ContentBox => clamped + inset_h,
+        }
+    } else {
+        let mut limit = avail_border_w;
+        if let Some(max_w) =
+            resolve_dimension_with_node(node.style.max_width, available_width, node)
+        {
+            let max_border = match node.style.box_sizing {
+                BoxSizing::BorderBox => max_w,
+                BoxSizing::ContentBox => max_w + inset_h,
+            };
+            limit = limit.min(max_border.max(0.0));
+        }
+        if let Some(min_w) =
+            resolve_dimension_with_node(node.style.min_width, available_width, node)
+        {
+            let min_border = match node.style.box_sizing {
+                BoxSizing::BorderBox => min_w,
+                BoxSizing::ContentBox => min_w + inset_h,
+            };
+            limit = limit.max(min_border.max(0.0));
+        }
+        limit
+    };
+    let base_text_avail_w = (max_border_limit - inset_h).max(0.0);
+    let text_avail_w = node
+        .transition_content_width()
+        .map_or(base_text_avail_w, |tw| base_text_avail_w.max(tw));
+
     let (text_w, text_h) = if node.children.is_empty() && !node.inline_items.is_empty() {
         let ifc = crate::typography::InlineFormattingContext::new();
         let opt = crate::typography::InlineLayoutOptions {
             font_size: node.style.font_size,
             line_height: Some(node.style.font_size * node.style.line_height),
-            max_width: Some(available_width),
+            max_width: Some(text_avail_w),
             white_space: match node.style.white_space {
                 strata_style::types::WhiteSpace::Normal => {
                     crate::typography::WhiteSpaceMode::Normal
@@ -1374,7 +1417,7 @@ pub fn solve_block_with_exclusions_guarded(
             text,
             node.style.font_size,
             node.style.line_height,
-            Some(available_width),
+            Some(text_avail_w),
             is_mono,
             node.style.white_space,
         )
@@ -1421,7 +1464,10 @@ pub fn solve_block_with_exclusions_guarded(
                 } else {
                     text_w
                 };
-                let fit_w = base_w + padding.left + padding.right + border.left + border.right;
+                let mut fit_w = base_w + padding.left + padding.right + border.left + border.right;
+                if node.style.overflow_x != strata_style::types::Overflow::Visible {
+                    fit_w = fit_w.min(max_border_limit);
+                }
                 clamp_dimension_with_node(
                     fit_w,
                     node.style.min_width,
@@ -1452,6 +1498,9 @@ pub fn solve_block_with_exclusions_guarded(
 
     let content_width =
         (border_box_width - padding.left - padding.right - border.left - border.right).max(0.0);
+    let child_layout_width = node
+        .transition_content_width()
+        .map_or(content_width, |tw| content_width.max(tw));
 
     // 2. Lay out in-flow children vertically with margin collapsing and floats
     let children_height = if node.children.is_empty() && node.text.is_some() {
@@ -1459,7 +1508,7 @@ pub fn solve_block_with_exclusions_guarded(
     } else {
         solve_block_children_with_exclusions_guarded(
             node,
-            content_width,
+            child_layout_width,
             available_height,
             parent_exclusions,
             bfc_offset_y,

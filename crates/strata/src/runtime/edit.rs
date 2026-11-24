@@ -92,7 +92,7 @@ impl AppRuntime {
                     val,
                 ));
             }
-            self.sync_active_input_layout();
+            self.sync_active_input_layout_and_scroll_caret();
         }
         true
     }

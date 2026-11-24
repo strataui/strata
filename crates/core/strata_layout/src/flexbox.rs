@@ -276,8 +276,11 @@ pub fn solve_flexbox_with_definite_cross_guarded(
             }
         };
 
-    let inner_width =
+    let base_inner_w =
         (resolved_width - padding.left - padding.right - border.left - border.right).max(0.0);
+    let inner_width = container
+        .transition_content_width()
+        .map_or(base_inner_w, |tw| base_inner_w.max(tw));
     let resolved_height = resolve_dimension(container.style.height, available_height).map(|h| {
         clamp_dimension(
             h,
@@ -287,9 +290,14 @@ pub fn solve_flexbox_with_definite_cross_guarded(
         )
     });
 
-    let inner_height = match resolved_height {
+    let base_inner_h = match resolved_height {
         Some(h) => Some((h - padding.top - padding.bottom - border.top - border.bottom).max(0.0)),
         None => definite_inner_cross,
+    };
+    let inner_height = match (base_inner_h, container.transition_content_height()) {
+        (Some(h), Some(th)) => Some(h.max(th)),
+        (None, Some(th)) => Some(th),
+        (other, _) => other,
     };
 
     let main_gap = if is_row {
@@ -341,7 +349,9 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                     }
                 } else if is_row || effective_align != AlignItems::Stretch {
                     let min_max = crate::intrinsic::compute_min_max_sizes(child, Some(inner_width));
-                    Some(min_max.max_content.min(inner_width))
+                    let avail_child_w =
+                        (inner_width - child.style.margin.left - child.style.margin.right).max(0.0);
+                    Some(min_max.max_content.min(avail_child_w))
                 } else {
                     None
                 }
@@ -355,11 +365,27 @@ pub fn solve_flexbox_with_definite_cross_guarded(
             && container.style.text_overflow == strata_style::types::TextOverflow::Ellipsis
             && container.style.overflow_x != Overflow::Visible
         {
-            child.style.text_overflow = strata_style::types::TextOverflow::Ellipsis;
-            child.style.overflow_x = Overflow::Hidden;
-            child.style.overflow_y = Overflow::Hidden;
-            if container.style.white_space == strata_style::types::WhiteSpace::NoWrap {
+            let mut mutated = false;
+            if child.style.text_overflow != strata_style::types::TextOverflow::Ellipsis {
+                child.style.text_overflow = strata_style::types::TextOverflow::Ellipsis;
+                mutated = true;
+            }
+            if child.style.overflow_x != Overflow::Hidden {
+                child.style.overflow_x = Overflow::Hidden;
+                mutated = true;
+            }
+            if child.style.overflow_y != Overflow::Hidden {
+                child.style.overflow_y = Overflow::Hidden;
+                mutated = true;
+            }
+            if container.style.white_space == strata_style::types::WhiteSpace::NoWrap
+                && child.style.white_space != strata_style::types::WhiteSpace::NoWrap
+            {
                 child.style.white_space = strata_style::types::WhiteSpace::NoWrap;
+                mutated = true;
+            }
+            if mutated {
+                child.invalidate_self_caches();
             }
         }
 
@@ -381,63 +407,110 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                 target_avail_h,
             )
         });
-        let (mut child_w, mut child_h) = match (clamped_item_w, resolved_item_h) {
-            (Some(w), Some(h)) => {
-                let saved_w = child.style.width;
-                let saved_min_w = child.style.min_width;
-                let saved_max_w = child.style.max_width;
-                let saved_h = child.style.height;
-                let saved_min_h = child.style.min_height;
-                let saved_max_h = child.style.max_height;
-                child.style.width = Dimension::Px(w);
-                child.style.min_width = Dimension::Auto;
-                child.style.max_width = Dimension::Auto;
-                child.style.height = Dimension::Px(h);
-                child.style.min_height = Dimension::Auto;
-                child.style.max_height = Dimension::Auto;
-                child.compute_layout_guarded(w, h, None, 0.0, cg);
-                child.style.width = saved_w;
-                child.style.min_width = saved_min_w;
-                child.style.max_width = saved_max_w;
-                child.style.height = saved_h;
-                child.style.min_height = saved_min_h;
-                child.style.max_height = saved_max_h;
-                (w, h)
-            }
-            (Some(w), None) => {
-                let saved_w = child.style.width;
-                let saved_min_w = child.style.min_width;
-                let saved_max_w = child.style.max_width;
-                child.style.width = Dimension::Px(w);
-                child.style.min_width = Dimension::Auto;
-                child.style.max_width = Dimension::Auto;
-                child.compute_layout_guarded(w, target_avail_h, None, 0.0, cg);
-                child.style.width = saved_w;
-                child.style.min_width = saved_min_w;
-                child.style.max_width = saved_max_w;
-                (w, child.geometry.border_box.height)
-            }
-            (None, Some(h)) => {
-                let saved_h = child.style.height;
-                let saved_min_h = child.style.min_height;
-                let saved_max_h = child.style.max_height;
-                child.style.height = Dimension::Px(h);
-                child.style.min_height = Dimension::Auto;
-                child.style.max_height = Dimension::Auto;
-                child.compute_layout_guarded(inner_width, h, None, 0.0, cg);
-                child.style.height = saved_h;
-                child.style.min_height = saved_min_h;
-                child.style.max_height = saved_max_h;
-                (child.geometry.border_box.width, h)
-            }
-            (None, None) => {
-                child.compute_layout_guarded(inner_width, target_avail_h, None, 0.0, cg);
-                (
-                    child.geometry.border_box.width,
-                    child.geometry.border_box.height,
-                )
-            }
-        };
+        let (mut child_w, mut child_h, cached_baseline_opt) =
+            match (clamped_item_w, resolved_item_h) {
+                (Some(w), Some(h)) => {
+                    let saved_w = child.style.width;
+                    let saved_min_w = child.style.min_width;
+                    let saved_max_w = child.style.max_width;
+                    let saved_h = child.style.height;
+                    let saved_min_h = child.style.min_height;
+                    let saved_max_h = child.style.max_height;
+                    child.style.width = Dimension::Px(w);
+                    child.style.min_width = Dimension::Auto;
+                    child.style.max_width = Dimension::Auto;
+                    child.style.height = Dimension::Px(h);
+                    child.style.min_height = Dimension::Auto;
+                    child.style.max_height = Dimension::Auto;
+                    let pin_hash = crate::tree::layout_style_pin_hash(&child.style);
+                    let res = if let Some((_, _, bl)) = child.lookup_measure_cache(w, h, pin_hash) {
+                        (w, h, Some(bl))
+                    } else {
+                        child.compute_layout_guarded(w, h, None, 0.0, cg);
+                        let bl = compute_first_baseline(child);
+                        child.store_measure_cache(0, w, h, pin_hash, w, h, bl);
+                        (w, h, Some(bl))
+                    };
+                    child.style.width = saved_w;
+                    child.style.min_width = saved_min_w;
+                    child.style.max_width = saved_max_w;
+                    child.style.height = saved_h;
+                    child.style.min_height = saved_min_h;
+                    child.style.max_height = saved_max_h;
+                    res
+                }
+                (Some(w), None) => {
+                    let saved_w = child.style.width;
+                    let saved_min_w = child.style.min_width;
+                    let saved_max_w = child.style.max_width;
+                    child.style.width = Dimension::Px(w);
+                    child.style.min_width = Dimension::Auto;
+                    child.style.max_width = Dimension::Auto;
+                    let pin_hash = crate::tree::layout_style_pin_hash(&child.style);
+                    let res = if let Some((_, mh, bl)) =
+                        child.lookup_measure_cache(w, target_avail_h, pin_hash)
+                    {
+                        (w, mh, Some(bl))
+                    } else {
+                        child.compute_layout_guarded(w, target_avail_h, None, 0.0, cg);
+                        let mh = child.geometry.border_box.height;
+                        let bl = compute_first_baseline(child);
+                        child.store_measure_cache(0, w, target_avail_h, pin_hash, w, mh, bl);
+                        (w, mh, Some(bl))
+                    };
+                    child.style.width = saved_w;
+                    child.style.min_width = saved_min_w;
+                    child.style.max_width = saved_max_w;
+                    res
+                }
+                (None, Some(h)) => {
+                    let saved_h = child.style.height;
+                    let saved_min_h = child.style.min_height;
+                    let saved_max_h = child.style.max_height;
+                    child.style.height = Dimension::Px(h);
+                    child.style.min_height = Dimension::Auto;
+                    child.style.max_height = Dimension::Auto;
+                    let pin_hash = crate::tree::layout_style_pin_hash(&child.style);
+                    let res = if let Some((mw, _, bl)) =
+                        child.lookup_measure_cache(inner_width, h, pin_hash)
+                    {
+                        (mw, h, Some(bl))
+                    } else {
+                        child.compute_layout_guarded(inner_width, h, None, 0.0, cg);
+                        let mw = child.geometry.border_box.width;
+                        let bl = compute_first_baseline(child);
+                        child.store_measure_cache(0, inner_width, h, pin_hash, mw, h, bl);
+                        (mw, h, Some(bl))
+                    };
+                    child.style.height = saved_h;
+                    child.style.min_height = saved_min_h;
+                    child.style.max_height = saved_max_h;
+                    res
+                }
+                (None, None) => {
+                    let pin_hash = crate::tree::layout_style_pin_hash(&child.style);
+                    if let Some((mw, mh, bl)) =
+                        child.lookup_measure_cache(inner_width, target_avail_h, pin_hash)
+                    {
+                        (mw, mh, Some(bl))
+                    } else {
+                        child.compute_layout_guarded(inner_width, target_avail_h, None, 0.0, cg);
+                        let mw = child.geometry.border_box.width;
+                        let mh = child.geometry.border_box.height;
+                        let bl = compute_first_baseline(child);
+                        child.store_measure_cache(
+                            0,
+                            inner_width,
+                            target_avail_h,
+                            pin_hash,
+                            mw,
+                            mh,
+                            bl,
+                        );
+                        (mw, mh, Some(bl))
+                    }
+                }
+            };
 
         if let Some(ref text_str) = child.text {
             if inner_width > 0.0 && child_w > inner_width {
@@ -451,8 +524,13 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                 );
                 child_w = inner_width;
                 child_h = wrapped_h;
-                child.style.width = Dimension::Px(child_w);
-                child.style.height = Dimension::Px(child_h);
+                let new_w = Dimension::Px(child_w);
+                let new_h = Dimension::Px(child_h);
+                if child.style.width != new_w || child.style.height != new_h {
+                    child.style.width = new_w;
+                    child.style.height = new_h;
+                    child.invalidate_self_caches();
+                }
             }
         }
 
@@ -559,7 +637,7 @@ pub fn solve_flexbox_with_definite_cross_guarded(
             )
         };
 
-        let baseline_offset = compute_first_baseline(child);
+        let baseline_offset = cached_baseline_opt.unwrap_or_else(|| compute_first_baseline(child));
 
         item_metas.push(FlexItemMeta {
             index: idx,
@@ -687,191 +765,249 @@ pub fn solve_flexbox_with_definite_cross_guarded(
             resolve_dimension_with_node(container.style.min_height, available_height, container)
         };
 
-        if is_main_definite {
-            let free_space = container_main - sum_hypothetical - total_gaps;
+        let item_min_max = |ch: &LayoutNode, hyp_main: f32, is_scroll_main: bool| -> (f32, f32) {
+            let min_main = if is_row {
+                if is_scroll_main {
+                    let explicit_min = resolve_dimension(ch.style.min_width, inner_width).unwrap_or(0.0);
+                    hyp_main.max(explicit_min)
+                } else if ch.style.min_width == Dimension::Auto {
+                    let ch_has_content =
+                        !ch.children.is_empty() || ch.text.is_some() || !ch.inline_items.is_empty();
+                    let content_size = if ch.style.overflow_x == Overflow::Visible && ch_has_content
+                    {
+                        crate::intrinsic::compute_min_max_sizes(ch, Some(inner_width)).min_content
+                    } else {
+                        0.0
+                    };
+                    // W3C CSS Flexbox §4.5: automatic minimum size = min(specified_size, content_size)
+                    let specified_size = resolve_dimension_with_node(ch.style.width, inner_width, ch)
+                        .map(|w| match ch.style.box_sizing {
+                            strata_style::types::BoxSizing::BorderBox => w,
+                            strata_style::types::BoxSizing::ContentBox => {
+                                w + ch.style.padding.left
+                                    + ch.style.padding.right
+                                    + ch.style.border_width.left
+                                    + ch.style.border_width.right
+                            }
+                        })
+                        .unwrap_or(f32::INFINITY);
+                    let mut auto_min = content_size.min(specified_size);
+                    if let Some(max_w) =
+                        resolve_dimension_with_node(ch.style.max_width, inner_width, ch)
+                    {
+                        auto_min = auto_min.min(max_w);
+                    }
+                    auto_min
+                } else {
+                    resolve_dimension_with_node(ch.style.min_width, inner_width, ch).unwrap_or(0.0)
+                }
+            } else if is_scroll_main {
+                let explicit_min =
+                    resolve_dimension(ch.style.min_height, target_avail_h).unwrap_or(0.0);
+                hyp_main.max(explicit_min)
+            } else if ch.style.min_height == Dimension::Auto {
+                if ch.style.overflow_y == Overflow::Visible
+                    && (!ch.children.is_empty()
+                        || ch.text.is_some()
+                        || !ch.inline_items.is_empty())
+                {
+                    hyp_main
+                } else {
+                    0.0
+                }
+            } else {
+                resolve_dimension(ch.style.min_height, target_avail_h).unwrap_or(0.0)
+            };
 
-            if free_space > 0.0 {
-                // Expansion via flex-grow
-                let total_grow: f32 = line.items.iter().map(|it| it.flex_grow).sum();
-                if total_grow > 0.0 {
+            let max_main = if is_row {
+                resolve_dimension_with_node(ch.style.max_width, inner_width, ch)
+                    .unwrap_or(f32::INFINITY)
+            } else {
+                resolve_dimension(ch.style.max_height, target_avail_h).unwrap_or(f32::INFINITY)
+            };
+
+            (min_main, max_main.max(min_main))
+        };
+
+        let distribute_grow =
+            |items: &mut [FlexItemMeta], target_main: f32, bounds: &[(f32, f32)]| {
+                let n = items.len();
+                let mut frozen: Vec<bool> = items.iter().map(|it| it.flex_grow <= 0.0).collect();
+                for _ in 0..=n {
+                    let used_frozen: f32 = items
+                        .iter()
+                        .zip(&frozen)
+                        .filter(|(_, &f)| f)
+                        .map(|(it, _)| it.resolved_main + it.margin_main_start + it.margin_main_end)
+                        .sum();
+                    let used_unfrozen: f32 = items
+                        .iter()
+                        .zip(&frozen)
+                        .filter(|(_, &f)| !f)
+                        .map(|(it, _)| {
+                            it.hypothetical_main + it.margin_main_start + it.margin_main_end
+                        })
+                        .sum();
+                    let rem_free = target_main - total_gaps - used_frozen - used_unfrozen;
+                    if rem_free <= 0.001 {
+                        break;
+                    }
+                    let total_grow: f32 = items
+                        .iter()
+                        .zip(&frozen)
+                        .filter(|(_, &f)| !f)
+                        .map(|(it, _)| it.flex_grow)
+                        .sum();
+                    if total_grow <= 0.0 {
+                        break;
+                    }
                     if strata_primitives::target::is_tui_target() {
-                        let grow_shares: Vec<f32> =
-                            line.items.iter().map(|it| it.flex_grow).collect();
-                        let free_cells = free_space.round().max(0.0) as u16;
+                        let grow_shares: Vec<f32> = items
+                            .iter()
+                            .zip(&frozen)
+                            .map(|(it, &f)| if f { 0.0 } else { it.flex_grow })
+                            .collect();
+                        let free_cells = rem_free.round().max(0.0) as u16;
                         let quants =
                             strata_primitives::quantization::largest_remainder_quantization(
                                 &grow_shares,
                                 free_cells,
                             );
-                        for (it, &q) in line.items.iter_mut().zip(&quants) {
+                        for (it, &q) in items.iter_mut().zip(&quants) {
                             if it.flex_grow > 0.0 {
                                 it.resolved_main = it.hypothetical_main.round() + q as f32;
                             }
                         }
-                    } else {
-                        for it in &mut line.items {
-                            if it.flex_grow > 0.0 {
-                                let delta = (it.flex_grow / total_grow) * free_space;
-                                it.resolved_main = it.hypothetical_main + delta;
-                            }
+                        break;
+                    }
+                    let mut hit_max = false;
+                    for i in 0..n {
+                        if frozen[i] {
+                            continue;
+                        }
+                        let delta = (items[i].flex_grow / total_grow) * rem_free;
+                        let cand = items[i].hypothetical_main + delta;
+                        let max_m = bounds[i].1;
+                        if cand > max_m + 0.001 && items[i].hypothetical_main <= max_m + 0.001 {
+                            items[i].resolved_main = max_m;
+                            frozen[i] = true;
+                            hit_max = true;
                         }
                     }
+                    if !hit_max {
+                        for i in 0..n {
+                            if !frozen[i] {
+                                let delta = (items[i].flex_grow / total_grow) * rem_free;
+                                items[i].resolved_main = items[i].hypothetical_main + delta;
+                            }
+                        }
+                        break;
+                    }
                 }
+            };
+
+        let is_scroll_main = if is_row {
+            matches!(
+                container.style.overflow_x,
+                Overflow::Auto | Overflow::Scroll
+            )
+        } else {
+            matches!(
+                container.style.overflow_y,
+                Overflow::Auto | Overflow::Scroll
+            )
+        };
+        let bounds: Vec<(f32, f32)> = line
+            .items
+            .iter()
+            .map(|it| {
+                item_min_max(
+                    &container.children[it.index],
+                    it.hypothetical_main,
+                    is_scroll_main,
+                )
+            })
+            .collect();
+
+        if is_main_definite {
+            let free_space = container_main - sum_hypothetical - total_gaps;
+
+            if free_space > 0.0 {
+                distribute_grow(&mut line.items, container_main, &bounds);
             } else if free_space < 0.0 {
-                // Contraction via flex-shrink along main axis (row or column)
-                let total_scaled_shrink: f32 = line
+                // W3C CSS Flexbox §9.7 iterative contraction via flex-shrink
+                let n = line.items.len();
+                let mut frozen: Vec<bool> = line
                     .items
                     .iter()
-                    .map(|it| it.flex_shrink * it.hypothetical_main)
-                    .sum();
+                    .map(|it| it.flex_shrink <= 0.0 || it.hypothetical_main <= 0.0)
+                    .collect();
 
-                let is_scroll_main = if is_row {
-                    matches!(
-                        container.style.overflow_x,
-                        Overflow::Auto | Overflow::Scroll
-                    )
-                } else {
-                    matches!(
-                        container.style.overflow_y,
-                        Overflow::Auto | Overflow::Scroll
-                    )
-                };
-
-                if total_scaled_shrink > 0.0 {
-                    let abs_free = free_space.abs();
-                    for it in &mut line.items {
-                        if it.flex_shrink > 0.0 {
-                            let scaled = it.flex_shrink * it.hypothetical_main;
-                            let reduction = (scaled / total_scaled_shrink) * abs_free;
-                            let min_main = if is_row {
-                                if is_scroll_main {
-                                    let explicit_min = resolve_dimension(
-                                        container.children[it.index].style.min_width,
-                                        inner_width,
-                                    )
-                                    .unwrap_or(0.0);
-                                    it.hypothetical_main.max(explicit_min)
-                                } else if container.children[it.index].style.min_width
-                                    == Dimension::Auto
-                                {
-                                    let ch = &container.children[it.index];
-                                    let ch_has_content = !ch.children.is_empty()
-                                        || ch.text.is_some()
-                                        || !ch.inline_items.is_empty();
-                                    let content_size = if ch.style.overflow_x == Overflow::Visible
-                                        && ch_has_content
-                                    {
-                                        crate::intrinsic::compute_min_max_sizes(
-                                            ch,
-                                            Some(inner_width),
-                                        )
-                                        .min_content
-                                    } else {
-                                        0.0
-                                    };
-                                    // W3C CSS Flexbox §4.5: automatic minimum size = min(specified_size, content_size)
-                                    let specified_size = match ch.style.width {
-                                        Dimension::Px(px) => {
-                                            px + ch.style.padding.left
-                                                + ch.style.padding.right
-                                                + ch.style.border_width.left
-                                                + ch.style.border_width.right
-                                        }
-                                        Dimension::Rem(rem) => {
-                                            rem * 16.0
-                                                + ch.style.padding.left
-                                                + ch.style.padding.right
-                                                + ch.style.border_width.left
-                                                + ch.style.border_width.right
-                                        }
-                                        Dimension::Em(em) => {
-                                            em * 16.0
-                                                + ch.style.padding.left
-                                                + ch.style.padding.right
-                                                + ch.style.border_width.left
-                                                + ch.style.border_width.right
-                                        }
-                                        _ => f32::INFINITY,
-                                    };
-                                    let mut auto_min = content_size.min(specified_size);
-                                    if let Some(max_w) = resolve_dimension_with_node(
-                                        ch.style.max_width,
-                                        inner_width,
-                                        ch,
-                                    ) {
-                                        auto_min = auto_min.min(max_w);
-                                    }
-                                    auto_min
-                                } else {
-                                    resolve_dimension_with_node(
-                                        container.children[it.index].style.min_width,
-                                        inner_width,
-                                        &container.children[it.index],
-                                    )
-                                    .unwrap_or(0.0)
-                                }
-                            } else {
-                                if is_scroll_main {
-                                    let explicit_min = resolve_dimension(
-                                        container.children[it.index].style.min_height,
-                                        target_avail_h,
-                                    )
-                                    .unwrap_or(0.0);
-                                    it.hypothetical_main.max(explicit_min)
-                                } else if container.children[it.index].style.min_height
-                                    == Dimension::Auto
-                                {
-                                    let ch = &container.children[it.index];
-                                    if ch.style.overflow_y == Overflow::Visible
-                                        && (!ch.children.is_empty()
-                                            || ch.text.is_some()
-                                            || !ch.inline_items.is_empty())
-                                    {
-                                        it.hypothetical_main
-                                    } else {
-                                        0.0
-                                    }
-                                } else {
-                                    resolve_dimension(
-                                        container.children[it.index].style.min_height,
-                                        target_avail_h,
-                                    )
-                                    .unwrap_or(0.0)
-                                }
-                            };
-                            it.resolved_main = (it.hypothetical_main - reduction).max(min_main);
+                for _ in 0..=n {
+                    let used_frozen: f32 = line
+                        .items
+                        .iter()
+                        .zip(&frozen)
+                        .filter(|(_, &f)| f)
+                        .map(|(it, _)| it.resolved_main + it.margin_main_start + it.margin_main_end)
+                        .sum();
+                    let used_unfrozen: f32 = line
+                        .items
+                        .iter()
+                        .zip(&frozen)
+                        .filter(|(_, &f)| !f)
+                        .map(|(it, _)| {
+                            it.hypothetical_main + it.margin_main_start + it.margin_main_end
+                        })
+                        .sum();
+                    let rem_free = container_main - total_gaps - used_frozen - used_unfrozen;
+                    if rem_free >= -0.001 {
+                        break;
+                    }
+                    let total_scaled_shrink: f32 = line
+                        .items
+                        .iter()
+                        .zip(&frozen)
+                        .filter(|(_, &f)| !f)
+                        .map(|(it, _)| it.flex_shrink * it.hypothetical_main)
+                        .sum();
+                    if total_scaled_shrink <= 0.0 {
+                        break;
+                    }
+                    let abs_free = -rem_free;
+                    let mut clamped_any = false;
+                    for i in 0..n {
+                        if frozen[i] {
+                            continue;
                         }
+                        let scaled = line.items[i].flex_shrink * line.items[i].hypothetical_main;
+                        let reduction = (scaled / total_scaled_shrink) * abs_free;
+                        let cand = line.items[i].hypothetical_main - reduction;
+                        let min_main = bounds[i].0;
+                        if cand < min_main - 0.001 {
+                            line.items[i].resolved_main = min_main;
+                            frozen[i] = true;
+                            clamped_any = true;
+                        }
+                    }
+                    if !clamped_any {
+                        for i in 0..n {
+                            if !frozen[i] {
+                                let scaled =
+                                    line.items[i].flex_shrink * line.items[i].hypothetical_main;
+                                let reduction = (scaled / total_scaled_shrink) * abs_free;
+                                line.items[i].resolved_main =
+                                    (line.items[i].hypothetical_main - reduction).max(bounds[i].0);
+                            }
+                        }
+                        break;
                     }
                 }
             }
         } else if let Some(min_main) = min_container_main {
             let free_space = min_main - sum_hypothetical - total_gaps;
             if free_space > 0.0 {
-                let total_grow: f32 = line.items.iter().map(|it| it.flex_grow).sum();
-                if total_grow > 0.0 {
-                    if strata_primitives::target::is_tui_target() {
-                        let grow_shares: Vec<f32> =
-                            line.items.iter().map(|it| it.flex_grow).collect();
-                        let free_cells = free_space.round().max(0.0) as u16;
-                        let quants =
-                            strata_primitives::quantization::largest_remainder_quantization(
-                                &grow_shares,
-                                free_cells,
-                            );
-                        for (it, &q) in line.items.iter_mut().zip(&quants) {
-                            if it.flex_grow > 0.0 {
-                                it.resolved_main = it.hypothetical_main.round() + q as f32;
-                            }
-                        }
-                    } else {
-                        for it in &mut line.items {
-                            if it.flex_grow > 0.0 {
-                                let delta = (it.flex_grow / total_grow) * free_space;
-                                it.resolved_main = it.hypothetical_main + delta;
-                            }
-                        }
-                    }
-                }
+                distribute_grow(&mut line.items, min_main, &bounds);
             }
         }
 
@@ -913,22 +1049,62 @@ pub fn solve_flexbox_with_definite_cross_guarded(
         // Recompute line cross size after main sizing (CSS Flexbox Level 1 §9.4)
         let cg = guard.enter().unwrap_or(guard);
         for it in &mut line.items {
-            if (it.resolved_main - it.hypothetical_main).abs() > 0.5 {
+            let prev_main = if is_row {
+                container.children[it.index].geometry.border_box.width
+            } else {
+                container.children[it.index].geometry.border_box.height
+            };
+            if (it.resolved_main - it.hypothetical_main).abs() > 0.5
+                || (is_row && (it.resolved_main - prev_main).abs() > 0.5)
+            {
                 let child = &mut container.children[it.index];
-                child.layout_cache.is_valid = false;
                 if is_row {
                     let saved_w = child.style.width;
                     let saved_min_w = child.style.min_width;
                     let saved_max_w = child.style.max_width;
+                    let saved_h = child.style.height;
                     child.style.width = Dimension::Px(it.resolved_main);
                     child.style.min_width = Dimension::Auto;
                     child.style.max_width = Dimension::Auto;
-                    child.compute_layout_guarded(it.resolved_main, target_avail_h, None, 0.0, cg);
+                    if child.text.is_some() {
+                        child.style.height = Dimension::Auto;
+                    }
+                    let pin_hash = crate::tree::layout_style_pin_hash(&child.style);
+                    let (res_h, bl) = if let Some((_, mh, cached_bl)) =
+                        child.lookup_measure_cache(it.resolved_main, target_avail_h, pin_hash)
+                    {
+                        (mh, cached_bl)
+                    } else {
+                        child.compute_layout_guarded(
+                            it.resolved_main,
+                            target_avail_h,
+                            None,
+                            0.0,
+                            cg,
+                        );
+                        let mh = child.geometry.border_box.height;
+                        let computed_bl = compute_first_baseline(child);
+                        child.store_measure_cache(
+                            1,
+                            it.resolved_main,
+                            target_avail_h,
+                            pin_hash,
+                            it.resolved_main,
+                            mh,
+                            computed_bl,
+                        );
+                        (mh, computed_bl)
+                    };
                     child.style.width = saved_w;
                     child.style.min_width = saved_min_w;
                     child.style.max_width = saved_max_w;
-                    it.resolved_cross = child.geometry.border_box.height;
-                    it.baseline_offset = compute_first_baseline(child);
+                    if child.text.is_some() {
+                        child.style.height = Dimension::Px(res_h);
+                    } else {
+                        child.style.height = saved_h;
+                    }
+                    it.resolved_cross = res_h;
+                    it.baseline_offset = bl;
                 } else {
                     let saved_h = child.style.height;
                     let saved_min_h = child.style.min_height;
@@ -936,12 +1112,31 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                     child.style.height = Dimension::Px(it.resolved_main);
                     child.style.min_height = Dimension::Auto;
                     child.style.max_height = Dimension::Auto;
-                    child.compute_layout_guarded(inner_width, it.resolved_main, None, 0.0, cg);
+                    let pin_hash = crate::tree::layout_style_pin_hash(&child.style);
+                    let (res_w, bl) = if let Some((mw, _, cached_bl)) =
+                        child.lookup_measure_cache(inner_width, it.resolved_main, pin_hash)
+                    {
+                        (mw, cached_bl)
+                    } else {
+                        child.compute_layout_guarded(inner_width, it.resolved_main, None, 0.0, cg);
+                        let mw = child.geometry.border_box.width;
+                        let computed_bl = compute_first_baseline(child);
+                        child.store_measure_cache(
+                            1,
+                            inner_width,
+                            it.resolved_main,
+                            pin_hash,
+                            mw,
+                            it.resolved_main,
+                            computed_bl,
+                        );
+                        (mw, computed_bl)
+                    };
                     child.style.height = saved_h;
                     child.style.min_height = saved_min_h;
                     child.style.max_height = saved_max_h;
-                    it.resolved_cross = child.geometry.border_box.width;
-                    it.baseline_offset = compute_first_baseline(child);
+                    it.resolved_cross = res_w;
+                    it.baseline_offset = bl;
                 }
             }
         }
@@ -1245,30 +1440,40 @@ pub fn solve_flexbox_with_definite_cross_guarded(
             // children laid out at their max-content width after a cross-axis
             // stretch. Re-run child layout whenever the content size changed,
             // regardless of `flex-shrink`.
-            let children_current = child.last_child_layout_content.map_or(
-                child.children.is_empty() && child.inline_items.is_empty() && child.text.is_none(),
-                |(w, h)| {
-                    (w - desired_content_w).abs() < 0.05 && (h - desired_content_h).abs() < 0.05
-                },
-            );
+            let children_current = child.children_layout_clean
+                && child.last_child_layout_content.map_or(
+                    child.children.is_empty()
+                        && child.inline_items.is_empty()
+                        && child.text.is_none(),
+                    |(w, h)| {
+                        (w - desired_content_w).abs() < 0.05 && (h - desired_content_h).abs() < 0.05
+                    },
+                );
 
             if children_current
                 && old_w > 0.0
                 && (item_w - old_w).abs() < 0.05
                 && (item_h - old_h).abs() < 0.05
             {
-                let dx = item_x - old_x;
-                let dy = item_y - old_y;
-                if dx.abs() > 0.001 || dy.abs() > 0.001 {
-                    child.translate(dx, dy);
-                }
-                child.geometry = LayoutGeometry::from_border_box(
+                let saved_scroll_bounds = child.geometry.scroll_bounds;
+                let saved_has_scroll = child.geometry.has_scroll;
+                let saved_scroll_offset = child.geometry.scroll_offset;
+                let mut new_geom = LayoutGeometry::from_border_box(
                     Rect::new(item_x, item_y, item_w, item_h),
                     child.style.padding,
                     child.style.border_width,
                     child_margin,
                 );
-                child.geometry.snap_to_pixel();
+                new_geom.snap_to_pixel();
+                let dx = new_geom.border_box.x - old_x;
+                let dy = new_geom.border_box.y - old_y;
+                if dx.abs() > 0.001 || dy.abs() > 0.001 {
+                    child.translate(dx, dy);
+                }
+                child.geometry = new_geom;
+                child.geometry.scroll_bounds = saved_scroll_bounds;
+                child.geometry.has_scroll = saved_has_scroll;
+                child.geometry.scroll_offset = saved_scroll_offset;
                 child.last_child_layout_content = Some((desired_content_w, desired_content_h));
             } else {
                 child.geometry = LayoutGeometry::from_border_box(
@@ -1290,9 +1495,15 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                             child, content_w, content_h, None, 0.0, cg,
                         );
                     }
+                    child.subtree_hit_flags &= !crate::tree::SUBTREE_META_VALID;
+                    child.update_scroll_metrics();
                     child.last_child_layout_content = Some((content_w, content_h));
+                    child.children_layout_clean = true;
                 } else {
+                    child.subtree_hit_flags &= !crate::tree::SUBTREE_META_VALID;
+                    child.update_scroll_metrics();
                     child.last_child_layout_content = Some((desired_content_w, desired_content_h));
+                    child.children_layout_clean = true;
                 }
             }
 

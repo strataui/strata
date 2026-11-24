@@ -103,10 +103,14 @@ pub fn compute_min_max_sizes_guarded(
         return MinMaxSizes::zero();
     }
     let _prof = crate::prof::Scope::new(crate::prof::Slot::Intrinsic);
+    if let Some(hit) = node.intrinsic_cache.get(parent_size) {
+        return hit;
+    }
     if let Some(hit) = memo_lookup(node, parent_size) {
         return hit;
     }
     let result = compute_min_max_sizes_uncached(node, parent_size, depth);
+    node.intrinsic_cache.set(parent_size, result);
     memo_store(node, parent_size, result);
     result
 }

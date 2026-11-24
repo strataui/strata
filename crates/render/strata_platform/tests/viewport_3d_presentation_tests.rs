@@ -310,3 +310,94 @@ fn test_wgpu_swapchain_presenter_gpu_2d_stencil_clips_and_hybrid_viewport() {
     assert_eq!(swapchain.presented_frames, 3);
     assert_eq!(swapchain.surface_size(), (240, 240));
 }
+
+#[cfg(feature = "wgpu-backend")]
+#[test]
+fn test_scene3d_offscreen_cache_hits_on_2d_overlay_update_and_misses_on_camera_change() {
+    use strata_platform::wgpu_surface::WgpuWindowPresenter;
+    use strata_platform::PresentMode;
+    use strata_render::scene3d::{RetainedCameraUniforms, RetainedScene3D};
+
+    let Ok(mut presenter) = WgpuWindowPresenter::new_offscreen(PresentMode::Immediate) else {
+        return;
+    };
+
+    let mut cam = RetainedCameraUniforms {
+        background: Background3D::Solid(Color::rgb(20, 40, 180)),
+        ..Default::default()
+    };
+    let retained = RetainedScene3D::new(cam);
+    let scene = Scene3D::new().with_retained_handle(retained.clone());
+    let vp = [0.0, 0.0, 64.0, 64.0];
+
+    // 2D overlay v1: transparent everywhere except top-left pixel green (premultiplied BGRA)
+    let mut overlay_v1 = vec![0u8; 64 * 64 * 4];
+    overlay_v1[0] = 0;
+    overlay_v1[1] = 255;
+    overlay_v1[2] = 0;
+    overlay_v1[3] = 255;
+    presenter.upload_ui_overlay_bgra(64, 64, &overlay_v1);
+
+    // Frame 1: cold 3D cache -> 1 miss, 0 hits
+    let px1 = presenter
+        .render_viewports_cached_offscreen_bgra(&[(vp, &scene)], 64, 64, true)
+        .expect("frame 1 cached 3d");
+    assert_eq!(presenter.scene3d_cache_stats(), (0, 1));
+    assert!(px1[1] > 200, "top-left pixel should show green 2D overlay");
+    let center = (32 * 64 + 32) * 4;
+    assert!(
+        px1[center] > 140 && px1[center + 2] < 60,
+        "center pixel should show blue 3D background"
+    );
+
+    // Frame 2: 2D overlay changes (e.g. button hover) while 3D scene & camera are unchanged!
+    // Must hit the offscreen Scene3D cache without re-rendering 3D.
+    let mut overlay_v2 = vec![0u8; 64 * 64 * 4];
+    overlay_v2[0] = 0;
+    overlay_v2[1] = 0;
+    overlay_v2[2] = 255; // red top-left pixel
+    overlay_v2[3] = 255;
+    presenter.upload_ui_overlay_bgra(64, 64, &overlay_v2);
+
+    let px2 = presenter
+        .render_viewports_cached_offscreen_bgra(&[(vp, &scene)], 64, 64, true)
+        .expect("frame 2 cached 3d hit");
+    assert_eq!(
+        presenter.scene3d_cache_stats(),
+        (1, 1),
+        "2D overlay update with unchanged 3D scene must hit Scene3D offscreen cache"
+    );
+    assert!(
+        px2[2] > 200 && px2[1] < 40,
+        "updated 2D overlay must composite cleanly over cached 3D texture"
+    );
+    assert!(
+        px2[center] > 140 && px2[center + 2] < 60,
+        "cached 3D background must stay intact"
+    );
+
+    // Frame 3: 3D camera/background changes -> must invalidate Scene3D cache and miss
+    cam.background = Background3D::Solid(Color::rgb(200, 180, 20));
+    retained.update_camera(cam);
+    let px3 = presenter
+        .render_viewports_cached_offscreen_bgra(&[(vp, &scene)], 64, 64, true)
+        .expect("frame 3 cached 3d miss after camera change");
+    assert_eq!(
+        presenter.scene3d_cache_stats(),
+        (1, 2),
+        "3D camera update must invalidate Scene3D offscreen cache"
+    );
+    assert!(
+        px3[center + 2] > 150 && px3[center + 1] > 130,
+        "re-rendered 3D background should reflect new golden color"
+    );
+
+    // GPU VRAM & telemetry reporting must be populated cleanly
+    let telemetry = presenter.gpu_telemetry();
+    assert_eq!(telemetry.scene3d_cache_hits, 1);
+    assert_eq!(telemetry.scene3d_cache_misses, 2);
+    assert!(
+        telemetry.gpu_memory_bytes > 0,
+        "GPU memory telemetry must report allocated offscreen/overlay textures"
+    );
+}

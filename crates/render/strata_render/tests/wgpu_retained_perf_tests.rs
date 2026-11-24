@@ -972,6 +972,7 @@ fn wgpu_directional_mountain_shadows_and_gpu_ocean_coastal_surf() {
         sdf_half_span_m: 60.0,
         sdf_center_en_m: [0.0, 0.0],
         coastal_sdf: Some(sdf_tex),
+        ..Default::default()
     });
     retained.update_camera_and_ocean(cam, Some(ocean));
     let px_ocean = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
@@ -1394,6 +1395,583 @@ fn wgpu_3d_ocean_vertex_wave_displacement_and_close_ground_micro_detail() {
         max_l
     );
 }
+
+#[test]
+fn wgpu_mixed_close_ground_grid_topologies_render_all_tiles_cleanly() {
+    let Ok(mut renderer) = Wgpu3DRenderer::new_headless(wgpu::TextureFormat::Bgra8Unorm) else {
+        return;
+    };
+    let (w, h) = (128u32, 128u32);
+
+    let make_grid_mesh = |key: TileKeyId, grid: u32, min_x: f32, max_x: f32, min_z: f32, max_z: f32| {
+        let n = grid as usize;
+        let mut verts = Vec::with_capacity(n * n + 4 * n);
+        for row in 0..n {
+            let v = row as f32 / (n - 1) as f32;
+            // Notice z decreases northward so triangles face +Y up under CCW winding.
+            let pz = max_z + (min_z - max_z) * v;
+            for col in 0..n {
+                let u = col as f32 / (n - 1) as f32;
+                let px = min_x + (max_x - min_x) * u;
+                verts.push(RteTileVertex::new([px, 0.0, pz], [0.0, 1.0, 0.0], [u, 1.0 - v]));
+            }
+        }
+        // Append 4*n skirt vertices matching build_terrain_grid_indices(grid, true).
+        for col in 0..n {
+            let mut v = verts[col];
+            v.pos_u[1] -= 20.0;
+            verts.push(v);
+        }
+        for row in 0..n {
+            let mut v = verts[row * n + (n - 1)];
+            v.pos_u[1] -= 20.0;
+            verts.push(v);
+        }
+        for col in 0..n {
+            let mut v = verts[(n - 1) * n + col];
+            v.pos_u[1] -= 20.0;
+            verts.push(v);
+        }
+        for row in 0..n {
+            let mut v = verts[row * n];
+            v.pos_u[1] -= 20.0;
+            verts.push(v);
+        }
+        Arc::new(RetainedTileMesh {
+            key,
+            revision: 1,
+            center_ecef: [0.0, 0.0, 0.0],
+            grid_res: grid,
+            has_skirts: true,
+            vertices: Arc::new(verts),
+            bounding_radius: 150.0,
+        })
+    };
+
+    // Mix 17x17, 25x25, and 33x33 close-ground tiles in the exact same frame!
+    let k_nw = TileKeyId::new(17, 10, 10, 0);
+    let k_ne = TileKeyId::new(17, 11, 10, 0);
+    let k_sw = TileKeyId::new(17, 10, 11, 0);
+    let k_se = TileKeyId::new(17, 11, 11, 0);
+    let meshes = vec![
+        make_grid_mesh(k_nw, 17, -100.0, 0.0, -100.0, 0.0),
+        make_grid_mesh(k_ne, 25, 0.0, 100.0, -100.0, 0.0),
+        make_grid_mesh(k_sw, 33, -100.0, 0.0, 0.0, 100.0),
+        make_grid_mesh(k_se, 17, 0.0, 100.0, 0.0, 100.0),
+    ];
+    let warm_tint = [0.90, 0.42, 0.20, 1.0];
+    let instances = vec![k_nw, k_ne, k_sw, k_se]
+        .into_iter()
+        .map(|key| RetainedTileInstance {
+            key,
+            mesh_revision: 1,
+            center_ecef: [0.0, 0.0, 0.0],
+            texture_id: None,
+            texture_revision: 0,
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
+            tint: warm_tint,
+            unlit: true,
+            night_texture_id: None,
+            night_texture_revision: 0,
+            night_uv_rect: [0.0, 0.0, 1.0, 1.0],
+        })
+        .collect();
+
+    let mut cam = camera_uniforms([0.0, 90.0, 1.0], [0.0, 0.0, 0.0], w, h);
+    cam.background = Background3D::Solid(strata_style::Color::rgb(20, 110, 255));
+    let frame = Arc::new(RetainedTerrainFrame {
+        camera: cam,
+        geometry_revision: 1,
+        meshes,
+        instances,
+        ..Default::default()
+    });
+    let retained = RetainedScene3D::new(cam);
+    retained.update_terrain(frame);
+    let scene = Scene3D::new().with_retained_handle(retained);
+    let px = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
+
+    // Every pixel in the central 80x80 covering all 4 quadrants must be warm terracotta (R > B),
+    // never ripped into sawtooth voids exposing the blue background sky.
+    let mut hole_count = 0usize;
+    for y in 24..104 {
+        for x in 24..104 {
+            let idx = (y * w + x) as usize * 4;
+            let b = px[idx];
+            let r = px[idx + 2];
+            if b >= r {
+                hole_count += 1;
+            }
+        }
+    }
+    assert_eq!(
+        hole_count, 0,
+        "mixed close-ground tile grids (17x17, 25x25, 33x33) must all render solidly with zero index-stride holes"
+    );
+}
+
+#[test]
+fn wgpu_ocean_waves_are_invariant_across_origin_shift_and_non_repetitive() {
+    use strata_render::scene3d::{RetainedOceanSurface, RetainedOceanWaveTrain};
+
+    let Ok(mut renderer) = Wgpu3DRenderer::new_headless(wgpu::TextureFormat::Bgra8Unorm) else {
+        return;
+    };
+    let (w, h) = (128u32, 128u32);
+    let r_earth = 6_378_137.0_f64;
+
+    let ocean_rgba = vec![20u8, 60, 118, 255].repeat(64 * 64);
+    let ocean_tex = Arc::new(RetainedTileTexture {
+        id: 890,
+        revision: 1,
+        width: 64,
+        height: 64,
+        rgba8: Arc::new(ocean_rgba),
+    });
+
+    // Place a 400x400m flat sea-level patch in a tangent frame matching WGS84 2.5D at (37.75°, -122.50°).
+    let lat0_deg = 37.75_f64;
+    let lon0_deg = -122.50_f64;
+    let lat0_rad = lat0_deg.to_radians();
+    let cos0 = lat0_rad.cos();
+    let anchor = [6_378_137.0_f64, 0.0, 0.0];
+    let grid = 17u32;
+    let span = 400.0_f32;
+    let mut verts = Vec::with_capacity((grid * grid) as usize);
+    for row in 0..grid {
+        let v = row as f32 / (grid - 1) as f32;
+        let pz = (0.5 - v) * span; // -north
+        for col in 0..grid {
+            let u = col as f32 / (grid - 1) as f32;
+            let px = (u - 0.5) * span; // +east
+            verts.push(RteTileVertex::new([px, 0.0, pz], [0.0, 1.0, 0.0], [u, v]));
+        }
+    }
+    let key = TileKeyId::new(15, 0, 0, 0);
+    let mesh = Arc::new(RetainedTileMesh {
+        key,
+        revision: 1,
+        center_ecef: anchor,
+        grid_res: grid,
+        has_skirts: false,
+        vertices: Arc::new(verts),
+        bounding_radius: 300.0,
+    });
+
+    let merc_y = |lat_rad: f64| -> f64 {
+        r_earth * (std::f64::consts::FRAC_PI_4 + lat_rad * 0.5).tan().ln()
+    };
+
+    let render_with_origin = |renderer: &mut Wgpu3DRenderer, dlat_deg: f64, dlon_deg: f64| {
+        let q_lat = lat0_deg + dlat_deg;
+        let q_lon = lon0_deg + dlon_deg;
+        let de_m = dlon_deg.to_radians() * r_earth * cos0;
+        let dn_m = dlat_deg.to_radians() * r_earth;
+        // Origin placed at anchor + de_m * east(+X) + dn_m * north(-Z).
+        let orig_ecef = [anchor[0] + de_m, anchor[1], anchor[2] - dn_m];
+        let wx = r_earth * q_lon.to_radians();
+        let wy = merc_y(q_lat.to_radians());
+
+        let mut cam = camera_uniforms(
+            [anchor[0] + 0.0, 95.0, anchor[2] + 150.0],
+            [anchor[0], 0.0, anchor[2] - 20.0],
+            w,
+            h,
+        );
+        cam.sun_dir = [0.42, 0.48, 0.76];
+        cam.sun_color = [1.0, 0.96, 0.90];
+        cam.day_night_strength = 1.0;
+        cam.local_25d_blend = 1.0;
+        cam.realistic_25d_sky = 1.0;
+        cam.terrain_25d_lighting = 1.0;
+
+        let frame = Arc::new(RetainedTerrainFrame {
+            camera: cam,
+            geometry_revision: 1,
+            meshes: vec![Arc::clone(&mesh)],
+            textures: vec![Arc::clone(&ocean_tex)],
+            instances: vec![RetainedTileInstance {
+                key,
+                mesh_revision: 1,
+                center_ecef: anchor,
+                texture_id: Some(890),
+                texture_revision: 1,
+                uv_rect: [0.0, 0.0, 1.0, 1.0],
+                tint: [1.0, 1.0, 1.0, 1.0],
+                unlit: false,
+                night_texture_id: None,
+                night_texture_revision: 0,
+                night_uv_rect: [0.0, 0.0, 1.0, 1.0],
+            }],
+            ocean: Some(Arc::new(RetainedOceanSurface {
+                enabled: true,
+                origin_ecef: orig_ecef,
+                basis_east: [1.0, 0.0, 0.0],
+                basis_north: [0.0, 0.0, -1.0],
+                basis_up: [0.0, 1.0, 0.0],
+                train_a: RetainedOceanWaveTrain {
+                    dir_en: [0.92, 0.39],
+                    wind_speed_mps: 9.0,
+                    phase_time_s: 12.5,
+                    weight: 1.0,
+                },
+                wave_strength: 1.3,
+                wave_scale: 1.0,
+                glint_intensity: 1.2,
+                opacity: 1.0,
+                alt_fade: 1.0,
+                world_origin_merc_m: [wx, wy],
+                origin_lat_rad: q_lat.to_radians() as f32,
+                east_scale: cos0 as f32,
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+        let retained = RetainedScene3D::new(cam);
+        retained.update_terrain(frame);
+        let scene = Scene3D::new().with_retained_handle(retained);
+        renderer.render_offscreen(&scene, w, h, true, true).unwrap()
+    };
+
+    let px_a = render_with_origin(&mut renderer, 0.0, 0.0);
+    // Simulate panning across a quantized +0.05° (+5.5 km) ocean origin snap cell!
+    let px_b = render_with_origin(&mut renderer, 0.05, 0.05);
+
+    let mut max_diff = 0i32;
+    let mut sum_diff = 0i64;
+    for (&a, &b) in px_a.iter().zip(px_b.iter()) {
+        let d = (a as i32 - b as i32).abs();
+        max_diff = max_diff.max(d);
+        sum_diff += d as i64;
+    }
+    let mean_diff = sum_diff as f64 / px_a.len() as f64;
+    assert!(
+        mean_diff < 1.5 && max_diff <= 24,
+        "ocean waves must stay invariant across +0.05° origin snap jumps (mean_diff={mean_diff:.3}, max_diff={max_diff})"
+    );
+
+    // Check left vs right patches aren't uniform or trivially repeated
+    let mut diff_lr = 0i64;
+    for y in 40..100 {
+        for x in 0..48 {
+            let i0 = (y * w + (x + 12)) as usize * 4;
+            let i1 = (y * w + (x + 68)) as usize * 4;
+            diff_lr += (px_a[i0] as i32 - px_a[i1] as i32).abs() as i64;
+        }
+    }
+    assert!(
+        diff_lr > 5_000,
+        "stochastic ocean waves must show rich non-repetitive spatial variation across the water surface (diff_lr={diff_lr})"
+    );
+}
+
+#[test]
+fn wgpu_coastal_swash_animates_and_offshore_fetch_grows_smoothly() {
+    use strata_render::scene3d::{RetainedOceanSurface, RetainedOceanWaveTrain};
+
+    let Ok(mut renderer) = Wgpu3DRenderer::new_headless(wgpu::TextureFormat::Bgra8Unorm) else {
+        return;
+    };
+    let (w, h) = (128u32, 128u32);
+
+    // Coastal tile: X in [-180..+180] m where X < -90 is sloping sandy shore (+Y up to 2.2m),
+    // and X >= -90 is shallow-to-open sea (Y = 0).
+    let grid = 25u32;
+    let span = 360.0_f32;
+    let mut verts = Vec::with_capacity((grid * grid) as usize);
+    for row in 0..grid {
+        let v = row as f32 / (grid - 1) as f32;
+        let pz = (0.5 - v) * span;
+        for col in 0..grid {
+            let u = col as f32 / (grid - 1) as f32;
+            let px = (u - 0.5) * span;
+            let py = if px < -90.0 {
+                ((-90.0 - px) / 90.0) * 2.2
+            } else {
+                0.0
+            };
+            verts.push(RteTileVertex::new([px, py, pz], [0.0, 1.0, 0.0], [u, v]));
+        }
+    }
+    let mut tex_px = Vec::with_capacity(64 * 64 * 4);
+    for _y in 0..64 {
+        for x in 0..64 {
+            if x < 16 {
+                tex_px.extend_from_slice(&[178, 152, 118, 255]);
+            } else {
+                tex_px.extend_from_slice(&[24, 72, 126, 255]);
+            }
+        }
+    }
+    let coast_tex = Arc::new(RetainedTileTexture {
+        id: 891,
+        revision: 1,
+        width: 64,
+        height: 64,
+        rgba8: Arc::new(tex_px),
+    });
+
+    // SDF covering [-180..+180] m: shore at u = 0.25 (X = -90m), distance increasing East (+X).
+    let sdf_w = 32usize;
+    let mut sdf_rgba = Vec::with_capacity(sdf_w * sdf_w * 4);
+    let range_m = 270.0_f32;
+    for _y in 0..sdf_w {
+        for x in 0..sdf_w {
+            let px = ((x as f32 + 0.5) / sdf_w as f32 - 0.5) * span;
+            let d_m = (px + 90.0).max(0.0);
+            let w_mask = if px < -90.0 { 0u8 } else { 255u8 };
+            let g = ((d_m / range_m).clamp(0.0, 1.0) * 255.0).round() as u8;
+            sdf_rgba.extend_from_slice(&[w_mask, g, 0, 128]);
+        }
+    }
+    let sdf_tex = Arc::new(RetainedTileTexture {
+        id: 892,
+        revision: 1,
+        width: sdf_w as u32,
+        height: sdf_w as u32,
+        rgba8: Arc::new(sdf_rgba),
+    });
+
+    let key = TileKeyId::new(16, 0, 0, 0);
+    let mesh = Arc::new(RetainedTileMesh {
+        key,
+        revision: 1,
+        center_ecef: [0.0, 0.0, 0.0],
+        grid_res: grid,
+        has_skirts: false,
+        vertices: Arc::new(verts),
+        bounding_radius: 260.0,
+    });
+
+    let render_at_t = |renderer: &mut Wgpu3DRenderer, t: f32| {
+        let mut cam = camera_uniforms([-40.0, 48.0, 75.0], [-45.0, 0.0, 0.0], w, h);
+        cam.sun_dir = [0.45, 0.55, 0.70];
+        cam.sun_color = [1.0, 0.96, 0.90];
+        cam.day_night_strength = 1.0;
+        cam.local_25d_blend = 1.0;
+        cam.realistic_25d_sky = 1.0;
+        cam.terrain_25d_lighting = 1.0;
+        cam.time_s = t;
+
+        let ocean = Arc::new(RetainedOceanSurface {
+            enabled: true,
+            origin_ecef: [0.0, 0.0, 0.0],
+            basis_east: [1.0, 0.0, 0.0],
+            basis_north: [0.0, 0.0, -1.0],
+            basis_up: [0.0, 1.0, 0.0],
+            train_a: RetainedOceanWaveTrain {
+                dir_en: [-0.9, 0.43],
+                wind_speed_mps: 9.0,
+                phase_time_s: t,
+                weight: 1.0,
+            },
+            wave_strength: 1.0,
+            wave_scale: 1.0,
+            glint_intensity: 1.2,
+            opacity: 0.9,
+            alt_fade: 1.0,
+            coastal_shoaling: true,
+            shoaling_range_m: range_m,
+            sdf_half_span_m: span * 0.5,
+            sdf_center_en_m: [0.0, 0.0],
+            coastal_sdf: Some(Arc::clone(&sdf_tex)),
+            ..Default::default()
+        });
+        let frame = Arc::new(RetainedTerrainFrame {
+            camera: cam,
+            geometry_revision: 1,
+            meshes: vec![Arc::clone(&mesh)],
+            textures: vec![Arc::clone(&coast_tex)],
+            instances: vec![RetainedTileInstance {
+                key,
+                mesh_revision: 1,
+                center_ecef: [0.0, 0.0, 0.0],
+                texture_id: Some(891),
+                texture_revision: 1,
+                uv_rect: [0.0, 0.0, 1.0, 1.0],
+                tint: [1.0, 1.0, 1.0, 1.0],
+                unlit: false,
+                ..Default::default()
+            }],
+            ocean: Some(ocean),
+            ..Default::default()
+        });
+        let retained = RetainedScene3D::new(cam);
+        retained.update_terrain(frame);
+        let scene = Scene3D::new().with_retained_handle(retained);
+        renderer.render_offscreen(&scene, w, h, true, true).unwrap()
+    };
+
+    let px_t0 = render_at_t(&mut renderer, 0.0);
+    let px_t3 = render_at_t(&mut renderer, 3.2);
+    let px_t6 = render_at_t(&mut renderer, 6.4);
+    assert_ne!(
+        px_t0, px_t3,
+        "coastal swash & surf must visibly come and go between t=0s and t=3.2s"
+    );
+    assert_ne!(
+        px_t3, px_t6,
+        "coastal swash & surf must keep cycling naturally between t=3.2s and t=6.4s"
+    );
+}
+
+#[test]
+fn wgpu_2d_transition_has_no_pale_blue_flash_and_pole_seam_is_clean() {
+    let mut renderer = match Wgpu3DRenderer::new_headless(wgpu::TextureFormat::Bgra8UnormSrgb) {
+        Ok(r) => r,
+        Err(reason) => {
+            eprintln!("[skip wgpu_2d_transition test] {}", reason);
+            return;
+        }
+    };
+
+    let (w, h) = (160u32, 120u32);
+    let mut tex_px = vec![0u8; 4 * 4 * 4];
+    for p in tex_px.chunks_exact_mut(4) {
+        p.copy_from_slice(&[72, 92, 64, 255]);
+    }
+    let tile_tex = Arc::new(RetainedTileTexture {
+        id: 991,
+        revision: 1,
+        width: 4,
+        height: 4,
+        rgba8: Arc::new(tex_px),
+    });
+
+    // Build a North Pole cap patch centered at (0, 0, R) so center vertex has dv = (0, 0, 1).
+    let r_pole = 6_356_752.314_2f64;
+    let grid = 5u32;
+    let mut verts = Vec::with_capacity((grid * grid) as usize);
+    for row in 0..grid {
+        let fy = (row as f32 / (grid - 1) as f32) - 0.5;
+        for col in 0..grid {
+            let fx = (col as f32 / (grid - 1) as f32) - 0.5;
+            verts.push(RteTileVertex::new(
+                [fx * 900.0, fy * 900.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [col as f32 / (grid - 1) as f32, row as f32 / (grid - 1) as f32],
+            ));
+        }
+    }
+    let key = TileKeyId::quadtree(12, 0, 0);
+    let mesh = Arc::new(RetainedTileMesh {
+        key,
+        revision: 1,
+        center_ecef: [0.0, 0.0, r_pole],
+        grid_res: grid,
+        has_skirts: false,
+        vertices: Arc::new(verts),
+        bounding_radius: 750.0,
+    });
+
+    // Regime A: Orbital 3D -> 2D must NEVER flash classic pale-blue sky at any intermediate morph!
+    let orbital_cam = |morph: f32| {
+        let mut cam = camera_uniforms([0.0, -5_000_000.0, r_pole + 9_000_000.0], [0.0, 0.0, r_pole], w, h);
+        let k = (1.0 - morph).clamp(0.0, 1.0);
+        cam.background = Background3D::VerticalGradient {
+            top: Color::rgba((18.0 * k) as u8, (64.0 * k) as u8, (140.0 * k) as u8, 255),
+            bottom: Color::rgba((135.0 * k) as u8, (206.0 * k) as u8, (250.0 * k) as u8, 255),
+        };
+        cam.map_2d_morph = morph;
+        cam.local_25d_blend = 0.0;
+        cam.stars_visible = morph < 0.85;
+        cam.realistic_25d_sky = 1.0 - morph;
+        cam.terrain_25d_lighting = 1.0 - morph;
+        cam.day_night_strength = 1.0 - morph;
+        cam.sun_dir = [0.3, 0.4, 0.86];
+        cam.sun_color = [1.0, 0.96, 0.90];
+        cam
+    };
+    let init_cam = orbital_cam(0.0);
+    let frame = Arc::new(RetainedTerrainFrame {
+        camera: init_cam,
+        geometry_revision: 1,
+        meshes: vec![mesh],
+        textures: vec![tile_tex],
+        instances: vec![RetainedTileInstance {
+            key,
+            mesh_revision: 1,
+            center_ecef: [0.0, 0.0, r_pole],
+            texture_id: Some(991),
+            texture_revision: 1,
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
+            tint: [1.0, 1.0, 1.0, 1.0],
+            unlit: false,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let retained = RetainedScene3D::new(init_cam);
+    retained.update_terrain(frame);
+    let scene = Scene3D::new().with_retained_handle(retained.clone());
+
+    for morph in [0.06f32, 0.15, 0.40, 0.70, 0.95] {
+        retained.update_camera(orbital_cam(morph));
+        let bgra = renderer
+            .render_offscreen(&scene, w, h, true, true)
+            .expect("wgpu orbital intermediate 2D morph frame");
+        let corner = ((4 * w + 4) * 4) as usize;
+        let corner_b = bgra[corner];
+        let corner_r = bgra[corner + 2];
+        assert!(
+            corner_b <= 48 && corner_b.saturating_sub(corner_r) <= 24,
+            "unexpected pale-blue flash in orbital sky at map_2d_morph={morph}: BGRA={:?}",
+            &bgra[corner..corner + 4]
+        );
+    }
+
+    // Regime B: Local 2.5D -> 2D must monotonically fade daytime sky/haze down to dark without spiking bluer mid-morph.
+    let local_cam = |morph: f32| {
+        let mut cam = camera_uniforms([0.0, -800.0, r_pole + 1_200.0], [0.0, 0.0, r_pole], w, h);
+        let k = (1.0 - morph).clamp(0.0, 1.0);
+        cam.background = Background3D::VerticalGradient {
+            top: Color::rgba((18.0 * k) as u8, (64.0 * k) as u8, (140.0 * k) as u8, 255),
+            bottom: Color::rgba((135.0 * k) as u8, (206.0 * k) as u8, (250.0 * k) as u8, 255),
+        };
+        cam.map_2d_morph = morph;
+        cam.local_25d_blend = 1.0 - morph;
+        cam.stars_visible = morph < 0.85;
+        cam.realistic_25d_sky = 1.0 - morph;
+        cam.terrain_25d_lighting = 1.0 - morph;
+        cam.day_night_strength = 0.0;
+        cam.sun_dir = [0.3, 0.4, 0.86];
+        cam.sun_color = [1.0, 0.96, 0.90];
+        cam
+    };
+    let mut prev_sky_b = 255u8;
+    for morph in [0.0f32, 0.25, 0.50, 0.75, 0.95, 1.0] {
+        retained.update_camera(local_cam(morph));
+        let bgra = renderer
+            .render_offscreen(&scene, w, h, true, true)
+            .expect("wgpu local 2.5D intermediate 2D morph frame");
+        let corner = ((4 * w + 4) * 4) as usize;
+        let corner_b = bgra[corner];
+        assert!(
+            corner_b <= prev_sky_b.saturating_add(4),
+            "2.5D sky blue channel must decrease monotonically during 2D transition: prev={prev_sky_b}, cur={corner_b} at morph={morph}"
+        );
+        if (morph - 0.95).abs() < 1e-3 {
+            assert!(
+                corner_b <= 75,
+                "at morph=0.95 sRGB 5% background should already be dim, got corner_b={corner_b}"
+            );
+        }
+        prev_sky_b = corner_b;
+        let center = (((h / 2) * w + (w / 2)) * 4) as usize;
+        let c_b = bgra[center];
+        let c_g = bgra[center + 1];
+        assert!(
+            c_g >= c_b,
+            "North Pole center terrain must keep natural green tint without blue wash at morph={morph}: BGRA={:?}",
+            &bgra[center..center + 4]
+        );
+    }
+    assert_eq!(
+        prev_sky_b, 0,
+        "2D sky must reach exact black by morph=1.0, got corner_b={prev_sky_b}"
+    );
+}
+
 
 
 

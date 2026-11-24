@@ -11,9 +11,13 @@ documentation.workspace = true
 
 [dependencies]
 strata-dom = { workspace = true }
+strata-layout = { workspace = true }
+strata-macro = { workspace = true }
 strata-primitives = { workspace = true }
+strata-render = { workspace = true }
 strata-style = { workspace = true }
 strata-web-reader = { workspace = true }
+regex = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tree-sitter = "0.27.2"

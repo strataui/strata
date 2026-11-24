@@ -706,6 +706,13 @@ pub struct RetainedOceanSurface {
     pub sdf_center_en_m: [f32; 2],
     /// Optional `256x256` RGBA8 shoreline SDF texture (`R=water_mask, G=shore_dist_norm, BA=shore_dir_en`).
     pub coastal_sdf: Option<std::sync::Arc<RetainedTileTexture>>,
+    /// World-fixed conformal Mercator metres `[wx_m, wy_m]` at `origin_ecef` so wave phases &
+    /// procedural noise stay 100% deterministic across camera pan, zoom, and origin snapping.
+    pub world_origin_merc_m: [f64; 2],
+    /// Origin latitude in radians (`0.0` when unset / flat local test plane).
+    pub origin_lat_rad: f32,
+    /// East metric cosine scale in 2.5D tangent mode (`1.0` when unset / equatorial).
+    pub east_scale: f32,
 }
 
 impl Default for RetainedOceanSurface {
@@ -731,6 +738,9 @@ impl Default for RetainedOceanSurface {
             sdf_half_span_m: 1_500.0,
             sdf_center_en_m: [0.0, 0.0],
             coastal_sdf: None,
+            world_origin_merc_m: [0.0, 0.0],
+            origin_lat_rad: 0.0,
+            east_scale: 1.0,
         }
     }
 }
@@ -1701,6 +1711,12 @@ impl RetainedScene3D {
             .ok()
             .and_then(|g| g.fallback_scene.clone())
     }
+
+    /// Stable process-unique pointer identity of this retained scene handle.
+    #[inline]
+    pub fn identity_id(&self) -> usize {
+        std::sync::Arc::as_ptr(&self.inner) as usize
+    }
 }
 
 /// Top-Level 3D Scene representation embedded in a Strata Viewport.
@@ -1756,6 +1772,231 @@ impl Scene3D {
 
     pub fn retained_handle(&self) -> Option<&RetainedScene3D> {
         self.retained_handle.as_ref()
+    }
+
+    /// Computes a deterministic 64-bit fingerprint capturing scene generation, camera state,
+    /// terrain/mesh geometry revisions, background, lighting, and atmosphere settings so GPU
+    /// presenters can reuse a cached offscreen 3D color attachment whenever only the 2D UI changes.
+    pub fn cache_fingerprint(&self) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mix_u64 = |acc: &mut u64, v: u64| {
+            *acc ^= v;
+            *acc = acc.wrapping_mul(0x100_0000_01b3);
+        };
+        let mix_f32 = |acc: &mut u64, v: f32| mix_u64(acc, v.to_bits() as u64);
+        let mix_f64 = |acc: &mut u64, v: f64| mix_u64(acc, v.to_bits());
+        let mix_color = |acc: &mut u64, c: Color| {
+            mix_u64(acc, u32::from_le_bytes([c.r, c.g, c.b, c.a]) as u64);
+        };
+
+        if let Some(ref handle) = self.retained_handle {
+            mix_u64(&mut h, 0x5245_5441_494e_4544);
+            mix_u64(&mut h, handle.identity_id() as u64);
+            let (cam_gen, geom_gen, ov_gen) = handle.generations();
+            mix_u64(&mut h, cam_gen);
+            mix_u64(&mut h, geom_gen);
+            mix_u64(&mut h, ov_gen);
+            let cam = handle.camera();
+            for row in cam.view_proj_rte {
+                for v in row {
+                    mix_f32(&mut h, v);
+                }
+            }
+            for v in cam.eye_ecef {
+                mix_f64(&mut h, v);
+            }
+            for v in cam.sun_dir {
+                mix_f32(&mut h, v);
+            }
+            mix_f32(&mut h, cam.near);
+            mix_f32(&mut h, cam.far);
+            mix_f32(&mut h, cam.day_night_strength);
+            mix_f32(&mut h, cam.city_lights_intensity);
+            mix_f32(&mut h, cam.local_25d_blend);
+            mix_f32(&mut h, cam.cloud_layer_opacity);
+            mix_f32(&mut h, cam.local_cloud_opacity);
+            mix_f32(&mut h, cam.time_s);
+            mix_f32(&mut h, cam.realistic_25d_sky);
+            mix_u64(&mut h, cam.stars_visible as u64);
+            mix_u64(&mut h, cam.sun_visible as u64);
+            mix_u64(&mut h, cam.moon_visible as u64);
+            return h;
+        }
+
+        mix_u64(&mut h, 0x4445_434c_4152_4154);
+        match self.camera {
+            Camera3D::Perspective {
+                fov_horizontal_deg,
+                near,
+                far,
+                position,
+                target,
+            } => {
+                mix_u64(&mut h, 1);
+                mix_f32(&mut h, fov_horizontal_deg);
+                mix_f32(&mut h, near);
+                mix_f32(&mut h, far);
+                for v in position {
+                    mix_f32(&mut h, v);
+                }
+                for v in target {
+                    mix_f32(&mut h, v);
+                }
+            }
+            Camera3D::Orthographic {
+                left,
+                right,
+                top,
+                bottom,
+                near,
+                far,
+                position,
+                target,
+            } => {
+                mix_u64(&mut h, 2);
+                for v in [left, right, top, bottom, near, far] {
+                    mix_f32(&mut h, v);
+                }
+                for v in position {
+                    mix_f32(&mut h, v);
+                }
+                for v in target {
+                    mix_f32(&mut h, v);
+                }
+            }
+        }
+        if let Some(up) = self.camera_up {
+            for v in up {
+                mix_f64(&mut h, v);
+            }
+        }
+        match self.background {
+            Background3D::Transparent => mix_u64(&mut h, 1),
+            Background3D::Solid(c) => {
+                mix_u64(&mut h, 2);
+                mix_color(&mut h, c);
+            }
+            Background3D::VerticalGradient { top, bottom } => {
+                mix_u64(&mut h, 3);
+                mix_color(&mut h, top);
+                mix_color(&mut h, bottom);
+            }
+        }
+        if let Some(ref terrain) = self.retained_terrain {
+            mix_u64(&mut h, std::sync::Arc::as_ptr(terrain) as usize as u64);
+            mix_u64(&mut h, terrain.geometry_revision);
+            mix_u64(&mut h, terrain.geo_revision);
+            mix_u64(&mut h, terrain.instances.len() as u64);
+            mix_f32(&mut h, terrain.camera.time_s);
+        }
+        if let Some(ref tex) = self.textures {
+            mix_u64(&mut h, std::sync::Arc::as_ptr(tex) as usize as u64);
+        }
+        mix_u64(&mut h, self.lights.len() as u64);
+        for l in &self.lights {
+            match *l {
+                Light3D::Ambient { color, intensity } => {
+                    mix_u64(&mut h, 1);
+                    mix_color(&mut h, color);
+                    mix_f32(&mut h, intensity);
+                }
+                Light3D::Directional {
+                    position,
+                    color,
+                    intensity,
+                    cast_shadow,
+                } => {
+                    mix_u64(&mut h, 2);
+                    for v in position {
+                        mix_f32(&mut h, v);
+                    }
+                    mix_color(&mut h, color);
+                    mix_f32(&mut h, intensity);
+                    mix_u64(&mut h, cast_shadow as u64);
+                }
+                Light3D::Point {
+                    position,
+                    color,
+                    intensity,
+                    distance,
+                } => {
+                    mix_u64(&mut h, 3);
+                    for v in position {
+                        mix_f32(&mut h, v);
+                    }
+                    mix_color(&mut h, color);
+                    mix_f32(&mut h, intensity);
+                    mix_f32(&mut h, distance);
+                }
+            }
+        }
+        mix_u64(&mut h, self.meshes.len() as u64);
+        for m in &self.meshes {
+            for v in m.transform.position {
+                mix_f32(&mut h, v);
+            }
+            for v in m.transform.rotation {
+                mix_f32(&mut h, v);
+            }
+            for v in m.transform.scale {
+                mix_f32(&mut h, v);
+            }
+            match &m.geometry {
+                Geometry3D::Box {
+                    width,
+                    height,
+                    depth,
+                } => {
+                    mix_u64(&mut h, 1);
+                    mix_f32(&mut h, *width);
+                    mix_f32(&mut h, *height);
+                    mix_f32(&mut h, *depth);
+                }
+                Geometry3D::Sphere {
+                    radius,
+                    width_segments,
+                    height_segments,
+                } => {
+                    mix_u64(&mut h, 2);
+                    mix_f32(&mut h, *radius);
+                    mix_u64(&mut h, *width_segments as u64);
+                    mix_u64(&mut h, *height_segments as u64);
+                }
+                Geometry3D::Plane { width, height } => {
+                    mix_u64(&mut h, 3);
+                    mix_f32(&mut h, *width);
+                    mix_f32(&mut h, *height);
+                }
+                Geometry3D::Cylinder {
+                    radius_top,
+                    radius_bottom,
+                    height,
+                    radial_segments,
+                } => {
+                    mix_u64(&mut h, 4);
+                    mix_f32(&mut h, *radius_top);
+                    mix_f32(&mut h, *radius_bottom);
+                    mix_f32(&mut h, *height);
+                    mix_u64(&mut h, *radial_segments as u64);
+                }
+                Geometry3D::Custom { vertices, indices }
+                | Geometry3D::CustomTextured { vertices, indices } => {
+                    mix_u64(&mut h, 5);
+                    mix_u64(&mut h, vertices.len() as u64);
+                    mix_u64(&mut h, indices.len() as u64);
+                    for &v in vertices.iter().take(6) {
+                        mix_f32(&mut h, v);
+                    }
+                    if let Some(&v) = vertices.last() {
+                        mix_f32(&mut h, v);
+                    }
+                }
+            }
+        }
+        mix_u64(&mut h, self.celestial.len() as u64);
+        mix_u64(&mut h, self.cloud_shells.len() as u64);
+        mix_u64(&mut h, self.overlay.is_some() as u64);
+        h
     }
 
     pub fn add_mesh(&mut self, mesh: Mesh3D) {

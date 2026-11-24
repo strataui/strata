@@ -1463,17 +1463,46 @@ impl FrameBuffer {
                 }
                 DrawCommand::DrawText {
                     origin,
+                    bounds_width,
+                    bounds_height,
+                    text_align,
                     text,
                     font_size,
+                    line_height,
                     color,
                     ..
                 } => {
-                    let (ox, oy) = if let Some(m) = active_matrix {
-                        m.transform_point(origin.0, origin.1)
-                    } else {
-                        *origin
-                    };
-                    target.draw_text((ox, oy), text, *font_size, *color, Some(effective_clip));
+                    let scale = (*font_size / 16.0).max(0.65);
+                    let char_w = 8.0 * scale;
+                    let step_y = crate::compositor::effective_draw_text_line_height(
+                        *font_size,
+                        *line_height,
+                    );
+                    let (lines, start_y_off) = crate::compositor::layout_draw_text_lines(
+                        text,
+                        *bounds_width,
+                        *bounds_height,
+                        *font_size,
+                        *line_height,
+                        *text_align,
+                        |_| char_w,
+                    );
+                    for (line_idx, (line_ox, line_str)) in lines.into_iter().enumerate() {
+                        let lx = origin.0 + line_ox;
+                        let ly = origin.1 + start_y_off + line_idx as f32 * step_y;
+                        let (ox, oy) = if let Some(m) = active_matrix {
+                            m.transform_point(lx, ly)
+                        } else {
+                            (lx, ly)
+                        };
+                        target.draw_text(
+                            (ox, oy),
+                            line_str,
+                            *font_size,
+                            *color,
+                            Some(effective_clip),
+                        );
+                    }
                 }
                 DrawCommand::DrawViewport3D { bounds, scene } => {
                     crate::rasterizer3d::render_scene_3d_with_textures(

@@ -113,9 +113,10 @@ pub use mcp_bridge::{default_dev_socket_path, start_mcp_dev_listener};
 pub use runtime::{
     app, launch, launch_auto, launch_headless, launch_headless_pump, launch_window,
     launch_with_config, launch_with_events, launch_with_frame, queue_edit_command, AppFrameInfo,
-    AppLifecycleHooks, AppRuntime, DynamicTextBinding, EditCommand, FrameOutcome,
-    KeyDispatchResult, MatchMode, NodeQuery, PointerDownAction, PointerMoveAction, PointerUpAction,
-    StrataApp, StrataAppBuilder,
+    AppLifecycleHooks, AppRuntime, DynamicTextBinding, EditCommand, FrameOutcome, FrameProfile,
+    FrameProfileRecord, KeyDispatchResult, MatchMode, NodeQuery, PerfPercentileStats,
+    PerfProfileSummary, PointerDownAction, PointerMoveAction, PointerUpAction, ProfilingAllocator,
+    RebuildReason, ReconcileStats, StrataApp, StrataAppBuilder,
 };
 #[cfg(target_os = "linux")]
 pub use runtime::{

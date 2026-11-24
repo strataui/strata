@@ -22,7 +22,7 @@ impl AppRuntime {
         None
     }
 
-    fn input_blueprint_matches_target(
+    pub(crate) fn input_blueprint_matches_target(
         attributes: &[strata_dom::Attribute],
         this_idx: usize,
         target_index: usize,
@@ -70,6 +70,7 @@ impl AppRuntime {
                 ..
             } => {
                 let is_input = matches!(tag, Tag::Input | Tag::Textarea);
+                let is_multiline = matches!(tag, Tag::Textarea);
                 if is_input {
                     let this_idx = *counter;
                     *counter += 1;
@@ -113,6 +114,13 @@ impl AppRuntime {
                         }
                     }
 
+                    if is_multiline && current_value.is_empty() {
+                        let child_text = Self::extract_text_content(blueprint);
+                        if !child_text.is_empty() {
+                            current_value = child_text;
+                        }
+                    }
+
                     let is_mono = strata_layout::is_monospace_family(layout.style.font_family);
                     out.push((
                         InputHitTarget {
@@ -123,6 +131,7 @@ impl AppRuntime {
                             } else {
                                 None
                             },
+                            is_multiline,
                             current_value,
                             font_size: layout.style.font_size,
                             line_height: layout.style.line_height,
@@ -131,6 +140,7 @@ impl AppRuntime {
                             content_box_x: layout.geometry.content_box.x,
                             content_box_y: layout.geometry.content_box.y,
                             content_box_width: layout.geometry.content_box.width,
+                            content_box_height: layout.geometry.content_box.height,
                             on_input,
                             on_change,
                             on_submit,

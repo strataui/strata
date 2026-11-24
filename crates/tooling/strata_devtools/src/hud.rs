@@ -8,7 +8,39 @@ use strata_primitives::AtomId;
 use strata_render::compositor::{DisplayList, DrawCommand};
 use strata_style::types::{BorderRadius, BorderStyle, Color, FontWeight, TextAlign};
 
+use crate::memory::ArenaInspector;
 use crate::profiler::FrameTimelineProfiler;
+use crate::time_travel::TimeTravelDebugger;
+
+/// Live runtime diagnostics snapshot rendered by DevTools HUD tabs (Reactivity, Memory, Time-Travel).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct HudLiveTelemetry {
+    pub reactive_active_signals: usize,
+    pub reactive_active_subscribers: usize,
+    pub reactive_total_reads: u64,
+    pub reactive_total_writes: u64,
+    pub reactive_total_flushes: u64,
+    pub reactive_cycle_guard_trips: u64,
+    pub last_rebuild_reason: String,
+    pub dirty_signal_names: Vec<String>,
+    /// Top active signals: `(name, write_count, read_count, subscriber_count)`.
+    pub top_signals: Vec<(String, u64, u64, usize)>,
+    pub dom_node_count: usize,
+    pub layout_node_count: usize,
+    pub display_cmd_count: usize,
+    pub arena_allocated_bytes: usize,
+    pub arena_capacity_bytes: usize,
+    pub heap_alloc_bytes: u64,
+    pub heap_alloc_count: u64,
+    pub gpu_memory_bytes: u64,
+    pub tiles_dirty: u32,
+    pub tiles_total: u32,
+    pub tile_cache_hit_pct: f32,
+    pub scene3d_cache_hit_pct: f32,
+    pub glyph_cache_hit_pct: f32,
+    pub reconciled_updates: u64,
+    pub full_rebuilds: u64,
+}
 
 /// Docking orientation and layout mode of the DevTools overlay HUD.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -174,6 +206,18 @@ impl HudController {
         profiler: Option<&FrameTimelineProfiler>,
         display_list: &mut DisplayList,
     ) {
+        self.render_overlay_with_context(profiler, None, None, None, display_list);
+    }
+
+    /// Renders the HUD overlay backed by live profiler, reactivity, memory, arena, and time-travel state.
+    pub fn render_overlay_with_context(
+        &self,
+        profiler: Option<&FrameTimelineProfiler>,
+        live: Option<&HudLiveTelemetry>,
+        arena_inspector: Option<&ArenaInspector>,
+        time_travel: Option<&TimeTravelDebugger>,
+        display_list: &mut DisplayList,
+    ) {
         if !self.state.is_visible {
             return;
         }
@@ -318,13 +362,13 @@ impl HudController {
                 self.render_components_tab(content_y, display_list);
             }
             HudTab::Reactivity => {
-                self.render_reactivity_tab(content_y, display_list);
+                self.render_reactivity_tab(live, content_y, display_list);
             }
             HudTab::Memory => {
-                self.render_memory_tab(content_y, display_list);
+                self.render_memory_tab(live, arena_inspector, content_y, display_list);
             }
             HudTab::TimeTravel => {
-                self.render_time_travel_tab(content_y, display_list);
+                self.render_time_travel_tab(time_travel, content_y, display_list);
             }
             HudTab::Settings => {
                 self.render_settings_tab(content_y, display_list);
@@ -342,6 +386,19 @@ impl HudController {
         list.commands
     }
 
+    /// Returns generated overlay draw commands with full live telemetry context.
+    pub fn render_overlay_commands_with_context(
+        &self,
+        profiler: Option<&FrameTimelineProfiler>,
+        live: Option<&HudLiveTelemetry>,
+        arena_inspector: Option<&ArenaInspector>,
+        time_travel: Option<&TimeTravelDebugger>,
+    ) -> Vec<DrawCommand> {
+        let mut list = DisplayList::new();
+        self.render_overlay_with_context(profiler, live, arena_inspector, time_travel, &mut list);
+        list.commands
+    }
+
     fn render_performance_tab(
         &self,
         profiler: Option<&FrameTimelineProfiler>,
@@ -351,22 +408,38 @@ impl HudController {
         let x = self.state.x + 16.0;
         let w = self.state.width - 32.0;
 
-        let (avg_cpu, p99_cpu, jank_count, total_samples, latest_sample) = if let Some(p) = profiler
-        {
-            (
-                p.average_cpu_time_us(),
-                p.p99_cpu_time_us(),
-                p.jank_frame_count(),
-                p.sample_count(),
-                p.samples().last().copied(),
-            )
-        } else {
-            (0.0, 0, 0, 0, None)
-        };
+        let (avg_cpu, p50_cpu, p95_cpu, p99_cpu, jank_count, total_samples, budget_us, latest_sample) =
+            if let Some(p) = profiler {
+                (
+                    p.average_cpu_time_us(),
+                    p.p50_cpu_time_us(),
+                    p.p95_cpu_time_us(),
+                    p.p99_cpu_time_us(),
+                    p.jank_frame_count(),
+                    p.sample_count(),
+                    p.frame_budget_us(),
+                    p.samples().last().copied(),
+                )
+            } else {
+                (0.0, 0, 0, 0, 0, 0, 16666, None)
+            };
 
+        let budget_ms = budget_us as f32 / 1000.0;
+        let gpu_tag = latest_sample
+            .map(|s| {
+                if s.gpu_timestamps_valid {
+                    format!(
+                        "GPU HW(3D:{}us 2D:{}us)",
+                        s.gpu_3d_pass_us, s.gpu_2d_overlay_pass_us
+                    )
+                } else {
+                    format!("GPU:{}us", s.gpu_raster_duration_us)
+                }
+            })
+            .unwrap_or_else(|| "GPU:0us".to_string());
         let summary = format!(
-            "Avg CPU: {:.1}us  |  P99: {}us  |  Jank: {}/{}  |  Budget: 16.6ms (60 FPS)",
-            avg_cpu, p99_cpu, jank_count, total_samples
+            "Avg CPU: {:.1}us  |  P50/P95/P99: {}/{}/{}us  |  Jank: {}/{}  |  {}  |  Budget: {:.1}ms",
+            avg_cpu, p50_cpu, p95_cpu, p99_cpu, jank_count, total_samples, gpu_tag, budget_ms
         );
 
         display_list.push(DrawCommand::DrawText {
@@ -383,7 +456,7 @@ impl HudController {
             font_family: AtomId(0),
         });
 
-        // 9-Stage Frame Timeline Flamegraph Bar
+        // Multi-stage Frame Timeline Flamegraph Bar
         let flamegraph_y = content_y + 24.0;
         let flamegraph_h = 24.0;
 
@@ -399,9 +472,9 @@ impl HudController {
 
         let stages = if let Some(ref s) = latest_sample {
             [
-                ("VSync Wait", s.vsync_wait_us, Color::rgb(100, 116, 139)),
                 ("Input", s.input_dispatch_us, Color::rgb(234, 179, 8)),
                 ("Signals", s.signal_drain_us, Color::rgb(168, 85, 247)),
+                ("View", s.view_render_us, Color::rgb(139, 92, 246)),
                 (
                     "Reconcile",
                     s.parallel_reconcile_us,
@@ -414,24 +487,34 @@ impl HudController {
                     s.display_list_build_us,
                     Color::rgb(249, 115, 22),
                 ),
+                ("2D Raster", s.raster_2d_us, Color::rgb(236, 72, 153)),
                 ("GPU Submit", s.gpu_submit_us, Color::rgb(239, 68, 68)),
                 (
                     "GPU Raster",
-                    s.gpu_raster_duration_us,
+                    if s.gpu_timestamps_valid {
+                        s.gpu_shadow_pass_us + s.gpu_3d_pass_us + s.gpu_2d_overlay_pass_us
+                    } else {
+                        s.gpu_raster_duration_us
+                    },
                     Color::rgb(245, 158, 11),
                 ),
+                ("Present", s.present_us, Color::rgb(100, 116, 139)),
+                ("VSync Wait", s.vsync_wait_us, Color::rgb(71, 85, 105)),
             ]
         } else {
             [
-                ("VSync Wait", 0, Color::rgb(100, 116, 139)),
                 ("Input", 0, Color::rgb(234, 179, 8)),
                 ("Signals", 0, Color::rgb(168, 85, 247)),
+                ("View", 0, Color::rgb(139, 92, 246)),
                 ("Reconcile", 0, Color::rgb(59, 130, 246)),
                 ("Style", 0, Color::rgb(6, 182, 212)),
                 ("Layout", 0, Color::rgb(16, 185, 129)),
                 ("DisplayList", 0, Color::rgb(249, 115, 22)),
+                ("2D Raster", 0, Color::rgb(236, 72, 153)),
                 ("GPU Submit", 0, Color::rgb(239, 68, 68)),
                 ("GPU Raster", 0, Color::rgb(245, 158, 11)),
+                ("Present", 0, Color::rgb(100, 116, 139)),
+                ("VSync Wait", 0, Color::rgb(71, 85, 105)),
             ]
         };
 
@@ -466,7 +549,7 @@ impl HudController {
             let col = i % 3;
             let row = i / 3;
             let item_x = x + col as f32 * col_w;
-            let item_y = legend_y + row as f32 * 20.0;
+            let item_y = legend_y + row as f32 * 18.0;
 
             // Color swatch dot
             display_list.push(DrawCommand::DrawRect {
@@ -541,16 +624,33 @@ impl HudController {
         });
     }
 
-    fn render_reactivity_tab(&self, content_y: f32, display_list: &mut DisplayList) {
+    fn render_reactivity_tab(
+        &self,
+        live: Option<&HudLiveTelemetry>,
+        content_y: f32,
+        display_list: &mut DisplayList,
+    ) {
         let x = self.state.x + 16.0;
         let w = self.state.width - 32.0;
 
+        let default_live = HudLiveTelemetry::default();
+        let data = live.unwrap_or(&default_live);
+
+        let header = format!(
+            "Signals: {}  |  Subscribers: {}  |  Reads: {}  |  Writes: {}  |  Flushes: {}  |  Cycle Trips: {}",
+            data.reactive_active_signals,
+            data.reactive_active_subscribers,
+            data.reactive_total_reads,
+            data.reactive_total_writes,
+            data.reactive_total_flushes,
+            data.reactive_cycle_guard_trips,
+        );
         display_list.push(DrawCommand::DrawText {
             origin: (x, content_y),
             bounds_width: Some(w),
             bounds_height: Some(18.0),
             text_align: TextAlign::Left,
-            text: "Reactive Dependency Graph Inspector".to_string(),
+            text: header,
             font_size: 12.0,
             line_height: 16.0,
             font_weight: FontWeight::Bold,
@@ -559,12 +659,145 @@ impl HudController {
             font_family: AtomId(0),
         });
 
+        let dirty_desc = if data.dirty_signal_names.is_empty() {
+            "none".to_string()
+        } else {
+            data.dirty_signal_names
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let reason_line = format!(
+            "Last Rebuild: {}  |  Reconciled/Full: {}/{}  |  Dirty Signals: {}",
+            if data.last_rebuild_reason.is_empty() {
+                "Clean"
+            } else {
+                &data.last_rebuild_reason
+            },
+            data.reconciled_updates,
+            data.full_rebuilds,
+            dirty_desc
+        );
         display_list.push(DrawCommand::DrawText {
-            origin: (x, content_y + 24.0),
+            origin: (x, content_y + 22.0),
             bounds_width: Some(w),
             bounds_height: Some(18.0),
             text_align: TextAlign::Left,
-            text: "Cycle Guard: ENABLED  |  Re-render Heatmap: ACTIVE".to_string(),
+            text: reason_line,
+            font_size: 11.0,
+            line_height: 14.0,
+            font_weight: FontWeight::Normal,
+            color: Color::rgb(96, 165, 250),
+            is_monospace: true,
+            font_family: AtomId(0),
+        });
+
+        let mut row_y = content_y + 44.0;
+        if data.top_signals.is_empty() {
+            display_list.push(DrawCommand::DrawText {
+                origin: (x, row_y),
+                bounds_width: Some(w),
+                bounds_height: Some(16.0),
+                text_align: TextAlign::Left,
+                text: "No signal reads or writes recorded yet.".to_string(),
+                font_size: 11.0,
+                line_height: 14.0,
+                font_weight: FontWeight::Normal,
+                color: Color::rgb(156, 163, 175),
+                is_monospace: true,
+                font_family: AtomId(0),
+            });
+        } else {
+            for (name, writes, reads, subs) in data.top_signals.iter().take(6) {
+                let color = if *writes >= 60 {
+                    Color::rgb(239, 68, 68)
+                } else if *writes >= 10 {
+                    Color::rgb(245, 158, 11)
+                } else {
+                    Color::rgb(16, 185, 129)
+                };
+                display_list.push(DrawCommand::DrawText {
+                    origin: (x, row_y),
+                    bounds_width: Some(w),
+                    bounds_height: Some(16.0),
+                    text_align: TextAlign::Left,
+                    text: format!(
+                        "{:<24}  writes={:<6}  reads={:<7}  subs={}",
+                        name, writes, reads, subs
+                    ),
+                    font_size: 11.0,
+                    line_height: 14.0,
+                    font_weight: FontWeight::Normal,
+                    color,
+                    is_monospace: true,
+                    font_family: AtomId(0),
+                });
+                row_y += 17.0;
+            }
+        }
+    }
+
+    fn render_memory_tab(
+        &self,
+        live: Option<&HudLiveTelemetry>,
+        arena_inspector: Option<&ArenaInspector>,
+        content_y: f32,
+        display_list: &mut DisplayList,
+    ) {
+        let x = self.state.x + 16.0;
+        let w = self.state.width - 32.0;
+
+        let default_live = HudLiveTelemetry::default();
+        let data = live.unwrap_or(&default_live);
+
+        let (arena_alloc, arena_cap) = arena_inspector
+            .and_then(|ai| ai.samples().last())
+            .map(|s| (s.allocated_bytes, s.capacity_bytes))
+            .unwrap_or((data.arena_allocated_bytes, data.arena_capacity_bytes));
+        let arena_pct = if arena_cap > 0 {
+            (arena_alloc as f32 / arena_cap as f32) * 100.0
+        } else {
+            0.0
+        };
+
+        let counts_line = format!(
+            "DOM Nodes: {}  |  Layout Nodes: {}  |  Display Cmds: {}  |  Tiles Dirty/Total: {}/{}",
+            data.dom_node_count,
+            data.layout_node_count,
+            data.display_cmd_count,
+            data.tiles_dirty,
+            data.tiles_total
+        );
+        display_list.push(DrawCommand::DrawText {
+            origin: (x, content_y),
+            bounds_width: Some(w),
+            bounds_height: Some(18.0),
+            text_align: TextAlign::Left,
+            text: counts_line,
+            font_size: 12.0,
+            line_height: 16.0,
+            font_weight: FontWeight::Bold,
+            color: Color::rgb(229, 231, 235),
+            is_monospace: true,
+            font_family: AtomId(0),
+        });
+
+        let gpu_mb = data.gpu_memory_bytes as f64 / (1024.0 * 1024.0);
+        let heap_kb = data.heap_alloc_bytes as f64 / 1024.0;
+        let arena_kb = arena_alloc as f64 / 1024.0;
+        let arena_cap_kb = arena_cap as f64 / 1024.0;
+        let mem_line = format!(
+            "Arena: {:.1}/{:.1} KiB ({:.1}%)  |  GPU VRAM: {:.2} MiB  |  Frame Heap: {:.1} KiB ({} allocs)",
+            arena_kb, arena_cap_kb, arena_pct, gpu_mb, heap_kb, data.heap_alloc_count
+        );
+        display_list.push(DrawCommand::DrawText {
+            origin: (x, content_y + 22.0),
+            bounds_width: Some(w),
+            bounds_height: Some(18.0),
+            text_align: TextAlign::Left,
+            text: mem_line,
             font_size: 11.0,
             line_height: 14.0,
             font_weight: FontWeight::Normal,
@@ -572,18 +805,99 @@ impl HudController {
             is_monospace: true,
             font_family: AtomId(0),
         });
+
+        // Visual Arena / Cache Utilization Bar
+        let bar_y = content_y + 44.0;
+        let bar_h = 12.0;
+        display_list.push(DrawCommand::DrawRect {
+            bounds: Rect {
+                x,
+                y: bar_y,
+                width: w,
+                height: bar_h,
+            },
+            color: Color::rgb(15, 18, 24),
+        });
+        let fill_w = (w * (arena_pct / 100.0).clamp(0.0, 1.0)).max(0.0);
+        if fill_w > 0.0 {
+            let bar_color = if arena_pct >= 85.0 {
+                Color::rgb(239, 68, 68)
+            } else if arena_pct >= 60.0 {
+                Color::rgb(245, 158, 11)
+            } else {
+                Color::rgb(16, 185, 129)
+            };
+            display_list.push(DrawCommand::DrawRect {
+                bounds: Rect {
+                    x,
+                    y: bar_y,
+                    width: fill_w,
+                    height: bar_h,
+                },
+                color: bar_color,
+            });
+        }
+
+        let cache_line = format!(
+            "Cache Hit Rates — Tile Cache: {:.1}%  |  Scene3D Cache: {:.1}%  |  Glyph/Text Cache: {:.1}%",
+            data.tile_cache_hit_pct, data.scene3d_cache_hit_pct, data.glyph_cache_hit_pct
+        );
+        display_list.push(DrawCommand::DrawText {
+            origin: (x, bar_y + 20.0),
+            bounds_width: Some(w),
+            bounds_height: Some(18.0),
+            text_align: TextAlign::Left,
+            text: cache_line,
+            font_size: 11.0,
+            line_height: 14.0,
+            font_weight: FontWeight::Normal,
+            color: Color::rgb(209, 213, 219),
+            is_monospace: true,
+            font_family: AtomId(0),
+        });
     }
 
-    fn render_memory_tab(&self, content_y: f32, display_list: &mut DisplayList) {
+    fn render_time_travel_tab(
+        &self,
+        time_travel: Option<&TimeTravelDebugger>,
+        content_y: f32,
+        display_list: &mut DisplayList,
+    ) {
         let x = self.state.x + 16.0;
         let w = self.state.width - 32.0;
 
+        let Some(tt) = time_travel else {
+            display_list.push(DrawCommand::DrawText {
+                origin: (x, content_y),
+                bounds_width: Some(w),
+                bounds_height: Some(18.0),
+                text_align: TextAlign::Left,
+                text: "Time-Travel Ring Buffer: 0 snapshots captured".to_string(),
+                font_size: 12.0,
+                line_height: 16.0,
+                font_weight: FontWeight::Bold,
+                color: Color::rgb(229, 231, 235),
+                is_monospace: true,
+                font_family: AtomId(0),
+            });
+            return;
+        };
+
+        let total = tt.len();
+        let cur_idx = if total == 0 { 0 } else { tt.current_index() + 1 };
+        let header = format!(
+            "Time-Travel Snapshots: {}/{}  |  Back: {}  |  Forward: {}",
+            cur_idx,
+            total,
+            if tt.can_step_back() { "available" } else { "start" },
+            if tt.can_step_forward() { "available" } else { "head" },
+        );
         display_list.push(DrawCommand::DrawText {
             origin: (x, content_y),
             bounds_width: Some(w),
             bounds_height: Some(18.0),
             text_align: TextAlign::Left,
-            text: "Memory & Arena Diagnostics".to_string(),
+            text: header,
             font_size: 12.0,
             line_height: 16.0,
             font_weight: FontWeight::Bold,
@@ -592,52 +906,86 @@ impl HudController {
             font_family: AtomId(0),
         });
 
-        display_list.push(DrawCommand::DrawText {
-            origin: (x, content_y + 24.0),
-            bounds_width: Some(w),
-            bounds_height: Some(18.0),
-            text_align: TextAlign::Left,
-            text: "Bump Allocator Utilization: Optimal  |  Leak Detector: Monitoring".to_string(),
-            font_size: 11.0,
-            line_height: 14.0,
-            font_weight: FontWeight::Normal,
-            color: Color::rgb(156, 163, 175),
-            is_monospace: false,
-            font_family: AtomId(0),
-        });
-    }
+        let mut row_y = content_y + 22.0;
+        if let Some(cur) = tt.current_snapshot() {
+            let delta_count = if tt.current_index() > 0 {
+                let prev = &tt.snapshots()[tt.current_index() - 1];
+                tt.compute_delta(prev.id, cur.id)
+                    .map(|d| d.len())
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            let active_line = format!(
+                "Active #{} @ {}us  |  {}  |  signals={}  deltas={}  ir={:#x}",
+                cur.id,
+                cur.timestamp_us,
+                cur.label,
+                cur.signal_values.len(),
+                delta_count,
+                cur.ir_hash
+            );
+            display_list.push(DrawCommand::DrawText {
+                origin: (x, row_y),
+                bounds_width: Some(w),
+                bounds_height: Some(16.0),
+                text_align: TextAlign::Left,
+                text: active_line,
+                font_size: 11.0,
+                line_height: 14.0,
+                font_weight: FontWeight::Bold,
+                color: Color::rgb(96, 165, 250),
+                is_monospace: true,
+                font_family: AtomId(0),
+            });
+            row_y += 20.0;
 
-    fn render_time_travel_tab(&self, content_y: f32, display_list: &mut DisplayList) {
-        let x = self.state.x + 16.0;
-        let w = self.state.width - 32.0;
-
-        display_list.push(DrawCommand::DrawText {
-            origin: (x, content_y),
-            bounds_width: Some(w),
-            bounds_height: Some(18.0),
-            text_align: TextAlign::Left,
-            text: "Time-Travel State Replayer".to_string(),
-            font_size: 12.0,
-            line_height: 16.0,
-            font_weight: FontWeight::Bold,
-            color: Color::rgb(229, 231, 235),
-            is_monospace: true,
-            font_family: AtomId(0),
-        });
-
-        display_list.push(DrawCommand::DrawText {
-            origin: (x, content_y + 24.0),
-            bounds_width: Some(w),
-            bounds_height: Some(18.0),
-            text_align: TextAlign::Left,
-            text: "Step Forward [->]  |  Step Backward [<-]  |  Fast Forward [>>]".to_string(),
-            font_size: 11.0,
-            line_height: 14.0,
-            font_weight: FontWeight::Normal,
-            color: Color::rgb(156, 163, 175),
-            is_monospace: true,
-            font_family: AtomId(0),
-        });
+            let snaps = tt.snapshots();
+            let start = snaps.len().saturating_sub(5);
+            for (offset, snap) in snaps[start..].iter().enumerate() {
+                let abs_idx = start + offset;
+                let marker = if abs_idx == tt.current_index() {
+                    ">"
+                } else {
+                    " "
+                };
+                display_list.push(DrawCommand::DrawText {
+                    origin: (x, row_y),
+                    bounds_width: Some(w),
+                    bounds_height: Some(15.0),
+                    text_align: TextAlign::Left,
+                    text: format!(
+                        "{} #{:<4} {:>9}us  {:<32}  ir={:#010x}",
+                        marker, snap.id, snap.timestamp_us, snap.label, snap.ir_hash as u32
+                    ),
+                    font_size: 10.5,
+                    line_height: 14.0,
+                    font_weight: FontWeight::Normal,
+                    color: if abs_idx == tt.current_index() {
+                        Color::rgb(255, 255, 255)
+                    } else {
+                        Color::rgb(156, 163, 175)
+                    },
+                    is_monospace: true,
+                    font_family: AtomId(0),
+                });
+                row_y += 16.0;
+            }
+        } else {
+            display_list.push(DrawCommand::DrawText {
+                origin: (x, row_y),
+                bounds_width: Some(w),
+                bounds_height: Some(16.0),
+                text_align: TextAlign::Left,
+                text: "No frame snapshots recorded yet.".to_string(),
+                font_size: 11.0,
+                line_height: 14.0,
+                font_weight: FontWeight::Normal,
+                color: Color::rgb(156, 163, 175),
+                is_monospace: true,
+                font_family: AtomId(0),
+            });
+        }
     }
 
     fn render_settings_tab(&self, content_y: f32, display_list: &mut DisplayList) {

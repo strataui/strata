@@ -41,7 +41,11 @@ pub use edit::*;
 pub(crate) use image::*;
 pub use launch::*;
 pub use platforms::*;
-pub use profile::{FrameProfile, FrameProfileHook};
+pub use profile::{
+    take_frame_heap_alloc_delta, total_heap_alloc_stats, FrameProfile, FrameProfileHistory,
+    FrameProfileHook, FrameProfileRecord, PerfPercentileStats, PerfProfileSummary,
+    ProfilingAllocator,
+};
 pub use spatial::*;
 pub use test_support::{MatchMode, NodeQuery};
 pub use types::*;
@@ -121,6 +125,9 @@ pub struct AppRuntime {
     pub base_node_styles: std::collections::HashMap<u64, ComputedStyle>,
     /// Previous frame's computed styles for transition diffing.
     pub previous_node_styles: std::collections::HashMap<u64, ComputedStyle>,
+    /// Previous frame's solved border-box `(width, height)` keyed by animation node ID
+    /// so `Auto <-> 0px` transitions can interpolate smoothly between concrete pixel sizes.
+    pub previous_node_sizes: std::collections::HashMap<u64, (f32, f32)>,
     /// Mapping from deterministic node ID to its hierarchical tree path.
     pub node_paths: std::collections::HashMap<u64, Vec<usize>>,
     /// Mapping from hierarchical tree path to its identity-aware animation node ID.
@@ -168,6 +175,14 @@ pub struct AppRuntime {
     pub(crate) frame_profile_hook: Option<FrameProfileHook>,
     /// Cached `<style>` stylesheets collected from `root_blueprint`.
     pub(crate) cached_stylesheets: Vec<std::sync::Arc<strata_style::StyleSheet>>,
+    /// Precomputed Bloom-filter and exact tag/class/id dependency index over `cached_stylesheets`.
+    pub(crate) stylesheet_index: StylesheetSelectorIndex,
+    /// Cached document-root inherited style (`:root` / `html` / `body` custom properties & defaults).
+    pub(crate) cached_root_inherited_style: Option<ComputedStyle>,
+    /// Whether the active rendering backend consumes compiled 2D GPU path segments.
+    /// Defaults to `strata_platform::gtk_gpu_2d_enabled()` so Cairo software 2D frames
+    /// skip redundant path tessellation.
+    pub(crate) gpu_2d_paths_enabled: bool,
     /// Active pointer capture or drag target `(tree_path, explicit_capture)`.
     pub pointer_capture_target: Option<(Vec<usize>, bool)>,
     /// True when the current `root_blueprint` contains any `EventType::Resize` listeners.
@@ -180,6 +195,26 @@ pub struct AppRuntime {
     pub(crate) pending_cursor_warp: Option<(f32, f32)>,
     /// True when the most recent `update_view` call reconciled the existing layout tree in place.
     pub(crate) last_update_reconciled: bool,
+    /// Per-update reconciliation subtree reuse and node rebuild counters.
+    pub(crate) last_reconcile_stats: ReconcileStats,
+    /// Reason the most recent `update_view` fell back to a full layout tree rebuild, if any.
+    pub(crate) last_reconcile_bailout: Option<String>,
+    /// True when the most recent paint-only hover update succeeded via `restyle_hover_subtrees_fast`.
+    pub(crate) last_hover_fast_path_used: bool,
+    /// Reason the most recent paint-only hover update bailed out of `restyle_hover_subtrees_fast`, if any.
+    pub(crate) last_hover_fast_path_bailout: Option<String>,
+    /// Cumulative count of full layout tree rebuilds across the runtime's lifetime.
+    pub(crate) full_rebuilds_count: u64,
+    /// Cumulative count of incremental reconciled view updates across the runtime's lifetime.
+    pub(crate) reconciled_updates_count: u64,
+    /// Structured attribution for why the most recent frame ran work.
+    pub(crate) last_rebuild_reason: RebuildReason,
+    /// Monotonic epoch recorded when this `AppRuntime` was instantiated (anchors Perfetto timestamps).
+    pub(crate) runtime_epoch: std::time::Instant,
+    /// Rolling ring buffer of real per-frame telemetry records for host HUDs & MCP profiling gates.
+    pub(crate) profile_history: FrameProfileHistory,
+    /// Previous frame's top-level layout rectangles used to compute real Cumulative Layout Shift (CLS).
+    pub(crate) prev_layout_cls_rects: Vec<(f32, f32, f32, f32)>,
     /// Active native DOM drag-and-drop operation (`ondragstart`, `ondragover`, `ondrop`, etc.).
     pub(crate) active_dom_drag: Option<ActiveDomDrag>,
 }
@@ -333,6 +368,7 @@ impl AppRuntime {
             animation_manager: strata_style::animation::AnimationManager::new(),
             base_node_styles: std::collections::HashMap::new(),
             previous_node_styles: std::collections::HashMap::new(),
+            previous_node_sizes: std::collections::HashMap::new(),
             node_paths: std::collections::HashMap::new(),
             path_node_ids: std::collections::HashMap::new(),
             view_transition_manager: crate::view_transition::ViewTransitionManager::new(),
@@ -357,12 +393,25 @@ impl AppRuntime {
             compiles_skipped: 0,
             frame_profile_hook: None,
             cached_stylesheets: Vec::new(),
+            stylesheet_index: StylesheetSelectorIndex::default(),
+            cached_root_inherited_style: None,
+            gpu_2d_paths_enabled: strata_platform::gtk_gpu_2d_enabled(),
             pointer_capture_target: None,
             has_resize_listeners: false,
             observed_element_sizes: std::collections::HashMap::new(),
             last_pointer_pos: None,
             pending_cursor_warp: None,
             last_update_reconciled: false,
+            last_reconcile_stats: ReconcileStats::default(),
+            last_reconcile_bailout: None,
+            last_hover_fast_path_used: false,
+            last_hover_fast_path_bailout: None,
+            full_rebuilds_count: 1,
+            reconciled_updates_count: 0,
+            last_rebuild_reason: RebuildReason::InitialMount,
+            runtime_epoch: std::time::Instant::now(),
+            profile_history: FrameProfileHistory::default(),
+            prev_layout_cls_rects: Vec::new(),
             active_dom_drag: None,
         };
 
@@ -372,6 +421,17 @@ impl AppRuntime {
         for sheet in &initial_sheets {
             runtime.register_keyframes_stylesheet(sheet);
         }
+        runtime.stylesheet_index = StylesheetSelectorIndex::from_stylesheets(&initial_sheets);
+        runtime.cached_root_inherited_style = if !initial_sheets.is_empty() {
+            let ctx = runtime.interaction_context();
+            Some(Self::resolve_document_root_inherited_style(
+                &runtime.root_blueprint,
+                &initial_sheets,
+                &ctx,
+            ))
+        } else {
+            None
+        };
         runtime.cached_stylesheets = initial_sheets;
         runtime.sync_tree_animations(0.0);
         runtime.apply_viewport_clamps();
@@ -594,7 +654,7 @@ impl AppRuntime {
                 if let Some(basis) = flex_basis {
                     node.style.flex_basis = basis;
                 }
-                node.layout_cache = strata_layout::tree::LayoutCacheEntry::invalid();
+                node.invalidate_self_caches();
                 return true;
             }
             let mut changed = false;
@@ -604,7 +664,7 @@ impl AppRuntime {
                 }
             }
             if changed {
-                node.layout_cache = strata_layout::tree::LayoutCacheEntry::invalid();
+                node.invalidate_self_caches();
             }
             changed
         }
@@ -888,24 +948,156 @@ impl AppRuntime {
     /// inheritance top-down from `parent_style`.
     /// Returns `None` if a structural mismatch requires a full subtree rebuild,
     /// `Some(true)` if any layout cache in this subtree was invalidated, or
+    /// Materializes `CascadeElementMeta` for a single blueprint element at `node_path` on demand
+    /// (called only when a node actually needs style re-resolution during reconciliation or fast hover).
+    pub(crate) fn materialize_cascade_meta(
+        bp: &NodeBlueprint,
+        node_path: &[usize],
+        ctx: &crate::runtime::InteractionContext,
+        group_state: (bool, bool, bool),
+    ) -> Option<CascadeElementMeta> {
+        let NodeBlueprint::Element {
+            tag,
+            classes,
+            attributes,
+            ..
+        } = bp
+        else {
+            return None;
+        };
+        if Self::is_style_tag(tag) {
+            return None;
+        }
+        let is_hovered = ctx.hovered_path.is_some_and(|h| h.starts_with(node_path));
+        let is_focused = ctx.focused_path.is_some_and(|f| f.starts_with(node_path));
+        let is_active = is_hovered && ctx.is_mouse_down;
+        let is_disabled = attributes.iter().any(|attr| match attr {
+            strata_dom::Attribute::Property { key, value } => {
+                key.eq_ignore_ascii_case("disabled") && !value.eq_ignore_ascii_case("false")
+            }
+            _ => false,
+        });
+        let (class_vec, id_val, attr_vec) = Self::extract_element_selector_meta(classes, attributes);
+        Some(CascadeElementMeta {
+            tag: Self::tag_as_str(tag),
+            classes: class_vec,
+            id: id_val,
+            attributes: attr_vec,
+            pseudo_state: strata_style::selector::PseudoState {
+                is_hovered,
+                is_focused,
+                is_active,
+                is_disabled,
+                is_dark: ctx.is_dark_mode,
+                is_group_hovered: group_state.0,
+                is_group_focused: group_state.1,
+                is_group_active: group_state.2,
+            },
+        })
+    }
+
+    pub(crate) fn materialize_ancestor_metas(
+        ancestor_stack: &[(&NodeBlueprint, (bool, bool, bool))],
+        path_buf: &[usize],
+        ctx: &crate::runtime::InteractionContext,
+        stylesheets: &[std::sync::Arc<strata_style::StyleSheet>],
+        sheet_index: &StylesheetSelectorIndex,
+    ) -> Vec<CascadeElementMeta> {
+        if stylesheets.is_empty() || !sheet_index.has_descendant_combinator_rules {
+            return Vec::new();
+        }
+        let mut out = Vec::with_capacity(ancestor_stack.len());
+        for (depth_idx, &(anc_bp, anc_group)) in ancestor_stack.iter().enumerate() {
+            let anc_path = &path_buf[..depth_idx.min(path_buf.len())];
+            if let Some(meta) = Self::materialize_cascade_meta(anc_bp, anc_path, ctx, anc_group) {
+                out.push(meta);
+            }
+        }
+        out
+    }
+
+    pub(crate) fn materialize_preceding_sibling_metas(
+        siblings: &[NodeBlueprint],
+        child_idx: usize,
+        parent_path: &[usize],
+        ctx: &crate::runtime::InteractionContext,
+        group_state: (bool, bool, bool),
+        stylesheets: &[std::sync::Arc<strata_style::StyleSheet>],
+        sheet_index: &StylesheetSelectorIndex,
+    ) -> Vec<CascadeElementMeta> {
+        if stylesheets.is_empty()
+            || !sheet_index.has_sibling_combinator_or_positional_rules
+            || child_idx == 0
+        {
+            return Vec::new();
+        }
+        let mut sib_path = Vec::with_capacity(parent_path.len() + 1);
+        sib_path.extend_from_slice(parent_path);
+        sib_path.push(0);
+        let mut out = Vec::with_capacity(child_idx);
+        for (j, sib_bp) in siblings[..child_idx].iter().enumerate() {
+            if let Some(last) = sib_path.last_mut() {
+                *last = j;
+            }
+            if let Some(meta) = Self::materialize_cascade_meta(sib_bp, &sib_path, ctx, group_state) {
+                out.push(meta);
+            }
+        }
+        out
+    }
+
+    /// Incrementally reconciles `layout_node` in place against `old_bp` and `new_bp`.
+    ///
+    /// Supports static `<style>` sheets (`:root` variables, class/tag/combinator rules),
+    /// active `:focus`/`:hover` interaction paths, and `group-*` markers while keeping
+    /// unchanged subtrees O(1) zero-allocation.
+    /// Returns `None` if this node cannot be reconciled in place (caller should rebuild it),
+    /// `Some(true)` if any style or descendant changed (layout cache invalidated), or
     /// `Some(false)` if this entire subtree is visually and structurally identical.
-    fn reconcile_layout_subtree(
+    #[allow(clippy::too_many_arguments)]
+    fn reconcile_layout_subtree<'a>(
         old_bp: &NodeBlueprint,
-        new_bp: &NodeBlueprint,
+        new_bp: &'a NodeBlueprint,
         layout_node: &mut LayoutNode,
         parent_style: Option<&strata_style::ComputedStyle>,
         parent_inherited_changed: bool,
+        ancestor_selector_changed: bool,
+        force_restyle_self: bool,
+        path_buf: &mut Vec<usize>,
+        ancestor_stack: &mut Vec<(&'a NodeBlueprint, (bool, bool, bool))>,
+        sibling_bps: &[NodeBlueprint],
+        sibling_idx: usize,
+        is_last_element_child: bool,
+        group_state: (bool, bool, bool),
         stylesheets: &[std::sync::Arc<strata_style::StyleSheet>],
+        sheet_index: &StylesheetSelectorIndex,
         ctx: &crate::runtime::InteractionContext,
+        stats: &mut ReconcileStats,
     ) -> Option<bool> {
         match (old_bp, new_bp) {
             (NodeBlueprint::Text(t1), NodeBlueprint::Text(t2)) => {
-                if t1 == t2 && !parent_inherited_changed {
+                if t1 == t2 && !parent_inherited_changed && !force_restyle_self {
+                    stats.reused_subtrees += 1;
                     Some(false)
                 } else {
                     *layout_node = Self::build_text_leaf_layout_node(t2.clone(), parent_style);
+                    stats.rebuilt_nodes += 1;
                     Some(true)
                 }
+            }
+            (NodeBlueprint::Empty, NodeBlueprint::Empty) => {
+                stats.reused_subtrees += 1;
+                Some(false)
+            }
+            (
+                NodeBlueprint::Element { tag: t1, .. },
+                NodeBlueprint::Element { tag: t2, .. },
+            ) if t1 == t2 && Self::is_style_tag(t1) => {
+                if let Some(eid) = new_bp.entity_id() {
+                    layout_node.entity_id = eid;
+                }
+                stats.reused_subtrees += 1;
+                Some(false)
             }
             (
                 NodeBlueprint::Element { tag: t1, .. },
@@ -916,13 +1108,21 @@ impl AppRuntime {
                     strata_dom::Tag::Svg
                         | strata_dom::Tag::Path
                         | strata_dom::Tag::Input
+                        | strata_dom::Tag::Textarea
                         | strata_dom::Tag::Img
+                        | strata_dom::Tag::Canvas
+                        | strata_dom::Tag::Custom("Canvas3D")
                 ) =>
             {
-                if !parent_inherited_changed && Self::blueprint_visually_equal(old_bp, new_bp) {
+                if !parent_inherited_changed
+                    && !ancestor_selector_changed
+                    && !force_restyle_self
+                    && Self::blueprint_visually_equal(old_bp, new_bp)
+                {
                     if let Some(eid) = new_bp.entity_id() {
                         layout_node.entity_id = eid;
                     }
+                    stats.reused_subtrees += 1;
                     Some(false)
                 } else {
                     None
@@ -955,103 +1155,228 @@ impl AppRuntime {
                         (NodeBlueprint::Text(x), NodeBlueprint::Text(y)) if x != y
                     );
 
-                let (self_rewritten, child_inherited_changed) =
-                    if self_props_changed || parent_inherited_changed || single_text_changed {
-                        let shallow_bp = NodeBlueprint::Element {
-                            tag: *t2,
-                            classes: cls2.clone(),
-                            attributes: a2.clone(),
-                            children: Vec::new(),
-                        };
-                        let mut path_buf = Vec::new();
-                        let mut ancestors = Vec::new();
-                        let mut updated = Self::build_layout_tree_full(
-                            &shallow_bp,
-                            parent_style,
-                            &mut path_buf,
-                            ctx,
-                            stylesheets,
-                            &mut ancestors,
-                            &[],
-                            true,
-                            (false, false, false),
-                        );
-                        Self::apply_single_text_inline_intrinsic_sizing(&mut updated.style, c2);
-                        if let Some(eid) = new_bp.entity_id() {
-                            updated.entity_id = eid;
-                        }
-                        let inh_changed =
-                            !Self::inherited_style_equal(&layout_node.style, &updated.style);
-                        updated.children = std::mem::take(&mut layout_node.children);
-                        *layout_node = updated;
-                        (true, inh_changed)
-                    } else {
-                        if let Some(eid) = new_bp.entity_id() {
-                            layout_node.entity_id = eid;
-                        }
-                        (false, false)
+                let (self_rewritten, child_inherited_changed) = if self_props_changed
+                    || parent_inherited_changed
+                    || ancestor_selector_changed
+                    || force_restyle_self
+                    || single_text_changed
+                {
+                    let shallow_bp = NodeBlueprint::Element {
+                        tag: *t2,
+                        classes: cls2.clone(),
+                        attributes: a2.clone(),
+                        children: Vec::new(),
                     };
+                    let mut ancestors_meta = Self::materialize_ancestor_metas(
+                        ancestor_stack,
+                        path_buf,
+                        ctx,
+                        stylesheets,
+                        sheet_index,
+                    );
+                    let parent_path_len = path_buf.len().saturating_sub(1);
+                    let preceding_sibs = if !path_buf.is_empty() {
+                        Self::materialize_preceding_sibling_metas(
+                            sibling_bps,
+                            sibling_idx,
+                            &path_buf[..parent_path_len],
+                            ctx,
+                            group_state,
+                            stylesheets,
+                            sheet_index,
+                        )
+                    } else {
+                        Vec::new()
+                    };
+                    let mut updated = Self::build_layout_tree_full(
+                        &shallow_bp,
+                        parent_style,
+                        path_buf,
+                        ctx,
+                        stylesheets,
+                        &mut ancestors_meta,
+                        &preceding_sibs,
+                        is_last_element_child,
+                        group_state,
+                    );
+                    Self::apply_single_text_inline_intrinsic_sizing(&mut updated.style, c2);
+                    if let Some(eid) = new_bp.entity_id() {
+                        updated.entity_id = eid;
+                    }
+                    let inh_changed =
+                        !Self::inherited_style_equal(&layout_node.style, &updated.style);
+                    updated.children = std::mem::take(&mut layout_node.children);
+                    *layout_node = updated;
+                    stats.rebuilt_nodes += 1;
+                    (true, inh_changed)
+                } else {
+                    if let Some(eid) = new_bp.entity_id() {
+                        layout_node.entity_id = eid;
+                    }
+                    (false, false)
+                };
+
+                let child_group_state = if Self::classes_have_group_marker(cls2) {
+                    let self_hovered = ctx.hovered_path.is_some_and(|h| h.starts_with(path_buf));
+                    let self_focused = ctx.focused_path.is_some_and(|f| f.starts_with(path_buf));
+                    let self_active = self_hovered && ctx.is_mouse_down;
+                    (
+                        group_state.0 || self_hovered,
+                        group_state.1 || self_focused,
+                        group_state.2 || self_active,
+                    )
+                } else {
+                    group_state
+                };
+                let old_group_marker = Self::classes_have_group_marker(cls1);
+                let group_marker_changed = old_group_marker != Self::classes_have_group_marker(cls2);
+                let next_ancestor_selector_changed = ancestor_selector_changed
+                    || group_marker_changed
+                    || (self_props_changed && sheet_index.has_descendant_combinator_rules);
 
                 let parent_style_for_children = layout_node.style.clone();
-                let mut children_changed = c1.len() != c2.len();
+                let child_count_changed = c1.len() != c2.len();
+                let mut children_changed = child_count_changed;
                 let common = c1.len().min(c2.len());
+                let last_elem_idx = if !stylesheets.is_empty()
+                    && sheet_index.has_sibling_combinator_or_positional_rules
+                {
+                    c2.iter().rposition(|bp| {
+                        matches!(bp, NodeBlueprint::Element { tag, .. } if !Self::is_style_tag(tag))
+                    })
+                } else {
+                    None
+                };
+
+                ancestor_stack.push((new_bp, group_state));
+                let mut preceding_sibling_mutated = false;
+
                 for i in 0..common {
+                    path_buf.push(i);
+                    let is_last_child = last_elem_idx.map_or(i + 1 == c2.len(), |l| l == i);
+                    // If child count changed and a hover/focus path runs through this child,
+                    // force re-style so shifted indices never keep stale pseudo styles.
+                    let interaction_shifted = child_count_changed
+                        && (ctx.hovered_path.is_some_and(|h| h.starts_with(path_buf))
+                            || ctx.focused_path.is_some_and(|f| f.starts_with(path_buf)));
+                    let positional_affected = sheet_index.has_sibling_combinator_or_positional_rules
+                        && (preceding_sibling_mutated
+                            || (child_count_changed && (i + 1 == common || is_last_child)));
+                    let child_force_restyle = interaction_shifted || positional_affected;
+
                     match Self::reconcile_layout_subtree(
                         &c1[i],
                         &c2[i],
                         &mut layout_node.children[i],
                         Some(&parent_style_for_children),
                         child_inherited_changed,
+                        next_ancestor_selector_changed,
+                        child_force_restyle,
+                        path_buf,
+                        ancestor_stack,
+                        c2,
+                        i,
+                        is_last_child,
+                        child_group_state,
                         stylesheets,
+                        sheet_index,
                         ctx,
+                        stats,
                     ) {
                         Some(false) => {}
-                        Some(true) => children_changed = true,
+                        Some(true) => {
+                            children_changed = true;
+                            if sheet_index.has_sibling_combinator_or_positional_rules {
+                                preceding_sibling_mutated = true;
+                            }
+                        }
                         None => {
-                            let mut path_buf = Vec::new();
-                            let mut ancestors = Vec::new();
+                            let mut ancestors_meta = Self::materialize_ancestor_metas(
+                                ancestor_stack,
+                                path_buf,
+                                ctx,
+                                stylesheets,
+                                sheet_index,
+                            );
+                            let parent_path_len = path_buf.len().saturating_sub(1);
+                            let preceding_sibs = Self::materialize_preceding_sibling_metas(
+                                c2,
+                                i,
+                                &path_buf[..parent_path_len],
+                                ctx,
+                                child_group_state,
+                                stylesheets,
+                                sheet_index,
+                            );
                             layout_node.children[i] = Self::build_layout_tree_full(
                                 &c2[i],
                                 Some(&parent_style_for_children),
-                                &mut path_buf,
+                                path_buf,
                                 ctx,
                                 stylesheets,
-                                &mut ancestors,
-                                &[],
-                                i + 1 == c2.len(),
-                                (false, false, false),
+                                &mut ancestors_meta,
+                                &preceding_sibs,
+                                is_last_child,
+                                child_group_state,
                             );
+                            stats.rebuilt_nodes += 1;
                             children_changed = true;
+                            if sheet_index.has_sibling_combinator_or_positional_rules {
+                                preceding_sibling_mutated = true;
+                            }
                         }
                     }
+                    path_buf.pop();
                 }
+
                 if c2.len() < c1.len() {
                     layout_node.children.truncate(c2.len());
                 } else if c2.len() > c1.len() {
                     for (offset, nc) in c2[common..].iter().enumerate() {
                         let idx = common + offset;
-                        let mut path_buf = Vec::new();
-                        let mut ancestors = Vec::new();
+                        path_buf.push(idx);
+                        let is_last_child = last_elem_idx.map_or(idx + 1 == c2.len(), |l| l == idx);
+                        let mut ancestors_meta = Self::materialize_ancestor_metas(
+                            ancestor_stack,
+                            path_buf,
+                            ctx,
+                            stylesheets,
+                            sheet_index,
+                        );
+                        let parent_path_len = path_buf.len().saturating_sub(1);
+                        let preceding_sibs = Self::materialize_preceding_sibling_metas(
+                            c2,
+                            idx,
+                            &path_buf[..parent_path_len],
+                            ctx,
+                            child_group_state,
+                            stylesheets,
+                            sheet_index,
+                        );
                         layout_node.children.push(Self::build_layout_tree_full(
                             nc,
                             Some(&parent_style_for_children),
-                            &mut path_buf,
+                            path_buf,
                             ctx,
                             stylesheets,
-                            &mut ancestors,
-                            &[],
-                            idx + 1 == c2.len(),
-                            (false, false, false),
+                            &mut ancestors_meta,
+                            &preceding_sibs,
+                            is_last_child,
+                            child_group_state,
                         ));
+                        stats.rebuilt_nodes += 1;
+                        path_buf.pop();
                     }
                 }
+                ancestor_stack.pop();
 
                 if self_rewritten || children_changed {
                     layout_node.inline_items.clear();
                     layout_node.line_boxes.clear();
-                    layout_node.layout_cache = strata_layout::tree::LayoutCacheEntry::invalid();
+                    layout_node.invalidate_self_caches();
                     Some(true)
                 } else {
+                    stats.reused_subtrees += 1;
                     Some(false)
                 }
             }
@@ -1063,7 +1388,9 @@ impl AppRuntime {
     /// `#[component]` scope is active) and updates the runtime tree cleanly, preserving top-level
     /// unkeyed sibling isolation and triggering unmount cleanups.
     pub fn update_root<F: FnOnce() -> View>(&mut self, root: F) {
+        let view_start = std::time::Instant::now();
         let new_view = strata_dom::with_root_component_scope(root);
+        self.frame_profile.view_render += view_start.elapsed();
         self.update_view(new_view);
     }
 
@@ -1073,6 +1400,9 @@ impl AppRuntime {
         self.unapply_scroll_offsets();
         self.applied_scroll_offsets.clear();
         self.applied_portal_offsets.clear();
+        if self.had_active_animations || self.has_active_animations() {
+            self.restore_base_styles_to_layout_tree();
+        }
         let mut next_blueprint = new_view.root.flatten_fragments();
         next_blueprint.ensure_entity_ids();
         let old_blueprint = std::mem::replace(&mut self.root_blueprint, next_blueprint);
@@ -1084,59 +1414,96 @@ impl AppRuntime {
             for sheet in &sheets {
                 self.register_keyframes_stylesheet(sheet);
             }
+            self.stylesheet_index = StylesheetSelectorIndex::from_stylesheets(&sheets);
             self.cached_stylesheets = sheets;
         }
+        self.capture_previous_node_sizes();
         let build_start = std::time::Instant::now();
-        let hover_safe = self.hover_is_paint_only()
-            || self.current_hover_path.as_deref().is_none_or(|p| {
-                !Self::node_path_has_hover_effects_with_sheets(
-                    &old_blueprint,
-                    p,
-                    &self.cached_stylesheets,
-                ) && !Self::node_path_has_hover_effects_with_sheets(
-                    &self.root_blueprint,
-                    p,
-                    &self.cached_stylesheets,
-                )
-            });
-        let reconciled = if self.cached_stylesheets.is_empty()
-            && sheets_unchanged
-            && hover_safe
-            && self.current_focus_path.is_none()
+        let mut stats = ReconcileStats::default();
+        let mut bailout_reason: Option<String> = None;
+
+        let hovered_owned = self.current_hover_path.clone();
+        let focused_owned = self.current_focus_path.clone();
+        let ctx = crate::runtime::InteractionContext {
+            hovered_path: hovered_owned.as_deref(),
+            focused_path: focused_owned.as_deref(),
+            is_mouse_down: self.is_mouse_down,
+            is_dark_mode: self.is_dark_mode,
+        };
+        let next_root_inherited = if !self.cached_stylesheets.is_empty() {
+            Some(Self::resolve_document_root_inherited_style(
+                &self.root_blueprint,
+                &self.cached_stylesheets,
+                &ctx,
+            ))
+        } else {
+            None
+        };
+        let root_inherited_changed = match (&self.cached_root_inherited_style, &next_root_inherited)
         {
-            let ctx = crate::runtime::InteractionContext {
-                hovered_path: None,
-                focused_path: None,
-                is_mouse_down: self.is_mouse_down,
-                is_dark_mode: self.is_dark_mode,
-            };
-            Self::reconcile_layout_subtree(
+            (Some(a), Some(b)) => !Self::inherited_style_equal(a, b),
+            (None, None) => false,
+            _ => true,
+        };
+
+        let reconciled = if sheets_unchanged {
+            let mut path_buf = Vec::new();
+            let mut ancestor_stack = Vec::new();
+            let ok = Self::reconcile_layout_subtree(
                 &old_blueprint,
                 &self.root_blueprint,
                 &mut self.layout_root,
-                None,
+                next_root_inherited.as_ref(),
+                root_inherited_changed,
                 false,
+                false,
+                &mut path_buf,
+                &mut ancestor_stack,
+                &[],
+                0,
+                true,
+                (false, false, false),
                 &self.cached_stylesheets,
+                &self.stylesheet_index,
                 &ctx,
+                &mut stats,
             )
-            .is_some()
+            .is_some();
+            if !ok {
+                bailout_reason = Some("RootStructuralMismatch".to_string());
+            }
+            ok
         } else {
+            bailout_reason = Some("StylesheetsChanged".to_string());
             false
         };
+        self.cached_root_inherited_style = next_root_inherited;
+
         if !reconciled {
             let ctx = self.interaction_context();
             self.layout_root = Self::build_layout_tree_with_interaction(&self.root_blueprint, &ctx);
+            self.full_rebuilds_count += 1;
+            if let Some(ref reason) = bailout_reason {
+                self.last_rebuild_reason = RebuildReason::LayoutReconcileBailout(reason.clone());
+            }
+        } else {
+            self.reconciled_updates_count += 1;
         }
         self.last_update_reconciled = reconciled;
+        self.last_reconcile_stats = stats;
+        self.last_reconcile_bailout = bailout_reason;
+        self.frame_profile.reconcile += build_start.elapsed();
         if perf_logging_enabled() {
             perf_log_ms(
                 "build_layout_tree_update",
                 build_start,
                 format!(
-                    "{} blueprint nodes -> {} layout nodes (reconciled={})",
+                    "{} blueprint nodes -> {} layout nodes (reconciled={}, reused={}, rebuilt={})",
                     perf_count_blueprint_nodes(&self.root_blueprint),
                     perf_count_layout_nodes(&self.layout_root),
-                    reconciled
+                    reconciled,
+                    stats.reused_subtrees,
+                    stats.rebuilt_nodes
                 ),
             );
         }
@@ -1151,6 +1518,9 @@ impl AppRuntime {
         let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
         let sync_start = std::time::Instant::now();
         self.sync_tree_animations(now_ms);
+        if self.had_active_animations || self.has_active_animations() {
+            strata_layout::box_model::refresh_inline_fragment_styles(&mut self.layout_root);
+        }
         if perf_logging_enabled() {
             perf_log_ms("sync_tree_animations", sync_start, "update_view");
         }
@@ -1171,6 +1541,7 @@ impl AppRuntime {
             let new_text = (binding.closure)();
             if new_text != binding.last_value {
                 binding.last_value = new_text.clone();
+                let mut node_updated = false;
                 if let Some(node) = Self::find_layout_node_mut(&mut self.layout_root, &binding.path)
                 {
                     let is_mono = strata_layout::is_monospace_family(node.style.font_family);
@@ -1189,8 +1560,11 @@ impl AppRuntime {
                     node.geometry.content_box.width = w;
                     node.geometry.content_box.height = h;
                     node.text = Some(new_text);
-                    node.layout_cache.is_valid = false;
+                    node_updated = true;
                     changed = true;
+                }
+                if node_updated {
+                    self.layout_root.invalidate_ancestors(&binding.path);
                 }
             }
         }
@@ -1300,9 +1674,18 @@ impl AppRuntime {
         } else {
             None
         };
-        self.display_list = strata_render::compositor::Compositor::build_display_list_with_viewport(
+        let scrollbar_overlays = self.build_scrollbar_overlays();
+        self.display_list =
+            strata_render::compositor::Compositor::build_document_display_list_with_scrollbars(
+                &self.layout_root,
+                viewport,
+                &scrollbar_overlays,
+            );
+        strata_render::compositor::Compositor::append_top_layer_portals_with_scrollbars(
             &self.layout_root,
+            &mut self.display_list,
             viewport,
+            &scrollbar_overlays,
         );
         self.tracked_retained_3d.clear();
         for cmd in &self.display_list.commands {
@@ -1313,13 +1696,14 @@ impl AppRuntime {
                 }
             }
         }
-        self.render_scrollbars();
         self.render_active_input_caret();
         self.render_hover_tooltip();
-        self.gpu_path_pipeline
-            .resize(self.viewport_width, self.viewport_height);
-        self.gpu_path_pipeline
-            .compile_frame(&self.display_list, None);
+        if self.gpu_2d_paths_enabled {
+            self.gpu_path_pipeline
+                .resize(self.viewport_width, self.viewport_height);
+            self.gpu_path_pipeline
+                .compile_frame(&self.display_list, None);
+        }
         self.frame_profile.compile += compile_start.elapsed();
         self.paint_dirty = false;
 
@@ -1330,14 +1714,35 @@ impl AppRuntime {
                 "compile_display_list",
                 compile_start,
                 format!(
-                    "frame {} {}x{} {} commands",
+                    "frame {} {}x{} {} commands (gpu_2d_paths={})",
                     frame,
                     self.viewport_width,
                     self.viewport_height,
-                    self.display_list.commands.len()
+                    self.display_list.commands.len(),
+                    self.gpu_2d_paths_enabled
                 ),
             );
         }
+    }
+
+    /// Controls whether [`Self::compile_display_list`] tessellates 2D GPU path segments.
+    /// Backends that rasterize 2D UI via Cairo software should leave this `false` unless
+    /// `STRATA_GPU_2D=1` is active.
+    pub fn set_gpu_2d_paths_enabled(&mut self, enabled: bool) {
+        self.gpu_2d_paths_enabled = enabled;
+    }
+
+    /// Returns whether 2D GPU path compilation is active during display-list builds.
+    pub fn gpu_2d_paths_enabled(&self) -> bool {
+        self.gpu_2d_paths_enabled
+    }
+
+    /// Explicitly compiles 2D GPU path segments from the current display list on demand.
+    pub fn compile_gpu_paths_now(&mut self) -> usize {
+        self.gpu_path_pipeline
+            .resize(self.viewport_width, self.viewport_height);
+        self.gpu_path_pipeline
+            .compile_frame(&self.display_list, None)
     }
 
     /// Returns the compiled GPU path segments from the latest frame.
@@ -1355,9 +1760,11 @@ impl AppRuntime {
     /// Processes an incoming platform event, updating viewport/scale or dispatching synthetic events.
     /// Returns true if a dirty layout or presentation redraw was triggered.
     pub fn step_event(&mut self, event: &PlatformEvent) -> bool {
+        let input_start = std::time::Instant::now();
         #[cfg(feature = "devtools")]
         if let Some(ref mut dt) = self.devtools {
             if strata_devtools::DevToolsEventInterceptor::intercept(&mut dt.hud, event) {
+                self.frame_profile.input_dispatch += input_start.elapsed();
                 return true;
             }
         }
@@ -1490,6 +1897,7 @@ impl AppRuntime {
         if needs_redraw {
             self.paint_dirty = true;
         }
+        self.frame_profile.input_dispatch += input_start.elapsed();
         needs_redraw
     }
 
@@ -1503,9 +1911,63 @@ impl AppRuntime {
         self.last_update_reconciled
     }
 
+    /// Per-update reconciliation statistics (reused subtrees vs rebuilt nodes).
+    pub fn last_reconcile_stats(&self) -> ReconcileStats {
+        self.last_reconcile_stats
+    }
+
+    /// Reason the most recent `update_view` bailed out of incremental reconciliation, if any.
+    pub fn last_reconcile_bailout(&self) -> Option<&str> {
+        self.last_reconcile_bailout.as_deref()
+    }
+
+    /// True when the most recent paint-only hover update succeeded via `restyle_hover_subtrees_fast`.
+    pub fn last_hover_fast_path_used(&self) -> bool {
+        self.last_hover_fast_path_used
+    }
+
+    /// Reason the most recent paint-only hover update bailed out of `restyle_hover_subtrees_fast`, if any.
+    pub fn last_hover_fast_path_bailout(&self) -> Option<&str> {
+        self.last_hover_fast_path_bailout.as_deref()
+    }
+
+    /// Cumulative number of full layout tree rebuilds performed by this runtime.
+    pub fn full_rebuilds_count(&self) -> u64 {
+        self.full_rebuilds_count
+    }
+
+    /// Cumulative number of incremental reconciled updates performed by this runtime.
+    pub fn reconciled_updates_count(&self) -> u64 {
+        self.reconciled_updates_count
+    }
+
+    /// Structured reason attributing why the latest frame ran work.
+    pub fn last_rebuild_reason(&self) -> &RebuildReason {
+        &self.last_rebuild_reason
+    }
+
+    /// Records the primary reason why the current frame was triggered.
+    pub fn set_rebuild_reason(&mut self, reason: RebuildReason) {
+        self.last_rebuild_reason = reason;
+    }
+
     /// Phase timings accumulated since the last presented frame.
     pub fn frame_profile(&self) -> FrameProfile {
         self.frame_profile
+    }
+
+    /// Most recent completed per-frame telemetry record (for host HUDs & profiling overlays).
+    pub fn last_frame_profile(&self) -> Option<&FrameProfileRecord> {
+        self.profile_history.last()
+    }
+
+    /// Rolling p50/p95/p99 performance distribution and cache hit summary over recent frames.
+    pub fn perf_profile_summary(&self) -> PerfProfileSummary {
+        self.profile_history.summary(
+            self.frame_count,
+            self.full_rebuilds_count,
+            self.reconciled_updates_count,
+        )
     }
 
     /// Registers an observer called with each completed [`FrameProfile`].
@@ -1513,14 +1975,60 @@ impl AppRuntime {
         self.frame_profile_hook = hook.map(FrameProfileHook);
     }
 
+    /// Adds time spent dispatching platform or MCP input events.
+    pub fn record_input_dispatch_time(&mut self, elapsed: std::time::Duration) {
+        self.frame_profile.input_dispatch += elapsed;
+    }
+
+    /// Adds time spent draining reactive signals and flushing subscribers.
+    pub fn record_signal_drain_time(&mut self, elapsed: std::time::Duration) {
+        self.frame_profile.signal_drain += elapsed;
+    }
+
+    /// Adds time spent evaluating the host RSX view closure.
+    pub fn record_view_render_time(&mut self, elapsed: std::time::Duration) {
+        self.frame_profile.view_render += elapsed;
+    }
+
     /// Adds time spent rasterizing, for presenting backends that rasterize outside the runtime.
     pub fn record_raster_time(&mut self, elapsed: std::time::Duration) {
         self.frame_profile.raster += elapsed;
     }
 
+    /// Adds CPU time spent submitting wgpu 3D passes and compositing commands.
+    pub fn record_wgpu_3d_submit_time(&mut self, elapsed: std::time::Duration) {
+        self.frame_profile.wgpu_3d_submit += elapsed;
+    }
+
     /// Adds time spent presenting, for backends that present outside the runtime.
     pub fn record_present_time(&mut self, elapsed: std::time::Duration) {
         self.frame_profile.present += elapsed;
+    }
+
+    /// Computes a real Cumulative Layout Shift (CLS) score against the previous frame's
+    /// top-level layout rectangles and updates `self.prev_layout_cls_rects`.
+    fn compute_real_layout_shift_score(&mut self) -> f32 {
+        let mut cur_rects: Vec<(f32, f32, f32, f32)> = Vec::new();
+        for child in self.layout_root.children.iter().take(32) {
+            let b = child.geometry.border_box;
+            cur_rects.push((b.x, b.y, b.width, b.height));
+        }
+        let mut max_shift = 0.0f32;
+        let vw = self.viewport_width.max(1.0);
+        let vh = self.viewport_height.max(1.0);
+        let max_dim = vw.max(vh);
+        let vp_area = (vw * vh).max(1.0);
+        for (prev, cur) in self.prev_layout_cls_rects.iter().zip(cur_rects.iter()) {
+            let dx = (cur.0 - prev.0).abs();
+            let dy = (cur.1 - prev.1).abs();
+            if dx > 0.5 || dy > 0.5 {
+                let dist = (dx.max(dy) / max_dim).clamp(0.0, 1.0);
+                let impact = ((prev.2 * prev.3).max(cur.2 * cur.3) / vp_area).clamp(0.0, 1.0);
+                max_shift = max_shift.max(impact * dist);
+            }
+        }
+        self.prev_layout_cls_rects = cur_rects;
+        max_shift
     }
 
     /// Publishes the accumulated profile to the hook and starts a fresh frame.
@@ -1533,6 +2041,227 @@ impl AppRuntime {
         done
     }
 
+    /// Finalizes a presented frame: snapshots all real monotonic CPU phase timings, GPU hardware
+    /// timestamp queries, 64x64 tile cache stats, Scene3D offscreen cache stats, text/glyph cache
+    /// hit rate, heap allocation deltas, and DevTools live HUD / Time-Travel / Perfetto state.
+    pub fn finalize_frame_telemetry(&mut self, outcome: &'static str) -> FrameProfileRecord {
+        let gpu_tel = strata_platform::gtk_last_gpu_telemetry();
+        let (tiles_dirty, tiles_total) = strata_platform::gtk_last_tile_cache_stats();
+        let tile_cache_hit_pct = if tiles_total > 0 {
+            ((tiles_total.saturating_sub(tiles_dirty)) as f32 / tiles_total as f32) * 100.0
+        } else {
+            100.0
+        };
+        let s3d_total = gpu_tel.scene3d_cache_hits + gpu_tel.scene3d_cache_misses;
+        let scene3d_cache_hit_pct = if s3d_total > 0 {
+            (gpu_tel.scene3d_cache_hits as f32 / s3d_total as f32) * 100.0
+        } else {
+            100.0
+        };
+        let (text_hits, text_misses) = strata_layout::text_measure_cache_stats();
+        let text_total = text_hits + text_misses;
+        let glyph_atlas_hit_pct = if text_total > 0 {
+            (text_hits as f32 / text_total as f32) * 100.0
+        } else {
+            100.0
+        };
+
+        self.frame_profile.gpu_3d_us = gpu_tel
+            .gpu_shadow_pass_us
+            .saturating_add(gpu_tel.gpu_3d_pass_us);
+        self.frame_profile.gpu_2d_overlay_us = gpu_tel.gpu_2d_overlay_pass_us;
+        self.frame_profile.gpu_timestamps_valid = gpu_tel.gpu_timestamps_supported;
+
+        let done = self.finish_frame_profile();
+        let cls_score = self.compute_real_layout_shift_score();
+        let timestamp_us = self.runtime_epoch.elapsed().as_micros() as u64;
+        let (heap_alloc_count, heap_alloc_bytes) = profile::take_frame_heap_alloc_delta();
+
+        let dom_nodes = perf_count_blueprint_nodes(&self.root_blueprint);
+        let layout_nodes = perf_count_layout_nodes(&self.layout_root);
+        let display_cmds = self.display_list.len();
+
+        let reconcile_us = if !done.reconcile.is_zero() {
+            done.reconcile.as_micros() as u32
+        } else {
+            done.rebuild.as_micros() as u32
+        };
+        let style_cascade_us = done.style_cascade.as_micros() as u32;
+        let input_dispatch_us = done.input_dispatch.as_micros() as u32;
+        let signal_drain_us = done.signal_drain.as_micros() as u32;
+        let view_render_us = done.view_render.as_micros() as u32;
+        let layout_us = done.layout.as_micros() as u32;
+        let display_list_build_us = done.compile.as_micros() as u32;
+        let raster_us = done.raster.as_micros() as u32;
+        let wgpu_3d_submit_us = done.wgpu_3d_submit.as_micros() as u32;
+        let present_us = done.present.as_micros() as u32;
+        let total_cpu_us = done.total().as_micros() as u32;
+
+        let reason_str = self.last_rebuild_reason.to_string();
+        let record = FrameProfileRecord {
+            frame_index: self.frame_count,
+            timestamp_us,
+            rebuild_reason: reason_str.clone(),
+            outcome: outcome.to_string(),
+            input_dispatch_us,
+            signal_drain_us,
+            view_render_us,
+            reconcile_us,
+            style_cascade_us,
+            layout_us,
+            display_list_build_us,
+            raster_us,
+            wgpu_3d_submit_us,
+            present_us,
+            total_cpu_us,
+            gpu_3d_us: done.gpu_3d_us,
+            gpu_2d_overlay_us: done.gpu_2d_overlay_us,
+            gpu_timestamps_valid: done.gpu_timestamps_valid,
+            dom_nodes: dom_nodes as u32,
+            layout_nodes: layout_nodes as u32,
+            display_cmds: display_cmds as u32,
+            tiles_dirty,
+            tiles_total,
+            tile_cache_hit_pct,
+            reconciled_subtrees: self.last_reconcile_stats.reused_subtrees as u32,
+            rebuilt_nodes: self.last_reconcile_stats.rebuilt_nodes as u32,
+            full_rebuilds: self.full_rebuilds_count,
+            reconciled: self.last_update_reconciled,
+            hover_fast_path_used: self.last_hover_fast_path_used,
+            hover_fast_path_bailout: self.last_hover_fast_path_bailout.clone(),
+            reconcile_bailout: self.last_reconcile_bailout.clone(),
+            scene3d_cache_hits: gpu_tel.scene3d_cache_hits,
+            scene3d_cache_misses: gpu_tel.scene3d_cache_misses,
+            scene3d_cache_hit_pct,
+            glyph_atlas_hit_pct,
+            gpu_memory_bytes: gpu_tel.gpu_memory_bytes,
+            heap_alloc_count,
+            heap_alloc_bytes,
+            layout_shift_score: cls_score,
+        };
+        self.profile_history.push(record.clone());
+
+        #[cfg(feature = "devtools")]
+        if let Some(ref mut dt) = self.devtools {
+            let ui_tid = strata_devtools::current_thread_id_u64();
+            let gpu_tid = ui_tid.wrapping_add(1).max(2);
+            let gpu_total_hw = gpu_tel
+                .gpu_shadow_pass_us
+                .saturating_add(gpu_tel.gpu_3d_pass_us)
+                .saturating_add(gpu_tel.gpu_2d_overlay_pass_us);
+            let sample = strata_devtools::FrameTimingSample {
+                frame_index: self.frame_count,
+                timestamp_us,
+                pid: std::process::id(),
+                ui_thread_id: ui_tid,
+                worker_thread_id: 0,
+                gpu_thread_id: gpu_tid,
+                vsync_wait_us: 0,
+                input_dispatch_us,
+                signal_drain_us,
+                view_render_us,
+                parallel_reconcile_us: reconcile_us,
+                style_cascade_us,
+                layout_solve_us: layout_us,
+                display_list_build_us,
+                raster_2d_us: raster_us,
+                gpu_submit_us: wgpu_3d_submit_us,
+                present_us,
+                gpu_raster_duration_us: if gpu_tel.gpu_timestamps_supported {
+                    gpu_total_hw
+                } else {
+                    raster_us.saturating_add(wgpu_3d_submit_us)
+                },
+                gpu_shadow_pass_us: gpu_tel.gpu_shadow_pass_us,
+                gpu_3d_pass_us: gpu_tel.gpu_3d_pass_us,
+                gpu_2d_overlay_pass_us: gpu_tel.gpu_2d_overlay_pass_us,
+                gpu_timestamps_valid: gpu_tel.gpu_timestamps_supported,
+                total_cpu_frame_us: total_cpu_us,
+                frame_budget_us: dt.profiler.frame_budget_us(),
+                layout_shift_score: cls_score,
+            };
+            dt.profiler.record_sample(sample);
+
+            let react_snap = strata_dom::reactive_telemetry_snapshot();
+            let arena_est_bytes = dom_nodes
+                .saturating_mul(std::mem::size_of::<NodeBlueprint>())
+                .saturating_add(layout_nodes.saturating_mul(std::mem::size_of::<strata_layout::LayoutNode>()))
+                .saturating_add(display_cmds.saturating_mul(std::mem::size_of::<strata_render::DrawCommand>()));
+            let arena_cap_bytes = (arena_est_bytes.max(64 * 1024)).next_power_of_two();
+            dt.arena_inspector
+                .record_sample(strata_devtools::ArenaTelemetrySample::new(
+                    0,
+                    arena_est_bytes,
+                    arena_cap_bytes,
+                    arena_est_bytes,
+                    self.frame_count,
+                ));
+            if heap_alloc_bytes > 0 {
+                dt.heap_tracker.record_allocation(heap_alloc_bytes as usize);
+            }
+            dt.live_telemetry = strata_devtools::HudLiveTelemetry {
+                reactive_active_signals: react_snap.active_signals,
+                reactive_active_subscribers: react_snap.active_subscribers,
+                reactive_total_reads: react_snap.total_reads,
+                reactive_total_writes: react_snap.total_writes,
+                reactive_total_flushes: react_snap.total_flushes,
+                reactive_cycle_guard_trips: react_snap.cycle_guard_trips,
+                last_rebuild_reason: reason_str.clone(),
+                dirty_signal_names: react_snap.dirty_signal_names,
+                top_signals: react_snap
+                    .signals
+                    .iter()
+                    .take(8)
+                    .map(|s| (s.name.clone(), s.write_count, s.read_count, s.subscriber_count))
+                    .collect(),
+                dom_node_count: dom_nodes,
+                layout_node_count: layout_nodes,
+                display_cmd_count: display_cmds,
+                arena_allocated_bytes: arena_est_bytes,
+                arena_capacity_bytes: arena_cap_bytes,
+                heap_alloc_bytes,
+                heap_alloc_count,
+                gpu_memory_bytes: gpu_tel.gpu_memory_bytes,
+                tiles_dirty,
+                tiles_total,
+                tile_cache_hit_pct,
+                scene3d_cache_hit_pct,
+                glyph_cache_hit_pct: glyph_atlas_hit_pct,
+                reconciled_updates: self.reconciled_updates_count,
+                full_rebuilds: self.full_rebuilds_count,
+            };
+
+            if outcome == "Dirty" || dt.time_travel.is_empty() {
+                let mut ir_hash: u64 = 0xcbf2_9ce4_8422_2325;
+                ir_hash ^= (dom_nodes as u64).wrapping_mul(0x100_0000_01b3);
+                ir_hash ^= (layout_nodes as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+                ir_hash ^= (display_cmds as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+                ir_hash ^= self.layout_computations;
+                let sig_values: Vec<(usize, String)> = react_snap
+                    .signals
+                    .iter()
+                    .take(16)
+                    .map(|s| {
+                        (
+                            s.signal_id,
+                            format!("{}:w{}r{}", s.name, s.write_count, s.read_count),
+                        )
+                    })
+                    .collect();
+                dt.time_travel
+                    .record_snapshot(timestamp_us, reason_str, sig_values, ir_hash);
+            }
+            dt.cdp_dispatcher.update_from_ir(
+                &self.ir_graph,
+                &self.base_node_styles,
+                self.frame_count,
+                self.layout_computations,
+            );
+        }
+
+        record
+    }
+
     /// Renders the current frame and presents it to the given surface presenter via the swapchain compositor.
     pub fn render_frame<P: SurfacePresenter>(
         &mut self,
@@ -1540,26 +2269,23 @@ impl AppRuntime {
         presenter: &mut P,
         force_redraw: bool,
     ) -> Result<bool, PresentError> {
-        #[cfg(feature = "devtools")]
-        let frame_start = std::time::Instant::now();
-
         let retained_3d_dirty = self.poll_retained_3d_dirty();
-        if self.paint_dirty || self.frame_count == 0 || force_redraw {
+        let did_dirty_tick = self.paint_dirty || self.frame_count == 0 || force_redraw;
+        if did_dirty_tick {
             self.tick_frame();
         } else {
             self.compiles_skipped += 1;
+            if retained_3d_dirty {
+                self.frame_count += 1;
+            }
         }
 
         #[cfg(feature = "devtools")]
         if let Some(ref mut dt) = self.devtools {
             if dt.hud.state.is_visible {
-                dt.hud
-                    .render_overlay(Some(&dt.profiler), &mut self.display_list);
+                dt.render_hud_overlay(&mut self.display_list);
             }
         }
-
-        #[cfg(feature = "devtools")]
-        let submit_start = std::time::Instant::now();
 
         let present_start = std::time::Instant::now();
         let res = compositor.render_and_present(
@@ -1569,35 +2295,15 @@ impl AppRuntime {
         );
         self.acknowledge_retained_3d_presented();
         self.frame_profile.present += present_start.elapsed();
-        self.finish_frame_profile();
 
-        #[cfg(feature = "devtools")]
-        if let Some(ref mut dt) = self.devtools {
-            let submit_dur = submit_start.elapsed().as_micros() as u32;
-            let total_dur = frame_start.elapsed().as_micros() as u32;
-            let sample = strata_devtools::FrameTimingSample {
-                frame_index: self.frame_count,
-                vsync_wait_us: 0,
-                input_dispatch_us: 100,
-                signal_drain_us: 150,
-                parallel_reconcile_us: 200,
-                style_cascade_us: 250,
-                layout_solve_us: 300,
-                display_list_build_us: 350,
-                gpu_submit_us: submit_dur,
-                gpu_raster_duration_us: submit_dur.max(500),
-                total_cpu_frame_us: total_dur,
-                frame_budget_us: 16666,
-                layout_shift_score: 0.0,
-            };
-            dt.profiler.record_sample(sample);
-            dt.cdp_dispatcher.update_from_ir(
-                &self.ir_graph,
-                &self.base_node_styles,
-                self.frame_count,
-                self.layout_computations,
-            );
-        }
+        let outcome = if did_dirty_tick {
+            "Dirty"
+        } else if retained_3d_dirty {
+            "RepaintCanvas3D"
+        } else {
+            "Clean"
+        };
+        self.finalize_frame_telemetry(outcome);
 
         res
     }

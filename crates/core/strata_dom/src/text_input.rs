@@ -9,6 +9,8 @@ pub enum InputKey {
     Char(char),
     Left,
     Right,
+    Up,
+    Down,
     Home,
     End,
     Backspace,
@@ -54,6 +56,7 @@ pub struct TextInputState {
     pub selection_anchor: Signal<Option<usize>>,
     pub is_focused: Signal<bool>,
     pub scroll_x: std::cell::Cell<f32>,
+    pub scroll_y: std::cell::Cell<f32>,
     undo_stack: Vec<(String, usize)>,
     redo_stack: Vec<(String, usize)>,
 }
@@ -77,6 +80,7 @@ impl TextInputState {
             selection_anchor,
             is_focused,
             scroll_x: std::cell::Cell::new(0.0),
+            scroll_y: std::cell::Cell::new(0.0),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         }
@@ -442,9 +446,13 @@ impl TextInputState {
         self.cursor_index.set(0);
     }
 
-    /// Moves the cursor to the end of the line.
+    /// Moves the cursor to the end of the text buffer.
     pub fn move_end(&self, extend_selection: bool) {
         let total = self.text.get().chars().count();
+        self.set_cursor_with_selection(total, extend_selection);
+    }
+
+    fn set_cursor_with_selection(&self, new_cursor: usize, extend_selection: bool) {
         let cursor = self.cursor_index.get();
         if extend_selection {
             if self.selection_anchor.get().is_none() {
@@ -453,7 +461,101 @@ impl TextInputState {
         } else {
             self.selection_anchor.set(None);
         }
-        self.cursor_index.set(total);
+        self.cursor_index.set(new_cursor);
+    }
+
+    /// Returns `(line_index, column_char_offset)` for a character index inside `text`.
+    pub fn line_col_at_index(text: &str, char_idx: usize) -> (usize, usize) {
+        let mut line = 0usize;
+        let mut col = 0usize;
+        for (idx, ch) in text.chars().enumerate() {
+            if idx >= char_idx {
+                break;
+            }
+            if ch == '\n' {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        (line, col)
+    }
+
+    /// Converts `(line_index, column_char_offset)` back into a clamped character index.
+    pub fn index_from_line_col(text: &str, target_line: usize, target_col: usize) -> usize {
+        let mut cur_line = 0usize;
+        let mut cur_col = 0usize;
+        for (idx, ch) in text.chars().enumerate() {
+            if cur_line == target_line && (ch == '\n' || cur_col >= target_col) {
+                return idx;
+            }
+            if ch == '\n' {
+                cur_line += 1;
+                cur_col = 0;
+            } else if cur_line == target_line {
+                cur_col += 1;
+            }
+        }
+        text.chars().count()
+    }
+
+    /// Moves the cursor to the start of the current `\n`-separated line.
+    pub fn move_line_home(&self, extend_selection: bool) {
+        let text = self.text.get();
+        let (line, _) = Self::line_col_at_index(&text, self.cursor_index.get());
+        let target = Self::index_from_line_col(&text, line, 0);
+        self.set_cursor_with_selection(target, extend_selection);
+    }
+
+    /// Moves the cursor to the end of the current `\n`-separated line.
+    pub fn move_line_end(&self, extend_selection: bool) {
+        let text = self.text.get();
+        let (line, _) = Self::line_col_at_index(&text, self.cursor_index.get());
+        let target = Self::index_from_line_col(&text, line, usize::MAX);
+        self.set_cursor_with_selection(target, extend_selection);
+    }
+
+    /// Moves the cursor up one logical line, preserving column where possible.
+    pub fn move_up(&self, extend_selection: bool) {
+        let text = self.text.get();
+        let cursor = self.cursor_index.get();
+        if !extend_selection && self.has_selection() {
+            if let Some((start, _)) = self.selection_range() {
+                self.selection_anchor.set(None);
+                self.cursor_index.set(start);
+                return;
+            }
+        }
+        let (line, col) = Self::line_col_at_index(&text, cursor);
+        let target = if line == 0 {
+            0
+        } else {
+            Self::index_from_line_col(&text, line - 1, col)
+        };
+        self.set_cursor_with_selection(target, extend_selection);
+    }
+
+    /// Moves the cursor down one logical line, preserving column where possible.
+    pub fn move_down(&self, extend_selection: bool) {
+        let text = self.text.get();
+        let cursor = self.cursor_index.get();
+        if !extend_selection && self.has_selection() {
+            if let Some((_, end)) = self.selection_range() {
+                self.selection_anchor.set(None);
+                self.cursor_index.set(end);
+                return;
+            }
+        }
+        let total = text.chars().count();
+        let (line, col) = Self::line_col_at_index(&text, cursor);
+        let line_count = text.chars().filter(|&c| c == '\n').count() + 1;
+        let target = if line + 1 >= line_count {
+            total
+        } else {
+            Self::index_from_line_col(&text, line + 1, col)
+        };
+        self.set_cursor_with_selection(target, extend_selection);
     }
 
     /// Pushes current text and cursor position to the undo stack.
@@ -500,6 +602,17 @@ impl TextInputState {
         key: InputKey,
         modifiers: InputModifiers,
         clipboard_content: Option<&str>,
+    ) -> InputKeyResult {
+        self.handle_key_with_mode(key, modifiers, clipboard_content, false)
+    }
+
+    /// Processes a keyboard event with optional multiline `<textarea>` semantics (`Enter` inserts `\n`).
+    pub fn handle_key_with_mode(
+        &mut self,
+        key: InputKey,
+        modifiers: InputModifiers,
+        clipboard_content: Option<&str>,
+        multiline: bool,
     ) -> InputKeyResult {
         // Handle Ctrl shortcuts
         if modifiers.ctrl {
@@ -552,6 +665,14 @@ impl TextInputState {
                     self.move_right(modifiers.shift, true);
                     return InputKeyResult::Handled;
                 }
+                InputKey::Home => {
+                    self.move_home(modifiers.shift);
+                    return InputKeyResult::Handled;
+                }
+                InputKey::End => {
+                    self.move_end(modifiers.shift);
+                    return InputKeyResult::Handled;
+                }
                 InputKey::Backspace => {
                     self.delete_word_backward();
                     return InputKeyResult::Handled;
@@ -559,6 +680,9 @@ impl TextInputState {
                 InputKey::Delete => {
                     self.delete_word_forward();
                     return InputKeyResult::Handled;
+                }
+                InputKey::Enter if multiline => {
+                    return InputKeyResult::Submitted;
                 }
                 _ => {}
             }
@@ -574,12 +698,28 @@ impl TextInputState {
                 self.move_right(modifiers.shift, false);
                 InputKeyResult::Handled
             }
+            InputKey::Up if multiline => {
+                self.move_up(modifiers.shift);
+                InputKeyResult::Handled
+            }
+            InputKey::Down if multiline => {
+                self.move_down(modifiers.shift);
+                InputKeyResult::Handled
+            }
             InputKey::Home => {
-                self.move_home(modifiers.shift);
+                if multiline {
+                    self.move_line_home(modifiers.shift);
+                } else {
+                    self.move_home(modifiers.shift);
+                }
                 InputKeyResult::Handled
             }
             InputKey::End => {
-                self.move_end(modifiers.shift);
+                if multiline {
+                    self.move_line_end(modifiers.shift);
+                } else {
+                    self.move_end(modifiers.shift);
+                }
                 InputKeyResult::Handled
             }
             InputKey::Backspace => {
@@ -590,7 +730,14 @@ impl TextInputState {
                 self.delete_forward();
                 InputKeyResult::Handled
             }
-            InputKey::Enter => InputKeyResult::Submitted,
+            InputKey::Enter => {
+                if multiline {
+                    self.insert_text("\n");
+                    InputKeyResult::Handled
+                } else {
+                    InputKeyResult::Submitted
+                }
+            }
             InputKey::Escape => {
                 self.clear_selection();
                 InputKeyResult::Handled

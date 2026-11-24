@@ -180,6 +180,15 @@ thread_local! {
     static MEASURE_CACHE: std::cell::RefCell<[Option<MeasureCacheEntry>; CACHE_SIZE]> = const { std::cell::RefCell::new([None; CACHE_SIZE]) };
     static STYLED_MEASURE_CACHE: std::cell::RefCell<std::collections::HashMap<StyledMeasureKey, (f32, f32)>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+    static TEXT_CACHE_HITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static TEXT_CACHE_MISSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Returns cumulative `(hits, misses)` for thread-local text/glyph layout measurement caches.
+pub fn text_measure_cache_stats() -> (u64, u64) {
+    let hits = TEXT_CACHE_HITS.with(|c| c.get());
+    let misses = TEXT_CACHE_MISSES.with(|c| c.get());
+    (hits, misses)
 }
 
 fn hash_text(text: &str) -> u64 {
@@ -217,7 +226,13 @@ fn styled_measure_key(
 }
 
 fn styled_cache_get(key: &StyledMeasureKey) -> Option<(f32, f32)> {
-    STYLED_MEASURE_CACHE.with(|cache| cache.borrow().get(key).copied())
+    let hit = STYLED_MEASURE_CACHE.with(|cache| cache.borrow().get(key).copied());
+    if hit.is_some() {
+        TEXT_CACHE_HITS.with(|c| c.set(c.get().wrapping_add(1)));
+    } else {
+        TEXT_CACHE_MISSES.with(|c| c.set(c.get().wrapping_add(1)));
+    }
+    hit
 }
 
 fn styled_cache_put(key: StyledMeasureKey, bounds: (f32, f32)) {
@@ -354,8 +369,10 @@ pub fn measure_text_bounds_ext(
     });
 
     if let Some(bounds) = cached {
+        TEXT_CACHE_HITS.with(|c| c.set(c.get().wrapping_add(1)));
         return bounds;
     }
+    TEXT_CACHE_MISSES.with(|c| c.set(c.get().wrapping_add(1)));
 
     let ifc = InlineFormattingContext::new();
     let explicit_lh = font_size * line_height_multiplier;

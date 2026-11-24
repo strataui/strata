@@ -244,6 +244,8 @@ pub fn Textarea(
 ) -> View {
     let r = rows.unwrap_or(4);
     let custom = class.unwrap_or("");
+    let val_str = value.as_ref().map(|s| s.get()).unwrap_or_default();
+    let val_sig = value.clone();
 
     rsx! {
         <div class="flex flex-col gap-1.5 w-full">
@@ -257,8 +259,15 @@ pub fn Textarea(
                 class={format!("w-full p-3.5 bg-neutral-900 border border-neutral-800 rounded-lg text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500 transition-colors resize-y {}", custom)}
                 placeholder={placeholder.unwrap_or("")}
                 disabled={disabled.unwrap_or(false)}
+                oninput={move |val: String| {
+                    if let Some(ref sig) = val_sig {
+                        if sig.get() != val {
+                            sig.set(val);
+                        }
+                    }
+                }}
             >
-                {value.map(|s| s.get()).unwrap_or_default()}
+                {val_str}
             </textarea>
         </div>
     }
@@ -551,7 +560,7 @@ pub fn Select(
             rsx! {
                 <div
                     role="listbox"
-                    class="min-w-40 max-h-64 overflow-y-auto rounded-lg bg-neutral-900 border border-neutral-800 shadow-xl py-1"
+                    class="w-full min-w-40 max-h-64 overflow-y-auto rounded-lg bg-neutral-900 border border-neutral-800 shadow-xl py-1"
                 >
                     {items}
                 </div>

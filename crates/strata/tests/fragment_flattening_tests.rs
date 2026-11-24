@@ -4,10 +4,10 @@ use strata_dom::{NodeBlueprint, Tag, View};
 #[component]
 fn TwoGridItems() -> View {
     rsx! {
-        <div class="w-[80px] h-[40px] bg-red-500">
+        <div class="h-[40px] bg-red-500">
             "Item 1"
         </div>
-        <div class="w-[80px] h-[40px] bg-blue-500">
+        <div class="h-[40px] bg-blue-500">
             "Item 2"
         </div>
     }

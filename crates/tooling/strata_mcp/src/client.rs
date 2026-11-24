@@ -214,9 +214,55 @@ impl StrataDevClient {
         self.call("inspect_element", serde_json::json!({ "x": x, "y": y }))
     }
 
-    /// Executes a sequential batch of UI actions.
+    /// Executes a sequential batch of UI actions, executing any `"wait"` delays on the caller/MCP
+    /// side between RPC batches so the target Strata UI main thread is never blocked by `sleep`.
     pub fn execute_actions(&self, actions: Vec<Value>) -> Result<Value, String> {
-        self.call("execute_actions", serde_json::json!({ "actions": actions }))
+        let has_wait = actions
+            .iter()
+            .any(|a| a.get("action").and_then(|v| v.as_str()) == Some("wait"));
+        if !has_wait {
+            return self.call("execute_actions", serde_json::json!({ "actions": actions }));
+        }
+
+        let mut total_executed: u64 = 0;
+        let mut pending_batch: Vec<Value> = Vec::new();
+
+        for act in actions {
+            if act.get("action").and_then(|v| v.as_str()) == Some("wait") {
+                if !pending_batch.is_empty() {
+                    let batch = std::mem::take(&mut pending_batch);
+                    let res = self.call("execute_actions", serde_json::json!({ "actions": batch }))?;
+                    total_executed += res
+                        .get("executed_actions")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                }
+                let ms = act
+                    .get("ms")
+                    .and_then(|m| m.as_u64())
+                    .unwrap_or(50)
+                    .min(5000);
+                if ms > 0 {
+                    std::thread::sleep(Duration::from_millis(ms));
+                }
+                total_executed += 1;
+            } else {
+                pending_batch.push(act);
+            }
+        }
+
+        if !pending_batch.is_empty() {
+            let res = self.call(
+                "execute_actions",
+                serde_json::json!({ "actions": pending_batch }),
+            )?;
+            total_executed += res
+                .get("executed_actions")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+        }
+
+        Ok(serde_json::json!({ "executed_actions": total_executed }))
     }
 }
 

@@ -12,3 +12,4 @@ documentation.workspace = true
 [dependencies]
 strata-dom = { workspace = true }
 strata-primitives = { workspace = true }
+strata-web-api = { workspace = true }

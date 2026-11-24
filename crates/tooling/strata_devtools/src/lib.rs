@@ -22,7 +22,9 @@ pub use cdp::{
 };
 pub use server::CdpServer;
 
-pub use hud::{DevToolsEventInterceptor, HudController, HudDockMode, HudState, HudTab};
+pub use hud::{
+    DevToolsEventInterceptor, HudController, HudDockMode, HudLiveTelemetry, HudState, HudTab,
+};
 pub use inspector::{
     BoxModelMetrics, ComponentMeta, LiveTailwindEditor, PropDescriptor, PropValue, ReflectProp,
     SourceLocation,
@@ -32,7 +34,8 @@ pub use memory::{
     HeapBudgetStatus,
 };
 pub use profiler::{
-    FrameTimelineProfiler, FrameTimingSample, LayoutShiftDetector, StageTimer, TraceJsonExporter,
+    current_thread_id_u64, FrameTimelineProfiler, FrameTimingSample, LayoutShiftDetector,
+    StageTimer, TraceJsonExporter, WorkerTraceSpan,
 };
 pub use reactive_graph::{
     CausalTriggerTrace, ReRenderHeatmapLevel, ReactiveCycleError, ReactiveCycleGuard, ReactiveEdge,
@@ -49,6 +52,7 @@ pub struct DevTools {
     pub arena_inspector: ArenaInspector,
     pub time_travel: TimeTravelDebugger,
     pub cdp_dispatcher: CdpDispatcher,
+    pub live_telemetry: HudLiveTelemetry,
 }
 
 impl DevTools {
@@ -60,6 +64,18 @@ impl DevTools {
             arena_inspector: ArenaInspector::new(85.0),
             time_travel: TimeTravelDebugger::new(128),
             cdp_dispatcher: CdpDispatcher::new(),
+            live_telemetry: HudLiveTelemetry::default(),
         }
+    }
+
+    /// Renders the DevTools HUD overlay backed by live profiler, reactivity, memory, arena, and time-travel state.
+    pub fn render_hud_overlay(&self, display_list: &mut strata_render::compositor::DisplayList) {
+        self.hud.render_overlay_with_context(
+            Some(&self.profiler),
+            Some(&self.live_telemetry),
+            Some(&self.arena_inspector),
+            Some(&self.time_travel),
+            display_list,
+        );
     }
 }

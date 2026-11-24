@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::runtime::AppRuntime;
-use strata_platform::{KeyCode, Modifiers, MouseButton};
+use strata_platform::{KeyCode, Modifiers, MouseButton, PlatformEvent};
 
 type PendingItem = (String, Sender<String>);
 
@@ -173,9 +173,103 @@ pub fn start_mcp_dev_listener(socket_path: Option<PathBuf>) -> Result<(), std::i
     Ok(())
 }
 
+fn dispatch_to_ui_thread(req_json: String) -> String {
+    let (tx, rx) = channel();
+    if let Ok(mut q) = get_pending_queue().lock() {
+        q.push((req_json, tx));
+    }
+
+    // Signal GTK main event loop to wake up and process the queue
+    #[cfg(target_os = "linux")]
+    strata_platform::post_platform_event(strata_platform::PlatformEvent::RedrawRequested);
+
+    match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(res) => res,
+        Err(_) => json!({
+            "jsonrpc": "2.0",
+            "error": { "code": -32000, "message": "Request timed out waiting for UI thread" }
+        })
+        .to_string(),
+    }
+}
+
+/// Splits an `execute_actions` request on `"wait"` steps so every delay sleeps on the background
+/// IPC thread instead of blocking the UI main thread or polluting `input_dispatch_us`.
+fn execute_actions_nonblocking_on_ipc_thread(id: Value, actions: &[Value]) -> String {
+    let mut total_executed: u64 = 0;
+    let mut pending_batch: Vec<Value> = Vec::new();
+
+    for act in actions {
+        if act.get("action").and_then(|v| v.as_str()) == Some("wait") {
+            if !pending_batch.is_empty() {
+                let batch = std::mem::take(&mut pending_batch);
+                let sub_req = json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "method": "execute_actions",
+                    "params": { "actions": batch },
+                });
+                let resp_str = dispatch_to_ui_thread(sub_req.to_string());
+                if let Ok(parsed) = serde_json::from_str::<Value>(&resp_str) {
+                    if parsed.get("error").is_some() {
+                        return resp_str;
+                    }
+                    total_executed += parsed
+                        .get("result")
+                        .and_then(|r| r.get("executed_actions"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                } else {
+                    return resp_str;
+                }
+            }
+            let ms = act
+                .get("ms")
+                .and_then(|m| m.as_u64())
+                .unwrap_or(50)
+                .min(5000);
+            if ms > 0 {
+                std::thread::sleep(Duration::from_millis(ms));
+            }
+            total_executed += 1;
+        } else {
+            pending_batch.push(act.clone());
+        }
+    }
+
+    if !pending_batch.is_empty() {
+        let sub_req = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "execute_actions",
+            "params": { "actions": pending_batch },
+        });
+        let resp_str = dispatch_to_ui_thread(sub_req.to_string());
+        if let Ok(parsed) = serde_json::from_str::<Value>(&resp_str) {
+            if parsed.get("error").is_some() {
+                return resp_str;
+            }
+            total_executed += parsed
+                .get("result")
+                .and_then(|r| r.get("executed_actions"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+        } else {
+            return resp_str;
+        }
+    }
+
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": { "executed_actions": total_executed },
+    })
+    .to_string()
+}
+
 fn handle_client_connection(mut stream: UnixStream) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
 
     let mut reader = BufReader::new(match stream.try_clone() {
         Ok(s) => s,
@@ -193,22 +287,33 @@ fn handle_client_connection(mut stream: UnixStream) {
             continue;
         }
 
-        let (tx, rx) = channel();
-        if let Ok(mut q) = get_pending_queue().lock() {
-            q.push((trimmed.to_string(), tx));
-        }
-
-        // Signal GTK main event loop to wake up and process the queue
-        #[cfg(target_os = "linux")]
-        strata_platform::post_platform_event(strata_platform::PlatformEvent::RedrawRequested);
-
-        let response = match rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(res) => res,
-            Err(_) => json!({
-                "jsonrpc": "2.0",
-                "error": { "code": -32000, "message": "Request timed out waiting for UI thread" }
-            })
-            .to_string(),
+        // Handle `execute_actions` batches containing `"wait"` on this background IPC thread so
+        // waiting never freezes the UI main thread or spikes `input_dispatch_us`.
+        let response = if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
+            let is_exec_with_wait = parsed.get("method").and_then(|m| m.as_str())
+                == Some("execute_actions")
+                && parsed
+                    .get("params")
+                    .and_then(|p| p.get("actions"))
+                    .and_then(|a| a.as_array())
+                    .is_some_and(|arr| {
+                        arr.iter()
+                            .any(|a| a.get("action").and_then(|v| v.as_str()) == Some("wait"))
+                    });
+            if is_exec_with_wait {
+                let id = parsed.get("id").cloned().unwrap_or(Value::Null);
+                let actions = parsed
+                    .get("params")
+                    .and_then(|p| p.get("actions"))
+                    .and_then(|a| a.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                execute_actions_nonblocking_on_ipc_thread(id, &actions)
+            } else {
+                dispatch_to_ui_thread(trimmed.to_string())
+            }
+        } else {
+            dispatch_to_ui_thread(trimmed.to_string())
         };
 
         let mut out_bytes = response.into_bytes();
@@ -222,72 +327,455 @@ fn handle_client_connection(mut stream: UnixStream) {
     }
 }
 
-/// Drains and processes all pending MCP requests on the active main UI thread.
+/// Structured outcome returned when draining or executing MCP commands, separating full view
+/// rebuilds from paint-only redraws (e.g. fast-path hover restyling or cursor-only moves).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct McpDrainOutcome {
+    pub needs_rebuild: bool,
+    pub needs_redraw: bool,
+}
+
+impl McpDrainOutcome {
+    pub fn merge(&mut self, other: Self) {
+        self.needs_rebuild |= other.needs_rebuild;
+        self.needs_redraw |= other.needs_redraw;
+    }
+
+    pub fn any_dirty(self) -> bool {
+        self.needs_rebuild || self.needs_redraw
+    }
+}
+
+/// Dispatches a synthetic MCP [`PlatformEvent`] through DevTools (when enabled) and the host
+/// application's event hook (`launch_with_events` / `launch_with_frame`), returning
+/// `(intercepted_by_devtools, needs_rebuild, needs_redraw)`.
+fn dispatch_synthetic_event_to_hook<F>(
+    runtime: &mut AppRuntime,
+    event: &PlatformEvent,
+    user_event_hook: &mut F,
+) -> (bool, bool, bool)
+where
+    F: FnMut(&PlatformEvent, &mut AppRuntime) -> bool,
+{
+    #[cfg(feature = "devtools")]
+    if let Some(ref mut dt) = runtime.devtools {
+        if strata_devtools::DevToolsEventInterceptor::intercept(&mut dt.hud, event) {
+            runtime.mark_paint_dirty();
+            return (true, true, true);
+        }
+    }
+    let hook_signals_before = strata_dom::reactive::has_dirty_signals();
+    if user_event_hook(event, runtime)
+        || (!hook_signals_before && strata_dom::reactive::has_dirty_signals())
+    {
+        runtime.mark_paint_dirty();
+        (false, true, true)
+    } else {
+        (false, false, false)
+    }
+}
+
+fn current_mcp_pointer_pos(runtime: &AppRuntime) -> (f32, f32) {
+    runtime
+        .mcp_cursor
+        .as_ref()
+        .map(|c| (c.current_x, c.current_y))
+        .unwrap_or(runtime.last_mouse_pos)
+}
+
+fn exec_mcp_move<F>(
+    runtime: &mut AppRuntime,
+    x: f32,
+    y: f32,
+    smooth: bool,
+    user_event_hook: &mut F,
+) -> McpDrainOutcome
+where
+    F: FnMut(&PlatformEvent, &mut AppRuntime) -> bool,
+{
+    runtime.last_mouse_pos = (x, y);
+    let ev = PlatformEvent::MouseMove { x, y };
+    let (intercepted, h_rb, h_rd) = dispatch_synthetic_event_to_hook(runtime, &ev, user_event_hook);
+    if intercepted {
+        return McpDrainOutcome {
+            needs_rebuild: h_rb,
+            needs_redraw: h_rd,
+        };
+    }
+    let (rb, rd) = runtime.mcp_move_pointer_outcome(x, y, smooth);
+    McpDrainOutcome {
+        needs_rebuild: h_rb || rb,
+        needs_redraw: h_rd || rd,
+    }
+}
+
+fn exec_mcp_down<F>(
+    runtime: &mut AppRuntime,
+    button: MouseButton,
+    x: Option<f32>,
+    y: Option<f32>,
+    user_event_hook: &mut F,
+) -> McpDrainOutcome
+where
+    F: FnMut(&PlatformEvent, &mut AppRuntime) -> bool,
+{
+    let mut out = McpDrainOutcome::default();
+    let (px, py) = match (x, y) {
+        (Some(px), Some(py)) => {
+            out.merge(exec_mcp_move(runtime, px, py, false, user_event_hook));
+            (px, py)
+        }
+        _ => current_mcp_pointer_pos(runtime),
+    };
+    let ev = PlatformEvent::MouseDown {
+        button,
+        x: px,
+        y: py,
+    };
+    let (intercepted, h_rb, h_rd) = dispatch_synthetic_event_to_hook(runtime, &ev, user_event_hook);
+    out.merge(McpDrainOutcome {
+        needs_rebuild: h_rb,
+        needs_redraw: h_rd,
+    });
+    if !intercepted {
+        let (rb, rd) = runtime.mcp_mouse_down_outcome(button, None, None);
+        out.merge(McpDrainOutcome {
+            needs_rebuild: rb,
+            needs_redraw: rd,
+        });
+    }
+    out
+}
+
+fn exec_mcp_up<F>(
+    runtime: &mut AppRuntime,
+    button: MouseButton,
+    x: Option<f32>,
+    y: Option<f32>,
+    user_event_hook: &mut F,
+) -> McpDrainOutcome
+where
+    F: FnMut(&PlatformEvent, &mut AppRuntime) -> bool,
+{
+    let mut out = McpDrainOutcome::default();
+    let (px, py) = match (x, y) {
+        (Some(px), Some(py)) => {
+            out.merge(exec_mcp_move(runtime, px, py, false, user_event_hook));
+            (px, py)
+        }
+        _ => current_mcp_pointer_pos(runtime),
+    };
+    let ev = PlatformEvent::MouseUp {
+        button,
+        x: px,
+        y: py,
+    };
+    let (intercepted, h_rb, h_rd) = dispatch_synthetic_event_to_hook(runtime, &ev, user_event_hook);
+    out.merge(McpDrainOutcome {
+        needs_rebuild: h_rb,
+        needs_redraw: h_rd,
+    });
+    if !intercepted {
+        let (rb, rd) = runtime.mcp_mouse_up_outcome(button, None, None);
+        out.merge(McpDrainOutcome {
+            needs_rebuild: rb,
+            needs_redraw: rd,
+        });
+    }
+    out
+}
+
+fn exec_mcp_click<F>(
+    runtime: &mut AppRuntime,
+    button: MouseButton,
+    x: Option<f32>,
+    y: Option<f32>,
+    count: usize,
+    user_event_hook: &mut F,
+) -> McpDrainOutcome
+where
+    F: FnMut(&PlatformEvent, &mut AppRuntime) -> bool,
+{
+    let mut out = McpDrainOutcome::default();
+    if let (Some(px), Some(py)) = (x, y) {
+        out.merge(exec_mcp_move(runtime, px, py, false, user_event_hook));
+    }
+    for _ in 0..count.max(1) {
+        out.merge(exec_mcp_down(runtime, button, None, None, user_event_hook));
+        out.merge(exec_mcp_up(runtime, button, None, None, user_event_hook));
+    }
+    out
+}
+
+fn exec_mcp_scroll<F>(
+    runtime: &mut AppRuntime,
+    delta_x: f32,
+    delta_y: f32,
+    x: Option<f32>,
+    y: Option<f32>,
+    user_event_hook: &mut F,
+) -> McpDrainOutcome
+where
+    F: FnMut(&PlatformEvent, &mut AppRuntime) -> bool,
+{
+    let mut out = McpDrainOutcome::default();
+    if let (Some(px), Some(py)) = (x, y) {
+        out.merge(exec_mcp_move(runtime, px, py, false, user_event_hook));
+    }
+    let ev = PlatformEvent::Scroll {
+        delta_x,
+        delta_y,
+        is_momentum: false,
+    };
+    let (intercepted, h_rb, h_rd) = dispatch_synthetic_event_to_hook(runtime, &ev, user_event_hook);
+    out.merge(McpDrainOutcome {
+        needs_rebuild: h_rb,
+        needs_redraw: h_rd,
+    });
+    if !intercepted {
+        let (rb, rd) = runtime.mcp_mouse_scroll_outcome(delta_x, delta_y, None, None);
+        out.merge(McpDrainOutcome {
+            needs_rebuild: rb,
+            needs_redraw: rd,
+        });
+    }
+    out
+}
+
+fn exec_mcp_type<F>(
+    runtime: &mut AppRuntime,
+    text: &str,
+    user_event_hook: &mut F,
+) -> McpDrainOutcome
+where
+    F: FnMut(&PlatformEvent, &mut AppRuntime) -> bool,
+{
+    let mut out = McpDrainOutcome::default();
+    let mut char_buf = [0u8; 4];
+    for ch in text.chars() {
+        let ev = PlatformEvent::ReceivedCharacter(ch);
+        let (intercepted, h_rb, h_rd) =
+            dispatch_synthetic_event_to_hook(runtime, &ev, user_event_hook);
+        out.merge(McpDrainOutcome {
+            needs_rebuild: h_rb,
+            needs_redraw: h_rd,
+        });
+        if !intercepted {
+            let s = ch.encode_utf8(&mut char_buf);
+            let (rb, rd) = runtime.mcp_keyboard_type_outcome(s);
+            out.merge(McpDrainOutcome {
+                needs_rebuild: rb,
+                needs_redraw: rd,
+            });
+        }
+    }
+    out
+}
+
+fn exec_mcp_key<F>(
+    runtime: &mut AppRuntime,
+    key: KeyCode,
+    modifiers: Modifiers,
+    user_event_hook: &mut F,
+) -> McpDrainOutcome
+where
+    F: FnMut(&PlatformEvent, &mut AppRuntime) -> bool,
+{
+    let mut out = McpDrainOutcome::default();
+    if let Some(ref mut c) = runtime.mcp_cursor {
+        c.touch_activity();
+    }
+    let ev_down = PlatformEvent::KeyDown { key, modifiers };
+    let (intercepted_down, h_rb_down, h_rd_down) =
+        dispatch_synthetic_event_to_hook(runtime, &ev_down, user_event_hook);
+    out.merge(McpDrainOutcome {
+        needs_rebuild: h_rb_down,
+        needs_redraw: h_rd_down,
+    });
+    if !intercepted_down {
+        let res_down = runtime.dispatch_key_event(&ev_down);
+        out.merge(McpDrainOutcome {
+            needs_rebuild: res_down.needs_rebuild(),
+            needs_redraw: res_down.needs_redraw(),
+        });
+    }
+
+    let ev_up = PlatformEvent::KeyUp { key, modifiers };
+    let (intercepted_up, h_rb_up, h_rd_up) =
+        dispatch_synthetic_event_to_hook(runtime, &ev_up, user_event_hook);
+    out.merge(McpDrainOutcome {
+        needs_rebuild: h_rb_up,
+        needs_redraw: h_rd_up,
+    });
+    if !intercepted_up {
+        let res_up = runtime.dispatch_key_event(&ev_up);
+        out.merge(McpDrainOutcome {
+            needs_rebuild: res_up.needs_rebuild(),
+            needs_redraw: res_up.needs_redraw(),
+        });
+    }
+    if out.needs_redraw {
+        runtime.mark_paint_dirty();
+    }
+    out
+}
+
+/// Drains and processes all pending MCP requests on the active main UI thread, forwarding all
+/// synthetic input events (`KeyDown`/`KeyUp`/`ReceivedCharacter`/`Scroll`/`MouseMove`/`MouseDown`/`MouseUp`)
+/// through `user_event_hook` just like native OS events.
 ///
-/// Returns true if any executed command requires a view rebuild or display list redraw.
-pub fn drain_and_execute_mcp_requests(runtime: &mut AppRuntime) -> bool {
+/// For `take_screenshot`, captures the pixel buffer on the UI thread (~1–2 ms) and offloads
+/// PNG compression + base64 encoding onto a background worker thread so rendering never stalls.
+pub fn drain_and_execute_mcp_requests_with_hook<F>(
+    runtime: &mut AppRuntime,
+    mut user_event_hook: F,
+) -> McpDrainOutcome
+where
+    F: FnMut(&PlatformEvent, &mut AppRuntime) -> bool,
+{
     let mut items = Vec::new();
     {
         if let Ok(mut lock) = get_pending_queue().lock() {
             if lock.is_empty() {
-                return false;
+                return McpDrainOutcome::default();
             }
             items = std::mem::take(&mut *lock);
         }
     }
 
-    let mut any_dirty = false;
+    let mut total = McpDrainOutcome::default();
     for (req_str, tx) in items {
-        let (resp_str, dirty) = process_single_mcp_request(runtime, &req_str);
-        if dirty {
-            any_dirty = true;
+        let parsed: Value = match serde_json::from_str(&req_str) {
+            Ok(v) => v,
+            Err(e) => {
+                let err = json!({
+                    "jsonrpc": "2.0",
+                    "error": { "code": -32700, "message": format!("Parse error: {}", e) }
+                });
+                let _ = tx.send(err.to_string());
+                continue;
+            }
+        };
+
+        let id = parsed.get("id").cloned();
+        let method = parsed.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        let params = parsed.get("params").cloned().unwrap_or(json!({}));
+
+        if method == "take_screenshot" {
+            match runtime.mcp_capture_screenshot_buffer() {
+                Ok(buf) => {
+                    let width = buf.width;
+                    let height = buf.height;
+                    let tx_worker = tx.clone();
+                    let id_worker = id.clone();
+                    let spawn_res = std::thread::Builder::new()
+                        .name("strata-mcp-png-encode".to_string())
+                        .spawn(move || {
+                            let resp = match buf.encode_png_bytes() {
+                                Ok(bytes) => json!({
+                                    "jsonrpc": "2.0",
+                                    "id": id_worker,
+                                    "result": {
+                                        "png_base64": base64_encode(&bytes),
+                                        "width": width,
+                                        "height": height,
+                                    }
+                                }),
+                                Err(err_msg) => json!({
+                                    "jsonrpc": "2.0",
+                                    "id": id_worker,
+                                    "error": { "code": -32603, "message": err_msg }
+                                }),
+                            };
+                            let _ = tx_worker.send(resp.to_string());
+                        });
+                    if let Err(e) = spawn_res {
+                        let resp = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": { "code": -32603, "message": format!("Failed to spawn PNG encoder thread: {e}") }
+                        });
+                        let _ = tx.send(resp.to_string());
+                    }
+                }
+                Err(err_msg) => {
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32603, "message": err_msg }
+                    });
+                    let _ = tx.send(resp.to_string());
+                }
+            }
+            continue;
         }
-        let _ = tx.send(resp_str);
+
+        let (result, outcome) =
+            execute_mcp_command_with_hook(runtime, method, params, &mut user_event_hook);
+        total.merge(outcome);
+
+        let resp = match result {
+            Ok(val) => json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": val,
+            }),
+            Err(err_msg) => json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": { "code": -32603, "message": err_msg }
+            }),
+        };
+        let _ = tx.send(resp.to_string());
     }
 
-    any_dirty
+    total
 }
 
-fn process_single_mcp_request(runtime: &mut AppRuntime, req_str: &str) -> (String, bool) {
-    let parsed: Value = match serde_json::from_str(req_str) {
-        Ok(v) => v,
-        Err(e) => {
-            let err = json!({
-                "jsonrpc": "2.0",
-                "error": { "code": -32700, "message": format!("Parse error: {}", e) }
-            });
-            return (err.to_string(), false);
-        }
-    };
-
-    let id = parsed.get("id").cloned();
-    let method = parsed.get("method").and_then(|m| m.as_str()).unwrap_or("");
-    let params = parsed.get("params").cloned().unwrap_or(json!({}));
-
-    let (result, dirty) = execute_mcp_command_core(runtime, method, params);
-
-    let resp = match result {
-        Ok(val) => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": val,
-        }),
-        Err(err_msg) => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": { "code": -32603, "message": err_msg }
-        }),
-    };
-
-    (resp.to_string(), dirty)
+/// Drains and processes all pending MCP requests on the active main UI thread, returning
+/// separate `needs_rebuild` and `needs_redraw` flags.
+pub fn drain_and_execute_mcp_requests_with_outcome(runtime: &mut AppRuntime) -> McpDrainOutcome {
+    drain_and_execute_mcp_requests_with_hook(runtime, |_, _| false)
 }
 
-/// Core execution routine for MCP commands directly modifying `AppRuntime`.
+/// Drains and processes all pending MCP requests on the active main UI thread.
+///
+/// Returns true if any executed command requires a view rebuild or display list redraw.
+pub fn drain_and_execute_mcp_requests(runtime: &mut AppRuntime) -> bool {
+    drain_and_execute_mcp_requests_with_outcome(runtime).any_dirty()
+}
+
+/// Core execution routine for MCP commands directly modifying `AppRuntime` (returning a combined dirty bool).
 pub fn execute_mcp_command_core(
     runtime: &mut AppRuntime,
     method: &str,
     params: Value,
 ) -> (Result<Value, String>, bool) {
+    let (res, outcome) = execute_mcp_command_with_outcome(runtime, method, params);
+    (res, outcome.any_dirty())
+}
+
+/// Core execution routine for MCP commands returning structured `(needs_rebuild, needs_redraw)`.
+pub fn execute_mcp_command_with_outcome(
+    runtime: &mut AppRuntime,
+    method: &str,
+    params: Value,
+) -> (Result<Value, String>, McpDrainOutcome) {
+    execute_mcp_command_with_hook(runtime, method, params, &mut |_, _| false)
+}
+
+/// Core execution routine for MCP commands that also forwards synthetic input events through the
+/// host application's event hook (`launch_with_events` / `launch_with_frame`).
+pub fn execute_mcp_command_with_hook<F>(
+    runtime: &mut AppRuntime,
+    method: &str,
+    params: Value,
+    user_event_hook: &mut F,
+) -> (Result<Value, String>, McpDrainOutcome)
+where
+    F: FnMut(&PlatformEvent, &mut AppRuntime) -> bool,
+{
+    let clean = McpDrainOutcome::default();
     match method {
         "session_info" => {
             let cursor_info = runtime.mcp_cursor.as_ref().map(|c| {
@@ -327,7 +815,14 @@ pub fn execute_mcp_command_core(
                 "cursor_theme": runtime.cursor_theme().name,
             });
 
-            (Ok(info), false)
+            (Ok(info), clean)
+        }
+        "get_perf_profile" => {
+            let summary = runtime.perf_profile_summary();
+            match serde_json::to_value(&summary) {
+                Ok(val) => (Ok(val), clean),
+                Err(e) => (Err(format!("Failed to serialize perf profile: {e}")), clean),
+            }
         }
         "mouse_move" => {
             let x = params.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
@@ -337,7 +832,7 @@ pub fn execute_mcp_command_core(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
 
-            let dirty = runtime.mcp_move_pointer(x, y, smooth);
+            let out = exec_mcp_move(runtime, x, y, smooth, user_event_hook);
             let cur_icon = runtime
                 .mcp_cursor
                 .as_ref()
@@ -349,9 +844,12 @@ pub fn execute_mcp_command_core(
                     "x": x,
                     "y": y,
                     "smooth": smooth,
-                    "cursor_icon": cur_icon
+                    "cursor_icon": cur_icon,
+                    "needs_rebuild": out.needs_rebuild,
+                    "needs_redraw": out.needs_redraw,
+                    "hover_fast_path_used": runtime.last_hover_fast_path_used(),
                 })),
-                dirty || true,
+                out,
             )
         }
         "mouse_click" => {
@@ -364,8 +862,15 @@ pub fn execute_mcp_command_core(
             let count = params.get("count").and_then(|c| c.as_u64()).unwrap_or(1) as usize;
             let button = parse_mouse_button(btn_str);
 
-            let dirty = runtime.mcp_mouse_click(button, x, y, count);
-            (Ok(json!({ "clicked": true })), dirty || true)
+            let out = exec_mcp_click(runtime, button, x, y, count, user_event_hook);
+            (
+                Ok(json!({
+                    "clicked": true,
+                    "needs_rebuild": out.needs_rebuild,
+                    "needs_redraw": out.needs_redraw,
+                })),
+                out,
+            )
         }
         "mouse_down" => {
             let x = params.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
@@ -376,8 +881,8 @@ pub fn execute_mcp_command_core(
                 .unwrap_or("left");
             let button = parse_mouse_button(btn_str);
 
-            let dirty = runtime.mcp_mouse_down(button, x, y);
-            (Ok(json!({ "down": true })), dirty || true)
+            let out = exec_mcp_down(runtime, button, x, y, user_event_hook);
+            (Ok(json!({ "down": true })), out)
         }
         "mouse_up" => {
             let x = params.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
@@ -388,10 +893,10 @@ pub fn execute_mcp_command_core(
                 .unwrap_or("left");
             let button = parse_mouse_button(btn_str);
 
-            let dirty = runtime.mcp_mouse_up(button, x, y);
-            (Ok(json!({ "up": true })), dirty || true)
+            let out = exec_mcp_up(runtime, button, x, y, user_event_hook);
+            (Ok(json!({ "up": true })), out)
         }
-        "mouse_scroll" => {
+        "mouse_scroll" | "mouse_wheel" => {
             let delta_x = params
                 .get("delta_x")
                 .and_then(|v| v.as_f64())
@@ -403,38 +908,59 @@ pub fn execute_mcp_command_core(
             let x = params.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
             let y = params.get("y").and_then(|v| v.as_f64()).map(|f| f as f32);
 
-            let dirty = runtime.mcp_mouse_scroll(delta_x, delta_y, x, y);
-            (Ok(json!({ "scrolled": true })), dirty || true)
+            let out = exec_mcp_scroll(runtime, delta_x, delta_y, x, y, user_event_hook);
+            (
+                Ok(json!({
+                    "scrolled": true,
+                    "delta_x": delta_x,
+                    "delta_y": delta_y,
+                    "needs_rebuild": out.needs_rebuild,
+                    "needs_redraw": out.needs_redraw,
+                })),
+                out,
+            )
         }
         "keyboard_type" => {
             let text = params.get("text").and_then(|t| t.as_str()).unwrap_or("");
-            let dirty = runtime.mcp_keyboard_type(text);
-            (
-                Ok(json!({ "typed_chars": text.chars().count() })),
-                dirty || true,
-            )
+            let out = exec_mcp_type(runtime, text, user_event_hook);
+            (Ok(json!({ "typed_chars": text.chars().count() })), out)
         }
-        "keyboard_key" => {
+        "keyboard_key" | "key_press" => {
             let key_str = params.get("key").and_then(|k| k.as_str()).unwrap_or("");
             let key = parse_key_code(key_str);
             let modifiers = parse_modifiers(params.get("modifiers"));
 
-            let dirty = runtime.mcp_keyboard_key(key, modifiers);
-            (Ok(json!({ "key_sent": key_str })), dirty || true)
+            let out = exec_mcp_key(runtime, key, modifiers, user_event_hook);
+            (
+                Ok(json!({
+                    "key_sent": key_str,
+                    "resolved_key": format!("{:?}", key),
+                    "needs_rebuild": out.needs_rebuild,
+                    "needs_redraw": out.needs_redraw,
+                })),
+                out,
+            )
         }
-        "take_screenshot" => match runtime.mcp_capture_screenshot_png() {
-            Ok(bytes) => {
-                let base64_str = base64_encode(&bytes);
-                (
-                    Ok(json!({
-                        "png_base64": base64_str,
-                        "width": runtime.viewport_width,
-                        "height": runtime.viewport_height,
-                    })),
-                    false,
-                )
+        "take_screenshot" => match runtime.mcp_capture_screenshot_buffer() {
+            Ok(buf) => {
+                let width = buf.width;
+                let height = buf.height;
+                match buf.encode_png_bytes() {
+                    Ok(bytes) => {
+                        let base64_str = base64_encode(&bytes);
+                        (
+                            Ok(json!({
+                                "png_base64": base64_str,
+                                "width": width,
+                                "height": height,
+                            })),
+                            clean,
+                        )
+                    }
+                    Err(e) => (Err(e), clean),
+                }
             }
-            Err(e) => (Err(e), false),
+            Err(e) => (Err(e), clean),
         },
         "inspect_element" => {
             let x = params.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
@@ -454,13 +980,14 @@ pub fn execute_mcp_command_core(
                     "text": text,
                     "cursor_icon": format!("{:?}", cursor_icon),
                 })),
-                false,
+                clean,
             )
         }
         "execute_actions" => {
             let actions_val = params.get("actions").cloned().unwrap_or(json!([]));
             let actions: Vec<Value> = actions_val.as_array().cloned().unwrap_or_default();
             let mut executed = 0;
+            let mut batch_outcome = McpDrainOutcome::default();
 
             for act in actions {
                 let act_type = act.get("action").and_then(|a| a.as_str()).unwrap_or("");
@@ -469,21 +996,31 @@ pub fn execute_mcp_command_core(
                         let x = act.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                         let y = act.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                         let smooth = act.get("smooth").and_then(|v| v.as_bool()).unwrap_or(true);
-                        runtime.mcp_move_pointer(x, y, smooth);
+                        batch_outcome.merge(exec_mcp_move(
+                            runtime,
+                            x,
+                            y,
+                            smooth,
+                            user_event_hook,
+                        ));
                         executed += 1;
                     }
                     "down" => {
                         let btn = parse_mouse_button(
                             act.get("button").and_then(|b| b.as_str()).unwrap_or("left"),
                         );
-                        runtime.mcp_mouse_down(btn, None, None);
+                        let x = act.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
+                        let y = act.get("y").and_then(|v| v.as_f64()).map(|f| f as f32);
+                        batch_outcome.merge(exec_mcp_down(runtime, btn, x, y, user_event_hook));
                         executed += 1;
                     }
                     "up" => {
                         let btn = parse_mouse_button(
                             act.get("button").and_then(|b| b.as_str()).unwrap_or("left"),
                         );
-                        runtime.mcp_mouse_up(btn, None, None);
+                        let x = act.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
+                        let y = act.get("y").and_then(|v| v.as_f64()).map(|f| f as f32);
+                        batch_outcome.merge(exec_mcp_up(runtime, btn, x, y, user_event_hook));
                         executed += 1;
                     }
                     "click" => {
@@ -493,45 +1030,59 @@ pub fn execute_mcp_command_core(
                             act.get("button").and_then(|b| b.as_str()).unwrap_or("left"),
                         );
                         let count = act.get("count").and_then(|c| c.as_u64()).unwrap_or(1) as usize;
-                        runtime.mcp_mouse_click(btn, x, y, count);
+                        batch_outcome.merge(exec_mcp_click(
+                            runtime,
+                            btn,
+                            x,
+                            y,
+                            count,
+                            user_event_hook,
+                        ));
                         executed += 1;
                     }
                     "type" => {
                         let text = act.get("text").and_then(|t| t.as_str()).unwrap_or("");
-                        runtime.mcp_keyboard_type(text);
+                        batch_outcome.merge(exec_mcp_type(runtime, text, user_event_hook));
                         executed += 1;
                     }
-                    "key" => {
+                    "key" | "key_press" => {
                         let key =
                             parse_key_code(act.get("key").and_then(|k| k.as_str()).unwrap_or(""));
                         let mods = parse_modifiers(act.get("modifiers"));
-                        runtime.mcp_keyboard_key(key, mods);
+                        batch_outcome.merge(exec_mcp_key(runtime, key, mods, user_event_hook));
                         executed += 1;
                     }
-                    "scroll" => {
+                    "scroll" | "wheel" => {
                         let dx = act.get("delta_x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                         let dy = act.get("delta_y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                         let x = act.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
                         let y = act.get("y").and_then(|v| v.as_f64()).map(|f| f as f32);
-                        runtime.mcp_mouse_scroll(dx, dy, x, y);
+                        batch_outcome.merge(exec_mcp_scroll(
+                            runtime,
+                            dx,
+                            dy,
+                            x,
+                            y,
+                            user_event_hook,
+                        ));
                         executed += 1;
                     }
                     "wait" => {
-                        let ms = act
-                            .get("ms")
-                            .and_then(|m| m.as_u64())
-                            .unwrap_or(50)
-                            .min(5000);
-                        std::thread::sleep(Duration::from_millis(ms));
+                        // Waits are scheduled off the UI main thread by the MCP server and the
+                        // background IPC listener (`execute_actions_nonblocking_on_ipc_thread`).
+                        // Never block the UI thread via `std::thread::sleep`.
                         executed += 1;
                     }
                     _ => {}
                 }
             }
 
-            (Ok(json!({ "executed_actions": executed })), true)
+            (
+                Ok(json!({ "executed_actions": executed })),
+                batch_outcome,
+            )
         }
-        unknown => (Err(format!("Unknown MCP method: {}", unknown)), false),
+        unknown => (Err(format!("Unknown MCP method: {}", unknown)), clean),
     }
 }
 
@@ -544,13 +1095,13 @@ fn parse_mouse_button(s: &str) -> MouseButton {
 }
 
 fn parse_key_code(s: &str) -> KeyCode {
-    match s.to_ascii_lowercase().as_str() {
+    match s.trim().to_ascii_lowercase().as_str() {
         "enter" | "return" => KeyCode::Enter,
         "escape" | "esc" => KeyCode::Escape,
         "backspace" => KeyCode::Backspace,
         "delete" | "del" => KeyCode::Delete,
         "tab" => KeyCode::Tab,
-        "space" => KeyCode::Space,
+        "space" | " " => KeyCode::Space,
         "arrowleft" | "left" => KeyCode::ArrowLeft,
         "arrowright" | "right" => KeyCode::ArrowRight,
         "arrowup" | "up" => KeyCode::ArrowUp,
@@ -560,11 +1111,62 @@ fn parse_key_code(s: &str) -> KeyCode {
         "pageup" => KeyCode::PageUp,
         "pagedown" => KeyCode::PageDown,
         "a" | "keya" => KeyCode::KeyA,
+        "b" | "keyb" => KeyCode::KeyB,
         "c" | "keyc" => KeyCode::KeyC,
+        "d" | "keyd" => KeyCode::KeyD,
+        "e" | "keye" => KeyCode::KeyE,
+        "f" | "keyf" => KeyCode::KeyF,
+        "g" | "keyg" => KeyCode::KeyG,
+        "h" | "keyh" => KeyCode::KeyH,
+        "i" | "keyi" => KeyCode::KeyI,
+        "j" | "keyj" => KeyCode::KeyJ,
+        "k" | "keyk" => KeyCode::KeyK,
+        "l" | "keyl" => KeyCode::KeyL,
+        "m" | "keym" => KeyCode::KeyM,
+        "n" | "keyn" => KeyCode::KeyN,
+        "o" | "keyo" => KeyCode::KeyO,
+        "p" | "keyp" => KeyCode::KeyP,
+        "q" | "keyq" => KeyCode::KeyQ,
+        "r" | "keyr" => KeyCode::KeyR,
+        "s" | "keys" => KeyCode::KeyS,
+        "t" | "keyt" => KeyCode::KeyT,
+        "u" | "keyu" => KeyCode::KeyU,
         "v" | "keyv" => KeyCode::KeyV,
+        "w" | "keyw" => KeyCode::KeyW,
         "x" | "keyx" => KeyCode::KeyX,
-        "z" | "keyz" => KeyCode::KeyZ,
         "y" | "keyy" => KeyCode::KeyY,
+        "z" | "keyz" => KeyCode::KeyZ,
+        "0" | "digit0" => KeyCode::Digit0,
+        "1" | "digit1" => KeyCode::Digit1,
+        "2" | "digit2" => KeyCode::Digit2,
+        "3" | "digit3" => KeyCode::Digit3,
+        "4" | "digit4" => KeyCode::Digit4,
+        "5" | "digit5" => KeyCode::Digit5,
+        "6" | "digit6" => KeyCode::Digit6,
+        "7" | "digit7" => KeyCode::Digit7,
+        "8" | "digit8" => KeyCode::Digit8,
+        "9" | "digit9" => KeyCode::Digit9,
+        "f1" => KeyCode::F1,
+        "f2" => KeyCode::F2,
+        "f3" => KeyCode::F3,
+        "f4" => KeyCode::F4,
+        "f5" => KeyCode::F5,
+        "f6" => KeyCode::F6,
+        "f7" => KeyCode::F7,
+        "f8" => KeyCode::F8,
+        "f9" => KeyCode::F9,
+        "f10" => KeyCode::F10,
+        "f11" => KeyCode::F11,
+        "f12" => KeyCode::F12,
+        "/" | "slash" => KeyCode::Slash,
+        "," | "comma" => KeyCode::Comma,
+        "." | "period" => KeyCode::Period,
+        "-" | "minus" => KeyCode::Minus,
+        "=" | "+" | "equal" | "equals" | "plus" => KeyCode::Equals,
+        "[" | "bracketleft" => KeyCode::BracketLeft,
+        "]" | "bracketright" => KeyCode::BracketRight,
+        ";" | "semicolon" => KeyCode::Semicolon,
+        "`" | "backquote" | "grave" => KeyCode::Backquote,
         _ => KeyCode::Space,
     }
 }

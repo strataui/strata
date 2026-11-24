@@ -75,7 +75,12 @@ impl AppRuntime {
             if child_layout.is_top_layer {
                 out.push((child_bp, child_layout, current_path.clone()));
             }
-            if !child_layout.children.is_empty() {
+            if !child_layout.children.is_empty()
+                && ((child_layout.subtree_hit_flags & strata_layout::tree::SUBTREE_META_VALID)
+                    == 0
+                    || (child_layout.subtree_hit_flags & strata_layout::tree::SUBTREE_HAS_TOP_LAYER)
+                        != 0)
+            {
                 Self::collect_top_layer_hover_portals(child_bp, child_layout, current_path, out);
             }
             current_path.pop();
@@ -89,7 +94,10 @@ impl AppRuntime {
         py: f32,
         current_path: &mut Vec<usize>,
     ) -> Option<Vec<usize>> {
-        if current_path.is_empty() {
+        if current_path.is_empty()
+            && ((layout.subtree_hit_flags & strata_layout::tree::SUBTREE_META_VALID) == 0
+                || (layout.subtree_hit_flags & strata_layout::tree::SUBTREE_HAS_TOP_LAYER) != 0)
+        {
             let mut portals = Vec::new();
             let mut scan_path = Vec::new();
             Self::collect_top_layer_hover_portals(blueprint, layout, &mut scan_path, &mut portals);
@@ -175,21 +183,39 @@ impl AppRuntime {
                         eff_for_child.to_vec(),
                     ));
                 }
-                let mut child_steps = Vec::with_capacity(eff_for_child.len() + 1);
-                child_steps.extend_from_slice(eff_for_child);
-                let step = Self::hit_clip_step_for(child_layout);
-                if step.clip.is_some() || step.is_abs_cb || step.is_fixed_cb {
-                    child_steps.push(step);
+                let skip_recurse = child_layout.children.is_empty()
+                    || ((child_layout.subtree_hit_flags & strata_layout::tree::SUBTREE_META_VALID)
+                        != 0
+                        && (child_layout.subtree_hit_flags
+                            & strata_layout::tree::SUBTREE_HAS_HOISTED)
+                            == 0);
+                if !skip_recurse {
+                    let step = Self::hit_clip_step_for(child_layout);
+                    if step.clip.is_some() || step.is_abs_cb || step.is_fixed_cb {
+                        let mut child_steps = Vec::with_capacity(eff_for_child.len() + 1);
+                        child_steps.extend_from_slice(eff_for_child);
+                        child_steps.push(step);
+                        Self::collect_hoisted_hover_participants(
+                            child_bp,
+                            child_layout,
+                            &child_steps,
+                            current_path,
+                            negative_z,
+                            auto_or_zero_z,
+                            positive_z,
+                        );
+                    } else {
+                        Self::collect_hoisted_hover_participants(
+                            child_bp,
+                            child_layout,
+                            eff_for_child,
+                            current_path,
+                            negative_z,
+                            auto_or_zero_z,
+                            positive_z,
+                        );
+                    }
                 }
-                Self::collect_hoisted_hover_participants(
-                    child_bp,
-                    child_layout,
-                    &child_steps,
-                    current_path,
-                    negative_z,
-                    auto_or_zero_z,
-                    positive_z,
-                );
             }
             current_path.pop();
         }
@@ -223,6 +249,14 @@ impl AppRuntime {
         {
             return None;
         }
+        if (layout.subtree_hit_flags
+            & (strata_layout::tree::SUBTREE_META_VALID
+                | strata_layout::tree::SUBTREE_HAS_TRANSFORM))
+            == strata_layout::tree::SUBTREE_META_VALID
+            && !layout.subtree_bounds.contains_point(px, py)
+        {
+            return None;
+        }
 
         let parent_display = Some(layout.style.display);
         let paired = Self::paired_blueprint_children(blueprint, layout);
@@ -234,6 +268,14 @@ impl AppRuntime {
                 )
                 || Self::establishes_stacking_context_in(child_layout, parent_display, false)
                 || child_layout.style.position != strata_style::types::Position::Static
+            {
+                continue;
+            }
+            if (child_layout.subtree_hit_flags
+                & (strata_layout::tree::SUBTREE_META_VALID
+                    | strata_layout::tree::SUBTREE_HAS_TRANSFORM))
+                == strata_layout::tree::SUBTREE_META_VALID
+                && !child_layout.subtree_bounds.contains_point(px, py)
             {
                 continue;
             }
@@ -291,49 +333,55 @@ impl AppRuntime {
             || layout.style.overflow_y != strata_style::types::Overflow::Visible;
         let own_allows = !own_clips || layout.geometry.border_box.contains_point(px, py);
 
-        let mut base_steps = Vec::with_capacity(eff_inherited.len() + 1);
-        base_steps.extend_from_slice(eff_inherited);
-        let own_step = Self::hit_clip_step_for(layout);
-        if own_step.clip.is_some() || own_step.is_abs_cb || own_step.is_fixed_cb {
-            base_steps.push(own_step);
-        }
-
+        let need_hoisted = (layout.subtree_hit_flags & strata_layout::tree::SUBTREE_META_VALID) == 0
+            || layout.children.iter().any(|c| {
+                (c.subtree_hit_flags & strata_layout::tree::SUBTREE_HAS_HOISTED) != 0
+            });
         let mut negative_z = Vec::new();
-        let mut auto_or_zero_z = Vec::new();
-        let mut positive_z = Vec::new();
-        Self::collect_hoisted_hover_participants(
-            blueprint,
-            layout,
-            &base_steps,
-            current_path,
-            &mut negative_z,
-            &mut auto_or_zero_z,
-            &mut positive_z,
-        );
-
-        negative_z.sort_by_key(|(_, l, _, _)| l.style.z_index.unwrap_or(0));
-        positive_z.sort_by_key(|(_, l, _, _)| l.style.z_index.unwrap_or(0));
-
-        // Layer 7: positive z-index child stacking contexts
-        for (c_bp, c_layout, c_path, c_steps) in positive_z.into_iter().rev() {
-            let mut path_buf = c_path;
-            if let Some(res) =
-                Self::hit_test_node_path_sc(c_bp, c_layout, px, py, &c_steps, &mut path_buf)
-            {
-                return Some(res);
+        if need_hoisted {
+            let mut base_steps = Vec::with_capacity(eff_inherited.len() + 1);
+            base_steps.extend_from_slice(eff_inherited);
+            let own_step = Self::hit_clip_step_for(layout);
+            if own_step.clip.is_some() || own_step.is_abs_cb || own_step.is_fixed_cb {
+                base_steps.push(own_step);
             }
-        }
 
-        // Layer 6: positioned auto/0 z-index descendants
-        for (c_bp, c_layout, c_path, is_sc, c_steps) in auto_or_zero_z.into_iter().rev() {
-            let mut path_buf = c_path;
-            let hit = if is_sc {
-                Self::hit_test_node_path_sc(c_bp, c_layout, px, py, &c_steps, &mut path_buf)
-            } else {
-                Self::hit_test_node_path_in_flow(c_bp, c_layout, px, py, &c_steps, &mut path_buf)
-            };
-            if hit.is_some() {
-                return hit;
+            let mut auto_or_zero_z = Vec::new();
+            let mut positive_z = Vec::new();
+            Self::collect_hoisted_hover_participants(
+                blueprint,
+                layout,
+                &base_steps,
+                current_path,
+                &mut negative_z,
+                &mut auto_or_zero_z,
+                &mut positive_z,
+            );
+
+            negative_z.sort_by_key(|(_, l, _, _)| l.style.z_index.unwrap_or(0));
+            positive_z.sort_by_key(|(_, l, _, _)| l.style.z_index.unwrap_or(0));
+
+            // Layer 7: positive z-index child stacking contexts
+            for (c_bp, c_layout, c_path, c_steps) in positive_z.into_iter().rev() {
+                let mut path_buf = c_path;
+                if let Some(res) =
+                    Self::hit_test_node_path_sc(c_bp, c_layout, px, py, &c_steps, &mut path_buf)
+                {
+                    return Some(res);
+                }
+            }
+
+            // Layer 6: positioned auto/0 z-index descendants
+            for (c_bp, c_layout, c_path, is_sc, c_steps) in auto_or_zero_z.into_iter().rev() {
+                let mut path_buf = c_path;
+                let hit = if is_sc {
+                    Self::hit_test_node_path_sc(c_bp, c_layout, px, py, &c_steps, &mut path_buf)
+                } else {
+                    Self::hit_test_node_path_in_flow(c_bp, c_layout, px, py, &c_steps, &mut path_buf)
+                };
+                if hit.is_some() {
+                    return hit;
+                }
             }
         }
 
@@ -349,6 +397,11 @@ impl AppRuntime {
                     )
                     || Self::establishes_stacking_context_in(child_layout, parent_display, false)
                     || child_layout.style.position != strata_style::types::Position::Static
+                    || ((child_layout.subtree_hit_flags
+                        & (strata_layout::tree::SUBTREE_META_VALID
+                            | strata_layout::tree::SUBTREE_HAS_TRANSFORM))
+                        == strata_layout::tree::SUBTREE_META_VALID
+                        && !child_layout.subtree_bounds.contains_point(px, py))
                 {
                     continue;
                 }
@@ -766,17 +819,19 @@ impl AppRuntime {
         let tooltip_changed = self.sync_hover_tooltip(px, py);
 
         let old_has_effects = old_path.as_deref().is_some_and(|p| {
-            Self::node_path_has_hover_effects_with_sheets(
+            Self::node_path_has_hover_effects_with_index(
                 &self.root_blueprint,
                 p,
                 &self.cached_stylesheets,
+                &self.stylesheet_index,
             )
         });
         let new_has_effects = new_path.as_deref().is_some_and(|p| {
-            Self::node_path_has_hover_effects_with_sheets(
+            Self::node_path_has_hover_effects_with_index(
                 &self.root_blueprint,
                 p,
                 &self.cached_stylesheets,
+                &self.stylesheet_index,
             )
         });
 
@@ -787,14 +842,31 @@ impl AppRuntime {
                 || new_path
                     .as_deref()
                     .is_some_and(|p| Self::path_has_hover_listeners(&self.root_blueprint, p));
-            let layout_required = old_path
-                .as_deref()
-                .is_some_and(|p| Self::path_hover_affects_layout(&self.root_blueprint, p))
-                || new_path
-                    .as_deref()
-                    .is_some_and(|p| Self::path_hover_affects_layout(&self.root_blueprint, p));
+            let layout_required = old_path.as_deref().is_some_and(|p| {
+                Self::path_hover_affects_layout_with_sheets(
+                    &self.root_blueprint,
+                    p,
+                    &self.cached_stylesheets,
+                    &self.stylesheet_index,
+                )
+            }) || new_path.as_deref().is_some_and(|p| {
+                Self::path_hover_affects_layout_with_sheets(
+                    &self.root_blueprint,
+                    p,
+                    &self.cached_stylesheets,
+                    &self.stylesheet_index,
+                )
+            });
             if layout_required || has_listeners {
                 self.hover_paint_only = false;
+                self.last_hover_fast_path_used = false;
+                let reason = if layout_required {
+                    "HoverAffectsLayout"
+                } else {
+                    "HoverListenersPresent"
+                };
+                self.last_hover_fast_path_bailout = Some(reason.to_string());
+                self.last_rebuild_reason = RebuildReason::HoverFastPathFailed(reason.to_string());
                 self.rebuild_layout_tree();
             } else {
                 self.hover_paint_only = true;
@@ -811,11 +883,29 @@ impl AppRuntime {
                         None
                     },
                 );
-                if !fast_ok {
+                self.last_hover_fast_path_used = fast_ok;
+                if fast_ok {
+                    self.last_hover_fast_path_bailout = None;
+                    self.last_rebuild_reason = RebuildReason::HoverFastPath;
+                    self.frame_profile.style_cascade += hover_start.elapsed();
+                } else {
+                    if let Some(ref reason) = self.last_hover_fast_path_bailout {
+                        self.last_rebuild_reason =
+                            RebuildReason::HoverFastPathFailed(reason.clone());
+                    }
                     self.restyle_for_hover_paint();
+                    self.frame_profile.style_cascade += hover_start.elapsed();
                 }
                 if perf_logging_enabled() {
-                    perf_log_ms("hover_repaint", hover_start, "paint-only hover");
+                    perf_log_ms(
+                        "hover_repaint",
+                        hover_start,
+                        if fast_ok {
+                            "paint-only hover (fast)"
+                        } else {
+                            "paint-only hover (full)"
+                        },
+                    );
                 }
             }
             true
@@ -836,10 +926,7 @@ impl AppRuntime {
     /// Rebuilding the tree carries the new styles; the previous geometry, line boxes, and inline item streams
     /// are transplanted so the display list can be recompiled immediately.
     pub fn restyle_for_hover_paint(&mut self) {
-        let stylesheets = Self::collect_stylesheets_from_blueprint(&self.root_blueprint);
-        for sheet in &stylesheets {
-            self.register_keyframes_stylesheet(sheet);
-        }
+        self.capture_previous_node_sizes();
         let ctx = self.interaction_context();
         let new_tree = Self::build_layout_tree_with_interaction(&self.root_blueprint, &ctx);
         let mut previous = std::mem::replace(&mut self.layout_root, new_tree);
@@ -876,37 +963,162 @@ impl AppRuntime {
         self.compile_display_list();
     }
 
+    /// Returns true if a single blueprint element matches any `:hover` rule in `stylesheets`
+    /// (fast-rejected in O(1) via `index`'s Bloom filter).
+    pub(crate) fn single_node_matches_stylesheet_hover(
+        bp: &NodeBlueprint,
+        stylesheets: &[std::sync::Arc<strata_style::StyleSheet>],
+        index: &StylesheetSelectorIndex,
+    ) -> bool {
+        if stylesheets.is_empty() || !index.has_any_hover_rule {
+            return false;
+        }
+        let NodeBlueprint::Element {
+            tag,
+            classes,
+            attributes,
+            ..
+        } = bp
+        else {
+            return false;
+        };
+        if Self::is_style_tag(tag) {
+            return false;
+        }
+        let tag_str = Self::tag_as_str(tag);
+        let (class_vec, id_val, _) = Self::extract_element_selector_meta(classes, attributes);
+        if !index.node_may_match_hover(tag_str, id_val.as_deref(), &class_vec) {
+            return false;
+        }
+        Self::path_nodes_match_stylesheet_hover(&[bp], stylesheets)
+    }
+
+    /// Bloom-filter-accelerated variant of [`Self::node_path_has_hover_effects_with_sheets`].
+    pub(crate) fn node_path_has_hover_effects_with_index(
+        blueprint: &NodeBlueprint,
+        path: &[usize],
+        stylesheets: &[std::sync::Arc<strata_style::StyleSheet>],
+        index: &StylesheetSelectorIndex,
+    ) -> bool {
+        let mut path_nodes: Vec<&NodeBlueprint> = Vec::with_capacity(path.len() + 1);
+        let mut cur_bp = blueprint;
+        if Self::node_has_hover_effects(cur_bp) {
+            return true;
+        }
+        path_nodes.push(cur_bp);
+
+        for &idx in path {
+            match cur_bp {
+                NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children) => {
+                    let mut flat = Vec::new();
+                    for c in children {
+                        Self::flatten_blueprints(c, &mut flat);
+                    }
+                    if idx >= flat.len() {
+                        break;
+                    }
+                    cur_bp = flat[idx];
+                }
+                _ => break,
+            }
+            if Self::node_has_hover_effects(cur_bp) {
+                return true;
+            }
+            path_nodes.push(cur_bp);
+        }
+
+        if stylesheets.is_empty() || !index.has_any_hover_rule {
+            return false;
+        }
+
+        for bp in &path_nodes {
+            if Self::single_node_matches_stylesheet_hover(bp, stylesheets, index) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Fast paint-only hover restyle that updates only the diverging subtrees along
-    /// `old_path` and `new_path` when no `<style>` sheets or CSS transitions apply.
+    /// `old_path` and `new_path`, supporting static `<style>` sheets (`:root` variables,
+    /// `.class:hover`, `.parent:hover .child`), `group-hover:`, and unrelated active transitions.
     pub(crate) fn restyle_hover_subtrees_fast(
         &mut self,
         old_path: Option<&[usize]>,
         new_path: Option<&[usize]>,
     ) -> bool {
-        if !self.cached_stylesheets.is_empty()
-            || self.transition_manager.has_active_transitions()
-            || Self::node_has_hover_effects(&self.root_blueprint)
+        if Self::node_has_hover_effects(&self.root_blueprint)
+            || Self::single_node_matches_stylesheet_hover(
+                &self.root_blueprint,
+                &self.cached_stylesheets,
+                &self.stylesheet_index,
+            )
         {
+            self.last_hover_fast_path_bailout = Some("RootHasHoverEffects".to_string());
+            return false;
+        }
+        if self.stylesheet_index.has_sibling_hover_rule {
+            self.last_hover_fast_path_bailout =
+                Some("StylesheetSiblingHoverCombinator".to_string());
             return false;
         }
 
-        fn subtree_has_transitions_or_anims(node: &LayoutNode) -> bool {
-            if !node.style.transitions.is_empty() || !node.style.animations.is_empty() {
+        fn subtree_has_animations(node: &LayoutNode) -> bool {
+            if !node.style.animations.is_empty() {
                 return true;
             }
-            node.children.iter().any(subtree_has_transitions_or_anims)
+            node.children.iter().any(subtree_has_animations)
         }
 
+        fn subtree_has_transitions(node: &LayoutNode) -> bool {
+            if !node.style.transitions.is_empty() || node.active_transitions {
+                return true;
+            }
+            node.children.iter().any(subtree_has_transitions)
+        }
+
+        #[allow(clippy::too_many_arguments)]
         fn restyle_one_path(
             bp_root: &NodeBlueprint,
             layout_root: &mut LayoutNode,
             target_path: &[usize],
             ctx: &InteractionContext,
+            stylesheets: &[std::sync::Arc<strata_style::StyleSheet>],
+            sheet_index: &StylesheetSelectorIndex,
+            path_node_ids: &std::collections::HashMap<Vec<usize>, u64>,
+            base_node_styles: &std::collections::HashMap<u64, ComputedStyle>,
+            restyled_paths: &mut Vec<(Vec<usize>, bool)>,
+            bailout: &mut Option<String>,
         ) -> bool {
             let mut cur_bp = bp_root;
             let mut cur_layout = layout_root;
             let mut prefix = Vec::with_capacity(target_path.len());
+            let mut ancestor_stack: Vec<(&NodeBlueprint, (bool, bool, bool))> =
+                Vec::with_capacity(target_path.len() + 1);
+            let mut group_state = (false, false, false);
+
             for &idx in target_path {
+                // Push current node onto ancestor stack before descending to its child.
+                let next_group_state = if let NodeBlueprint::Element { classes, .. } = cur_bp {
+                    if AppRuntime::classes_have_group_marker(classes) {
+                        let self_hovered =
+                            ctx.hovered_path.is_some_and(|h| h.starts_with(&prefix));
+                        let self_focused =
+                            ctx.focused_path.is_some_and(|f| f.starts_with(&prefix));
+                        let self_active = self_hovered && ctx.is_mouse_down;
+                        (
+                            group_state.0 || self_hovered,
+                            group_state.1 || self_focused,
+                            group_state.2 || self_active,
+                        )
+                    } else {
+                        group_state
+                    }
+                } else {
+                    group_state
+                };
+                ancestor_stack.push((cur_bp, group_state));
+
                 let mut flat = Vec::new();
                 match cur_bp {
                     NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children) => {
@@ -914,37 +1126,106 @@ impl AppRuntime {
                             AppRuntime::flatten_blueprints(c, &mut flat);
                         }
                     }
-                    _ => return false,
+                    _ => {
+                        *bailout = Some("PathNotElement".to_string());
+                        return false;
+                    }
                 }
                 if idx >= flat.len() || idx >= cur_layout.children.len() {
+                    *bailout = Some("PathIndexOutOfBounds".to_string());
                     return false;
                 }
                 let child_bp = flat[idx];
+                let parent_base_style = path_node_ids
+                    .get(&prefix)
+                    .and_then(|id| base_node_styles.get(id))
+                    .cloned();
                 prefix.push(idx);
-                if AppRuntime::subtree_has_group_hover_effects(child_bp) {
-                    return false;
+
+                // If an ancestor of this path was already restyled in this pass (e.g. shared
+                // hover ancestor between old_path and new_path), we are already up to date.
+                if restyled_paths
+                    .iter()
+                    .any(|(rp, _)| prefix.starts_with(rp.as_slice()))
+                {
+                    return true;
                 }
-                if AppRuntime::node_has_hover_effects(child_bp) {
-                    let parent_style = cur_layout.style.clone();
+
+                let node_has_hover = AppRuntime::node_has_hover_effects(child_bp)
+                    || AppRuntime::single_node_matches_stylesheet_hover(
+                        child_bp,
+                        stylesheets,
+                        sheet_index,
+                    );
+                if node_has_hover {
+                    let parent_style =
+                        parent_base_style.unwrap_or_else(|| cur_layout.style.clone());
                     let child_layout = &mut cur_layout.children[idx];
-                    if subtree_has_transitions_or_anims(child_layout) {
+                    if subtree_has_animations(child_layout) {
+                        *bailout = Some("SubtreeHasKeyframeAnimation".to_string());
                         return false;
                     }
-                    let mut rebuilt = AppRuntime::build_layout_tree_with_interaction_context(
+                    let has_trans = subtree_has_transitions(child_layout);
+                    let mut ancestors_meta = AppRuntime::materialize_ancestor_metas(
+                        &ancestor_stack,
+                        &prefix,
+                        ctx,
+                        stylesheets,
+                        sheet_index,
+                    );
+                    let preceding_sibs = if !stylesheets.is_empty()
+                        && sheet_index.has_sibling_combinator_or_positional_rules
+                        && idx > 0
+                    {
+                        let parent_path = &prefix[..prefix.len() - 1];
+                        let mut sib_path = Vec::with_capacity(prefix.len());
+                        sib_path.extend_from_slice(parent_path);
+                        sib_path.push(0);
+                        let mut sibs = Vec::with_capacity(idx);
+                        for (j, sib_bp) in flat[..idx].iter().enumerate() {
+                            if let Some(last) = sib_path.last_mut() {
+                                *last = j;
+                            }
+                            if let Some(meta) = AppRuntime::materialize_cascade_meta(
+                                sib_bp,
+                                &sib_path,
+                                ctx,
+                                next_group_state,
+                            ) {
+                                sibs.push(meta);
+                            }
+                        }
+                        sibs
+                    } else {
+                        Vec::new()
+                    };
+                    let is_last_elem = flat.iter().rposition(|bp| {
+                        matches!(bp, NodeBlueprint::Element { tag, .. } if !AppRuntime::is_style_tag(tag))
+                    }) == Some(idx);
+
+                    let mut rebuilt = AppRuntime::build_layout_tree_full(
                         child_bp,
                         Some(&parent_style),
                         &mut prefix,
                         ctx,
+                        stylesheets,
+                        &mut ancestors_meta,
+                        &preceding_sibs,
+                        is_last_elem,
+                        next_group_state,
                     );
                     if !AppRuntime::transplant_layout_state(child_layout, &mut rebuilt) {
+                        *bailout = Some("TransplantMismatch".to_string());
                         return false;
                     }
                     strata_layout::box_model::refresh_inline_fragment_styles(&mut rebuilt);
                     *child_layout = rebuilt;
+                    restyled_paths.push((prefix.clone(), has_trans));
                     return true;
                 }
                 cur_bp = child_bp;
                 cur_layout = &mut cur_layout.children[idx];
+                group_state = next_group_state;
             }
             true
         }
@@ -957,16 +1238,57 @@ impl AppRuntime {
             is_mouse_down: self.is_mouse_down,
             is_dark_mode: self.is_dark_mode,
         };
+        let mut restyled_paths: Vec<(Vec<usize>, bool)> = Vec::new();
+        let mut bailout: Option<String> = None;
+
         if let Some(p) = old_path {
-            if !restyle_one_path(&self.root_blueprint, &mut self.layout_root, p, &ctx) {
+            if !restyle_one_path(
+                &self.root_blueprint,
+                &mut self.layout_root,
+                p,
+                &ctx,
+                &self.cached_stylesheets,
+                &self.stylesheet_index,
+                &self.path_node_ids,
+                &self.base_node_styles,
+                &mut restyled_paths,
+                &mut bailout,
+            ) {
+                self.last_hover_fast_path_bailout = bailout;
                 return false;
             }
         }
         if let Some(p) = new_path {
-            if !restyle_one_path(&self.root_blueprint, &mut self.layout_root, p, &ctx) {
+            if !restyle_one_path(
+                &self.root_blueprint,
+                &mut self.layout_root,
+                p,
+                &ctx,
+                &self.cached_stylesheets,
+                &self.stylesheet_index,
+                &self.path_node_ids,
+                &self.base_node_styles,
+                &mut restyled_paths,
+                &mut bailout,
+            ) {
+                self.last_hover_fast_path_bailout = bailout;
                 return false;
             }
         }
+
+        // Sync paint-only transitions strictly on restyled subtrees so hover transitions
+        // animate smoothly without full-tree rebuilds or disturbing unrelated active transitions.
+        let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
+        let anims_active = self.had_active_animations || self.has_active_animations();
+        for (path, has_trans) in &restyled_paths {
+            if *has_trans {
+                self.sync_subtree_paint_transitions(path, now_ms);
+            } else if anims_active {
+                self.sync_subtree_base_styles(path);
+            }
+        }
+
+        self.last_hover_fast_path_bailout = None;
         self.sync_active_input_layout();
         self.compile_display_list();
         true
@@ -1050,6 +1372,13 @@ impl AppRuntime {
         next.line_boxes = std::mem::take(&mut previous.line_boxes);
         next.inline_items = std::mem::take(&mut previous.inline_items);
         next.layout_cache = previous.layout_cache;
+        next.measure_cache = previous.measure_cache;
+        next.intrinsic_cache = previous.intrinsic_cache.clone();
+        next.last_child_layout_content = previous.last_child_layout_content;
+        next.children_layout_clean = previous.children_layout_clean;
+        next.last_preserved_box = previous.last_preserved_box;
+        next.subtree_hit_flags = previous.subtree_hit_flags;
+        next.subtree_bounds = previous.subtree_bounds;
         for (prev_child, next_child) in previous.children.iter_mut().zip(next.children.iter_mut()) {
             if !Self::transplant_layout_state(prev_child, next_child) {
                 return false;
@@ -1119,25 +1448,49 @@ impl AppRuntime {
             self.last_mouse_pos.1,
         );
         let tooltip_dismissed = self.dismiss_hover_tooltip();
-        let old_has_effects = old_path
-            .as_deref()
-            .is_some_and(|p| Self::node_path_has_hover_effects(&self.root_blueprint, p));
+        let old_has_effects = old_path.as_deref().is_some_and(|p| {
+            Self::node_path_has_hover_effects_with_index(
+                &self.root_blueprint,
+                p,
+                &self.cached_stylesheets,
+                &self.stylesheet_index,
+            )
+        });
         if old_has_effects {
             let has_listeners = old_path
                 .as_deref()
                 .is_some_and(|p| Self::path_has_hover_listeners(&self.root_blueprint, p));
-            let layout_required = old_path
-                .as_deref()
-                .is_some_and(|p| Self::path_hover_affects_layout(&self.root_blueprint, p));
+            let layout_required = old_path.as_deref().is_some_and(|p| {
+                Self::path_hover_affects_layout_with_sheets(
+                    &self.root_blueprint,
+                    p,
+                    &self.cached_stylesheets,
+                    &self.stylesheet_index,
+                )
+            });
             if layout_required || has_listeners {
                 self.hover_paint_only = false;
+                self.last_hover_fast_path_used = false;
                 self.rebuild_layout_tree();
             } else {
                 self.hover_paint_only = true;
                 let hover_start = std::time::Instant::now();
-                self.restyle_for_hover_paint();
+                let fast_ok = self.restyle_hover_subtrees_fast(old_path.as_deref(), None);
+                self.last_hover_fast_path_used = fast_ok;
+                if !fast_ok {
+                    self.restyle_for_hover_paint();
+                }
+                self.frame_profile.style_cascade += hover_start.elapsed();
                 if perf_logging_enabled() {
-                    perf_log_ms("hover_repaint", hover_start, "paint-only hover");
+                    perf_log_ms(
+                        "hover_repaint",
+                        hover_start,
+                        if fast_ok {
+                            "paint-only clear_hover (fast)"
+                        } else {
+                            "paint-only clear_hover (full)"
+                        },
+                    );
                 }
             }
             true

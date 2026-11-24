@@ -89,6 +89,15 @@ pub enum KeyCode {
     F10,
     F11,
     F12,
+    Slash,
+    Comma,
+    Period,
+    Minus,
+    Equals,
+    BracketLeft,
+    BracketRight,
+    Semicolon,
+    Backquote,
     Unknown,
 }
 

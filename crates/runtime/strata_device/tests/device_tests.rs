@@ -345,3 +345,180 @@ fn test_macos_power_source_snapshot_decoding() {
     };
     assert!(decode_macos_power_snapshot(&invalid).is_none());
 }
+
+#[test]
+fn test_reactive_geolocation_and_hardware_sensor_hooks() {
+    let controller = DeviceMockController::new();
+    controller.reset_to_defaults();
+
+    let geo = use_geolocation();
+    let compass = use_compass();
+    let imu = use_imu();
+    let baro = use_barometer();
+    let als = use_ambient_light();
+
+    assert!(!geo.get().is_available);
+    assert!(!compass.get().available);
+    assert!(!imu.get().available);
+    assert!(!baro.get().available);
+    assert!(!als.get().available);
+
+    // 1. Geolocation coordinates + reactive signal sync + probe priority
+    controller.set_coordinates(41.0082, 28.9784, Some(40.0), 6.0);
+    let g = geo.get();
+    assert!(g.is_available);
+    assert!((g.latitude - 41.0082).abs() < 1e-6);
+    assert!((g.longitude - 28.9784).abs() < 1e-6);
+    assert_eq!(g.altitude_m, Some(40.0));
+    assert_eq!(g.source, GeolocationSource::MockOverride);
+
+    let probed = probe_os_geolocation(false).expect("Mock override must win immediately");
+    assert_eq!(probed.source, GeolocationSource::MockOverride);
+    assert!((probed.latitude - 41.0082).abs() < 1e-6);
+
+    // Bridge check: strata_web_api::Geolocation resolves through strata_device automatically
+    register_web_api_geolocation_provider();
+    let web_geo = strata_web_api::Geolocation::new();
+    let web_pos = web_geo
+        .get_current_position()
+        .expect("strata_web_api::Geolocation must bridge to strata_device");
+    assert!((web_pos.coords.latitude - 41.0082).abs() < 1e-6);
+
+    // Async probe invokes callback cleanly without blocking
+    let (tx, rx) = std::sync::mpsc::channel();
+    probe_os_geolocation_async(false, move |res| {
+        let _ = tx.send(res);
+    });
+    let async_fix = rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("Async probe must finish quickly")
+        .expect("Mock override must resolve");
+    assert!((async_fix.longitude - 28.9784).abs() < 1e-6);
+
+    // 2. Compass heading & declination wraparound
+    let comp_val = CompassReading::from_magnetic_field_ut([25.0, 0.0, -40.0], 5.0);
+    assert!((comp_val.magnetic_heading_deg - 90.0).abs() < 0.1);
+    assert!((comp_val.true_heading_deg - 95.0).abs() < 0.1);
+    controller.set_compass(comp_val);
+    assert!(compass.get().available);
+    assert!((compass.get().true_heading_deg - 95.0).abs() < 0.1);
+
+    // 3. 6-DoF IMU attitude & unit quaternion normalization
+    let imu_val = ImuReading::from_accel_gyro([0.0, 4.9033, 8.4928], [0.01, -0.02, 0.03]);
+    let [qx, qy, qz, qw] = imu_val.quaternion;
+    let q_norm = (qx * qx + qy * qy + qz * qz + qw * qw).sqrt();
+    assert!((q_norm - 1.0).abs() < 1e-4, "IMU quaternion must be unit length");
+    assert!((imu_val.attitude_deg[0] - 30.0).abs() < 0.2, "Expected ~30 deg roll");
+    controller.set_imu(imu_val);
+    assert!(imu.get().available);
+
+    // 4. Barometer ISA altitude formula accuracy
+    let sea_level = isa_pressure_altitude_m(1013.25);
+    assert!(sea_level.abs() < 0.1);
+    let alt_1km = isa_pressure_altitude_m(898.75);
+    assert!(
+        (alt_1km - 1000.0).abs() < 15.0,
+        "898.75 hPa should correspond to ~1000m ISA altitude, got {alt_1km}"
+    );
+    controller.set_barometer(BarometerReading::from_hpa(898.75, Some(15.2)));
+    assert!(baro.get().available);
+    assert_eq!(baro.get().temperature_c, Some(15.2));
+
+    // 5. Ambient light lux -> monotonic daylight factor in [0, 1]
+    assert_eq!(lux_to_daylight_factor(0.0), 0.0);
+    let indoor = lux_to_daylight_factor(300.0);
+    let sunny = lux_to_daylight_factor(10_000.0);
+    assert!(indoor > 0.3 && indoor < 0.8);
+    assert!((sunny - 1.0).abs() < 1e-5);
+    controller.set_ambient_light(AmbientLightReading::from_lux(300.0));
+    assert!(als.get().available);
+    assert!((als.get().daylight_factor - indoor).abs() < 1e-5);
+
+    controller.reset_to_defaults();
+}
+
+#[test]
+fn test_linux_iio_sysfs_parsers_and_nmea_file_probe() {
+    use std::fs;
+    use strata_device::{
+        probe_linux_iio_ambient_light_in_dir, probe_linux_iio_barometer_in_dir,
+        probe_linux_iio_compass_in_dir, probe_linux_iio_imu_in_dir, probe_nmea_file,
+    };
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "strata_device_iio_test_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&tmp_root);
+
+    // Synthetic Linux IIO sysfs tree
+    let dev_mag = tmp_root.join("iio:device0");
+    let dev_imu = tmp_root.join("iio:device1");
+    let dev_baro = tmp_root.join("iio:device2");
+    let dev_als = tmp_root.join("iio:device3");
+    fs::create_dir_all(&dev_mag).unwrap();
+    fs::create_dir_all(&dev_imu).unwrap();
+    fs::create_dir_all(&dev_baro).unwrap();
+    fs::create_dir_all(&dev_als).unwrap();
+
+    // Magnetometer: X=0, Y=400 raw @ 0.001 Gauss/LSB -> 0 uT east, 40 uT north -> heading 0 deg
+    fs::write(dev_mag.join("in_magn_x_raw"), "0\n").unwrap();
+    fs::write(dev_mag.join("in_magn_y_raw"), "400\n").unwrap();
+    fs::write(dev_mag.join("in_magn_z_raw"), "-300\n").unwrap();
+    fs::write(dev_mag.join("in_magn_scale"), "0.001\n").unwrap();
+
+    // IMU: level gravity on Z + steady yaw rate
+    fs::write(dev_imu.join("in_accel_x_raw"), "0\n").unwrap();
+    fs::write(dev_imu.join("in_accel_y_raw"), "0\n").unwrap();
+    fs::write(dev_imu.join("in_accel_z_raw"), "1000\n").unwrap();
+    fs::write(dev_imu.join("in_accel_scale"), "0.00980665\n").unwrap();
+    fs::write(dev_imu.join("in_anglvel_x_raw"), "10\n").unwrap();
+    fs::write(dev_imu.join("in_anglvel_y_raw"), "-20\n").unwrap();
+    fs::write(dev_imu.join("in_anglvel_z_raw"), "30\n").unwrap();
+    fs::write(dev_imu.join("in_anglvel_scale"), "0.001\n").unwrap();
+
+    // Barometer: 101.325 kPa -> 1013.25 hPa (0m ISA), temp 22.5 C
+    fs::write(dev_baro.join("in_pressure_raw"), "101325\n").unwrap();
+    fs::write(dev_baro.join("in_pressure_scale"), "0.001\n").unwrap();
+    fs::write(dev_baro.join("in_temp_input"), "22500\n").unwrap();
+
+    // Ambient light: 650 lux
+    fs::write(dev_als.join("in_illuminance_input"), "650\n").unwrap();
+
+    let comp = probe_linux_iio_compass_in_dir(&tmp_root).expect("IIO compass must parse");
+    assert!(comp.available);
+    assert!(comp.magnetic_heading_deg < 0.5 || comp.magnetic_heading_deg > 359.5);
+    assert!((comp.magnetic_field_ut[1] - 40.0).abs() < 0.1);
+
+    let imu = probe_linux_iio_imu_in_dir(&tmp_root).expect("IIO IMU must parse");
+    assert!(imu.available);
+    assert!((imu.accel_mps2[2] - 9.80665).abs() < 1e-3);
+    assert!((imu.gyro_rps[2] - 0.03).abs() < 1e-4);
+    assert!(imu.attitude_deg[0].abs() < 0.1 && imu.attitude_deg[1].abs() < 0.1);
+
+    let baro = probe_linux_iio_barometer_in_dir(&tmp_root).expect("IIO barometer must parse");
+    assert!(baro.available);
+    assert!((baro.pressure_hpa - 1013.25).abs() < 0.05);
+    assert!(baro.pressure_altitude_m.abs() < 0.5);
+    assert!((baro.temperature_c.unwrap() - 22.5).abs() < 0.05);
+
+    let als = probe_linux_iio_ambient_light_in_dir(&tmp_root).expect("IIO ALS must parse");
+    assert!(als.available);
+    assert!((als.illuminance_lux - 650.0).abs() < 0.1);
+    assert!(als.daylight_factor > 0.5);
+
+    // NMEA-0183 serial/file capture probe
+    let nmea_path = tmp_root.join("gps_capture.nmea");
+    let body = "GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,";
+    let ck = body.bytes().fold(0u8, |a, b| a ^ b);
+    fs::write(&nmea_path, format!("$GNGSA,A,3\n${body}*{ck:02X}\n")).unwrap();
+    let nmea_fix = probe_nmea_file(&nmea_path).expect("NMEA capture must parse");
+    assert!(nmea_fix.is_available);
+    assert_eq!(nmea_fix.source, GeolocationSource::HardwareGpsNmea);
+    assert!((nmea_fix.latitude - 48.1173).abs() < 1e-4);
+    assert!((nmea_fix.longitude - 11.516667).abs() < 1e-4);
+    assert!((nmea_fix.altitude_m.unwrap() - 545.4).abs() < 1e-2);
+
+    let _ = fs::remove_dir_all(&tmp_root);
+}
+

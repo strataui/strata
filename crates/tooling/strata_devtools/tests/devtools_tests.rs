@@ -145,6 +145,7 @@ fn test_frame_profiler_cls_and_trace_export() {
 
     let mut sample = FrameTimingSample {
         frame_index: 1,
+        timestamp_us: 125_400,
         vsync_wait_us: 100,
         input_dispatch_us: 200,
         signal_drain_us: 300,
@@ -157,6 +158,7 @@ fn test_frame_profiler_cls_and_trace_export() {
         total_cpu_frame_us: 0,
         frame_budget_us: 16666,
         layout_shift_score: 0.05,
+        ..Default::default()
     };
     sample.calculate_total_cpu();
     assert_eq!(sample.total_cpu_frame_us, 3500);
@@ -172,10 +174,15 @@ fn test_frame_profiler_cls_and_trace_export() {
     );
     assert!(cls > 0.0);
 
-    // Trace JSON exporter
+    // Trace JSON exporter uses real monotonic timestamp & thread metadata (not mock frame_index*8333)
     let trace_json = TraceJsonExporter::export_trace_json(profiler.samples());
     assert!(trace_json.contains("\"traceEvents\":["));
     assert!(trace_json.contains("\"name\":\"LayoutSolve\""));
+    assert!(trace_json.contains("\"ts\":125400"));
+    assert!(!trace_json.contains("\"ts\":8333"));
+    assert!(trace_json.contains("\"name\":\"thread_name\""));
+    assert!(trace_json.contains("UI Thread"));
+    assert!(trace_json.contains("GPU Submit & Passes"));
 }
 
 #[test]
@@ -594,6 +601,7 @@ fn test_hud_overlay_rendering_with_9_stage_flamegraph_and_live_timings() {
         total_cpu_frame_us: 3850,
         frame_budget_us: 16666,
         layout_shift_score: 0.001,
+        ..Default::default()
     };
     profiler.record_sample(sample);
 
@@ -659,4 +667,130 @@ fn test_hud_overlay_rendering_with_9_stage_flamegraph_and_live_timings() {
         2,
         "Inspect highlight emits translucent overlay and border"
     );
+}
+
+#[test]
+fn test_live_devtools_hud_tabs_and_multithread_perfetto_export() {
+    let mut dt = DevTools::new();
+    dt.hud.update_bounds(1280.0, 720.0);
+    dt.hud.toggle_visibility();
+
+    dt.live_telemetry = HudLiveTelemetry {
+        reactive_active_signals: 14,
+        reactive_active_subscribers: 9,
+        reactive_total_reads: 420,
+        reactive_total_writes: 37,
+        reactive_total_flushes: 18,
+        reactive_cycle_guard_trips: 0,
+        last_rebuild_reason: "SignalWrite(camera_lat)".to_string(),
+        dirty_signal_names: vec!["camera_lat".to_string()],
+        top_signals: vec![("camera_lat".to_string(), 25, 180, 3)],
+        dom_node_count: 312,
+        layout_node_count: 298,
+        display_cmd_count: 615,
+        arena_allocated_bytes: 16 * 1024,
+        arena_capacity_bytes: 64 * 1024,
+        heap_alloc_bytes: 8192,
+        heap_alloc_count: 42,
+        gpu_memory_bytes: 32 * 1024 * 1024,
+        tiles_dirty: 4,
+        tiles_total: 480,
+        tile_cache_hit_pct: 99.2,
+        scene3d_cache_hit_pct: 91.5,
+        glyph_cache_hit_pct: 98.7,
+        reconciled_updates: 29,
+        full_rebuilds: 2,
+    };
+    dt.arena_inspector
+        .record_sample(ArenaTelemetrySample::new(1, 16 * 1024, 64 * 1024, 24 * 1024, 5));
+    dt.time_travel.record_snapshot(
+        50_000,
+        "SignalWrite(camera_lat)",
+        vec![(1, "37.7749".to_string())],
+        0xDEAD_BEEF,
+    );
+    dt.time_travel.record_snapshot(
+        66_600,
+        "PlatformEvent(MouseMove)",
+        vec![(1, "37.7751".to_string())],
+        0xCAFE_BABE,
+    );
+
+    let extract_texts = |dl: &strata_render::compositor::DisplayList| -> Vec<String> {
+        dl.commands
+            .iter()
+            .filter_map(|c| match c {
+                strata_render::compositor::DrawCommand::DrawText { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    // Reactivity tab renders real counters & attribution, never static placeholder text
+    dt.hud.set_active_tab(HudTab::Reactivity);
+    let mut dl_react = strata_render::compositor::DisplayList::new();
+    dt.render_hud_overlay(&mut dl_react);
+    let react_joined = extract_texts(&dl_react).join("\n");
+    assert!(react_joined.contains("Signals: 14"));
+    assert!(react_joined.contains("SignalWrite(camera_lat)"));
+    assert!(react_joined.contains("camera_lat"));
+    assert!(!react_joined.contains("Cycle Guard: ENABLED"));
+
+    // Memory tab renders real node counts, arena bytes, VRAM, and cache hit rates
+    dt.hud.set_active_tab(HudTab::Memory);
+    let mut dl_mem = strata_render::compositor::DisplayList::new();
+    dt.render_hud_overlay(&mut dl_mem);
+    let mem_joined = extract_texts(&dl_mem).join("\n");
+    assert!(mem_joined.contains("DOM Nodes: 312"));
+    assert!(mem_joined.contains("Display Cmds: 615"));
+    assert!(mem_joined.contains("32.00 MiB"));
+    assert!(mem_joined.contains("99.2%"));
+    assert!(!mem_joined.contains("Bump Allocator Utilization: Optimal"));
+
+    // Time-Travel tab renders real ring-buffer snapshots and deltas
+    dt.hud.set_active_tab(HudTab::TimeTravel);
+    let mut dl_tt = strata_render::compositor::DisplayList::new();
+    dt.render_hud_overlay(&mut dl_tt);
+    let tt_joined = extract_texts(&dl_tt).join("\n");
+    assert!(tt_joined.contains("Time-Travel Snapshots: 2/2"));
+    assert!(tt_joined.contains("PlatformEvent(MouseMove)"));
+    assert!(tt_joined.contains("deltas=1"));
+    assert!(!tt_joined.contains("Step Forward [->]"));
+
+    // Multi-thread Perfetto trace export with hardware GPU passes & worker spans
+    dt.profiler.record_sample(FrameTimingSample {
+        frame_index: 7,
+        timestamp_us: 90_100,
+        ui_thread_id: 1001,
+        worker_thread_id: 2002,
+        gpu_thread_id: 3003,
+        input_dispatch_us: 45,
+        view_render_us: 120,
+        parallel_reconcile_us: 90,
+        layout_solve_us: 140,
+        display_list_build_us: 80,
+        raster_2d_us: 210,
+        gpu_submit_us: 60,
+        present_us: 30,
+        gpu_shadow_pass_us: 110,
+        gpu_3d_pass_us: 640,
+        gpu_2d_overlay_pass_us: 95,
+        gpu_timestamps_valid: true,
+        ..Default::default()
+    });
+    dt.profiler.record_worker_span(
+        "EarthTileFetch",
+        "worker",
+        "Earth / Terrain Worker",
+        2002,
+        90_150,
+        430,
+    );
+    let trace = dt.profiler.export_trace_json();
+    assert!(trace.contains("\"name\":\"Gpu3DPass\""));
+    assert!(trace.contains("\"name\":\"Gpu2DOverlayPass\""));
+    assert!(trace.contains("\"name\":\"EarthTileFetch\""));
+    assert!(trace.contains("\"tid\":1001"));
+    assert!(trace.contains("\"tid\":2002"));
+    assert!(trace.contains("\"tid\":3003"));
 }

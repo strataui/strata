@@ -806,3 +806,680 @@ fn test_multicursor_multiline_newline_insertion_safety() {
     assert_eq!(editor.buffer().line(1), Some("beta"));
     assert_eq!(editor.buffer().line(2), Some("gamma"));
 }
+
+#[test]
+fn test_rope_byte_position_roundtrip_and_metrics_after_multiline_edits() {
+    let mut doc = String::from("🦀 alpha\nПривет мир\n東京 Tokyo\n");
+    for i in 0..1_500 {
+        doc.push_str(&format!("let row_{i:04} = {i};\n"));
+    }
+    let mut buf = LineBuffer::from_str(&doc);
+
+    let assert_metrics = |b: &LineBuffer| {
+        let full = b.to_string();
+        assert_eq!(b.total_text_byte_len(), full.len());
+        assert_eq!(
+            b.rope().total_byte_count() + b.line_count().saturating_sub(1),
+            full.len(),
+            "SubtreeMetrics byte sum must stay invariant across mutations"
+        );
+    };
+    assert_metrics(&buf);
+
+    // Verify exact O(log N) byte <-> Position bijection across ASCII and multi-byte UTF-8 lines.
+    for line in [0, 1, 2, 10, 750, 1_500] {
+        let len = buf.line_len(line);
+        for col in [0, len / 2, len] {
+            let pos = Position::new(line, col);
+            let byte = buf.position_to_byte(pos);
+            let back = buf.byte_to_position(byte);
+            assert_eq!(back, pos, "Round-trip failed for pos={pos:?} byte={byte}");
+        }
+    }
+
+    // Mutate with multiline insert, multiline delete, split, and join — metrics MUST never drift.
+    buf.insert_str(1, 3, "🚀\nmiddle line\n日本語");
+    assert_metrics(&buf);
+    buf.delete_range(1, 2, 3, 2);
+    assert_metrics(&buf);
+    buf.split_line(750, 8);
+    assert_metrics(&buf);
+    buf.join_line_with_next(750);
+    assert_metrics(&buf);
+
+    // Re-check bijection after all mutations.
+    for line in [0, 1, 2, 750, buf.line_count() - 1] {
+        let len = buf.line_len(line);
+        let pos = Position::new(line, len);
+        assert_eq!(buf.byte_to_position(buf.position_to_byte(pos)), pos);
+    }
+}
+
+#[test]
+fn test_true_incremental_tree_sitter_edits_and_ast_equivalence() {
+    let mut src = String::new();
+    for i in 0..120 {
+        src.push_str(&format!("pub fn func_{i}(x: i32) -> i32 {{ x + {i} }}\n"));
+    }
+
+    let assert_ast_matches_fresh = |ed: &CodeEditor, step: &str| {
+        let inc_sexp = ed
+            .highlighter()
+            .root_node()
+            .expect("Incremental AST must exist")
+            .to_sexp();
+        let mut fresh = SyntaxHighlighter::with_language(ed.language());
+        fresh.parse(&ed.text());
+        let fresh_sexp = fresh
+            .root_node()
+            .expect("Fresh AST must exist")
+            .to_sexp();
+        assert_eq!(
+            inc_sexp, fresh_sexp,
+            "Incremental Tree-Sitter AST diverged from fresh parse at step: {step}"
+        );
+    };
+
+    let mut editor = CodeEditor::new(&src, Language::Rust);
+    assert_eq!(editor.highlighter().incremental_edit_count(), 0);
+    assert_ast_matches_fresh(&editor, "initial");
+
+    // 1. Single-line edit in the middle of 120 functions
+    editor.cursors_mut().set_single(Position::new(60, 38));
+    editor.insert_text(" * 2");
+    assert!(editor.highlighter().incremental_edit_count() >= 1);
+    assert_ast_matches_fresh(&editor, "single-line insert");
+    // Localized invalidation: changed line ranges must NOT cover all 120 lines
+    let changed_span: usize = editor
+        .highlighter()
+        .last_changed_lines()
+        .iter()
+        .map(|r| r.len())
+        .sum();
+    assert!(
+        changed_span < 20,
+        "Single-line edit should localize invalidation; got {changed_span} lines"
+    );
+
+    // 2. Auto-indented newline insertion
+    editor.cursors_mut().set_single(Position::new(10, 34));
+    editor.insert_newline();
+    editor.insert_text("let y = x + 1;");
+    assert_ast_matches_fresh(&editor, "newline + body insert");
+
+    // 3. Delete forward & backwards
+    editor.cursors_mut().set_single(Position::new(11, 4));
+    editor.delete_forward();
+    editor.delete_backwards();
+    assert_ast_matches_fresh(&editor, "delete_forward + delete_backwards");
+
+    // 4. Multi-cursor simultaneous edit
+    editor.cursors_mut().set_single(Position::new(2, 0));
+    editor.cursors_mut().add_cursor(Position::new(4, 0));
+    editor.insert_text("// note\n");
+    assert_ast_matches_fresh(&editor, "multi-cursor edit");
+
+    // 5. Undo & Redo driving incremental InputEdit
+    let edits_before_undo = editor.highlighter().incremental_edit_count();
+    editor.undo();
+    assert!(editor.highlighter().incremental_edit_count() > edits_before_undo);
+    assert_ast_matches_fresh(&editor, "undo");
+
+    let edits_before_redo = editor.highlighter().incremental_edit_count();
+    editor.redo();
+    assert!(editor.highlighter().incremental_edit_count() > edits_before_redo);
+    assert_ast_matches_fresh(&editor, "redo");
+
+    // 6. Atomic batch replace_ranges_atomic (used by Replace All)
+    editor.replace_ranges_atomic(vec![
+        (Position::new(0, 7), Position::new(0, 13), "alpha_0".to_string()),
+        (Position::new(1, 7), Position::new(1, 13), "alpha_1".to_string()),
+    ]);
+    assert!(editor.buffer().line(0).unwrap().contains("fn alpha_0"));
+    assert!(editor.buffer().line(1).unwrap().contains("fn alpha_1"));
+    assert_ast_matches_fresh(&editor, "replace_ranges_atomic");
+
+    // 7. JavaScript incremental AST equivalence
+    let mut js_editor = CodeEditor::new(
+        "export function launch(speed) {\n    return speed * 2;\n}\n",
+        Language::JavaScript,
+    );
+    js_editor.cursors_mut().set_single(Position::new(1, 21));
+    js_editor.insert_text(" + 10");
+    assert!(js_editor.highlighter().incremental_edit_count() >= 1);
+    assert_ast_matches_fresh(&js_editor, "javascript insert");
+}
+
+#[test]
+fn test_ten_languages_tokenization_multiline_state_and_folding() {
+    // Verify extension & filename detection for all 10 languages
+    assert_eq!(Language::from_extension("rs"), Language::Rust);
+    assert_eq!(Language::from_extension("py"), Language::Python);
+    assert_eq!(Language::from_extension("json"), Language::Json);
+    assert_eq!(Language::from_extension("yaml"), Language::Yaml);
+    assert_eq!(Language::from_extension("yml"), Language::Yaml);
+    assert_eq!(Language::from_extension("toml"), Language::Toml);
+    assert_eq!(Language::from_extension("sdf"), Language::XmlSdf);
+    assert_eq!(Language::from_extension("urdf"), Language::XmlSdf);
+    assert_eq!(Language::from_extension("xml"), Language::XmlSdf);
+    assert_eq!(Language::from_extension("cpp"), Language::Cpp);
+    assert_eq!(Language::from_extension("hpp"), Language::Cpp);
+    assert_eq!(Language::from_extension("ts"), Language::TypeScript);
+    assert_eq!(Language::from_extension("js"), Language::JavaScript);
+    assert_eq!(Language::from_extension("md"), Language::Markdown);
+    assert_eq!(Language::from_extension("sh"), Language::Shell);
+    assert_eq!(Language::from_filename("Cargo.toml"), Language::Toml);
+    assert_eq!(Language::from_filename("model.sdf"), Language::XmlSdf);
+    assert_eq!(Language::from_filename("deploy.bash"), Language::Shell);
+
+    // 1. Rust: doc comments, macro, raw string, control flow
+    let rs = "/// Computes force\npub fn force(m: f64) -> f64 {\n    println!(r#\"raw\"#);\n    return m * 9.81;\n}";
+    let rs_ed = CodeEditor::new(rs, Language::Rust);
+    let rs_t0 = rs_ed.highlighter().highlight_line_ast(0, rs_ed.buffer().line(0).unwrap());
+    assert!(rs_t0.iter().any(|t| t.token_type == TokenType::DocComment));
+    let rs_t2 = rs_ed.highlighter().highlight_line_ast(2, rs_ed.buffer().line(2).unwrap());
+    assert!(rs_t2.iter().any(|t| t.token_type == TokenType::Macro || t.text == "println"));
+    let rs_t3 = rs_ed.highlighter().highlight_line_ast(3, rs_ed.buffer().line(3).unwrap());
+    assert!(rs_t3.iter().any(|t| t.token_type == TokenType::ControlFlow && t.text == "return"));
+
+    // 2. Python: decorator, def, triple-quoted multiline string, indentation fold
+    let py = "@dataclass\ndef fly(alt: float):\n    \"\"\"Multi-line\n    docstring\n    \"\"\"\n    if alt > 0:\n        return True\n";
+    let py_ed = CodeEditor::new(py, Language::Python);
+    let py_t3 = py_ed.highlighter().highlight_line_ast(3, py_ed.buffer().line(3).unwrap());
+    assert!(
+        py_t3.iter().any(|t| t.token_type == TokenType::String),
+        "Middle line of triple-quoted Python docstring must tokenize as String: {py_t3:?}"
+    );
+    let py_folds = py_ed.highlighter().compute_fold_ranges(py_ed.buffer());
+    assert!(
+        py_folds.iter().any(|f| f.start_line == 1 && f.end_line >= 5),
+        "Python def block must produce indentation fold: {py_folds:?}"
+    );
+
+    // 3. JSON: properties, escapes, booleans, numbers, folds
+    let json = "{\n  \"vehicle\": \"rover\\n1\",\n  \"armed\": true,\n  \"altitude\": 120.5\n}";
+    let json_ed = CodeEditor::new(json, Language::Json);
+    let j1 = json_ed.highlighter().highlight_line_ast(1, json_ed.buffer().line(1).unwrap());
+    assert!(j1.iter().any(|t| t.token_type == TokenType::Property));
+    assert!(j1.iter().any(|t| t.token_type == TokenType::String));
+    let j2 = json_ed.highlighter().highlight_line_ast(2, json_ed.buffer().line(2).unwrap());
+    assert!(j2.iter().any(|t| t.token_type == TokenType::Boolean && t.text == "true"));
+    assert!(!json_ed.highlighter().compute_fold_ranges(json_ed.buffer()).is_empty());
+
+    // 4. YAML: keys, anchors, block scalar, indentation folds
+    let yaml = "defaults: &base\n  enabled: true\n  script: |\n    echo hello\n    echo world\nmission:\n  <<: *base\n";
+    let yaml_ed = CodeEditor::new(yaml, Language::Yaml);
+    let y0 = yaml_ed.highlighter().highlight_line_ast(0, yaml_ed.buffer().line(0).unwrap());
+    assert!(y0.iter().any(|t| t.token_type == TokenType::Property && t.text == "defaults"));
+    let y3 = yaml_ed.highlighter().highlight_line_ast(3, yaml_ed.buffer().line(3).unwrap());
+    assert!(
+        y3.iter().any(|t| t.token_type == TokenType::String),
+        "YAML block scalar body must highlight as String: {y3:?}"
+    );
+    assert!(!yaml_ed.highlighter().compute_fold_ranges(yaml_ed.buffer()).is_empty());
+
+    // 5. TOML: section headers, keys, multiline strings, folds
+    let toml = "[package]\nname = \"strata\"\ndesc = \"\"\"\nline one\nline two\n\"\"\"\n[dependencies]\nserde = \"1.0\"\n";
+    let toml_ed = CodeEditor::new(toml, Language::Toml);
+    let t0 = toml_ed.highlighter().highlight_line_ast(0, toml_ed.buffer().line(0).unwrap());
+    assert!(t0.iter().any(|t| t.token_type == TokenType::Heading || t.token_type == TokenType::Tag));
+    let t3 = toml_ed.highlighter().highlight_line_ast(3, toml_ed.buffer().line(3).unwrap());
+    assert!(t3.iter().any(|t| t.token_type == TokenType::String));
+    assert!(!toml_ed.highlighter().compute_fold_ranges(toml_ed.buffer()).is_empty());
+
+    // 6. XML/SDF: tags, attributes, multiline comments, tag-pair folds
+    let sdf = "<?xml version=\"1.0\"?>\n<sdf version=\"1.9\">\n  <!-- multi\n       comment -->\n  <model name=\"rover\">\n    <pose>0 0 1 0 0 0</pose>\n  </model>\n</sdf>";
+    let sdf_ed = CodeEditor::new(sdf, Language::XmlSdf);
+    let s1 = sdf_ed.highlighter().highlight_line_ast(1, sdf_ed.buffer().line(1).unwrap());
+    assert!(s1.iter().any(|t| t.token_type == TokenType::Tag && t.text.contains("sdf")));
+    assert!(s1.iter().any(|t| t.token_type == TokenType::Attribute && t.text == "version"));
+    let s3 = sdf_ed.highlighter().highlight_line_ast(3, sdf_ed.buffer().line(3).unwrap());
+    assert!(s3.iter().any(|t| t.token_type == TokenType::Comment));
+    let sdf_folds = sdf_ed.highlighter().compute_fold_ranges(sdf_ed.buffer());
+    assert!(
+        sdf_folds.iter().any(|f| f.start_line == 1 && f.end_line == 7),
+        "SDF <sdf>..</sdf> must fold: {sdf_folds:?}"
+    );
+    assert!(
+        sdf_folds.iter().any(|f| f.start_line == 4 && f.end_line == 6),
+        "SDF <model>..</model> must fold: {sdf_folds:?}"
+    );
+
+    // 7. C/C++: preprocessor, namespace, template, block comment, folds
+    let cpp = "#include <vector>\nnamespace sim {\n/* block\n   comment */\nclass Drone {\n    double mass = 1.5;\n};\n}";
+    let cpp_ed = CodeEditor::new(cpp, Language::Cpp);
+    let c0 = cpp_ed.highlighter().highlight_line_ast(0, cpp_ed.buffer().line(0).unwrap());
+    assert!(c0.iter().any(|t| t.token_type == TokenType::Macro));
+    let c3 = cpp_ed.highlighter().highlight_line_ast(3, cpp_ed.buffer().line(3).unwrap());
+    assert!(c3.iter().any(|t| t.token_type == TokenType::Comment));
+    assert!(!cpp_ed.highlighter().compute_fold_ranges(cpp_ed.buffer()).is_empty());
+
+    // 8. TypeScript: interface, type annotations, arrow functions
+    let ts = "export interface Pose {\n  lat: number;\n}\nconst norm = (x: number): number => x;\n";
+    let ts_ed = CodeEditor::new(ts, Language::TypeScript);
+    let ts0 = ts_ed.highlighter().highlight_line_ast(0, ts_ed.buffer().line(0).unwrap());
+    assert!(ts0.iter().any(|t| t.token_type == TokenType::Keyword && t.text == "interface"));
+
+    // 9. Markdown: headings, links, fenced code block with embedded Rust highlighting
+    let md = "# Flight Plan\nSee [docs](https://example.com)\n```rust\nfn takeoff() -> bool { true }\n```\n";
+    let md_ed = CodeEditor::new(md, Language::Markdown);
+    let m0 = md_ed.highlighter().highlight_line_ast(0, md_ed.buffer().line(0).unwrap());
+    assert!(m0.iter().any(|t| t.token_type == TokenType::Heading));
+    let m1 = md_ed.highlighter().highlight_line_ast(1, md_ed.buffer().line(1).unwrap());
+    assert!(m1.iter().any(|t| t.token_type == TokenType::Link));
+    let m3 = md_ed.highlighter().highlight_line_ast(3, md_ed.buffer().line(3).unwrap());
+    assert!(
+        m3.iter().any(|t| t.token_type == TokenType::Keyword && t.text == "fn"),
+        "Embedded rust fence in Markdown should highlight Rust keywords: {m3:?}"
+    );
+    assert!(!md_ed.highlighter().compute_fold_ranges(md_ed.buffer()).is_empty());
+
+    // 10. Shell: shebang, variables, control flow, heredoc, folds
+    let sh = "#!/usr/bin/env bash\nif [ -n \"$HOME\" ]; then\n  cat <<EOF\n  inside heredoc\nEOF\nfi\n";
+    let sh_ed = CodeEditor::new(sh, Language::Shell);
+    let sh1 = sh_ed.highlighter().highlight_line_ast(1, sh_ed.buffer().line(1).unwrap());
+    assert!(sh1.iter().any(|t| t.token_type == TokenType::ControlFlow && t.text == "if"));
+    let sh3 = sh_ed.highlighter().highlight_line_ast(3, sh_ed.buffer().line(3).unwrap());
+    assert!(
+        sh3.iter().any(|t| t.token_type == TokenType::String),
+        "Shell heredoc body must highlight as String: {sh3:?}"
+    );
+    assert!(!sh_ed.highlighter().compute_fold_ranges(sh_ed.buffer()).is_empty());
+}
+
+#[test]
+fn test_incremental_multiline_state_convergence_and_diagnostics() {
+    // Multi-line comment propagation & early convergence on C++
+    let mut cpp = String::from("int a = 1;\nint b = 2;\nint c = 3;\n");
+    for i in 4..40 {
+        cpp.push_str(&format!("int v{i} = {i};\n"));
+    }
+    let mut ed = CodeEditor::new(&cpp, Language::Cpp);
+
+    // Line 10 initially starts with type `int`
+    let before_toks = ed.highlighter().highlight_line_ast(10, ed.buffer().line(10).unwrap());
+    assert!(before_toks.iter().any(|t| t.token_type == TokenType::Type && t.text == "int"));
+
+    // Open an unclosed block comment on line 1 -> line 10 must become Comment
+    ed.cursors_mut().set_single(Position::new(1, 0));
+    ed.insert_text("/* ");
+    let during_toks = ed.highlighter().highlight_line_ast(10, ed.buffer().line(10).unwrap());
+    assert!(
+        during_toks.iter().all(|t| t.token_type == TokenType::Comment),
+        "Line 10 must turn into Comment when line 1 opens unclosed /*: {during_toks:?}"
+    );
+
+    // Close the block comment on line 2 -> line 10 must immediately recover to Type `int`
+    ed.cursors_mut().set_single(Position::new(2, 0));
+    ed.insert_text("*/ ");
+    let after_toks = ed.highlighter().highlight_line_ast(10, ed.buffer().line(10).unwrap());
+    assert!(
+        after_toks.iter().any(|t| t.token_type == TokenType::Type && t.text == "int"),
+        "Line 10 must recover after closing */ on line 2: {after_toks:?}"
+    );
+
+    // Syntax diagnostics: Rust AST error
+    let ok_rs = CodeEditor::new("fn valid() -> i32 { 42 }", Language::Rust);
+    assert!(ok_rs.highlighter().collect_syntax_diagnostics(ok_rs.buffer()).is_empty());
+
+    let bad_rs = CodeEditor::new("fn broken( {", Language::Rust);
+    assert!(
+        !bad_rs.highlighter().collect_syntax_diagnostics(bad_rs.buffer()).is_empty(),
+        "Broken Rust must emit Tree-Sitter syntax diagnostics"
+    );
+
+    // Syntax diagnostics: JSON malformed vs valid
+    let ok_json = CodeEditor::new("{\"a\": [1, 2]}", Language::Json);
+    assert!(ok_json.highlighter().collect_syntax_diagnostics(ok_json.buffer()).is_empty());
+    let bad_json = CodeEditor::new("{\"a\": [1, 2}", Language::Json);
+    assert!(!bad_json.highlighter().collect_syntax_diagnostics(bad_json.buffer()).is_empty());
+
+    // Syntax diagnostics: XML/SDF mismatched closing tag
+    let ok_sdf = CodeEditor::new("<sdf><model/></sdf>", Language::XmlSdf);
+    assert!(ok_sdf.highlighter().collect_syntax_diagnostics(ok_sdf.buffer()).is_empty());
+    let bad_sdf = CodeEditor::new("<sdf><model></world></sdf>", Language::XmlSdf);
+    assert!(!bad_sdf.highlighter().collect_syntax_diagnostics(bad_sdf.buffer()).is_empty());
+}
+
+#[test]
+fn test_utf8_multibyte_code_editor_insert_delete_undo_redo() {
+    let mut ed = CodeEditor::new("let msg = \"🦀\";", Language::Rust);
+    ed.cursors_mut().set_single(Position::new(0, 12)); // right after 🦀
+    ed.insert_text("東京🚀");
+    assert_eq!(ed.buffer().line(0), Some("let msg = \"🦀東京🚀\";"));
+    assert_eq!(ed.cursors().primary().focus, Position::new(0, 15));
+
+    // Delete forward over closing quote, then backspace over 🚀
+    ed.delete_forward();
+    assert_eq!(ed.buffer().line(0), Some("let msg = \"🦀東京🚀;"));
+    ed.delete_backwards();
+    assert_eq!(ed.buffer().line(0), Some("let msg = \"🦀東京;"));
+
+    // Undo back to original cleanly without UTF-8 panic
+    ed.undo();
+    ed.undo();
+    ed.undo();
+    assert_eq!(ed.buffer().line(0), Some("let msg = \"🦀\";"));
+    ed.redo();
+    assert_eq!(ed.buffer().line(0), Some("let msg = \"🦀東京🚀\";"));
+
+    // Rendering multi-byte syntax tokens must never panic on char boundaries
+    let _bp = ed.render();
+}
+
+#[test]
+fn test_find_replace_literal_case_whole_word_regex_and_atomic_replace_all() {
+    let original = "let foo_1 = bar;\nlet Foo_2 = foobar;\nlet foo_3 = bar + BAR;\n";
+    let mut ed = CodeEditor::new(original, Language::Rust);
+    ed.open_replace();
+
+    // 1. Case-insensitive literal search
+    ed.set_find_query("bar");
+    assert_eq!(ed.search().matches.len(), 4); // bar, foobar, bar, BAR
+    assert_eq!(ed.search().status_label(), "1 of 4");
+
+    // 2. Whole-word toggle excludes `foobar`
+    let mut s = std::mem::take(ed.search_mut());
+    s.toggle_whole_word(ed.buffer());
+    *ed.search_mut() = s;
+    assert_eq!(ed.search().matches.len(), 3); // bar, bar, BAR
+
+    // 3. Case-sensitive toggle excludes `BAR`
+    let mut s = std::mem::take(ed.search_mut());
+    s.toggle_case_sensitive(ed.buffer());
+    *ed.search_mut() = s;
+    assert_eq!(ed.search().matches.len(), 2); // bar on line 0 and line 2
+
+    // 4. Next/prev wraparound syncs cursor selection
+    let m1 = ed.find_next().expect("second match");
+    assert_eq!(m1.start.line, 2);
+    assert_eq!(ed.cursors().primary().ordered_range(), (m1.start, m1.end));
+    let m0 = ed.find_next().expect("wraps to first match");
+    assert_eq!(m0.start.line, 0);
+    let m_prev = ed.find_prev().expect("wraps backwards to last match");
+    assert_eq!(m_prev.start.line, 2);
+
+    // 5. Invalid regex never panics and surfaces regex_error cleanly
+    let mut s = std::mem::take(ed.search_mut());
+    s.use_regex = true;
+    s.whole_word = false;
+    s.case_sensitive = false;
+    s.set_query("[unclosed", ed.buffer());
+    *ed.search_mut() = s;
+    assert!(ed.search().regex_error.is_some());
+    assert_eq!(ed.search().status_label(), "Invalid regex");
+
+    // 6. Regex capture-group Replace All in ONE atomic undo transaction
+    ed.set_find_query(r"foo_(\d+)");
+    assert_eq!(ed.search().matches.len(), 3);
+    ed.set_replace_text("item_$1");
+    let replaced = ed.replace_all();
+    assert_eq!(replaced, 3);
+    assert!(ed.text().contains("let item_1 = bar;"));
+    assert!(ed.text().contains("let item_2 = foobar;"));
+    assert!(ed.text().contains("let item_3 = bar + BAR;"));
+
+    // Single undo reverts all 3 regex replacements at once
+    ed.undo();
+    assert_eq!(ed.text(), original);
+}
+
+#[test]
+fn test_fold_aware_virtualization_and_row_projection() {
+    let sdf = "<sdf version=\"1.9\">\n  <model name=\"a\">\n    <link name=\"base\"/>\n  </model>\n  <model name=\"b\">\n    <link name=\"rotor\"/>\n  </model>\n</sdf>";
+    let mut ed = CodeEditor::new(sdf, Language::XmlSdf);
+    assert_eq!(ed.visible_logical_lines().len(), 8);
+
+    // Collapse first <model> (lines 1..=3 -> hides lines 2 and 3)
+    assert!(ed.toggle_fold_at(1));
+    assert!(ed.is_folded(1));
+    assert_eq!(ed.folded_hidden_count(1), Some(2));
+    assert_eq!(ed.visible_logical_lines(), vec![0, 1, 4, 5, 6, 7]);
+    assert_eq!(ed.logical_to_display_row(2), None);
+    assert_eq!(ed.logical_to_display_row(4), Some(2));
+    assert_eq!(ed.display_row_to_logical(2), Some(4));
+
+    // Fold all -> only outer <sdf> line 0 stays visible
+    ed.fold_all();
+    assert_eq!(ed.visible_logical_lines(), vec![0]);
+
+    // Unfold all restores every line
+    ed.unfold_all();
+    assert_eq!(ed.visible_logical_lines().len(), 8);
+
+    // Interactive render shows fold badge when folded
+    let handle = CodeEditorHandle::new(sdf, Language::XmlSdf);
+    handle.with_editor_mut(|e| {
+        e.toggle_fold_at(1);
+    });
+    let bp = handle.render_interactive(&CodeEditorOptions::default());
+    let debug_str = format!("{bp:?}");
+    assert!(
+        debug_str.contains("⋯ 2 lines"),
+        "Collapsed fold pill badge must appear in interactive blueprint"
+    );
+    assert!(debug_str.contains("data-fold-toggle"));
+}
+
+#[test]
+fn test_diagnostics_merging_syntax_and_external_lsp() {
+    let mut ed = CodeEditor::new("fn broken( {", Language::Rust);
+    assert!(
+        ed.diagnostic_counts().errors >= 1,
+        "Broken Rust should emit live syntax error"
+    );
+
+    // Attach external LSP warning and hint
+    ed.set_external_diagnostics(vec![
+        EditorDiagnostic::warning(
+            Position::new(0, 0),
+            Position::new(0, 2),
+            "Unused function",
+        )
+        .with_code("W001")
+        .with_source("rust-analyzer"),
+        EditorDiagnostic::hint(Position::new(0, 3), Position::new(0, 9), "Consider docs"),
+    ]);
+
+    let counts = ed.diagnostic_counts();
+    assert!(counts.errors >= 1);
+    assert_eq!(counts.warnings, 1);
+    assert_eq!(counts.hints, 1);
+    assert_eq!(
+        ed.diagnostics().max_severity_on_line(0),
+        Some(DiagnosticSeverity::Error)
+    );
+
+    // Fix the syntax error -> live syntax error clears while external warning stays
+    ed.set_text("fn fixed() -> i32 { 42 }");
+    let after = ed.diagnostic_counts();
+    assert_eq!(after.errors, 0);
+    assert_eq!(after.warnings, 1);
+    assert_eq!(
+        ed.diagnostics().max_severity_on_line(0),
+        Some(DiagnosticSeverity::Warning)
+    );
+}
+
+#[test]
+fn test_minimap_canvas_commands_scaling_and_scrub_to_scroll() {
+    let mut large = String::new();
+    for i in 0..20_000 {
+        large.push_str(&format!("pub fn node_{i:05}(val: f64) -> f64 {{ val * 2.0 }}\n"));
+    }
+    let mut ed = CodeEditor::new(&large, Language::Rust);
+    ed.open_find();
+    ed.set_find_query("node_10000");
+    ed.set_external_diagnostics(vec![EditorDiagnostic::error(
+        Position::new(5_000, 0),
+        Position::new(5_000, 10),
+        "Simulated error",
+    )]);
+
+    let cfg = MinimapConfig::default();
+    let cmds = render_minimap_canvas_commands(
+        &ed,
+        0.0,
+        480.0,
+        22.0,
+        480.0,
+        &cfg,
+        &EditorTheme::obsidian_dark(),
+    );
+    assert!(!cmds.is_empty());
+    assert!(
+        cmds.len() < 2_500,
+        "20k-line minimap must downsample to bounded CanvasCommands; actual {}",
+        cmds.len()
+    );
+
+    // Monotonic click-to-scroll mapping
+    let top_scroll = minimap_y_to_scroll_top(0.0, 480.0, ed.line_count(), 480.0, 22.0, &cfg);
+    let mid_scroll = minimap_y_to_scroll_top(240.0, 480.0, ed.line_count(), 480.0, 22.0, &cfg);
+    let bot_scroll = minimap_y_to_scroll_top(480.0, 480.0, ed.line_count(), 480.0, 22.0, &cfg);
+    assert_eq!(top_scroll, 0.0);
+    assert!(mid_scroll > top_scroll);
+    assert!(bot_scroll > mid_scroll);
+}
+
+#[test]
+fn test_interactive_code_editor_widget_keymap_mouse_rsx_and_css_variables() {
+    use strata_dom::{Attribute, Event, EventType, NodeBlueprint, Tag};
+    use strata_render::canvas2d::CanvasCommand;
+
+    let handle = CodeEditorHandle::new("fn main() {\n    let x = 10;\n    let y = 20;\n}", Language::Rust);
+
+    // 1. RSX drop-in instantiation with CSS-variable theme & Canvas2D minimap payload
+    let view = strata_macro::rsx! {
+        <CodeEditorWidget
+            handle={handle.clone()}
+            language={Language::Rust}
+            theme={EditorTheme::obsidian_dark()}
+            show_minimap={true}
+            show_line_numbers={true}
+            show_fold_gutter={true}
+            show_status_bar={true}
+            read_only={false}
+            class="h-full w-full"
+        />
+    };
+
+    let debug_bp = format!("{:?}", view.root);
+    assert!(debug_bp.contains("var(--strata-editor-bg"));
+    assert!(debug_bp.contains("var(--strata-editor-tok-keyword"));
+    assert!(debug_bp.contains("data-editor-minimap"));
+    assert!(debug_bp.contains("data-editor-statusbar"));
+
+    // Verify minimap Tag::Canvas carries an Arc<Vec<CanvasCommand>> ScenePayload
+    fn find_minimap_payload(node: &NodeBlueprint) -> bool {
+        if let NodeBlueprint::Element {
+            tag,
+            attributes,
+            children,
+            ..
+        } = node
+        {
+            if *tag == Tag::Canvas {
+                for attr in attributes {
+                    if let Attribute::ScenePayload(p) = attr {
+                        if p.downcast_ref::<Vec<CanvasCommand>>().is_some()
+                            || p.downcast_ref::<std::sync::Arc<Vec<CanvasCommand>>>()
+                                .is_some()
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return children.iter().any(find_minimap_payload);
+        }
+        false
+    }
+    assert!(
+        find_minimap_payload(&view.root),
+        "Minimap Tag::Canvas must carry Vec<CanvasCommand> ScenePayload"
+    );
+
+    // 2. Keyboard interactions: Ctrl+F opens Find bar, Escape closes it, Ctrl+/ toggles comments
+    handle.with_editor_mut(|ed| {
+        let mut ctrl_f = Event::new(EventType::KeyDown);
+        ctrl_f.ctrl_key = true;
+        ctrl_f.key = "f".to_string();
+        assert!(ed.handle_key_event(&ctrl_f));
+        assert!(ed.search().is_open);
+    });
+    let with_find = handle.render_interactive(&CodeEditorOptions::default());
+    assert!(format!("{with_find:?}").contains("data-find-replace-bar"));
+
+    handle.with_editor_mut(|ed| {
+        let mut esc = Event::new(EventType::KeyDown);
+        esc.key = "Escape".to_string();
+        assert!(ed.handle_key_event(&esc));
+        assert!(!ed.search().is_open);
+
+        // Toggle comment on lines 1..=2
+        ed.cursors_mut().set_single(Position::new(1, 0));
+        ed.cursors_mut().all_mut()[0] =
+            Selection::range(Position::new(1, 0), Position::new(2, 5));
+        let mut ctrl_slash = Event::new(EventType::KeyDown);
+        ctrl_slash.ctrl_key = true;
+        ctrl_slash.key = "/".to_string();
+        assert!(ed.handle_key_event(&ctrl_slash));
+        assert!(ed.buffer().line(1).unwrap().trim_start().starts_with("// "));
+        assert!(ed.buffer().line(2).unwrap().trim_start().starts_with("// "));
+
+        // Toggle again uncomments cleanly
+        assert!(ed.handle_key_event(&ctrl_slash));
+        assert_eq!(ed.buffer().line(1), Some("    let x = 10;"));
+
+        // Tab / Shift+Tab multi-line indent & outdent
+        ed.cursors_mut().set_single(Position::new(1, 0));
+        ed.cursors_mut().all_mut()[0] =
+            Selection::range(Position::new(1, 0), Position::new(2, 5));
+        let mut tab = Event::new(EventType::KeyDown);
+        tab.key = "Tab".to_string();
+        assert!(ed.handle_key_event(&tab));
+        assert_eq!(ed.buffer().line(1), Some("        let x = 10;"));
+        tab.shift_key = true;
+        assert!(ed.handle_key_event(&tab));
+        assert_eq!(ed.buffer().line(1), Some("    let x = 10;"));
+
+        // Pointer double-click selects word, Alt+Click adds second cursor
+        ed.handle_pointer_down(72.0 + 36.0, 22.0 + 5.0, 2, false, false, 72.0);
+        assert!(!ed.cursors().primary().is_collapsed());
+        ed.handle_pointer_down(72.0 + 10.0, 5.0, 1, true, false, 72.0);
+        assert_eq!(ed.cursors().count(), 2);
+
+        // Read-only mode blocks mutations while permitting navigation & Find
+        ed.set_read_only(true);
+        let before = ed.text();
+        let mut ch = Event::new(EventType::KeyDown);
+        ch.key = "x".to_string();
+        assert!(ed.handle_key_event(&ch));
+        assert_eq!(ed.text(), before);
+    });
+
+    // 3. Light theme CSS variable preset emits daylight-light styling
+    handle.set_theme(EditorTheme::daylight_light());
+    let light_bp = handle.render_interactive(&CodeEditorOptions::default());
+    assert!(format!("{light_bp:?}").contains("daylight-light"));
+    assert!(EditorTheme::daylight_light()
+        .to_css_variables_block()
+        .contains("--strata-editor-bg: #ffffff"));
+
+    // 4. Reactive hook persistence across two render passes
+    strata_dom::reset_component_hooks();
+    let v1 = strata_dom::with_root_component_scope(|| {
+        let h = use_code_editor("alpha", Language::PlainText);
+        h.with_editor_mut(|e| e.insert_text("beta "));
+        h.text()
+    });
+    let v2 = strata_dom::with_root_component_scope(|| {
+        let h = use_code_editor("alpha", Language::PlainText);
+        h.text()
+    });
+    assert_eq!(v1, "beta alpha");
+    assert_eq!(v2, "beta alpha");
+}
+
+

@@ -208,6 +208,7 @@ fn test_input_synchronization_with_fragment_flattening_and_entity_id() {
         input_index: 0,
         input_id: Some("test-search-input".to_string()),
         entity_id: Some(target_eid),
+        is_multiline: false,
         state,
         on_input: None,
         on_change: None,

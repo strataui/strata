@@ -232,6 +232,7 @@ fn test_compute_idle_sleep_pacing_states() {
         input_index: 0,
         input_id: None,
         entity_id: None,
+        is_multiline: false,
         state: input_state,
         on_input: None,
         on_change: None,

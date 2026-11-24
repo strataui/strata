@@ -821,6 +821,26 @@ impl Wgpu2DRenderer {
         &self.stencil_clip_pipeline
     }
 
+    /// Total GPU buffer & render-target memory allocated by this 2D renderer in bytes.
+    pub fn gpu_memory_bytes(&self) -> u64 {
+        let mut bytes = self.uniform_buffer.size()
+            + self.unit_quad_vbuf.size()
+            + self.signed_quad_vbuf.size()
+            + self.quad_ibuf_cap_bytes
+            + self.path_seg_ibuf_cap_bytes
+            + self.slug_inst_ibuf_cap_bytes
+            + self.slug_curve_sbuf_cap_bytes
+            + self.stencil_vbuf_cap_bytes;
+        if let Some(ref st) = self.stencil_target {
+            bytes += (st.width as u64) * (st.height as u64) * 4;
+        }
+        if let Some(ref off) = self.offscreen {
+            bytes += (off.width as u64) * (off.height as u64) * 4
+                + (off.padded_bytes_per_row as u64) * (off.height as u64);
+        }
+        bytes
+    }
+
     fn ensure_stencil_target(&mut self, width: u32, height: u32) {
         let w = width.max(1);
         let h = height.max(1);

@@ -211,13 +211,22 @@ impl DrawCommand {
             Self::DrawBorder { bounds, .. } => Some(*bounds),
             Self::DrawText {
                 origin,
+                bounds_width,
+                bounds_height,
                 text,
                 font_size,
                 line_height,
+                is_monospace,
                 ..
             } => {
-                let h = line_height.max(*font_size);
-                let w = text.len() as f32 * font_size * 0.6;
+                let (w, h) = draw_text_paint_size(
+                    text,
+                    *bounds_width,
+                    *bounds_height,
+                    *font_size,
+                    *line_height,
+                    *is_monospace,
+                );
                 Some(Rect::new(origin.0, origin.1, w, h))
             }
             Self::DrawTextFragments { fragments } => {
@@ -252,6 +261,178 @@ impl DrawCommand {
             Self::PushTransform { .. } | Self::PopTransform => None,
         }
     }
+}
+
+/// Breaks and aligns [`DrawCommand::DrawText`] slices to fit `bounds_width` using `char_advance`,
+/// returning `(x_offset, line_slice)` entries and the starting `y_offset` for vertical centering.
+pub fn layout_draw_text_lines<'a>(
+    text: &'a str,
+    bounds_width: Option<f32>,
+    bounds_height: Option<f32>,
+    font_size: f32,
+    line_height: f32,
+    text_align: strata_style::TextAlign,
+    mut char_advance: impl FnMut(char) -> f32,
+) -> (Vec<(f32, &'a str)>, f32) {
+    let max_w = bounds_width.filter(|w| w.is_finite() && *w > 0.0);
+    let mut raw_lines: Vec<(&'a str, f32)> = Vec::new();
+    for para in text.split('\n') {
+        if let Some(limit) = max_w {
+            let mut line_start = 0usize;
+            let mut cur_w = 0.0f32;
+            let mut last_break: Option<(usize, usize, f32)> = None;
+            let mut in_ws = false;
+            let mut ws_end_prev = 0usize;
+            let mut ws_w_prev = 0.0f32;
+            for (idx, ch) in para.char_indices() {
+                let ch_end = idx + ch.len_utf8();
+                let cw = char_advance(ch);
+                if ch.is_whitespace() {
+                    if !in_ws {
+                        ws_end_prev = idx;
+                        ws_w_prev = cur_w;
+                        in_ws = true;
+                    }
+                    last_break = Some((ws_end_prev, ch_end, ws_w_prev));
+                    cur_w += cw;
+                } else {
+                    in_ws = false;
+                    if cur_w + cw > limit + 0.01 && idx > line_start {
+                        if let Some((end_b, next_b, bw)) =
+                            last_break.filter(|(eb, _, _)| *eb > line_start)
+                        {
+                            raw_lines.push((&para[line_start..end_b], bw));
+                            line_start = next_b;
+                            cur_w = para[line_start..ch_end]
+                                .chars()
+                                .map(&mut char_advance)
+                                .sum();
+                            last_break = None;
+                        } else {
+                            raw_lines.push((&para[line_start..idx], cur_w));
+                            line_start = idx;
+                            cur_w = cw;
+                            last_break = None;
+                        }
+                    } else {
+                        cur_w += cw;
+                    }
+                }
+            }
+            raw_lines.push((&para[line_start..], cur_w));
+        } else {
+            let w: f32 = para.chars().map(&mut char_advance).sum();
+            raw_lines.push((para, w));
+        }
+    }
+
+    let aligned: Vec<(f32, &'a str)> = raw_lines
+        .into_iter()
+        .map(|(line, lw)| {
+            let ox = match (max_w, text_align) {
+                (Some(limit), strata_style::TextAlign::Center) => ((limit - lw) * 0.5).max(0.0),
+                (Some(limit), strata_style::TextAlign::Right) => (limit - lw).max(0.0),
+                _ => 0.0,
+            };
+            (ox, line)
+        })
+        .collect();
+
+    let single_line_h = effective_draw_text_line_height(font_size, line_height);
+    let total_text_h = aligned.len().max(1) as f32 * single_line_h;
+    let start_y_offset = bounds_height
+        .map(|bh| ((bh.max(single_line_h) - total_text_h) * 0.5).max(0.0))
+        .unwrap_or(0.0);
+
+    (aligned, start_y_offset)
+}
+
+/// Resolves a `DrawText` `line_height` field (multiplier if `<= 4.0`, pixel distance if `> 4.0`).
+#[inline]
+pub fn effective_draw_text_line_height(font_size: f32, line_height: f32) -> f32 {
+    if line_height <= 0.0 || !line_height.is_finite() {
+        font_size * 1.2
+    } else if line_height <= 4.0 {
+        font_size * line_height
+    } else {
+        line_height
+    }
+}
+
+/// Computes a conservative `(width, height)` bounding size for a [`DrawCommand::DrawText`]
+/// command, accounting for explicit newlines and word-wrapping within `bounds_width` so
+/// 64x64 dirty-tile hashing, tile culling, and clip culling never underestimate multiline text.
+pub fn draw_text_paint_size(
+    text: &str,
+    bounds_width: Option<f32>,
+    bounds_height: Option<f32>,
+    font_size: f32,
+    line_height: f32,
+    is_monospace: bool,
+) -> (f32, f32) {
+    let fs = if font_size.is_finite() && font_size > 0.0 {
+        font_size
+    } else {
+        14.0
+    };
+    let line_step = effective_draw_text_line_height(fs, line_height).max(fs);
+    let max_w = bounds_width.filter(|w| w.is_finite() && *w > 0.0);
+
+    let ascii_w = if is_monospace { fs * 0.65 } else { fs * 0.64 };
+    let wide_ascii_w = if is_monospace { fs * 0.65 } else { fs * 0.85 };
+    let non_ascii_w = fs * 1.05;
+
+    let mut total_lines = 0usize;
+    let mut max_line_w = 0.0f32;
+    let mut max_para_chars = 0usize;
+    let mut para_count = 0usize;
+
+    for para in text.split('\n') {
+        para_count += 1;
+        let mut para_chars = 0usize;
+        let mut para_w = 0.0f32;
+        for ch in para.chars() {
+            para_chars += 1;
+            para_w += if ch == '\t' {
+                ascii_w * 4.0
+            } else if ch.is_ascii_uppercase() || matches!(ch, 'm' | 'w' | '@' | '%' | '&') {
+                wide_ascii_w
+            } else if ch.is_ascii() {
+                ascii_w
+            } else {
+                non_ascii_w
+            };
+        }
+        max_para_chars = max_para_chars.max(para_chars);
+
+        if let Some(limit) = max_w {
+            max_line_w = max_line_w.max(limit);
+            if para.is_empty() {
+                total_lines += 1;
+            } else {
+                // Account for word-wrap slack (~22%) where Pango breaks at whitespace
+                // before reaching `limit`, ensuring estimated wrapped lines >= actual lines.
+                let eff_limit = (limit * 0.78).max(ascii_w);
+                let wrapped = ((para_w / eff_limit).ceil() as usize).max(1);
+                total_lines += wrapped;
+            }
+        } else {
+            max_line_w = max_line_w.max(para_w);
+            total_lines += 1;
+        }
+    }
+
+    let line_count = total_lines.max(para_count).max(1);
+    let est_w = if let Some(limit) = max_w {
+        limit.max(max_line_w)
+    } else {
+        max_line_w.max(max_para_chars as f32 * fs * 0.72)
+    };
+    let est_h = (line_count as f32 * line_step) + (line_step * 0.5);
+    let final_h = bounds_height
+        .filter(|bh| bh.is_finite() && *bh > 0.0)
+        .map_or(est_h, |bh| bh.max(est_h));
+    (est_w, final_h)
 }
 
 /// A serialized sequence of render instructions for a single frame.
@@ -366,6 +547,24 @@ impl DamageTracker {
     }
 }
 
+/// Precomputed scrollbar thumb overlay bound to a specific scroll container [`LayoutNode`]
+/// so [`Compositor`] emits it inline inside that container's stacking context and clip bounds.
+#[derive(Debug, Clone, Copy)]
+pub struct ScrollbarOverlay {
+    /// Pointer identity (`node as *const LayoutNode as usize`) of the owning scroll container.
+    pub node_ptr: usize,
+    /// Clip bounds in the owning container's coordinate space.
+    pub clip_bounds: Rect,
+    /// Clip corner radius.
+    pub clip_radius: BorderRadius,
+    /// Thumb rectangle in the owning container's coordinate space.
+    pub thumb_bounds: Rect,
+    /// Thumb fill color (including hover/active alpha).
+    pub color: Color,
+    /// Thumb corner radius.
+    pub thumb_radius: BorderRadius,
+}
+
 /// Compiles a `LayoutNode` tree into a `DisplayList` following CSS 2.1 Appendix E.
 pub struct Compositor;
 
@@ -375,14 +574,9 @@ impl Compositor {
         Self::build_display_list_with_viewport(root, None)
     }
 
-    /// Compiles a layout tree root into an ordered DisplayList with spatial viewport culling.
-    /// Elements outside the active viewport buffer zone are culled from command emission.
-    pub fn build_display_list_with_viewport(
-        root: &LayoutNode,
-        viewport: Option<Rect>,
-    ) -> DisplayList {
-        let mut list = DisplayList::new();
-        let cull_rect = viewport.map(|vp| {
+    #[inline]
+    fn cull_rect_for_viewport(viewport: Option<Rect>) -> Option<Rect> {
+        viewport.map(|vp| {
             let buffer_y = 1200.0;
             let buffer_x = 300.0;
             Rect::new(
@@ -391,9 +585,114 @@ impl Compositor {
                 vp.width + buffer_x * 2.0,
                 vp.height + buffer_y * 2.0,
             )
-        });
-        Self::paint_stacking_context_guarded(root, &mut list, cull_rect, 0);
+        })
+    }
+
+    #[inline]
+    fn has_scrollbar(node: &LayoutNode, scrollbars: &[ScrollbarOverlay]) -> bool {
+        if scrollbars.is_empty() {
+            return false;
+        }
+        let ptr = node as *const LayoutNode as usize;
+        scrollbars.iter().any(|bar| bar.node_ptr == ptr)
+    }
+
+    #[inline]
+    fn emit_node_scrollbar(
+        node: &LayoutNode,
+        list: &mut DisplayList,
+        scrollbars: &[ScrollbarOverlay],
+    ) {
+        if scrollbars.is_empty() {
+            return;
+        }
+        let ptr = node as *const LayoutNode as usize;
+        for bar in scrollbars {
+            if bar.node_ptr == ptr {
+                list.push(DrawCommand::PushClip {
+                    bounds: bar.clip_bounds,
+                    radius: bar.clip_radius,
+                });
+                list.push(DrawCommand::DrawRoundedRect {
+                    bounds: bar.thumb_bounds,
+                    color: bar.color,
+                    border_radius: bar.thumb_radius,
+                    border_width: EdgeInsets::all(0.0),
+                    border_color: None,
+                });
+                list.push(DrawCommand::PopClip);
+                break;
+            }
+        }
+    }
+
+    /// Compiles a layout tree root into an ordered DisplayList with spatial viewport culling.
+    /// Elements outside the active viewport buffer zone are culled from command emission.
+    pub fn build_display_list_with_viewport(
+        root: &LayoutNode,
+        viewport: Option<Rect>,
+    ) -> DisplayList {
+        Self::build_display_list_with_scrollbars(root, viewport, &[])
+    }
+
+    /// Compiles a layout tree root (including Top-Layer portals) into a DisplayList while emitting
+    /// each scroll container's scrollbar thumb inline inside its own stacking context and clip bounds.
+    pub fn build_display_list_with_scrollbars(
+        root: &LayoutNode,
+        viewport: Option<Rect>,
+        scrollbars: &[ScrollbarOverlay],
+    ) -> DisplayList {
+        let mut list = DisplayList::new();
+        let cull_rect = Self::cull_rect_for_viewport(viewport);
+        Self::paint_stacking_context_guarded_with_scrollbars(
+            root, &mut list, cull_rect, scrollbars, 0,
+        );
         list
+    }
+
+    /// Compiles only the document stacking contexts (excluding Top-Layer `<Portal>` overlays)
+    /// so document scrollbars can be emitted before Top-Layer overlays are composited.
+    pub fn build_document_display_list_with_viewport(
+        root: &LayoutNode,
+        viewport: Option<Rect>,
+    ) -> DisplayList {
+        Self::build_document_display_list_with_scrollbars(root, viewport, &[])
+    }
+
+    /// Compiles only the document stacking contexts (excluding Top-Layer `<Portal>` overlays),
+    /// emitting each document scroll container's scrollbar thumb inline inside its stacking context.
+    pub fn build_document_display_list_with_scrollbars(
+        root: &LayoutNode,
+        viewport: Option<Rect>,
+        scrollbars: &[ScrollbarOverlay],
+    ) -> DisplayList {
+        let mut list = DisplayList::new();
+        let cull_rect = Self::cull_rect_for_viewport(viewport);
+        Self::paint_stacking_context_inner(
+            root, &mut list, cull_rect, cull_rect, &[], true, scrollbars, 0,
+        );
+        list
+    }
+
+    /// Appends all Top-Layer `<Portal>` overlays to an existing DisplayList.
+    pub fn append_top_layer_portals(
+        root: &LayoutNode,
+        list: &mut DisplayList,
+        viewport: Option<Rect>,
+    ) {
+        Self::append_top_layer_portals_with_scrollbars(root, list, viewport, &[]);
+    }
+
+    /// Appends all Top-Layer `<Portal>` overlays to an existing DisplayList while emitting
+    /// portal scroll container thumbs inline inside each portal's stacking context.
+    pub fn append_top_layer_portals_with_scrollbars(
+        root: &LayoutNode,
+        list: &mut DisplayList,
+        viewport: Option<Rect>,
+        scrollbars: &[ScrollbarOverlay],
+    ) {
+        let cull_rect = Self::cull_rect_for_viewport(viewport);
+        Self::paint_top_layer_portals(root, list, cull_rect, scrollbars);
     }
 
     /// Determines if an element establishes a new Stacking Context (without parent display context).
@@ -597,9 +896,28 @@ impl Compositor {
         cull: Option<Rect>,
         depth: usize,
     ) {
-        Self::paint_stacking_context_inner(node, list, cull, cull, &[], depth == 0, depth);
+        Self::paint_stacking_context_guarded_with_scrollbars(node, list, cull, &[], depth);
+    }
+
+    fn paint_stacking_context_guarded_with_scrollbars(
+        node: &LayoutNode,
+        list: &mut DisplayList,
+        cull: Option<Rect>,
+        scrollbars: &[ScrollbarOverlay],
+        depth: usize,
+    ) {
+        Self::paint_stacking_context_inner(
+            node,
+            list,
+            cull,
+            cull,
+            &[],
+            depth == 0,
+            scrollbars,
+            depth,
+        );
         if depth == 0 {
-            Self::paint_top_layer_portals(node, list, cull);
+            Self::paint_top_layer_portals(node, list, cull, scrollbars);
         }
     }
 
@@ -624,11 +942,25 @@ impl Compositor {
         }
     }
 
-    fn paint_top_layer_portals(node: &LayoutNode, list: &mut DisplayList, root_cull: Option<Rect>) {
+    fn paint_top_layer_portals(
+        node: &LayoutNode,
+        list: &mut DisplayList,
+        root_cull: Option<Rect>,
+        scrollbars: &[ScrollbarOverlay],
+    ) {
         let mut portals = Vec::new();
         Self::collect_top_layer_portals(node, &mut portals);
         for portal in portals {
-            Self::paint_stacking_context_inner(portal, list, root_cull, root_cull, &[], false, 1);
+            Self::paint_stacking_context_inner(
+                portal,
+                list,
+                root_cull,
+                root_cull,
+                &[],
+                false,
+                scrollbars,
+                1,
+            );
         }
     }
 
@@ -640,7 +972,9 @@ impl Compositor {
             || border_radius.bottom_left > 0.0
             || border_radius.bottom_right > 0.0;
         let clips_overflow = node.style.overflow_x != Overflow::Visible
-            || node.style.overflow_y != Overflow::Visible;
+            || node.style.overflow_y != Overflow::Visible
+            || node.transition_layout_width_px.is_some()
+            || node.transition_layout_height_px.is_some();
         let should_clip =
             clips_overflow || (has_any_radius && (node.image.is_some() || node.scene_3d.is_some()));
         let clip = if should_clip {
@@ -761,6 +1095,7 @@ impl Compositor {
         negative_z: &mut Vec<HoistedParticipant<'a>>,
         auto_or_zero_z: &mut Vec<HoistedParticipant<'a>>,
         positive_z: &mut Vec<HoistedParticipant<'a>>,
+        scrollbars: &[ScrollbarOverlay],
         depth: usize,
     ) {
         if depth >= Self::MAX_COMPOSITOR_DEPTH {
@@ -788,7 +1123,7 @@ impl Compositor {
                 let z = child.style.z_index.unwrap_or(0);
                 let entry = HoistedParticipant {
                     node: child,
-                    is_sc: true,
+                    kind: HoistedKind::StackingContext,
                     steps: current_steps.clone(),
                 };
                 if z < 0 {
@@ -802,7 +1137,7 @@ impl Compositor {
                 if child.style.position != Position::Static {
                     auto_or_zero_z.push(HoistedParticipant {
                         node: child,
-                        is_sc: false,
+                        kind: HoistedKind::PositionedNode,
                         steps: current_steps.clone(),
                     });
                 }
@@ -818,11 +1153,19 @@ impl Compositor {
                         negative_z,
                         auto_or_zero_z,
                         positive_z,
+                        scrollbars,
                         depth + 1,
                     );
                     if pushed {
                         current_steps.pop();
                     }
+                }
+                if Self::has_scrollbar(child, scrollbars) {
+                    auto_or_zero_z.push(HoistedParticipant {
+                        node: child,
+                        kind: HoistedKind::Scrollbar,
+                        steps: current_steps.clone(),
+                    });
                 }
             }
         }
@@ -836,6 +1179,7 @@ impl Compositor {
         root_cull: Option<Rect>,
         inherited_steps: &[ClipScrollStep],
         is_root: bool,
+        scrollbars: &[ScrollbarOverlay],
         depth: usize,
     ) {
         if depth >= Self::MAX_COMPOSITOR_DEPTH {
@@ -870,7 +1214,9 @@ impl Compositor {
             || border_radius.bottom_left > 0.0
             || border_radius.bottom_right > 0.0;
         let clips_overflow = node.style.overflow_x != Overflow::Visible
-            || node.style.overflow_y != Overflow::Visible;
+            || node.style.overflow_y != Overflow::Visible
+            || node.transition_layout_width_px.is_some()
+            || node.transition_layout_height_px.is_some();
         let should_clip =
             clips_overflow || (has_any_radius && (node.image.is_some() || node.scene_3d.is_some()));
 
@@ -1056,6 +1402,7 @@ impl Compositor {
             &mut negative_z,
             &mut auto_or_zero_z,
             &mut positive_z,
+            scrollbars,
             depth + 1,
         );
 
@@ -1150,6 +1497,7 @@ impl Compositor {
                 child_root_cull,
                 &entry.steps,
                 false,
+                scrollbars,
                 depth + 1,
             );
         }
@@ -1180,17 +1528,17 @@ impl Compositor {
 
         // Layer 3: In-flow, non-inline, non-positioned block descendants
         for child in in_flow_blocks {
-            Self::paint_node_content_inner(child, list, child_cull, true, depth + 1);
+            Self::paint_node_content_inner(child, list, child_cull, true, scrollbars, depth + 1);
         }
 
         // Layer 4: Non-positioned floating descendants
         for child in floats {
-            Self::paint_node_content_inner(child, list, child_cull, true, depth + 1);
+            Self::paint_node_content_inner(child, list, child_cull, true, scrollbars, depth + 1);
         }
 
         // Layer 5: In-flow inline-level descendants
         for child in in_flow_inlines {
-            Self::paint_node_content_inner(child, list, child_cull, true, depth + 1);
+            Self::paint_node_content_inner(child, list, child_cull, true, scrollbars, depth + 1);
         }
 
         // Collapsed table boundaries paint once above cell content.
@@ -1208,26 +1556,60 @@ impl Compositor {
             Self::pop_clip_scroll_steps(inner_inherited_steps, list);
         }
 
-        // Layer 6: Positioned descendants with z-index: auto and child stacking contexts with z-index: 0
+        // Layer 6: Positioned descendants with z-index: auto, child stacking contexts with z-index: 0,
+        // and inline scrollbars for non-stacking-context scroll containers within this context.
         for entry in &auto_or_zero_z {
-            if entry.is_sc {
-                Self::paint_stacking_context_inner(
-                    entry.node,
-                    list,
-                    root_cull,
-                    child_root_cull,
-                    &entry.steps,
-                    false,
-                    depth + 1,
-                );
-            } else {
-                let eff = Self::effective_steps(entry.node.style.position, &entry.steps);
-                let entry_cull = Self::cull_with_steps(child_root_cull, eff);
-                if entry_cull.is_none_or(|c| c.width >= 0.0 && c.height >= 0.0) {
-                    Self::push_clip_scroll_steps(eff, list);
-                    Self::paint_node_content_inner(entry.node, list, entry_cull, true, depth + 1);
-                    Self::pop_clip_scroll_steps(eff, list);
+            match entry.kind {
+                HoistedKind::StackingContext => {
+                    Self::paint_stacking_context_inner(
+                        entry.node,
+                        list,
+                        root_cull,
+                        child_root_cull,
+                        &entry.steps,
+                        false,
+                        scrollbars,
+                        depth + 1,
+                    );
                 }
+                HoistedKind::PositionedNode => {
+                    let eff = Self::effective_steps(entry.node.style.position, &entry.steps);
+                    let entry_cull = Self::cull_with_steps(child_root_cull, eff);
+                    if entry_cull.is_none_or(|c| c.width >= 0.0 && c.height >= 0.0) {
+                        Self::push_clip_scroll_steps(eff, list);
+                        Self::paint_node_content_inner(
+                            entry.node,
+                            list,
+                            entry_cull,
+                            true,
+                            scrollbars,
+                            depth + 1,
+                        );
+                        Self::pop_clip_scroll_steps(eff, list);
+                    }
+                }
+                HoistedKind::Scrollbar => {
+                    let eff = Self::effective_steps(entry.node.style.position, &entry.steps);
+                    let entry_cull = Self::cull_with_steps(child_root_cull, eff);
+                    if entry_cull.is_none_or(|c| c.width >= 0.0 && c.height >= 0.0) {
+                        Self::push_clip_scroll_steps(eff, list);
+                        Self::emit_node_scrollbar(entry.node, list, scrollbars);
+                        Self::pop_clip_scroll_steps(eff, list);
+                    }
+                }
+            }
+        }
+
+        // If this stacking context node itself is a scroll container, emit its scrollbar thumb
+        // above its own in-flow/Layer-6 content and strictly below Layer-7 positive-z overlays
+        // and any higher-z sibling stacking contexts.
+        if is_visible && Self::has_scrollbar(node, scrollbars) {
+            if !inner_inherited_steps.is_empty() {
+                Self::push_clip_scroll_steps(inner_inherited_steps, list);
+            }
+            Self::emit_node_scrollbar(node, list, scrollbars);
+            if !inner_inherited_steps.is_empty() {
+                Self::pop_clip_scroll_steps(inner_inherited_steps, list);
             }
         }
 
@@ -1240,6 +1622,7 @@ impl Compositor {
                 child_root_cull,
                 &entry.steps,
                 false,
+                scrollbars,
                 depth + 1,
             );
         }
@@ -1516,18 +1899,30 @@ impl Compositor {
             );
             let is_monospace = strata_layout::is_monospace_family(node.style.font_family);
             let text_align = node.style.text_align;
-            let bounds_width = if node.geometry.content_box.width > 0.0 && !is_nowrap {
-                Some(node.geometry.content_box.width)
+            let effective_text_w = node
+                .transition_content_width()
+                .map_or(node.geometry.content_box.width, |tw| {
+                    node.geometry.content_box.width.max(tw)
+                });
+            let bounds_width = if effective_text_w > 0.0 && !is_nowrap {
+                Some(effective_text_w)
             } else {
                 None
             };
-            let bounds_height = if node.geometry.content_box.height > 0.0 {
+            let scroll_x = node.geometry.scroll_offset.x;
+            let scroll_y = node.geometry.scroll_offset.y;
+            let is_top_aligned = matches!(
+                node.style.white_space,
+                strata_style::types::WhiteSpace::PreWrap
+                    | strata_style::types::WhiteSpace::PreLine
+                    | strata_style::types::WhiteSpace::Pre
+            ) || scroll_y != 0.0
+                || text.contains('\n');
+            let bounds_height = if !is_top_aligned && node.geometry.content_box.height > 0.0 {
                 Some(node.geometry.content_box.height)
             } else {
                 None
             };
-
-            let scroll_x = node.geometry.scroll_offset.x;
             let align_offset = if is_nowrap
                 && node.geometry.content_box.width > 0.0
                 && scroll_x == 0.0
@@ -1561,6 +1956,7 @@ impl Compositor {
             let clip_rect = if node.style.overflow_x != Overflow::Visible
                 || node.style.overflow_y != Overflow::Visible
                 || scroll_x != 0.0
+                || scroll_y != 0.0
             {
                 let c = if node.geometry.content_box.width > 0.0
                     && node.geometry.content_box.height > 0.0
@@ -1587,7 +1983,7 @@ impl Compositor {
             list.push(DrawCommand::DrawText {
                 origin: (
                     node.geometry.content_box.x + align_offset - scroll_x,
-                    node.geometry.content_box.y,
+                    node.geometry.content_box.y - scroll_y,
                 ),
                 bounds_width,
                 bounds_height,
@@ -1716,7 +2112,7 @@ impl Compositor {
         cull: Option<Rect>,
         depth: usize,
     ) {
-        Self::paint_node_content_inner(node, list, cull, false, depth);
+        Self::paint_node_content_inner(node, list, cull, false, &[], depth);
     }
 
     fn paint_node_content_inner(
@@ -1724,6 +2120,7 @@ impl Compositor {
         list: &mut DisplayList,
         cull: Option<Rect>,
         skip_hoisted: bool,
+        scrollbars: &[ScrollbarOverlay],
         depth: usize,
     ) {
         if depth >= Self::MAX_COMPOSITOR_DEPTH {
@@ -1738,7 +2135,9 @@ impl Compositor {
 
         let bounds = node.geometry.border_box;
         let clips_overflow = node.style.overflow_x != Overflow::Visible
-            || node.style.overflow_y != Overflow::Visible;
+            || node.style.overflow_y != Overflow::Visible
+            || node.transition_layout_width_px.is_some()
+            || node.transition_layout_height_px.is_some();
         let border_radius = node.style.border_radius;
         let has_any_radius = border_radius.top_left > 0.0
             || border_radius.top_right > 0.0
@@ -1842,9 +2241,22 @@ impl Compositor {
             }
 
             if child_is_sc {
-                Self::paint_stacking_context_guarded(child, list, child_cull, depth + 1);
+                Self::paint_stacking_context_guarded_with_scrollbars(
+                    child,
+                    list,
+                    child_cull,
+                    scrollbars,
+                    depth + 1,
+                );
             } else {
-                Self::paint_node_content_inner(child, list, child_cull, skip_hoisted, depth + 1);
+                Self::paint_node_content_inner(
+                    child,
+                    list,
+                    child_cull,
+                    skip_hoisted,
+                    scrollbars,
+                    depth + 1,
+                );
             }
         }
 
@@ -1858,6 +2270,10 @@ impl Compositor {
         if should_clip && is_visible {
             list.push(DrawCommand::PopClip);
         }
+
+        if !skip_hoisted && is_visible {
+            Self::emit_node_scrollbar(node, list, scrollbars);
+        }
     }
 }
 
@@ -1869,8 +2285,15 @@ struct ClipScrollStep {
     is_fixed_cb: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HoistedKind {
+    StackingContext,
+    PositionedNode,
+    Scrollbar,
+}
+
 struct HoistedParticipant<'a> {
     node: &'a LayoutNode,
-    is_sc: bool,
+    kind: HoistedKind,
     steps: Vec<ClipScrollStep>,
 }

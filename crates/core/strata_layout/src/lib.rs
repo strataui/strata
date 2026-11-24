@@ -44,7 +44,7 @@ pub use table::{
 pub use text::{
     is_monospace_family, layout_inline_text, measure_text_bounds, measure_text_bounds_ext,
     measure_text_bounds_styled_with_family, measure_text_bounds_with_family,
-    measure_text_bounds_with_white_space,
+    measure_text_bounds_with_white_space, text_measure_cache_stats,
 };
 pub use tree::{
     clear_layout_overflow, last_layout_overflow, record_layout_overflow, set_on_layout_overflow,

@@ -494,3 +494,72 @@ fn test_gpu_slug_text_pipeline_compilation_and_bezier_evaluation() {
     assert_eq!(frag_glyph_count, 8); // "Fragment" has 8 chars
     assert!(text_pipeline.total_curves > 0);
 }
+
+#[test]
+fn test_draw_text_wraps_to_bounds_width_in_gpu_pipeline_and_rasterizer() {
+    let mut dl = DisplayList::new();
+    dl.push(DrawCommand::DrawText {
+        origin: (10.0, 12.0),
+        bounds_width: Some(80.0),
+        bounds_height: None,
+        text_align: strata_style::TextAlign::Left,
+        text: "Alpha Beta Gamma Delta Epsilon".to_string(),
+        font_size: 16.0,
+        line_height: 1.25,
+        font_weight: strata_style::FontWeight::Normal,
+        color: Color::rgb(255, 255, 255),
+        is_monospace: false,
+        font_family: strata_primitives::AtomId::FONT_SANS,
+    });
+
+    // 1. GpuSlugTextPipeline must wrap onto multiple lines and stay within origin.0 + 80px.
+    let mut text_pipeline = GpuSlugTextPipeline::new();
+    let pushed = text_pipeline.compile_display_list(&dl, 400.0, 300.0, None);
+    assert!(pushed > 10, "expected glyphs pushed, got {pushed}");
+    let mut min_y = f32::MAX;
+    let mut max_y = f32::MIN;
+    let mut max_right = f32::MIN;
+    for inst in &text_pipeline.buffer.instances {
+        min_y = min_y.min(inst.bounds[1]);
+        max_y = max_y.max(inst.bounds[1]);
+        max_right = max_right.max(inst.bounds[0] + inst.bounds[2]);
+    }
+    assert!(
+        max_right <= 10.0 + 80.5,
+        "GPU text glyphs overflowed bounds_width=80: max_right={max_right}"
+    );
+    assert!(
+        max_y > min_y + 15.0,
+        "GPU text should wrap across multiple lines (min_y={min_y}, max_y={max_y})"
+    );
+
+    // 2. Software rasterizer must also wrap within 80px and draw pixels on wrapped rows.
+    let mut sw = FrameBuffer::new(240, 180);
+    sw.clear(Color::rgb(0, 0, 0));
+    sw.execute_display_list(&dl);
+
+    let mut any_beyond_bounds = false;
+    let mut wrapped_row_lit = false;
+    for y in 0..180usize {
+        for x in 0..240usize {
+            let p = sw.get_pixel(x, y);
+            if p.r() > 0.0 || p.g() > 0.0 || p.b() > 0.0 {
+                if x >= 92 {
+                    any_beyond_bounds = true;
+                }
+                if y >= 32 {
+                    wrapped_row_lit = true;
+                }
+            }
+        }
+    }
+    assert!(
+        !any_beyond_bounds,
+        "Software rasterizer DrawText must not draw beyond origin.0 + bounds_width (x >= 92)"
+    );
+    assert!(
+        wrapped_row_lit,
+        "Software rasterizer DrawText must wrap onto subsequent rows (y >= 32)"
+    );
+}
+

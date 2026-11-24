@@ -590,7 +590,7 @@ fn test_canvas2d_component_emits_draw_canvas2d_and_compiles_gpu_and_rasterizer()
     });
 
     let view = Canvas2D(Some(200.0), Some(120.0), None, Some(draw_cb));
-    let runtime = AppRuntime::new(view, 240.0, 160.0, 1.0);
+    let mut runtime = AppRuntime::new(view, 240.0, 160.0, 1.0);
 
     let has_canvas_cmd = runtime.display_list.commands.iter().any(|cmd| {
         matches!(
@@ -603,7 +603,9 @@ fn test_canvas2d_component_emits_draw_canvas2d_and_compiles_gpu_and_rasterizer()
         "<Canvas2D> must emit DrawCommand::DrawCanvas2D with 4 recorded commands"
     );
 
-    // GPU path pipeline must compile line/arc/path primitives from DrawCanvas2D
+    // GPU path pipeline must compile line/arc/path primitives from DrawCanvas2D when GPU 2D is enabled
+    runtime.set_gpu_2d_paths_enabled(true);
+    runtime.compile_gpu_paths_now();
     assert!(
         !runtime.gpu_path_segments().is_empty(),
         "GpuPathPipeline must compile path segments from DrawCommand::DrawCanvas2D"
@@ -1052,6 +1054,172 @@ fn test_smooth_scroll_continuous_deltas_no_runaway_flick_and_zero_delta_skips_re
         "8ms HID touchpad packet must accumulate 1:1 without flick amplification, got {hid_target}"
     );
 }
+
+#[test]
+fn wheel_over_canvas3d_or_covering_modal_does_not_scroll_unrelated_dock() {
+    // 1. Scrollable container holding both a Canvas3D viewport and normal scrollable content below it.
+    let view = rsx! {
+        <div class="relative w-[600px] h-[400px]">
+            <div id="dock-scroll" class="w-[320px] h-[300px] flex flex-col overflow-y-auto">
+                <Canvas3D class="w-full h-[180px] shrink-0" />
+                <div id="dock-body" class="w-full h-[600px] shrink-0" />
+            </div>
+        </div>
+    };
+    let mut rt = AppRuntime::new(view, 600.0, 400.0, 1.0);
+    rt.tick_frame();
+
+    assert_eq!(rt.active_scrollbars.len(), 1);
+    assert_eq!(rt.active_scrollbars[0].scroll_y, 0.0);
+
+    // Wheel directly over Canvas3D must NOT scroll #dock-scroll behind/around it.
+    let scrolled_canvas = rt.dispatch_scroll(100.0, 90.0, 0.0, 60.0);
+    assert!(
+        !scrolled_canvas,
+        "wheel over Canvas3D must not fall back into #dock-scroll"
+    );
+    assert_eq!(rt.active_scrollbars[0].scroll_y, 0.0);
+
+    // Wheel over #dock-body below Canvas3D DOES scroll #dock-scroll.
+    let scrolled_body = rt.dispatch_scroll(100.0, 220.0, 0.0, 60.0);
+    assert!(scrolled_body, "wheel over #dock-body must scroll #dock-scroll");
+    assert!((rt.active_scrollbars[0].scroll_y - 60.0).abs() < 0.1);
+
+    // 2. Non-scrollable overlay covering #dock-scroll blocks wheel fallthrough to underlying dock.
+    let modal_view = rsx! {
+        <div class="relative w-[600px] h-[400px]">
+            <div id="under-dock" class="w-[320px] h-[300px] flex flex-col overflow-y-auto">
+                <div class="w-full h-[700px] shrink-0" />
+            </div>
+            <div id="covering-panel" class="absolute left-0 top-0 w-[320px] h-[300px]" />
+        </div>
+    };
+    let mut modal_rt = AppRuntime::new(modal_view, 600.0, 400.0, 1.0);
+    modal_rt.tick_frame();
+    let scrolled_under_modal = modal_rt.dispatch_scroll(100.0, 100.0, 0.0, 60.0);
+    assert!(
+        !scrolled_under_modal,
+        "wheel over non-scrollable covering panel must not fall through to underlying dock"
+    );
+    assert_eq!(modal_rt.active_scrollbars[0].scroll_y, 0.0);
+}
+
+#[test]
+fn background_floating_window_scrollbar_paints_and_hittests_below_foreground_window() {
+    use strata::render::compositor::DrawCommand;
+
+    let mut bg_rows = Vec::new();
+    for i in 0..20 {
+        let label = format!("Sequence log line #{i:02}");
+        bg_rows.push(rsx! {
+            <div class="h-[24px] shrink-0 px-2 text-xs text-slate-200">{label}</div>
+        });
+    }
+
+    let view = rsx! {
+        <div class="relative w-[800px] h-[600px] bg-slate-950">
+            <div class="fixed left-[20px] top-[20px] w-[320px] h-[220px] z-[41] flex flex-col bg-slate-900">
+                <div id="bg-term" class="flex-1 min-h-0 overflow-y-auto flex flex-col">
+                    {bg_rows}
+                </div>
+            </div>
+            <div class="fixed left-[180px] top-[80px] w-[320px] h-[180px] z-[42] flex flex-col bg-emerald-950">
+                <div class="p-3 text-sm text-white">{"Terminal: Session #1"}</div>
+            </div>
+        </div>
+    };
+
+    let mut rt = AppRuntime::new(view, 800.0, 600.0, 1.0);
+    rt.tick_frame();
+    rt.compile_display_list();
+
+    let bg_bar = rt
+        .active_scrollbars
+        .iter()
+        .find(|b| b.id == "bg-term")
+        .cloned()
+        .expect("background floating window must have an active scrollbar");
+
+    // 1. Paint order: background scrollbar thumb must be emitted strictly BEFORE the
+    //    foreground (z=42) window's text.
+    let bg_thumb_idx = rt
+        .display_list
+        .commands
+        .iter()
+        .position(|cmd| {
+            matches!(
+                cmd,
+                DrawCommand::DrawRoundedRect { bounds, color, .. }
+                    if (bounds.x - bg_bar.thumb_bounds.x).abs() < 3.0
+                        && color.r == 255
+                        && color.g == 255
+                        && color.b == 255
+            )
+        })
+        .expect("background scrollbar thumb DrawRoundedRect must be emitted");
+
+    let fg_text_idx = rt
+        .display_list
+        .commands
+        .iter()
+        .position(|cmd| {
+            matches!(
+                cmd,
+                DrawCommand::DrawText { text, .. } if text.contains("Session #1")
+            )
+        })
+        .expect("foreground window text must be emitted");
+
+    assert!(
+        bg_thumb_idx < fg_text_idx,
+        "background z=41 scrollbar ({bg_thumb_idx}) must paint before foreground z=42 window ({fg_text_idx})"
+    );
+
+    // 2. Occluded hover must NOT highlight/expand the background scrollbar thumb.
+    let bar_center_x = bg_bar.track_bounds.x + bg_bar.track_bounds.width * 0.5;
+    let occluded_y = 120.0; // Covered by foreground window (y=80..260, x=180..500)
+    rt.last_mouse_pos = (bar_center_x, occluded_y);
+    rt.compile_display_list();
+    let occluded_alpha = rt
+        .display_list
+        .commands
+        .iter()
+        .find_map(|cmd| match cmd {
+            DrawCommand::DrawRoundedRect { bounds, color, .. }
+                if (bounds.x - bg_bar.thumb_bounds.x).abs() < 3.0
+                    && color.r == 255
+                    && color.g == 255
+                    && color.b == 255 =>
+            {
+                Some(color.a)
+            }
+            _ => None,
+        })
+        .expect("background scrollbar thumb must still exist");
+    assert_eq!(
+        occluded_alpha, 60,
+        "hovering foreground window over occluded background scrollbar must not activate hover alpha"
+    );
+
+    // 3. Clicking over the foreground window right above the background scrollbar track/thumb
+    //    must NOT capture or scroll the background window's scrollbar.
+    assert!(
+        !rt.check_scrollbar_thumb_press(bar_center_x, occluded_y),
+        "occluded background scrollbar must not capture clicks through higher z-index foreground window"
+    );
+    assert!(rt.scrollbar_drag.is_none());
+    assert_eq!(rt.scroll_offset_by_id("bg-term").1, 0.0);
+
+    // 4. Clicking the UNOCCLUDED top segment of the background window's scrollbar (y=40, above
+    //    foreground window top y=80) still hits and initiates scrollbar drag normally.
+    let unoccluded_y = 40.0;
+    assert!(
+        rt.check_scrollbar_thumb_press(bar_center_x, unoccluded_y),
+        "unoccluded portion of background scrollbar must remain interactive"
+    );
+    assert!(rt.scrollbar_drag.is_some());
+}
+
 
 
 

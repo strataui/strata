@@ -158,7 +158,17 @@ impl HistoryStack {
 
     /// Rolls back the most recent transaction, reversing buffer changes and restoring cursors.
     pub fn undo(&mut self, buffer: &mut LineBuffer) -> Option<Vec<Selection>> {
+        self.undo_with_edits(buffer).map(|(cursors, _)| cursors)
+    }
+
+    /// Rolls back the most recent transaction and returns both the restored cursors and
+    /// the ordered `tree_sitter::InputEdit` records applied to `buffer`.
+    pub fn undo_with_edits(
+        &mut self,
+        buffer: &mut LineBuffer,
+    ) -> Option<(Vec<Selection>, Vec<tree_sitter::InputEdit>)> {
         let tx = self.undo_stack.pop()?;
+        let mut edits = Vec::with_capacity(tx.operations.len());
 
         // Apply operations in reverse order
         for op in tx.operations.iter().rev() {
@@ -168,41 +178,60 @@ impl HistoryStack {
                     let lines: Vec<&str> = text.split('\n').collect();
                     let end_line = pos.line + lines.len() - 1;
                     let end_col = if lines.len() == 1 {
-                        pos.col + lines[0].len()
+                        pos.col + lines[0].chars().count()
                     } else {
-                        lines[lines.len() - 1].len()
+                        lines[lines.len() - 1].chars().count()
                     };
+                    let end = Position::new(end_line, end_col);
+                    let (edit, _) = buffer.compute_input_edit(*pos, end, "");
                     buffer.delete_range(pos.line, pos.col, end_line, end_col);
+                    edits.push(edit);
                 }
                 EditOperation::Delete { start, text, .. } => {
                     // Undo delete by re-inserting the deleted text
+                    let (edit, _) = buffer.compute_input_edit(*start, *start, text);
                     buffer.insert_str(start.line, start.col, text);
+                    edits.push(edit);
                 }
             }
         }
 
         let restore_cursors = tx.before_cursors.clone();
         self.redo_stack.push(tx);
-        Some(restore_cursors)
+        Some((restore_cursors, edits))
     }
 
     /// Replays the most recently undone transaction.
     pub fn redo(&mut self, buffer: &mut LineBuffer) -> Option<Vec<Selection>> {
+        self.redo_with_edits(buffer).map(|(cursors, _)| cursors)
+    }
+
+    /// Replays the most recently undone transaction and returns both the restored cursors
+    /// and the ordered `tree_sitter::InputEdit` records applied to `buffer`.
+    pub fn redo_with_edits(
+        &mut self,
+        buffer: &mut LineBuffer,
+    ) -> Option<(Vec<Selection>, Vec<tree_sitter::InputEdit>)> {
         let tx = self.redo_stack.pop()?;
+        let mut edits = Vec::with_capacity(tx.operations.len());
 
         for op in &tx.operations {
             match op {
                 EditOperation::Insert { pos, text } => {
+                    let (edit, _) = buffer.compute_input_edit(*pos, *pos, text);
                     buffer.insert_str(pos.line, pos.col, text);
+                    edits.push(edit);
                 }
                 EditOperation::Delete { start, end, .. } => {
+                    let (edit, _) = buffer.compute_input_edit(*start, *end, "");
                     buffer.delete_range(start.line, start.col, end.line, end.col);
+                    edits.push(edit);
                 }
             }
         }
 
         let restore_cursors = tx.after_cursors.clone();
         self.undo_stack.push(tx);
-        Some(restore_cursors)
+        Some((restore_cursors, edits))
     }
 }

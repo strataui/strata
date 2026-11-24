@@ -475,6 +475,108 @@ impl RopeNode {
         }
     }
 
+    /// Mutates the line at `line_idx` in place and bubbles exact `(chars, bytes)` metric deltas
+    /// up the B-Tree spine in O(log N), keeping `SubtreeMetrics` strictly invariant.
+    pub fn mutate_line<R>(
+        &mut self,
+        mut line_idx: usize,
+        f: impl FnOnce(&mut String) -> R,
+    ) -> Option<(R, isize, isize)> {
+        match self {
+            RopeNode::Leaf(leaf) => {
+                let line = leaf.lines.get_mut(line_idx)?;
+                let old_chars = line.chars().count() as isize;
+                let old_bytes = line.len() as isize;
+                let res = f(line);
+                let new_chars = line.chars().count() as isize;
+                let new_bytes = line.len() as isize;
+                let d_chars = new_chars - old_chars;
+                let d_bytes = new_bytes - old_bytes;
+                leaf.metrics.chars = (leaf.metrics.chars as isize + d_chars).max(0) as usize;
+                leaf.metrics.bytes = (leaf.metrics.bytes as isize + d_bytes).max(0) as usize;
+                Some((res, d_chars, d_bytes))
+            }
+            RopeNode::Internal(internal) => {
+                for child in &mut internal.children {
+                    let c_lines = child.line_count();
+                    if line_idx < c_lines {
+                        let (res, d_chars, d_bytes) = child.mutate_line(line_idx, f)?;
+                        internal.metrics.chars =
+                            (internal.metrics.chars as isize + d_chars).max(0) as usize;
+                        internal.metrics.bytes =
+                            (internal.metrics.bytes as isize + d_bytes).max(0) as usize;
+                        return Some((res, d_chars, d_bytes));
+                    }
+                    line_idx -= c_lines;
+                }
+                None
+            }
+        }
+    }
+
+    /// Computes the exact byte offset of `(line_idx, char_col)` in the `\n`-joined document
+    /// in O(log N) time using cached `SubtreeMetrics`.
+    pub fn position_to_byte(&self, mut line_idx: usize, char_col: usize) -> usize {
+        match self {
+            RopeNode::Leaf(leaf) => {
+                let mut offset = 0usize;
+                for (i, line) in leaf.lines.iter().enumerate() {
+                    if i == line_idx {
+                        return offset + char_to_byte(line, char_col);
+                    }
+                    offset += line.len() + 1;
+                }
+                // Clamped past end of leaf
+                offset.saturating_sub(1)
+            }
+            RopeNode::Internal(internal) => {
+                let mut offset = 0usize;
+                for child in &internal.children {
+                    let m = child.metrics();
+                    if line_idx < m.lines {
+                        return offset + child.position_to_byte(line_idx, char_col);
+                    }
+                    offset += m.bytes + m.lines;
+                    line_idx -= m.lines;
+                }
+                offset.saturating_sub(1)
+            }
+        }
+    }
+
+    /// Converts a byte offset in the `\n`-joined document into `(line_idx, char_col)` in O(log N).
+    pub fn byte_to_position(&self, mut byte_offset: usize, line_base: usize) -> (usize, usize) {
+        match self {
+            RopeNode::Leaf(leaf) => {
+                for (i, line) in leaf.lines.iter().enumerate() {
+                    let line_bytes = line.len();
+                    if byte_offset <= line_bytes {
+                        return (line_base + i, byte_to_char(line, byte_offset));
+                    }
+                    // +1 accounts for the `\n` separator after this line
+                    byte_offset = byte_offset.saturating_sub(line_bytes + 1);
+                }
+                let last_idx = leaf.lines.len().saturating_sub(1);
+                let last_chars = leaf.lines.get(last_idx).map_or(0, |l| l.chars().count());
+                (line_base + last_idx, last_chars)
+            }
+            RopeNode::Internal(internal) => {
+                let mut cur_line = line_base;
+                let last_child_idx = internal.children.len().saturating_sub(1);
+                for (i, child) in internal.children.iter().enumerate() {
+                    let m = child.metrics();
+                    let span_with_newlines = m.bytes + m.lines;
+                    if byte_offset < span_with_newlines || i == last_child_idx {
+                        return child.byte_to_position(byte_offset, cur_line);
+                    }
+                    byte_offset -= span_with_newlines;
+                    cur_line += m.lines;
+                }
+                (cur_line, 0)
+            }
+        }
+    }
+
     pub fn write_text(&self, out: &mut String, is_first: &mut bool) {
         match self {
             RopeNode::Leaf(leaf) => {
@@ -678,14 +780,15 @@ impl TextRope {
         }
 
         let parts: Vec<&str> = text.split('\n').collect();
-        let remainder = if let Some(l) = self.line_mut(line) {
+        let remainder = match self.root.mutate_line(line, |l| {
             let byte_idx = char_to_byte(l, col);
             let rem = l[byte_idx..].to_string();
             l.truncate(byte_idx);
             l.push_str(parts[0]);
             rem
-        } else {
-            return;
+        }) {
+            Some((rem, _, _)) => rem,
+            None => return,
         };
 
         let mut insert_idx = line + 1;
@@ -744,24 +847,30 @@ impl TextRope {
         }
 
         if start_line == end_line {
-            if let Some(line) = self.line_mut(start_line) {
-                let sc = char_to_byte(line, start_col);
-                let ec = char_to_byte(line, end_col);
-                let deleted = line[sc..ec].to_string();
-                line.replace_range(sc..ec, "");
-                return deleted;
-            }
-            return String::new();
+            return self
+                .root
+                .mutate_line(start_line, |line| {
+                    let sc = char_to_byte(line, start_col);
+                    let ec = char_to_byte(line, end_col);
+                    let deleted = line[sc..ec].to_string();
+                    line.replace_range(sc..ec, "");
+                    deleted
+                })
+                .map(|(d, _, _)| d)
+                .unwrap_or_default();
         }
 
         let mut deleted = String::new();
 
         // 1. First line
-        let remainder = if let Some(first) = self.line_mut(start_line) {
+        let remainder = if let Some((first_tail, _, _)) = self.root.mutate_line(start_line, |first| {
             let sc = char_to_byte(first, start_col);
-            deleted.push_str(&first[sc..]);
-            deleted.push('\n');
+            let tail = first[sc..].to_string();
             first.truncate(sc);
+            tail
+        }) {
+            deleted.push_str(&first_tail);
+            deleted.push('\n');
             true
         } else {
             false
@@ -784,13 +893,90 @@ impl TextRope {
                 let ec = char_to_byte(&last, end_col);
                 deleted.push_str(&last[..ec]);
                 let tail = &last[ec..];
-                if let Some(first) = self.line_mut(start_line) {
-                    first.push_str(tail);
+                if !tail.is_empty() {
+                    self.root.append_to_line(start_line, tail);
                 }
             }
         }
 
         deleted
+    }
+
+    /// Total UTF-8 byte length of the serialized `\n`-joined document.
+    #[inline]
+    pub fn total_text_byte_len(&self) -> usize {
+        self.root.byte_count() + self.line_count().saturating_sub(1)
+    }
+
+    /// Computes the exact byte offset of `(line, char_col)` in the `\n`-joined document in O(log N).
+    pub fn position_to_byte(&self, line: usize, char_col: usize) -> usize {
+        let clamped_line = line.min(self.line_count().saturating_sub(1));
+        self.root.position_to_byte(clamped_line, char_col)
+    }
+
+    /// Computes the Tree-Sitter `Point { row, column }` (byte column within row) for `(line, char_col)`.
+    pub fn position_to_point(&self, line: usize, char_col: usize) -> tree_sitter::Point {
+        let clamped_line = line.min(self.line_count().saturating_sub(1));
+        let byte_col = self
+            .line(clamped_line)
+            .map_or(0, |l| char_to_byte(l, char_col));
+        tree_sitter::Point {
+            row: clamped_line,
+            column: byte_col,
+        }
+    }
+
+    /// Converts a byte offset in the `\n`-joined document into `(line, char_col)` in O(log N).
+    pub fn byte_to_position(&self, byte_offset: usize) -> (usize, usize) {
+        self.root.byte_to_position(byte_offset, 0)
+    }
+
+    /// Computes an exact [`tree_sitter::InputEdit`] describing replacing `[start..old_end)` with
+    /// `inserted_text` **before** applying the mutation to the rope.
+    pub fn compute_input_edit(
+        &self,
+        start: crate::cursor::Position,
+        old_end: crate::cursor::Position,
+        inserted_text: &str,
+    ) -> (tree_sitter::InputEdit, crate::cursor::Position) {
+        let start_byte = self.position_to_byte(start.line, start.col);
+        let old_end_byte = self.position_to_byte(old_end.line, old_end.col);
+        let new_end_byte = start_byte + inserted_text.len();
+
+        let start_position = self.position_to_point(start.line, start.col);
+        let old_end_position = self.position_to_point(old_end.line, old_end.col);
+
+        let (new_end_position, new_end_char_pos) = if let Some(last_nl) = inserted_text.rfind('\n') {
+            let added_rows = inserted_text.bytes().filter(|&b| b == b'\n').count();
+            let tail = &inserted_text[last_nl + 1..];
+            (
+                tree_sitter::Point {
+                    row: start_position.row + added_rows,
+                    column: tail.len(),
+                },
+                crate::cursor::Position::new(start.line + added_rows, tail.chars().count()),
+            )
+        } else {
+            (
+                tree_sitter::Point {
+                    row: start_position.row,
+                    column: start_position.column + inserted_text.len(),
+                },
+                crate::cursor::Position::new(start.line, start.col + inserted_text.chars().count()),
+            )
+        };
+
+        (
+            tree_sitter::InputEdit {
+                start_byte,
+                old_end_byte,
+                new_end_byte,
+                start_position,
+                old_end_position,
+                new_end_position,
+            },
+            new_end_char_pos,
+        )
     }
 
     /// Returns a slice of lines for virtual viewport rendering in logarithmic time.
@@ -857,9 +1043,41 @@ impl LineBuffer {
         self.rope.total_char_count()
     }
 
-    /// Total number of bytes in the buffer.
+    /// Total number of bytes in the buffer (excluding `\n` separators).
     pub fn total_byte_count(&self) -> usize {
         self.rope.total_byte_count()
+    }
+
+    /// Total UTF-8 byte length of the serialized `\n`-joined document.
+    pub fn total_text_byte_len(&self) -> usize {
+        self.rope.total_text_byte_len()
+    }
+
+    /// Computes the exact byte offset of `pos` in the `\n`-joined document in O(log N).
+    pub fn position_to_byte(&self, pos: crate::cursor::Position) -> usize {
+        self.rope.position_to_byte(pos.line, pos.col)
+    }
+
+    /// Computes the Tree-Sitter `Point` (byte column) for `pos`.
+    pub fn position_to_point(&self, pos: crate::cursor::Position) -> tree_sitter::Point {
+        self.rope.position_to_point(pos.line, pos.col)
+    }
+
+    /// Converts a byte offset in the `\n`-joined document into a character `Position` in O(log N).
+    pub fn byte_to_position(&self, byte_offset: usize) -> crate::cursor::Position {
+        let (line, col) = self.rope.byte_to_position(byte_offset);
+        crate::cursor::Position::new(line, col)
+    }
+
+    /// Computes an exact [`tree_sitter::InputEdit`] describing replacing `[start..old_end)` with
+    /// `inserted_text` **before** applying the mutation to the buffer.
+    pub fn compute_input_edit(
+        &self,
+        start: crate::cursor::Position,
+        old_end: crate::cursor::Position,
+        inserted_text: &str,
+    ) -> (tree_sitter::InputEdit, crate::cursor::Position) {
+        self.rope.compute_input_edit(start, old_end, inserted_text)
     }
 
     /// Tree height of the B-Tree rope.

@@ -1,6 +1,6 @@
 //! Layout tree node definition and top-level formatting context dispatcher.
 
-use crate::geometry::LayoutGeometry;
+use crate::geometry::{LayoutGeometry, Rect};
 use std::cell::{Cell, RefCell};
 use strata_style::types::{ComputedStyle, Display};
 
@@ -87,6 +87,48 @@ pub struct ImageResource {
     pub height: u32,
 }
 
+/// Computes a compact 64-bit hash of the sizing and overflow style fields that flexbox/grid
+/// passes temporarily override or that affect layout box measurement.
+#[inline]
+pub(crate) fn layout_style_pin_hash(style: &ComputedStyle) -> u64 {
+    use strata_style::types::Dimension;
+    #[inline(always)]
+    fn dim_bits(d: Dimension) -> u64 {
+        match d {
+            Dimension::Auto => 0x01,
+            Dimension::Px(v) => 0x02 | ((v.to_bits() as u64) << 8),
+            Dimension::Percent(v) => 0x03 | ((v.to_bits() as u64) << 8),
+            Dimension::Vw(v) => 0x04 | ((v.to_bits() as u64) << 8),
+            Dimension::Vh(v) => 0x05 | ((v.to_bits() as u64) << 8),
+            Dimension::Rem(v) => 0x06 | ((v.to_bits() as u64) << 8),
+            Dimension::Em(v) => 0x07 | ((v.to_bits() as u64) << 8),
+            Dimension::Calc(id) => 0x08 | ((id.0 as u64) << 8),
+            Dimension::MinContent => 0x09,
+            Dimension::MaxContent => 0x0A,
+            Dimension::FitContent(v) => 0x0B | ((v.to_bits() as u64) << 8),
+        }
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut mix = |v: u64| {
+        h ^= v;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    };
+    mix(dim_bits(style.width));
+    mix(dim_bits(style.height));
+    mix(dim_bits(style.min_width));
+    mix(dim_bits(style.max_width));
+    mix(dim_bits(style.min_height));
+    mix(dim_bits(style.max_height));
+    mix(dim_bits(style.flex_basis));
+    mix(style.flex_grow.to_bits() as u64);
+    mix(style.flex_shrink.to_bits() as u64);
+    mix(((style.overflow_x as u64) << 16)
+        | ((style.overflow_y as u64) << 8)
+        | ((style.white_space as u64) << 4)
+        | (style.text_overflow as u64));
+    h
+}
+
 /// Compact layout result cache for O(1) subtree re-entry during multi-pass formatting.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct LayoutCacheEntry {
@@ -96,6 +138,7 @@ pub struct LayoutCacheEntry {
     pub result_h: f32,
     pub origin_x: f32,
     pub origin_y: f32,
+    pub style_pin_hash: u64,
     pub is_valid: bool,
 }
 
@@ -109,8 +152,136 @@ impl LayoutCacheEntry {
             result_h: 0.0,
             origin_x: 0.0,
             origin_y: 0.0,
+            style_pin_hash: 0,
             is_valid: false,
         }
+    }
+}
+
+/// Cached flexbox/grid measurement probe result (`(available_w, available_h, style_pin_hash) ->
+/// (result_w, result_h, baseline_offset)`), allowing clean subtrees to skip Pass-1 / Pass-2
+/// measurement traversals in O(1) without disturbing their final Pass-4 child geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct MeasureCacheEntry {
+    pub available_w: f32,
+    pub available_h: f32,
+    pub style_pin_hash: u64,
+    pub result_w: f32,
+    pub result_h: f32,
+    pub baseline_offset: f32,
+    pub is_valid: bool,
+}
+
+impl MeasureCacheEntry {
+    #[inline]
+    pub const fn invalid() -> Self {
+        Self {
+            available_w: 0.0,
+            available_h: 0.0,
+            style_pin_hash: 0,
+            result_w: 0.0,
+            result_h: 0.0,
+            baseline_offset: 0.0,
+            is_valid: false,
+        }
+    }
+}
+
+/// Lock-free, 2-slot persistent intrinsic [`crate::intrinsic::MinMaxSizes`] cache stored inline
+/// on every [`LayoutNode`].
+///
+/// Slot 0 caches `parent_size == None`, and Slot 1 caches the most recent `parent_size == Some(w)`.
+/// Cleared whenever this node or any descendant is invalidated, eliminating full-tree text shaping
+/// and intrinsic min/max re-traversal on unchanged reconciled subtrees across frames.
+pub struct IntrinsicCacheCell {
+    keys: [std::sync::atomic::AtomicU64; 2],
+    vals: [std::sync::atomic::AtomicU64; 2],
+}
+
+impl IntrinsicCacheCell {
+    #[inline]
+    pub const fn empty() -> Self {
+        Self {
+            keys: [
+                std::sync::atomic::AtomicU64::new(0),
+                std::sync::atomic::AtomicU64::new(0),
+            ],
+            vals: [
+                std::sync::atomic::AtomicU64::new(0),
+                std::sync::atomic::AtomicU64::new(0),
+            ],
+        }
+    }
+
+    #[inline]
+    fn encode_key(parent_size: Option<f32>) -> (usize, u64) {
+        match parent_size {
+            None => (0, 1),
+            Some(w) => (1, 2u64.wrapping_add(w.to_bits() as u64)),
+        }
+    }
+
+    #[inline]
+    pub fn get(&self, parent_size: Option<f32>) -> Option<crate::intrinsic::MinMaxSizes> {
+        let (slot, expected_key) = Self::encode_key(parent_size);
+        let k = self.keys[slot].load(std::sync::atomic::Ordering::Relaxed);
+        if k == expected_key {
+            let v = self.vals[slot].load(std::sync::atomic::Ordering::Relaxed);
+            let min_c = f32::from_bits(v as u32);
+            let max_c = f32::from_bits((v >> 32) as u32);
+            Some(crate::intrinsic::MinMaxSizes::new(min_c, max_c))
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub fn set(&self, parent_size: Option<f32>, sizes: crate::intrinsic::MinMaxSizes) {
+        let (slot, key) = Self::encode_key(parent_size);
+        let packed = (sizes.min_content.to_bits() as u64) | ((sizes.max_content.to_bits() as u64) << 32);
+        self.vals[slot].store(packed, std::sync::atomic::Ordering::Relaxed);
+        self.keys[slot].store(key, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn clear(&self) {
+        self.keys[0].store(0, std::sync::atomic::Ordering::Relaxed);
+        self.keys[1].store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl Clone for IntrinsicCacheCell {
+    fn clone(&self) -> Self {
+        Self {
+            keys: [
+                std::sync::atomic::AtomicU64::new(
+                    self.keys[0].load(std::sync::atomic::Ordering::Relaxed),
+                ),
+                std::sync::atomic::AtomicU64::new(
+                    self.keys[1].load(std::sync::atomic::Ordering::Relaxed),
+                ),
+            ],
+            vals: [
+                std::sync::atomic::AtomicU64::new(
+                    self.vals[0].load(std::sync::atomic::Ordering::Relaxed),
+                ),
+                std::sync::atomic::AtomicU64::new(
+                    self.vals[1].load(std::sync::atomic::Ordering::Relaxed),
+                ),
+            ],
+        }
+    }
+}
+
+impl PartialEq for IntrinsicCacheCell {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for IntrinsicCacheCell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IntrinsicCacheCell").finish_non_exhaustive()
     }
 }
 
@@ -674,6 +845,15 @@ impl PartialEq for ViewportSceneHandle {
     }
 }
 
+/// Subtree hit-testing bitflags stored on [`LayoutNode::subtree_hit_flags`].
+pub const SUBTREE_HAS_TOP_LAYER: u8 = 1 << 0;
+pub const SUBTREE_HAS_HOISTED: u8 = 1 << 1;
+pub const SUBTREE_HAS_TRANSFORM: u8 = 1 << 2;
+pub const SUBTREE_META_VALID: u8 = 1 << 3;
+/// Cached summary bit indicating whether any descendant (up to an explicit pixel-height boundary)
+/// depends on parent height (`has_height_dependent_descendant`).
+pub const SUBTREE_HAS_HEIGHT_DEP_DESCENDANT: u8 = 1 << 4;
+
 /// A node participating in the layout tree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayoutNode {
@@ -688,8 +868,19 @@ pub struct LayoutNode {
     pub inline_items: Vec<InlineItem>,
     pub line_boxes: Vec<LineBox>,
     pub layout_cache: LayoutCacheEntry,
+    /// Two-slot measurement probe cache used by Flexbox Pass 1 & Pass 2 to skip clean subtrees
+    /// in O(1) without clobbering their final Pass-4 child geometry.
+    pub measure_cache: [MeasureCacheEntry; 2],
+    /// Persistent per-node intrinsic min/max sizing cache cleared only on subtree invalidation.
+    pub intrinsic_cache: IntrinsicCacheCell,
     /// Content-box size used the last time this node formatted its descendants.
     pub last_child_layout_content: Option<(f32, f32)>,
+    /// True when this node's descendants have been laid out for the current style/tree state and
+    /// neither `self` nor any descendant has been invalidated since.
+    pub children_layout_clean: bool,
+    /// Last preserved box parameters `(x, y, border_w, border_h, resolve_positioned)` formatted by
+    /// `layout_children_inner_guarded`, enabling O(1) skip + translate when unchanged.
+    pub last_preserved_box: Option<(f32, f32, f32, f32, bool)>,
     /// Table border grid matrix for collapsed border rendering (CSS 2.1 §17.6.2).
     pub table_grid: Option<crate::table::TableBorderGrid>,
     /// Unique 64-bit entity identifier associating this layout node with its blueprint element.
@@ -705,6 +896,14 @@ pub struct LayoutNode {
     pub is_top_layer: bool,
     /// Live anchor positioning specification resolved against post-scroll trigger bounds.
     pub portal_anchor: Option<Box<PortalAnchorSpec>>,
+    /// Bitflags summarizing descendants (`SUBTREE_HAS_*`, `SUBTREE_META_VALID`).
+    pub subtree_hit_flags: u8,
+    /// Conservative axis-aligned bounding box covering this node and in-flow descendants.
+    pub subtree_bounds: Rect,
+    /// Expanded border-box width locked during collapse/expand transitions so children avoid 0px squeeze.
+    pub transition_layout_width_px: Option<f32>,
+    /// Expanded border-box height locked during collapse/expand transitions so children avoid 0px squeeze.
+    pub transition_layout_height_px: Option<f32>,
 }
 
 impl LayoutNode {
@@ -722,7 +921,11 @@ impl LayoutNode {
             inline_items: Vec::new(),
             line_boxes: Vec::new(),
             layout_cache: LayoutCacheEntry::invalid(),
+            measure_cache: [MeasureCacheEntry::invalid(); 2],
+            intrinsic_cache: IntrinsicCacheCell::empty(),
             last_child_layout_content: None,
+            children_layout_clean: false,
+            last_preserved_box: None,
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
             active_transitions: false,
@@ -730,171 +933,69 @@ impl LayoutNode {
             anchor_name: None,
             is_top_layer: false,
             portal_anchor: None,
+            subtree_hit_flags: 0,
+            subtree_bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
+            transition_layout_width_px: None,
+            transition_layout_height_px: None,
         }
     }
 
     /// Constructs a layout node with child nodes.
     pub fn with_children(style: ComputedStyle, children: Vec<LayoutNode>) -> Self {
-        Self {
-            style,
-            geometry: LayoutGeometry::default(),
-            children,
-            text: None,
-            svg_path: None,
-            svg_items: Vec::new(),
-            image: None,
-            scene_3d: None,
-            inline_items: Vec::new(),
-            line_boxes: Vec::new(),
-            layout_cache: LayoutCacheEntry::invalid(),
-            last_child_layout_content: None,
-            table_grid: None,
-            entity_id: strata_primitives::EntityId::NONE,
-            active_transitions: false,
-            element_id: None,
-            anchor_name: None,
-            is_top_layer: false,
-            portal_anchor: None,
-        }
+        let mut node = Self::new(style);
+        node.children = children;
+        node
     }
 
     /// Constructs a text leaf node with computed styles and string content.
     pub fn with_text(style: ComputedStyle, text: String) -> Self {
-        Self {
-            style,
-            geometry: LayoutGeometry::default(),
-            children: Vec::new(),
-            text: Some(text),
-            svg_path: None,
-            svg_items: Vec::new(),
-            image: None,
-            scene_3d: None,
-            inline_items: Vec::new(),
-            line_boxes: Vec::new(),
-            layout_cache: LayoutCacheEntry::invalid(),
-            last_child_layout_content: None,
-            table_grid: None,
-            entity_id: strata_primitives::EntityId::NONE,
-            active_transitions: false,
-            element_id: None,
-            anchor_name: None,
-            is_top_layer: false,
-            portal_anchor: None,
-        }
+        let mut node = Self::new(style);
+        node.text = Some(text);
+        node
     }
 
     /// Constructs an inline phrasing container with an inline item stream.
     pub fn with_inline_items(style: ComputedStyle, inline_items: Vec<InlineItem>) -> Self {
-        Self {
-            style,
-            geometry: LayoutGeometry::default(),
-            children: Vec::new(),
-            text: None,
-            svg_path: None,
-            svg_items: Vec::new(),
-            image: None,
-            scene_3d: None,
-            inline_items,
-            line_boxes: Vec::new(),
-            layout_cache: LayoutCacheEntry::invalid(),
-            last_child_layout_content: None,
-            table_grid: None,
-            entity_id: strata_primitives::EntityId::NONE,
-            active_transitions: false,
-            element_id: None,
-            anchor_name: None,
-            is_top_layer: false,
-            portal_anchor: None,
-        }
+        let mut node = Self::new(style);
+        node.inline_items = inline_items;
+        node
     }
 
     /// Constructs an SVG vector path leaf node with computed styles and path string.
     pub fn with_svg_path(style: ComputedStyle, svg_path: String) -> Self {
-        Self {
-            style,
-            geometry: LayoutGeometry::default(),
-            children: Vec::new(),
+        let mut node = Self::new(style);
+        node.svg_path = Some(svg_path.clone());
+        node.svg_items = vec![SvgItem {
+            path_data: svg_path,
+            stroke_color: None,
+            fill_color: None,
+            stroke_is_current_color: true,
+            fill_is_current_color: false,
+            stroke_width: 2.0,
+            stroke_linecap: StrokeLineCap::Round,
+            stroke_linejoin: StrokeLineJoin::Round,
+            stroke_dasharray: Vec::new(),
+            fill_rule: FillRule::NonZero,
+            view_box: (24.0, 24.0),
             text: None,
-            svg_path: Some(svg_path.clone()),
-            svg_items: vec![SvgItem {
-                path_data: svg_path,
-                stroke_color: None,
-                fill_color: None,
-                stroke_is_current_color: true,
-                fill_is_current_color: false,
-                stroke_width: 2.0,
-                stroke_linecap: StrokeLineCap::Round,
-                stroke_linejoin: StrokeLineJoin::Round,
-                stroke_dasharray: Vec::new(),
-                fill_rule: FillRule::NonZero,
-                view_box: (24.0, 24.0),
-                text: None,
-            }],
-            image: None,
-            scene_3d: None,
-            inline_items: Vec::new(),
-            line_boxes: Vec::new(),
-            layout_cache: LayoutCacheEntry::invalid(),
-            last_child_layout_content: None,
-            table_grid: None,
-            entity_id: strata_primitives::EntityId::NONE,
-            active_transitions: false,
-            element_id: None,
-            anchor_name: None,
-            is_top_layer: false,
-            portal_anchor: None,
-        }
+        }];
+        node
     }
 
     /// Constructs an SVG layout node with multiple styled vector items and viewBox.
     pub fn with_svg_items(style: ComputedStyle, svg_items: Vec<SvgItem>) -> Self {
         let first_path = svg_items.first().map(|i| i.path_data.clone());
-        Self {
-            style,
-            geometry: LayoutGeometry::default(),
-            children: Vec::new(),
-            text: None,
-            svg_path: first_path,
-            svg_items,
-            image: None,
-            scene_3d: None,
-            inline_items: Vec::new(),
-            line_boxes: Vec::new(),
-            layout_cache: LayoutCacheEntry::invalid(),
-            last_child_layout_content: None,
-            table_grid: None,
-            entity_id: strata_primitives::EntityId::NONE,
-            active_transitions: false,
-            element_id: None,
-            anchor_name: None,
-            is_top_layer: false,
-            portal_anchor: None,
-        }
+        let mut node = Self::new(style);
+        node.svg_path = first_path;
+        node.svg_items = svg_items;
+        node
     }
 
     /// Constructs a replaced raster image leaf node with intrinsic dimensions.
     pub fn with_image(style: ComputedStyle, image: ImageResource) -> Self {
-        Self {
-            style,
-            geometry: LayoutGeometry::default(),
-            children: Vec::new(),
-            text: None,
-            svg_path: None,
-            svg_items: Vec::new(),
-            image: Some(image),
-            scene_3d: None,
-            inline_items: Vec::new(),
-            line_boxes: Vec::new(),
-            layout_cache: LayoutCacheEntry::invalid(),
-            last_child_layout_content: None,
-            table_grid: None,
-            entity_id: strata_primitives::EntityId::NONE,
-            active_transitions: false,
-            element_id: None,
-            anchor_name: None,
-            is_top_layer: false,
-            portal_anchor: None,
-        }
+        let mut node = Self::new(style);
+        node.image = Some(image);
+        node
     }
 
     /// Returns `true` if this node or any of its descendants currently has an active CSS transition.
@@ -903,6 +1004,29 @@ impl LayoutNode {
             return true;
         }
         self.children.iter().any(|c| c.has_active_transitions())
+    }
+
+    /// Inner content-box width override used during collapse/expand transitions so children
+    /// keep their expanded layout width without squeezing to zero mid-animation.
+    #[inline]
+    pub fn transition_content_width(&self) -> Option<f32> {
+        let inset_h = self.style.padding.left
+            + self.style.padding.right
+            + self.style.border_width.left
+            + self.style.border_width.right;
+        self.transition_layout_width_px
+            .map(|w| (w - inset_h).max(0.0))
+    }
+
+    /// Inner content-box height override used during collapse/expand transitions.
+    #[inline]
+    pub fn transition_content_height(&self) -> Option<f32> {
+        let inset_v = self.style.padding.top
+            + self.style.padding.bottom
+            + self.style.border_width.top
+            + self.style.border_width.bottom;
+        self.transition_layout_height_px
+            .map(|h| (h - inset_v).max(0.0))
     }
 
     /// Attaches a 3D viewport scene handle to this layout node.
@@ -987,8 +1111,14 @@ impl LayoutNode {
         let mut stack: Vec<&mut LayoutNode> = vec![self];
         while let Some(node) = stack.pop() {
             node.geometry.translate(dx, dy);
+            node.subtree_bounds.x += dx;
+            node.subtree_bounds.y += dy;
             node.layout_cache.origin_x += dx;
             node.layout_cache.origin_y += dy;
+            if let Some(ref mut pb) = node.last_preserved_box {
+                pb.0 += dx;
+                pb.1 += dy;
+            }
             for line in &mut node.line_boxes {
                 line.bounds.x += dx;
                 line.bounds.y += dy;
@@ -1045,8 +1175,14 @@ impl LayoutNode {
             }
 
             node.geometry.translate(dx, dy);
+            node.subtree_bounds.x += dx;
+            node.subtree_bounds.y += dy;
             node.layout_cache.origin_x += dx;
             node.layout_cache.origin_y += dy;
+            if let Some(ref mut pb) = node.last_preserved_box {
+                pb.0 += dx;
+                pb.1 += dy;
+            }
             for line in &mut node.line_boxes {
                 line.bounds.x += dx;
                 line.bounds.y += dy;
@@ -1098,6 +1234,54 @@ impl LayoutNode {
         let content_h = self.geometry.content_box.height;
         let preserved_geom = self.geometry;
 
+        // O(1) clean subtree fast path: when neither `self` nor any descendant was invalidated
+        // since the last layout and the preserved box + content dimensions match, simply translate
+        // descendants if the box origin moved instead of re-solving the entire subtree.
+        if self.children_layout_clean {
+            if let Some((prev_x, prev_y, prev_w, prev_h, prev_pos)) = self.last_preserved_box {
+                if prev_pos == resolve_positioned
+                    && (prev_w - preserved_geom.border_box.width).abs() < 0.05
+                    && (prev_h - preserved_geom.border_box.height).abs() < 0.05
+                    && self.last_child_layout_content.is_some_and(|(cw, ch)| {
+                        (cw - content_w).abs() < 0.05 && (ch - content_h).abs() < 0.05
+                    })
+                {
+                    let dx = preserved_geom.border_box.x - prev_x;
+                    let dy = preserved_geom.border_box.y - prev_y;
+                    if dx.abs() > 0.001 || dy.abs() > 0.001 {
+                        self.subtree_bounds.x += dx;
+                        self.subtree_bounds.y += dy;
+                        for line in &mut self.line_boxes {
+                            line.bounds.x += dx;
+                            line.bounds.y += dy;
+                            for frag in &mut line.text_fragments {
+                                frag.bounds.x += dx;
+                                frag.bounds.y += dy;
+                                frag.baseline_y += dy;
+                            }
+                            for at in &mut line.atomic_fragments {
+                                at.bounds.x += dx;
+                                at.bounds.y += dy;
+                            }
+                        }
+                        for child in &mut self.children {
+                            child.translate(dx, dy);
+                        }
+                        self.last_preserved_box = Some((
+                            preserved_geom.border_box.x,
+                            preserved_geom.border_box.y,
+                            prev_w,
+                            prev_h,
+                            prev_pos,
+                        ));
+                    }
+                    return;
+                }
+            }
+        }
+
+        self.subtree_hit_flags &= !SUBTREE_META_VALID;
+
         let saved_w = self.style.width;
         let saved_h = self.style.height;
         let saved_min_w = self.style.min_width;
@@ -1120,11 +1304,21 @@ impl LayoutNode {
         };
 
         let container_avail_h = if pin_h {
-            self.style.height =
-                strata_style::types::Dimension::Px(preserved_geom.border_box.height);
+            let pinned_h = if saved_h == strata_style::types::Dimension::Auto {
+                crate::box_model::clamp_dimension_with_node(
+                    preserved_geom.border_box.height,
+                    saved_min_h,
+                    saved_max_h,
+                    content_h.max(preserved_geom.border_box.height),
+                    self,
+                )
+            } else {
+                preserved_geom.border_box.height
+            };
+            self.style.height = strata_style::types::Dimension::Px(pinned_h);
             self.style.min_height = strata_style::types::Dimension::Auto;
             self.style.max_height = strata_style::types::Dimension::Auto;
-            preserved_geom.border_box.height
+            pinned_h
         } else {
             preserved_geom.border_box.height + self.style.margin.top + self.style.margin.bottom
         };
@@ -1171,12 +1365,7 @@ impl LayoutNode {
                     self, content_w, content_h, None, 0.0, guard,
                 );
                 if saved_h == strata_style::types::Dimension::Auto {
-                    self.geometry.border_box.height = crate::box_model::clamp_dimension(
-                        block_h,
-                        saved_min_h,
-                        saved_max_h,
-                        content_h,
-                    );
+                    self.geometry.border_box.height = block_h;
                 }
             }
             Display::None => {}
@@ -1189,14 +1378,43 @@ impl LayoutNode {
         self.style.min_height = saved_min_h;
         self.style.max_height = saved_max_h;
 
+        let clamp_avail_h = preserved_geom.border_box.height.max(content_h);
+        if self.style.height == strata_style::types::Dimension::Auto {
+            self.geometry.border_box.height = crate::box_model::clamp_dimension_with_node(
+                self.geometry.border_box.height,
+                saved_min_h,
+                saved_max_h,
+                clamp_avail_h,
+                self,
+            );
+        }
+
         let clips_y = self.style.overflow_y != strata_style::types::Overflow::Visible;
         let final_h = if self.style.height == strata_style::types::Dimension::Auto && !clips_y {
-            self.geometry
+            let unclipped = self
+                .geometry
                 .border_box
                 .height
-                .max(preserved_geom.border_box.height)
+                .max(preserved_geom.border_box.height);
+            crate::box_model::clamp_dimension_with_node(
+                unclipped,
+                saved_min_h,
+                saved_max_h,
+                clamp_avail_h,
+                self,
+            )
         } else if preserved_geom.border_box.height > 0.0 {
-            preserved_geom.border_box.height
+            if self.style.height == strata_style::types::Dimension::Auto {
+                crate::box_model::clamp_dimension_with_node(
+                    preserved_geom.border_box.height,
+                    saved_min_h,
+                    saved_max_h,
+                    clamp_avail_h,
+                    self,
+                )
+            } else {
+                preserved_geom.border_box.height
+            }
         } else {
             self.geometry.border_box.height
         };
@@ -1231,6 +1449,14 @@ impl LayoutNode {
         self.geometry.snap_to_pixel();
         self.update_scroll_metrics();
         self.last_child_layout_content = Some((content_w, content_h));
+        self.children_layout_clean = true;
+        self.last_preserved_box = Some((
+            self.geometry.border_box.x,
+            self.geometry.border_box.y,
+            self.geometry.border_box.width,
+            self.geometry.border_box.height,
+            resolve_positioned,
+        ));
         self.layout_cache.is_valid = false;
     }
 
@@ -1241,6 +1467,7 @@ impl LayoutNode {
         let guard = LayoutDepthGuard::root();
         self.compute_layout_guarded(available_width, available_height, None, 0.0, guard);
         crate::intrinsic::end_layout_session(session_root);
+        self.refresh_subtree_hit_metadata();
     }
 
     /// Computes layout geometry passing an active exclusion space for float obstructions.
@@ -1259,6 +1486,222 @@ impl LayoutNode {
             bfc_offset_y,
             guard,
         );
+        self.refresh_subtree_hit_metadata();
+    }
+
+    /// Recomputes `subtree_hit_flags` and `subtree_bounds` bottom-up across the layout tree,
+    /// skipping clean subtrees whose `SUBTREE_META_VALID` flag is already up to date.
+    pub fn refresh_subtree_hit_metadata(&mut self) {
+        self.refresh_subtree_hit_metadata_inner(None, true);
+    }
+
+    #[inline]
+    fn is_self_height_dependent(&self) -> bool {
+        use strata_style::types::{Dimension, Position};
+        matches!(self.style.height, Dimension::Percent(_))
+            || matches!(self.style.min_height, Dimension::Percent(_))
+            || matches!(self.style.max_height, Dimension::Percent(_))
+            || matches!(self.style.flex_basis, Dimension::Percent(_))
+            || (matches!(self.style.position, Position::Absolute | Position::Fixed)
+                && (!matches!(self.style.insets.bottom, Dimension::Auto)
+                    || matches!(self.style.insets.top, Dimension::Percent(_))))
+    }
+
+    fn refresh_subtree_hit_metadata_inner(
+        &mut self,
+        parent_display: Option<strata_style::types::Display>,
+        is_root: bool,
+    ) {
+        let self_hoisted = !is_root
+            && (self.style.position != strata_style::types::Position::Static
+                || self.establishes_stacking_context_in(parent_display, false));
+        if (self.subtree_hit_flags & SUBTREE_META_VALID) != 0
+            && (!self_hoisted || (self.subtree_hit_flags & SUBTREE_HAS_HOISTED) != 0)
+        {
+            return;
+        }
+
+        if matches!(self.style.display, strata_style::types::Display::None) {
+            self.subtree_hit_flags = SUBTREE_META_VALID;
+            self.subtree_bounds = Rect::new(0.0, 0.0, 0.0, 0.0);
+            return;
+        }
+
+        let mut flags = SUBTREE_META_VALID;
+        if self.is_top_layer {
+            flags |= SUBTREE_HAS_TOP_LAYER;
+        }
+        if self.style.has_transform() {
+            flags |= SUBTREE_HAS_TRANSFORM;
+        }
+        if self_hoisted {
+            flags |= SUBTREE_HAS_HOISTED;
+        }
+
+        let own = self.geometry.border_box;
+        let mut min_x = own.x;
+        let mut min_y = own.y;
+        let mut max_x = own.x + own.width.max(0.0);
+        let mut max_y = own.y + own.height.max(0.0);
+        let mut has_bounds = own.width > 0.0 || own.height > 0.0 || self.children.is_empty();
+
+        let union_rect = |r: Rect,
+                          min_x: &mut f32,
+                          min_y: &mut f32,
+                          max_x: &mut f32,
+                          max_y: &mut f32,
+                          has_bounds: &mut bool| {
+            let rx1 = r.x + r.width.max(0.0);
+            let ry1 = r.y + r.height.max(0.0);
+            if *has_bounds {
+                *min_x = min_x.min(r.x);
+                *min_y = min_y.min(r.y);
+                *max_x = max_x.max(rx1);
+                *max_y = max_y.max(ry1);
+            } else {
+                *min_x = r.x;
+                *min_y = r.y;
+                *max_x = rx1;
+                *max_y = ry1;
+                *has_bounds = true;
+            }
+        };
+
+        for line in &self.line_boxes {
+            if line.bounds.width > 0.0 || line.bounds.height > 0.0 {
+                union_rect(
+                    line.bounds,
+                    &mut min_x,
+                    &mut min_y,
+                    &mut max_x,
+                    &mut max_y,
+                    &mut has_bounds,
+                );
+            }
+        }
+
+        let self_display = Some(self.style.display);
+        for child in &mut self.children {
+            child.refresh_subtree_hit_metadata_inner(self_display, false);
+            flags |= child.subtree_hit_flags & !SUBTREE_HAS_HEIGHT_DEP_DESCENDANT;
+            if child.is_self_height_dependent()
+                || (!matches!(child.style.height, strata_style::types::Dimension::Px(_))
+                    && (child.subtree_hit_flags & SUBTREE_HAS_HEIGHT_DEP_DESCENDANT) != 0)
+            {
+                flags |= SUBTREE_HAS_HEIGHT_DEP_DESCENDANT;
+            }
+            if matches!(child.style.display, strata_style::types::Display::None)
+                || child.is_top_layer
+                || child.style.position != strata_style::types::Position::Static
+                || child.establishes_stacking_context_in(self_display, false)
+            {
+                continue;
+            }
+            let cb = child.subtree_bounds;
+            if cb.width > 0.0 || cb.height > 0.0 || (child.children.is_empty() && (cb.x != 0.0 || cb.y != 0.0)) {
+                union_rect(
+                    cb,
+                    &mut min_x,
+                    &mut min_y,
+                    &mut max_x,
+                    &mut max_y,
+                    &mut has_bounds,
+                );
+            }
+        }
+
+        if has_bounds {
+            if self.style.overflow_x != strata_style::types::Overflow::Visible {
+                let clip_x0 = own.x;
+                let clip_x1 = own.x + own.width.max(0.0);
+                min_x = min_x.max(clip_x0).min(clip_x1);
+                max_x = max_x.min(clip_x1).max(min_x);
+            }
+            if self.style.overflow_y != strata_style::types::Overflow::Visible {
+                let clip_y0 = own.y;
+                let clip_y1 = own.y + own.height.max(0.0);
+                min_y = min_y.max(clip_y0).min(clip_y1);
+                max_y = max_y.min(clip_y1).max(min_y);
+            }
+            self.subtree_bounds = Rect::new(min_x, min_y, max_x - min_x, max_y - min_y);
+        } else {
+            self.subtree_bounds = own;
+        }
+        self.subtree_hit_flags = flags;
+    }
+
+    #[inline]
+    pub(crate) fn is_height_independent_for_cache(&self) -> bool {
+        self.style.height == strata_style::types::Dimension::Auto
+            && self.style.flex_basis == strata_style::types::Dimension::Auto
+            && self.style.flex_grow == 0.0
+            && !matches!(
+                self.style.min_height,
+                strata_style::types::Dimension::Percent(_)
+            )
+            && !matches!(
+                self.style.max_height,
+                strata_style::types::Dimension::Percent(_)
+            )
+            && !(matches!(
+                self.style.position,
+                strata_style::types::Position::Absolute | strata_style::types::Position::Fixed
+            ) && (!matches!(
+                self.style.insets.bottom,
+                strata_style::types::Dimension::Auto
+            ) || matches!(
+                self.style.insets.top,
+                strata_style::types::Dimension::Percent(_)
+            )))
+            && !self.has_height_dependent_descendant_fast()
+    }
+
+    /// Looks up a cached measurement probe `(result_w, result_h, baseline_offset)` for a clean
+    /// subtree without modifying `self.geometry` or descending into children.
+    #[inline]
+    pub(crate) fn lookup_measure_cache(
+        &self,
+        available_w: f32,
+        available_h: f32,
+        style_pin_hash: u64,
+    ) -> Option<(f32, f32, f32)> {
+        if !self.children_layout_clean {
+            return None;
+        }
+        for slot in &self.measure_cache {
+            if slot.is_valid
+                && slot.style_pin_hash == style_pin_hash
+                && (available_w - slot.available_w).abs() < 0.01
+                && ((available_h - slot.available_h).abs() < 0.01
+                    || self.is_height_independent_for_cache())
+            {
+                return Some((slot.result_w, slot.result_h, slot.baseline_offset));
+            }
+        }
+        None
+    }
+
+    /// Stores a measurement probe result in slot `0` (Pass 1) or `1` (Pass 2).
+    #[inline]
+    pub(crate) fn store_measure_cache(
+        &mut self,
+        slot_idx: usize,
+        available_w: f32,
+        available_h: f32,
+        style_pin_hash: u64,
+        result_w: f32,
+        result_h: f32,
+        baseline_offset: f32,
+    ) {
+        self.measure_cache[slot_idx.min(1)] = MeasureCacheEntry {
+            available_w,
+            available_h,
+            style_pin_hash,
+            result_w,
+            result_h,
+            baseline_offset,
+            is_valid: true,
+        };
     }
 
     /// Computes layout geometry passing an active exclusion space and depth guard.
@@ -1287,6 +1730,8 @@ impl LayoutNode {
         if self.style.display == Display::None {
             self.geometry = LayoutGeometry::default();
             self.layout_cache.is_valid = false;
+            self.children_layout_clean = false;
+            self.subtree_hit_flags &= !SUBTREE_META_VALID;
             return;
         }
 
@@ -1326,49 +1771,44 @@ impl LayoutNode {
             );
             self.geometry.snap_to_pixel();
             self.layout_cache.is_valid = false;
+            self.children_layout_clean = false;
+            self.subtree_hit_flags &= !SUBTREE_META_VALID;
             return;
         }
 
         let is_unconstrained_root = exclusions
             .as_ref()
             .is_none_or(|e| e.exclusions().is_empty());
+        let style_pin_hash = layout_style_pin_hash(&self.style);
 
-        // Subtree layout cache hit: skip re-traversal if available dimensions are unchanged
-        let height_independent = self.style.height == strata_style::types::Dimension::Auto
-            && self.style.flex_basis == strata_style::types::Dimension::Auto
-            && self.style.flex_grow == 0.0
-            && !matches!(
-                self.style.min_height,
-                strata_style::types::Dimension::Percent(_)
-            )
-            && !matches!(
-                self.style.max_height,
-                strata_style::types::Dimension::Percent(_)
-            )
-            && !(matches!(
-                self.style.position,
-                strata_style::types::Position::Absolute | strata_style::types::Position::Fixed
-            ) && (!matches!(
-                self.style.insets.bottom,
-                strata_style::types::Dimension::Auto
-            ) || matches!(
-                self.style.insets.top,
-                strata_style::types::Dimension::Percent(_)
-            )))
-            && !self.has_height_dependent_descendant();
-        let height_matches = (available_height - self.layout_cache.available_h).abs() < 0.01
-            || (height_independent
-                && (self.style.content_visibility == strata_style::types::ContentVisibility::Auto
-                    || self.layout_cache.is_valid));
-
+        // Subtree layout cache hit: skip re-traversal if available dimensions & style pins match.
+        // Only evaluate `is_height_independent_for_cache()` when `available_w` and `style_pin_hash`
+        // already match and `available_h` differs (avoiding unnecessary subtree walks).
         if is_unconstrained_root
             && self.layout_cache.is_valid
+            && self.layout_cache.style_pin_hash == style_pin_hash
             && (available_width - self.layout_cache.available_w).abs() < 0.01
-            && height_matches
+            && ((available_height - self.layout_cache.available_h).abs() < 0.01
+                || self.is_height_independent_for_cache())
         {
             let dx = self.geometry.border_box.x - self.layout_cache.origin_x;
             let dy = self.geometry.border_box.y - self.layout_cache.origin_y;
             if dx.abs() > 0.001 || dy.abs() > 0.001 {
+                self.geometry.padding_box.x += dx;
+                self.geometry.padding_box.y += dy;
+                self.geometry.content_box.x += dx;
+                self.geometry.content_box.y += dy;
+                self.geometry.margin_box.x += dx;
+                self.geometry.margin_box.y += dy;
+                self.subtree_bounds.x += dx;
+                self.subtree_bounds.y += dy;
+                if let Some(ref mut pb) = self.last_preserved_box {
+                    pb.0 += dx;
+                    pb.1 += dy;
+                }
+                if let Some(ref mut grid) = self.table_grid {
+                    grid.translate(dx, dy);
+                }
                 for line in &mut self.line_boxes {
                     line.bounds.x += dx;
                     line.bounds.y += dy;
@@ -1390,6 +1830,8 @@ impl LayoutNode {
             }
             return;
         }
+
+        self.subtree_hit_flags &= !SUBTREE_META_VALID;
 
         // Dispatch according to container display formatting context
         match self.style.display {
@@ -1452,6 +1894,8 @@ impl LayoutNode {
                 self.geometry.content_box.height,
             ));
         }
+        self.children_layout_clean = true;
+        self.last_preserved_box = None;
 
         // Record layout result in cache for subsequent multi-pass probes
         if is_unconstrained_root {
@@ -1462,9 +1906,18 @@ impl LayoutNode {
                 result_h: self.geometry.border_box.height,
                 origin_x: self.geometry.border_box.x,
                 origin_y: self.geometry.border_box.y,
+                style_pin_hash,
                 is_valid: true,
             };
         }
+    }
+
+    #[inline]
+    fn has_height_dependent_descendant_fast(&self) -> bool {
+        if (self.subtree_hit_flags & SUBTREE_META_VALID) != 0 {
+            return (self.subtree_hit_flags & SUBTREE_HAS_HEIGHT_DEP_DESCENDANT) != 0;
+        }
+        self.has_height_dependent_descendant()
     }
 
     /// Returns true if any descendant (up to an explicit pixel-height boundary) depends on parent height.
@@ -1494,11 +1947,25 @@ impl LayoutNode {
         false
     }
 
+    /// Invalidates all layout, measurement, intrinsic sizing, and hit-metadata caches strictly on
+    /// this node without disturbing clean child subtrees.
+    #[inline]
+    pub fn invalidate_self_caches(&mut self) {
+        self.layout_cache.is_valid = false;
+        self.measure_cache[0].is_valid = false;
+        self.measure_cache[1].is_valid = false;
+        self.intrinsic_cache.clear();
+        self.last_child_layout_content = None;
+        self.children_layout_clean = false;
+        self.last_preserved_box = None;
+        self.subtree_hit_flags &= !SUBTREE_META_VALID;
+    }
+
     /// Invalidates layout cache on this node and all descendants using an iterative heap stack.
     pub fn invalidate_cache(&mut self) {
         let mut stack: Vec<&mut LayoutNode> = vec![self];
         while let Some(node) = stack.pop() {
-            node.layout_cache.is_valid = false;
+            node.invalidate_self_caches();
             for child in &mut node.children {
                 stack.push(child);
             }
@@ -1672,14 +2139,14 @@ impl LayoutNode {
 
     /// Invalidates layout cache on self and all ancestors leading down to `path`.
     pub fn invalidate_ancestors(&mut self, path: &[usize]) {
-        self.layout_cache.is_valid = false;
+        self.invalidate_self_caches();
         let mut curr = self;
         for &idx in path {
             if idx >= curr.children.len() {
                 break;
             }
             curr = &mut curr.children[idx];
-            curr.layout_cache.is_valid = false;
+            curr.invalidate_self_caches();
         }
     }
 

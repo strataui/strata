@@ -555,9 +555,15 @@ impl AppRuntime {
                     }
                 }
 
-                // 2. Input handling: synthesize text from value or placeholder attributes
-                if matches!(tag, Tag::Input) {
-                    let mut input_node = Self::build_input_leaf_node(attributes, *style, entity_id);
+                // 2. Input / Textarea handling: synthesize text from value, children, or placeholder
+                if matches!(tag, Tag::Input | Tag::Textarea) {
+                    let mut input_node = Self::build_input_leaf_node(
+                        blueprint,
+                        matches!(tag, Tag::Textarea),
+                        attributes,
+                        *style,
+                        entity_id,
+                    );
                     Self::apply_portal_and_anchor_metadata(&mut input_node, tag, attributes);
                     return input_node;
                 }
@@ -1480,7 +1486,7 @@ impl AppRuntime {
 
         if !has_display_class && !has_explicit_display_decl {
             match tag {
-                Tag::Svg | Tag::Path | Tag::Input => {}
+                Tag::Svg | Tag::Path | Tag::Input | Tag::Textarea => {}
                 Tag::Table => {
                     style.display = Display::Table;
                 }
@@ -1534,8 +1540,57 @@ impl AppRuntime {
                     }
                 }
                 _ => {
-                    style.display = Display::Flex;
+                    if let Tag::Custom(name) = tag {
+                        if matches!(
+                            name.to_ascii_lowercase().as_str(),
+                            "code"
+                                | "strong"
+                                | "em"
+                                | "b"
+                                | "i"
+                                | "u"
+                                | "s"
+                                | "small"
+                                | "mark"
+                                | "kbd"
+                                | "samp"
+                                | "var"
+                                | "abbr"
+                                | "cite"
+                                | "q"
+                                | "sub"
+                                | "sup"
+                                | "del"
+                                | "ins"
+                                | "time"
+                        ) {
+                            style.display = Display::Inline;
+                        } else {
+                            style.display = Display::Flex;
+                            if name.eq_ignore_ascii_case("portal") {
+                                style.flex_direction = FlexDirection::Column;
+                            }
+                        }
+                    } else {
+                        style.display = Display::Flex;
+                    }
                 }
+            }
+        } else if matches!(tag, Tag::Custom(name) if name.eq_ignore_ascii_case("portal"))
+            && matches!(style.display, Display::Flex | Display::InlineFlex)
+        {
+            let has_explicit_flex_dir = classes.iter().any(|c| {
+                c.split_whitespace().any(|tok| {
+                    matches!(
+                        tok,
+                        "flex-row" | "flex-row-reverse" | "flex-col" | "flex-col-reverse"
+                    )
+                })
+            }) || inline_decls
+                .iter()
+                .any(|d| d.property.eq_ignore_ascii_case("flex-direction"));
+            if !has_explicit_flex_dir {
+                style.flex_direction = FlexDirection::Column;
             }
         }
 
@@ -1757,6 +1812,8 @@ impl AppRuntime {
 
     #[inline(never)]
     fn build_input_leaf_node(
+        blueprint: &NodeBlueprint,
+        is_textarea: bool,
         attributes: &[strata_dom::Attribute],
         mut style: ComputedStyle,
         entity_id: strata_primitives::EntityId,
@@ -1764,19 +1821,41 @@ impl AppRuntime {
         if style.cursor == strata_style::types::Cursor::Default {
             style.cursor = strata_style::types::Cursor::Text;
         }
-        style.white_space = strata_style::types::WhiteSpace::NoWrap;
+        style.white_space = if is_textarea {
+            strata_style::types::WhiteSpace::PreWrap
+        } else {
+            strata_style::types::WhiteSpace::NoWrap
+        };
         style.overflow_x = strata_style::types::Overflow::Hidden;
-        style.overflow_y = strata_style::types::Overflow::Hidden;
-        let is_password = Self::is_password_input_attrs(attributes);
+        if is_textarea {
+            if style.overflow_y == strata_style::types::Overflow::Visible {
+                style.overflow_y = strata_style::types::Overflow::Auto;
+            }
+        } else {
+            style.overflow_y = strata_style::types::Overflow::Hidden;
+        }
+        let is_password = !is_textarea && Self::is_password_input_attrs(attributes);
         let mut value_text = None;
         let mut placeholder_text = None;
+        let mut rows_attr: Option<usize> = None;
+        let mut cols_attr: Option<usize> = None;
         for attr in attributes {
             if let strata_dom::Attribute::Property { key, value } = attr {
                 if key == "value" && !value.is_empty() {
                     value_text = Some(value.clone());
                 } else if key == "placeholder" && !value.is_empty() {
                     placeholder_text = Some(value.clone());
+                } else if key == "rows" {
+                    rows_attr = value.trim().parse::<usize>().ok().filter(|&r| r > 0);
+                } else if key == "cols" {
+                    cols_attr = value.trim().parse::<usize>().ok().filter(|&c| c > 0);
                 }
+            }
+        }
+        if is_textarea && value_text.is_none() {
+            let child_text = Self::extract_text_content(blueprint);
+            if !child_text.is_empty() {
+                value_text = Some(child_text);
             }
         }
         let is_mono = strata_layout::is_monospace_family(style.font_family);
@@ -1786,32 +1865,73 @@ impl AppRuntime {
             style.font_size * 0.55
         };
         if style.height == Dimension::Auto {
-            let text_h = style.font_size * style.line_height;
-            style.height = Dimension::Px(text_h + style.padding.top + style.padding.bottom);
+            let line_count = if is_textarea {
+                rows_attr.unwrap_or(3) as f32
+            } else {
+                1.0
+            };
+            let text_h = style.font_size * style.line_height * line_count;
+            style.height = Dimension::Px(
+                text_h
+                    + style.padding.top
+                    + style.padding.bottom
+                    + style.border_width.top
+                    + style.border_width.bottom,
+            );
         }
+        let border_h = style.border_width.left + style.border_width.right;
         if let Some(val) = value_text {
             let display_val = if is_password {
                 Self::mask_password_text(&val)
             } else {
                 val
             };
-            let approx_width = (display_val.chars().count() as f32 * char_w).max(40.0);
+            let max_chars = if is_textarea {
+                display_val
+                    .lines()
+                    .map(|l| l.chars().count())
+                    .max()
+                    .unwrap_or(0)
+            } else {
+                display_val.chars().count()
+            };
+            let approx_width = if is_textarea {
+                cols_attr
+                    .map(|c| c as f32 * char_w)
+                    .unwrap_or_else(|| (max_chars as f32 * char_w).max(200.0))
+            } else {
+                (max_chars as f32 * char_w).max(40.0)
+            };
             if style.width == Dimension::Auto && style.flex_grow <= 0.0 {
-                style.width =
-                    Dimension::Px(approx_width + style.padding.left + style.padding.right);
+                style.width = Dimension::Px(
+                    approx_width + style.padding.left + style.padding.right + border_h,
+                );
             }
             LayoutNode::with_text(style, display_val).with_entity_id(entity_id)
         } else if let Some(ph) = placeholder_text {
-            let approx_width = (ph.chars().count() as f32 * char_w).max(40.0);
+            let approx_width = if is_textarea {
+                cols_attr
+                    .map(|c| c as f32 * char_w)
+                    .unwrap_or_else(|| (ph.chars().count() as f32 * char_w).max(200.0))
+            } else {
+                (ph.chars().count() as f32 * char_w).max(40.0)
+            };
             if style.width == Dimension::Auto && style.flex_grow <= 0.0 {
-                style.width =
-                    Dimension::Px(approx_width + style.padding.left + style.padding.right);
+                style.width = Dimension::Px(
+                    approx_width + style.padding.left + style.padding.right + border_h,
+                );
             }
             style.color = strata_style::types::Color::new(140, 145, 155, 255);
             LayoutNode::with_text(style, ph).with_entity_id(entity_id)
         } else {
+            let default_w = if is_textarea {
+                cols_attr.map(|c| c as f32 * char_w).unwrap_or(200.0)
+            } else {
+                60.0
+            };
             if style.width == Dimension::Auto && style.flex_grow <= 0.0 {
-                style.width = Dimension::Px(60.0 + style.padding.left + style.padding.right);
+                style.width =
+                    Dimension::Px(default_w + style.padding.left + style.padding.right + border_h);
             }
             LayoutNode::with_text(style, String::new()).with_entity_id(entity_id)
         }
@@ -1911,11 +2031,23 @@ impl AppRuntime {
         style: &mut ComputedStyle,
         children: &[NodeBlueprint],
     ) {
-        let is_inline = matches!(
+        // Non-replaced `display: inline` elements (e.g. `<span>`, `<a>`, `<label>`)
+        // must remain `width: auto; height: auto` so their inline text wraps to
+        // whatever width their containing block, flex item (`flex-1 min-w-0`), or
+        // grid track resolves to. Only atomic inline containers (`inline-flex` /
+        // `inline-block`) that are not flexible (`flex-grow == 0`) or explicitly
+        // `min-w-0` should receive eager single-text intrinsic dimensions.
+        let is_atomic_inline = matches!(
             style.display,
-            Display::Inline | Display::InlineFlex | Display::InlineBlock
+            Display::InlineFlex | Display::InlineBlock
         );
-        if is_inline && style.width == Dimension::Auto && children.len() == 1 {
+        let is_flexible_or_min_zero =
+            style.flex_grow > 0.0 || matches!(style.min_width, Dimension::Px(px) if px == 0.0);
+        if is_atomic_inline
+            && !is_flexible_or_min_zero
+            && style.width == Dimension::Auto
+            && children.len() == 1
+        {
             let single_text: Option<std::borrow::Cow<'_, str>> = match &children[0] {
                 NodeBlueprint::Text(t) => Some(std::borrow::Cow::Borrowed(t.as_str())),
                 NodeBlueprint::DynamicText(dyn_fn) => Some(std::borrow::Cow::Owned(dyn_fn())),

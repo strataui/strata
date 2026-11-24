@@ -7,13 +7,15 @@ pub(crate) fn resolved_cursor_at(
     x: f32,
     y: f32,
 ) -> strata_platform::window::CursorIcon {
-    let is_over_scrollbar = runtime.active_scrollbars.iter().any(|bar| {
+    let mut cached_hit: Option<Option<Vec<usize>>> = None;
+    let is_over_scrollbar = runtime.active_scrollbars.iter().rev().any(|bar| {
         bar.max_scroll_y > 1.0
             && bar.clip_bounds.contains_point(x, y)
             && (x >= bar.track_bounds.x
                 && x <= bar.bounds.x + bar.bounds.width + 1.0
                 && y >= bar.track_bounds.y
                 && y <= bar.track_bounds.y + bar.track_bounds.height)
+            && runtime.scrollbar_owns_point(bar, x, y, &mut cached_hit)
     });
     if is_over_scrollbar {
         strata_platform::window::CursorIcon::Default

@@ -118,7 +118,7 @@ pub struct McpTool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallResult {
     pub content: Vec<McpContent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isError", skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
 }
 

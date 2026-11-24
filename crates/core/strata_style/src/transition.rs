@@ -849,4 +849,52 @@ impl TransitionManager {
     pub fn retain_nodes<F: FnMut(&u64) -> bool>(&mut self, mut keep: F) {
         self.node_transitions.retain(|id, _| keep(id));
     }
+
+    /// Resolves `(expanded_width_px, expanded_height_px)` when `node_id` has an active
+    /// `Width`/`MaxWidth` or `Height`/`MaxHeight` transition collapsing to or expanding from a
+    /// narrow/zero size (`<= 48px` with `>= 2x` expansion), so inner dock content keeps its
+    /// expanded layout geometry rather than squeezing to zero mid-animation.
+    pub fn active_collapse_lock_dimensions(
+        &self,
+        node_id: u64,
+        parent_w: f32,
+        parent_h: f32,
+        viewport_w: f32,
+        viewport_h: f32,
+        font_size: f32,
+    ) -> (Option<f32>, Option<f32>) {
+        let Some(transitions) = self.node_transitions.get(&node_id) else {
+            return (None, None);
+        };
+        let resolve_dim_px = |dim: Dimension, parent_axis: f32, vp_axis: f32| -> Option<f32> {
+            match dim {
+                Dimension::Vw(v) => Some(vp_axis * (v / 100.0)),
+                Dimension::Vh(v) => Some(viewport_h * (v / 100.0)),
+                other => other.resolve_px(parent_axis, 16.0, font_size),
+            }
+        };
+        let detect_lock = |prop: TransitionProperty, parent_axis: f32, vp_axis: f32| -> Option<f32> {
+            let trans = transitions.iter().find(|t| t.property == prop)?;
+            let (AnimatableValue::Dimension(from_d), AnimatableValue::Dimension(to_d)) =
+                (&trans.from_value, &trans.to_value)
+            else {
+                return None;
+            };
+            let a = resolve_dim_px(*from_d, parent_axis, vp_axis)?;
+            let b = resolve_dim_px(*to_d, parent_axis, vp_axis)?;
+            let lo = a.min(b).max(0.0);
+            let hi = a.max(b).max(0.0);
+            if hi > 1.0 && (lo <= 1.0 || (lo <= 48.0 && hi >= lo * 2.0)) {
+                Some(hi)
+            } else {
+                None
+            }
+        };
+
+        let lock_w = detect_lock(TransitionProperty::Width, parent_w, viewport_w)
+            .or_else(|| detect_lock(TransitionProperty::MaxWidth, parent_w, viewport_w));
+        let lock_h = detect_lock(TransitionProperty::Height, parent_h, viewport_h)
+            .or_else(|| detect_lock(TransitionProperty::MaxHeight, parent_h, viewport_h));
+        (lock_w, lock_h)
+    }
 }

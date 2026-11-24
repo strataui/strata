@@ -105,29 +105,33 @@ impl AppRuntime {
         for (path, &(applied_x, applied_y)) in &self.applied_scroll_offsets {
             if applied_x.abs() > 0.0001 || applied_y.abs() > 0.0001 {
                 if let Some(target) = Self::get_layout_node_mut(&mut self.layout_root, path) {
-                    let target_fixed_cb = target.style.establishes_fixed_containing_block();
-                    let target_abs_cb = target.style.position
-                        != strata_style::types::Position::Static
-                        || target_fixed_cb;
-                    for child in &mut target.children {
-                        child.translate_scrolled(
-                            applied_x,
-                            applied_y,
-                            target_abs_cb,
-                            target_fixed_cb,
-                        );
-                    }
-                    for line in &mut target.line_boxes {
-                        line.bounds.x += applied_x;
-                        line.bounds.y += applied_y;
-                        for frag in &mut line.text_fragments {
-                            frag.bounds.x += applied_x;
-                            frag.bounds.y += applied_y;
-                            frag.baseline_y += applied_y;
+                    if Self::is_multiline_text_scroll_leaf(target) {
+                        target.geometry.scroll_offset.y = 0.0;
+                    } else {
+                        let target_fixed_cb = target.style.establishes_fixed_containing_block();
+                        let target_abs_cb = target.style.position
+                            != strata_style::types::Position::Static
+                            || target_fixed_cb;
+                        for child in &mut target.children {
+                            child.translate_scrolled(
+                                applied_x,
+                                applied_y,
+                                target_abs_cb,
+                                target_fixed_cb,
+                            );
                         }
-                        for atomic in &mut line.atomic_fragments {
-                            atomic.bounds.x += applied_x;
-                            atomic.bounds.y += applied_y;
+                        for line in &mut target.line_boxes {
+                            line.bounds.x += applied_x;
+                            line.bounds.y += applied_y;
+                            for frag in &mut line.text_fragments {
+                                frag.bounds.x += applied_x;
+                                frag.bounds.y += applied_y;
+                                frag.baseline_y += applied_y;
+                            }
+                            for atomic in &mut line.atomic_fragments {
+                                atomic.bounds.x += applied_x;
+                                atomic.bounds.y += applied_y;
+                            }
                         }
                     }
                 }
@@ -156,42 +160,12 @@ impl AppRuntime {
         self.rebuild_active_scrollbars();
     }
 
-    /// Walks from `root` to `path`, accumulating CSS `style.transform` matrices and returning the
-    /// screen-space axis-aligned bounding box of the target node.
-    fn effective_screen_border_box(root: &LayoutNode, path: &[usize]) -> Option<strata_layout::Rect> {
-        let mut mat = strata_primitives::geom::Matrix4x4::identity();
-        let mut cur = root;
-        for &idx in path {
-            if cur.is_top_layer {
-                mat = strata_primitives::geom::Matrix4x4::identity();
-            }
-            if cur.style.has_transform() {
-                let bx = cur.geometry.border_box.x;
-                let by = cur.geometry.border_box.y;
-                let local_mat = cur.style.compute_transform_matrix(
-                    cur.geometry.border_box.width,
-                    cur.geometry.border_box.height,
-                );
-                let origin_mat = strata_primitives::geom::Matrix4x4::translation(bx, by, 0.0)
-                    .multiply(&local_mat)
-                    .multiply(&strata_primitives::geom::Matrix4x4::translation(-bx, -by, 0.0));
-                mat = mat.multiply(&origin_mat);
-            }
-            cur = cur.children.get(idx)?;
-        }
-        if cur.is_top_layer {
-            mat = strata_primitives::geom::Matrix4x4::identity();
-        }
-        let b = cur.geometry.border_box;
-        if !cur.style.has_transform() && mat == strata_primitives::geom::Matrix4x4::identity() {
-            return Some(b);
-        }
-        if cur.style.has_transform() {
-            let local_mat = cur.style.compute_transform_matrix(b.width, b.height);
-            let origin_mat = strata_primitives::geom::Matrix4x4::translation(b.x, b.y, 0.0)
-                .multiply(&local_mat)
-                .multiply(&strata_primitives::geom::Matrix4x4::translation(-b.x, -b.y, 0.0));
-            mat = mat.multiply(&origin_mat);
+    fn transform_rect_aabb(
+        mat: &strata_primitives::geom::Matrix4x4,
+        b: strata_layout::Rect,
+    ) -> strata_layout::Rect {
+        if *mat == strata_primitives::geom::Matrix4x4::identity() {
+            return b;
         }
         let corners = [
             mat.transform_point(b.x, b.y),
@@ -203,12 +177,54 @@ impl AppRuntime {
         let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
         let max_x = corners.iter().map(|c| c.0).fold(f32::NEG_INFINITY, f32::max);
         let max_y = corners.iter().map(|c| c.1).fold(f32::NEG_INFINITY, f32::max);
-        Some(strata_layout::Rect::new(
-            min_x,
-            min_y,
-            (max_x - min_x).max(0.0),
-            (max_y - min_y).max(0.0),
-        ))
+        strata_layout::Rect::new(min_x, min_y, (max_x - min_x).max(0.0), (max_y - min_y).max(0.0))
+    }
+
+    fn apply_node_transform(
+        parent_mat: &strata_primitives::geom::Matrix4x4,
+        node: &LayoutNode,
+    ) -> strata_primitives::geom::Matrix4x4 {
+        if !node.style.has_transform() {
+            return *parent_mat;
+        }
+        let b = node.geometry.border_box;
+        let local_mat = node.style.compute_transform_matrix(b.width, b.height);
+        let origin_mat = strata_primitives::geom::Matrix4x4::translation(b.x, b.y, 0.0)
+            .multiply(&local_mat)
+            .multiply(&strata_primitives::geom::Matrix4x4::translation(-b.x, -b.y, 0.0));
+        parent_mat.multiply(&origin_mat)
+    }
+
+    /// Walks from `root` to `path`, accumulating CSS `style.transform` matrices and returning the
+    /// screen-space axis-aligned bounding box of the target node.
+    fn effective_screen_border_box(root: &LayoutNode, path: &[usize]) -> Option<strata_layout::Rect> {
+        let mut mat = strata_primitives::geom::Matrix4x4::identity();
+        let mut cur = root;
+        for &idx in path {
+            if cur.is_top_layer {
+                mat = strata_primitives::geom::Matrix4x4::identity();
+            }
+            mat = Self::apply_node_transform(&mat, cur);
+            cur = cur.children.get(idx)?;
+        }
+        if cur.is_top_layer {
+            mat = strata_primitives::geom::Matrix4x4::identity();
+        }
+        mat = Self::apply_node_transform(&mat, cur);
+        Some(Self::transform_rect_aabb(&mat, cur.geometry.border_box))
+    }
+
+    #[inline]
+    pub(crate) fn is_multiline_text_scroll_leaf(layout: &LayoutNode) -> bool {
+        layout.children.is_empty()
+            && layout.line_boxes.is_empty()
+            && layout.text.is_some()
+            && matches!(
+                layout.style.white_space,
+                strata_style::types::WhiteSpace::PreWrap
+                    | strata_style::types::WhiteSpace::PreLine
+                    | strata_style::types::WhiteSpace::Pre
+            )
     }
 
     fn compute_container_scroll_extents(
@@ -243,6 +259,21 @@ impl AppRuntime {
             max_child_x = max_child_x.max(line.bounds.x + line.bounds.width + applied_x);
             max_child_y = max_child_y.max(line.bounds.y + line.bounds.height + applied_y);
         }
+        if Self::is_multiline_text_scroll_leaf(layout) {
+            if let Some(ref text) = layout.text {
+                let is_mono = strata_layout::is_monospace_family(layout.style.font_family);
+                let (lines, line_step) = Self::layout_visual_lines(
+                    text,
+                    viewport_w,
+                    layout.style.font_size,
+                    layout.style.line_height,
+                    is_mono,
+                    layout.style.font_family,
+                );
+                let text_h = lines.len().max(1) as f32 * line_step;
+                max_child_y = max_child_y.max(layout.geometry.content_box.y + text_h);
+            }
+        }
 
         let content_w = (max_child_x - layout.geometry.content_box.x).max(0.0);
         let content_h = (max_child_y - layout.geometry.content_box.y).max(0.0);
@@ -267,11 +298,13 @@ impl AppRuntime {
             None
         };
         let mut path = Vec::new();
+        let identity = strata_primitives::geom::Matrix4x4::identity();
         Self::collect_active_scrollbars_walk(
             &self.root_blueprint,
             &self.layout_root,
             &mut path,
             &[],
+            &identity,
             false,
             viewport_clip,
             &self.scroll_offsets,
@@ -288,6 +321,7 @@ impl AppRuntime {
         layout: &LayoutNode,
         current_path: &mut Vec<usize>,
         inherited_steps: &[super::hit_test::HitClipStep],
+        parent_transform: &strata_primitives::geom::Matrix4x4,
         in_top_layer: bool,
         viewport_clip: Option<strata_layout::Rect>,
         scroll_offsets: &std::collections::HashMap<Vec<usize>, (f32, f32)>,
@@ -307,6 +341,12 @@ impl AppRuntime {
         } else {
             Self::effective_hit_clip_steps(layout, inherited_steps)
         };
+        let base_transform = if layout.is_top_layer {
+            strata_primitives::geom::Matrix4x4::identity()
+        } else {
+            *parent_transform
+        };
+        let node_transform = Self::apply_node_transform(&base_transform, layout);
 
         let is_scroll_y = matches!(
             layout.style.overflow_y,
@@ -352,7 +392,8 @@ impl AppRuntime {
                 };
                 let clamped_y = stored_y.clamp(0.0, max_scroll_y);
 
-                let border_box = layout.geometry.border_box;
+                let border_box = Self::transform_rect_aabb(&node_transform, layout.geometry.border_box);
+                let padding_box = Self::transform_rect_aabb(&node_transform, layout.geometry.padding_box);
                 let mut clip_bounds = border_box;
                 if let Some(vp) = viewport_clip {
                     clip_bounds = clip_bounds
@@ -368,9 +409,15 @@ impl AppRuntime {
                 }
 
                 let track_width = 10.0;
-                let track_x = border_box.x + border_box.width - track_width;
-                let track_y = border_box.y;
-                let track_h = border_box.height;
+                let inner_track_box = if padding_box.width > 0.0 && padding_box.height > 0.0 {
+                    padding_box
+                } else {
+                    border_box
+                };
+                let track_x =
+                    (inner_track_box.x + inner_track_box.width - track_width).max(inner_track_box.x);
+                let track_y = inner_track_box.y;
+                let track_h = inner_track_box.height;
                 let track_bounds =
                     strata_layout::Rect::new(track_x, track_y, track_width, track_h);
 
@@ -418,6 +465,7 @@ impl AppRuntime {
                 child_layout,
                 current_path,
                 &next_steps,
+                &node_transform,
                 node_in_top_layer,
                 viewport_clip,
                 scroll_offsets,
@@ -429,11 +477,63 @@ impl AppRuntime {
         }
     }
 
+    fn hit_path_and_canvas_depth(&self, px: f32, py: f32) -> (Option<Vec<usize>>, Option<usize>) {
+        let hit_path = Self::hit_test_node_path(&self.root_blueprint, &self.layout_root, px, py);
+        let canvas_depth = hit_path.as_ref().and_then(|hp| {
+            let mut cur_bp = &self.root_blueprint;
+            let mut deepest = None;
+            if matches!(
+                cur_bp,
+                NodeBlueprint::Element {
+                    tag: Tag::Canvas | Tag::Custom("Canvas3D"),
+                    ..
+                }
+            ) {
+                deepest = Some(0);
+            }
+            for (depth, &idx) in hp.iter().enumerate() {
+                let mut flat = Vec::new();
+                match cur_bp {
+                    NodeBlueprint::Element { children, .. }
+                    | NodeBlueprint::Fragment(children) => {
+                        for c in children {
+                            Self::flatten_blueprints(c, &mut flat);
+                        }
+                    }
+                    _ => break,
+                }
+                let Some(next) = flat.get(idx).copied() else {
+                    break;
+                };
+                cur_bp = next;
+                if matches!(
+                    cur_bp,
+                    NodeBlueprint::Element {
+                        tag: Tag::Canvas | Tag::Custom("Canvas3D"),
+                        ..
+                    }
+                ) {
+                    deepest = Some(depth + 1);
+                }
+            }
+            deepest
+        });
+        (hit_path, canvas_depth)
+    }
+
     #[inline]
     fn matching_scrollbars_at(&self, px: f32, py: f32) -> Vec<ActiveScrollbar> {
+        let (hit_path, canvas_depth) = self.hit_path_and_canvas_depth(px, py);
+        let Some(ref hp) = hit_path else {
+            return Vec::new();
+        };
         self.active_scrollbars
             .iter()
-            .filter(|bar| bar.clip_bounds.contains_point(px, py))
+            .filter(|bar| {
+                bar.clip_bounds.contains_point(px, py)
+                    && hp.starts_with(&bar.path)
+                    && canvas_depth.is_none_or(|cd| bar.path.len() > cd)
+            })
             .cloned()
             .collect()
     }
@@ -557,6 +657,7 @@ impl AppRuntime {
             };
 
             let mut active_box = cur_box;
+            let mut portal_relayout = false;
             let max_vp_width = (viewport_rect.width - 2.0 * spec.viewport_padding).max(0.0);
             if spec.match_width && (active_box.width - anchor_rect.width).abs() > 0.5 {
                 let prior = self
@@ -576,6 +677,7 @@ impl AppRuntime {
                         true,
                     );
                     active_box = target.geometry.border_box;
+                    portal_relayout = true;
                 }
             } else if !spec.match_width && spec.min_width_from_anchor {
                 let target_min_w = if max_vp_width > 0.0 {
@@ -583,14 +685,15 @@ impl AppRuntime {
                 } else {
                     anchor_rect.width
                 };
-                let existing_min_px = match Self::get_layout_node_mut(&mut self.layout_root, &portal_path)
-                    .map(|n| n.style.min_width)
-                {
-                    Some(strata_style::types::Dimension::Px(px)) => px,
-                    _ => 0.0,
-                };
-                let needs_min_resize =
-                    active_box.width + 0.5 < target_min_w || existing_min_px < target_min_w - 0.5;
+                let existing_min_px =
+                    match Self::get_layout_node_mut(&mut self.layout_root, &portal_path)
+                        .map(|n| n.style.min_width)
+                    {
+                        Some(strata_style::types::Dimension::Px(px)) => px,
+                        _ => 0.0,
+                    };
+                let needs_min_resize = active_box.width + 0.5 < target_min_w
+                    || (existing_min_px - target_min_w).abs() > 0.5;
                 let needs_max_cap = max_vp_width > 0.0 && active_box.width > max_vp_width + 0.5;
                 if needs_min_resize || needs_max_cap {
                     let prior = self
@@ -603,10 +706,7 @@ impl AppRuntime {
                         if prior.0.abs() > 0.0001 || prior.1.abs() > 0.0001 {
                             target.translate(-prior.0, -prior.1);
                         }
-                        if target_min_w > existing_min_px {
-                            target.style.min_width =
-                                strata_style::types::Dimension::Px(target_min_w);
-                        }
+                        target.style.min_width = strata_style::types::Dimension::Px(target_min_w);
                         if max_vp_width > 0.0
                             && matches!(
                                 target.style.max_width,
@@ -623,7 +723,47 @@ impl AppRuntime {
                             true,
                         );
                         active_box = target.geometry.border_box;
+                        portal_relayout = true;
                     }
+                }
+            }
+
+            if portal_relayout {
+                self.applied_scroll_offsets
+                    .retain(|p, _| !p.starts_with(&portal_path));
+                let mut cur_bp = Some(&self.root_blueprint);
+                for &idx in &portal_path {
+                    cur_bp = cur_bp.and_then(|bp| {
+                        let mut flat = Vec::new();
+                        match bp {
+                            NodeBlueprint::Element { children, .. }
+                            | NodeBlueprint::Fragment(children) => {
+                                for c in children {
+                                    Self::flatten_blueprints(c, &mut flat);
+                                }
+                            }
+                            _ => {}
+                        }
+                        flat.get(idx).copied()
+                    });
+                }
+                if let (Some(bp), Some(target)) = (
+                    cur_bp,
+                    Self::get_layout_node_mut(&mut self.layout_root, &portal_path),
+                ) {
+                    let mut pbuf = portal_path.clone();
+                    let mut dummy_bars = Vec::new();
+                    Self::apply_scroll_walk(
+                        bp,
+                        target,
+                        &mut pbuf,
+                        &self.scroll_offsets,
+                        &self.scroll_offsets_by_id,
+                        &mut self.applied_scroll_offsets,
+                        &mut dummy_bars,
+                    );
+                    target.refresh_subtree_hit_metadata();
+                    active_box = target.geometry.border_box;
                 }
             }
 
@@ -717,7 +857,12 @@ impl AppRuntime {
                 strata_dom::hooks::set_live_scroll_offset(id, clamped_x, clamped_y);
             }
 
-            if clamped_x > 0.0 || clamped_y > 0.0 {
+            if Self::is_multiline_text_scroll_leaf(layout) {
+                layout.geometry.scroll_offset.y = clamped_y;
+                if clamped_y > 0.0 {
+                    applied_scroll_offsets.insert(current_path.clone(), (0.0, clamped_y));
+                }
+            } else if clamped_x > 0.0 || clamped_y > 0.0 {
                 let target_fixed_cb = layout.style.establishes_fixed_containing_block();
                 let target_abs_cb = layout.style.position != strata_style::types::Position::Static
                     || target_fixed_cb;
@@ -822,31 +967,67 @@ impl AppRuntime {
         let mut client_w = 0.0_f32;
         let mut client_h = 0.0_f32;
         let mut content_h = 0.0_f32;
+        let mut is_text_leaf = false;
+        let mut target_entity_id: Option<strata_primitives::EntityId> = None;
         if let Some(target) = Self::get_layout_node_mut(&mut self.layout_root, path) {
             client_w = target.geometry.content_box.width;
             client_h = target.geometry.content_box.height;
-            let target_fixed_cb = target.style.establishes_fixed_containing_block();
-            let target_abs_cb =
-                target.style.position != strata_style::types::Position::Static || target_fixed_cb;
-            for child in &mut target.children {
-                child.translate_scrolled(-dx, -dy, target_abs_cb, target_fixed_cb);
-            }
-            for line in &mut target.line_boxes {
-                line.bounds.x -= dx;
-                line.bounds.y -= dy;
-                for frag in &mut line.text_fragments {
-                    frag.bounds.x -= dx;
-                    frag.bounds.y -= dy;
-                    frag.baseline_y -= dy;
+            target_entity_id = Some(target.entity_id);
+            if Self::is_multiline_text_scroll_leaf(target) {
+                is_text_leaf = true;
+                target.geometry.scroll_offset.y = new_scroll_y;
+            } else {
+                let target_fixed_cb = target.style.establishes_fixed_containing_block();
+                let target_abs_cb =
+                    target.style.position != strata_style::types::Position::Static
+                        || target_fixed_cb;
+                for child in &mut target.children {
+                    child.translate_scrolled(-dx, -dy, target_abs_cb, target_fixed_cb);
                 }
-                for atomic in &mut line.atomic_fragments {
-                    atomic.bounds.x -= dx;
-                    atomic.bounds.y -= dy;
+                for line in &mut target.line_boxes {
+                    line.bounds.x -= dx;
+                    line.bounds.y -= dy;
+                    for frag in &mut line.text_fragments {
+                        frag.bounds.x -= dx;
+                        frag.bounds.y -= dy;
+                        frag.baseline_y -= dy;
+                    }
+                    for atomic in &mut line.atomic_fragments {
+                        atomic.bounds.x -= dx;
+                        atomic.bounds.y -= dy;
+                    }
                 }
             }
             let (_, ch, _, _) =
                 Self::compute_container_scroll_extents(target, new_scroll_x, new_scroll_y);
             content_h = ch;
+        }
+        if is_text_leaf {
+            if let Some(ref active) = self.active_focus {
+                if active.is_multiline {
+                    let matches_active = (is_id
+                        && !id.is_empty()
+                        && active.input_id.as_deref() == Some(id))
+                        || (target_entity_id.is_some() && active.entity_id == target_entity_id)
+                        || Self::find_layout_path_for_focus(
+                            &self.root_blueprint,
+                            &self.layout_root,
+                            active.input_index,
+                            active.input_id.as_deref(),
+                            active.entity_id,
+                        )
+                        .as_deref()
+                            == Some(path);
+                    if matches_active {
+                        active.state.scroll_y.set(new_scroll_y);
+                    }
+                }
+            }
+            if is_id && !id.is_empty() {
+                if let Some(saved) = self.input_states.get(id) {
+                    saved.scroll_y.set(new_scroll_y);
+                }
+            }
         }
         let has_descendant_scrollbar = self
             .active_scrollbars
@@ -1143,6 +1324,10 @@ impl AppRuntime {
     }
 
     fn dispatch_horizontal_wheel_at(&mut self, px: f32, py: f32, delta_x: f32) -> bool {
+        let (hit_path, canvas_depth) = self.hit_path_and_canvas_depth(px, py);
+        let Some(ref hp) = hit_path else {
+            return false;
+        };
         let mut hits = Vec::new();
         let mut path_buf = Vec::new();
         Self::collect_horizontal_scroll_paths_at(
@@ -1155,6 +1340,9 @@ impl AppRuntime {
             false,
             &mut hits,
         );
+        hits.retain(|(path, _, _, _, _)| {
+            hp.starts_with(path) && canvas_depth.is_none_or(|cd| path.len() > cd)
+        });
         hits.sort_by_key(|h| h.4);
         for (path, elem_id, _, _, _) in hits.into_iter().rev() {
             let (cur_x, cur_y) = if let Some(ref id) = elem_id {
@@ -1228,7 +1416,38 @@ impl AppRuntime {
             return (wheel_handled, false);
         }
 
-        let matching_bars = self.matching_scrollbars_at(px, py);
+        let mut matching_bars = self.matching_scrollbars_at(px, py);
+        if matching_bars.is_empty() && !wheel_handled {
+            if let Some(ref active) = self.active_focus {
+                if active.is_multiline {
+                    let (_, canvas_depth) = self.hit_path_and_canvas_depth(px, py);
+                    if canvas_depth.is_none() {
+                        if let Some(focus_path) = Self::find_layout_path_for_focus(
+                            &self.root_blueprint,
+                            &self.layout_root,
+                            active.input_index,
+                            active.input_id.as_deref(),
+                            active.entity_id,
+                        ) {
+                            let covered_by_top_layer =
+                                self.point_hits_non_backdrop_top_layer_portal(px, py);
+                            let focused_bars: Vec<ActiveScrollbar> = self
+                                .active_scrollbars
+                                .iter()
+                                .filter(|bar| {
+                                    focus_path.starts_with(&bar.path)
+                                        && (!covered_by_top_layer || bar.is_top_layer)
+                                })
+                                .cloned()
+                                .collect();
+                            if focused_bars.iter().any(|b| b.path == focus_path) {
+                                matching_bars = focused_bars;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if matching_bars.is_empty() && delta_x.abs() >= 0.01 {
             let horiz_changed = self.dispatch_horizontal_wheel_at(px, py, delta_x);
             return (wheel_handled, horiz_changed);

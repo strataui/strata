@@ -108,17 +108,18 @@ impl AppRuntime {
                 } else {
                     target.current_value.clone()
                 };
-                let is_password = self.input_is_password(
-                    target.input_index,
-                    target.input_id.as_deref(),
-                    target.entity_id,
-                );
+                let is_password = !target.is_multiline
+                    && self.input_is_password(
+                        target.input_index,
+                        target.input_id.as_deref(),
+                        target.entity_id,
+                    );
                 let measure_val = if is_password {
                     Self::mask_password_text(&text_val)
                 } else {
                     text_val
                 };
-                let active_scroll_x = self
+                let (active_scroll_x, active_scroll_y) = self
                     .active_focus
                     .as_ref()
                     .and_then(|active| {
@@ -127,24 +128,49 @@ impl AppRuntime {
                             .clone()
                             .unwrap_or_else(|| format!("input:{}", active.input_index));
                         if current_key == target_key {
-                            Some(active.state.scroll_x.get())
+                            Some((active.state.scroll_x.get(), active.state.scroll_y.get()))
                         } else {
                             None
                         }
                     })
-                    .unwrap_or(0.0);
-                let content_box_width = target.content_box_width;
-                let rel_x = if px < target.content_box_x {
-                    (active_scroll_x + (px - target.content_box_x)).max(0.0)
-                } else if content_box_width > 0.0 && px > target.content_box_x + content_box_width
-                {
-                    100000.0
-                } else {
-                    (px - target.content_box_x + active_scroll_x).max(0.0)
-                };
-                let char_idx = Self::calculate_exact_char_index_at_offset(
+                    .or_else(|| {
+                        if target.is_multiline {
+                            target
+                                .input_id
+                                .as_deref()
+                                .filter(|id| !id.is_empty())
+                                .and_then(|id| self.scroll_offsets_by_id.get(id).copied())
+                                .or_else(|| {
+                                    Self::find_layout_for_focus(
+                                        &self.root_blueprint,
+                                        &self.layout_root,
+                                        target.input_index,
+                                        target.input_id.as_deref(),
+                                        target.entity_id,
+                                    )
+                                    .map(|n| (n.geometry.scroll_offset.x, n.geometry.scroll_offset.y))
+                                })
+                                .filter(|(_, y)| *y > 0.0)
+                        } else {
+                            None
+                        }
+                    })
+                    .or_else(|| {
+                        self.input_states
+                            .get(&target_key)
+                            .map(|s| (s.scroll_x.get(), s.scroll_y.get()))
+                    })
+                    .unwrap_or((0.0, 0.0));
+                let char_idx = Self::cursor_index_at_input_point(
                     &measure_val,
-                    rel_x,
+                    target.is_multiline,
+                    px,
+                    py,
+                    target.content_box_x,
+                    target.content_box_y,
+                    target.content_box_width,
+                    active_scroll_x,
+                    active_scroll_y,
                     target.font_size,
                     target.line_height,
                     target.is_mono,
@@ -203,7 +229,7 @@ impl AppRuntime {
                             active.state.selection_anchor.set(Some(char_idx));
                             self.drag_selection_active = true;
                         }
-                        self.sync_active_input_layout();
+                        self.sync_active_input_layout_and_scroll_caret();
                         return PointerDownAction::CaretMoved;
                     }
 
@@ -222,6 +248,9 @@ impl AppRuntime {
                 // Sync external value if state was empty
                 if state.text.get().is_empty() && !target.current_value.is_empty() {
                     state.text.set(target.current_value.clone());
+                }
+                if target.is_multiline {
+                    state.scroll_y.set(active_scroll_y);
                 }
 
                 if click_count == 2 {
@@ -252,16 +281,28 @@ impl AppRuntime {
                     input_index: target.input_index,
                     input_id: target.input_id,
                     entity_id: target.entity_id,
+                    is_multiline: target.is_multiline,
                     state,
                     on_input: target.on_input,
                     on_change: target.on_change,
                     on_submit: target.on_submit,
                     on_blur: target.on_blur,
                 });
-                self.sync_active_input_layout();
+                self.sync_active_input_layout_and_scroll_caret();
                 input_handled = true;
             } else if let Some(active) = self.active_focus.take() {
-                active.state.scroll_x.set(0.0);
+                if !active.is_multiline {
+                    active.state.scroll_x.set(0.0);
+                    if let Some(layout) = Self::find_layout_for_focus_mut(
+                        &self.root_blueprint,
+                        &mut self.layout_root,
+                        active.input_index,
+                        active.input_id.as_deref(),
+                        active.entity_id,
+                    ) {
+                        layout.geometry.scroll_offset.x = 0.0;
+                    }
+                }
                 let key = active
                     .input_id
                     .clone()
@@ -377,30 +418,17 @@ impl AppRuntime {
             let is_password = self
                 .active_focus
                 .as_ref()
-                .is_some_and(|a| self.active_input_is_password(a));
+                .is_some_and(|a| !a.is_multiline && self.active_input_is_password(a));
             if let Some(ref mut active) = self.active_focus {
-                let mut current_idx = 0;
-                let target_idx = active.input_index;
-                let target_id = active.input_id.as_deref();
-
-                let layout_by_entity = if let Some(eid) = active.entity_id {
-                    self.layout_root.find_by_entity_id(eid)
-                } else {
-                    None
-                };
-                let layout_opt = layout_by_entity.or_else(|| {
-                    Self::find_input_layout(
-                        &self.root_blueprint,
-                        &self.layout_root,
-                        target_idx,
-                        target_id,
-                        &mut current_idx,
-                    )
-                });
+                let layout_opt = Self::find_layout_for_focus(
+                    &self.root_blueprint,
+                    &self.layout_root,
+                    active.input_index,
+                    active.input_id.as_deref(),
+                    active.entity_id,
+                );
 
                 if let Some(layout) = layout_opt {
-                    let scroll_x = active.state.scroll_x.get();
-                    let rel_x = (px - layout.geometry.content_box.x + scroll_x).max(0.0);
                     let is_mono = strata_layout::is_monospace_family(layout.style.font_family);
                     let raw_text = active.state.text.get();
                     let measure_text = if is_password {
@@ -408,9 +436,16 @@ impl AppRuntime {
                     } else {
                         raw_text
                     };
-                    let char_idx = Self::calculate_exact_char_index_at_offset(
+                    let char_idx = Self::cursor_index_at_input_point(
                         &measure_text,
-                        rel_x,
+                        active.is_multiline,
+                        px,
+                        py,
+                        layout.geometry.content_box.x,
+                        layout.geometry.content_box.y,
+                        layout.geometry.content_box.width,
+                        active.state.scroll_x.get(),
+                        active.state.scroll_y.get(),
                         layout.style.font_size,
                         layout.style.line_height,
                         is_mono,
@@ -418,7 +453,7 @@ impl AppRuntime {
                     );
                     active.state.cursor_index.set(char_idx);
                     self.reset_caret_blink();
-                    self.sync_active_input_layout();
+                    self.sync_active_input_layout_and_scroll_caret();
                     self.mark_paint_dirty();
                     selection_dragged = true;
                 }
@@ -910,6 +945,15 @@ impl AppRuntime {
             KeyCode::Digit7 => "7".to_string(),
             KeyCode::Digit8 => "8".to_string(),
             KeyCode::Digit9 => "9".to_string(),
+            KeyCode::Slash => if shift { "?" } else { "/" }.to_string(),
+            KeyCode::Comma => if shift { "<" } else { "," }.to_string(),
+            KeyCode::Period => if shift { ">" } else { "." }.to_string(),
+            KeyCode::Minus => if shift { "_" } else { "-" }.to_string(),
+            KeyCode::Equals => if shift { "+" } else { "=" }.to_string(),
+            KeyCode::BracketLeft => if shift { "{" } else { "[" }.to_string(),
+            KeyCode::BracketRight => if shift { "}" } else { "]" }.to_string(),
+            KeyCode::Semicolon => if shift { ":" } else { ";" }.to_string(),
+            KeyCode::Backquote => if shift { "~" } else { "`" }.to_string(),
             other => {
                 let dbg = format!("{:?}", other);
                 if let Some(letter) = dbg.strip_prefix("Key") {
@@ -1066,7 +1110,7 @@ impl AppRuntime {
                             val,
                         ));
                     }
-                    self.sync_active_input_layout();
+                    self.sync_active_input_layout_and_scroll_caret();
                     KeyDispatchResult::NeedsRebuild
                 } else {
                     KeyDispatchResult::Ignored
@@ -1085,7 +1129,7 @@ impl AppRuntime {
                             val,
                         ));
                     }
-                    self.sync_active_input_layout();
+                    self.sync_active_input_layout_and_scroll_caret();
                     KeyDispatchResult::NeedsRebuild
                 } else {
                     KeyDispatchResult::Ignored
@@ -1113,7 +1157,11 @@ impl AppRuntime {
                     };
                     if let Some(cmd) = cmd {
                         let res = self.apply_edit_command(cmd);
-                        self.sync_active_input_layout();
+                        if matches!(cmd, EditCommand::Copy | EditCommand::SelectAll) {
+                            self.sync_active_input_layout();
+                        } else {
+                            self.sync_active_input_layout_and_scroll_caret();
+                        }
                         if res {
                             return match cmd {
                                 EditCommand::SelectAll | EditCommand::Copy => {
@@ -1150,9 +1198,39 @@ impl AppRuntime {
                     return KeyDispatchResult::NeedsRebuild;
                 }
 
-                let active = self.active_focus.as_mut().unwrap();
+                let is_multiline = self.active_focus.as_ref().is_some_and(|a| a.is_multiline);
+                if is_multiline {
+                    match key {
+                        strata_platform::KeyCode::ArrowUp => {
+                            self.move_active_input_vertical(-1, false, modifiers.shift);
+                            nav_or_sel = true;
+                        }
+                        strata_platform::KeyCode::ArrowDown => {
+                            self.move_active_input_vertical(1, false, modifiers.shift);
+                            nav_or_sel = true;
+                        }
+                        strata_platform::KeyCode::PageUp => {
+                            self.move_active_input_vertical(-1, true, modifiers.shift);
+                            nav_or_sel = true;
+                        }
+                        strata_platform::KeyCode::PageDown => {
+                            self.move_active_input_vertical(1, true, modifiers.shift);
+                            nav_or_sel = true;
+                        }
+                        strata_platform::KeyCode::Home if !is_cmd => {
+                            self.move_active_input_line_edge(false, modifiers.shift);
+                            nav_or_sel = true;
+                        }
+                        strata_platform::KeyCode::End if !is_cmd => {
+                            self.move_active_input_line_edge(true, modifiers.shift);
+                            nav_or_sel = true;
+                        }
+                        _ => {}
+                    }
+                }
 
                 if !text_changed && !nav_or_sel {
+                    let active = self.active_focus.as_mut().unwrap();
                     match key {
                         strata_platform::KeyCode::Backspace => {
                             if is_cmd {
@@ -1187,7 +1265,12 @@ impl AppRuntime {
                             nav_or_sel = true;
                         }
                         strata_platform::KeyCode::Enter => {
-                            submit = true;
+                            if active.is_multiline && !is_cmd {
+                                active.state.insert_text("\n");
+                                text_changed = true;
+                            } else {
+                                submit = true;
+                            }
                         }
                         strata_platform::KeyCode::Escape => {
                             blur = true;
@@ -1201,6 +1284,7 @@ impl AppRuntime {
                 }
 
                 if text_changed {
+                    let active = self.active_focus.as_ref().unwrap();
                     let val = active.state.text.get();
                     if let Some(ref on_input) = active.on_input {
                         on_input(strata_dom::Event::with_value(
@@ -1208,17 +1292,18 @@ impl AppRuntime {
                             val,
                         ));
                     }
-                    self.sync_active_input_layout();
+                    self.sync_active_input_layout_and_scroll_caret();
                     return KeyDispatchResult::NeedsRebuild;
                 }
 
                 if nav_or_sel {
-                    self.sync_active_input_layout();
+                    self.sync_active_input_layout_and_scroll_caret();
                     self.mark_paint_dirty();
                     return KeyDispatchResult::RedrawOnly;
                 }
 
                 if submit {
+                    let active = self.active_focus.as_ref().unwrap();
                     let val = active.state.text.get();
                     if let Some(ref on_submit) = active.on_submit {
                         on_submit(strata_dom::Event::with_value(
@@ -1236,11 +1321,13 @@ impl AppRuntime {
                 }
 
                 if blur {
-                    active.state.scroll_x.set(0.0);
+                    let active = self.active_focus.take().unwrap();
+                    if !active.is_multiline {
+                        active.state.scroll_x.set(0.0);
+                    }
                     if let Some(ref on_blur) = active.on_blur {
                         on_blur(strata_dom::Event::new(strata_dom::EventType::Blur));
                     }
-                    self.active_focus = None;
                     return KeyDispatchResult::NeedsRebuild;
                 }
 

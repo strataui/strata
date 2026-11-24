@@ -423,3 +423,200 @@ fn test_transition_width_to_zero_and_rem_reflows_flex_siblings_smoothly() {
     );
 }
 
+#[test]
+fn test_collapsible_dock_transition_locks_inner_width_and_supports_auto_height() {
+    use std::time::Duration;
+
+    #[component]
+    fn CollapsiblePanels(side_open: bool, bottom_open: bool) -> View {
+        let side_cls = if side_open {
+            "w-[260px] h-[220px] shrink-0 overflow-hidden transition-[width] duration-150 flex flex-col p-2"
+        } else {
+            "w-0 h-[220px] shrink-0 overflow-hidden transition-[width] duration-150 flex flex-col p-0"
+        };
+        let bottom_cls = if bottom_open {
+            "w-[480px] h-auto overflow-hidden transition-[height] duration-150 flex flex-col"
+        } else {
+            "w-[480px] h-0 overflow-hidden transition-[height] duration-150 flex flex-col"
+        };
+        rsx! {
+            <div class="flex flex-col w-[480px] h-[360px]">
+                <div class="flex flex-row w-[480px] h-[220px]">
+                    <div key="side-dock" class={side_cls}>
+                        <div key="inner-card" class="w-full p-2">
+                            <p key="inner-text" class="w-full text-sm">
+                                {"Telemetry dock description should never squeeze to zero width mid-collapse"}
+                            </p>
+                        </div>
+                    </div>
+                    <div key="canvas-pane" class="flex-1 h-[220px]">{"Canvas"}</div>
+                </div>
+                <div key="bottom-dock" class={bottom_cls}>
+                    <div class="w-full h-[96px] shrink-0">{"Bottom Strip"}</div>
+                </div>
+            </div>
+        }
+    }
+
+    let mut runtime = AppRuntime::new(CollapsiblePanels(true, true), 480.0, 360.0, 1.0);
+    let side_open_w = runtime.layout_root.children[0].children[0].geometry.border_box.width;
+    let inner_open_w = runtime.layout_root.children[0].children[0].children[0]
+        .geometry
+        .border_box
+        .width;
+    let bottom_open_h = runtime.layout_root.children[1].geometry.border_box.height;
+    assert!((side_open_w - 260.0).abs() < 1.0);
+    assert!((inner_open_w - 244.0).abs() < 1.0);
+    assert!((bottom_open_h - 96.0).abs() < 1.0);
+
+    // 1. Collapse both side dock (260 -> 0) and auto-height bottom dock (Auto 96 -> 0).
+    runtime.update_view(CollapsiblePanels(false, false));
+    assert!(runtime.has_active_animations());
+
+    std::thread::sleep(Duration::from_millis(55));
+    assert!(runtime.poll_animations());
+
+    let side_node = &runtime.layout_root.children[0].children[0];
+    let side_w = side_node.geometry.border_box.width;
+    let inner_card_w = side_node.children[0].geometry.border_box.width;
+    let inner_text_h = side_node.children[0].children[0].geometry.border_box.height;
+    let bottom_mid_h = runtime.layout_root.children[1].geometry.border_box.height;
+
+    assert!(
+        side_w > 10.0 && side_w < 245.0,
+        "side dock outer width must animate smoothly, got {side_w}"
+    );
+    assert!(
+        inner_card_w >= 240.0,
+        "inner dock card must stay at expanded width (>=240px) instead of squeezing mid-collapse, got {inner_card_w}"
+    );
+    assert!(
+        inner_text_h < 120.0,
+        "inner dock text must not collapse into single-letter column wrapping (h={inner_text_h})"
+    );
+    assert!(
+        bottom_mid_h > 5.0 && bottom_mid_h < 90.0,
+        "bottom dock h-auto -> h-0 must smoothly interpolate height instead of snapping, got {bottom_mid_h}"
+    );
+
+    // Verify PushClip matches the animating side dock bounds so expanded inner content is clipped.
+    runtime.compile_display_list();
+    assert!(runtime.display_list.commands.iter().any(|cmd| matches!(
+        cmd,
+        strata::render::compositor::DrawCommand::PushClip { bounds, .. }
+            if (bounds.width - side_w).abs() < 2.0
+                && (bounds.height - 220.0).abs() < 2.0
+    )));
+
+    // 2. Finish collapse, then toggle back open (h-0 -> h-auto) and verify smooth expansion!
+    std::thread::sleep(Duration::from_millis(130));
+    let _ = runtime.poll_animations();
+    assert!(runtime.layout_root.children[1].geometry.border_box.height < 0.5);
+
+    runtime.update_view(CollapsiblePanels(true, true));
+    assert!(runtime.has_active_animations());
+    std::thread::sleep(Duration::from_millis(55));
+    assert!(runtime.poll_animations());
+    let bottom_reopen_h = runtime.layout_root.children[1].geometry.border_box.height;
+    assert!(
+        bottom_reopen_h > 5.0 && bottom_reopen_h < 90.0,
+        "bottom dock h-0 -> h-auto must smoothly interpolate height upward, got {bottom_reopen_h}"
+    );
+}
+
+#[test]
+fn reconciled_update_view_during_active_theme_transition_preserves_target_base_styles() {
+    use strata_style::types::Color;
+
+    fn render_theme_app(light: bool, hud_tick: u32) -> View {
+        let css = if light {
+            ".action-btn { background-color: rgb(255, 255, 255); color: rgb(30, 41, 59); }"
+        } else {
+            ".action-btn { background-color: rgb(30, 32, 37); color: rgb(229, 231, 235); }"
+        };
+        let tick_label = format!("FPS: {}", 60 + hud_tick);
+        rsx! {
+            <div class="w-[640px] h-[360px] flex flex-col gap-3 p-4">
+                <style>{css}</style>
+                <div class="flex flex-row gap-2">
+                    <button id="action-btn" class="action-btn transition-all duration-150 px-3 py-1">
+                        {"Action"}
+                    </button>
+                    <button id="other-btn" class="px-3 py-1 bg-slate-700 hover:bg-blue-600 text-white">
+                        {"Hoverable"}
+                    </button>
+                </div>
+                <div id="hud-fps" class="text-xs text-slate-400">{tick_label}</div>
+            </div>
+        }
+    }
+
+    fn find_by_id<'a>(
+        node: &'a strata_layout::LayoutNode,
+        id: &str,
+    ) -> Option<&'a strata_layout::LayoutNode> {
+        if node.element_id.as_deref() == Some(id) {
+            return Some(node);
+        }
+        for child in &node.children {
+            if let Some(found) = find_by_id(child, id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    let mut rt = AppRuntime::new(render_theme_app(false, 0), 640.0, 360.0, 1.0);
+    rt.tick_frame();
+    {
+        let rtl = find_by_id(&rt.layout_root, "action-btn").expect("#action-btn must exist");
+        assert_eq!(rtl.style.background_color, Some(Color::rgb(30, 32, 37)));
+        assert_eq!(rtl.style.color, Color::rgb(229, 231, 235));
+    }
+
+    // 1. Switch theme obsidian-dark -> daylight-light (starts 150ms transition on #action-btn).
+    rt.update_view(render_theme_app(true, 0));
+    assert!(
+        rt.has_active_animations(),
+        "theme switch on transition-all duration-150 button must start an active transition"
+    );
+
+    // 2. At +20 ms, fire an unrelated reconciled update_view (e.g. status HUD 4Hz tick).
+    std::thread::sleep(Duration::from_millis(20));
+    let _ = rt.poll_animations();
+    rt.update_view(render_theme_app(true, 1));
+    assert!(
+        rt.last_update_reconciled(),
+        "unrelated HUD counter update must take the incremental reconcile path"
+    );
+    assert!(
+        rt.has_active_animations(),
+        "unrelated reconciled update_view must not cancel the in-flight theme transition"
+    );
+
+    // 3. Fire a second unrelated reconciled update_view at +40 ms as well.
+    std::thread::sleep(Duration::from_millis(20));
+    let _ = rt.poll_animations();
+    rt.update_view(render_theme_app(true, 2));
+    assert!(rt.last_update_reconciled());
+
+    // 4. Wait past the 150 ms transition duration and poll animations to completion.
+    std::thread::sleep(Duration::from_millis(190));
+    let _ = rt.poll_animations();
+    assert!(
+        !rt.has_active_animations(),
+        "150ms theme transition must complete cleanly after 230ms total elapsed time"
+    );
+
+    let rtl = find_by_id(&rt.layout_root, "action-btn").expect("#action-btn must still exist");
+    assert_eq!(
+        rtl.style.background_color,
+        Some(Color::rgb(255, 255, 255)),
+        "#action-btn background must settle to daylight-light white, not freeze at mid-transition dark"
+    );
+    assert_eq!(
+        rtl.style.color,
+        Color::rgb(30, 41, 59),
+        "#action-btn text color must settle to daylight-light slate-800, not freeze at mid-transition dark"
+    );
+}

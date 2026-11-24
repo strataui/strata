@@ -138,6 +138,15 @@ fn parse_key_code(name: &str) -> Option<KeyCode> {
         "END" => Some(KeyCode::End),
         "PAGEUP" | "PGUP" => Some(KeyCode::PageUp),
         "PAGEDOWN" | "PGDN" => Some(KeyCode::PageDown),
+        "/" | "SLASH" => Some(KeyCode::Slash),
+        "," | "COMMA" => Some(KeyCode::Comma),
+        "." | "PERIOD" => Some(KeyCode::Period),
+        "-" | "MINUS" => Some(KeyCode::Minus),
+        "=" | "+" | "EQUALS" | "EQUAL" | "PLUS" => Some(KeyCode::Equals),
+        "[" | "BRACKETLEFT" => Some(KeyCode::BracketLeft),
+        "]" | "BRACKETRIGHT" => Some(KeyCode::BracketRight),
+        ";" | "SEMICOLON" => Some(KeyCode::Semicolon),
+        "`" | "BACKQUOTE" | "GRAVE" => Some(KeyCode::Backquote),
         _ => None,
     }
 }

@@ -1327,6 +1327,37 @@ impl GpuSlugTextPipeline {
         color: Color,
         clip_rect: Rect,
     ) -> usize {
+        self.push_text_run_with_bounds(
+            text,
+            start_x,
+            start_y,
+            None,
+            None,
+            font_size,
+            1.2,
+            strata_style::TextAlign::Left,
+            x_squeeze,
+            color,
+            clip_rect,
+        )
+        .0
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_text_run_with_bounds(
+        &mut self,
+        text: &str,
+        start_x: f32,
+        start_y: f32,
+        bounds_width: Option<f32>,
+        bounds_height: Option<f32>,
+        font_size: f32,
+        line_height: f32,
+        text_align: strata_style::TextAlign,
+        x_squeeze: f32,
+        color: Color,
+        clip_rect: Rect,
+    ) -> (usize, Rect) {
         let (r, g, b, a) = color.to_f32();
         let color_f32 = [r, g, b, a];
         let clip_r = strata_gpu_path::Rect2D::new(
@@ -1335,36 +1366,66 @@ impl GpuSlugTextPipeline {
             clip_rect.x + clip_rect.width,
             clip_rect.y + clip_rect.height,
         );
-        let mut cursor_x = start_x;
-        let cursor_y = start_y;
+        let step_y = crate::compositor::effective_draw_text_line_height(font_size, line_height);
+        let glyph_cache = &self.glyph_cache;
+        let (lines, start_y_off) = crate::compositor::layout_draw_text_lines(
+            text,
+            bounds_width,
+            bounds_height,
+            font_size,
+            line_height,
+            text_align,
+            |ch| {
+                glyph_cache
+                    .get(ch)
+                    .map(|glyph| glyph.advance_width * font_size * x_squeeze)
+                    .unwrap_or(font_size * 0.5 * x_squeeze)
+            },
+        );
         let mut pushed = 0usize;
+        let mut max_end_x = start_x;
+        let mut min_start_x = start_x;
+        let base_y = start_y + start_y_off;
 
-        for ch in text.chars() {
-            if let Some(glyph) = self.glyph_cache.get(ch) {
-                let glyph_w = glyph.advance_width * font_size * x_squeeze;
-                let glyph_h = font_size;
-                let screen_bounds = strata_gpu_path::Rect2D::new(
-                    cursor_x,
-                    cursor_y,
-                    cursor_x + glyph_w,
-                    cursor_y + glyph_h,
-                );
-                if clip_rect
-                    .intersect(Rect::new(cursor_x, cursor_y, glyph_w, glyph_h))
-                    .is_some()
-                    && self
-                        .buffer
-                        .push_glyph(glyph, screen_bounds, color_f32, clip_r)
-                {
-                    self.total_glyphs += 1;
-                    pushed += 1;
+        for (line_idx, (line_ox, line_str)) in lines.iter().enumerate() {
+            let mut cursor_x = start_x + line_ox;
+            min_start_x = min_start_x.min(cursor_x);
+            let cursor_y = base_y + line_idx as f32 * step_y;
+            for ch in line_str.chars() {
+                if let Some(glyph) = self.glyph_cache.get(ch) {
+                    let glyph_w = glyph.advance_width * font_size * x_squeeze;
+                    let glyph_h = font_size;
+                    let screen_bounds = strata_gpu_path::Rect2D::new(
+                        cursor_x,
+                        cursor_y,
+                        cursor_x + glyph_w,
+                        cursor_y + glyph_h,
+                    );
+                    if clip_rect
+                        .intersect(Rect::new(cursor_x, cursor_y, glyph_w, glyph_h))
+                        .is_some()
+                        && self
+                            .buffer
+                            .push_glyph(glyph, screen_bounds, color_f32, clip_r)
+                    {
+                        self.total_glyphs += 1;
+                        pushed += 1;
+                    }
+                    cursor_x += glyph_w;
+                } else {
+                    cursor_x += font_size * 0.5 * x_squeeze;
                 }
-                cursor_x += glyph_w;
-            } else {
-                cursor_x += font_size * 0.5 * x_squeeze;
             }
+            max_end_x = max_end_x.max(cursor_x);
         }
-        pushed
+        let total_h = (lines.len().max(1) as f32 * step_y).max(font_size).max(1.0);
+        let run_rect = Rect::new(
+            min_start_x,
+            base_y,
+            (max_end_x - min_start_x).max(1.0),
+            total_h,
+        );
+        (pushed, run_rect)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1443,16 +1504,24 @@ impl GpuSlugTextPipeline {
             match cmd {
                 DrawCommand::DrawText {
                     origin,
+                    bounds_width,
+                    bounds_height,
+                    text_align,
                     text,
                     font_size,
+                    line_height,
                     color,
                     ..
                 } => {
-                    self.push_text_run(
+                    self.push_text_run_with_bounds(
                         text,
                         origin.0,
                         origin.1,
+                        *bounds_width,
+                        *bounds_height,
                         *font_size,
+                        *line_height,
+                        *text_align,
                         1.0,
                         *color,
                         default_clip,
@@ -3866,29 +3935,31 @@ impl<'a> HardwareFrameBuilder<'a> {
                 }
                 DrawCommand::DrawText {
                     origin,
+                    bounds_width,
+                    bounds_height,
+                    text_align,
                     text,
                     font_size,
+                    line_height,
                     color,
                     ..
                 } => {
                     let col = apply_color_opacity(*color, self.cur_alpha);
                     let start = self.frame.text.buffer.instances.len();
-                    self.frame.text.push_text_run(
+                    let (_, run_rect) = self.frame.text.push_text_run_with_bounds(
                         text,
                         origin.0,
                         origin.1,
+                        *bounds_width,
+                        *bounds_height,
                         *font_size,
+                        *line_height,
+                        *text_align,
                         1.0,
                         col,
                         current_clip,
                     );
                     let end = self.frame.text.buffer.instances.len();
-                    let run_rect = Rect::new(
-                        origin.0,
-                        origin.1,
-                        (text.len() as f32 * font_size).max(1.0),
-                        font_size.max(1.0),
-                    );
                     self.emit_text_with_clip(
                         start,
                         end,

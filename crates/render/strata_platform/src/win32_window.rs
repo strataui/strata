@@ -910,6 +910,15 @@ fn map_virtual_key(vk: u32) -> Option<KeyCode> {
         0x58 => Some(KeyCode::KeyX),
         0x59 => Some(KeyCode::KeyY),
         0x5A => Some(KeyCode::KeyZ),
+        0xBF => Some(KeyCode::Slash),
+        0xBC => Some(KeyCode::Comma),
+        0xBE => Some(KeyCode::Period),
+        0xBD => Some(KeyCode::Minus),
+        0xBB => Some(KeyCode::Equals),
+        0xDB => Some(KeyCode::BracketLeft),
+        0xDD => Some(KeyCode::BracketRight),
+        0xBA => Some(KeyCode::Semicolon),
+        0xC0 => Some(KeyCode::Backquote),
         _ => None,
     }
 }

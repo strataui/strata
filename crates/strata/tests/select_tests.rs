@@ -307,3 +307,61 @@ fn select_popover_expands_wider_than_narrow_trigger_and_stays_single_line() {
     );
 }
 
+#[test]
+fn select_wide_anchor_stretches_listbox_and_aligns_overlay_scrollbar() {
+    clear_persistent_signals();
+    let options: Vec<SelectOption> = (0..16)
+        .map(|i| SelectOption::new(format!("board-{i}"), format!("CubeOrangePlus-{i}")))
+        .collect();
+    let wide_root = move || {
+        rsx! {
+            <div class="w-[660px] h-[500px] p-3">
+                <Select id="wide-board" label="Board" options={options.clone()} />
+            </div>
+        }
+    };
+    let mut runtime = AppRuntime::new(wide_root(), 720.0, 500.0, 1.0);
+    runtime.tick_frame();
+
+    let trigger_rect = find_rect_by_role(&runtime.root_blueprint, &runtime.layout_root, "combobox")
+        .expect("trigger combobox rect");
+    assert!(
+        trigger_rect.width >= 620.0,
+        "expected wide trigger, got {:?}",
+        trigger_rect
+    );
+
+    click(
+        &mut runtime,
+        trigger_rect.x + trigger_rect.width * 0.5,
+        trigger_rect.y + trigger_rect.height * 0.5,
+    );
+    runtime.update_view(wide_root());
+
+    let listbox_rect = find_rect_by_role(&runtime.root_blueprint, &runtime.layout_root, "listbox")
+        .expect("open listbox rect");
+    assert!(
+        (listbox_rect.width - trigger_rect.width).abs() < 4.0,
+        "Select listbox must match wide anchor width (trigger={:?}, listbox={:?})",
+        trigger_rect,
+        listbox_rect
+    );
+
+    if let Some(bar) = runtime.active_scrollbars.iter().find(|b| b.is_top_layer) {
+        assert!(
+            bar.track_bounds.y >= listbox_rect.y - 0.5
+                && bar.track_bounds.y + bar.track_bounds.height
+                    <= listbox_rect.y + listbox_rect.height + 0.5
+                && bar.thumb_bounds.y >= listbox_rect.y - 0.5
+                && bar.thumb_bounds.x >= listbox_rect.x
+                && bar.thumb_bounds.x + bar.thumb_bounds.width
+                    <= listbox_rect.x + listbox_rect.width + 0.5,
+            "Top-layer Select scrollbar track/thumb {:?} / {:?} must stay strictly inside listbox {:?}",
+            bar.track_bounds,
+            bar.thumb_bounds,
+            listbox_rect
+        );
+    }
+}
+
+

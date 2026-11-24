@@ -104,6 +104,15 @@ impl MenuAccelerator {
             "F10" => KeyCode::F10,
             "F11" => KeyCode::F11,
             "F12" => KeyCode::F12,
+            "/" | "SLASH" => KeyCode::Slash,
+            "," | "COMMA" => KeyCode::Comma,
+            "." | "PERIOD" => KeyCode::Period,
+            "-" | "MINUS" => KeyCode::Minus,
+            "=" | "+" | "EQUALS" | "EQUAL" | "PLUS" => KeyCode::Equals,
+            "[" | "BRACKETLEFT" => KeyCode::BracketLeft,
+            "]" | "BRACKETRIGHT" => KeyCode::BracketRight,
+            ";" | "SEMICOLON" => KeyCode::Semicolon,
+            "`" | "BACKQUOTE" | "GRAVE" => KeyCode::Backquote,
             _ => return None,
         };
 
@@ -211,6 +220,15 @@ impl MenuAccelerator {
             KeyCode::End => "End",
             KeyCode::PageUp => "PageUp",
             KeyCode::PageDown => "PageDown",
+            KeyCode::Slash => "/",
+            KeyCode::Comma => ",",
+            KeyCode::Period => ".",
+            KeyCode::Minus => "-",
+            KeyCode::Equals => "=",
+            KeyCode::BracketLeft => "[",
+            KeyCode::BracketRight => "]",
+            KeyCode::Semicolon => ";",
+            KeyCode::Backquote => "`",
             KeyCode::Unknown => "?",
         };
 

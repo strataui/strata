@@ -346,6 +346,57 @@ impl McpServer {
                     "required": ["x", "y"]
                 }),
             },
+            McpTool {
+                name: "strata_key_press".to_string(),
+                description: "Presses and releases a keyboard key with optional modifiers (supports Escape, Enter, Arrow keys, F1..F12, A..Z, 0..9, and punctuation Slash/Comma/Period/Minus/Equals/Brackets/Semicolon/Backquote).".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Key identifier (e.g. Escape, Enter, Slash, Comma, Minus, Equals, KeyK, F12)."
+                        },
+                        "modifiers": {
+                            "type": "object",
+                            "properties": {
+                                "shift": { "type": "boolean" },
+                                "ctrl": { "type": "boolean" },
+                                "alt": { "type": "boolean" },
+                                "meta": { "type": "boolean" }
+                            }
+                        }
+                    },
+                    "required": ["key"]
+                }),
+            },
+            McpTool {
+                name: "strata_mouse_wheel".to_string(),
+                description: "Dispatches a mouse wheel event at (x, y) or current cursor position for 3D Earth zoom and scroll-container QA.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "delta_x": {
+                            "type": "number",
+                            "description": "Horizontal wheel delta (default: 0)."
+                        },
+                        "delta_y": {
+                            "type": "number",
+                            "description": "Vertical wheel delta (negative zooms in / scrolls up, positive zooms out / scrolls down)."
+                        },
+                        "x": { "type": "number" },
+                        "y": { "type": "number" }
+                    },
+                    "required": ["delta_y"]
+                }),
+            },
+            McpTool {
+                name: "strata_get_perf_profile".to_string(),
+                description: "Returns real per-frame pipeline timings (reconcile_us, layout_us, raster_us, gpu_3d_us, present_us), rolling p50/p95/p99 stats, tile/Scene3D/glyph cache hit rates, rebuild reasons, and memory/VRAM counters for CI performance gates.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
         ]
     }
 
@@ -355,6 +406,12 @@ impl McpServer {
             "strata_session_info" => match self.client.call("session_info", json!({})) {
                 Ok(info) => {
                     ToolCallResult::text(serde_json::to_string_pretty(&info).unwrap_or_default())
+                }
+                Err(e) => ToolCallResult::error(e),
+            },
+            "strata_get_perf_profile" => match self.client.call("get_perf_profile", json!({})) {
+                Ok(profile) => {
+                    ToolCallResult::text(serde_json::to_string_pretty(&profile).unwrap_or_default())
                 }
                 Err(e) => ToolCallResult::error(e),
             },
@@ -473,8 +530,14 @@ impl McpServer {
                     Ok(val) => {
                         let base64_str =
                             val.get("png_base64").and_then(|b| b.as_str()).unwrap_or("");
-                        let width = val.get("width").and_then(|w| w.as_u64()).unwrap_or(0);
-                        let height = val.get("height").and_then(|h| h.as_u64()).unwrap_or(0);
+                        let width = val
+                            .get("width")
+                            .and_then(|w| w.as_u64().or_else(|| w.as_f64().map(|f| f.round().max(0.0) as u64)))
+                            .unwrap_or(0);
+                        let height = val
+                            .get("height")
+                            .and_then(|h| h.as_u64().or_else(|| h.as_f64().map(|f| f.round().max(0.0) as u64)))
+                            .unwrap_or(0);
 
                         if let Some(save_path) = args.get("save_path").and_then(|p| p.as_str()) {
                             use base64_light::base64_decode;
@@ -567,7 +630,7 @@ impl McpServer {
                     Err(e) => ToolCallResult::error(e),
                 }
             }
-            "strata_mouse_scroll" => {
+            "strata_mouse_scroll" | "strata_mouse_wheel" => {
                 let delta_x = args.get("delta_x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                 let delta_y = args.get("delta_y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                 let x = args.get("x").and_then(|v| v.as_f64()).map(|f| f as f32);
@@ -594,7 +657,7 @@ impl McpServer {
                     Err(e) => ToolCallResult::error(e),
                 }
             }
-            "strata_keyboard_key" => {
+            "strata_keyboard_key" | "strata_key_press" => {
                 let key = args.get("key").and_then(|k| k.as_str()).unwrap_or("");
                 let modifiers = args.get("modifiers").cloned().unwrap_or(json!({}));
                 match self.client.call(
@@ -609,11 +672,12 @@ impl McpServer {
                 }
             }
             "strata_execute_actions" => {
-                let actions = args.get("actions").cloned().unwrap_or(json!([]));
-                match self
-                    .client
-                    .call("execute_actions", json!({ "actions": actions }))
-                {
+                let actions = args
+                    .get("actions")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                match self.client.execute_actions(actions) {
                     Ok(val) => ToolCallResult::text(format!(
                         "Successfully executed batch actions: {}",
                         serde_json::to_string_pretty(&val).unwrap_or_default()

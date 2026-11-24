@@ -71,33 +71,107 @@ pub use events::{
 };
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 pub use gtk;
+/// Snapshot of hardware GPU pass timings, Scene3D offscreen cache statistics, and VRAM allocation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PlatformGpuTelemetry {
+    pub gpu_timestamps_supported: bool,
+    pub gpu_shadow_pass_us: u32,
+    pub gpu_3d_pass_us: u32,
+    pub gpu_2d_overlay_pass_us: u32,
+    pub scene3d_cache_hits: u64,
+    pub scene3d_cache_misses: u64,
+    pub gpu_memory_bytes: u64,
+}
+
+/// Structured wall-clock breakdown returned by hybrid GTK + wgpu swapchain presentation so
+/// [`FrameProfileRecord`] captures real 2D raster/upload, 3D GPU encode/submit, and swapchain
+/// present durations instead of attributing everything to a single bucket.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GpuPresentTimings {
+    /// True when the native wgpu swapchain rendered and presented the frame.
+    pub presented: bool,
+    /// Time spent rasterizing/uploading the 2D UI overlay (Cairo tiles + texture upload,
+    /// or GPU 2D batch collection when `STRATA_GPU_2D=1`).
+    pub raster_2d: std::time::Duration,
+    /// Time spent acquiring the swapchain surface, encoding 3D/2D passes, and submitting to wgpu.
+    pub wgpu_3d_submit: std::time::Duration,
+    /// Time spent in `wgpu::SurfaceTexture::present()` (swapchain handoff / vsync).
+    pub swapchain_present: std::time::Duration,
+}
+
+/// Owned surface pixel buffer captured on the UI thread so PNG compression & base64 encoding
+/// can execute on a background worker thread without stalling rendering.
+#[derive(Debug, Clone)]
+pub struct CapturedSurfaceBuffer {
+    pub width: u32,
+    pub height: u32,
+    pub stride: i32,
+    pub pixels: Vec<u8>,
+    pub is_cairo_argb32: bool,
+}
+
+impl CapturedSurfaceBuffer {
+    /// Encodes the captured pixel buffer into PNG bytes. Safe to call from any background thread.
+    pub fn encode_png_bytes(self) -> Result<Vec<u8>, String> {
+        if self.width == 0 || self.height == 0 {
+            return Err("Captured surface dimensions must be non-zero".to_string());
+        }
+        #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
+        if self.is_cairo_argb32 {
+            let surface = cairo::ImageSurface::create_for_data(
+                self.pixels,
+                cairo::Format::ARgb32,
+                self.width as i32,
+                self.height as i32,
+                self.stride,
+            )
+            .map_err(|e| format!("Failed to wrap captured surface for PNG encoding: {:?}", e))?;
+            let mut buf = Vec::new();
+            {
+                let mut cursor = std::io::Cursor::new(&mut buf);
+                surface
+                    .write_to_png(&mut cursor)
+                    .map_err(|e| format!("Failed to write PNG: {:?}", e))?;
+            }
+            return Ok(buf);
+        }
+
+        let fb = strata_render::FrameBuffer {
+            width: self.width as usize,
+            height: self.height as usize,
+            pixels: self.pixels,
+            clip_mask_stack: Vec::new(),
+        };
+        fb.to_png_bytes()
+    }
+}
+
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 pub use gtk_window::{
     cairo_rounded_rect, cairo_rounded_rect_radii, gtk_begin_window_drag, gtk_close,
     gtk_current_modifiers, gtk_focus_window, gtk_get_clipboard_text, gtk_gpu_2d_enabled,
-    gtk_gpu_surface_is_active, gtk_is_closing, gtk_is_maximized, gtk_minimize,
-    gtk_present_active_gpu_surface_now, gtk_primary_refresh_interval, gtk_reset_ime,
+    gtk_gpu_surface_is_active, gtk_is_closing, gtk_is_maximized, gtk_last_gpu_telemetry,
+    gtk_last_tile_cache_stats, gtk_minimize, gtk_present_active_gpu_surface_now,
+    gtk_present_active_gpu_surface_now_timed, gtk_primary_refresh_interval, gtk_reset_ime,
     gtk_set_clipboard_text, gtk_set_cursor, gtk_set_gpu_2d_enabled, gtk_set_ime_cursor_location,
-    gtk_set_ime_surrounding_text, gtk_toggle_maximize, gtk_warp_cursor,
-    init_pango_text_measurement, launch_gtk_window, launch_gtk_window_with_config,
-    launch_gtk_window_with_scheduler, pango_font_metrics, pango_measure_styled_text,
-    pango_measure_styled_text_family, pango_measure_text, pango_measure_text_family,
-    post_platform_event, render_display_list_to_cairo, render_to_png, render_to_png_bytes,
-    resolved_font_family, set_cursor_position, try_present_display_list_gpu, warp_cursor,
+    gtk_set_ime_surrounding_text, gtk_toggle_maximize, gtk_warp_cursor, init_pango_text_measurement,
+    launch_gtk_window, launch_gtk_window_with_config, launch_gtk_window_with_scheduler,
+    pango_font_metrics, pango_measure_styled_text, pango_measure_styled_text_family,
+    pango_measure_text, pango_measure_text_family, post_platform_event,
+    render_display_list_to_cairo, render_to_captured_buffer, render_to_png, render_to_png_bytes,
+    resolved_font_family, set_cursor_position, try_present_display_list_gpu,
+    try_present_display_list_gpu_timed, warp_cursor,
 };
 #[cfg(feature = "wgpu-backend")]
 pub use wgpu_surface::{render_scene_3d_wgpu_bgra, WgpuSwapchainPresenter, WgpuWindowPresenter};
 pub use mcp_cursor::McpCursorState;
-/// Pure-Rust headless software rasterization and PNG byte export.
-///
-/// Completely decoupled from Cairo, GTK3, Pango, or X11/Wayland display servers.
-/// Operates deterministically across Linux, macOS, Windows, and CI runners.
-pub fn render_to_png_bytes_pure(
+/// Pure-Rust headless software rasterization into an owned RGBA pixel buffer.
+pub fn render_to_captured_buffer_pure(
     display_list: &strata_render::DisplayList,
     width: i32,
     height: i32,
     cursor_overlay: Option<(&McpCursorState, &CursorTheme)>,
-) -> Result<Vec<u8>, String> {
+) -> Result<CapturedSurfaceBuffer, String> {
     if width <= 0 || height <= 0 {
         return Err("Dimensions must be positive to render to PNG".to_string());
     }
@@ -138,7 +212,36 @@ pub fn render_to_png_bytes_pure(
         }
     }
 
-    fb.to_png_bytes()
+    Ok(CapturedSurfaceBuffer {
+        width: width as u32,
+        height: height as u32,
+        stride: width * 4,
+        pixels: fb.pixels,
+        is_cairo_argb32: false,
+    })
+}
+
+/// Pure-Rust headless software rasterization and PNG byte export.
+///
+/// Completely decoupled from Cairo, GTK3, Pango, or X11/Wayland display servers.
+/// Operates deterministically across Linux, macOS, Windows, and CI runners.
+pub fn render_to_png_bytes_pure(
+    display_list: &strata_render::DisplayList,
+    width: i32,
+    height: i32,
+    cursor_overlay: Option<(&McpCursorState, &CursorTheme)>,
+) -> Result<Vec<u8>, String> {
+    render_to_captured_buffer_pure(display_list, width, height, cursor_overlay)?.encode_png_bytes()
+}
+
+#[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
+pub fn render_to_captured_buffer(
+    display_list: &strata_render::DisplayList,
+    width: i32,
+    height: i32,
+    cursor_overlay: Option<(&McpCursorState, &CursorTheme)>,
+) -> Result<CapturedSurfaceBuffer, String> {
+    render_to_captured_buffer_pure(display_list, width, height, cursor_overlay)
 }
 
 #[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
@@ -165,6 +268,29 @@ pub fn gtk_set_gpu_2d_enabled(_enabled: bool) {}
 #[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
 pub fn gtk_gpu_2d_enabled() -> bool {
     false
+}
+#[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
+pub fn gtk_last_tile_cache_stats() -> (u32, u32) {
+    (0, 0)
+}
+#[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
+pub fn gtk_last_gpu_telemetry() -> PlatformGpuTelemetry {
+    PlatformGpuTelemetry::default()
+}
+#[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
+pub fn try_present_display_list_gpu_timed(
+    _list: &strata_render::DisplayList,
+    _width: f32,
+    _height: f32,
+    _overlay_dirty: bool,
+    _transparent_bg: bool,
+    _cursor_overlay: Option<(&McpCursorState, &CursorTheme)>,
+) -> GpuPresentTimings {
+    GpuPresentTimings::default()
+}
+#[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
+pub fn gtk_present_active_gpu_surface_now_timed() -> GpuPresentTimings {
+    GpuPresentTimings::default()
 }
 #[cfg(target_os = "android")]
 pub use android_window::{AndroidEventLoop, AndroidWindow};

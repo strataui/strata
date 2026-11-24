@@ -26,6 +26,31 @@ thread_local! {
 
 pub type SubscriberCallback = Rc<RefCell<dyn FnMut()>>;
 
+/// Per-signal read/write/subscriber telemetry entry for DevTools and rebuild attribution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignalTelemetryEntry {
+    pub signal_id: SignalId,
+    pub name: String,
+    pub read_count: u64,
+    pub write_count: u64,
+    pub subscriber_count: usize,
+    pub is_dirty: bool,
+}
+
+/// Live snapshot of the thread-local reactive signal graph and read/write activity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReactiveTelemetrySnapshot {
+    pub active_signals: usize,
+    pub active_subscribers: usize,
+    pub total_reads: u64,
+    pub total_writes: u64,
+    pub total_flushes: u64,
+    pub cycle_guard_trips: u64,
+    pub dirty_signal_names: Vec<String>,
+    pub signals: Vec<SignalTelemetryEntry>,
+    pub edges: Vec<(SignalId, SubscriberId)>,
+}
+
 /// Central thread-local reactive graph coordinator.
 pub struct ReactiveRuntime {
     current_subscriber: Cell<Option<SubscriberId>>,
@@ -40,6 +65,14 @@ pub struct ReactiveRuntime {
     free_subscriber_indices: RefCell<Vec<u32>>,
     batch_depth: Cell<usize>,
     dirty_signals: Cell<bool>,
+    dirty_signal_ids: RefCell<Vec<SignalId>>,
+    signal_names: RefCell<BTreeMap<SignalId, String>>,
+    signal_read_counts: RefCell<BTreeMap<SignalId, u64>>,
+    signal_write_counts: RefCell<BTreeMap<SignalId, u64>>,
+    total_reads: Cell<u64>,
+    total_writes: Cell<u64>,
+    total_flushes: Cell<u64>,
+    cycle_guard_trips: Cell<u64>,
     next_signal_id: Cell<SignalId>,
     next_scope_id: Cell<ScopeId>,
 }
@@ -59,6 +92,14 @@ impl ReactiveRuntime {
             free_subscriber_indices: RefCell::new(Vec::new()),
             batch_depth: Cell::new(0),
             dirty_signals: Cell::new(false),
+            dirty_signal_ids: RefCell::new(Vec::new()),
+            signal_names: RefCell::new(BTreeMap::new()),
+            signal_read_counts: RefCell::new(BTreeMap::new()),
+            signal_write_counts: RefCell::new(BTreeMap::new()),
+            total_reads: Cell::new(0),
+            total_writes: Cell::new(0),
+            total_flushes: Cell::new(0),
+            cycle_guard_trips: Cell::new(0),
             next_signal_id: Cell::new(1),
             next_scope_id: Cell::new(1),
         }
@@ -140,8 +181,179 @@ impl ReactiveRuntime {
 
     pub fn take_dirty_signals() -> bool {
         RUNTIME
-            .try_with(|rt| rt.dirty_signals.replace(false))
+            .try_with(|rt| {
+                if let Ok(mut dirty_ids) = rt.dirty_signal_ids.try_borrow_mut() {
+                    dirty_ids.clear();
+                }
+                rt.dirty_signals.replace(false)
+            })
             .unwrap_or(false)
+    }
+
+    pub fn set_signal_name(signal_id: SignalId, name: impl Into<String>) {
+        let name = name.into();
+        let _ = RUNTIME.try_with(|rt| {
+            if let Ok(mut names) = rt.signal_names.try_borrow_mut() {
+                names.insert(signal_id, name);
+            }
+        });
+    }
+
+    pub fn signal_name(signal_id: SignalId) -> String {
+        RUNTIME
+            .try_with(|rt| {
+                rt.signal_names
+                    .try_borrow()
+                    .ok()
+                    .and_then(|names| names.get(&signal_id).cloned())
+            })
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| format!("signal_{signal_id}"))
+    }
+
+    pub fn peek_dirty_signal_names() -> Vec<String> {
+        RUNTIME
+            .try_with(|rt| {
+                let ids = rt
+                    .dirty_signal_ids
+                    .try_borrow()
+                    .map(|v| v.clone())
+                    .unwrap_or_default();
+                let names = rt.signal_names.try_borrow().ok();
+                ids.into_iter()
+                    .map(|id| {
+                        names
+                            .as_ref()
+                            .and_then(|m| m.get(&id).cloned())
+                            .unwrap_or_else(|| format!("signal_{id}"))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn take_dirty_signal_names() -> Vec<String> {
+        RUNTIME
+            .try_with(|rt| {
+                rt.dirty_signals.set(false);
+                let ids = if let Ok(mut dirty_ids) = rt.dirty_signal_ids.try_borrow_mut() {
+                    std::mem::take(&mut *dirty_ids)
+                } else {
+                    Vec::new()
+                };
+                let names = rt.signal_names.try_borrow().ok();
+                ids.into_iter()
+                    .map(|id| {
+                        names
+                            .as_ref()
+                            .and_then(|m| m.get(&id).cloned())
+                            .unwrap_or_else(|| format!("signal_{id}"))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn telemetry_snapshot() -> ReactiveTelemetrySnapshot {
+        RUNTIME
+            .try_with(|rt| {
+                let names = rt.signal_names.try_borrow().ok();
+                let reads = rt.signal_read_counts.try_borrow().ok();
+                let writes = rt.signal_write_counts.try_borrow().ok();
+                let sig_subs = rt.signal_subscribers.try_borrow().ok();
+                let dirty_ids: BTreeSet<SignalId> = rt
+                    .dirty_signal_ids
+                    .try_borrow()
+                    .map(|v| v.iter().copied().collect())
+                    .unwrap_or_default();
+
+                let mut known_ids: BTreeSet<SignalId> = BTreeSet::new();
+                if let Some(ref m) = names {
+                    known_ids.extend(m.keys().copied());
+                }
+                if let Some(ref m) = reads {
+                    known_ids.extend(m.keys().copied());
+                }
+                if let Some(ref m) = writes {
+                    known_ids.extend(m.keys().copied());
+                }
+                if let Some(ref m) = sig_subs {
+                    known_ids.extend(m.keys().copied());
+                }
+
+                let mut signals = Vec::with_capacity(known_ids.len());
+                for id in known_ids {
+                    let name = names
+                        .as_ref()
+                        .and_then(|m| m.get(&id).cloned())
+                        .unwrap_or_else(|| format!("signal_{id}"));
+                    let read_count = reads
+                        .as_ref()
+                        .and_then(|m| m.get(&id).copied())
+                        .unwrap_or(0);
+                    let write_count = writes
+                        .as_ref()
+                        .and_then(|m| m.get(&id).copied())
+                        .unwrap_or(0);
+                    let subscriber_count = sig_subs
+                        .as_ref()
+                        .and_then(|m| m.get(&id).map(|s| s.len()))
+                        .unwrap_or(0);
+                    signals.push(SignalTelemetryEntry {
+                        signal_id: id,
+                        name,
+                        read_count,
+                        write_count,
+                        subscriber_count,
+                        is_dirty: dirty_ids.contains(&id),
+                    });
+                }
+                signals.sort_by(|a, b| {
+                    b.write_count
+                        .cmp(&a.write_count)
+                        .then_with(|| b.read_count.cmp(&a.read_count))
+                        .then_with(|| a.signal_id.cmp(&b.signal_id))
+                });
+
+                let mut edges = Vec::new();
+                if let Some(ref m) = sig_subs {
+                    for (&sig_id, subs) in m.iter() {
+                        for &sub in subs {
+                            edges.push((sig_id, sub));
+                        }
+                    }
+                }
+
+                let dirty_signal_names = dirty_ids
+                    .iter()
+                    .map(|id| {
+                        names
+                            .as_ref()
+                            .and_then(|m| m.get(id).cloned())
+                            .unwrap_or_else(|| format!("signal_{id}"))
+                    })
+                    .collect();
+
+                let active_subscribers = rt
+                    .subscribers
+                    .try_borrow()
+                    .map(|s| s.len())
+                    .unwrap_or(0);
+
+                ReactiveTelemetrySnapshot {
+                    active_signals: signals.len(),
+                    active_subscribers,
+                    total_reads: rt.total_reads.get(),
+                    total_writes: rt.total_writes.get(),
+                    total_flushes: rt.total_flushes.get(),
+                    cycle_guard_trips: rt.cycle_guard_trips.get(),
+                    dirty_signal_names,
+                    signals,
+                    edges,
+                }
+            })
+            .unwrap_or_default()
     }
 
     pub fn mark_dirty() {
@@ -194,6 +406,11 @@ impl ReactiveRuntime {
 
     pub fn track(signal_id: SignalId) {
         RUNTIME.with(|rt| {
+            rt.total_reads.set(rt.total_reads.get().wrapping_add(1));
+            if let Ok(mut reads) = rt.signal_read_counts.try_borrow_mut() {
+                let c = reads.entry(signal_id).or_insert(0);
+                *c = c.wrapping_add(1);
+            }
             if let Some(sub_id) = rt.current_subscriber.get() {
                 if let Ok(mut sig_subs) = rt.signal_subscribers.try_borrow_mut() {
                     sig_subs.entry(signal_id).or_default().insert(sub_id);
@@ -327,6 +544,16 @@ impl ReactiveRuntime {
     pub fn notify(signal_id: SignalId) {
         let _ = RUNTIME.try_with(|rt| {
             rt.dirty_signals.set(true);
+            rt.total_writes.set(rt.total_writes.get().wrapping_add(1));
+            if let Ok(mut writes) = rt.signal_write_counts.try_borrow_mut() {
+                let c = writes.entry(signal_id).or_insert(0);
+                *c = c.wrapping_add(1);
+            }
+            if let Ok(mut dirty_ids) = rt.dirty_signal_ids.try_borrow_mut() {
+                if dirty_ids.len() < 64 && !dirty_ids.contains(&signal_id) {
+                    dirty_ids.push(signal_id);
+                }
+            }
             let mut stale_subs: Option<Vec<SubscriberId>> = None;
 
             if let Ok(sig_subs) = rt.signal_subscribers.try_borrow() {
@@ -399,6 +626,7 @@ impl ReactiveRuntime {
     pub fn flush() {
         RUNTIME.with(|rt| {
             let mut loop_count: usize = 0;
+            let mut ran_any = false;
             let mut run_counts: Option<std::collections::HashMap<SubscriberId, usize>> = None;
             const MAX_RUNS_PER_SUBSCRIBER: usize = 50;
 
@@ -432,6 +660,8 @@ impl ReactiveRuntime {
                     let count = map.entry(sub_id).or_insert(0);
                     *count += 1;
                     if *count > MAX_RUNS_PER_SUBSCRIBER {
+                        rt.cycle_guard_trips
+                            .set(rt.cycle_guard_trips.get().wrapping_add(1));
                         eprintln!(
                             "Strata Reactive Guard: Subscriber {} exceeded maximum recursive executions (possible circular dependency).",
                             sub_id
@@ -449,6 +679,7 @@ impl ReactiveRuntime {
                 };
 
                 if let Some(runner) = runner {
+                    ran_any = true;
                     Self::clear_subscriber_dependencies(sub_id);
                     let prev = rt.current_subscriber.replace(Some(sub_id));
                     if let Ok(mut r) = runner.try_borrow_mut() {
@@ -456,6 +687,9 @@ impl ReactiveRuntime {
                     }
                     rt.current_subscriber.set(prev);
                 }
+            }
+            if ran_any {
+                rt.total_flushes.set(rt.total_flushes.get().wrapping_add(1));
             }
         });
     }
@@ -474,6 +708,19 @@ impl<T: Clone + 'static> Signal<T> {
             id: ReactiveRuntime::alloc_signal_id(),
             value: Rc::new(RefCell::new(initial)),
         }
+    }
+
+    /// Creates a signal with an explicit debug/telemetry name for rebuild-reason attribution.
+    pub fn named(initial: T, name: impl Into<String>) -> Self {
+        let sig = Self::new(initial);
+        ReactiveRuntime::set_signal_name(sig.id, name);
+        sig
+    }
+
+    /// Assigns a debug/telemetry name to this signal and returns it.
+    pub fn with_name(self, name: impl Into<String>) -> Self {
+        ReactiveRuntime::set_signal_name(self.id, name);
+        self
     }
 
     pub fn id(&self) -> SignalId {
@@ -1853,4 +2100,24 @@ pub fn take_dirty_signals() -> bool {
 
 pub fn mark_dirty() {
     ReactiveRuntime::mark_dirty()
+}
+
+pub fn set_signal_name(signal_id: SignalId, name: impl Into<String>) {
+    ReactiveRuntime::set_signal_name(signal_id, name);
+}
+
+pub fn signal_name(signal_id: SignalId) -> String {
+    ReactiveRuntime::signal_name(signal_id)
+}
+
+pub fn peek_dirty_signal_names() -> Vec<String> {
+    ReactiveRuntime::peek_dirty_signal_names()
+}
+
+pub fn take_dirty_signal_names() -> Vec<String> {
+    ReactiveRuntime::take_dirty_signal_names()
+}
+
+pub fn reactive_telemetry_snapshot() -> ReactiveTelemetrySnapshot {
+    ReactiveRuntime::telemetry_snapshot()
 }

@@ -74,8 +74,11 @@ pub fn solve_grid_with_subgrid_guarded(
             }
         };
 
-    let inner_width =
+    let base_inner_w =
         (resolved_width - padding.left - padding.right - border.left - border.right).max(0.0);
+    let inner_width = container
+        .transition_content_width()
+        .map_or(base_inner_w, |tw| base_inner_w.max(tw));
     let resolved_height = resolve_dimension(container.style.height, available_height).map(|h| {
         clamp_dimension(
             h,
@@ -84,8 +87,12 @@ pub fn solve_grid_with_subgrid_guarded(
             available_height,
         )
     });
-    let inner_height = resolved_height
+    let base_inner_h = resolved_height
         .map(|h| (h - padding.top - padding.bottom - border.top - border.bottom).max(0.0));
+    let inner_height = match (base_inner_h, container.transition_content_height()) {
+        (Some(h), Some(th)) => Some(h.max(th)),
+        (other, _) => other,
+    };
 
     let gap_col = container.style.gap_col.max(container.style.gap);
     let gap_row = container.style.gap_row.max(container.style.gap);
@@ -479,7 +486,86 @@ pub fn solve_grid_with_subgrid_guarded(
         while col_tracks.len() < total_cols {
             col_tracks.push(GridTrack::Auto);
         }
-        resolve_tracks(&col_tracks, inner_width, gap_col)
+        let has_col_fr = col_tracks.iter().any(|t| {
+            matches!(
+                t,
+                GridTrack::Fr(_) | GridTrack::MinMax(_, GridTrackBreadth::Fr(_))
+            )
+        });
+        let needs_col_intrinsic = col_tracks.iter().any(|t| {
+            matches!(
+                t,
+                GridTrack::Auto
+                    | GridTrack::MinContent
+                    | GridTrack::MaxContent
+                    | GridTrack::MinMax(
+                        _,
+                        GridTrackBreadth::Auto
+                            | GridTrackBreadth::MinContent
+                            | GridTrackBreadth::MaxContent
+                    )
+            )
+        });
+        if needs_col_intrinsic {
+            let mut intrinsic_cols = vec![0.0f32; col_tracks.len()];
+            for item in &placed_items {
+                let child = &container.children[item.child_index];
+                let mut track_spans_intrinsic = false;
+                for c in 0..item.col_span {
+                    let col = item.col_start + c;
+                    if let Some(t) = col_tracks.get(col) {
+                        if matches!(
+                            t,
+                            GridTrack::Auto
+                                | GridTrack::MinContent
+                                | GridTrack::MaxContent
+                                | GridTrack::MinMax(
+                                    _,
+                                    GridTrackBreadth::Auto
+                                        | GridTrackBreadth::MinContent
+                                        | GridTrackBreadth::MaxContent
+                                )
+                        ) {
+                            track_spans_intrinsic = true;
+                            break;
+                        }
+                    }
+                }
+                if !track_spans_intrinsic {
+                    continue;
+                }
+                let sizes = crate::intrinsic::compute_min_max_sizes(child, Some(inner_width));
+                let margin_h = child.style.margin.left + child.style.margin.right;
+                for c in 0..item.col_span {
+                    let col = item.col_start + c;
+                    let Some(track) = col_tracks.get(col) else {
+                        continue;
+                    };
+                    let contrib = match track {
+                        GridTrack::MinContent
+                        | GridTrack::MinMax(_, GridTrackBreadth::MinContent) => {
+                            sizes.min_content + margin_h
+                        }
+                        GridTrack::MaxContent
+                        | GridTrack::MinMax(_, GridTrackBreadth::MaxContent) => {
+                            sizes.max_content + margin_h
+                        }
+                        GridTrack::Auto | GridTrack::MinMax(_, GridTrackBreadth::Auto) => {
+                            if has_col_fr {
+                                (sizes.max_content + margin_h).min(inner_width)
+                            } else {
+                                (sizes.min_content + margin_h).min(inner_width)
+                            }
+                        }
+                        _ => continue,
+                    };
+                    intrinsic_cols[col] = intrinsic_cols[col].max(contrib / item.col_span as f32);
+                }
+            }
+            resolve_tracks(&col_tracks, inner_width, gap_col, Some(&intrinsic_cols), true)
+        } else {
+            resolve_tracks(&col_tracks, inner_width, gap_col, None, true)
+        }
     };
 
     // 5. Resolve Row Tracks (with Subgrid and implicit track expansion)
@@ -492,18 +578,24 @@ pub fn solve_grid_with_subgrid_guarded(
             row_tracks.push(GridTrack::Auto);
         }
 
-        if let Some(h) = inner_height {
-            resolve_tracks(&row_tracks, h, gap_row)
-        } else {
-            // Explicit absolute row tracks keep their authored size even when the
-            // container height is indefinite; remaining rows size to their content.
-            let mut sizes: Vec<f32> = row_tracks
-                .iter()
-                .map(|track| match *track {
-                    GridTrack::Px(px) => px.max(0.0),
-                    _ => 0.0,
-                })
-                .collect();
+        let needs_intrinsic_rows = inner_height.is_none()
+            || row_tracks.iter().any(|t| {
+                matches!(
+                    t,
+                    GridTrack::Auto
+                        | GridTrack::MinContent
+                        | GridTrack::MaxContent
+                        | GridTrack::MinMax(
+                            _,
+                            GridTrackBreadth::Auto
+                                | GridTrackBreadth::MinContent
+                                | GridTrackBreadth::MaxContent
+                        )
+                )
+            });
+
+        let mut intrinsic_rows = vec![0.0f32; row_tracks.len()];
+        if needs_intrinsic_rows {
             let cg = guard.enter().unwrap_or(guard);
             for item in &placed_items {
                 let child = &mut container.children[item.child_index];
@@ -516,13 +608,38 @@ pub fn solve_grid_with_subgrid_guarded(
                 let h_per_row = item_h / item.row_span as f32;
                 for r in 0..item.row_span {
                     let row = item.row_start + r;
-                    if row >= sizes.len() || matches!(row_tracks.get(row), Some(GridTrack::Px(_))) {
+                    if row >= intrinsic_rows.len()
+                        || matches!(
+                            row_tracks.get(row),
+                            Some(GridTrack::Px(_) | GridTrack::Percent(_))
+                        )
+                    {
                         continue;
                     }
-                    sizes[row] = sizes[row].max(h_per_row);
+                    intrinsic_rows[row] = intrinsic_rows[row].max(h_per_row);
                 }
             }
-            sizes
+        }
+
+        if let Some(h) = inner_height {
+            let stretch_auto_rows =
+                container.style.overflow_y == strata_style::types::Overflow::Visible;
+            resolve_tracks(
+                &row_tracks,
+                h,
+                gap_row,
+                Some(&intrinsic_rows),
+                stretch_auto_rows,
+            )
+        } else {
+            row_tracks
+                .iter()
+                .enumerate()
+                .map(|(r, track)| match *track {
+                    GridTrack::Px(px) => px.max(0.0),
+                    _ => intrinsic_rows.get(r).copied().unwrap_or(0.0),
+                })
+                .collect()
         }
     };
 
@@ -535,8 +652,17 @@ pub fn solve_grid_with_subgrid_guarded(
     };
     let content_height = total_rows_h + total_row_gaps;
 
-    let final_height = resolved_height
-        .unwrap_or(content_height + padding.top + padding.bottom + border.top + border.bottom);
+    let natural_height =
+        content_height + padding.top + padding.bottom + border.top + border.bottom;
+    let final_height = resolved_height.unwrap_or_else(|| {
+        clamp_dimension_with_node(
+            natural_height,
+            container.style.min_height,
+            container.style.max_height,
+            available_height,
+            container,
+        )
+    });
 
     let border_box = Rect::new(
         container.geometry.border_box.x,
@@ -563,14 +689,6 @@ pub fn solve_grid_with_subgrid_guarded(
         let item_x = container.geometry.content_box.x + offset_x + child_margin.left;
         let item_y = container.geometry.content_box.y + offset_y + child_margin.top;
 
-        child.geometry = LayoutGeometry::from_border_box(
-            Rect::new(item_x, item_y, item_w, item_h),
-            child.style.padding,
-            child.style.border_width,
-            child.style.margin,
-        );
-        child.geometry.snap_to_pixel();
-
         // Subgrid handling: if child is display: grid with subgrid columns or rows, inherit tracks
         if child.style.display == strata_style::types::Display::Grid {
             let is_child_subgrid_cols =
@@ -578,6 +696,13 @@ pub fn solve_grid_with_subgrid_guarded(
             let is_child_subgrid_rows =
                 child.style.grid_template_rows.first() == Some(&GridTrack::Subgrid);
             if is_child_subgrid_cols || is_child_subgrid_rows {
+                child.geometry = LayoutGeometry::from_border_box(
+                    Rect::new(item_x, item_y, item_w, item_h),
+                    child.style.padding,
+                    child.style.border_width,
+                    child.style.margin,
+                );
+                child.geometry.snap_to_pixel();
                 let sub_cols = if is_child_subgrid_cols {
                     let end = (item.col_start + item.col_span).min(col_sizes.len());
                     Some(&col_sizes[item.col_start..end])
@@ -597,10 +722,85 @@ pub fn solve_grid_with_subgrid_guarded(
             }
         }
 
-        if !child.children.is_empty() {
-            if let Some(cg) = child_guard {
-                child.layout_children_guarded(cg);
+        if let Some(cg) = child_guard {
+            child.geometry.border_box.x = 0.0;
+            child.geometry.border_box.y = 0.0;
+            child.compute_layout_guarded(span_width, span_height, None, 0.0, cg);
+
+            let stretch_w = if child.style.width == strata_style::types::Dimension::Auto
+                && child.geometry.border_box.width > item_w + 0.5
+            {
+                clamp_dimension_with_node(
+                    item_w,
+                    child.style.min_width,
+                    child.style.max_width,
+                    span_width,
+                    child,
+                )
+            } else if child.style.width == strata_style::types::Dimension::Auto
+                && matches!(
+                    child.style.display,
+                    Display::Block | Display::Flex | Display::Grid | Display::Table
+                )
+                && child.geometry.border_box.width < item_w
+            {
+                clamp_dimension_with_node(
+                    item_w,
+                    child.style.min_width,
+                    child.style.max_width,
+                    span_width,
+                    child,
+                )
+            } else {
+                child.geometry.border_box.width
+            };
+
+            let can_stretch_h = child.style.height == strata_style::types::Dimension::Auto
+                && !matches!(
+                    child.style.align_self,
+                    strata_style::types::AlignSelf::FlexStart
+                        | strata_style::types::AlignSelf::FlexEnd
+                        | strata_style::types::AlignSelf::Center
+                        | strata_style::types::AlignSelf::Baseline
+                );
+            let stretch_h = if can_stretch_h && child.geometry.border_box.height < item_h {
+                clamp_dimension_with_node(
+                    item_h,
+                    child.style.min_height,
+                    child.style.max_height,
+                    span_height,
+                    child,
+                )
+            } else {
+                child.geometry.border_box.height
+            };
+
+            if (stretch_w - child.geometry.border_box.width).abs() > 0.01
+                || (stretch_h - child.geometry.border_box.height).abs() > 0.01
+            {
+                child.geometry = LayoutGeometry::from_border_box(
+                    Rect::new(
+                        child.geometry.border_box.x,
+                        child.geometry.border_box.y,
+                        stretch_w,
+                        stretch_h,
+                    ),
+                    child.style.padding,
+                    child.style.border_width,
+                    child.style.margin,
+                );
+                if !child.children.is_empty() {
+                    child.layout_children_guarded(cg);
+                } else {
+                    child.update_scroll_metrics();
+                }
             }
+
+            child.translate(
+                item_x - child.geometry.border_box.x,
+                item_y - child.geometry.border_box.y,
+            );
+            child.geometry.snap_to_pixel();
         }
     }
 
@@ -612,7 +812,13 @@ fn snap_subpixel_grid(v: f32) -> f32 {
     (v * 64.0).round() / 64.0
 }
 
-fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f32> {
+fn resolve_tracks(
+    tracks: &[GridTrack],
+    available_space: f32,
+    gap: f32,
+    intrinsic_sizes: Option<&[f32]>,
+    stretch_auto: bool,
+) -> Vec<f32> {
     let count = tracks.len();
     if count == 0 {
         return Vec::new();
@@ -625,11 +831,23 @@ fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f
     } else {
         0.0
     };
+    let has_fr = tracks.iter().any(|t| {
+        matches!(
+            t,
+            GridTrack::Fr(_) | GridTrack::MinMax(_, GridTrackBreadth::Fr(_))
+        )
+    });
+    let should_stretch_auto = stretch_auto && !has_fr;
+
     let mut resolved = vec![0.0f32; count];
     let mut total_fixed = 0.0;
     let mut total_fr = 0.0;
 
     for (i, track) in tracks.iter().enumerate() {
+        let intrinsic = intrinsic_sizes
+            .and_then(|s| s.get(i).copied())
+            .unwrap_or(0.0)
+            .max(0.0);
         match *track {
             GridTrack::Px(px) => {
                 let val = if is_tui {
@@ -653,11 +871,26 @@ fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f
             GridTrack::Fr(fr) => {
                 total_fr += fr;
             }
-            GridTrack::Auto
-            | GridTrack::MinContent
-            | GridTrack::MaxContent
-            | GridTrack::Subgrid => {
-                total_fr += 1.0;
+            GridTrack::Auto | GridTrack::Subgrid => {
+                let val = if is_tui {
+                    intrinsic.round()
+                } else {
+                    snap_subpixel_grid(intrinsic)
+                };
+                resolved[i] = val;
+                total_fixed += val;
+                if should_stretch_auto {
+                    total_fr += 1.0;
+                }
+            }
+            GridTrack::MinContent | GridTrack::MaxContent => {
+                let val = if is_tui {
+                    intrinsic.round()
+                } else {
+                    snap_subpixel_grid(intrinsic)
+                };
+                resolved[i] = val;
+                total_fixed += val;
             }
             GridTrack::MinMax(min_b, max_b) => {
                 let min_px = match min_b {
@@ -696,12 +929,28 @@ fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f
                         resolved[i] = val;
                         total_fixed += val;
                     }
-                    GridTrackBreadth::Auto
-                    | GridTrackBreadth::MaxContent
-                    | GridTrackBreadth::MinContent => {
-                        resolved[i] = min_px;
-                        total_fixed += min_px;
-                        total_fr += 1.0;
+                    GridTrackBreadth::Auto => {
+                        let sz = intrinsic.max(min_px);
+                        let val = if is_tui {
+                            sz.round()
+                        } else {
+                            snap_subpixel_grid(sz)
+                        };
+                        resolved[i] = val;
+                        total_fixed += val;
+                        if should_stretch_auto {
+                            total_fr += 1.0;
+                        }
+                    }
+                    GridTrackBreadth::MaxContent | GridTrackBreadth::MinContent => {
+                        let sz = intrinsic.max(min_px);
+                        let val = if is_tui {
+                            sz.round()
+                        } else {
+                            snap_subpixel_grid(sz)
+                        };
+                        resolved[i] = val;
+                        total_fixed += val;
                     }
                 }
             }
@@ -714,18 +963,10 @@ fn resolve_tracks(tracks: &[GridTrack], available_space: f32, gap: f32) -> Vec<f
             .iter()
             .enumerate()
             .filter_map(|(i, t)| match *t {
-                GridTrack::Fr(_)
-                | GridTrack::Auto
-                | GridTrack::MinContent
-                | GridTrack::MaxContent
-                | GridTrack::Subgrid => Some(i),
-                GridTrack::MinMax(
-                    _,
-                    GridTrackBreadth::Fr(_)
-                    | GridTrackBreadth::Auto
-                    | GridTrackBreadth::MaxContent
-                    | GridTrackBreadth::MinContent,
-                ) => Some(i),
+                GridTrack::Fr(_) => Some(i),
+                GridTrack::Auto | GridTrack::Subgrid if should_stretch_auto => Some(i),
+                GridTrack::MinMax(_, GridTrackBreadth::Fr(_)) => Some(i),
+                GridTrack::MinMax(_, GridTrackBreadth::Auto) if should_stretch_auto => Some(i),
                 _ => None,
             })
             .collect();

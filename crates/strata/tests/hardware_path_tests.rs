@@ -24,6 +24,7 @@ fn VectorPathDemo() -> View {
 #[test]
 fn test_runtime_gpu_path_compilation_and_segments() {
     let mut runtime = AppRuntime::new(VectorPathDemo(), 800.0, 600.0, 1.0);
+    runtime.set_gpu_2d_paths_enabled(true);
     runtime.tick_frame();
 
     let initial_count = runtime.gpu_path_segments().len();

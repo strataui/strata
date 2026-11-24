@@ -238,3 +238,125 @@ fn test_title_bar_drag_region_hit_testing() {
         Some("no-drag")
     );
 }
+
+#[test]
+fn test_inline_code_stays_inline_and_w_full_button_keeps_sibling_in_card() {
+    use strata_ui::buttons::{Button, ButtonVariant};
+
+    let view = rsx! {
+        <div class="w-[320px] flex flex-col gap-3 p-3">
+            <p id="copilot-para" class="w-full text-sm">
+                {"See "}
+                <code class="px-1 bg-zinc-800">{"groundspeed_mps"}</code>
+                {" reading inside this bubble."}
+            </p>
+            <div id="ssh-card-actions" class="w-full flex flex-row gap-2">
+                <Button class="w-full" variant={ButtonVariant::Primary}>{"Connect"}</Button>
+                <Button variant={ButtonVariant::Secondary}>{"Reset"}</Button>
+            </div>
+        </div>
+    };
+    let mut rt = AppRuntime::new(view, 320.0, 240.0, 1.0);
+    rt.tick_frame();
+
+    let para_box = rt.query_element_rect("copilot-para").expect("copilot-para rect");
+    let para_node = &rt.layout_root.children[0];
+    assert!(
+        !para_node.line_boxes.is_empty(),
+        "paragraph with inline <code> must format via IFC line_boxes instead of splitting blocks"
+    );
+    let first_line_text: String = para_node.line_boxes[0]
+        .text_fragments
+        .iter()
+        .map(|f| f.text.as_str())
+        .collect();
+    assert!(
+        first_line_text.contains("See ") && first_line_text.contains("groundspeed_mps"),
+        "inline <code> must remain on the same line as surrounding text, got {:?} (para={:?})",
+        first_line_text,
+        para_box
+    );
+
+    let row_box = rt
+        .query_element_rect("ssh-card-actions")
+        .expect("ssh-card-actions rect");
+    let actions = &rt.layout_root.children[1];
+    let sib_box = actions.children[1].geometry.border_box;
+    assert!(
+        sib_box.x + sib_box.width <= row_box.x + row_box.width + 0.5,
+        "sibling Button next to w-full Button must stay inside row bounds {:?} (got {:?})",
+        row_box,
+        sib_box
+    );
+}
+
+#[test]
+fn test_flex1_min_w0_inline_span_wraps_against_shrink0_button_and_in_grid_cards() {
+    use strata_ui::buttons::{Button, ButtonVariant};
+
+    let view = rsx! {
+        <div class="w-[360px] flex flex-col gap-4 p-2">
+            <div id="action-row" class="w-full flex items-center justify-between gap-3">
+                <div id="text-wrap" class="flex-1 min-w-0">
+                    <span id="long-span" class="text-sm">
+                        {"This inline span description inside a flex-1 min-w-0 container must wrap cleanly and never bleed underneath the right-aligned shrink-0 button."}
+                    </span>
+                </div>
+                <Button class="shrink-0" variant={ButtonVariant::Primary}>{"Launch"}</Button>
+            </div>
+            <div id="hub-grid" class="w-full grid grid-cols-2 gap-3">
+                <div id="hub-card-1" class="p-2 flex flex-col gap-1">
+                    <span id="lock-desc" class="text-xs text-yellow-400">
+                        {"Workspace locked by another session until active telemetry synchronization completes across all nodes."}
+                    </span>
+                </div>
+                <div id="hub-card-2" class="p-2 flex flex-col gap-1">
+                    <span class="text-xs">{"Adjacent card"}</span>
+                </div>
+            </div>
+        </div>
+    };
+    let mut rt = AppRuntime::new(view, 360.0, 480.0, 1.0);
+    rt.tick_frame();
+
+    let row_box = rt.query_element_rect("action-row").expect("action-row rect");
+    let wrap_box = rt.query_element_rect("text-wrap").expect("text-wrap rect");
+    let span_box = rt.query_element_rect("long-span").expect("long-span rect");
+    let btn_box = rt.layout_root.children[0].children[1].geometry.border_box;
+
+    assert!(
+        btn_box.x + btn_box.width <= row_box.x + row_box.width + 0.5,
+        "shrink-0 button overflowed row: row={:?} btn={:?}",
+        row_box,
+        btn_box
+    );
+    assert!(
+        span_box.x + span_box.width <= btn_box.x + 0.5,
+        "inline <span> bled horizontally underneath shrink-0 button: span={:?} wrap={:?} btn={:?}",
+        span_box,
+        wrap_box,
+        btn_box
+    );
+    assert!(
+        span_box.height > 30.0,
+        "inline <span> must wrap onto multiple lines inside flex-1 min-w-0: span={:?}",
+        span_box
+    );
+
+    let card1_box = rt.query_element_rect("hub-card-1").expect("hub-card-1 rect");
+    let card2_box = rt.query_element_rect("hub-card-2").expect("hub-card-2 rect");
+    let lock_box = rt.query_element_rect("lock-desc").expect("lock-desc rect");
+    assert!(
+        lock_box.x + lock_box.width <= card1_box.x + card1_box.width + 0.5
+            && lock_box.x + lock_box.width <= card2_box.x + 0.5,
+        "grid card lock description <span> overflowed into adjacent card: lock={:?} card1={:?} card2={:?}",
+        lock_box,
+        card1_box,
+        card2_box
+    );
+    assert!(
+        lock_box.height > 30.0,
+        "grid card lock description <span> must wrap vertically: lock={:?}",
+        lock_box
+    );
+}

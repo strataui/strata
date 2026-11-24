@@ -1662,6 +1662,141 @@ fn compute_opacity_group_clip(rest: &[DrawCommand]) -> Option<(f64, f64, f64, f6
     }
 }
 
+/// Computes `(pad_left, pad_top, pad_right, pad_bottom)` inflation required for a CSS filter
+/// chain (`blur(r)` inflates by `r * 3.0` for 3-sigma Gaussian support; `drop-shadow` inflates
+/// by offset + `blur_radius * 3.0`).
+pub(crate) fn filter_padding_insets(
+    filter: &strata_style::effects::BackdropFilter,
+) -> (f64, f64, f64, f64) {
+    let mut left = 0.0f64;
+    let mut top = 0.0f64;
+    let mut right = 0.0f64;
+    let mut bottom = 0.0f64;
+    for op in &filter.operations {
+        match *op {
+            strata_style::effects::FilterOp::Blur(radius) => {
+                let spread = (radius.max(0.0) as f64) * 3.0;
+                left += spread;
+                top += spread;
+                right += spread;
+                bottom += spread;
+            }
+            strata_style::effects::FilterOp::DropShadow {
+                offset_x,
+                offset_y,
+                blur_radius,
+                ..
+            } => {
+                let spread = (blur_radius.max(0.0) as f64) * 3.0;
+                let ox = offset_x as f64;
+                let oy = offset_y as f64;
+                left = left.max(spread - ox.min(0.0));
+                right = right.max(spread + ox.max(0.0));
+                top = top.max(spread - oy.min(0.0));
+                bottom = bottom.max(spread + oy.max(0.0));
+            }
+            _ => {}
+        }
+    }
+    (left, top, right, bottom)
+}
+
+fn compute_isolation_group_clip(rest: &[DrawCommand]) -> Option<(f64, f64, f64, f64)> {
+    let mut depth = 1usize;
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    for cmd in rest {
+        match cmd {
+            DrawCommand::PushIsolation { .. } => depth += 1,
+            DrawCommand::PopIsolation => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            DrawCommand::PushTransform { .. } | DrawCommand::DrawViewport3D { .. } => {
+                return None;
+            }
+            DrawCommand::PushFilter { bounds, filter } => {
+                let (pl, pt, pr, pb) = filter_padding_insets(filter);
+                min_x = min_x.min(bounds.x - pl as f32);
+                min_y = min_y.min(bounds.y - pt as f32);
+                max_x = max_x.max(bounds.x + bounds.width + pr as f32);
+                max_y = max_y.max(bounds.y + bounds.height + pb as f32);
+            }
+            _ => {
+                if let Some((bx1, by1, bx2, by2)) = command_paint_rect(cmd) {
+                    if bx2 > bx1 && by2 > by1 {
+                        min_x = min_x.min(bx1 as f32);
+                        min_y = min_y.min(by1 as f32);
+                        max_x = max_x.max(bx2 as f32);
+                        max_y = max_y.max(by2 as f32);
+                    }
+                }
+            }
+        }
+    }
+    if min_x < max_x && min_y < max_y {
+        let pad = 8.0f64;
+        let x = (min_x as f64 - pad).floor();
+        let y = (min_y as f64 - pad).floor();
+        let w = ((max_x as f64 + pad).ceil() - x).max(1.0);
+        let h = ((max_y as f64 + pad).ceil() - y).max(1.0);
+        Some((x, y, w, h))
+    } else {
+        None
+    }
+}
+
+fn compute_filter_group_clip(
+    bounds: strata_layout::Rect,
+    filter: &strata_style::effects::BackdropFilter,
+    rest: &[DrawCommand],
+) -> Option<(f64, f64, f64, f64)> {
+    let (pl, pt, pr, pb) = filter_padding_insets(filter);
+    let mut min_x = bounds.x as f64;
+    let mut min_y = bounds.y as f64;
+    let mut max_x = (bounds.x + bounds.width) as f64;
+    let mut max_y = (bounds.y + bounds.height) as f64;
+    let mut depth = 1usize;
+    for cmd in rest {
+        match cmd {
+            DrawCommand::PushFilter { .. } => depth += 1,
+            DrawCommand::PopFilter => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            DrawCommand::PushTransform { .. } | DrawCommand::DrawViewport3D { .. } => {
+                return None;
+            }
+            _ => {
+                if let Some((bx1, by1, bx2, by2)) = command_paint_rect(cmd) {
+                    if bx2 > bx1 && by2 > by1 {
+                        min_x = min_x.min(bx1);
+                        min_y = min_y.min(by1);
+                        max_x = max_x.max(bx2);
+                        max_y = max_y.max(by2);
+                    }
+                }
+            }
+        }
+    }
+    if min_x < max_x && min_y < max_y {
+        let pad = 4.0f64;
+        let x = (min_x - pl - pad).floor();
+        let y = (min_y - pt - pad).floor();
+        let w = ((max_x + pr + pad).ceil() - x).max(1.0);
+        let h = ((max_y + pb + pad).ceil() - y).max(1.0);
+        Some((x, y, w, h))
+    } else {
+        None
+    }
+}
+
 #[inline]
 fn rect_overlaps_dirty_tiles(
     x1: f64,
@@ -1713,14 +1848,19 @@ fn command_paint_rect(cmd: &DrawCommand) -> Option<(f64, f64, f64, f64)> {
             text,
             font_size,
             line_height,
+            is_monospace,
             ..
         } => {
-            let w = bounds_width
-                .unwrap_or(0.0)
-                .max(text.len() as f32 * (*font_size) * 0.95) as f64;
-            let h = bounds_height
-                .unwrap_or(0.0)
-                .max(line_height.max(*font_size) * 1.5) as f64;
+            let (est_w, est_h) = strata_render::compositor::draw_text_paint_size(
+                text,
+                *bounds_width,
+                *bounds_height,
+                *font_size,
+                *line_height,
+                *is_monospace,
+            );
+            let w = est_w as f64;
+            let h = est_h as f64;
             let pad = 16.0f64;
             Some((
                 origin.0 as f64 - pad,
@@ -1825,6 +1965,9 @@ fn render_display_list_to_cairo_with_dirty_tiles(
         .unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
     let mut operator_stack: Vec<cairo::Operator> = Vec::new();
     let mut opacity_stack: Vec<Option<f64>> = Vec::new();
+    let mut isolation_stack: Vec<Option<bool>> = Vec::new();
+    let mut filter_stack: Vec<bool> = Vec::new();
+    let mut filter_pad_stack: Vec<(f64, f64, f64, f64)> = Vec::new();
     let mut transform_stack: Vec<strata_primitives::geom::Matrix4x4> =
         vec![strata_primitives::geom::Matrix4x4::identity()];
     let mut shared_layout: Option<pango::Layout> = None;
@@ -1833,7 +1976,20 @@ fn render_display_list_to_cairo_with_dirty_tiles(
     for (cmd_idx, cmd) in cmds.iter().enumerate() {
         if !cmd.is_clip() && !cmd.is_state_command() {
             let (cx1, cy1, cx2, cy2) = current_clip;
-            if let Some((bx1, by1, bx2, by2)) = command_paint_rect(cmd) {
+            if let Some((mut bx1, mut by1, mut bx2, mut by2)) = command_paint_rect(cmd) {
+                if !filter_pad_stack.is_empty() {
+                    let (mut pl, mut pt, mut pr, mut pb) = (0.0, 0.0, 0.0, 0.0);
+                    for &(fl, ft, fr, fb) in &filter_pad_stack {
+                        pl += fl;
+                        pt += ft;
+                        pr += fr;
+                        pb += fb;
+                    }
+                    bx1 -= pl;
+                    by1 -= pt;
+                    bx2 += pr;
+                    by2 += pb;
+                }
                 if bx2 < cx1 || bx1 > cx2 || by2 < cy1 || by1 > cy2 {
                     continue;
                 }
@@ -2046,6 +2202,7 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                 layout.set_wrap(pango::WrapMode::Word);
                 layout.set_alignment(pango::Alignment::Left);
                 layout.set_justify(false);
+                layout.set_spacing(0);
                 let mut font_desc = pango::FontDescription::new();
                 let family = resolved_font_family(*font_family, *is_monospace);
                 font_desc.set_family(&family);
@@ -2057,10 +2214,10 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                 if let Some(w) = bounds_width {
                     let (unwrapped_w, _) = layout.size();
                     let unwrapped_px = unwrapped_w as f32 / pango::SCALE as f32;
-                    if unwrapped_px > *w * 1.12 {
+                    if *w > 0.0 && unwrapped_px > *w {
                         layout.set_width((*w * pango::SCALE as f32) as i32);
                         layout.set_wrap(pango::WrapMode::WordChar);
-                    } else if *text_align != strata_style::TextAlign::Left {
+                    } else if *w > 0.0 && *text_align != strata_style::TextAlign::Left {
                         layout.set_width((*w * pango::SCALE as f32) as i32);
                     }
                     match text_align {
@@ -2077,6 +2234,27 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                     }
                 }
 
+                // Apply CSS `line-height` inter-line spacing so painted line baselines match
+                // `effective_draw_text_line_height(font_size, line_height)` (used by caret,
+                // selection, and click hit-testing) with zero vertical drift.
+                let target_line_step = strata_render::compositor::effective_draw_text_line_height(
+                    *font_size,
+                    *line_height,
+                ) as f64;
+                let natural_line_h_px = layout
+                    .line_readonly(0)
+                    .map(|line| {
+                        let (_, logical) = line.extents();
+                        logical.height() as f64 / pango::SCALE as f64
+                    })
+                    .filter(|h| h.is_finite() && *h > 0.5)
+                    .unwrap_or_else(|| (*font_size as f64) * 1.2);
+                let extra_spacing_px =
+                    (target_line_step - natural_line_h_px).max(-natural_line_h_px * 0.35);
+                if extra_spacing_px.abs() > 0.01 {
+                    layout.set_spacing((extra_spacing_px * pango::SCALE as f64).round() as i32);
+                }
+
                 cr.set_source_rgba(
                     color.r() as f64,
                     color.g() as f64,
@@ -2085,10 +2263,14 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                 );
                 let (_, pango_h) = layout.size();
                 let pango_h_px = pango_h as f64 / pango::SCALE as f64;
-                let target_h = bounds_height
-                    .unwrap_or(*font_size * *line_height)
-                    .max(*font_size * *line_height) as f64;
-                let vert_offset = ((target_h - pango_h_px) / 2.0).max(0.0);
+                let vert_offset = if let Some(bh) = bounds_height {
+                    let target_h = (*bh as f64).max(target_line_step);
+                    ((target_h - pango_h_px) * 0.5).max(0.0)
+                } else {
+                    // Top-aligned multiline text (e.g. `<textarea>`): apply CSS half-leading so
+                    // line `i` occupies `[i * target_line_step, (i + 1) * target_line_step]`.
+                    ((target_line_step - natural_line_h_px) * 0.5).max(0.0)
+                };
                 cr.move_to(origin.0 as f64, origin.1 as f64 + vert_offset);
                 pangocairo::functions::show_layout(cr, layout);
             }
@@ -2099,6 +2281,7 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                 layout.set_wrap(pango::WrapMode::Word);
                 layout.set_alignment(pango::Alignment::Left);
                 layout.set_justify(false);
+                layout.set_spacing(0);
                 for frag in fragments {
                     if frag.text.is_empty() && frag.style.background_color.is_none() {
                         continue;
@@ -2543,6 +2726,7 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                                 layout.set_width(-1);
                                 layout.set_alignment(pango::Alignment::Left);
                                 layout.set_justify(false);
+                                layout.set_spacing(0);
                                 let mut font_desc = pango::FontDescription::new();
                                 font_desc.set_family(font_family);
                                 font_desc.set_absolute_size(
@@ -2835,13 +3019,64 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                 }
             }
             DrawCommand::PushIsolation { isolate } => {
-                if *isolate {
-                    cr.push_group();
+                if !*isolate {
+                    isolation_stack.push(None);
+                } else {
+                    let _ = cr.save();
+                    let mut skip_group = false;
+                    if let Some((bx, by, bw, bh)) =
+                        compute_isolation_group_clip(&cmds[cmd_idx + 1..])
+                    {
+                        let (cx1, cy1, cx2, cy2) = current_clip;
+                        if bx + bw < cx1 || bx > cx2 || by + bh < cy1 || by > cy2 {
+                            skip_group = true;
+                        } else if let Some((bits, cols, rows)) = dirty_tiles {
+                            let (sx1, sy1, sx2, sy2) = if transform_stack.len() > 1 {
+                                transform_paint_rect(
+                                    transform_stack.last().unwrap(),
+                                    bx - 12.0,
+                                    by - 12.0,
+                                    bx + bw + 12.0,
+                                    by + bh + 12.0,
+                                )
+                            } else {
+                                (bx - 12.0, by - 12.0, bx + bw + 12.0, by + bh + 12.0)
+                            };
+                            if !rect_overlaps_dirty_tiles(sx1, sy1, sx2, sy2, bits, cols, rows) {
+                                skip_group = true;
+                            }
+                        }
+                        if skip_group {
+                            cr.rectangle(0.0, 0.0, 0.0, 0.0);
+                            cr.clip();
+                            current_clip = (0.0, 0.0, 0.0, 0.0);
+                        } else {
+                            cr.rectangle(bx, by, bw, bh);
+                            cr.clip();
+                            current_clip = cr
+                                .clip_extents()
+                                .unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
+                        }
+                    }
+                    if skip_group {
+                        isolation_stack.push(Some(false));
+                    } else {
+                        cr.push_group();
+                        isolation_stack.push(Some(true));
+                    }
                 }
             }
             DrawCommand::PopIsolation => {
-                let _ = cr.pop_group_to_source();
-                let _ = cr.paint();
+                if let Some(Some(pushed_group)) = isolation_stack.pop() {
+                    if pushed_group {
+                        let _ = cr.pop_group_to_source();
+                        let _ = cr.paint();
+                    }
+                    let _ = cr.restore();
+                    current_clip = cr
+                        .clip_extents()
+                        .unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
+                }
             }
             DrawCommand::PushOpacity { alpha } => {
                 let _ = cr.save();
@@ -2897,12 +3132,64 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                         .unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
                 }
             }
-            DrawCommand::PushFilter { .. } => {
-                cr.push_group();
+            DrawCommand::PushFilter { bounds, filter } => {
+                let _ = cr.save();
+                let pad = filter_padding_insets(filter);
+                filter_pad_stack.push(pad);
+                let mut skip_group = false;
+                if let Some((bx, by, bw, bh)) =
+                    compute_filter_group_clip(*bounds, filter, &cmds[cmd_idx + 1..])
+                {
+                    let (cx1, cy1, cx2, cy2) = current_clip;
+                    if bx + bw < cx1 || bx > cx2 || by + bh < cy1 || by > cy2 {
+                        skip_group = true;
+                    } else if let Some((bits, cols, rows)) = dirty_tiles {
+                        let (sx1, sy1, sx2, sy2) = if transform_stack.len() > 1 {
+                            transform_paint_rect(
+                                transform_stack.last().unwrap(),
+                                bx,
+                                by,
+                                bx + bw,
+                                by + bh,
+                            )
+                        } else {
+                            (bx, by, bx + bw, by + bh)
+                        };
+                        if !rect_overlaps_dirty_tiles(sx1, sy1, sx2, sy2, bits, cols, rows) {
+                            skip_group = true;
+                        }
+                    }
+                    if skip_group {
+                        cr.rectangle(0.0, 0.0, 0.0, 0.0);
+                        cr.clip();
+                        current_clip = (0.0, 0.0, 0.0, 0.0);
+                    } else {
+                        cr.rectangle(bx, by, bw, bh);
+                        cr.clip();
+                        current_clip = cr
+                            .clip_extents()
+                            .unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
+                    }
+                }
+                if skip_group {
+                    filter_stack.push(false);
+                } else {
+                    cr.push_group();
+                    filter_stack.push(true);
+                }
             }
             DrawCommand::PopFilter => {
-                let _ = cr.pop_group_to_source();
-                let _ = cr.paint();
+                filter_pad_stack.pop();
+                if let Some(pushed_group) = filter_stack.pop() {
+                    if pushed_group {
+                        let _ = cr.pop_group_to_source();
+                        let _ = cr.paint();
+                    }
+                    let _ = cr.restore();
+                    current_clip = cr
+                        .clip_extents()
+                        .unwrap_or((0.0, 0.0, 100_000.0, 100_000.0));
+                }
             }
             DrawCommand::PushClipPath { bounds, clip_path } => {
                 let _ = cr.save();
@@ -3130,6 +3417,67 @@ pub fn render_to_png(
     Ok(())
 }
 
+/// Renders a DisplayList into an owned Cairo ARGB32 pixel buffer on the UI thread so PNG
+/// compression and base64 encoding can execute off-thread without stalling frame presentation.
+pub fn render_to_captured_buffer(
+    display_list: &DisplayList,
+    width: i32,
+    height: i32,
+    cursor_overlay: Option<(
+        &crate::mcp_cursor::McpCursorState,
+        &crate::cursor_theme::CursorTheme,
+    )>,
+) -> Result<crate::CapturedSurfaceBuffer, String> {
+    if width <= 0 || height <= 0 {
+        return Err("Dimensions must be positive to capture screenshot".to_string());
+    }
+    #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+    if let Some(res) =
+        gtk_gpu_x11::try_capture_from_cached_overlay(display_list, width, height, cursor_overlay)
+    {
+        return res;
+    }
+    let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, width, height)
+        .map_err(|e| format!("Failed to create Cairo image surface: {:?}", e))?;
+    {
+        let cr = cairo::Context::new(&surface)
+            .map_err(|e| format!("Failed to create Cairo context: {:?}", e))?;
+
+        cr.set_font_options(&parity_font_options());
+
+        cr.set_source_rgb(0.035, 0.035, 0.043);
+        let _ = cr.paint();
+
+        render_display_list_to_cairo(&cr, display_list);
+
+        if let Some((cursor_state, theme)) = cursor_overlay {
+            if cursor_state.fade_opacity > 0.001 {
+                theme.render_cairo(
+                    &cr,
+                    cursor_state.cursor_icon,
+                    cursor_state.current_x,
+                    cursor_state.current_y,
+                    cursor_state.fade_opacity,
+                    cursor_state.is_down,
+                );
+            }
+        }
+    }
+    surface.flush();
+    let stride = surface.stride();
+    let pixels = surface
+        .data()
+        .map_err(|e| format!("Failed to borrow captured Cairo surface data: {:?}", e))?
+        .to_vec();
+    Ok(crate::CapturedSurfaceBuffer {
+        width: width as u32,
+        height: height as u32,
+        stride,
+        pixels,
+        is_cairo_argb32: true,
+    })
+}
+
 /// Renders a DisplayList into an in-memory Cairo ImageSurface and returns raw PNG bytes.
 /// Optionally composites an emulated MCP cursor with authentic Yaru theme bitmaps.
 pub fn render_to_png_bytes(
@@ -3141,40 +3489,7 @@ pub fn render_to_png_bytes(
         &crate::cursor_theme::CursorTheme,
     )>,
 ) -> Result<Vec<u8>, String> {
-    let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, width, height)
-        .map_err(|e| format!("Failed to create Cairo image surface: {:?}", e))?;
-    let cr = cairo::Context::new(&surface)
-        .map_err(|e| format!("Failed to create Cairo context: {:?}", e))?;
-
-    cr.set_font_options(&parity_font_options());
-
-    cr.set_source_rgb(0.035, 0.035, 0.043);
-    let _ = cr.paint();
-
-    render_display_list_to_cairo(&cr, display_list);
-
-    if let Some((cursor_state, theme)) = cursor_overlay {
-        if cursor_state.fade_opacity > 0.001 {
-            theme.render_cairo(
-                &cr,
-                cursor_state.cursor_icon,
-                cursor_state.current_x,
-                cursor_state.current_y,
-                cursor_state.fade_opacity,
-                cursor_state.is_down,
-            );
-        }
-    }
-
-    let mut buf = Vec::new();
-    {
-        let mut cursor = std::io::Cursor::new(&mut buf);
-        surface
-            .write_to_png(&mut cursor)
-            .map_err(|e| format!("Failed to write PNG: {:?}", e))?;
-    }
-
-    Ok(buf)
+    render_to_captured_buffer(display_list, width, height, cursor_overlay)?.encode_png_bytes()
 }
 
 thread_local! {
@@ -3318,6 +3633,7 @@ mod gtk_gpu_x11 {
         height: u32,
         mapped: bool,
         overlay_uploaded: bool,
+        last_transparent_bg: bool,
         last_overlay_hash: Option<u64>,
         overlay_surface: Option<(u32, u32, cairo::ImageSurface)>,
         tile_cols: usize,
@@ -3638,6 +3954,7 @@ mod gtk_gpu_x11 {
         h_acc.0
     }
 
+    #[allow(dead_code)]
     fn compute_overlay_hash(
         list: &DisplayList,
         w: u32,
@@ -3689,6 +4006,7 @@ mod gtk_gpu_x11 {
         let hf = h as f64;
         let mut clip_stack: Vec<(f64, f64, f64, f64)> = vec![(0.0, 0.0, wf, hf)];
         let mut state_stack: Vec<u64> = vec![0x9e37_79b9_7f4a_7c15];
+        let mut filter_pad_stack: Vec<(f64, f64, f64, f64)> = Vec::new();
         let mut transform_stack: Vec<strata_primitives::geom::Matrix4x4> =
             vec![strata_primitives::geom::Matrix4x4::identity()];
 
@@ -3760,18 +4078,84 @@ mod gtk_gpu_x11 {
                         state_stack.pop();
                     }
                 }
-                DrawCommand::PushOpacity { .. } | DrawCommand::PushBlendMode { .. } => {
+                DrawCommand::PushOpacity { .. }
+                | DrawCommand::PushBlendMode { .. }
+                | DrawCommand::PushIsolation { .. } => {
+                    // State-stack commands taint only the 64x64 tiles touched by child draw
+                    // commands inside the group, rather than invalidating the whole window.
                     state_stack.push(hash_single_draw_command(cmd, cur_state));
                 }
-                DrawCommand::PopOpacity | DrawCommand::PopBlendMode => {
+                DrawCommand::PopOpacity
+                | DrawCommand::PopBlendMode
+                | DrawCommand::PopIsolation => {
                     if state_stack.len() > 1 {
                         state_stack.pop();
                     }
                 }
-                DrawCommand::PushBackdropFilter { .. } | DrawCommand::PopBackdropFilter => {}
+                DrawCommand::PushFilter { bounds, filter } => {
+                    let filter_h = hash_single_draw_command(cmd, cur_state);
+                    state_stack.push(filter_h);
+                    let (pl, pt, pr, pb) = super::filter_padding_insets(filter);
+                    filter_pad_stack.push((pl, pt, pr, pb));
+                    let (mut fx1, mut fy1, mut fx2, mut fy2) = (
+                        bounds.x as f64 - pl - 4.0,
+                        bounds.y as f64 - pt - 4.0,
+                        (bounds.x + bounds.width) as f64 + pr + 4.0,
+                        (bounds.y + bounds.height) as f64 + pb + 4.0,
+                    );
+                    if transform_stack.len() > 1 {
+                        (fx1, fy1, fx2, fy2) = super::transform_paint_rect(
+                            transform_stack.last().unwrap(),
+                            fx1,
+                            fy1,
+                            fx2,
+                            fy2,
+                        );
+                    }
+                    mix_rect(
+                        fx1.max(cx1).max(0.0),
+                        fy1.max(cy1).max(0.0),
+                        fx2.min(cx2).min(wf),
+                        fy2.min(cy2).min(hf),
+                        filter_h,
+                    );
+                }
+                DrawCommand::PopFilter => {
+                    filter_pad_stack.pop();
+                    if state_stack.len() > 1 {
+                        state_stack.pop();
+                    }
+                }
+                DrawCommand::PushBackdropFilter { bounds, filter, .. } => {
+                    let bf_h = hash_single_draw_command(cmd, cur_state);
+                    let (pl, pt, pr, pb) = super::filter_padding_insets(filter);
+                    let (mut fx1, mut fy1, mut fx2, mut fy2) = (
+                        bounds.x as f64 - pl - 4.0,
+                        bounds.y as f64 - pt - 4.0,
+                        (bounds.x + bounds.width) as f64 + pr + 4.0,
+                        (bounds.y + bounds.height) as f64 + pb + 4.0,
+                    );
+                    if transform_stack.len() > 1 {
+                        (fx1, fy1, fx2, fy2) = super::transform_paint_rect(
+                            transform_stack.last().unwrap(),
+                            fx1,
+                            fy1,
+                            fx2,
+                            fy2,
+                        );
+                    }
+                    mix_rect(
+                        fx1.max(cx1).max(0.0),
+                        fy1.max(cy1).max(0.0),
+                        fx2.min(cx2).min(wf),
+                        fy2.min(cy2).min(hf),
+                        bf_h,
+                    );
+                }
+                DrawCommand::PopBackdropFilter => {}
                 _ => {
                     let cmd_h = hash_single_draw_command(cmd, cur_state);
-                    let (bx1, by1, bx2, by2) = super::command_paint_rect(cmd)
+                    let (mut bx1, mut by1, mut bx2, mut by2) = super::command_paint_rect(cmd)
                         .map(|(rx1, ry1, rx2, ry2)| {
                             if transform_stack.len() > 1 {
                                 super::transform_paint_rect(
@@ -3786,6 +4170,19 @@ mod gtk_gpu_x11 {
                             }
                         })
                         .unwrap_or((cx1, cy1, cx2, cy2));
+                    if !filter_pad_stack.is_empty() {
+                        let (mut pl, mut pt, mut pr, mut pb) = (0.0, 0.0, 0.0, 0.0);
+                        for &(fl, ft, fr, fb) in &filter_pad_stack {
+                            pl += fl;
+                            pt += ft;
+                            pr += fr;
+                            pb += fb;
+                        }
+                        bx1 -= pl;
+                        by1 -= pt;
+                        bx2 += pr;
+                        by2 += pb;
+                    }
                     mix_rect(
                         bx1.max(cx1).max(0.0),
                         by1.max(cy1).max(0.0),
@@ -3918,6 +4315,7 @@ mod gtk_gpu_x11 {
             height: h,
             mapped: true,
             overlay_uploaded: false,
+            last_transparent_bg: false,
             last_overlay_hash: None,
             overlay_surface: None,
             tile_cols: 0,
@@ -3939,6 +4337,7 @@ mod gtk_gpu_x11 {
         transparent_bg: bool,
         cursor_overlay: Option<(&crate::McpCursorState, &crate::CursorTheme)>,
     ) -> bool {
+        state.last_transparent_bg = transparent_bg;
         let needs_new_surf = state
             .overlay_surface
             .as_ref()
@@ -3955,24 +4354,19 @@ mod gtk_gpu_x11 {
             state.last_tile_hashes.clear();
         }
 
-        let has_unbounded = list.commands().iter().any(|c| {
-            matches!(
-                c,
-                DrawCommand::PushFilter { .. } | DrawCommand::PushIsolation { isolate: true }
-            )
-        });
         let cols = (w as usize).div_ceil(OVERLAY_TILE_PX).max(1);
         let rows = (h as usize).div_ceil(OVERLAY_TILE_PX).max(1);
         let total_tiles = cols * rows;
 
+        // `PushFilter` (padded by 3-sigma blur + drop-shadow spread) and `PushIsolation`
+        // (bounded by child draw commands) are both scoped in `compute_overlay_tile_hashes`
+        // and `render_display_list_to_cairo_with_dirty_tiles`, so the 64x64 incremental
+        // tile cache stays active even when individual elements use opacity/blur/isolation.
         let can_incremental = !needs_new_surf
             && state.overlay_uploaded
-            && !has_unbounded
             && state.tile_cols == cols
             && state.tile_rows == rows
             && state.last_tile_hashes.len() == total_tiles;
-
-        let mut pending_unbounded_hash: Option<u64> = None;
 
         if can_incremental {
             compute_overlay_tile_hashes(
@@ -4021,6 +4415,7 @@ mod gtk_gpu_x11 {
                 }
             }
 
+            super::record_tile_cache_stats(dirty_tiles_count as u32, total_tiles as u32);
             if dirty_tiles_count == 0 {
                 return true;
             }
@@ -4082,7 +4477,7 @@ mod gtk_gpu_x11 {
                 state.last_overlay_hash = None;
                 return true;
             }
-        } else if !has_unbounded {
+        } else {
             compute_overlay_tile_hashes(
                 list,
                 w,
@@ -4093,14 +4488,7 @@ mod gtk_gpu_x11 {
                 rows,
                 &mut state.new_tile_hashes,
             );
-        } else {
-            let overlay_hash =
-                compute_overlay_hash(list, w, h, transparent_bg, cursor_overlay);
-            if state.overlay_uploaded && state.last_overlay_hash == Some(overlay_hash) {
-                return true;
-            }
-            pending_unbounded_hash = Some(overlay_hash);
-            state.last_tile_hashes.clear();
+            super::record_tile_cache_stats(total_tiles as u32, total_tiles as u32);
         }
 
         let Some((_, _, ref mut surf)) = state.overlay_surface else {
@@ -4156,28 +4544,21 @@ mod gtk_gpu_x11 {
                 .presenter
                 .upload_ui_overlay_bgra(w, h, &state.upload_scratch);
         }
-        if !has_unbounded {
-            state.tile_cols = cols;
-            state.tile_rows = rows;
-            std::mem::swap(&mut state.last_tile_hashes, &mut state.new_tile_hashes);
-            state.last_overlay_hash = None;
-        } else {
-            state.tile_cols = 0;
-            state.tile_rows = 0;
-            state.last_tile_hashes.clear();
-            state.last_overlay_hash = pending_unbounded_hash;
-        }
+        state.tile_cols = cols;
+        state.tile_rows = rows;
+        std::mem::swap(&mut state.last_tile_hashes, &mut state.new_tile_hashes);
+        state.last_overlay_hash = None;
         true
     }
 
-    pub(super) fn try_present_display_list(
+    pub(super) fn try_present_display_list_timed(
         list: &DisplayList,
         width: f32,
         height: f32,
         overlay_dirty: bool,
         transparent_bg: bool,
         cursor_overlay: Option<(&crate::McpCursorState, &crate::CursorTheme)>,
-    ) -> bool {
+    ) -> crate::GpuPresentTimings {
         let mut viewports: Vec<([f32; 4], Arc<Scene3D>)> = Vec::new();
         for cmd in list.commands() {
             if let DrawCommand::DrawViewport3D { bounds, scene } = cmd {
@@ -4197,13 +4578,13 @@ mod gtk_gpu_x11 {
                     state.set_mapped(false);
                 }
             });
-            return false;
+            return crate::GpuPresentTimings::default();
         }
 
         let w = width.max(1.0).round() as u32;
         let h = height.max(1.0).round() as u32;
         if GPU_SURFACE_INIT_FAILED.with(|f| f.get()) {
-            return false;
+            return crate::GpuPresentTimings::default();
         }
 
         let present_mode = super::ACTIVE_PRESENT_MODE.with(|m| m.get());
@@ -4212,7 +4593,7 @@ mod gtk_gpu_x11 {
             if cell.is_none() {
                 let da_opt = super::DRAWING_AREA_HANDLE.with(|da| da.borrow().clone());
                 let Some(da) = da_opt else {
-                    return false;
+                    return crate::GpuPresentTimings::default();
                 };
                 match init_state_from_drawing_area(&da, w, h, present_mode) {
                     Ok(state) => *cell = Some(state),
@@ -4221,13 +4602,13 @@ mod gtk_gpu_x11 {
                             eprintln!("[perf] wgpu X11 swapchain init failed: {e}");
                         }
                         GPU_SURFACE_INIT_FAILED.with(|f| f.set(true));
-                        return false;
+                        return crate::GpuPresentTimings::default();
                     }
                 }
             }
 
             let Some(ref mut state) = *cell else {
-                return false;
+                return crate::GpuPresentTimings::default();
             };
             state.resize(w, h);
             state.set_mapped(true);
@@ -4238,9 +4619,9 @@ mod gtk_gpu_x11 {
                 } else {
                     [0.035, 0.035, 0.043, 1.0]
                 };
-                if state
+                if let Ok((_, raster_2d, wgpu_3d_submit, swapchain_present)) = state
                     .presenter
-                    .present_display_list_to_surface(
+                    .present_display_list_to_surface_timed(
                         list,
                         width.max(1.0),
                         height.max(1.0),
@@ -4248,18 +4629,24 @@ mod gtk_gpu_x11 {
                         None,
                         clear_color,
                     )
-                    .is_ok()
                 {
                     state.last_viewports = viewports;
                     state.overlay_uploaded = true;
-                    return true;
+                    super::record_gpu_telemetry(state.presenter.gpu_telemetry());
+                    return crate::GpuPresentTimings {
+                        presented: true,
+                        raster_2d,
+                        wgpu_3d_submit,
+                        swapchain_present,
+                    };
                 }
                 if viewports.is_empty() {
                     state.set_mapped(false);
-                    return false;
+                    return crate::GpuPresentTimings::default();
                 }
             }
 
+            let mut raster_2d = std::time::Duration::ZERO;
             if overlay_dirty || !state.overlay_uploaded {
                 let t_ov0 = std::time::Instant::now();
                 if rasterize_and_upload_overlay(
@@ -4272,7 +4659,8 @@ mod gtk_gpu_x11 {
                 ) {
                     state.overlay_uploaded = true;
                 }
-                let t_ov = t_ov0.elapsed().as_secs_f64() * 1000.0;
+                raster_2d = t_ov0.elapsed();
+                let t_ov = raster_2d.as_secs_f64() * 1000.0;
                 if super::gtk_perf_logging_enabled() && t_ov > 1.2 {
                     eprintln!("[perf] overlay_upload total={:.2}ms", t_ov);
                 }
@@ -4284,31 +4672,139 @@ mod gtk_gpu_x11 {
                 .iter()
                 .map(|(vp, sc)| (*vp, sc.as_ref()))
                 .collect();
-            state
+            match state
                 .presenter
-                .present_viewports_to_surface(&vp_refs, state.overlay_uploaded)
-                .is_ok()
+                .present_viewports_to_surface_timed(&vp_refs, state.overlay_uploaded)
+            {
+                Ok((wgpu_3d_submit, swapchain_present)) => {
+                    super::record_gpu_telemetry(state.presenter.gpu_telemetry());
+                    crate::GpuPresentTimings {
+                        presented: true,
+                        raster_2d,
+                        wgpu_3d_submit,
+                        swapchain_present,
+                    }
+                }
+                Err(_) => crate::GpuPresentTimings::default(),
+            }
         })
     }
 
-    pub(super) fn present_active_now() -> bool {
+    pub(super) fn present_active_now_timed() -> crate::GpuPresentTimings {
         GPU_SURFACE_STATE.with(|slot| {
             let mut cell = slot.borrow_mut();
             let Some(ref mut state) = *cell else {
-                return false;
+                return crate::GpuPresentTimings::default();
             };
             if !state.mapped || !state.overlay_uploaded || state.last_viewports.is_empty() {
-                return false;
+                return crate::GpuPresentTimings::default();
             }
             let vp_refs: Vec<([f32; 4], &Scene3D)> = state
                 .last_viewports
                 .iter()
                 .map(|(vp, sc)| (*vp, sc.as_ref()))
                 .collect();
-            state
+            match state
                 .presenter
-                .present_viewports_to_surface(&vp_refs, state.overlay_uploaded)
-                .is_ok()
+                .present_viewports_to_surface_timed(&vp_refs, state.overlay_uploaded)
+            {
+                Ok((wgpu_3d_submit, swapchain_present)) => {
+                    super::record_gpu_telemetry(state.presenter.gpu_telemetry());
+                    crate::GpuPresentTimings {
+                        presented: true,
+                        raster_2d: std::time::Duration::ZERO,
+                        wgpu_3d_submit,
+                        swapchain_present,
+                    }
+                }
+                Err(_) => crate::GpuPresentTimings::default(),
+            }
+        })
+    }
+
+    pub(super) fn try_capture_from_cached_overlay(
+        list: &DisplayList,
+        width: i32,
+        height: i32,
+        cursor_overlay: Option<(&crate::McpCursorState, &crate::CursorTheme)>,
+    ) -> Option<Result<crate::CapturedSurfaceBuffer, String>> {
+        if super::gtk_gpu_2d_enabled() {
+            return None;
+        }
+        let w = width as u32;
+        let h = height as u32;
+        GPU_SURFACE_STATE.with(|slot| {
+            let mut cell = slot.borrow_mut();
+            let state = cell.as_mut()?;
+            if !state.mapped || state.width != w || state.height != h {
+                return None;
+            }
+            // Refresh the live 64x64 incremental dirty-tile overlay surface so screenshot capture
+            // exercises and reflects the exact live cached 2D surface composited onto the swapchain.
+            let transparent_bg = state.last_transparent_bg;
+            if !rasterize_and_upload_overlay(state, list, w, h, transparent_bg, cursor_overlay) {
+                return None;
+            }
+            state.overlay_uploaded = true;
+            let (_, _, ref overlay_surf) = state.overlay_surface.as_ref()?;
+
+            let capture_res = (|| -> Result<crate::CapturedSurfaceBuffer, String> {
+                let mut out_surface =
+                    cairo::ImageSurface::create(cairo::Format::ARgb32, width, height)
+                        .map_err(|e| format!("Failed to create Cairo capture surface: {:?}", e))?;
+                {
+                    let cr = cairo::Context::new(&out_surface)
+                        .map_err(|e| format!("Failed to create Cairo context: {:?}", e))?;
+                    cr.set_font_options(&super::parity_font_options());
+                    cr.set_source_rgb(0.035, 0.035, 0.043);
+                    let _ = cr.paint();
+
+                    // Paint 3D viewports underneath matching the live swapchain composite order
+                    // (overlay_surface punches transparent holes over DrawViewport3D rects).
+                    for cmd in list.commands() {
+                        if let DrawCommand::DrawViewport3D { bounds, scene } = cmd {
+                            if bounds.width > 0.0 && bounds.height > 0.0 {
+                                let vw = bounds.width.max(1.0).round() as usize;
+                                let vh = bounds.height.max(1.0).round() as usize;
+                                if let Some(res) =
+                                    super::viewport_3d_surface_with_fallback(scene, vw, vh, false)
+                                {
+                                    let _ = cr.save();
+                                    cr.translate(bounds.x as f64, bounds.y as f64);
+                                    if res.src_width != vw || res.src_height != vh {
+                                        cr.scale(
+                                            bounds.width as f64 / res.src_width.max(1) as f64,
+                                            bounds.height as f64 / res.src_height.max(1) as f64,
+                                        );
+                                    }
+                                    let _ = cr.set_source_surface(&res.surface, 0.0, 0.0);
+                                    let _ = cr.paint();
+                                    let _ = cr.restore();
+                                }
+                            }
+                        }
+                    }
+
+                    // Composite the live 64x64 dirty-tile cached UI overlay directly on top.
+                    cr.set_operator(cairo::Operator::Over);
+                    let _ = cr.set_source_surface(overlay_surf, 0.0, 0.0);
+                    let _ = cr.paint();
+                }
+                out_surface.flush();
+                let stride = out_surface.stride();
+                let pixels = out_surface
+                    .data()
+                    .map_err(|e| format!("Failed to borrow captured Cairo surface data: {:?}", e))?
+                    .to_vec();
+                Ok(crate::CapturedSurfaceBuffer {
+                    width: w,
+                    height: h,
+                    stride,
+                    pixels,
+                    is_cairo_argb32: true,
+                })
+            })();
+            Some(capture_res)
         })
     }
 
@@ -4332,23 +4828,268 @@ mod gtk_gpu_x11 {
             }
         });
     }
+
+    #[cfg(test)]
+    mod tile_cache_tests {
+        use super::*;
+        use strata_layout::Rect;
+        use strata_style::{BorderRadius, Color, FontWeight, TextAlign};
+
+        fn build_multiline_textarea_list(scroll_y: f32, caret_line: Option<usize>) -> DisplayList {
+            let mut list = DisplayList::new();
+            let box_rect = Rect::new(16.0, 16.0, 260.0, 180.0);
+            list.push(DrawCommand::DrawRect {
+                bounds: box_rect,
+                color: Color::rgba(20, 22, 28, 255),
+            });
+            list.push(DrawCommand::PushClip {
+                bounds: box_rect,
+                radius: BorderRadius::all(0.0),
+            });
+            let text = (1..=16)
+                .map(|i| format!("Line {:02}: telemetry payload alpha beta", i))
+                .collect::<Vec<_>>()
+                .join("\n");
+            list.push(DrawCommand::DrawText {
+                origin: (20.0, 20.0 - scroll_y),
+                bounds_width: Some(252.0),
+                bounds_height: None,
+                text_align: TextAlign::Left,
+                text,
+                font_size: 13.0,
+                line_height: 1.5,
+                font_weight: FontWeight::Normal,
+                color: Color::rgba(235, 240, 245, 255),
+                is_monospace: true,
+                font_family: strata_primitives::AtomId(0),
+            });
+            if let Some(line_idx) = caret_line {
+                let line_step =
+                    strata_render::compositor::effective_draw_text_line_height(13.0, 1.5);
+                list.push(DrawCommand::DrawRect {
+                    bounds: Rect::new(24.0, 20.0 + line_idx as f32 * line_step - scroll_y, 2.0, 18.0),
+                    color: Color::rgba(59, 130, 246, 255),
+                });
+            }
+            list.push(DrawCommand::PopClip);
+            list
+        }
+
+        #[test]
+        fn dirty_tile_incremental_repaint_preserves_multiline_text_on_lower_caret_and_scroll() {
+            let w: u32 = 320;
+            let h: u32 = 256;
+            let cols = (w as usize).div_ceil(OVERLAY_TILE_PX);
+            let rows = (h as usize).div_ceil(OVERLAY_TILE_PX);
+            let total_tiles = cols * rows;
+
+            // Frame 1: Full initial render of multiline textarea with no caret.
+            let list_f1 = build_multiline_textarea_list(0.0, None);
+            let mut prev_hashes = Vec::new();
+            compute_overlay_tile_hashes(&list_f1, w, h, false, None, cols, rows, &mut prev_hashes);
+
+            let mut cached_surf =
+                cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32)
+                    .expect("create cached surface");
+            {
+                let cr = cairo::Context::new(&cached_surf).expect("cairo ctx");
+                cr.set_font_options(&super::super::parity_font_options());
+                cr.set_source_rgb(0.035, 0.035, 0.043);
+                let _ = cr.paint();
+                super::super::render_display_list_to_cairo_impl(&cr, &list_f1, true);
+            }
+            cached_surf.flush();
+
+            // Frame 2: Caret blinks on line 6 (~y=137, in tile row 2 — does NOT touch tile row 0!).
+            let list_f2 = build_multiline_textarea_list(0.0, Some(6));
+            let mut next_hashes = Vec::new();
+            compute_overlay_tile_hashes(&list_f2, w, h, false, None, cols, rows, &mut next_hashes);
+            let mut dirty_bits = vec![0u64; total_tiles.div_ceil(64)];
+            let mut dirty_rects: Vec<(u32, u32, u32, u32)> = Vec::new();
+            for r in 0..rows {
+                for c in 0..cols {
+                    let idx = r * cols + c;
+                    if next_hashes[idx] != prev_hashes[idx] {
+                        dirty_bits[idx >> 6] |= 1u64 << (idx & 63);
+                        let rx = (c * OVERLAY_TILE_PX) as u32;
+                        let ry = (r * OVERLAY_TILE_PX) as u32;
+                        let rw = OVERLAY_TILE_PX as u32;
+                        let rh = OVERLAY_TILE_PX as u32;
+                        if let Some(prev) = dirty_rects.last_mut() {
+                            if prev.0 == rx && prev.2 == rw && prev.1 + prev.3 == ry {
+                                prev.3 += rh;
+                                continue;
+                            }
+                        }
+                        dirty_rects.push((rx, ry, rw, rh));
+                    }
+                }
+            }
+            assert!(
+                !dirty_rects.is_empty(),
+                "caret on line 6 must dirty lower tile(s)"
+            );
+            assert!(
+                dirty_rects.len() < total_tiles,
+                "caret blink should stay incremental, not repaint all tiles"
+            );
+            {
+                let cr = cairo::Context::new(&cached_surf).expect("cairo ctx");
+                cr.set_font_options(&super::super::parity_font_options());
+                for &(rx, ry, rw, rh) in &dirty_rects {
+                    cr.rectangle(rx as f64, ry as f64, rw as f64, rh as f64);
+                }
+                cr.clip();
+                cr.set_operator(cairo::Operator::Source);
+                cr.set_source_rgb(0.035, 0.035, 0.043);
+                let _ = cr.paint();
+                cr.set_operator(cairo::Operator::Over);
+                super::super::render_display_list_to_cairo_with_dirty_tiles(
+                    &cr,
+                    &list_f2,
+                    true,
+                    Some((&dirty_bits, cols, rows)),
+                );
+            }
+            cached_surf.flush();
+
+            // Compare incremental cached surface pixel-for-pixel against a fresh full render.
+            let mut ref_surf =
+                cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32)
+                    .expect("create ref surface");
+            {
+                let cr = cairo::Context::new(&ref_surf).expect("cairo ctx");
+                cr.set_font_options(&super::super::parity_font_options());
+                cr.set_source_rgb(0.035, 0.035, 0.043);
+                let _ = cr.paint();
+                super::super::render_display_list_to_cairo_impl(&cr, &list_f2, true);
+            }
+            ref_surf.flush();
+
+            let cached_bytes = cached_surf.data().expect("cached data");
+            let ref_bytes = ref_surf.data().expect("ref data");
+            let mut diff_pixels = 0usize;
+            let mut samples = Vec::new();
+            for y in 0..h as usize {
+                for x in 0..w as usize {
+                    let off = (y * w as usize + x) * 4;
+                    let a = &cached_bytes[off..off + 4];
+                    let b = &ref_bytes[off..off + 4];
+                    if a != b {
+                        diff_pixels += 1;
+                        if samples.len() < 8 {
+                            samples.push((x, y, [a[0], a[1], a[2], a[3]], [b[0], b[1], b[2], b[3]]));
+                        }
+                    }
+                }
+            }
+            assert_eq!(
+                diff_pixels, 0,
+                "incremental 64x64 dirty-tile repaint on lower line must match full render (diff_pixels={}, dirty_rects={:?}, samples={:?})",
+                diff_pixels, dirty_rects, samples
+            );
+
+            // Frame 3: Scrolled past scroll_y = 90px (well beyond old 35.5px single-line height).
+            let list_f3 = build_multiline_textarea_list(90.0, Some(8));
+            let mut scrolled_surf =
+                cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32)
+                    .expect("create scrolled surface");
+            {
+                let cr = cairo::Context::new(&scrolled_surf).expect("cairo ctx");
+                cr.set_font_options(&super::super::parity_font_options());
+                cr.set_source_rgb(0.035, 0.035, 0.043);
+                let _ = cr.paint();
+                super::super::render_display_list_to_cairo_impl(&cr, &list_f3, true);
+            }
+            scrolled_surf.flush();
+            let scrolled_bytes = scrolled_surf.data().expect("scrolled data");
+            let mut bright_text_pixels = 0usize;
+            for y in 24..180 {
+                for x in 24..260 {
+                    let off = (y * w as usize + x) * 4;
+                    let b = scrolled_bytes[off];
+                    let g = scrolled_bytes[off + 1];
+                    let r = scrolled_bytes[off + 2];
+                    if r > 140 && g > 140 && b > 140 {
+                        bright_text_pixels += 1;
+                    }
+                }
+            }
+            assert!(
+                bright_text_pixels > 200,
+                "multiline DrawText scrolled past 90px must NOT be culled (bright_text_pixels={})",
+                bright_text_pixels
+            );
+        }
+
+        #[test]
+        fn pango_draw_text_respects_line_height_spacing() {
+            let render_for_lh = |lh: f32| -> usize {
+                let mut list = DisplayList::new();
+                list.push(DrawCommand::DrawText {
+                    origin: (10.0, 10.0),
+                    bounds_width: Some(240.0),
+                    bounds_height: None,
+                    text_align: TextAlign::Left,
+                    text: "AAAA\n\n\n\n\nBBBB".to_string(),
+                    font_size: 13.0,
+                    line_height: lh,
+                    font_weight: FontWeight::Normal,
+                    color: Color::rgba(255, 255, 255, 255),
+                    is_monospace: true,
+                    font_family: strata_primitives::AtomId(0),
+                });
+                let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 260, 260)
+                    .expect("create surf");
+                {
+                    let cr = cairo::Context::new(&surf).expect("ctx");
+                    cr.set_font_options(&super::super::parity_font_options());
+                    cr.set_source_rgb(0.0, 0.0, 0.0);
+                    let _ = cr.paint();
+                    super::super::render_display_list_to_cairo_impl(&cr, &list, false);
+                }
+                surf.flush();
+                let data = surf.data().expect("data");
+                let mut max_lit_y = 0usize;
+                for y in 0..260usize {
+                    for x in 0..260usize {
+                        let off = (y * 260 + x) * 4;
+                        if data[off + 2] > 120 {
+                            max_lit_y = max_lit_y.max(y);
+                        }
+                    }
+                }
+                max_lit_y
+            };
+
+            let y_tight = render_for_lh(1.2);
+            let y_loose = render_for_lh(2.2);
+            // Across 5 line steps, (2.2 - 1.2) * 13px * 5 = +65px vertical delta.
+            let delta = y_loose as isize - y_tight as isize;
+            assert!(
+                delta >= 50 && delta <= 80,
+                "Pango DrawText must apply line_height spacing (y_tight={}, y_loose={}, delta={})",
+                y_tight,
+                y_loose,
+                delta
+            );
+        }
+    }
 }
 
-/// Attempts direct zero-readback GPU swapchain presentation for `list` on the live GTK window.
-///
-/// Returns `true` when the active native GPU swapchain rendered and presented the 3D viewport plus
-/// cached 2D HUD overlay (`ui_overlay_texture`), allowing the caller to skip Cairo window painting.
-pub fn try_present_display_list_gpu(
+/// Attempts direct zero-readback GPU swapchain presentation for `list` on the live GTK window,
+/// returning structured wall-clock sub-timings (`raster_2d`, `wgpu_3d_submit`, `swapchain_present`).
+pub fn try_present_display_list_gpu_timed(
     list: &DisplayList,
     width: f32,
     height: f32,
     overlay_dirty: bool,
     transparent_bg: bool,
     cursor_overlay: Option<(&crate::McpCursorState, &crate::CursorTheme)>,
-) -> bool {
+) -> crate::GpuPresentTimings {
     #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
     {
-        gtk_gpu_x11::try_present_display_list(
+        gtk_gpu_x11::try_present_display_list_timed(
             list,
             width,
             height,
@@ -4367,21 +5108,50 @@ pub fn try_present_display_list_gpu(
             transparent_bg,
             cursor_overlay,
         );
-        false
+        crate::GpuPresentTimings::default()
+    }
+}
+
+/// Attempts direct zero-readback GPU swapchain presentation for `list` on the live GTK window.
+///
+/// Returns `true` when the active native GPU swapchain rendered and presented the 3D viewport plus
+/// cached 2D HUD overlay (`ui_overlay_texture`), allowing the caller to skip Cairo window painting.
+pub fn try_present_display_list_gpu(
+    list: &DisplayList,
+    width: f32,
+    height: f32,
+    overlay_dirty: bool,
+    transparent_bg: bool,
+    cursor_overlay: Option<(&crate::McpCursorState, &crate::CursorTheme)>,
+) -> bool {
+    try_present_display_list_gpu_timed(
+        list,
+        width,
+        height,
+        overlay_dirty,
+        transparent_bg,
+        cursor_overlay,
+    )
+    .presented
+}
+
+/// Immediately re-presents the currently mapped 3D scene and cached 2D overlay on the live GPU
+/// swapchain, returning structured wall-clock sub-timings.
+pub fn gtk_present_active_gpu_surface_now_timed() -> crate::GpuPresentTimings {
+    #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+    {
+        gtk_gpu_x11::present_active_now_timed()
+    }
+    #[cfg(not(all(feature = "wgpu-backend", feature = "xlib")))]
+    {
+        crate::GpuPresentTimings::default()
     }
 }
 
 /// Immediately re-presents the currently mapped 3D scene and cached 2D overlay on the live GPU
 /// swapchain without invoking GTK's Cairo draw pass or waiting for GDK's VSync frame clock.
 pub fn gtk_present_active_gpu_surface_now() -> bool {
-    #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
-    {
-        gtk_gpu_x11::present_active_now()
-    }
-    #[cfg(not(all(feature = "wgpu-backend", feature = "xlib")))]
-    {
-        false
-    }
+    gtk_present_active_gpu_surface_now_timed().presented
 }
 
 /// Returns `true` when the live GTK window currently has a mapped zero-readback GPU swapchain.
@@ -4417,6 +5187,41 @@ pub fn gtk_gpu_2d_enabled() -> bool {
             Some("1" | "true" | "TRUE" | "yes" | "on")
         )
     })
+}
+
+thread_local! {
+    static LAST_TILE_CACHE_STATS: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
+    static LAST_GPU_TELEMETRY: std::cell::Cell<crate::PlatformGpuTelemetry> = const {
+        std::cell::Cell::new(crate::PlatformGpuTelemetry {
+            gpu_timestamps_supported: false,
+            gpu_shadow_pass_us: 0,
+            gpu_3d_pass_us: 0,
+            gpu_2d_overlay_pass_us: 0,
+            scene3d_cache_hits: 0,
+            scene3d_cache_misses: 0,
+            gpu_memory_bytes: 0,
+        })
+    };
+}
+
+#[allow(dead_code)]
+pub(crate) fn record_tile_cache_stats(dirty_tiles: u32, total_tiles: u32) {
+    LAST_TILE_CACHE_STATS.with(|cell| cell.set((dirty_tiles, total_tiles)));
+}
+
+#[allow(dead_code)]
+pub(crate) fn record_gpu_telemetry(telemetry: crate::PlatformGpuTelemetry) {
+    LAST_GPU_TELEMETRY.with(|cell| cell.set(telemetry));
+}
+
+/// Returns `(tiles_dirty, tiles_total)` from the most recent GTK 64x64 overlay tile pass.
+pub fn gtk_last_tile_cache_stats() -> (u32, u32) {
+    LAST_TILE_CACHE_STATS.with(|cell| cell.get())
+}
+
+/// Returns the most recent GPU pass timing, Scene3D cache, and VRAM telemetry from the live GTK GPU surface.
+pub fn gtk_last_gpu_telemetry() -> crate::PlatformGpuTelemetry {
+    LAST_GPU_TELEMETRY.with(|cell| cell.get())
 }
 
 /// Posts a platform event to the running GTK application event loop from any background thread.
@@ -4870,6 +5675,15 @@ fn map_key_name_to_keycode(key_name: &str) -> crate::events::KeyCode {
         "F11" => crate::events::KeyCode::F11,
         "F12" => crate::events::KeyCode::F12,
         "space" => crate::events::KeyCode::Space,
+        "slash" | "question" | "KP_Divide" => crate::events::KeyCode::Slash,
+        "comma" | "less" => crate::events::KeyCode::Comma,
+        "period" | "greater" | "KP_Decimal" => crate::events::KeyCode::Period,
+        "minus" | "underscore" | "KP_Subtract" => crate::events::KeyCode::Minus,
+        "equal" | "plus" | "KP_Equal" | "KP_Add" => crate::events::KeyCode::Equals,
+        "bracketleft" | "braceleft" => crate::events::KeyCode::BracketLeft,
+        "bracketright" | "braceright" => crate::events::KeyCode::BracketRight,
+        "semicolon" | "colon" => crate::events::KeyCode::Semicolon,
+        "grave" | "asciitilde" => crate::events::KeyCode::Backquote,
         _ => crate::events::KeyCode::Unknown,
     }
 }
@@ -4889,6 +5703,8 @@ fn map_evdev_hardware_keycode(hw_code: u16) -> crate::events::KeyCode {
         17 => crate::events::KeyCode::Digit8,
         18 => crate::events::KeyCode::Digit9,
         19 => crate::events::KeyCode::Digit0,
+        20 => crate::events::KeyCode::Minus,
+        21 => crate::events::KeyCode::Equals,
         22 => crate::events::KeyCode::Backspace,
         23 => crate::events::KeyCode::Tab,
         24 => crate::events::KeyCode::KeyQ,
@@ -4901,6 +5717,8 @@ fn map_evdev_hardware_keycode(hw_code: u16) -> crate::events::KeyCode {
         31 => crate::events::KeyCode::KeyI,
         32 => crate::events::KeyCode::KeyO,
         33 => crate::events::KeyCode::KeyP,
+        34 => crate::events::KeyCode::BracketLeft,
+        35 => crate::events::KeyCode::BracketRight,
         36 => crate::events::KeyCode::Enter,
         38 => crate::events::KeyCode::KeyA,
         39 => crate::events::KeyCode::KeyS,
@@ -4911,6 +5729,8 @@ fn map_evdev_hardware_keycode(hw_code: u16) -> crate::events::KeyCode {
         44 => crate::events::KeyCode::KeyJ,
         45 => crate::events::KeyCode::KeyK,
         46 => crate::events::KeyCode::KeyL,
+        47 => crate::events::KeyCode::Semicolon,
+        49 => crate::events::KeyCode::Backquote,
         52 => crate::events::KeyCode::KeyZ,
         53 => crate::events::KeyCode::KeyX,
         54 => crate::events::KeyCode::KeyC,
@@ -4918,6 +5738,9 @@ fn map_evdev_hardware_keycode(hw_code: u16) -> crate::events::KeyCode {
         56 => crate::events::KeyCode::KeyB,
         57 => crate::events::KeyCode::KeyN,
         58 => crate::events::KeyCode::KeyM,
+        59 => crate::events::KeyCode::Comma,
+        60 => crate::events::KeyCode::Period,
+        61 => crate::events::KeyCode::Slash,
         65 => crate::events::KeyCode::Space,
         67 => crate::events::KeyCode::F1,
         68 => crate::events::KeyCode::F2,
@@ -6608,6 +7431,22 @@ mod frameless_resize_tests {
         assert_eq!(super::resolve_gtk_keycode("Cyrillic_de", 46), KeyCode::KeyL);
         assert_eq!(super::resolve_gtk_keycode("exclam", 10), KeyCode::Digit1);
         assert_eq!(super::resolve_gtk_keycode("idotless", 31), KeyCode::KeyI);
+        // Punctuation keys (both GDK keyval names and evdev+8 fallback):
+        assert_eq!(super::resolve_gtk_keycode("slash", 61), KeyCode::Slash);
+        assert_eq!(super::resolve_gtk_keycode("question", 61), KeyCode::Slash);
+        assert_eq!(super::resolve_gtk_keycode("comma", 59), KeyCode::Comma);
+        assert_eq!(super::resolve_gtk_keycode("period", 60), KeyCode::Period);
+        assert_eq!(super::resolve_gtk_keycode("minus", 20), KeyCode::Minus);
+        assert_eq!(super::resolve_gtk_keycode("equal", 21), KeyCode::Equals);
+        assert_eq!(super::resolve_gtk_keycode("plus", 21), KeyCode::Equals);
+        assert_eq!(super::resolve_gtk_keycode("bracketleft", 34), KeyCode::BracketLeft);
+        assert_eq!(super::resolve_gtk_keycode("bracketright", 35), KeyCode::BracketRight);
+        assert_eq!(super::resolve_gtk_keycode("semicolon", 47), KeyCode::Semicolon);
+        assert_eq!(super::resolve_gtk_keycode("grave", 49), KeyCode::Backquote);
+        assert_eq!(super::resolve_gtk_keycode("unknown_sym", 61), KeyCode::Slash);
+        assert_eq!(super::resolve_gtk_keycode("unknown_sym", 59), KeyCode::Comma);
+        assert_eq!(super::resolve_gtk_keycode("unknown_sym", 20), KeyCode::Minus);
+        assert_eq!(super::resolve_gtk_keycode("unknown_sym", 21), KeyCode::Equals);
     }
 
     #[test]
@@ -6762,6 +7601,98 @@ mod frameless_resize_tests {
             100.0,
             448.0,
             160.0,
+            &dirty_bits,
+            cols,
+            rows
+        ));
+    }
+
+    #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+    #[test]
+    fn test_overlay_tile_cache_scopes_push_filter_and_isolation() {
+        use strata_layout::geometry::Rect;
+        use strata_render::{DisplayList, DrawCommand};
+        use strata_style::effects::{BackdropFilter, FilterOp};
+        use strata_style::types::Color as Rgba;
+
+        let build_list = |tooltip_alpha: u8| {
+            let mut dl = DisplayList::new();
+            // Background panel across the left sidebar (unrelated tiles)
+            dl.push(DrawCommand::DrawRect {
+                bounds: Rect::new(0.0, 0.0, 320.0, 720.0),
+                color: Rgba::rgba(15, 20, 28, 240),
+            });
+            // Isolated + blur(12px) tooltip near (900..1020, 400..460)
+            dl.push(DrawCommand::PushIsolation { isolate: true });
+            dl.push(DrawCommand::PushFilter {
+                filter: BackdropFilter {
+                    operations: vec![FilterOp::Blur(12.0)],
+                },
+                bounds: Rect::new(900.0, 400.0, 120.0, 60.0),
+            });
+            dl.push(DrawCommand::DrawRect {
+                bounds: Rect::new(900.0, 400.0, 120.0, 60.0),
+                color: Rgba::rgba(40, 120, 220, tooltip_alpha),
+            });
+            dl.push(DrawCommand::PopFilter);
+            dl.push(DrawCommand::PopIsolation);
+            dl
+        };
+
+        let cols = 1920usize.div_ceil(64);
+        let rows = 1080usize.div_ceil(64);
+        let mut h1 = Vec::new();
+        let mut h2 = Vec::new();
+        super::gtk_gpu_x11::compute_overlay_tile_hashes(
+            &build_list(200),
+            1920,
+            1080,
+            true,
+            None,
+            cols,
+            rows,
+            &mut h1,
+        );
+        super::gtk_gpu_x11::compute_overlay_tile_hashes(
+            &build_list(245),
+            1920,
+            1080,
+            true,
+            None,
+            cols,
+            rows,
+            &mut h2,
+        );
+
+        let mut dirty_bits = vec![0u64; (cols * rows).div_ceil(64)];
+        let mut dirty_count = 0usize;
+        for (i, (&a, &b)) in h1.iter().zip(h2.iter()).enumerate() {
+            if a != b {
+                dirty_bits[i >> 6] |= 1u64 << (i & 63);
+                dirty_count += 1;
+            }
+        }
+        let total_tiles = cols * rows; // 30 * 17 = 510 tiles
+        assert!(
+            dirty_count > 0 && dirty_count <= 20,
+            "PushFilter(blur 12px) + PushIsolation must only dirty padded local tiles, got {dirty_count}/{total_tiles}"
+        );
+        // Far-away left sidebar tile (0..64, 0..64) must remain completely cached/clean!
+        assert!(!super::rect_overlaps_dirty_tiles(
+            0.0,
+            0.0,
+            64.0,
+            64.0,
+            &dirty_bits,
+            cols,
+            rows
+        ));
+        // Padded halo (900 - 36 = 864, 400 - 36 = 364) must be marked dirty!
+        assert!(super::rect_overlaps_dirty_tiles(
+            866.0,
+            366.0,
+            880.0,
+            380.0,
             &dirty_bits,
             cols,
             rows

@@ -172,7 +172,20 @@ impl AppRuntime {
 
     /// Returns true when any `hover:` utility, `.group` descendant `group-hover:` utility, or
     /// `<style>` `:hover` rule on the path mutates box geometry.
+    #[allow(dead_code)]
     pub(crate) fn path_hover_affects_layout(blueprint: &NodeBlueprint, path: &[usize]) -> bool {
+        let stylesheets = Self::collect_stylesheets_from_blueprint(blueprint);
+        let index = StylesheetSelectorIndex::from_stylesheets(&stylesheets);
+        Self::path_hover_affects_layout_with_sheets(blueprint, path, &stylesheets, &index)
+    }
+
+    /// Cached-stylesheet variant of [`Self::path_hover_affects_layout`] avoiding per-hover DOM scans.
+    pub(crate) fn path_hover_affects_layout_with_sheets(
+        blueprint: &NodeBlueprint,
+        path: &[usize],
+        stylesheets: &[std::sync::Arc<strata_style::StyleSheet>],
+        index: &StylesheetSelectorIndex,
+    ) -> bool {
         let mut path_nodes: Vec<&NodeBlueprint> = Vec::with_capacity(path.len() + 1);
         let mut current = blueprint;
         if Self::node_hover_classes_affect_layout(current)
@@ -203,8 +216,7 @@ impl AppRuntime {
             path_nodes.push(current);
         }
 
-        let stylesheets = Self::collect_stylesheets_from_blueprint(blueprint);
-        if stylesheets.is_empty() {
+        if stylesheets.is_empty() || !index.has_any_hover_rule {
             return false;
         }
 
@@ -241,7 +253,10 @@ impl AppRuntime {
                 let tag_str = Self::tag_as_str(tag);
                 let (class_vec, id_val, attr_vec) =
                     Self::extract_element_selector_meta(classes, attributes);
-                for sheet in &stylesheets {
+                if !index.node_may_match_hover(tag_str, id_val.as_deref(), &class_vec) {
+                    continue;
+                }
+                for sheet in stylesheets {
                     for rule in &sheet.rules {
                         let any_hover_sel_matches = rule.selectors.iter().any(|sel| {
                             if !sel.has_any_hover_pseudo() {

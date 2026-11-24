@@ -606,3 +606,96 @@ fn test_granular_subtree_layout_invalidation_and_preservation() {
     assert!(root.children[1].layout_cache.is_valid);
     assert_eq!(root.children[1].geometry.border_box.width, 250.0);
 }
+
+#[test]
+fn test_flex_wrapped_log_rows_clean_subtree_caches_preserved() {
+    use strata_style::types::{FlexDirection, Overflow};
+
+    fn make_row(idx: usize, extra: &str) -> LayoutNode {
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::Flex;
+        row_style.flex_direction = FlexDirection::Row;
+        row_style.width = Dimension::Percent(100.0);
+
+        let mut badge_style = ComputedStyle::default();
+        badge_style.width = Dimension::Px(56.0);
+        badge_style.flex_shrink = 0.0;
+        let badge = LayoutNode::with_text(badge_style, format!("[{:03}]", idx));
+
+        let mut msg_style = ComputedStyle::default();
+        msg_style.flex_grow = 1.0;
+        msg_style.flex_shrink = 1.0;
+        msg_style.flex_basis = Dimension::Px(0.0);
+        msg_style.min_width = Dimension::Px(0.0);
+        let msg = LayoutNode::with_text(
+            msg_style,
+            format!(
+                "Log entry #{idx}{extra}: deterministic telemetry frame streamed across multiple wrapped lines inside a flex log viewer."
+            ),
+        );
+
+        LayoutNode::with_children(row_style, vec![badge, msg])
+    }
+
+    let mut root_style = ComputedStyle::default();
+    root_style.display = Display::Flex;
+    root_style.flex_direction = FlexDirection::Column;
+    root_style.width = Dimension::Px(640.0);
+    root_style.height = Dimension::Px(480.0);
+    root_style.overflow_y = Overflow::Auto;
+
+    let rows: Vec<LayoutNode> = (0..150).map(|i| make_row(i, "")).collect();
+    let mut root = LayoutNode::with_children(root_style.clone(), rows);
+
+    root.compute_layout(640.0, 480.0);
+    assert!(root.children[1].children_layout_clean);
+    assert!(root.children[1].intrinsic_cache.get(Some(640.0)).is_some()
+        || root.children[1].intrinsic_cache.get(None).is_some()
+        || root.children[1].measure_cache[0].is_valid
+        || root.children[1].layout_cache.is_valid);
+
+    // Mutate only row 0 to grow taller (causing rows 1..150 to shift down while remaining clean).
+    root.children[0] = make_row(
+        0,
+        " — extended payload forcing additional wrapped lines to verify downstream translation accuracy across cached siblings",
+    );
+    root.invalidate_ancestors(&[0]);
+
+    // Sibling rows 1..150 must stay clean prior to incremental layout!
+    assert!(root.children[1].children_layout_clean);
+    assert!(root.children[149].children_layout_clean);
+
+    root.compute_layout(640.0, 480.0);
+
+    // Build an identical cold reference tree and assert pixel-exact layout parity.
+    let mut ref_rows: Vec<LayoutNode> = (0..150).map(|i| make_row(i, "")).collect();
+    ref_rows[0] = make_row(
+        0,
+        " — extended payload forcing additional wrapped lines to verify downstream translation accuracy across cached siblings",
+    );
+    let mut reference = LayoutNode::with_children(root_style, ref_rows);
+    reference.compute_layout(640.0, 480.0);
+
+    for idx in [0usize, 1, 50, 149] {
+        let a = root.children[idx].geometry.border_box;
+        let b = reference.children[idx].geometry.border_box;
+        assert!(
+            (a.x - b.x).abs() < 0.05
+                && (a.y - b.y).abs() < 0.05
+                && (a.width - b.width).abs() < 0.05
+                && (a.height - b.height).abs() < 0.05,
+            "row {idx} incremental layout {:?} must match cold layout {:?}",
+            a,
+            b
+        );
+        let a_msg = root.children[idx].children[1].geometry.border_box;
+        let b_msg = reference.children[idx].children[1].geometry.border_box;
+        assert!(
+            (a_msg.y - b_msg.y).abs() < 0.05 && (a_msg.height - b_msg.height).abs() < 0.05,
+            "row {idx} message child {:?} must match cold layout {:?}",
+            a_msg,
+            b_msg
+        );
+    }
+}
+

@@ -65,12 +65,14 @@ pub use portal::{
 };
 pub use reactive::{
     batch, clear_persistent_signals, create_context, create_signal, has_dirty_signals, mark_dirty,
-    provide_context, reset_component_hooks, take_dirty_signals, untrack, use_callback, use_context,
-    use_effect, use_effect_with_deps, use_id, use_memo, use_memo_with_deps, use_persistent_signal,
-    use_reducer, use_reducer_init, use_ref, use_signal, use_state, with_component_key,
-    with_root_component_scope, ComponentScopeGuard, Context, Effect, EffectGuard,
-    IntoEffectCleanup, IntoInitialState, Memo, ReactiveRuntime, ReadSignal, Ref, ScopeId, SetSignal,
-    Signal, SignalId, SubscriberId, WriteSignal,
+    peek_dirty_signal_names, provide_context, reactive_telemetry_snapshot, reset_component_hooks,
+    set_signal_name, signal_name, take_dirty_signal_names, take_dirty_signals, untrack,
+    use_callback, use_context, use_effect, use_effect_with_deps, use_id, use_memo,
+    use_memo_with_deps, use_persistent_signal, use_reducer, use_reducer_init, use_ref, use_signal,
+    use_state, with_component_key, with_root_component_scope, ComponentScopeGuard, Context, Effect,
+    EffectGuard, IntoEffectCleanup, IntoInitialState, Memo, ReactiveRuntime,
+    ReactiveTelemetrySnapshot, ReadSignal, Ref, ScopeId, SetSignal, Signal, SignalId,
+    SignalTelemetryEntry, SubscriberId, WriteSignal,
 };
 pub use spring::{SpringConfig, SpringSignal};
 pub use strata_primitives::EntityId;

@@ -232,9 +232,12 @@ pub fn shift_position_after_edit(
 
     if pos <= edit_end {
         if inserted_lines.len() == 1 {
-            Position::new(edit_start.line, edit_start.col + inserted_lines[0].len())
+            Position::new(
+                edit_start.line,
+                edit_start.col + inserted_lines[0].chars().count(),
+            )
         } else {
-            let last_line_len = inserted_lines.last().map_or(0, |l| l.len());
+            let last_line_len = inserted_lines.last().map_or(0, |l| l.chars().count());
             Position::new(edit_start.line + inserted_lines.len() - 1, last_line_len)
         }
     } else if pos.line == edit_end.line {
@@ -242,10 +245,10 @@ pub fn shift_position_after_edit(
         if inserted_lines.len() == 1 {
             Position::new(
                 edit_start.line,
-                edit_start.col + inserted_lines[0].len() + col_offset,
+                edit_start.col + inserted_lines[0].chars().count() + col_offset,
             )
         } else {
-            let last_line_len = inserted_lines.last().map_or(0, |l| l.len());
+            let last_line_len = inserted_lines.last().map_or(0, |l| l.chars().count());
             let target_line = (pos.line as isize + delta_lines).max(0) as usize;
             Position::new(target_line, last_line_len + col_offset)
         }

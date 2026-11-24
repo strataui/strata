@@ -476,6 +476,7 @@ where
         1.0,
     );
     initial_runtime.apply_window_config(&config);
+    initial_runtime.set_gpu_2d_paths_enabled(strata_platform::gtk_gpu_2d_enabled());
     let runtime = std::rc::Rc::new(std::cell::RefCell::new(initial_runtime));
 
     let transparent_bg = config.transparent
@@ -493,10 +494,17 @@ where
             rt.viewport_width = width;
             rt.viewport_height = height;
             if size_changed {
+                #[cfg(feature = "devtools")]
+                if let Some(ref mut dt) = rt.devtools {
+                    dt.hud.update_bounds(width, height);
+                }
                 {
                     let rt = &mut *rt;
                     rt.unapply_scroll_offsets();
+                    let layout_start = std::time::Instant::now();
                     rt.layout_root.compute_layout(width, height);
+                    rt.frame_profile.layout += layout_start.elapsed();
+                    rt.layout_computations += 1;
                     AppRuntime::sync_layout_to_ir(&rt.layout_root, &mut rt.ir_graph);
                     rt.apply_viewport_clamps();
                     rt.apply_scroll_offsets();
@@ -508,14 +516,25 @@ where
             }
         }
         if resize_fired {
+            let sig_start = std::time::Instant::now();
             let _ = strata_dom::reactive::take_dirty_signals();
-            runtime_draw
-                .borrow_mut()
-                .update_root(|| (root_fn_draw.borrow_mut())());
+            let sig_dur = sig_start.elapsed();
+            let mut rt = runtime_draw.borrow_mut();
+            rt.record_signal_drain_time(sig_dur);
+            rt.update_root(|| (root_fn_draw.borrow_mut())());
         }
         let mut rt = runtime_draw.borrow_mut();
         // Repaints with no state change (expose, focus) reuse the compiled list.
         let dl_recompiled = rt.compile_display_list_if_dirty();
+        #[cfg(feature = "devtools")]
+        {
+            let rt_mut = &mut *rt;
+            if let Some(ref dt) = rt_mut.devtools {
+                if dt.hud.state.is_visible {
+                    dt.render_hud_overlay(&mut rt_mut.display_list);
+                }
+            }
+        }
         let mcp_overlay_active = rt
             .mcp_cursor
             .as_ref()
@@ -531,13 +550,13 @@ where
         } else {
             None
         };
-        let gpu_presented = {
+        let gpu_timings = {
             let cursor_pair = match (cursor_tuple, theme_ref) {
                 // SAFETY: Both pointers borrow disjoint fields of `rt` for the duration of the call.
                 (Some(c), Some(t)) => Some(unsafe { (&*c, &*t) }),
                 _ => None,
             };
-            strata_platform::try_present_display_list_gpu(
+            strata_platform::try_present_display_list_gpu_timed(
                 &rt.display_list,
                 width,
                 height,
@@ -547,11 +566,22 @@ where
             )
         };
 
-        if gpu_presented {
+        if gpu_timings.presented {
+            rt.record_raster_time(gpu_timings.raster_2d);
+            rt.record_wgpu_3d_submit_time(gpu_timings.wgpu_3d_submit);
+            rt.record_present_time(gpu_timings.swapchain_present);
+            rt.frame_count += 1;
             rt.acknowledge_retained_3d_presented();
+            let outcome = if overlay_dirty {
+                "Dirty"
+            } else {
+                "RepaintCanvas3D"
+            };
+            rt.finalize_frame_telemetry(outcome);
             return;
         }
 
+        let raster_start = std::time::Instant::now();
         // Clear or fill window background
         if transparent_bg {
             cr.set_operator(strata_platform::cairo::Operator::Source);
@@ -579,6 +609,10 @@ where
                 );
             }
         }
+        rt.record_raster_time(raster_start.elapsed());
+        rt.frame_count += 1;
+        let outcome = if overlay_dirty { "Dirty" } else { "Clean" };
+        rt.finalize_frame_telemetry(outcome);
     };
 
     let frame_hook_state = std::rc::Rc::new(std::cell::RefCell::new(on_frame_opt.map(
@@ -596,10 +630,34 @@ where
     let on_event_inner = move |event: &strata_platform::PlatformEvent| -> (bool, bool) {
         let mut needs_rebuild = false;
         let mut needs_redraw = false;
+        // Drain pending MCP requests BEFORE starting `input_dispatch_us` timing so MCP
+        // bridge/IPC overhead never pollutes frame input dispatch telemetry, while still
+        // routing every synthetic MCP input event through the host application's event hook.
         {
             let mut rt = runtime_event.borrow_mut();
-            if crate::mcp_bridge::drain_and_execute_mcp_requests(&mut rt) {
+            let mcp_outcome = crate::mcp_bridge::drain_and_execute_mcp_requests_with_hook(
+                &mut rt,
+                |mcp_ev, rt_ref| {
+                    invoke_user_event_hook(mcp_ev, rt_ref, &mut *event_handler_event.borrow_mut())
+                },
+            );
+            if mcp_outcome.needs_rebuild {
                 needs_rebuild = true;
+            }
+            if mcp_outcome.needs_redraw {
+                needs_redraw = true;
+            }
+        }
+        let input_start = std::time::Instant::now();
+        {
+            let mut rt = runtime_event.borrow_mut();
+            #[cfg(feature = "devtools")]
+            if let Some(ref mut dt) = rt.devtools {
+                if strata_devtools::DevToolsEventInterceptor::intercept(&mut dt.hud, event) {
+                    rt.record_input_dispatch_time(input_start.elapsed());
+                    rt.mark_paint_dirty();
+                    return (true, true);
+                }
             }
             let hook_signals_before = strata_dom::reactive::has_dirty_signals();
             if invoke_user_event_hook(event, &mut rt, &mut *event_handler_event.borrow_mut())
@@ -968,13 +1026,32 @@ where
             strata_platform::gtk_set_cursor(cur);
         };
 
+        {
+            runtime_event
+                .borrow_mut()
+                .record_input_dispatch_time(input_start.elapsed());
+        }
+
         if needs_rebuild {
             #[cfg(target_os = "linux")]
             if strata_platform::gtk_is_closing() {
                 return (false, false);
             }
+            let sig_start = std::time::Instant::now();
+            let dirty_sig_names = strata_dom::reactive::peek_dirty_signal_names();
+            let reason = if !dirty_sig_names.is_empty() {
+                RebuildReason::SignalWrite(dirty_sig_names.join(", "))
+            } else {
+                RebuildReason::PlatformEvent(format!("{:?}", event))
+            };
             if runtime_event.borrow_mut().sync_dynamic_text() {
                 let _ = strata_dom::reactive::take_dirty_signals();
+                let sig_dur = sig_start.elapsed();
+                {
+                    let mut rt = runtime_event.borrow_mut();
+                    rt.record_signal_drain_time(sig_dur);
+                    rt.set_rebuild_reason(reason);
+                }
                 if !matches!(event, strata_platform::PlatformEvent::CursorLeft)
                     && (matches!(
                         event,
@@ -988,9 +1065,15 @@ where
                 (true, true)
             } else {
                 let _ = strata_dom::reactive::take_dirty_signals();
+                let sig_dur = sig_start.elapsed();
+                let view_start = std::time::Instant::now();
                 let new_view =
                     strata_dom::with_root_component_scope(|| (root_fn_event.borrow_mut())());
+                let view_dur = view_start.elapsed();
                 let mut rt = runtime_event.borrow_mut();
+                rt.record_signal_drain_time(sig_dur);
+                rt.record_view_render_time(view_dur);
+                rt.set_rebuild_reason(reason);
                 rt.update_view(new_view);
                 if !matches!(event, strata_platform::PlatformEvent::CursorLeft)
                     && (matches!(
@@ -1022,6 +1105,9 @@ where
             if strata_platform::gtk_is_closing() {
                 return (false, false);
             }
+            runtime_event
+                .borrow_mut()
+                .set_rebuild_reason(RebuildReason::RepaintCanvas3D);
             if matches!(
                 event,
                 strata_platform::PlatformEvent::MouseDown { .. }
@@ -1062,6 +1148,15 @@ where
             }
             if redraw && strata_platform::gtk_gpu_surface_is_active() {
                 let dl_recompiled = rt.compile_display_list_if_dirty();
+                #[cfg(feature = "devtools")]
+                {
+                    let rt_mut = &mut *rt;
+                    if let Some(ref dt) = rt_mut.devtools {
+                        if dt.hud.state.is_visible {
+                            dt.render_hud_overlay(&mut rt_mut.display_list);
+                        }
+                    }
+                }
                 let mcp_active = rt
                     .mcp_cursor
                     .as_ref()
@@ -1078,15 +1173,25 @@ where
                     (Some(c), Some(t)) => Some(unsafe { (&*c, &*t) }),
                     _ => None,
                 };
-                if strata_platform::try_present_display_list_gpu(
+                let gpu_timings = strata_platform::try_present_display_list_gpu_timed(
                     &rt.display_list,
                     w,
                     h,
                     overlay_dirty,
                     transparent_bg,
                     cursor_pair,
-                ) {
+                );
+                if gpu_timings.presented {
+                    rt.record_raster_time(gpu_timings.raster_2d);
+                    rt.record_wgpu_3d_submit_time(gpu_timings.wgpu_3d_submit);
+                    rt.record_present_time(gpu_timings.swapchain_present);
+                    rt.frame_count += 1;
                     rt.acknowledge_retained_3d_presented();
+                    rt.finalize_frame_telemetry(if overlay_dirty {
+                        "Dirty"
+                    } else {
+                        "RepaintCanvas3D"
+                    });
                     if let (Some(t0), Some(t1)) = (t_ev_start, t_after_inner) {
                         let now = std::time::Instant::now();
                         let gap_ms = now.duration_since(last_present_instant).as_secs_f64() * 1000.0;
@@ -1105,27 +1210,31 @@ where
             }
             return redraw;
         }
-        if redraw
-            && !runtime_dirty.borrow().is_paint_dirty()
-            && strata_platform::gtk_present_active_gpu_surface_now()
-        {
-            runtime_dirty
-                .borrow_mut()
-                .acknowledge_retained_3d_presented();
-            if let (Some(t0), Some(t1)) = (t_ev_start, t_after_inner) {
-                let now = std::time::Instant::now();
-                let gap_ms = now.duration_since(last_present_instant).as_secs_f64() * 1000.0;
-                last_present_instant = now;
-                let inner_ms = t1.duration_since(t0).as_secs_f64() * 1000.0;
-                let pres_ms = now.duration_since(t1).as_secs_f64() * 1000.0;
-                if gap_ms > 10.5 || inner_ms > 3.5 || pres_ms > 5.0 {
-                    eprintln!(
-                        "[perf] slow_frame({:?}, active_3d) gap={:.2}ms inner={:.2}ms pres={:.2}ms",
-                        event, gap_ms, inner_ms, pres_ms
-                    );
+        if redraw && !runtime_dirty.borrow().is_paint_dirty() {
+            let gpu_timings = strata_platform::gtk_present_active_gpu_surface_now_timed();
+            if gpu_timings.presented {
+                let mut rt = runtime_dirty.borrow_mut();
+                rt.record_raster_time(gpu_timings.raster_2d);
+                rt.record_wgpu_3d_submit_time(gpu_timings.wgpu_3d_submit);
+                rt.record_present_time(gpu_timings.swapchain_present);
+                rt.frame_count += 1;
+                rt.acknowledge_retained_3d_presented();
+                rt.finalize_frame_telemetry("RepaintCanvas3D");
+                if let (Some(t0), Some(t1)) = (t_ev_start, t_after_inner) {
+                    let now = std::time::Instant::now();
+                    let gap_ms = now.duration_since(last_present_instant).as_secs_f64() * 1000.0;
+                    last_present_instant = now;
+                    let inner_ms = t1.duration_since(t0).as_secs_f64() * 1000.0;
+                    let pres_ms = now.duration_since(t1).as_secs_f64() * 1000.0;
+                    if gap_ms > 10.5 || inner_ms > 3.5 || pres_ms > 5.0 {
+                        eprintln!(
+                            "[perf] slow_frame({:?}, active_3d) gap={:.2}ms inner={:.2}ms pres={:.2}ms",
+                            event, gap_ms, inner_ms, pres_ms
+                        );
+                    }
                 }
+                return false;
             }
-            return false;
         }
         redraw
     };

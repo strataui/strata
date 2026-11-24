@@ -744,4 +744,59 @@ fn solve_anchored_position_four_way_fallback_covers_corners_and_cross_axis() {
     assert!(x3 >= 144.0 && y3 >= 8.0 && y3 + 90.0 <= 112.0);
 }
 
+#[test]
+fn document_scrollbars_draw_before_top_layer_portals() {
+    let view = rsx! {
+        <div class="relative w-[500px] h-[300px]">
+            <div id="doc-scroll" class="w-[300px] h-[240px] overflow-y-auto">
+                <div class="w-full h-[900px] shrink-0" />
+            </div>
+            <Portal class="w-[220px] h-[120px] bg-emerald-500">
+                <div>{"Top Layer Overlay"}</div>
+            </Portal>
+        </div>
+    };
+    let mut runtime = AppRuntime::new(view, 500.0, 300.0, 1.0);
+    runtime.tick_frame();
+
+    let doc_bar = runtime
+        .active_scrollbars
+        .iter()
+        .find(|b| !b.is_top_layer)
+        .expect("expected document scrollbar")
+        .clone();
+    runtime.compile_display_list();
+
+    let doc_bar_clip_idx = runtime
+        .display_list
+        .commands
+        .iter()
+        .position(|cmd| matches!(
+            cmd,
+            strata::render::compositor::DrawCommand::PushClip { bounds, .. }
+                if (bounds.x - doc_bar.clip_bounds.x).abs() < 1.0
+                    && (bounds.y - doc_bar.clip_bounds.y).abs() < 1.0
+                    && (bounds.height - doc_bar.clip_bounds.height).abs() < 1.0
+        ))
+        .expect("document scrollbar PushClip command");
+    let portal_text_idx = runtime
+        .display_list
+        .commands
+        .iter()
+        .position(|cmd| matches!(
+            cmd,
+            strata::render::compositor::DrawCommand::DrawText { text, .. }
+                if text.contains("Top Layer Overlay")
+        ))
+        .expect("portal DrawText command");
+
+    assert!(
+        doc_bar_clip_idx < portal_text_idx,
+        "document scrollbar ({}) must draw before Top-Layer portal overlay ({})",
+        doc_bar_clip_idx,
+        portal_text_idx
+    );
+}
+
+
 

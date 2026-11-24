@@ -364,6 +364,7 @@ impl GpuCameraUniforms {
             || cam.sun_visible
             || cam.moon_visible
             || cam.realistic_25d_sky > 0.001
+            || (cam.map_2d_morph > 0.001 && !matches!(cam.background, Background3D::Solid(_)))
         {
             1.0
         } else if matches!(cam.background, Background3D::Solid(_)) {
@@ -456,21 +457,57 @@ impl GpuCameraUniforms {
     }
 }
 
+const OCEAN_WORLD_NOISE_PERIOD_M: f64 = 32_768.0;
+const OCEAN_OCTAVE_ANGS: [f64; 8] = [0.04, -0.26, 0.42, -0.58, 0.77, -0.86, 0.21, -0.41];
+const OCEAN_OCTAVE_WLS: [f64; 8] = [151.0, 97.0, 61.0, 38.0, 23.5, 13.7, 7.9, 4.3];
+const OCEAN_OCTAVE_PHASES: [f64; 8] = [0.37, 2.18, 4.91, 1.09, 3.64, 5.47, 2.71, 0.83];
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuOceanUniforms {
-    origin_high: [f32; 4],    // xyz = split high f32 of ocean origin_ecef, w = enabled (0/1)
-    origin_low: [f32; 4],     // xyz = split low f32 of ocean origin_ecef, w = alt_fade
-    basis_east: [f32; 4],     // xyz = local ENU east, w = wave_strength
-    basis_north: [f32; 4],    // xyz = local ENU north, w = wave_scale
-    basis_up: [f32; 4],       // xyz = local ENU up, w = glint_intensity
-    train_a: [f32; 4],        // x = dir_e, y = dir_n, z = wind_speed_mps, w = phase_time_s
-    train_b: [f32; 4],        // x = dir_e, y = dir_n, z = wind_speed_mps, w = phase_time_s
-    blend_params: [f32; 4],   // x = weight_a, y = weight_b, z = opacity, w = coastal_shoaling (0/1)
-    coastal_params: [f32; 4], // x = shoaling_range_m, y = sdf_half_span_m, z = sdf_center_e, w = sdf_center_n
+    origin_high: [f32; 4],     // xyz = split high f32 of ocean origin_ecef, w = enabled (0/1)
+    origin_low: [f32; 4],      // xyz = split low f32 of ocean origin_ecef, w = alt_fade
+    basis_east: [f32; 4],      // xyz = local ENU east, w = wave_strength
+    basis_north: [f32; 4],     // xyz = local ENU north, w = wave_scale
+    basis_up: [f32; 4],        // xyz = local ENU up, w = glint_intensity
+    train_a: [f32; 4],         // x = dir_e, y = dir_n, z = wind_speed_mps, w = phase_time_s
+    train_b: [f32; 4],         // x = dir_e, y = dir_n, z = wind_speed_mps, w = phase_time_s
+    blend_params: [f32; 4],    // x = weight_a, y = weight_b, z = opacity, w = coastal_shoaling (0/1)
+    coastal_params: [f32; 4],  // x = shoaling_range_m, y = sdf_half_span_m, z = sdf_center_e, w = sdf_center_n
+    world_meta: [f32; 4],      // x = wx mod P, y = wy mod P, z = origin_lat_rad, w = east_scale_25d (<0 => disabled)
+    train_a_phases0: [f32; 4], // f64-reduced base phases for train_a octaves 0..4 in [0, TAU)
+    train_a_phases1: [f32; 4], // f64-reduced base phases for train_a octaves 4..8 in [0, TAU)
+    train_b_phases0: [f32; 4], // f64-reduced base phases for train_b octaves 0..4 in [0, TAU)
+    train_b_phases1: [f32; 4], // f64-reduced base phases for train_b octaves 4..8 in [0, TAU)
 }
 
 impl GpuOceanUniforms {
+    fn compute_train_base_phases(
+        dir_en: [f64; 2],
+        wind_speed_mps: f64,
+        phase_time_s: f64,
+        wave_scale: f64,
+        world_origin_merc_m: [f64; 2],
+    ) -> ([f32; 4], [f32; 4]) {
+        let len_wind = 0.48 + (1.72 - 0.48) * (wind_speed_mps / 18.0).clamp(0.0, 1.3);
+        let ws = wave_scale.max(0.15);
+        let perp0 = [-dir_en[1], dir_en[0]];
+        let wx = world_origin_merc_m[0];
+        let wy = world_origin_merc_m[1];
+        let mut p = [0.0f32; 8];
+        for i in 0..8 {
+            let wl = ((OCEAN_OCTAVE_WLS[i] * len_wind) / ws).max(1.4);
+            let k = std::f64::consts::TAU / wl;
+            let omega = (9.81 * k).sqrt();
+            let (sa, ca) = OCEAN_OCTAVE_ANGS[i].sin_cos();
+            let dx = dir_en[0] * ca + perp0[0] * sa;
+            let dy = dir_en[1] * ca + perp0[1] * sa;
+            let base = (dx * wx + dy * wy) * k - omega * phase_time_s + OCEAN_OCTAVE_PHASES[i];
+            p[i] = base.rem_euclid(std::f64::consts::TAU) as f32;
+        }
+        ([p[0], p[1], p[2], p[3]], [p[4], p[5], p[6], p[7]])
+    }
+
     fn disabled() -> Self {
         Self {
             origin_high: [0.0; 4],
@@ -482,6 +519,11 @@ impl GpuOceanUniforms {
             train_b: [1.0, 0.0, 8.0, 0.0],
             blend_params: [1.0, 0.0, 0.0, 0.0],
             coastal_params: [360.0, 1_500.0, 0.0, 0.0],
+            world_meta: [0.0, 0.0, 0.0, -1.0],
+            train_a_phases0: [0.0; 4],
+            train_a_phases1: [0.0; 4],
+            train_b_phases0: [0.0; 4],
+            train_b_phases1: [0.0; 4],
         }
     }
 
@@ -492,16 +534,50 @@ impl GpuOceanUniforms {
         let (ox_hi, ox_lo) = split_f64_to_f32(ocean.origin_ecef[0]);
         let (oy_hi, oy_lo) = split_f64_to_f32(ocean.origin_ecef[1]);
         let (oz_hi, oz_lo) = split_f64_to_f32(ocean.origin_ecef[2]);
-        let norm2 = |v: [f32; 2]| -> [f32; 2] {
-            let l = (v[0] * v[0] + v[1] * v[1]).sqrt();
-            if l > 1e-5 {
-                [v[0] / l, v[1] / l]
+        let norm2_f64 = |v: [f32; 2]| -> [f64; 2] {
+            let vx = v[0] as f64;
+            let vy = v[1] as f64;
+            let l = (vx * vx + vy * vy).sqrt();
+            if l > 1e-6 {
+                [vx / l, vy / l]
             } else {
                 [1.0, 0.0]
             }
         };
-        let da = norm2(ocean.train_a.dir_en);
-        let db = norm2(ocean.train_b.dir_en);
+        let da64 = norm2_f64(ocean.train_a.dir_en);
+        let db64 = norm2_f64(ocean.train_b.dir_en);
+        let da = [da64[0] as f32, da64[1] as f32];
+        let db = [db64[0] as f32, db64[1] as f32];
+        let wave_scale = ocean.wave_scale.clamp(0.15, 6.0);
+        let speed_a = ocean.train_a.wind_speed_mps.clamp(0.2, 60.0);
+        let speed_b = ocean.train_b.wind_speed_mps.clamp(0.2, 60.0);
+
+        let has_world = ocean.world_origin_merc_m[0].abs() > 1e-3
+            || ocean.world_origin_merc_m[1].abs() > 1e-3
+            || ocean.origin_lat_rad.abs() > 1e-5
+            || ocean.origin_ecef.iter().any(|v| v.abs() > 100.0);
+        let wx_mod = ocean.world_origin_merc_m[0].rem_euclid(OCEAN_WORLD_NOISE_PERIOD_M) as f32;
+        let wy_mod = ocean.world_origin_merc_m[1].rem_euclid(OCEAN_WORLD_NOISE_PERIOD_M) as f32;
+        let east_scale_meta = if has_world {
+            ocean.east_scale.clamp(0.15, 1.0)
+        } else {
+            -1.0
+        };
+        let (ta_p0, ta_p1) = Self::compute_train_base_phases(
+            da64,
+            speed_a as f64,
+            ocean.train_a.phase_time_s as f64,
+            wave_scale as f64,
+            ocean.world_origin_merc_m,
+        );
+        let (tb_p0, tb_p1) = Self::compute_train_base_phases(
+            db64,
+            speed_b as f64,
+            ocean.train_b.phase_time_s as f64,
+            wave_scale as f64,
+            ocean.world_origin_merc_m,
+        );
+
         Self {
             origin_high: [ox_hi, oy_hi, oz_hi, 1.0],
             origin_low: [ox_lo, oy_lo, oz_lo, ocean.alt_fade.clamp(0.0, 1.0)],
@@ -515,7 +591,7 @@ impl GpuOceanUniforms {
                 ocean.basis_north[0],
                 ocean.basis_north[1],
                 ocean.basis_north[2],
-                ocean.wave_scale.clamp(0.15, 6.0),
+                wave_scale,
             ],
             basis_up: [
                 ocean.basis_up[0],
@@ -523,18 +599,8 @@ impl GpuOceanUniforms {
                 ocean.basis_up[2],
                 ocean.glint_intensity.clamp(0.0, 4.0),
             ],
-            train_a: [
-                da[0],
-                da[1],
-                ocean.train_a.wind_speed_mps.clamp(0.2, 60.0),
-                ocean.train_a.phase_time_s,
-            ],
-            train_b: [
-                db[0],
-                db[1],
-                ocean.train_b.wind_speed_mps.clamp(0.2, 60.0),
-                ocean.train_b.phase_time_s,
-            ],
+            train_a: [da[0], da[1], speed_a, ocean.train_a.phase_time_s],
+            train_b: [db[0], db[1], speed_b, ocean.train_b.phase_time_s],
             blend_params: [
                 ocean.train_a.weight.clamp(0.0, 1.0),
                 ocean.train_b.weight.clamp(0.0, 1.0),
@@ -551,6 +617,11 @@ impl GpuOceanUniforms {
                 ocean.sdf_center_en_m[0],
                 ocean.sdf_center_en_m[1],
             ],
+            world_meta: [wx_mod, wy_mod, ocean.origin_lat_rad, east_scale_meta],
+            train_a_phases0: ta_p0,
+            train_a_phases1: ta_p1,
+            train_b_phases0: tb_p0,
+            train_b_phases1: tb_p1,
         }
     }
 }
@@ -849,6 +920,8 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     }
 
     let space_t = 1.0 - smoothstep(0.0, 0.85, cam.env_params.z);
+    let map_2d = clamp(cam.view_flags.x, 0.0, 1.0);
+    let morph_clear = 1.0 - smoothstep(0.0, 0.85, map_2d);
     let sun_dir = normalize(cam.sun_dir.xyz);
     let real_sky_w = clamp(cam.atmo_25d_params.x, 0.0, 1.0);
     let night_star_w = clamp(cam.atmo_25d_params.y, 0.0, 1.0);
@@ -900,7 +973,8 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
         } else {
             atmo_sky = classic_sky;
         }
-        if (cam.cloud_params.w < 0.5) {
+        atmo_sky = mix(sky_grad_2d.rgb, atmo_sky, morph_clear);
+        if (cam.cloud_params.w < 0.5 && map_2d <= 0.001) {
             return vec4<f32>(atmo_sky, sky_grad_2d.a);
         }
     }
@@ -912,7 +986,7 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
         * night_star_w
         * sky_clear_factor
         * smoothstep(-0.005, 0.08, elev);
-    let skybox_vis = max(space_t, night_vis_25d * (1.0 - space_t));
+    let skybox_vis = max(space_t, night_vis_25d * (1.0 - space_t)) * morph_clear;
 
     // 1. Pitch-black deep space + J2000 ICRF telescope skybox cubemap (or procedural Milky Way fallback)
     var space_col = vec3<f32>(0.0);
@@ -1159,6 +1233,11 @@ struct GpuOceanUniforms {
     train_b: vec4<f32>,
     blend_params: vec4<f32>,
     coastal_params: vec4<f32>,
+    world_meta: vec4<f32>,
+    train_a_phases0: vec4<f32>,
+    train_a_phases1: vec4<f32>,
+    train_b_phases0: vec4<f32>,
+    train_b_phases1: vec4<f32>,
 }
 
 struct GpuTileVertex {
@@ -1181,12 +1260,22 @@ struct GpuTileInstance {
 @group(0) @binding(3) var terrain_atlas: texture_2d_array<f32>;
 @group(0) @binding(4) var terrain_sampler: sampler;
 @group(0) @binding(5) var land_mask_tex: texture_2d<f32>;
+@group(0) @binding(6) var env_wrap_sampler: sampler;
 
 @group(1) @binding(0) var shadow_map: texture_depth_2d;
 @group(1) @binding(1) var shadow_sampler: sampler_comparison;
 @group(1) @binding(2) var<uniform> ocean: GpuOceanUniforms;
 @group(1) @binding(3) var coastal_sdf_tex: texture_2d<f32>;
 @group(1) @binding(4) var coastal_sdf_sampler: sampler;
+
+fn dir_to_equirect_uv(d: vec3<f32>) -> vec2<f32> {
+    let xy_len_sq = dot(d.xy, d.xy);
+    let az = select(0.0, atan2(d.y, d.x), xy_len_sq > 1e-10);
+    return vec2<f32>(
+        fract(az * 0.15915494309 + 0.5),
+        clamp(0.5 - asin(clamp(d.z, -1.0, 1.0)) * 0.31830988618, 0.001, 0.999),
+    );
+}
 
 struct TerrainVsOut {
     @builtin(position) clip_pos: vec4<f32>,
@@ -1220,48 +1309,131 @@ fn vnoise2(x: vec2<f32>) -> f32 {
     return mix(mix(n00, n10, u.x), mix(n01, n11, u.x), u.y);
 }
 
-// Returns Gerstner trochoidal wave displacement vec3(disp_east_m, disp_north_m, disp_up_m).
+// Wraps global Mercator noise offset seamlessly into [0, 32768) m for bit-exact pan/zoom stability.
+fn ocean_noise_wrap(p_m: vec2<f32>) -> vec2<f32> {
+    return fract(p_m * (1.0 / 32768.0)) * 32768.0;
+}
+
+// Maps local ENU metres near `ocean.origin` to invariant global Mercator delta metres
+// so crossing quantized origin cells or 3D<->2.5D morph bands produces zero wave phase jumps.
+fn ocean_merc_from_en(pos_en: vec2<f32>, blend_25d: f32) -> vec2<f32> {
+    if (ocean.world_meta.w < 0.0) {
+        return pos_en;
+    }
+    let orig_lat_rad = ocean.world_meta.z;
+    let east_scale_25d = ocean.world_meta.w;
+    let dlat_est = clamp(pos_en.y * (1.0 / 6378137.0), -0.4, 0.4);
+    let cos_curved = max(cos(clamp(orig_lat_rad + dlat_est, -1.483, 1.483)), 0.15);
+    let cos_eff_e = max(mix(cos_curved, east_scale_25d, blend_25d), 0.15);
+    let cos_eff_n = max(cos(clamp(orig_lat_rad + 0.5 * dlat_est, -1.483, 1.483)), 0.15);
+    return vec2<f32>(pos_en.x / cos_eff_e, pos_en.y / cos_eff_n);
+}
+
+// C2 quintic periodic 2D Perlin gradient noise rotated by integer Pythagorean matrix `rot = (rx, ry)`
+// where `32768.0 * inv_cell == period` (exact integer wrapping across the 32768 m world tile boundary).
+// `seed` decorrelates independent octaves after modulo wrapping without breaking periodicity.
+// Returns vec3(value in [0,1], grad_x, grad_y) with normalized dimensionless gradient.
+fn wrap_period2(i_raw: vec2<f32>, period: f32) -> vec2<f32> {
+    let w = i_raw - floor(i_raw * (1.0 / period)) * period;
+    let w_pos = select(w, w + vec2<f32>(period), w < vec2<f32>(0.0));
+    return select(w_pos, w_pos - vec2<f32>(period), w_pos >= vec2<f32>(period));
+}
+
+fn pgrad2_periodic_rot(
+    p_mod: vec2<f32>,
+    inv_cell: f32,
+    period: f32,
+    rot: vec2<f32>,
+    seed: vec2<f32>,
+) -> vec3<f32> {
+    let q = p_mod * inv_cell;
+    let x = vec2<f32>(rot.x * q.x - rot.y * q.y, rot.y * q.x + rot.x * q.y);
+    let i0_raw = floor(x);
+    let f = fract(x);
+    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    let one_minus_f = 1.0 - f;
+    let du = 30.0 * f * f * one_minus_f * one_minus_f;
+
+    let a = wrap_period2(i0_raw, period);
+    let b = wrap_period2(a + vec2<f32>(1.0), period);
+
+    let ang00 = 6.2831853 * hash21(vec2<f32>(a.x, a.y) + seed);
+    let ang10 = 6.2831853 * hash21(vec2<f32>(b.x, a.y) + seed);
+    let ang01 = 6.2831853 * hash21(vec2<f32>(a.x, b.y) + seed);
+    let ang11 = 6.2831853 * hash21(vec2<f32>(b.x, b.y) + seed);
+
+    let g00 = vec2<f32>(cos(ang00), sin(ang00));
+    let g10 = vec2<f32>(cos(ang10), sin(ang10));
+    let g01 = vec2<f32>(cos(ang01), sin(ang01));
+    let g11 = vec2<f32>(cos(ang11), sin(ang11));
+
+    let v00 = dot(g00, f);
+    let v10 = dot(g10, f - vec2<f32>(1.0, 0.0));
+    let v01 = dot(g01, f - vec2<f32>(0.0, 1.0));
+    let v11 = dot(g11, f - vec2<f32>(1.0, 1.0));
+
+    let k1 = v10 - v00;
+    let k2 = v01 - v00;
+    let k3 = v00 - v10 - v01 + v11;
+    let h = v00 + k1 * u.x + k2 * u.y + k3 * u.x * u.y;
+    let val01 = clamp(h * 0.70 + 0.5, 0.0, 1.0);
+
+    let gx_u = mix(mix(g00.x, g10.x, u.x), mix(g01.x, g11.x, u.x), u.y);
+    let gy_u = mix(mix(g00.y, g10.y, u.x), mix(g01.y, g11.y, u.x), u.y);
+    let dh_dx = gx_u + du.x * (k1 + k3 * u.y);
+    let dh_dy = gy_u + du.y * (k2 + k3 * u.x);
+
+    let inv_rlen = 1.0 / max(length(rot), 1.0);
+    let grad_norm = vec2<f32>(rot.x * dh_dx + rot.y * dh_dy, -rot.y * dh_dx + rot.x * dh_dy) * inv_rlen;
+    return vec3<f32>(val01, grad_norm.x, grad_norm.y);
+}
+
+// Returns Gerstner trochoidal wave displacement vec3(disp_east_m, disp_north_m, disp_up_m)
+// for the 4 primary macro swells using world-locked phases and short-crested wave-group envelopes.
 fn eval_ocean_vertex_train(
-    pos_en: vec2<f32>,
+    d_merc: vec2<f32>,
+    p_noise_base: vec2<f32>,
     wind_dir: vec2<f32>,
     wind_speed: f32,
     t: f32,
     wave_scale: f32,
     sample_scale_m: f32,
-    shoal_boost: f32,
+    sea_exposure: f32,
+    phases0: vec4<f32>,
 ) -> vec3<f32> {
     let dir0 = normalize(wind_dir);
     let perp0 = vec2<f32>(-dir0.y, dir0.x);
 
-    let warp_en = vec2<f32>(
-        vnoise2(pos_en * 0.0045 + vec2<f32>(0.0, t * 0.03)) - 0.5,
-        vnoise2(pos_en * 0.0045 + vec2<f32>(19.3, -t * 0.025)) - 0.5,
-    ) * 18.0;
-    let p_eff = pos_en + warp_en;
+    let drift_m = ocean_noise_wrap(p_noise_base - dir0 * (t * 0.42));
+    let n_warp1 = pgrad2_periodic_rot(drift_m, 1.0 / 512.0, 64.0, vec2<f32>(3.0, 4.0), vec2<f32>(11.3, 27.9)).x;
+    let n_warp2 = pgrad2_periodic_rot(drift_m, 1.0 / 512.0, 64.0, vec2<f32>(8.0, 15.0), vec2<f32>(53.1, 19.7)).x;
+    let warp_vec = vec2<f32>(n_warp1 - 0.5, n_warp2 - 0.5);
+    let group_macro = 0.52 + 0.88 * (0.62 * n_warp1 + 0.38 * n_warp2);
 
-    let beaufort = clamp((wind_speed - 0.5) / 14.0, 0.06, 2.2);
-    let len_wind = mix(0.42, 1.85, clamp(wind_speed / 18.0, 0.0, 1.4));
-    let offshore_atten = mix(1.0, 0.42, shoal_boost);
+    // Physical Beaufort saturation curve: calm light air -> smooth ~1.38 asymptote at strong wind.
+    let beaufort = clamp(1.38 * (1.0 - exp(-max(wind_speed, 0.3) / 10.5)), 0.10, 1.38);
+    let len_wind = mix(0.48, 1.72, clamp(wind_speed / 18.0, 0.0, 1.3));
 
-    var angs = array<f32, 4>(0.0, 0.24, -0.31, 0.56);
-    var wls = array<f32, 4>(138.0, 82.0, 47.0, 26.0);
-    var amps = array<f32, 4>(0.056, 0.048, 0.040, 0.032);
-    var phases = array<f32, 4>(0.0, 1.41, 2.83, 4.19);
+    var angs = array<f32, 4>(0.04, -0.26, 0.42, -0.58);
+    var wls = array<f32, 4>(151.0, 97.0, 61.0, 38.0);
+    var amps = array<f32, 4>(0.025, 0.023, 0.020, 0.017);
+    var base_ph = array<f32, 4>(phases0.x, phases0.y, phases0.z, phases0.w);
 
     var disp = vec3<f32>(0.0);
     for (var i: u32 = 0u; i < 4u; i = i + 1u) {
         let wl = max((wls[i] * len_wind) / max(wave_scale, 0.15), 4.0);
-        let aa_vs = 1.0 - smoothstep(wl * 0.28, wl * 0.95, sample_scale_m);
+        let aa_vs = 1.0 - smoothstep(wl * 0.32, wl * 1.05, sample_scale_m);
         if (aa_vs > 0.008) {
             let ca = cos(angs[i]);
             let sa = sin(angs[i]);
             let d = dir0 * ca + perp0 * sa;
             let k = 6.2831853 / wl;
-            let omega = sqrt(9.81 * k);
-            let ph = dot(d, p_eff) * k - omega * t + phases[i];
-            let steep = amps[i] * beaufort * offshore_atten * aa_vs;
-            let amp_m = (steep / k) * 0.52;
-            let q_m = amp_m * 0.55;
+            let p_eff = d_merc + warp_vec * min(wl * 0.48, 52.0);
+            let ph = base_ph[i] + dot(d, p_eff) * k;
+            let env_shift = mix(group_macro, 0.52 + 0.88 * n_warp2, select(0.18, 0.55, (i & 1u) == 1u));
+            let steep = amps[i] * beaufort * sea_exposure * aa_vs * env_shift;
+            let amp_m = (steep / k) * 0.56;
+            let q_m = amp_m * 0.48;
             disp.x += d.x * (cos(ph) * q_m);
             disp.y += d.y * (cos(ph) * q_m);
             disp.z += sin(ph) * amp_m;
@@ -1283,10 +1455,7 @@ fn vs_terrain(
     let raw_uv = vec2<f32>(v.pos_u.w, v.norm_v.w);
     var ecef_p = (inst.center_high.xyz + inst.center_low.xyz) + v.pos_u.xyz;
     let dv = normalize(ecef_p);
-    let land_uv = vec2<f32>(
-        atan2(dv.y, dv.x) * 0.15915494309 + 0.5,
-        clamp(0.5 - asin(clamp(dv.z, -1.0, 1.0)) * 0.31830988618, 0.001, 0.999),
-    );
+    let land_uv = dir_to_equirect_uv(dv);
 
     let map_2d = clamp(cam.view_flags.x, 0.0, 1.0);
     let ocean_on = ocean.origin_high.w * ocean.origin_low.w * (1.0 - map_2d);
@@ -1308,8 +1477,8 @@ fn vs_terrain(
             / (2.0 * 6378137.0);
         let sea_elev = rel_h + curve_sag;
         let elev_water = 1.0 - smoothstep(-0.25, 2.2, sea_elev);
-        let env_mask_vs = textureSampleLevel(land_mask_tex, terrain_sampler, land_uv, 0.0).r;
-        let open_ocean_vs = 1.0 - smoothstep(0.08, 0.42, env_mask_vs);
+        let env_mask_vs = textureSampleLevel(land_mask_tex, env_wrap_sampler, land_uv, 0.0).r;
+        let open_ocean_vs = 1.0 - smoothstep(0.04, 0.52, env_mask_vs);
 
         let half_span = max(ocean.coastal_params.y, 50.0);
         let sdf_uv = (pos_en - ocean.coastal_params.zw) / (2.0 * half_span) + vec2<f32>(0.5);
@@ -1324,38 +1493,50 @@ fn vs_terrain(
         let use_sdf = ocean.blend_params.w * in_sdf;
         let shore_dist_norm = mix(1.0, sdf_s.g, use_sdf);
         let shore_taper = mix(1.0, smoothstep(0.02, 0.16, shore_dist_norm), use_sdf);
-        let shoal_boost = use_sdf * (1.0 - smoothstep(0.04, 0.45, shore_dist_norm));
+        let near_exp_vs = mix(0.32, 0.78, smoothstep(0.06, 0.88, shore_dist_norm));
+        let open_exp_vs = mix(0.38, 1.0, smoothstep(0.05, 0.92, open_ocean_vs));
+        let sea_exposure_vs = mix(
+            1.0,
+            max(near_exp_vs, open_exp_vs),
+            clamp(use_sdf + (1.0 - open_ocean_vs) * 0.65, 0.0, 1.0),
+        );
         let water_vs = clamp(mix(open_ocean_vs, sdf_s.r, use_sdf) * elev_water * shore_taper, 0.0, 1.0);
 
         if (water_vs > 0.005) {
             let view_dist = length(world_rel);
-            let sample_scale_m = max(view_dist * 0.022, 1.0);
+            let sample_scale_m = max(view_dist * 0.032, 4.0);
             let wave_strength = ocean.basis_east.w;
             let wave_scale = ocean.basis_north.w;
+            let d_merc = ocean_merc_from_en(pos_en, blend_25d);
+            let p_noise_base = ocean_noise_wrap(ocean.world_meta.xy + d_merc);
             let wa = ocean.blend_params.x;
             let wb = ocean.blend_params.y;
             let w_sum = max(wa + wb, 1e-4);
             var disp_enu = vec3<f32>(0.0);
             if (wa > 0.002) {
                 disp_enu += eval_ocean_vertex_train(
-                    pos_en,
+                    d_merc,
+                    p_noise_base,
                     ocean.train_a.xy,
                     ocean.train_a.z,
                     ocean.train_a.w,
                     wave_scale,
                     sample_scale_m,
-                    shoal_boost,
+                    sea_exposure_vs,
+                    ocean.train_a_phases0,
                 ) * wa;
             }
             if (wb > 0.002) {
                 disp_enu += eval_ocean_vertex_train(
-                    pos_en,
+                    d_merc,
+                    p_noise_base,
                     ocean.train_b.xy,
                     ocean.train_b.z,
                     ocean.train_b.w,
                     wave_scale,
                     sample_scale_m,
-                    shoal_boost,
+                    sea_exposure_vs,
+                    ocean.train_b_phases0,
                 ) * wb;
             }
             disp_enu = (disp_enu / w_sum) * wave_strength * water_vs * ocean_on * ocean.blend_params.z;
@@ -1445,66 +1626,135 @@ fn eval_sky_reflection(
     return mix(classic, phys, real_sky_w);
 }
 
-// Evaluates 6 directional anti-aliased trochoidal/Gerstner wave octaves for one wind wave train.
-// Uses spatially constant `wind_dir` (preventing `grad(d)*pos_en` phase-compression fringes near
-// curved coasts) plus subtle low-frequency domain warp for authentic organic sea-surface swells.
-// Returns vec3(slope_east, slope_north, crest_steepness).
+// Evaluates 8 directional anti-aliased short-crested Gerstner swells plus 6 octaves of
+// Pythagorean-rotated C2 periodic Perlin gradient-noise wavelets & capillary slopes.
+// Uses world-fixed Mercator deltas (`d_merc`) and pre-reduced CPU f64 base phases (`phases0/1`) so
+// ocean waves never jump or alter pattern across camera pan, zoom, or 3D<->2.5D morph transitions.
+// Returns vec4(slope_east, slope_north, crest_steepness, subpixel_aa_roughness).
 fn eval_ocean_train(
-    pos_en: vec2<f32>,
+    d_merc: vec2<f32>,
+    p_noise_base: vec2<f32>,
     wind_dir: vec2<f32>,
     wind_speed: f32,
     t: f32,
     wave_scale: f32,
     px_m: f32,
-    shoal_boost: f32,
-) -> vec3<f32> {
+    sea_exposure: f32,
+    phases0: vec4<f32>,
+    phases1: vec4<f32>,
+) -> vec4<f32> {
     let dir0 = normalize(wind_dir);
     let perp0 = vec2<f32>(-dir0.y, dir0.x);
 
-    // Subtle organic domain warp breaks up infinite straight sine ridges into natural wind-sea groups.
-    let warp_en = vec2<f32>(
-        vnoise2(pos_en * 0.0045 + vec2<f32>(0.0, t * 0.03)) - 0.5,
-        vnoise2(pos_en * 0.0045 + vec2<f32>(19.3, -t * 0.025)) - 0.5,
-    ) * 18.0;
-    let p_eff = pos_en + warp_en;
+    // Multi-scale advected Perlin gradient noise drives smooth wave packets ("sets"), domain warp, and gusts.
+    let drift_macro = ocean_noise_wrap(p_noise_base - dir0 * (t * 0.42));
+    let drift_cross = ocean_noise_wrap(p_noise_base - dir0 * (t * 0.65) + perp0 * (t * 0.22));
+    let gw1 = pgrad2_periodic_rot(drift_macro, 1.0 / 512.0, 64.0, vec2<f32>(3.0, 4.0), vec2<f32>(11.3, 27.9));
+    let gw2 = pgrad2_periodic_rot(drift_cross, 1.0 / 512.0, 64.0, vec2<f32>(8.0, 15.0), vec2<f32>(53.1, 19.7));
+    let n_warp1 = gw1.x;
+    let n_warp2 = gw2.x;
+    let warp_vec = vec2<f32>(n_warp1 - 0.5, n_warp2 - 0.5);
+    let group_macro = 0.48 + 0.96 * (0.60 * n_warp1 + 0.40 * n_warp2);
 
-    // Beaufort scaling: gentle capillary chop at 1-3 m/s -> steep rolling whitecap swells at 14-25 m/s.
-    let beaufort = clamp((wind_speed - 0.5) / 14.0, 0.06, 2.2);
-    let len_wind = mix(0.42, 1.85, clamp(wind_speed / 18.0, 0.0, 1.4));
-    let offshore_atten = mix(1.0, 0.42, shoal_boost);
+    let drift_mid = ocean_noise_wrap(p_noise_base - dir0 * (t * 0.85) - perp0 * (t * 0.18));
+    let gc = pgrad2_periodic_rot(drift_mid, 1.0 / 256.0, 128.0, vec2<f32>(5.0, 12.0), vec2<f32>(103.5, 41.2));
+    let drift_b = ocean_noise_wrap(p_noise_base - dir0 * (t * 1.15) + perp0 * (t * 0.31) + vec2<f32>(317.0, 911.0));
+    let gd = pgrad2_periodic_rot(drift_b, 1.0 / 128.0, 256.0, vec2<f32>(15.0, 8.0), vec2<f32>(19.7, 131.3));
+    let n_gust = 0.58 * gc.x + 0.42 * n_warp2;
+    let group_chop = 0.42 + 1.12 * (0.55 * gc.x + 0.45 * gd.x);
 
-    // 6 non-harmonic golden-ratio directional octaves spanning regional ocean swells to crisp wind chop.
-    var angs = array<f32, 6>(0.0, 0.24, -0.31, 0.56, -0.62, 0.16);
-    var wls = array<f32, 6>(138.0, 82.0, 47.0, 26.0, 13.5, 5.8);
-    var amps = array<f32, 6>(0.056, 0.048, 0.040, 0.032, 0.024, 0.016);
-    var phases = array<f32, 6>(0.0, 1.41, 2.83, 4.19, 0.92, 5.14);
+    // Physical Beaufort asymptote: calm light ripples at 2 m/s, rolling swells at 7-12 m/s,
+    // smoothly saturating toward 1.38 in gale winds instead of scaling linearly to extremes.
+    let beaufort = clamp(1.38 * (1.0 - exp(-max(wind_speed, 0.3) / 10.5)), 0.10, 1.38);
+    let len_wind = mix(0.48, 1.72, clamp(wind_speed / 18.0, 0.0, 1.3));
+
+    // 8 incommensurable directional swells localized into short-crested wave packets so no grid stripes form.
+    var angs = array<f32, 8>(0.04, -0.26, 0.42, -0.58, 0.77, -0.86, 0.21, -0.41);
+    var wls = array<f32, 8>(151.0, 97.0, 61.0, 38.0, 23.5, 13.7, 7.9, 4.3);
+    var amps = array<f32, 8>(0.025, 0.023, 0.020, 0.017, 0.014, 0.011, 0.0085, 0.006);
+    var base_ph = array<f32, 8>(
+        phases0.x, phases0.y, phases0.z, phases0.w,
+        phases1.x, phases1.y, phases1.z, phases1.w,
+    );
 
     var slope = vec2<f32>(0.0);
     var crest_acc = 0.0;
+    let warp_mid = vec2<f32>(gc.x - 0.5, gd.x - 0.5);
 
-    for (var i: u32 = 0u; i < 6u; i = i + 1u) {
+    for (var i: u32 = 0u; i < 8u; i = i + 1u) {
         let wl = max((wls[i] * len_wind) / max(wave_scale, 0.15), 1.4);
-        // Smooth spatial anti-aliasing: drop sub-pixel octaves before Nyquist aliasing occurs.
-        let aa_w = 1.0 - smoothstep(wl * 0.14, wl * 0.48, px_m);
+        let aa_w = 1.0 - smoothstep(wl * 0.22, wl * 0.58, px_m);
         if (aa_w > 0.008) {
             let ca = cos(angs[i]);
             let sa = sin(angs[i]);
             let d = dir0 * ca + perp0 * sa;
             let k = 6.2831853 / wl;
-            // Exact deep-water gravity wave dispersion: omega = sqrt(g * k).
-            let omega = sqrt(9.81 * k);
-            let ph = dot(d, p_eff) * k - omega * t + phases[i];
+            let w_m = select(min(wl * 0.28, 7.5), min(wl * 0.48, 52.0), i < 4u);
+            let p_eff = d_merc + warp_vec * w_m + warp_mid * min(wl * 0.22, 11.0);
+            let ph = base_ph[i] + dot(d, p_eff) * k;
             let s = sin(ph);
             let c = cos(ph);
-            // Trochoidal crest sharpening: broad troughs, sharp wind-driven crests.
             let sharp = 0.5 + 0.5 * s;
-            let steep = amps[i] * beaufort * offshore_atten * aa_w;
-            let d_wave = c * (0.68 + 0.64 * sharp);
+            let env_alt = 0.45 + 1.05 * select(gd.x, n_warp2, (i & 1u) == 1u);
+            let env_base = select(group_chop, group_macro, i < 4u);
+            let env = mix(env_base, env_alt, 0.35);
+            let steep = amps[i] * beaufort * sea_exposure * aa_w * env;
+            let d_wave = c * (0.72 + 0.56 * sharp);
             slope += d * (d_wave * steep);
-            crest_acc += pow(sharp, 2.8) * steep * 3.6;
+            crest_acc += pow(sharp, 2.4) * steep * 4.2;
         }
     }
-    return vec3<f32>(slope.x, slope.y, crest_acc);
+
+    // 6 isotropic periodic Perlin gradient wavelets (~102m down to ~0.94m) provide rich organic
+    // ocean texture with zero square-cell artifacts and preserve distant roughness via AA deficit.
+    var noise_slope = vec2<f32>(0.0);
+    var aa_rough = 0.0;
+    let noise_strength = beaufort * sea_exposure * (0.62 + 0.72 * n_gust);
+
+    let cell_a = (512.0 / 5.0) / max(wave_scale, 0.25);
+    let aa_a = 1.0 - smoothstep(cell_a * 0.25, cell_a * 0.85, px_m);
+    if (aa_a > 0.008) {
+        noise_slope += gw1.yz * (0.018 * noise_strength * aa_a);
+    }
+
+    let cell_b = (512.0 / 17.0) / max(wave_scale, 0.25);
+    let aa_b = 1.0 - smoothstep(cell_b * 0.25, cell_b * 0.85, px_m);
+    if (aa_b > 0.008) {
+        noise_slope += gw2.yz * (0.021 * noise_strength * aa_b);
+    }
+
+    let cell_c = (256.0 / 13.0) / max(wave_scale, 0.25);
+    let aa_c = 1.0 - smoothstep(cell_c * 0.25, cell_c * 0.85, px_m);
+    if (aa_c > 0.008) {
+        noise_slope += gc.yz * (0.022 * noise_strength * aa_c);
+    }
+
+    let cell_d = (128.0 / 17.0) / max(wave_scale, 0.25);
+    let aa_d = 1.0 - smoothstep(cell_d * 0.25, cell_d * 0.85, px_m);
+    if (aa_d > 0.008) {
+        noise_slope += gd.yz * (0.020 * noise_strength * aa_d);
+    }
+    aa_rough += (1.0 - aa_d) * 0.028;
+
+    let cell_e = (32.0 / 13.0) / max(wave_scale, 0.25);
+    let aa_e = 1.0 - smoothstep(cell_e * 0.25, cell_e * 0.85, px_m);
+    if (aa_e > 0.008) {
+        let ge = pgrad2_periodic_rot(drift_mid, 1.0 / 32.0, 1024.0, vec2<f32>(12.0, 5.0), vec2<f32>(61.9, 97.1)).yz;
+        noise_slope += ge * (0.017 * noise_strength * aa_e);
+    }
+    aa_rough += (1.0 - aa_e) * 0.042;
+
+    let cell_f = (16.0 / 17.0) / max(wave_scale, 0.25);
+    let aa_f = 1.0 - smoothstep(cell_f * 0.25, cell_f * 0.85, px_m);
+    if (aa_f > 0.008) {
+        let gf = pgrad2_periodic_rot(drift_b, 1.0 / 16.0, 2048.0, vec2<f32>(8.0, 15.0), vec2<f32>(149.1, 33.7)).yz;
+        noise_slope += gf * (0.013 * noise_strength * aa_f);
+    }
+    aa_rough += (1.0 - aa_f) * 0.036;
+
+    slope += noise_slope;
+    crest_acc += clamp(length(noise_slope) * 1.45, 0.0, 0.36);
+    return vec4<f32>(slope.x, slope.y, crest_acc, aa_rough * clamp(sea_exposure * beaufort, 0.15, 1.2));
 }
 
 fn hash31(p: vec3<f32>) -> f32 {
@@ -1584,14 +1834,9 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
     // Keep derivatives & texture lookups in uniform control flow for WGSL validation.
     let raw_px_m = length(fwidth(in.view_rel));
     let px_m = max(raw_px_m, 0.15);
-    var u = fract(in.land_uv_approx.x);
-    var v = in.land_uv_approx.y;
-    if ((d.x < -0.5 && abs(d.y) < 0.14) || abs(d.z) > 0.95) {
-        u = fract(atan2(d.y, d.x) * 0.15915494309 + 0.5);
-        v = clamp(0.5 - asin(clamp(d.z, -1.0, 1.0)) * 0.31830988618, 0.001, 0.999);
-    }
+    let env_uv = dir_to_equirect_uv(d);
     let env_lod = clamp(log2(max(px_m * 0.0001022, 1.0)), 0.0, 5.0);
-    let env_mask = textureSampleLevel(land_mask_tex, terrain_sampler, vec2<f32>(u, v), env_lod);
+    let env_mask = textureSampleLevel(land_mask_tex, env_wrap_sampler, env_uv, env_lod);
     let on_land = smoothstep(0.18, 0.55, env_mask.r);
 
     // Close-ground (< ~50-80m) procedural micro-albedo grain & micro-normal bump on land surfaces.
@@ -1634,7 +1879,12 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
     let twilight = exp(-tn * tn) * vec3<f32>(0.42, 0.18, 0.06);
     let f1 = 1.0 - max(dot(local_up, view_dir), 0.0);
     let fresnel = f1 * f1 * f1;
-    let atmo_rim = vec3<f32>(0.28, 0.56, 1.0) * fresnel * smoothstep(-0.18, 0.32, ndotl) * 0.45 * (1.0 - blend_25d);
+    let atmo_rim = vec3<f32>(0.28, 0.56, 1.0)
+        * fresnel
+        * smoothstep(-0.18, 0.32, ndotl)
+        * 0.45
+        * (1.0 - blend_25d)
+        * (1.0 - smoothstep(0.0, 0.55, map_2d));
     let ocean_night = vec3<f32>(0.048, 0.068, 0.108);
     let land_night = vec3<f32>(0.095, 0.120, 0.174);
     let night_fill = mix(ocean_night, land_night, on_land);
@@ -1682,17 +1932,20 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
         let pos_en = vec2<f32>(dot(p_rel_orig, east_v), dot(p_rel_orig, north_v));
         let rel_h = dot(p_rel_orig, up_v);
 
-        // Optional coastal SDF texture sample with smooth border taper so open ocean never seams.
+        // 5-tap C1-smooth coastal SDF sample eliminates 128x128 u8 bilinear facets along coastlines.
         let half_span = max(ocean.coastal_params.y, 50.0);
         let sdf_uv = (pos_en - ocean.coastal_params.zw) / (2.0 * half_span) + vec2<f32>(0.5);
         let in_sdf = smoothstep(0.01, 0.09, sdf_uv.x) * (1.0 - smoothstep(0.91, 0.99, sdf_uv.x))
                    * smoothstep(0.01, 0.09, sdf_uv.y) * (1.0 - smoothstep(0.91, 0.99, sdf_uv.y));
-        let sdf_s = textureSampleLevel(
-            coastal_sdf_tex,
-            coastal_sdf_sampler,
-            clamp(sdf_uv, vec2<f32>(0.002), vec2<f32>(0.998)),
-            0.0,
-        );
+        let sdf_texel = 1.0 / max(vec2<f32>(textureDimensions(coastal_sdf_tex)), vec2<f32>(8.0));
+        let sdf_d = sdf_texel * 0.70;
+        let uv_c = clamp(sdf_uv, vec2<f32>(0.002), vec2<f32>(0.998));
+        let sdf_c0 = textureSampleLevel(coastal_sdf_tex, coastal_sdf_sampler, uv_c, 0.0);
+        let sdf_c1 = textureSampleLevel(coastal_sdf_tex, coastal_sdf_sampler, clamp(uv_c + vec2<f32>(sdf_d.x, sdf_d.y), vec2<f32>(0.002), vec2<f32>(0.998)), 0.0);
+        let sdf_c2 = textureSampleLevel(coastal_sdf_tex, coastal_sdf_sampler, clamp(uv_c + vec2<f32>(-sdf_d.x, sdf_d.y), vec2<f32>(0.002), vec2<f32>(0.998)), 0.0);
+        let sdf_c3 = textureSampleLevel(coastal_sdf_tex, coastal_sdf_sampler, clamp(uv_c + vec2<f32>(sdf_d.x, -sdf_d.y), vec2<f32>(0.002), vec2<f32>(0.998)), 0.0);
+        let sdf_c4 = textureSampleLevel(coastal_sdf_tex, coastal_sdf_sampler, clamp(uv_c + vec2<f32>(-sdf_d.x, -sdf_d.y), vec2<f32>(0.002), vec2<f32>(0.998)), 0.0);
+        let sdf_s = sdf_c0 * 0.50 + (sdf_c1 + sdf_c2 + sdf_c3 + sdf_c4) * 0.125;
 
         let use_sdf = ocean.blend_params.w * in_sdf;
         let curve_sag = select(0.0, 1.0, eye_r > 1000000.0)
@@ -1700,12 +1953,9 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
             * dot(pos_en, pos_en)
             / (2.0 * 6378137.0);
         let sea_elev = rel_h + curve_sag;
-        // Reject elevated land (> +0.6..+5.5m) while preserving sea level & negative ocean bathymetry
-        // so distant offshore ocean tiles stay wavy all the way to the horizon!
         let elev_water = 1.0 - smoothstep(0.6, 5.5, sea_elev);
 
-        // Fast GPU water classification (recognizes deep blue ocean, emerald coastal water where
-        // B > R, and cool-white sea-level surf foam while rejecting chlorophyll grass & tan sand where R > B).
+        // Pixel-sharp water classification from satellite imagery & elevation; SDF fills bright foam holes only.
         let max_c = max(base.r, max(base.g, base.b));
         let min_c = min(base.r, min(base.g, base.b));
         let cool_px = select(0.0, 1.0, (base.b >= base.r - 0.010) && (base.b + 0.030 >= base.g) && ((base.b - base.r >= 0.012) || max_c < 0.42));
@@ -1714,11 +1964,17 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
         let warm_land = select(0.0, 1.0, (base.r - base.b >= 0.022) || ((min_c > 0.64) && (base.r > base.b + 0.008)));
         let img_water = clamp((cool_px + emerald_px + surf_foam_px) * (1.0 - warm_land), 0.0, 1.0);
 
-        let open_ocean_mask = 1.0 - smoothstep(0.08, 0.42, env_mask.r);
+        let open_ocean_mask = 1.0 - smoothstep(0.04, 0.52, env_mask.r);
         let gpu_water = clamp(mix(img_water, 1.0, open_ocean_mask) * (1.0 - smoothstep(0.75, 0.96, env_mask.r) * (1.0 - img_water)) * elev_water, 0.0, 1.0);
+        let sdf_surf_fill = clamp((sdf_s.r - 0.55) * 2.2, 0.0, 1.0)
+                          * (1.0 - smoothstep(0.3, 2.0, sea_elev))
+                          * (1.0 - warm_land);
+        let water_mask = clamp(max(gpu_water, sdf_surf_fill * use_sdf), 0.0, 1.0);
 
-        let water_mask = mix(gpu_water, sdf_s.r, use_sdf);
-        if (water_mask > 0.01) {
+        let swash_margin = use_sdf * (1.0 - smoothstep(36.0, 58.0, sdf_s.g * ocean.coastal_params.x))
+                         * (1.0 - smoothstep(0.20, 1.55, sea_elev));
+
+        if (water_mask > 0.01 || swash_margin > 0.01) {
             let shore_dist_norm = mix(1.0, sdf_s.g, use_sdf);
             let raw_sdir = sdf_s.ba * 2.0 - vec2<f32>(1.0);
             let sdir_len = length(raw_sdir);
@@ -1729,114 +1985,175 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
             let wave_strength = ocean.basis_east.w;
             let wave_scale = ocean.basis_north.w;
             let glint_scale = ocean.basis_up.w;
+            let d_merc = ocean_merc_from_en(pos_en, blend_25d);
+            let p_noise_base = ocean_noise_wrap(ocean.world_meta.xy + d_merc);
+
+            // Smooth noise-warped open-ocean fetch: calm in sheltered coves (~0.34x), gradually building
+            // seaward to full capped open-sea swells (~1.0x) without shoreline-parallel contour bands.
+            let d_m_raw = shore_dist_norm * ocean.coastal_params.x;
+            let n_cw1 = pgrad2_periodic_rot(p_noise_base, 1.0 / 512.0, 64.0, vec2<f32>(3.0, 4.0), vec2<f32>(71.3, 13.9)).x;
+            let n_cw2 = pgrad2_periodic_rot(p_noise_base, 1.0 / 256.0, 128.0, vec2<f32>(5.0, 12.0), vec2<f32>(29.1, 87.7)).x;
+            let warp_fetch = (n_cw1 - 0.5) * 110.0 + (n_cw2 - 0.5) * 42.0;
+            let d_fetch = max(d_m_raw + warp_fetch, 0.0);
+            let open_fetch = 1.0 - smoothstep(0.02, 0.54, clamp(env_mask.r + (n_cw1 - 0.5) * 0.18, 0.0, 1.0));
+            let near_fetch = mix(0.32, 0.78, smoothstep(24.0, 320.0, d_fetch));
+            let far_fetch = mix(0.38, 1.0, smoothstep(0.05, 0.92, open_fetch));
+            let sea_exposure = mix(1.0, max(near_fetch, far_fetch), clamp(use_sdf + (1.0 - open_ocean_mask) * 0.65, 0.0, 1.0));
 
             // Dual-state smooth wind cross-fade (zero phase-spin glitch on wind angle/speed change!).
             let wa = ocean.blend_params.x;
             let wb = ocean.blend_params.y;
             let w_sum = max(wa + wb, 1e-4);
-            var wave_res = vec3<f32>(0.0);
+            var wave_res = vec4<f32>(0.0);
             if (wa > 0.002) {
                 wave_res += eval_ocean_train(
-                    pos_en,
+                    d_merc,
+                    p_noise_base,
                     ocean.train_a.xy,
                     ocean.train_a.z,
                     ocean.train_a.w,
                     wave_scale,
                     px_m,
-                    shoal_boost,
+                    sea_exposure,
+                    ocean.train_a_phases0,
+                    ocean.train_a_phases1,
                 ) * (wa / w_sum);
             }
             if (wb > 0.002) {
                 wave_res += eval_ocean_train(
-                    pos_en,
+                    d_merc,
+                    p_noise_base,
                     ocean.train_b.xy,
                     ocean.train_b.z,
                     ocean.train_b.w,
                     wave_scale,
                     px_m,
-                    shoal_boost,
+                    sea_exposure,
+                    ocean.train_b_phases0,
+                    ocean.train_b_phases1,
                 ) * (wb / w_sum);
             }
 
             let eff_wind_speed = (ocean.train_a.z * wa + ocean.train_b.z * wb) / w_sum;
             let eff_t = (ocean.train_a.w * wa + ocean.train_b.w * wb) / w_sum;
 
-            // Optional Coastal Periodic Breaking Surf & Advancing/Receding Beach Swash!
-            // Uses pure SDF distance `d_m` (|grad d_m| == 1.0 everywhere) so wave fronts align
-            // parallel to bays & beaches with exact physical wavelength and zero phase-gradient fringes!
+            // Optional Coastal Refracted Breaking Surf & Rhythmic Come-and-Go Beach Swash!
             var coastal_foam = 0.0;
             var surf_slope = vec2<f32>(0.0);
+            var swash_cov = 0.0;
+            var wet_darken = 0.0;
             if (use_sdf > 0.01 && shore_dist_norm < 0.96) {
-                let d_m = shore_dist_norm * ocean.coastal_params.x;
-                // Gentle coastal warp so wave crests curve organically along bays & headlands.
-                let warp = (vnoise2(pos_en * 0.008) - 0.5) * 28.0 + (vnoise2(pos_en * 0.022) - 0.5) * 9.0;
-                let d_warped = max(d_m + warp, 0.0);
-                let surf_wl = clamp(mix(32.0, 58.0, clamp(eff_wind_speed / 16.0, 0.0, 1.0)), 26.0, 64.0);
+                let warp_surf = (n_cw1 - 0.5) * 58.0 + (n_cw2 - 0.5) * 24.0;
+                let d_eff = max(d_m_raw + warp_surf, 0.0);
+                let surf_wl = clamp(mix(28.0, 48.0, clamp(eff_wind_speed / 16.0, 0.0, 1.0)), 24.0, 52.0);
                 let k_surf = 6.2831853 / surf_wl;
-                // Period ~7-11 s real ocean surf period; +omega*t moves crests INWARD toward the beach!
-                let omega_surf = sqrt(9.81 * k_surf) * 0.62;
-                let surf_phase = k_surf * d_warped + omega_surf * eff_t;
-                // Realistic wave-set group modulation (3-5 stronger waves, then calm lull!).
-                let set_group = 0.60 + 0.40 * sin(0.24 * k_surf * d_warped + 0.20 * omega_surf * eff_t);
+                // Period ~8-11 s real ocean surf period; +omega*t moves crests INWARD toward the beach.
+                let omega_surf = sqrt(9.81 * k_surf) * 0.58;
+
+                // Blend wave propagation direction toward shoreline only close inside <125m (Snell refraction)
+                let refract_w = 1.0 - smoothstep(15.0, 125.0, d_eff);
+                let inc_dir = normalize((ocean.train_a.xy * wa + ocean.train_b.xy * wb) / w_sum + vec2<f32>(1e-4, 0.0));
+                let prop_to_shore = normalize(mix(inc_dir, shore_dir, clamp(0.35 + 0.65 * refract_w, 0.0, 1.0)));
+
+                // Along-shore broken wave-packet envelope breaks continuous rings into organic surf arcs.
+                let p_along = ocean_noise_wrap(p_noise_base - prop_to_shore * (eff_t * 1.4));
+                let n_along = pgrad2_periodic_rot(p_along, 1.0 / 256.0, 128.0, vec2<f32>(15.0, 8.0), vec2<f32>(83.1, 47.3)).x;
+                let crest_patch = smoothstep(0.24, 0.76, n_along);
+                let set_group = (0.55 + 0.45 * sin(0.22 * k_surf * d_eff + 0.18 * omega_surf * eff_t + n_cw1 * 3.1))
+                              * (0.45 + 0.90 * crest_patch);
+                let phase_var = k_surf * d_eff + omega_surf * eff_t + (n_cw1 - 0.5) * 2.4;
                 let surf_aa = 1.0 - smoothstep(surf_wl * 0.16, surf_wl * 0.55, px_m);
 
-                // Asymmetric shoaling swells & breaking surf crests inside [6m .. 220m] from beach.
-                let shoal_swell_zone = smoothstep(4.0, 20.0, d_m) * (1.0 - smoothstep(140.0, 320.0, d_m));
-                let breaker_zone = smoothstep(5.0, 26.0, d_m) * (1.0 - smoothstep(95.0, 220.0, d_m));
-                let s_wave = 0.5 + 0.5 * sin(surf_phase);
-                let crest_line = pow(s_wave, 4.8) * breaker_zone * set_group * surf_aa;
-                let foam_noise = 0.52 + 0.48 * vnoise2(pos_en * 0.18 + shore_dir * eff_t * 1.2);
-                let wake_trail = pow(0.5 + 0.5 * sin(surf_phase - 0.65), 2.5) * breaker_zone * set_group * 0.28 * surf_aa;
-                coastal_foam += (crest_line * 0.68 + wake_trail) * foam_noise * use_sdf;
-                surf_slope += shore_dir * (cos(surf_phase) * shoal_swell_zone * set_group * 0.16 * surf_aa * use_sdf);
+                // Subtle refracting shoaling swells & broken whitewater crests inside [10m .. 125m] (no 320m rings).
+                let shoal_swell_zone = smoothstep(8.0, 24.0, d_m_raw) * (1.0 - smoothstep(65.0, 130.0, d_m_raw));
+                let breaker_zone = smoothstep(10.0, 26.0, d_m_raw) * (1.0 - smoothstep(55.0, 115.0, d_m_raw));
+                let s_wave = 0.5 + 0.5 * sin(phase_var);
+                let crest_line = pow(s_wave, 5.2) * breaker_zone * set_group * surf_aa;
+                let n_foam = pgrad2_periodic_rot(
+                    ocean_noise_wrap(p_noise_base + prop_to_shore * (eff_t * 1.1)),
+                    1.0 / 32.0,
+                    1024.0,
+                    vec2<f32>(12.0, 5.0),
+                    vec2<f32>(119.3, 61.7),
+                ).x;
+                let foam_noise = 0.42 + 0.58 * n_foam;
+                let wake_trail = pow(0.5 + 0.5 * sin(phase_var - 0.70), 2.8) * breaker_zone * set_group * 0.24 * surf_aa;
+                coastal_foam += (crest_line * 0.72 + wake_trail) * foam_noise * use_sdf * water_mask;
+                surf_slope += prop_to_shore * (cos(phase_var) * shoal_swell_zone * set_group * 0.042 * surf_aa * use_sdf);
 
-                // Rhythmic shoreline swash & backwash right on the wet beach edge [0..26 m].
-                let swash_cycle = 0.5 + 0.5 * sin(omega_surf * eff_t * 0.78 + warp * 0.10);
-                let swash_reach = mix(6.0, 26.0, swash_cycle * set_group);
-                let swash_sheet = (1.0 - smoothstep(swash_reach * 0.45, swash_reach, d_m))
-                                * smoothstep(0.0, 2.5, d_m + 1.0);
-                let swash_lip = exp(-pow((d_m - swash_reach * 0.85) / 4.2, 2.0)) * (0.65 + 0.35 * swash_cycle);
-                let lace = smoothstep(0.28, 0.76, vnoise2(pos_en * 0.32 - shore_dir * eff_t * 0.8));
-                coastal_foam += (swash_sheet * 0.35 * lace + swash_lip * 0.66) * surf_aa * use_sdf;
+                // Rhythmic Come-and-Go Shoreline Swash: washes UP onto wet beach margin (-8.5m) and slides BACK (+34m).
+                if (swash_margin > 0.01) {
+                    let swash_ph = omega_surf * 0.76 * eff_t + (n_cw1 - 0.5) * 4.8 + (n_along - 0.5) * 2.6;
+                    let rush_raw = 0.5 + 0.5 * sin(swash_ph);
+                    let surge = pow(rush_raw, 0.72);
+                    let surge_vel = cos(swash_ph);
+                    let beach_s = d_m_raw - max(sea_elev, -0.25) * 10.0;
+                    let front_s = mix(34.0, -8.5, surge * clamp(0.68 + 0.52 * n_along, 0.48, 1.22));
+                    let swash_sheet = smoothstep(front_s - 2.5, front_s + 8.5, beach_s)
+                                    * (1.0 - smoothstep(34.0, 54.0, d_m_raw))
+                                    * swash_margin;
+                    let swash_lip = exp(-pow((beach_s - front_s) / 4.2, 2.0))
+                                  * (0.58 + 0.42 * max(surge_vel, 0.0))
+                                  * swash_margin;
+                    let n_lace = pgrad2_periodic_rot(
+                        ocean_noise_wrap(p_noise_base - shore_dir * (eff_t * 0.75)),
+                        1.0 / 16.0,
+                        2048.0,
+                        vec2<f32>(8.0, 15.0),
+                        vec2<f32>(137.5, 91.1),
+                    ).x;
+                    let lace = smoothstep(0.26, 0.74, n_lace);
+                    let foam_amt = (swash_sheet * 0.44 * lace + swash_lip * 0.84) * surf_aa * use_sdf;
+                    coastal_foam += foam_amt;
+                    let wet_zone = (1.0 - smoothstep(-8.0, 6.0, -beach_s)) * (1.0 - smoothstep(14.0, 34.0, d_m_raw));
+                    wet_darken = wet_zone * swash_margin * 0.24 * use_sdf;
+                    swash_cov = clamp(swash_sheet * 0.62 + swash_lip * 0.90, 0.0, 0.94) * use_sdf;
+                }
             }
 
-            let slope_e = (wave_res.x * wave_strength + surf_slope.x) * water_mask;
-            let slope_n = (wave_res.y * wave_strength + surf_slope.y) * water_mask;
-            let n_water = normalize(up_v - east_v * slope_e - north_v * slope_n);
+            let cov_eff = clamp(max(water_mask, swash_cov), 0.0, 1.0);
+            var raw_slope = (wave_res.xy * wave_strength + surf_slope) * cov_eff;
+            // Miche breaking-steepness soft limiter caps surface slope cleanly at ~0.40 without flat clipping.
+            let slope_len = length(raw_slope);
+            if (slope_len > 0.16) {
+                let over = slope_len - 0.16;
+                let capped = 0.16 + 0.24 * (over / (0.24 + over));
+                raw_slope *= capped / slope_len;
+            }
+            let n_water = normalize(up_v - east_v * raw_slope.x - north_v * raw_slope.y);
 
             // Physically based Fresnel sky reflection + deep pelagic water absorption.
-            // Clamp reflected ray slightly above horizon so grazing troughs never reflect a black void.
-            let ndotv = max(dot(n_water, view_dir), 0.03);
+            let ndotv = max(dot(n_water, view_dir), 0.04);
             let f_schlick = 0.02 + 0.98 * pow(1.0 - ndotv, 5.0);
             var refl_dir = reflect(-view_dir, n_water);
             let refl_up = dot(refl_dir, local_up);
-            if (refl_up < 0.035) {
-                refl_dir = normalize(refl_dir + local_up * (0.035 - refl_up));
+            if (refl_up < 0.045) {
+                refl_dir = normalize(refl_dir + local_up * (0.045 - refl_up));
             }
             let sky_refl = eval_sky_reflection(refl_dir, local_up, sun_dir, real_sky_w, weather_dark, cloud_cov);
 
             let sun_elev = dot(local_up, sun_dir);
             let day_t = smoothstep(-0.08, 0.24, sun_elev);
             let water_albedo = mix(
-                base.rgb * lit,
+                base.rgb * lit * (1.0 - wet_darken),
                 mix(vec3<f32>(0.014, 0.052, 0.095), vec3<f32>(0.028, 0.135, 0.205), shoal_boost) * max(lit, vec3<f32>(0.12)),
-                0.42,
+                mix(0.28, 0.44, water_mask),
             );
 
             // Subsurface turquoise glow through sunlit wave crests & shallow coastal water.
-            let sss = pow(clamp(wave_res.z * 0.75, 0.0, 1.0), 1.4) * smoothstep(-0.04, 0.30, sun_elev)
+            let sss = pow(clamp(wave_res.z * 0.72, 0.0, 1.0), 1.4) * smoothstep(-0.04, 0.30, sun_elev)
                     * (0.35 + 0.65 * shoal_boost) * shadow_factor * (1.0 - weather_dark * 0.72);
-            let sss_col = vec3<f32>(0.04, 0.32, 0.36) * sss * 0.42;
+            let sss_col = vec3<f32>(0.04, 0.32, 0.36) * sss * 0.38;
 
-            // Crisp GGX-like solar specular glitter path + subtle silver moon glitter at night.
+            // Crisp GGX-like solar specular glitter path widened softly by distant AA roughness + silver moon glitter.
             let half_s = normalize(sun_dir + view_dir);
             let ndoth_s = max(dot(n_water, half_s), 0.0);
-            let rough = clamp(mix(0.06, 0.22, clamp(eff_wind_speed / 22.0, 0.0, 1.0)), 0.05, 0.28);
-            let spec_exp = mix(420.0, 38.0, rough * 3.2);
+            let rough = clamp(mix(0.06, 0.20, clamp(eff_wind_speed / 22.0, 0.0, 1.0)) + wave_res.w, 0.05, 0.34);
+            let spec_exp = mix(420.0, 32.0, min(rough * 2.9, 1.0));
             let sun_vis_w = smoothstep(-0.03, 0.12, sun_elev) * (1.0 - clamp(weather_dark * 0.85 + cloud_cov * 0.45, 0.0, 0.96));
             let sun_spec_col = mix(vec3<f32>(1.0, 0.56, 0.22), vec3<f32>(1.0, 0.97, 0.90), smoothstep(0.0, 0.28, sun_elev));
-            let sun_glint = sun_spec_col * (pow(ndoth_s, spec_exp) * 2.4 + pow(ndoth_s, 22.0) * 0.16)
-                          * sun_vis_w * shadow_factor * glint_scale;
+            let sun_glint = sun_spec_col * (pow(ndoth_s, spec_exp) * 2.3 + pow(ndoth_s, 22.0) * 0.15)
+                          * sun_vis_w * shadow_factor * glint_scale * cov_eff;
 
             var moon_glint = vec3<f32>(0.0);
             if (cam.moon_dir.w > 0.5 && sun_elev < 0.02) {
@@ -1846,26 +2163,33 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
                     let half_m = normalize(m_dir + view_dir);
                     let ndoth_m = max(dot(n_water, half_m), 0.0);
                     let night_w = (1.0 - smoothstep(-0.10, 0.02, sun_elev)) * (1.0 - cloud_cov * 0.75);
-                    moon_glint = vec3<f32>(0.62, 0.74, 0.92) * pow(ndoth_m, 96.0) * 0.45 * night_w * glint_scale;
+                    moon_glint = vec3<f32>(0.62, 0.74, 0.92) * pow(ndoth_m, 96.0) * 0.45 * night_w * glint_scale * cov_eff;
                 }
             }
 
-            // Open-sea whitecap foam at higher Beaufort wind speeds + coastal surf foam.
-            let wind_foam_thresh = clamp((eff_wind_speed - 7.5) / 12.0, 0.0, 1.0);
-            let chop_noise = vnoise2(pos_en * 0.28 - ocean.train_a.xy * eff_t * 1.2);
-            let whitecap = smoothstep(0.55, 1.05, wave_res.z * wave_strength * (0.75 + 0.5 * chop_noise))
-                         * wind_foam_thresh * 0.55;
-            let total_foam = clamp(whitecap + coastal_foam, 0.0, 0.85);
+            // Open-sea whitecap foam gated by fetch & capped Beaufort curve + coastal surf foam.
+            let wind_foam_thresh = clamp((eff_wind_speed - 8.0) / 13.0, 0.0, 0.85) * smoothstep(0.25, 0.85, sea_exposure);
+            let chop_noise = pgrad2_periodic_rot(
+                ocean_noise_wrap(p_noise_base - ocean.train_a.xy * (eff_t * 1.1)),
+                1.0 / 32.0,
+                1024.0,
+                vec2<f32>(5.0, 12.0),
+                vec2<f32>(173.1, 23.9),
+            ).x;
+            let whitecap = smoothstep(0.62, 1.12, wave_res.z * wave_strength * (0.72 + 0.56 * chop_noise))
+                         * wind_foam_thresh * 0.52 * water_mask;
+            let total_foam = clamp(whitecap + coastal_foam, 0.0, 0.86);
             let foam_sun_tint = mix(vec3<f32>(0.98, 0.78, 0.62), vec3<f32>(0.94, 0.97, 1.0), smoothstep(0.02, 0.28, sun_elev));
             let foam_col = mix(vec3<f32>(0.16, 0.20, 0.28), foam_sun_tint, clamp(day_t * 0.9 + 0.12, 0.12, 1.0))
                          * mix(1.0, 0.68, weather_dark);
 
-            var ocean_rgb = mix(water_albedo + sss_col, sky_refl, clamp(f_schlick * 0.90 + 0.10, 0.0, 0.92))
+            var ocean_rgb = mix(water_albedo + sss_col, sky_refl, clamp(f_schlick * 0.86 + 0.08, 0.0, 0.90))
                           + sun_glint + moon_glint;
             ocean_rgb = mix(ocean_rgb, foam_col, total_foam);
 
-            let ocean_blend = clamp(water_mask * ocean.blend_params.z * ocean_on, 0.0, 1.0);
-            rgb = mix(rgb, ocean_rgb, ocean_blend);
+            let dry_wet_rgb = mix(rgb, rgb * (1.0 - wet_darken), step(0.001, wet_darken));
+            let ocean_blend = clamp(cov_eff * ocean.blend_params.z * ocean_on, 0.0, 1.0);
+            rgb = mix(dry_wet_rgb, ocean_rgb, ocean_blend);
         }
     }
 
@@ -1938,13 +2262,14 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
     }
 
     // --- Weather- & Sky-Matched Aerial Perspective / Precipitation Mist ---
-    if (blend_25d > 0.01) {
+    let morph_fade_2d = 1.0 - smoothstep(0.0, 0.55, map_2d);
+    if (blend_25d > 0.01 && morph_fade_2d > 0.001) {
         let view_dist = length(in.view_rel);
         let haze_density = mix(0.000018, 0.00016, weather_haze);
         let haze_near = mix(3500.0, 420.0, weather_haze);
         let haze_far = mix(52000.0, 9500.0, weather_haze);
         let haze_start = smoothstep(haze_near, haze_far, view_dist);
-        let aerial_haze = clamp((1.0 - exp(-view_dist * haze_density)) * haze_start * blend_25d * mix(0.68, 0.84, weather_haze), 0.0, 0.82);
+        let aerial_haze = clamp((1.0 - exp(-view_dist * haze_density)) * haze_start * blend_25d * mix(0.68, 0.84, weather_haze), 0.0, 0.82) * morph_fade_2d;
 
         let day_scale = clamp(max(cam.sky_bottom.b, max(cam.sky_bottom.r, cam.sky_bottom.g)), 0.0, 1.0);
         let classic_haze = vec3<f32>(0.73, 0.85, 0.96) * day_scale * mix(vec3<f32>(1.0), clamp(lit * 1.15, vec3<f32>(0.35), vec3<f32>(1.0)), dn_strength);
@@ -1955,7 +2280,7 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
     }
 
     if (map_2d > 0.001) {
-        rgb = mix(rgb, base.rgb, smoothstep(0.55, 0.98, map_2d));
+        rgb = mix(rgb, base.rgb, smoothstep(0.0, 0.95, map_2d));
     }
 
     return vec4<f32>(rgb, base.a);
@@ -2228,9 +2553,11 @@ fn fs_cloud(in: CloudOut) -> @location(0) vec4<f32> {
     let d = in.unit_pos;
     var u_unwrapped = in.uv_par.x;
     var v_base = in.uv_par.y;
-    if ((d.x < -0.5 && abs(d.y) < 0.14) || abs(d.z) > 0.95) {
+    let d_xy_r = sqrt(max(d.x * d.x + d.y * d.y, 0.0));
+    if ((d.x < 0.0 && abs(d.y) < max(d_xy_r * 0.45, 0.06)) || abs(d.z) > 0.85) {
         let dn = normalize(d);
-        u_unwrapped = atan2(dn.y, dn.x) * 0.15915494309 + 0.5;
+        let az = select(0.0, atan2(dn.y, dn.x), dot(dn.xy, dn.xy) > 1e-10);
+        u_unwrapped = az * 0.15915494309 + 0.5;
         v_base = clamp(0.5 - asin(clamp(dn.z, -1.0, 1.0)) * 0.31830988618, 0.001, 0.999);
     }
     let u_base = fract(u_unwrapped + cam.cloud_params.y * 0.15915494309);
@@ -2970,6 +3297,8 @@ struct SlabEntry {
     revision: u64,
     offset: u32,
     len: u32,
+    grid_res: u32,
+    has_skirts: bool,
     last_used_frame: u64,
 }
 
@@ -3134,7 +3463,10 @@ impl GpuTileSlabAllocator {
         // First mark already-resident entries for visible keys as fresh this frame so LRU never evicts a fallback.
         for mesh in meshes {
             if let Some(entry) = self.resident.get_mut(&mesh.key) {
-                if entry.len == mesh.vertices.len() as u32 {
+                if entry.len == mesh.vertices.len() as u32
+                    && entry.grid_res == mesh.grid_res
+                    && entry.has_skirts == mesh.has_skirts
+                {
                     entry.last_used_frame = frame_idx;
                 }
             }
@@ -3146,7 +3478,11 @@ impl GpuTileSlabAllocator {
                 continue;
             }
             if let Some(entry) = self.resident.get(&mesh.key) {
-                if entry.revision == mesh.revision && entry.len == needed {
+                if entry.revision == mesh.revision
+                    && entry.len == needed
+                    && entry.grid_res == mesh.grid_res
+                    && entry.has_skirts == mesh.has_skirts
+                {
                     continue;
                 }
             }
@@ -3174,6 +3510,8 @@ impl GpuTileSlabAllocator {
                     revision: mesh.revision,
                     offset: off,
                     len: needed,
+                    grid_res: mesh.grid_res,
+                    has_skirts: mesh.has_skirts,
                     last_used_frame: frame_idx,
                 },
             );
@@ -3182,13 +3520,10 @@ impl GpuTileSlabAllocator {
         (bind_group_dirty, deferred_any)
     }
 
-    fn base_vertex(&self, key: TileKeyId, revision: u64, expected_len: Option<u32>) -> Option<u32> {
+    fn resident_slot(&self, key: TileKeyId, revision: u64) -> Option<(u32, u32, bool)> {
         let entry = self.resident.get(&key)?;
-        if entry.revision == revision || expected_len.is_some_and(|len| entry.len == len) {
-            Some(entry.offset)
-        } else {
-            None
-        }
+        let _ = revision;
+        Some((entry.offset, entry.grid_res, entry.has_skirts))
     }
 }
 
@@ -4288,6 +4623,213 @@ struct CachedParticleTexture {
     bind_group: wgpu::BindGroup,
 }
 
+/// Hardware GPU pass durations resolved asynchronously from `wgpu::Features::TIMESTAMP_QUERY`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GpuPassTimings {
+    /// True when the active adapter/device supports `wgpu::Features::TIMESTAMP_QUERY`.
+    pub supported: bool,
+    /// Directional shadow-map pass duration on GPU (microseconds).
+    pub shadow_pass_us: u32,
+    /// Main 3D scene pass (terrain/atmosphere/ocean/buildings/clouds/objects) duration on GPU (microseconds).
+    pub scene_3d_pass_us: u32,
+    /// Standalone 2D overlay / cached-3D blit+composite pass duration on GPU (microseconds).
+    pub overlay_pass_us: u32,
+    /// Combined 3D GPU duration (`shadow_pass_us + scene_3d_pass_us`).
+    pub total_3d_gpu_us: u32,
+}
+
+const GPU_TS_SLOTS: usize = 3;
+const GPU_TS_QUERY_COUNT: u32 = 6; // [0..2]=shadow, [2..4]=main 3D, [4..6]=overlay/blit
+const GPU_TS_RESOLVE_STRIDE: u64 = 256; // WebGPU QUERY_RESOLVE_BUFFER_ALIGNMENT
+
+struct TimestampSlot {
+    query_set: wgpu::QuerySet,
+    resolve_buffer: wgpu::Buffer,
+    readback_buffer: wgpu::Buffer,
+    mapped_ready: Arc<std::sync::atomic::AtomicBool>,
+    in_flight: bool,
+    wrote_shadow: bool,
+    wrote_main: bool,
+    wrote_overlay: bool,
+}
+
+struct GpuTimestampProfiler {
+    slots: Vec<TimestampSlot>,
+    next_slot: usize,
+    timestamp_period_ns: f64,
+    last_timings: GpuPassTimings,
+}
+
+impl GpuTimestampProfiler {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        let mut slots = Vec::with_capacity(GPU_TS_SLOTS);
+        let resolve_bytes = GPU_TS_RESOLVE_STRIDE * 3;
+        let readback_bytes = (GPU_TS_QUERY_COUNT as u64) * 8;
+        for i in 0..GPU_TS_SLOTS {
+            let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some(&format!("strata_gpu_ts_query_set_{i}")),
+                ty: wgpu::QueryType::Timestamp,
+                count: GPU_TS_QUERY_COUNT,
+            });
+            let resolve_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("strata_gpu_ts_resolve_{i}")),
+                size: resolve_bytes,
+                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("strata_gpu_ts_readback_{i}")),
+                size: readback_bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            slots.push(TimestampSlot {
+                query_set,
+                resolve_buffer,
+                readback_buffer,
+                mapped_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                in_flight: false,
+                wrote_shadow: false,
+                wrote_main: false,
+                wrote_overlay: false,
+            });
+        }
+        Self {
+            slots,
+            next_slot: 0,
+            timestamp_period_ns: (queue.get_timestamp_period() as f64).max(0.0),
+            last_timings: GpuPassTimings {
+                supported: true,
+                ..Default::default()
+            },
+        }
+    }
+
+    fn poll_ready(&mut self, device: &wgpu::Device) {
+        device.poll(wgpu::Maintain::Poll);
+        let period_ns = self.timestamp_period_ns;
+        for slot in &mut self.slots {
+            if !slot.in_flight
+                || !slot
+                    .mapped_ready
+                    .load(std::sync::atomic::Ordering::Acquire)
+            {
+                continue;
+            }
+            {
+                let view = slot.readback_buffer.slice(..).get_mapped_range();
+                if view.len() >= (GPU_TS_QUERY_COUNT as usize) * 8 {
+                    let read_u64 = |idx: usize| -> u64 {
+                        let off = idx * 8;
+                        u64::from_le_bytes(view[off..off + 8].try_into().unwrap_or([0; 8]))
+                    };
+                    let ticks_to_us = |start: u64, end: u64| -> u32 {
+                        let delta = end.saturating_sub(start) as f64;
+                        ((delta * period_ns) / 1000.0).round().clamp(0.0, u32::MAX as f64) as u32
+                    };
+                    if slot.wrote_shadow {
+                        self.last_timings.shadow_pass_us = ticks_to_us(read_u64(0), read_u64(1));
+                    } else if slot.wrote_main {
+                        self.last_timings.shadow_pass_us = 0;
+                    }
+                    if slot.wrote_main {
+                        self.last_timings.scene_3d_pass_us = ticks_to_us(read_u64(2), read_u64(3));
+                        self.last_timings.total_3d_gpu_us = self
+                            .last_timings
+                            .shadow_pass_us
+                            .saturating_add(self.last_timings.scene_3d_pass_us);
+                    }
+                    if slot.wrote_overlay {
+                        self.last_timings.overlay_pass_us = ticks_to_us(read_u64(4), read_u64(5));
+                    }
+                }
+            }
+            slot.readback_buffer.unmap();
+            slot.mapped_ready
+                .store(false, std::sync::atomic::Ordering::Release);
+            slot.in_flight = false;
+            slot.wrote_shadow = false;
+            slot.wrote_main = false;
+            slot.wrote_overlay = false;
+        }
+    }
+
+    fn acquire_idle_slot(&mut self, device: &wgpu::Device) -> Option<usize> {
+        self.poll_ready(device);
+        let n = self.slots.len();
+        for off in 0..n {
+            let idx = (self.next_slot + off) % n;
+            if !self.slots[idx].in_flight {
+                self.next_slot = (idx + 1) % n;
+                let s = &mut self.slots[idx];
+                s.wrote_shadow = false;
+                s.wrote_main = false;
+                s.wrote_overlay = false;
+                return Some(idx);
+            }
+        }
+        None
+    }
+
+    fn resolve_and_copy(&self, slot_idx: usize, encoder: &mut wgpu::CommandEncoder) {
+        let slot = &self.slots[slot_idx];
+        // Vulkan requires resolving ONLY query indices that were actually written in this submission;
+        // resolving unwritten queries blocks forever on VK_QUERY_RESULT_WAIT_BIT.
+        if slot.wrote_shadow {
+            encoder.resolve_query_set(&slot.query_set, 0..2, &slot.resolve_buffer, 0);
+            encoder.copy_buffer_to_buffer(&slot.resolve_buffer, 0, &slot.readback_buffer, 0, 16);
+        }
+        if slot.wrote_main {
+            encoder.resolve_query_set(
+                &slot.query_set,
+                2..4,
+                &slot.resolve_buffer,
+                GPU_TS_RESOLVE_STRIDE,
+            );
+            encoder.copy_buffer_to_buffer(
+                &slot.resolve_buffer,
+                GPU_TS_RESOLVE_STRIDE,
+                &slot.readback_buffer,
+                16,
+                16,
+            );
+        }
+        if slot.wrote_overlay {
+            encoder.resolve_query_set(
+                &slot.query_set,
+                4..6,
+                &slot.resolve_buffer,
+                GPU_TS_RESOLVE_STRIDE * 2,
+            );
+            encoder.copy_buffer_to_buffer(
+                &slot.resolve_buffer,
+                GPU_TS_RESOLVE_STRIDE * 2,
+                &slot.readback_buffer,
+                32,
+                16,
+            );
+        }
+    }
+
+    fn begin_async_map(&mut self, slot_idx: usize) {
+        let slot = &mut self.slots[slot_idx];
+        if !slot.wrote_shadow && !slot.wrote_main && !slot.wrote_overlay {
+            return;
+        }
+        slot.in_flight = true;
+        slot.mapped_ready
+            .store(false, std::sync::atomic::Ordering::Release);
+        let ready = Arc::clone(&slot.mapped_ready);
+        slot.readback_buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |res| {
+                if res.is_ok() {
+                    ready.store(true, std::sync::atomic::Ordering::Release);
+                }
+            });
+    }
+}
+
 /// Hardware-accelerated `wgpu` 3D renderer capable of rendering directly into any `TextureView`
 /// (swapchain surface) or offscreen RGBA target.
 pub struct Wgpu3DRenderer {
@@ -4364,10 +4906,12 @@ pub struct Wgpu3DRenderer {
     particle_textures: HashMap<u64, CachedParticleTexture>,
     overlay_pipeline: wgpu::RenderPipeline,
     overlay_main_pass_pipeline: wgpu::RenderPipeline,
+    scene_blit_pipeline: wgpu::RenderPipeline,
     overlay_bind_group_layout: wgpu::BindGroupLayout,
     overlay_sampler: wgpu::Sampler,
     depth_target: Option<(u32, u32, wgpu::TextureView)>,
     offscreen: Option<OffscreenTarget>,
+    timestamp_profiler: Option<GpuTimestampProfiler>,
     frame_index: u64,
     last_geometry_rev: u64,
     last_terrain_frame: Option<Arc<RetainedTerrainFrame>>,
@@ -4462,18 +5006,43 @@ pub fn request_working_adapter_and_device(
     for adapter in candidates {
         let info = adapter.get_info();
         let required_limits = preferred_wgpu_limits(&adapter);
-        match pollster::block_on(adapter.request_device(
+        let optional_ts = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
+        let first_try = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some(label),
-                required_features: wgpu::Features::empty(),
-                required_limits,
+                required_features: optional_ts,
+                required_limits: required_limits.clone(),
                 memory_hints: wgpu::MemoryHints::Performance,
             },
             None,
-        )) {
+        ));
+        match first_try {
             Ok((device, queue)) => return Ok((adapter, device, queue)),
+            Err(_) if !optional_ts.is_empty() => {
+                // Gracefully fall back if driver advertises TIMESTAMP_QUERY but rejects device creation.
+                match pollster::block_on(adapter.request_device(
+                    &wgpu::DeviceDescriptor {
+                        label: Some(label),
+                        required_features: wgpu::Features::empty(),
+                        required_limits,
+                        memory_hints: wgpu::MemoryHints::Performance,
+                    },
+                    None,
+                )) {
+                    Ok((device, queue)) => return Ok((adapter, device, queue)),
+                    Err(e) => {
+                        errors.push(format!(
+                            "{} ({:?}/{:?}): {e}",
+                            info.name, info.backend, info.device_type
+                        ));
+                    }
+                }
+            }
             Err(e) => {
-                errors.push(format!("{} ({:?}/{:?}): {e}", info.name, info.backend, info.device_type));
+                errors.push(format!(
+                    "{} ({:?}/{:?}): {e}",
+                    info.name, info.backend, info.device_type
+                ));
             }
         }
     }
@@ -5007,6 +5576,12 @@ impl Wgpu3DRenderer {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
             });
         let terrain_bind_group = Self::create_terrain_bind_group(
@@ -5018,6 +5593,7 @@ impl Wgpu3DRenderer {
             &atlas.view,
             &terrain_sampler,
             &env_state.land_mask_view,
+            &env_state.env_sampler,
         );
         let shadow_ocean_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("strata_3d_shadow_ocean_bgl"),
@@ -5926,6 +6502,40 @@ impl Wgpu3DRenderer {
                 multiview: None,
                 cache: None,
             });
+        let scene_blit_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("strata_cached_3d_scene_blit_pipeline"),
+                layout: Some(&overlay_layout),
+                vertex: wgpu::VertexState {
+                    module: &overlay_shader,
+                    entry_point: Some("vs_overlay"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &overlay_shader,
+                    entry_point: Some("fs_overlay"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
+        let timestamp_profiler = if device
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY)
+        {
+            Some(GpuTimestampProfiler::new(&device, &queue))
+        } else {
+            None
+        };
 
         Self {
             device,
@@ -6001,10 +6611,12 @@ impl Wgpu3DRenderer {
             particle_textures: HashMap::new(),
             overlay_pipeline,
             overlay_main_pass_pipeline,
+            scene_blit_pipeline,
             overlay_bind_group_layout,
             overlay_sampler,
             depth_target: None,
             offscreen: None,
+            timestamp_profiler,
             frame_index: 0,
             last_geometry_rev: 0,
             last_terrain_frame: None,
@@ -6032,6 +6644,70 @@ impl Wgpu3DRenderer {
     /// Number of currently cached GPU geodetic object albedo textures.
     pub fn cached_geo_texture_count(&self) -> usize {
         self.geo_textures.len()
+    }
+
+    /// Polls any completed asynchronous GPU timestamp query readbacks without stalling.
+    pub fn poll_gpu_timestamps(&mut self) {
+        if let Some(ref mut profiler) = self.timestamp_profiler {
+            profiler.poll_ready(&self.device);
+        }
+    }
+
+    /// Returns the most recently resolved hardware GPU pass timings (or `supported: false`
+    /// when `wgpu::Features::TIMESTAMP_QUERY` is unavailable on the active adapter).
+    pub fn last_gpu_pass_timings(&self) -> GpuPassTimings {
+        self.timestamp_profiler
+            .as_ref()
+            .map(|p| p.last_timings)
+            .unwrap_or_default()
+    }
+
+    /// Total GPU buffer, texture atlas, and render-target memory allocated by this 3D renderer.
+    pub fn gpu_memory_bytes(&self) -> u64 {
+        let mut bytes = self.camera_buffer.size()
+            + self.instance_buffer.size()
+            + self.ocean_uniform_buffer.size()
+            + self.dynamic_uniform_buffer.size()
+            + self.geo_instance_buffer.size()
+            + self.particle_uniform_buffer.size()
+            + self.env_state.star_buffer.size()
+            + self.cloud_vbuf.size()
+            + self.cloud_ibuf.size()
+            + self.slab.buffer.size()
+            + (ATLAS_TILE_SIZE as u64)
+                * (ATLAS_TILE_SIZE as u64)
+                * 4
+                * (self.atlas.layer_owner.len() as u64);
+
+        for topo in self.topologies.values() {
+            bytes += topo.buffer.size();
+        }
+        for dm in self.dynamic_meshes.values() {
+            bytes += dm.vbuf.size() + dm.ibuf.size();
+        }
+        for gm in self.geo_meshes.values() {
+            bytes += gm.vbuf.size() + gm.ibuf.size();
+        }
+        for gt in self.geo_textures.values() {
+            bytes += (gt.width as u64) * (gt.height as u64) * 4;
+        }
+        for pt in self.particle_textures.values() {
+            bytes += (pt.width as u64) * (pt.height as u64) * 4;
+        }
+        if let Some((sz, _, _)) = self.shadow_target {
+            bytes += (sz as u64) * (sz as u64) * 4;
+        }
+        if let Some((_, _, w, h, _, _)) = self.coastal_sdf_cached {
+            bytes += (w as u64) * (h as u64) * 4;
+        }
+        if let Some((w, h, _)) = self.depth_target {
+            bytes += (w as u64) * (h as u64) * 4;
+        }
+        if let Some(ref off) = self.offscreen {
+            bytes += (off.width as u64) * (off.height as u64) * 8
+                + (off.padded_bytes_per_row as u64) * (off.height as u64);
+        }
+        bytes
     }
 
     fn ensure_geo_texture(
@@ -6427,6 +7103,7 @@ impl Wgpu3DRenderer {
         atlas_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         land_mask_view: &wgpu::TextureView,
+        env_wrap_sampler: &wgpu::Sampler,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("strata_3d_terrain_bg"),
@@ -6455,6 +7132,10 @@ impl Wgpu3DRenderer {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(land_mask_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(env_wrap_sampler),
                 },
             ],
         })
@@ -6899,7 +7580,7 @@ impl Wgpu3DRenderer {
         // 2. Upload incremental tile meshes/textures, environment assets, and prepare draw instances.
         let mut draw_count = 0usize;
         let mut all_terrain_opaque = true;
-        let mut grid_topology: Option<(u32, bool)> = None;
+        let mut terrain_batches: Vec<((u32, bool), std::ops::Range<u32>)> = Vec::new();
         let mut dynamic_draws: Vec<(u64, [f64; 3], [f32; 4], bool)> = Vec::new();
         let mut geo_opaque_batches: Vec<(u64, Option<u64>, std::ops::Range<u32>)> = Vec::new();
         let mut geo_transparent_batches: Vec<(u64, Option<u64>, std::ops::Range<u32>)> = Vec::new();
@@ -6947,23 +7628,14 @@ impl Wgpu3DRenderer {
             }
 
             let tp3 = std::time::Instant::now();
-            if let Some(first_m) = frame.meshes.first() {
-                grid_topology = Some((first_m.grid_res, first_m.has_skirts));
-            }
-            let expected_verts = frame.meshes.first().map(|m| m.vertices.len() as u32);
-            let mut instances_gpu: Vec<GpuTileInstance> = Vec::with_capacity(frame.instances.len());
+            let mut tagged_instances: Vec<((u32, bool), GpuTileInstance)> =
+                Vec::with_capacity(frame.instances.len());
             for inst in &frame.instances {
-                let Some(base_v) =
-                    self.slab
-                        .base_vertex(inst.key, inst.mesh_revision, expected_verts)
+                let Some((base_v, grid_res, has_skirts)) =
+                    self.slab.resident_slot(inst.key, inst.mesh_revision)
                 else {
                     continue;
                 };
-                if grid_topology.is_none() {
-                    if let Some(m) = frame.meshes.iter().find(|m| m.key == inst.key) {
-                        grid_topology = Some((m.grid_res, m.has_skirts));
-                    }
-                }
                 let (cx_hi, cx_lo) = split_f64_to_f32(inst.center_ecef[0]);
                 let (cy_hi, cy_lo) = split_f64_to_f32(inst.center_ecef[1]);
                 let (cz_hi, cz_lo) = split_f64_to_f32(inst.center_ecef[2]);
@@ -6979,14 +7651,31 @@ impl Wgpu3DRenderer {
                 if eff_tint[3] < 0.999 {
                     all_terrain_opaque = false;
                 }
-                instances_gpu.push(GpuTileInstance {
-                    center_high: [cx_hi, cy_hi, cz_hi, 0.0],
-                    center_low: [cx_lo, cy_lo, cz_lo, 0.0],
-                    uv_rect: inst.uv_rect,
-                    night_uv_rect: inst.night_uv_rect,
-                    tint: eff_tint,
-                    tile_meta: [base_v, tex_layer, u32::from(inst.unlit), night_layer],
-                });
+                tagged_instances.push((
+                    (grid_res, has_skirts),
+                    GpuTileInstance {
+                        center_high: [cx_hi, cy_hi, cz_hi, 0.0],
+                        center_low: [cx_lo, cy_lo, cz_lo, 0.0],
+                        uv_rect: inst.uv_rect,
+                        night_uv_rect: inst.night_uv_rect,
+                        tint: eff_tint,
+                        tile_meta: [base_v, tex_layer, u32::from(inst.unlit), night_layer],
+                    },
+                ));
+            }
+            tagged_instances.sort_by_key(|(topo, _)| *topo);
+            let mut instances_gpu: Vec<GpuTileInstance> =
+                Vec::with_capacity(tagged_instances.len());
+            for (topo, gpu_inst) in tagged_instances {
+                let idx = instances_gpu.len() as u32;
+                instances_gpu.push(gpu_inst);
+                if let Some((last_topo, range)) = terrain_batches.last_mut() {
+                    if *last_topo == topo && range.end == idx {
+                        range.end = idx + 1;
+                        continue;
+                    }
+                }
+                terrain_batches.push((topo, idx..(idx + 1)));
             }
 
             let mut instance_resized = false;
@@ -7011,6 +7700,7 @@ impl Wgpu3DRenderer {
                     &self.atlas.view,
                     &self.terrain_sampler,
                     &self.env_state.land_mask_view,
+                    &self.env_state.env_sampler,
                 );
             }
             if !instances_gpu.is_empty() {
@@ -7581,7 +8271,17 @@ impl Wgpu3DRenderer {
         let ocean_opt = terrain_frame_opt.as_ref().and_then(|f| f.ocean.as_deref());
         self.sync_shadow_and_ocean_resources(shadows_active, cam.shadow_map_size, ocean_opt);
 
-        let topology_res = grid_topology.map(|(g, s)| self.ensure_topology(g, s));
+        let topology_batches: Vec<(wgpu::Buffer, u32, std::ops::Range<u32>)> = terrain_batches
+            .into_iter()
+            .filter_map(|((g, s), range)| {
+                let (buf, cnt) = self.ensure_topology(g, s);
+                if cnt > 0 && !range.is_empty() {
+                    Some((buf, cnt, range))
+                } else {
+                    None
+                }
+            })
+            .collect();
         let depth_view = self.ensure_depth_view(target_width.max(1), target_height.max(1));
 
         let clear_op = if !clear_color_target {
@@ -7602,6 +8302,10 @@ impl Wgpu3DRenderer {
         };
 
         let tp_pass = std::time::Instant::now();
+        let ts_slot = self
+            .timestamp_profiler
+            .as_mut()
+            .and_then(|p| p.acquire_idle_slot(&self.device));
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -7609,8 +8313,19 @@ impl Wgpu3DRenderer {
             });
 
         // Opt-in directional shadow map pass for 2.5D mountains & opaque 3D objects (0.00 ms when off).
+        let mut wrote_shadow_ts = false;
         if shadows_active && (draw_count > 0 || !geo_opaque_batches.is_empty()) {
             if let Some((_, _, ref shadow_view)) = self.shadow_target {
+                let shadow_ts = ts_slot.and_then(|slot_idx| {
+                    self.timestamp_profiler.as_ref().map(|p| {
+                        wrote_shadow_ts = true;
+                        wgpu::RenderPassTimestampWrites {
+                            query_set: &p.slots[slot_idx].query_set,
+                            beginning_of_pass_write_index: Some(0),
+                            end_of_pass_write_index: Some(1),
+                        }
+                    })
+                });
                 let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("strata_3d_shadow_pass"),
                     color_attachments: &[],
@@ -7622,17 +8337,15 @@ impl Wgpu3DRenderer {
                         }),
                         stencil_ops: None,
                     }),
-                    timestamp_writes: None,
+                    timestamp_writes: shadow_ts,
                     occlusion_query_set: None,
                 });
-                if draw_count > 0 {
-                    if let Some((ref idx_buf, idx_count)) = topology_res {
-                        if idx_count > 0 {
-                            spass.set_pipeline(&self.terrain_shadow_pipeline);
-                            spass.set_bind_group(0, &self.terrain_bind_group, &[]);
-                            spass.set_index_buffer(idx_buf.slice(..), wgpu::IndexFormat::Uint32);
-                            spass.draw_indexed(0..idx_count, 0, 0..draw_count as u32);
-                        }
+                if !topology_batches.is_empty() {
+                    spass.set_pipeline(&self.terrain_shadow_pipeline);
+                    spass.set_bind_group(0, &self.terrain_bind_group, &[]);
+                    for (idx_buf, idx_count, range) in &topology_batches {
+                        spass.set_index_buffer(idx_buf.slice(..), wgpu::IndexFormat::Uint32);
+                        spass.draw_indexed(0..*idx_count, 0, range.clone());
                     }
                 }
                 if !geo_opaque_batches.is_empty() {
@@ -7651,6 +8364,15 @@ impl Wgpu3DRenderer {
         }
 
         {
+            let main_ts = ts_slot.and_then(|slot_idx| {
+                self.timestamp_profiler.as_ref().map(|p| {
+                    wgpu::RenderPassTimestampWrites {
+                        query_set: &p.slots[slot_idx].query_set,
+                        beginning_of_pass_write_index: Some(2),
+                        end_of_pass_write_index: Some(3),
+                    }
+                })
+            });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("strata_3d_main_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -7669,7 +8391,7 @@ impl Wgpu3DRenderer {
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: None,
+                timestamp_writes: main_ts,
                 occlusion_query_set: None,
             });
 
@@ -7696,15 +8418,13 @@ impl Wgpu3DRenderer {
                 && all_terrain_opaque
                 && !matches!(cam.background, Background3D::Transparent);
 
-            if terrain_first {
-                if let Some((ref idx_buf, idx_count)) = topology_res {
-                    if idx_count > 0 {
-                        pass.set_pipeline(&self.terrain_opaque_pipeline);
-                        pass.set_bind_group(0, &self.terrain_bind_group, &[]);
-                        pass.set_bind_group(1, &self.shadow_ocean_bind_group, &[]);
-                        pass.set_index_buffer(idx_buf.slice(..), wgpu::IndexFormat::Uint32);
-                        pass.draw_indexed(0..idx_count, 0, 0..draw_count as u32);
-                    }
+            if terrain_first && !topology_batches.is_empty() {
+                pass.set_pipeline(&self.terrain_opaque_pipeline);
+                pass.set_bind_group(0, &self.terrain_bind_group, &[]);
+                pass.set_bind_group(1, &self.shadow_ocean_bind_group, &[]);
+                for (idx_buf, idx_count, range) in &topology_batches {
+                    pass.set_index_buffer(idx_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..*idx_count, 0, range.clone());
                 }
             }
 
@@ -7750,15 +8470,13 @@ impl Wgpu3DRenderer {
                 pass.draw(0..6, 0..self.env_state.star_count);
             }
 
-            if !terrain_first && draw_count > 0 {
-                if let Some((ref idx_buf, idx_count)) = topology_res {
-                    if idx_count > 0 {
-                        pass.set_pipeline(&self.terrain_pipeline);
-                        pass.set_bind_group(0, &self.terrain_bind_group, &[]);
-                        pass.set_bind_group(1, &self.shadow_ocean_bind_group, &[]);
-                        pass.set_index_buffer(idx_buf.slice(..), wgpu::IndexFormat::Uint32);
-                        pass.draw_indexed(0..idx_count, 0, 0..draw_count as u32);
-                    }
+            if !terrain_first && !topology_batches.is_empty() {
+                pass.set_pipeline(&self.terrain_pipeline);
+                pass.set_bind_group(0, &self.terrain_bind_group, &[]);
+                pass.set_bind_group(1, &self.shadow_ocean_bind_group, &[]);
+                for (idx_buf, idx_count, range) in &topology_batches {
+                    pass.set_index_buffer(idx_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..*idx_count, 0, range.clone());
                 }
             }
 
@@ -7861,7 +8579,17 @@ impl Wgpu3DRenderer {
             }
         }
         let tp_sub = std::time::Instant::now();
+        if let (Some(slot_idx), Some(ref mut profiler)) = (ts_slot, self.timestamp_profiler.as_mut())
+        {
+            profiler.slots[slot_idx].wrote_shadow = wrote_shadow_ts;
+            profiler.slots[slot_idx].wrote_main = true;
+            profiler.resolve_and_copy(slot_idx, &mut encoder);
+        }
         self.queue.submit(Some(encoder.finish()));
+        if let (Some(slot_idx), Some(ref mut profiler)) = (ts_slot, self.timestamp_profiler.as_mut())
+        {
+            profiler.begin_async_map(slot_idx);
+        }
         if perf {
             let tot = t_start.elapsed().as_secs_f64() * 1000.0;
             if tot > 3.0 {
@@ -7918,6 +8646,68 @@ impl Wgpu3DRenderer {
             });
         self.record_overlay_pass(&mut encoder, target_view, overlay_bind_group);
         self.queue.submit(Some(encoder.finish()));
+    }
+
+    /// Blits a cached offscreen 3D scene color attachment into `target_view` and composites
+    /// an optional 2D UI overlay on top in a single lightweight fullscreen render pass.
+    pub fn composite_cached_scene_and_overlay_to_view(
+        &mut self,
+        target_view: &wgpu::TextureView,
+        cached_scene_bind_group: &wgpu::BindGroup,
+        overlay_bind_group: Option<&wgpu::BindGroup>,
+    ) {
+        let ts_slot = self
+            .timestamp_profiler
+            .as_mut()
+            .and_then(|p| p.acquire_idle_slot(&self.device));
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("strata_cached_3d_composite_encoder"),
+            });
+        {
+            let ov_ts = ts_slot.and_then(|slot_idx| {
+                self.timestamp_profiler.as_ref().map(|p| {
+                    wgpu::RenderPassTimestampWrites {
+                        query_set: &p.slots[slot_idx].query_set,
+                        beginning_of_pass_write_index: Some(4),
+                        end_of_pass_write_index: Some(5),
+                    }
+                })
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("strata_cached_3d_composite_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: ov_ts,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.scene_blit_pipeline);
+            pass.set_bind_group(0, cached_scene_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+            if let Some(ov_bg) = overlay_bind_group {
+                pass.set_pipeline(&self.overlay_pipeline);
+                pass.set_bind_group(0, ov_bg, &[]);
+                pass.draw(0..3, 0..1);
+            }
+        }
+        if let (Some(slot_idx), Some(ref mut profiler)) = (ts_slot, self.timestamp_profiler.as_mut())
+        {
+            profiler.slots[slot_idx].wrote_overlay = true;
+            profiler.resolve_and_copy(slot_idx, &mut encoder);
+        }
+        self.queue.submit(Some(encoder.finish()));
+        if let (Some(slot_idx), Some(ref mut profiler)) = (ts_slot, self.timestamp_profiler.as_mut())
+        {
+            profiler.begin_async_map(slot_idx);
+        }
     }
 
     /// Renders `scene` into a persistent offscreen texture and performs GPU->CPU readback only

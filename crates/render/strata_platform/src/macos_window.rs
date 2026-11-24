@@ -861,6 +861,15 @@ fn map_macos_key_code(code: u16) -> Option<KeyCode> {
         0x7D => Some(KeyCode::ArrowDown),
         0x7B => Some(KeyCode::ArrowLeft),
         0x7C => Some(KeyCode::ArrowRight),
+        0x2C => Some(KeyCode::Slash),
+        0x2B => Some(KeyCode::Comma),
+        0x2F => Some(KeyCode::Period),
+        0x1B => Some(KeyCode::Minus),
+        0x18 => Some(KeyCode::Equals),
+        0x21 => Some(KeyCode::BracketLeft),
+        0x1E => Some(KeyCode::BracketRight),
+        0x29 => Some(KeyCode::Semicolon),
+        0x32 => Some(KeyCode::Backquote),
         _ => None,
     }
 }

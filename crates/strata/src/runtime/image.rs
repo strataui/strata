@@ -70,15 +70,24 @@ pub(crate) fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 }
 
 impl AppRuntime {
-    /// Captures a high-resolution PNG screenshot with the active MCP cursor composited.
-    pub fn mcp_capture_screenshot_png(&mut self) -> Result<Vec<u8>, String> {
+    /// Captures the current surface pixels on the UI thread into an owned buffer so PNG encoding
+    /// and base64 serialization can run on a background worker thread without stalling frame presentation.
+    pub fn mcp_capture_screenshot_buffer(
+        &mut self,
+    ) -> Result<strata_platform::CapturedSurfaceBuffer, String> {
+        let _ = self.compile_display_list_if_dirty();
         let overlay = self.mcp_cursor.as_ref().map(|c| (c, self.cursor_theme()));
-        strata_platform::render_to_png_bytes(
+        strata_platform::render_to_captured_buffer(
             &self.display_list,
-            self.viewport_width as i32,
-            self.viewport_height as i32,
+            self.viewport_width.round().max(1.0) as i32,
+            self.viewport_height.round().max(1.0) as i32,
             overlay,
         )
+    }
+
+    /// Captures a high-resolution PNG screenshot with the active MCP cursor composited.
+    pub fn mcp_capture_screenshot_png(&mut self) -> Result<Vec<u8>, String> {
+        self.mcp_capture_screenshot_buffer()?.encode_png_bytes()
     }
 
     /// Helper to convert SVG points attribute into path commands.

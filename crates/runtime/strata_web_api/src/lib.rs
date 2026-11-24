@@ -33,8 +33,10 @@ pub use fetch::{
     RequestMode, Response,
 };
 pub use geolocation::{
-    haversine_distance_meters, initial_bearing_degrees, GeoCoordinates, Geolocation,
-    GeolocationError, GeolocationOptions, GeolocationPosition,
+    haversine_distance_meters, initial_bearing_degrees, parse_env_lat_lon,
+    parse_geoclue_dbus_output, parse_gpsd_tpv_json, parse_ip_geolocation_json, parse_nmea_sentence,
+    GeoCoordinates, Geolocation, GeolocationError, GeolocationOptions, GeolocationPosition,
+    GeolocationSource, OsGeolocationProvider,
 };
 pub use http2::{
     decode_hpack_headers, encode_hpack_headers, execute_http2_request, Http2Frame, FLAG_ACK,
@@ -58,7 +60,7 @@ pub mod prelude {
     };
     pub use super::geolocation::{
         haversine_distance_meters, GeoCoordinates, Geolocation, GeolocationError,
-        GeolocationPosition,
+        GeolocationOptions, GeolocationPosition, GeolocationSource as WebGeolocationSource,
     };
     pub use super::websocket::{WebSocket, WsError, WsMessage, WsOpcode, WsState};
 }
