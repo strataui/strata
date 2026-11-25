@@ -39,12 +39,36 @@ pub use strata_web_api as web_api;
 
 #[cfg(feature = "device")]
 pub use strata_device as device;
+#[cfg(feature = "audio-dsp")]
+pub use strata_audio as audio;
+#[cfg(feature = "media")]
+pub use strata_media as media;
+#[cfg(feature = "hardware")]
+pub use strata_hardware as hardware;
+#[cfg(feature = "tui")]
+pub use strata_tui as tui;
 #[cfg(feature = "devtools")]
 pub use strata_devtools as devtools;
 #[cfg(feature = "hot-reload")]
 pub use strata_hot_reload as hot_reload;
 #[cfg(feature = "parallel")]
 pub use strata_parallel as parallel;
+
+/// Installs cycle-free runtime sensor provider bridges connecting enabled `crates/io/*`
+/// subsystems (`strata-audio` A-weighted SPL and `strata-hardware` BLE Heart Rate `0x180D`)
+/// into `strata-device` reactive sensor hooks (`use_ambient_spl`, `use_heart_rate`).
+pub fn register_universal_io_bridges() {
+    #[cfg(all(feature = "device", feature = "audio-dsp"))]
+    {
+        strata_device::register_ambient_spl_provider(Some(strata_audio::latest_ambient_spl_dba));
+    }
+    #[cfg(all(feature = "device", feature = "hardware"))]
+    {
+        strata_device::register_heart_rate_provider(Some(
+            strata_hardware::latest_ble_heart_rate_bpm,
+        ));
+    }
+}
 
 pub mod low_level;
 pub mod mcp_bridge;

@@ -22,6 +22,12 @@ struct ThreadLocalSignals {
     imu: Signal<ImuReading>,
     barometer: Signal<BarometerReading>,
     ambient_light: Signal<AmbientLightReading>,
+    proximity: Signal<ProximityReading>,
+    hinge_angle: Signal<HingeAngleReading>,
+    radio_signal: Signal<RadioSignalReading>,
+    ambient_spl: Signal<AmbientSplReading>,
+    pedometer: Signal<PedometerReading>,
+    heart_rate: Signal<HeartRateReading>,
 }
 
 thread_local! {
@@ -51,6 +57,12 @@ fn with_or_init_signals<R>(f: impl FnOnce(&ThreadLocalSignals) -> R) -> R {
                 imu: Signal::new(mock.imu()),
                 barometer: Signal::new(mock.barometer()),
                 ambient_light: Signal::new(mock.ambient_light()),
+                proximity: Signal::new(mock.proximity()),
+                hinge_angle: Signal::new(mock.hinge_angle()),
+                radio_signal: Signal::new(mock.radio_signal()),
+                ambient_spl: Signal::new(mock.ambient_spl()),
+                pedometer: Signal::new(mock.pedometer()),
+                heart_rate: Signal::new(mock.heart_rate()),
             });
         }
         f(borrow.as_ref().unwrap())
@@ -72,6 +84,12 @@ pub(crate) fn sync_signals_from_mock(mock: &DeviceMockController) {
                 signals.imu.set(mock.imu());
                 signals.barometer.set(mock.barometer());
                 signals.ambient_light.set(mock.ambient_light());
+                signals.proximity.set(mock.proximity());
+                signals.hinge_angle.set(mock.hinge_angle());
+                signals.radio_signal.set(mock.radio_signal());
+                signals.ambient_spl.set(mock.ambient_spl());
+                signals.pedometer.set(mock.pedometer());
+                signals.heart_rate.set(mock.heart_rate());
             }
         }
     });
@@ -176,6 +194,44 @@ pub fn use_barometer() -> Signal<BarometerReading> {
 /// Reactive hook returning live ambient light illuminance (lux) and daylight adaptation factor.
 pub fn use_ambient_light() -> Signal<AmbientLightReading> {
     with_or_init_signals(|s| s.ambient_light.clone())
+}
+
+/// Reactive hook returning proximity sensor state (near/far and distance in cm).
+pub fn use_proximity() -> Signal<ProximityReading> {
+    with_or_init_signals(|s| s.proximity.clone())
+}
+
+/// Reactive hook returning foldable display / laptop lid hinge angle & posture.
+pub fn use_hinge_angle() -> Signal<HingeAngleReading> {
+    with_or_init_signals(|s| s.hinge_angle.clone())
+}
+
+/// Reactive hook returning Wi-Fi RSSI / link quality and cellular signal strength.
+pub fn use_radio_signal() -> Signal<RadioSignalReading> {
+    with_or_init_signals(|s| s.radio_signal.clone())
+}
+
+/// Reactive hook returning live IEC A-weighted ambient sound pressure level (`dBA`),
+/// automatically bridged from registered `strata-audio` microphone providers when available.
+pub fn use_ambient_spl() -> Signal<AmbientSplReading> {
+    if let Some(live) = crate::os_sensors::probe_os_ambient_spl() {
+        DeviceMockController::new().set_ambient_spl(live);
+    }
+    with_or_init_signals(|s| s.ambient_spl.clone())
+}
+
+/// Reactive hook returning hardware step counter / pedometer telemetry.
+pub fn use_pedometer() -> Signal<PedometerReading> {
+    with_or_init_signals(|s| s.pedometer.clone())
+}
+
+/// Reactive hook returning biometric heart-rate BPM, automatically bridged from registered
+/// BLE Heart Rate Service (`0x180D`) or wearable sensor providers when available.
+pub fn use_heart_rate() -> Signal<HeartRateReading> {
+    if let Some(live) = crate::os_sensors::probe_os_heart_rate() {
+        DeviceMockController::new().set_heart_rate(live);
+    }
+    with_or_init_signals(|s| s.heart_rate.clone())
 }
 
 // ---------------------------------------------------------------------------

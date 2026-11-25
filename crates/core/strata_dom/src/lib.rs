@@ -1001,6 +1001,8 @@ pub enum Tag {
     Li,
     A,
     Img,
+    Audio,
+    Video,
     Svg,
     Path,
     Canvas,
@@ -1036,7 +1038,8 @@ impl Tag {
             | Tag::Ul
             | Tag::Ol
             | Tag::Li
-            | Tag::Hr => IrTag::Div,
+            | Tag::Hr
+            | Tag::Audio => IrTag::Div,
             Tag::Span
             | Tag::Label
             | Tag::P
@@ -1050,7 +1053,7 @@ impl Tag {
             | Tag::Br => IrTag::Span,
             Tag::Button => IrTag::Button,
             Tag::Input | Tag::Textarea | Tag::Select | Tag::Option => IrTag::Input,
-            Tag::Img => IrTag::Image,
+            Tag::Img | Tag::Video => IrTag::Image,
             Tag::Svg | Tag::Path => IrTag::Svg,
             Tag::Canvas => IrTag::Canvas3D,
             Tag::Custom(_) => IrTag::Div,

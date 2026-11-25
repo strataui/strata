@@ -820,3 +820,219 @@ fn probe_linux_applesmc_light() -> Option<AmbientLightReading> {
     let first = trimmed.split(',').next()?.trim().parse::<f32>().ok()?;
     Some(AmbientLightReading::from_lux(first))
 }
+
+// ---------------------------------------------------------------------------
+// Phase 8 Expanded Hardware Sensor Probes & Cycle-Free Provider Bridges
+// ---------------------------------------------------------------------------
+
+use crate::types::{
+    AmbientSplReading, HeartRateReading, HingeAngleReading, PedometerReading, ProximityReading,
+    RadioSignalReading,
+};
+
+type AmbientSplProviderFn = fn() -> Option<f32>;
+type HeartRateProviderFn = fn() -> Option<u16>;
+
+static AMBIENT_SPL_PROVIDER: OnceLock<Mutex<Option<AmbientSplProviderFn>>> = OnceLock::new();
+static HEART_RATE_PROVIDER: OnceLock<Mutex<Option<HeartRateProviderFn>>> = OnceLock::new();
+
+/// Registers a cycle-free process-wide ambient SPL (`dBA`) provider (e.g., `strata_audio::latest_ambient_spl_dba`).
+pub fn register_ambient_spl_provider(provider: Option<AmbientSplProviderFn>) {
+    let slot = AMBIENT_SPL_PROVIDER.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = slot.lock() {
+        *guard = provider;
+    }
+}
+
+/// Registers a cycle-free process-wide heart-rate BPM provider (e.g., `strata_hardware::latest_ble_heart_rate_bpm`).
+pub fn register_heart_rate_provider(provider: Option<HeartRateProviderFn>) {
+    let slot = HEART_RATE_PROVIDER.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = slot.lock() {
+        *guard = provider;
+    }
+}
+
+/// Probes ambient SPL (`dBA`) via mock override or registered audio provider.
+pub fn probe_os_ambient_spl() -> Option<AmbientSplReading> {
+    let mock = DeviceMockController::new().ambient_spl();
+    if mock.available {
+        return Some(mock);
+    }
+    let provider = AMBIENT_SPL_PROVIDER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|g| *g);
+    let dba = provider?()?;
+    Some(AmbientSplReading::from_dba(dba))
+}
+
+/// Probes heart-rate BPM via mock override or registered BLE/wearable provider.
+pub fn probe_os_heart_rate() -> Option<HeartRateReading> {
+    let mock = DeviceMockController::new().heart_rate();
+    if mock.available {
+        return Some(mock);
+    }
+    let provider = HEART_RATE_PROVIDER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|g| *g);
+    let bpm = provider?()?;
+    Some(HeartRateReading {
+        available: true,
+        bpm,
+        sensor_contact: true,
+    })
+}
+
+/// Parses a Linux IIO proximity sensor (`in_proximity_raw` / `in_proximity_input`) in `iio_root`.
+pub fn probe_linux_iio_proximity_in_dir(iio_root: &Path) -> Option<ProximityReading> {
+    for dev in iter_iio_device_dirs(iio_root) {
+        if let Some(raw) = read_f32_file(&dev.join("in_proximity_raw"))
+            .or_else(|| read_f32_file(&dev.join("in_proximity_input")))
+        {
+            let scale = read_f32_file(&dev.join("in_proximity_scale")).unwrap_or(1.0);
+            let val = (raw * scale).max(0.0);
+            // IIO proximity values vary by chip; treat small cm distances (< 5 cm) or high raw counts as near.
+            let is_near = val <= 5.0;
+            return Some(ProximityReading {
+                available: true,
+                is_near,
+                distance_cm: val,
+            });
+        }
+    }
+    None
+}
+
+/// Parses a Linux IIO hinge/lid angle sensor (`in_angl_raw` * `in_angl_scale`) in `iio_root`.
+pub fn probe_linux_iio_hinge_angle_in_dir(iio_root: &Path) -> Option<HingeAngleReading> {
+    for dev in iter_iio_device_dirs(iio_root) {
+        if let Some(raw) = read_f32_file(&dev.join("in_angl_raw"))
+            .or_else(|| read_f32_file(&dev.join("in_angl0_raw")))
+        {
+            let scale = read_f32_file(&dev.join("in_angl_scale")).unwrap_or(1.0);
+            let rad_or_deg = raw * scale;
+            // IIO reports angles in radians when scale < 0.05; convert radians to degrees cleanly.
+            let deg = if scale < 0.05 && rad_or_deg.abs() <= std::f32::consts::TAU + 0.1 {
+                rad_or_deg.to_degrees()
+            } else {
+                rad_or_deg
+            };
+            return Some(HingeAngleReading::from_degrees(deg));
+        }
+    }
+    None
+}
+
+/// Parses a Linux IIO step counter / pedometer (`in_steps_input`) in `iio_root`.
+pub fn probe_linux_iio_pedometer_in_dir(iio_root: &Path) -> Option<PedometerReading> {
+    for dev in iter_iio_device_dirs(iio_root) {
+        if let Some(steps_f) = read_f32_file(&dev.join("in_steps_input")) {
+            return Some(PedometerReading {
+                available: true,
+                steps: steps_f.max(0.0) as u64,
+                cadence_spm: 0.0,
+            });
+        }
+    }
+    None
+}
+
+/// Parses Linux `/proc/net/wireless` content into a [`RadioSignalReading`].
+pub fn parse_proc_net_wireless(content: &str) -> Option<RadioSignalReading> {
+    for line in content.lines().skip(2) {
+        let trimmed = line.trim();
+        let Some((iface, rest)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let cols: Vec<&str> = rest.split_whitespace().collect();
+        if cols.len() >= 3 {
+            // Columns: status, link quality (0..70), signal level (dBm, often negative with trailing '.')
+            let link_raw: f32 = cols[1].trim_end_matches('.').parse().ok()?;
+            let level_raw: f32 = cols[2].trim_end_matches('.').parse().ok()?;
+            let rssi_dbm = if level_raw > 0.0 && level_raw <= 255.0 {
+                (level_raw as i32) - 256
+            } else {
+                level_raw.round() as i32
+            };
+            let quality_pct = ((link_raw / 70.0) * 100.0).clamp(0.0, 100.0);
+            return Some(RadioSignalReading {
+                available: true,
+                wifi_interface: Some(iface.trim().to_string()),
+                wifi_rssi_dbm: Some(rssi_dbm),
+                wifi_link_quality_pct: Some(quality_pct),
+                cellular_rssi_dbm: None,
+            });
+        }
+    }
+    None
+}
+
+/// Probes host Wi-Fi RSSI & radio signal strength (mock override -> `/proc/net/wireless` on Linux).
+pub fn probe_os_radio_signal() -> Option<RadioSignalReading> {
+    let mock = DeviceMockController::new().radio_signal();
+    if mock.available {
+        return Some(mock);
+    }
+    #[cfg(target_os = "linux")]
+    if let Ok(text) = fs::read_to_string("/proc/net/wireless") {
+        if let Some(r) = parse_proc_net_wireless(&text) {
+            return Some(r);
+        }
+    }
+    None
+}
+
+/// Probes host proximity sensor via mock override or Linux IIO sysfs.
+pub fn probe_os_proximity() -> Option<ProximityReading> {
+    let mock = DeviceMockController::new().proximity();
+    if mock.available {
+        return Some(mock);
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(r) = probe_linux_iio_proximity_in_dir(Path::new("/sys/bus/iio/devices")) {
+        return Some(r);
+    }
+    None
+}
+
+/// Probes host foldable / laptop lid hinge angle via mock override, Linux IIO, or ACPI lid state.
+pub fn probe_os_hinge_angle() -> Option<HingeAngleReading> {
+    let mock = DeviceMockController::new().hinge_angle();
+    if mock.available {
+        return Some(mock);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(r) = probe_linux_iio_hinge_angle_in_dir(Path::new("/sys/bus/iio/devices")) {
+            return Some(r);
+        }
+        if let Ok(entries) = fs::read_dir("/proc/acpi/button/lid") {
+            for entry in entries.flatten() {
+                if let Ok(txt) = fs::read_to_string(entry.path().join("state")) {
+                    if txt.contains("closed") {
+                        return Some(HingeAngleReading::from_degrees(0.0));
+                    } else if txt.contains("open") {
+                        return Some(HingeAngleReading::from_degrees(115.0));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Probes host hardware pedometer via mock override or Linux IIO sysfs.
+pub fn probe_os_pedometer() -> Option<PedometerReading> {
+    let mock = DeviceMockController::new().pedometer();
+    if mock.available {
+        return Some(mock);
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(r) = probe_linux_iio_pedometer_in_dir(Path::new("/sys/bus/iio/devices")) {
+        return Some(r);
+    }
+    None
+}

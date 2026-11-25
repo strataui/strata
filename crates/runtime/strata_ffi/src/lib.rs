@@ -10,6 +10,7 @@ pub mod app;
 pub mod bridge;
 pub mod dom;
 pub mod error;
+pub mod io;
 pub mod signal;
 pub mod style;
 
@@ -17,5 +18,6 @@ pub use app::*;
 pub use bridge::*;
 pub use dom::*;
 pub use error::*;
+pub use io::*;
 pub use signal::*;
 pub use style::{format_css_color, format_css_dimension, serialize_computed_style_css};

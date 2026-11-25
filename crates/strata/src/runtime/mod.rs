@@ -15,6 +15,7 @@ pub mod edit;
 #[cfg(feature = "hot-reload")]
 pub mod hmr_bridge;
 pub mod launch;
+pub mod media_host;
 pub mod platforms;
 pub mod types;
 
@@ -44,6 +45,7 @@ pub use edit::*;
 pub use hmr_bridge::*;
 pub(crate) use image::*;
 pub use launch::*;
+pub use media_host::*;
 pub use platforms::*;
 pub use profile::{
     take_frame_heap_alloc_delta, total_heap_alloc_stats, FrameProfile, FrameProfileHistory,
@@ -1852,6 +1854,58 @@ impl AppRuntime {
                 let hover_changed = self.update_hover(*x, *y);
                 self.dispatch_pointer_move_action(*x, *y).needs_redraw() || hover_changed
             }
+            PlatformEvent::Stylus {
+                phase,
+                pointer_id,
+                tool,
+                x,
+                y,
+                pressure,
+                tilt_x,
+                tilt_y,
+                twist,
+                tangential_pressure,
+                hovering,
+                buttons,
+            } => {
+                self.last_mouse_pos = (*x, *y);
+                let hover_changed = self.update_hover(*x, *y);
+                let dom_ev_type = match phase {
+                    strata_platform::StylusPhase::Down => strata_dom::EventType::PointerDown,
+                    strata_platform::StylusPhase::Move | strata_platform::StylusPhase::Hover => {
+                        strata_dom::EventType::PointerMove
+                    }
+                    strata_platform::StylusPhase::Up | strata_platform::StylusPhase::Cancel => {
+                        strata_dom::EventType::PointerUp
+                    }
+                };
+                let effective_pressure = if *hovering { 0.0 } else { *pressure };
+                let outcome = self.dispatch_bubbling_event_detailed_at(
+                    dom_ev_type,
+                    *x,
+                    *y,
+                    0,
+                    1,
+                    |ev| {
+                        ev.pointer_id = *pointer_id as i32;
+                        ev.pointer_type = tool.as_w3c_str();
+                        ev.pressure = effective_pressure;
+                        ev.tilt_x = *tilt_x;
+                        ev.tilt_y = *tilt_y;
+                        ev.twist = *twist;
+                        ev.tangential_pressure = *tangential_pressure;
+                        ev.buttons = *buttons;
+                        ev.is_primary = true;
+                    },
+                );
+                let dynamic_updated = self.sync_dynamic_text();
+                if outcome.handled || dynamic_updated {
+                    self.rebuild_layout_tree();
+                    true
+                } else {
+                    hover_changed
+                }
+            }
             PlatformEvent::MouseDown { button, x, y } => {
                 let tooltip_dismissed = self.dismiss_hover_tooltip_and_repaint();
                 let btn_idx = button.to_button_index();
@@ -2426,6 +2480,29 @@ impl AppRuntime {
     pub fn export_png<P: AsRef<std::path::Path>>(&mut self, path: P) -> Result<(), String> {
         let fb = self.render_to_framebuffer();
         fb.export_png(path).map_err(|e| e.to_string())
+    }
+
+    #[cfg(feature = "pdf")]
+    /// Compiles the current `AppRuntime` vector [`DisplayList`] directly into a PDF 1.7 byte buffer.
+    pub fn export_pdf_bytes(&mut self, options: &strata_render::PdfExportOptions) -> Vec<u8> {
+        self.compile_display_list();
+        strata_render::export_display_list_to_pdf(
+            &self.display_list,
+            self.viewport_width,
+            self.viewport_height,
+            options,
+        )
+    }
+
+    #[cfg(feature = "pdf")]
+    /// Exports the current `AppRuntime` UI directly to a lossless Vector PDF 1.7 file on disk.
+    pub fn export_pdf<P: AsRef<std::path::Path>>(
+        &mut self,
+        path: P,
+        options: &strata_render::PdfExportOptions,
+    ) -> Result<(), String> {
+        let bytes = self.export_pdf_bytes(options);
+        std::fs::write(path, bytes).map_err(|e| e.to_string())
     }
 
     #[cfg(feature = "devtools")]

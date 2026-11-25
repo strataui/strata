@@ -1,0 +1,26 @@
+[package]
+name = "strata-hardware"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Zero-C-dependency hardware I/O buses for Strata: Gamepad/HOTAS, Haptics/Rumble, Serial/UART, USB Raw HID, and Bluetooth LE GATT"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+strata-dom = { workspace = true }
+strata-ui-platform = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_Devices_Communication",
+] }

@@ -174,6 +174,8 @@ impl AppRuntime {
             Tag::Li => "li",
             Tag::A => "a",
             Tag::Img => "img",
+            Tag::Audio => "audio",
+            Tag::Video => "video",
             Tag::Svg => "svg",
             Tag::Path => "path",
             Tag::Canvas => "canvas",

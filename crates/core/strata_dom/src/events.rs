@@ -88,6 +88,20 @@ pub struct Event {
     pub buttons: u16,
     pub detail: i32,
     pub pointer_id: i32,
+    /// W3C Pointer Events Level 3 `pointerType` (`"mouse"`, `"touch"`, or `"pen"`).
+    pub pointer_type: &'static str,
+    /// Normalized contact pressure in `[0.0, 1.0]` (`0.5` for standard mouse down, analog for pen).
+    pub pressure: f32,
+    /// Barrel tangential pressure / airbrush wheel in `[-1.0, 1.0]`.
+    pub tangential_pressure: f32,
+    /// Stylus X-axis tilt in degrees (`-90.0..=90.0`).
+    pub tilt_x: f32,
+    /// Stylus Y-axis tilt in degrees (`-90.0..=90.0`).
+    pub tilt_y: f32,
+    /// Clockwise stylus barrel rotation in degrees (`0.0..=359.0`).
+    pub twist: f32,
+    /// `true` if this pointer represents the primary contact of its pointer type.
+    pub is_primary: bool,
     pub pointer_capture_requested: std::rc::Rc<Cell<Option<bool>>>,
     pub cursor_warp_requested: std::rc::Rc<Cell<Option<(f64, f64)>>>,
 
@@ -158,6 +172,13 @@ impl Default for Event {
             buttons: 0,
             detail: 0,
             pointer_id: 1,
+            pointer_type: "mouse",
+            pressure: 0.0,
+            tangential_pressure: 0.0,
+            tilt_x: 0.0,
+            tilt_y: 0.0,
+            twist: 0.0,
+            is_primary: true,
             pointer_capture_requested: std::rc::Rc::new(Cell::new(None)),
             cursor_warp_requested: std::rc::Rc::new(Cell::new(None)),
             width: 0.0,

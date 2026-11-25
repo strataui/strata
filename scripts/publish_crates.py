@@ -1813,8 +1813,8 @@ def publish_workspace(
 
 # Exact multi-repo topological publish order across the entire Strata ecosystem:
 #   Tier 0: mica (standalone JS engine — zero Strata deps)
-#   Tier 1: strata (lean core framework — 18 publishable crates)
-#   Tier 2: components, editor, earth, audio, tui, kit, mcp
+#   Tier 1: strata (core framework + consolidated crates/io/* universal I/O stack)
+#   Tier 2: components, editor, earth, kit, mcp
 #   Tier 3: onyx, cli, vscode-lsp
 DEFAULT_REPOS: tuple[tuple[str, str, str | None], ...] = (
     ("mica", "mica", None),
@@ -1822,8 +1822,6 @@ DEFAULT_REPOS: tuple[tuple[str, str, str | None], ...] = (
     ("components", "components", None),
     ("editor", "editor", None),
     ("earth", "earth", "strata-earth"),
-    ("audio", "audio", None),
-    ("tui", "tui", None),
     ("kit", "kit", None),
     ("mcp", "mcp", None),
     ("onyx", "onyx", None),

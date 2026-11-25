@@ -1,0 +1,25 @@
+[package]
+name = "strata-media"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Pure-Rust camera capture (V4L2/PipeWire/AVFoundation/MediaFoundation), screen capture, YUV-to-RGBA pixel conversion, and A/V-synced video playback for Strata"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["audio-sync"]
+audio-sync = ["dep:strata-audio"]
+
+[dependencies]
+strata-dom = { workspace = true }
+strata-render = { workspace = true }
+strata-ui-platform = { workspace = true }
+strata-audio = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

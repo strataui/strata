@@ -1,0 +1,23 @@
+[package]
+name = "strata-audio"
+version = "0.2.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Full-duplex pure-Rust audio I/O, spatial 3D synthesizer, real-time voice DSP (NS/AEC/AGC/VAD), MIDI 1.0, and speech engine for Strata"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["hardware", "reactive"]
+hardware = ["dep:cpal"]
+codecs = ["dep:symphonia"]
+reactive = ["dep:strata-dom"]
+
+[dependencies]
+cpal = { version = "0.15", optional = true }
+symphonia = { version = "0.5", optional = true, default-features = false, features = ["mp3", "flac", "ogg", "vorbis", "aac", "isomp4", "wav", "pcm"] }
+strata-dom = { workspace = true, optional = true }

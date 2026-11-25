@@ -40,6 +40,8 @@ pub fn parse_dom_tag(tag: &str) -> Tag {
         "li" => Tag::Li,
         "a" => Tag::A,
         "img" => Tag::Img,
+        "audio" => Tag::Audio,
+        "video" => Tag::Video,
         "svg" => Tag::Svg,
         "path" => Tag::Path,
         "canvas" => Tag::Canvas,

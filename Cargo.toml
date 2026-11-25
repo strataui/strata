@@ -4,6 +4,7 @@ members = [
     "crates/strata",
     "crates/core/*",
     "crates/render/*",
+    "crates/io/*",
     "crates/runtime/*",
     "crates/tooling/*",
     "tests_crates/*",
@@ -36,6 +37,12 @@ strata-a11y = { path = "crates/core/strata_a11y", version = "0.1.2" }
 strata-render = { path = "crates/render/strata_render", version = "0.1.3" }
 strata-gpu-path = { path = "crates/render/strata_gpu_path", version = "0.1.1" }
 strata-ui-platform = { path = "crates/render/strata_platform", version = "0.1.3" }
+
+# Universal I/O
+strata-audio = { path = "crates/io/strata_audio", version = "0.2.0", default-features = false }
+strata-media = { path = "crates/io/strata_media", version = "0.1.0" }
+strata-hardware = { path = "crates/io/strata_hardware", version = "0.1.0" }
+strata-tui = { path = "crates/io/strata_tui", version = "0.2.0" }
 
 # Runtime
 strata-js = "0.1.1"

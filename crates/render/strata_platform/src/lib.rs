@@ -22,6 +22,7 @@
 
 #[cfg(target_os = "android")]
 pub mod android_window;
+pub mod biometrics;
 pub mod csd;
 pub mod cursor_theme;
 #[cfg(target_os = "linux")]
@@ -36,6 +37,8 @@ pub mod ios_window;
 pub mod macos_window;
 pub mod mcp_cursor;
 pub mod menu;
+pub mod notifications;
+pub mod print;
 pub mod raw_abi;
 pub mod shortcuts;
 pub mod single_instance;
@@ -53,6 +56,10 @@ pub mod window_manager;
 #[cfg(target_os = "linux")]
 pub mod x11_window;
 
+pub use biometrics::{
+    authenticate_biometric, probe_biometric_capability, set_mock_biometric_result,
+    BiometricAuthResult, BiometricCapability, BiometricKind,
+};
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 pub use cairo;
 pub use csd::{ControlPlacement, CsdController, CsdGeometry, CsdHitZone};
@@ -67,7 +74,16 @@ pub use dialog::{
 };
 pub use events::{
     decode_file_uri_to_path, parse_dropped_uri_list_to_paths, KeyCode, Modifiers, MouseButton,
-    PlatformEvent, TouchPhase,
+    PlatformEvent, PointerKind, StylusPhase, TouchPhase,
+};
+pub use notifications::{
+    close_notification, enable_notification_recorder, take_closed_notification_ids,
+    take_recorded_notifications, NotificationAction, NotificationBuilder, NotificationRecord,
+    NotificationUrgency,
+};
+pub use print::{
+    list_printers, print_pdf_bytes, set_mock_print_spooler, take_mock_print_jobs, PrintDuplex,
+    PrintJobOptions, PrinterInfo, RecordedPrintJob,
 };
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 pub use gtk;

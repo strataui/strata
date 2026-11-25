@@ -404,6 +404,8 @@ fn tag_to_str(tag: &Tag) -> &'static str {
         Tag::Select => "select",
         Tag::A => "a",
         Tag::Img => "img",
+        Tag::Audio => "audio",
+        Tag::Video => "video",
         Tag::H1 => "h1",
         Tag::H2 => "h2",
         Tag::H3 => "h3",

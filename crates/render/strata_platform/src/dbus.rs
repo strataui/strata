@@ -49,6 +49,24 @@ pub fn session_bus_socket_path() -> Result<String, String> {
     Err("Could not resolve D-Bus session bus socket address".to_string())
 }
 
+/// Resolves the UNIX domain socket path for the Linux system D-Bus daemon
+/// (used by BlueZ BLE, `fprintd` biometrics, and NetworkManager).
+pub fn system_bus_socket_path() -> Result<String, String> {
+    if let Ok(addr) = std::env::var("DBUS_SYSTEM_BUS_ADDRESS") {
+        for part in addr.split(',') {
+            if let Some(path) = part.strip_prefix("unix:path=") {
+                return Ok(path.to_string());
+            }
+        }
+    }
+    for candidate in ["/run/dbus/system_bus_socket", "/var/run/dbus/system_bus_socket"] {
+        if std::path::Path::new(candidate).exists() {
+            return Ok(candidate.to_string());
+        }
+    }
+    Err("Could not resolve D-Bus system bus socket address".to_string())
+}
+
 /// Encodes an ASCII string to hexadecimal for D-Bus SASL authentication.
 pub fn hex_encode_bytes(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -378,6 +396,12 @@ impl DbusClient {
         Self::connect_to_path(&path)
     }
 
+    /// Connects to the local Linux system bus (`/run/dbus/system_bus_socket`) and completes SASL auth.
+    pub fn connect_system() -> Result<Self, String> {
+        let path = system_bus_socket_path()?;
+        Self::connect_to_path(&path)
+    }
+
     /// Connects to a specific UNIX domain socket path and performs SASL authentication.
     pub fn connect_to_path(socket_path: &str) -> Result<Self, String> {
         let mut stream = UnixStream::connect(socket_path)
@@ -603,4 +627,206 @@ pub fn show_desktop_notification(
     } else {
         Ok(1)
     }
+}
+
+/// Typed D-Bus variant payload value for `a{sv}` dictionaries (Notifications, BlueZ, NetworkManager, Portals).
+#[derive(Debug, Clone, PartialEq)]
+pub enum DbusVariantValue {
+    Byte(u8),
+    Bool(bool),
+    Uint32(u32),
+    Int32(i32),
+    String(String),
+    ObjectPath(String),
+}
+
+impl DbusMessageEncoder {
+    /// Appends a D-Bus boolean (`b`) encoded as an aligned `u32` (`0` or `1`).
+    pub fn push_bool(&mut self, val: bool) {
+        self.push_u32(if val { 1 } else { 0 });
+    }
+
+    /// Appends a D-Bus array of strings (`as`).
+    pub fn push_string_array(&mut self, items: &[&str]) {
+        self.pad_to(4);
+        let len_pos = self.buffer.len();
+        self.buffer.extend_from_slice(&0u32.to_le_bytes());
+        let data_start = self.buffer.len();
+        for item in items {
+            self.push_string(item);
+        }
+        let byte_len = (self.buffer.len() - data_start) as u32;
+        self.buffer[len_pos..len_pos + 4].copy_from_slice(&byte_len.to_le_bytes());
+    }
+
+    /// Appends a D-Bus variant (`v`).
+    pub fn push_variant(&mut self, val: &DbusVariantValue) {
+        match val {
+            DbusVariantValue::Byte(b) => {
+                self.push_signature("y");
+                self.push_u8(*b);
+            }
+            DbusVariantValue::Bool(b) => {
+                self.push_signature("b");
+                self.push_bool(*b);
+            }
+            DbusVariantValue::Uint32(u) => {
+                self.push_signature("u");
+                self.push_u32(*u);
+            }
+            DbusVariantValue::Int32(i) => {
+                self.push_signature("i");
+                self.push_i32(*i);
+            }
+            DbusVariantValue::String(s) => {
+                self.push_signature("s");
+                self.push_string(s);
+            }
+            DbusVariantValue::ObjectPath(o) => {
+                self.push_signature("o");
+                self.push_object_path(o);
+            }
+        }
+    }
+
+    /// Appends a D-Bus `a{sv}` dictionary with exact 8-byte struct/dict-entry alignment.
+    pub fn push_dict_sv(&mut self, entries: &[(&str, DbusVariantValue)]) {
+        self.pad_to(4);
+        let len_pos = self.buffer.len();
+        self.buffer.extend_from_slice(&0u32.to_le_bytes());
+        // Array of `{sv}` structs ALWAYS pads to 8-byte alignment before the first element.
+        self.pad_to(8);
+        let data_start = self.buffer.len();
+        for (k, v) in entries {
+            self.pad_to(8);
+            self.push_string(k);
+            self.push_variant(v);
+        }
+        let byte_len = (self.buffer.len() - data_start) as u32;
+        self.buffer[len_pos..len_pos + 4].copy_from_slice(&byte_len.to_le_bytes());
+    }
+}
+
+impl<'a> DbusMessageDecoder<'a> {
+    /// Extracts the body slice of a complete framed D-Bus message packet.
+    pub fn body_from_message(full_msg: &'a [u8]) -> Option<Self> {
+        if full_msg.len() < 16 {
+            return None;
+        }
+        let body_len = u32::from_le_bytes(full_msg[4..8].try_into().ok()?) as usize;
+        let fields_len = u32::from_le_bytes(full_msg[12..16].try_into().ok()?) as usize;
+        let mut header_total = 16 + fields_len;
+        if !header_total.is_multiple_of(8) {
+            header_total += 8 - (header_total % 8);
+        }
+        if full_msg.len() < header_total + body_len {
+            return None;
+        }
+        Some(Self::new(&full_msg[header_total..header_total + body_len]))
+    }
+
+    pub fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.offset)
+    }
+
+    pub fn read_bool(&mut self) -> Option<bool> {
+        self.read_u32().map(|u| u != 0)
+    }
+
+    pub fn read_signature(&mut self) -> Option<String> {
+        let len = self.read_u8()? as usize;
+        let bytes = self.data.get(self.offset..self.offset + len)?;
+        self.offset += len;
+        if self.offset < self.data.len() {
+            self.offset += 1;
+        }
+        Some(String::from_utf8_lossy(bytes).into_owned())
+    }
+}
+
+impl DbusClient {
+    /// Registers a D-Bus signal match rule via `org.freedesktop.DBus.AddMatch`.
+    pub fn add_match_rule(&mut self, rule: &str) -> Result<(), String> {
+        let mut body = DbusMessageEncoder::new();
+        body.push_string(rule);
+        let _ = self.call_method(
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "AddMatch",
+            Some("s"),
+            body.as_bytes(),
+        )?;
+        Ok(())
+    }
+}
+
+/// Dispatches a rich desktop notification with replacement ID, action buttons, urgency hint,
+/// and category metadata via `org.freedesktop.Notifications.Notify`.
+pub fn show_desktop_notification_rich(
+    app_name: &str,
+    replaces_id: u32,
+    icon: Option<&str>,
+    summary: &str,
+    body: &str,
+    actions: &[(&str, &str)],
+    urgency: u8,
+    category: Option<&str>,
+    timeout_ms: i32,
+) -> Result<u32, String> {
+    let mut client = DbusClient::connect()?;
+    let mut body_encoder = DbusMessageEncoder::new();
+    body_encoder.push_string(app_name);
+    body_encoder.push_u32(replaces_id);
+    body_encoder.push_string(icon.unwrap_or("dialog-information"));
+    body_encoder.push_string(summary);
+    body_encoder.push_string(body);
+
+    // Flatten `(action_key, label)` pairs into `as` array per FreeDesktop Notifications Spec 1.2
+    let mut flat_actions: Vec<&str> = Vec::with_capacity(actions.len() * 2);
+    for (k, label) in actions {
+        flat_actions.push(k);
+        flat_actions.push(label);
+    }
+    body_encoder.push_string_array(&flat_actions);
+
+    let mut hints: Vec<(&str, DbusVariantValue)> =
+        vec![("urgency", DbusVariantValue::Byte(urgency.min(2)))];
+    if let Some(cat) = category {
+        hints.push(("category", DbusVariantValue::String(cat.to_string())));
+    }
+    body_encoder.push_dict_sv(&hints);
+    body_encoder.push_i32(timeout_ms);
+
+    let reply = client.call_method(
+        "org.freedesktop.Notifications",
+        "/org/freedesktop/Notifications",
+        "org.freedesktop.Notifications",
+        "Notify",
+        Some("susssasa{sv}i"),
+        body_encoder.as_bytes(),
+    )?;
+
+    if let Some(mut dec) = DbusMessageDecoder::body_from_message(&reply) {
+        if let Some(id) = dec.read_u32() {
+            return Ok(id);
+        }
+    }
+    Ok(replaces_id.max(1))
+}
+
+/// Closes an active desktop notification by ID via `org.freedesktop.Notifications.CloseNotification`.
+pub fn close_desktop_notification(id: u32) -> Result<(), String> {
+    let mut client = DbusClient::connect()?;
+    let mut body = DbusMessageEncoder::new();
+    body.push_u32(id);
+    let _ = client.call_method(
+        "org.freedesktop.Notifications",
+        "/org/freedesktop/Notifications",
+        "org.freedesktop.Notifications",
+        "CloseNotification",
+        Some("u"),
+        body.as_bytes(),
+    )?;
+    Ok(())
 }

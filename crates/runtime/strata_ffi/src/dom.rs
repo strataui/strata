@@ -64,6 +64,8 @@ fn parse_tag(name: &str) -> (Tag, Option<String>) {
         "li" => (Tag::Li, None),
         "a" => (Tag::A, None),
         "img" => (Tag::Img, None),
+        "audio" => (Tag::Audio, None),
+        "video" => (Tag::Video, None),
         "svg" => (Tag::Svg, None),
         "path" => (Tag::Path, None),
         "canvas" => (Tag::Canvas, None),

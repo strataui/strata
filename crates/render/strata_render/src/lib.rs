@@ -35,6 +35,8 @@ pub mod math3d;
 pub mod multi_window_compositor;
 pub mod orbit_controls;
 pub mod overlay3d;
+#[cfg(feature = "pdf")]
+pub mod pdf;
 pub mod rasterizer;
 pub mod rasterizer3d;
 pub mod scene3d;
@@ -85,6 +87,8 @@ pub use kinetic_scroll::{
 };
 pub use math3d::{Mat4, Ray3D, Vec3, Vec4};
 pub use orbit_controls::{OrbitControls, OrbitInteractionMode};
+#[cfg(feature = "pdf")]
+pub use pdf::{export_display_list_to_pdf, PdfExportOptions, PdfPageSize};
 pub use rasterizer::{sd_rounded_rect, sdf_coverage, FrameBuffer, Rasterizer};
 pub use scene3d::{Camera3D, Geometry3D, Light3D, Material3D, Mesh3D, Scene3D, Transform3D};
 pub use shared_target::{render_hybrid_frame, SharedRenderTarget};

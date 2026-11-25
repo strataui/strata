@@ -190,6 +190,7 @@ fn test_x11_32_byte_event_packet_decoding() {
 
     let listener = UnixListener::bind(&socket_path).expect("Bind test socket");
     let socket_path_str = socket_path.to_str().unwrap().to_string();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
 
     let server_thread = std::thread::spawn(move || {
         let (mut client_sock, _) = listener.accept().expect("Accept client");
@@ -262,6 +263,10 @@ fn test_x11_32_byte_event_packet_decoding() {
         btn_pkt[24..26].copy_from_slice(&100i16.to_ne_bytes());
         btn_pkt[26..28].copy_from_slice(&120i16.to_ne_bytes());
         client_sock.write_all(&btn_pkt).unwrap();
+
+        // Keep the server side of the socket open until the client finishes
+        // sending setup requests and polling events, avoiding EPIPE races.
+        let _ = done_rx.recv();
     });
 
     let config = WindowConfig::default();
@@ -272,6 +277,7 @@ fn test_x11_32_byte_event_packet_decoding() {
     std::thread::sleep(std::time::Duration::from_millis(50));
 
     let events = win.poll_native_events();
+    let _ = done_tx.send(());
     let _ = server_thread.join();
     let _ = std::fs::remove_file(&socket_path);
 

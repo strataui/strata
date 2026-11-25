@@ -18,6 +18,12 @@ pub struct DeviceTelemetrySnapshot {
     pub imu: ImuReading,
     pub barometer: BarometerReading,
     pub ambient_light: AmbientLightReading,
+    pub proximity: ProximityReading,
+    pub hinge_angle: HingeAngleReading,
+    pub radio_signal: RadioSignalReading,
+    pub ambient_spl: AmbientSplReading,
+    pub pedometer: PedometerReading,
+    pub heart_rate: HeartRateReading,
 }
 
 static GLOBAL_MOCK: OnceLock<Arc<Mutex<DeviceTelemetrySnapshot>>> = OnceLock::new();
@@ -218,6 +224,60 @@ impl DeviceMockController {
     /// Updates ambient light sensor reading and notifies reactive `use_ambient_light()` signals.
     pub fn set_ambient_light(&self, reading: AmbientLightReading) {
         self.state.lock().unwrap().ambient_light = reading;
+        sync_signals_from_mock(self);
+    }
+
+    pub fn proximity(&self) -> ProximityReading {
+        self.state.lock().unwrap().proximity
+    }
+
+    pub fn set_proximity(&self, reading: ProximityReading) {
+        self.state.lock().unwrap().proximity = reading;
+        sync_signals_from_mock(self);
+    }
+
+    pub fn hinge_angle(&self) -> HingeAngleReading {
+        self.state.lock().unwrap().hinge_angle
+    }
+
+    pub fn set_hinge_angle(&self, reading: HingeAngleReading) {
+        self.state.lock().unwrap().hinge_angle = reading;
+        sync_signals_from_mock(self);
+    }
+
+    pub fn radio_signal(&self) -> RadioSignalReading {
+        self.state.lock().unwrap().radio_signal.clone()
+    }
+
+    pub fn set_radio_signal(&self, reading: RadioSignalReading) {
+        self.state.lock().unwrap().radio_signal = reading;
+        sync_signals_from_mock(self);
+    }
+
+    pub fn ambient_spl(&self) -> AmbientSplReading {
+        self.state.lock().unwrap().ambient_spl
+    }
+
+    pub fn set_ambient_spl(&self, reading: AmbientSplReading) {
+        self.state.lock().unwrap().ambient_spl = reading;
+        sync_signals_from_mock(self);
+    }
+
+    pub fn pedometer(&self) -> PedometerReading {
+        self.state.lock().unwrap().pedometer
+    }
+
+    pub fn set_pedometer(&self, reading: PedometerReading) {
+        self.state.lock().unwrap().pedometer = reading;
+        sync_signals_from_mock(self);
+    }
+
+    pub fn heart_rate(&self) -> HeartRateReading {
+        self.state.lock().unwrap().heart_rate
+    }
+
+    pub fn set_heart_rate(&self, reading: HeartRateReading) {
+        self.state.lock().unwrap().heart_rate = reading;
         sync_signals_from_mock(self);
     }
 

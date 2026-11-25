@@ -95,6 +95,8 @@ fn lower_element(el: &RsxElement, errors: &mut Vec<String>) -> String {
         "li" => "strata_dom::Tag::Li".to_string(),
         "a" => "strata_dom::Tag::A".to_string(),
         "img" => "strata_dom::Tag::Img".to_string(),
+        "audio" => "strata_dom::Tag::Audio".to_string(),
+        "video" => "strata_dom::Tag::Video".to_string(),
         "svg" => "strata_dom::Tag::Svg".to_string(),
         "path" => "strata_dom::Tag::Path".to_string(),
         "canvas" => "strata_dom::Tag::Canvas".to_string(),

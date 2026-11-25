@@ -275,6 +275,52 @@ uint32_t strata_window_get_width(const StrataWindowHandle *win);
 uint32_t strata_window_get_height(const StrataWindowHandle *win);
 void strata_window_destroy(StrataWindowHandle *win);
 
+/* ============================================================================
+ * Universal Core I/O, Real-Time Voice DSP, Vector PDF, Notifications & Perms
+ * ============================================================================ */
+
+typedef struct StrataVoicePipelineHandle StrataVoicePipelineHandle;
+
+typedef struct StrataVoiceStats {
+    bool is_speech;
+    float speech_probability;
+    float estimated_snr_db;
+    float erle_db;
+    bool double_talk;
+    float agc_gain_db;
+    float latency_ms;
+} StrataVoiceStats;
+
+StrataVoicePipelineHandle *strata_audio_voice_pipeline_new(
+    uint32_t sample_rate,
+    uint32_t preset_id
+);
+StrataStatus strata_audio_voice_pipeline_set_ns_preset(
+    StrataVoicePipelineHandle *handle,
+    uint32_t ns_preset
+);
+StrataStatus strata_audio_voice_pipeline_process(
+    StrataVoicePipelineHandle *handle,
+    const float *mic_in,
+    const float *far_in,
+    float *out_pcm,
+    size_t frame_len,
+    StrataVoiceStats *out_stats
+);
+void strata_audio_voice_pipeline_destroy(StrataVoicePipelineHandle *handle);
+
+StrataStatus strata_runtime_export_pdf(
+    StrataRuntimeHandle *runtime,
+    const char *path
+);
+StrataStatus strata_notify_send(
+    const char *title,
+    const char *body,
+    uint8_t urgency,
+    uint32_t *out_id
+);
+int32_t strata_permission_check(uint32_t kind_id);
+
 #ifdef __cplusplus
 }
 #endif

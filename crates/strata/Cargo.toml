@@ -36,22 +36,42 @@ serde_json = "1.0"
 
 # Core optional engine capabilities
 strata-device = { workspace = true, optional = true }
+strata-audio = { workspace = true, optional = true }
+strata-media = { workspace = true, optional = true }
+strata-hardware = { workspace = true, optional = true }
+strata-tui = { workspace = true, optional = true }
 strata-parallel = { workspace = true, optional = true }
 strata-devtools = { workspace = true, optional = true }
 strata-hot-reload = { workspace = true, optional = true }
 
 [features]
-default = ["tailwind", "device"]
+default = ["tailwind", "device", "audio-dsp", "pdf"]
 tailwind = []
 device = ["dep:strata-device"]
+audio-dsp = ["dep:strata-audio"]
+audio = ["audio-dsp", "strata-audio/hardware", "strata-audio/reactive"]
+audio-codecs = ["audio", "strata-audio/codecs"]
+media = ["dep:strata-media"]
+hardware = ["dep:strata-hardware"]
+tui = ["dep:strata-tui"]
+pdf = ["strata-render/pdf"]
 parallel = ["dep:strata-parallel"]
 devtools = ["dep:strata-devtools"]
 hot-reload = ["dep:strata-hot-reload"]
 profiling = []
 a11y = []
+full-io = [
+    "device",
+    "audio",
+    "audio-codecs",
+    "media",
+    "hardware",
+    "tui",
+    "pdf",
+]
 full = [
     "tailwind",
-    "device",
+    "full-io",
     "parallel",
     "devtools",
     "hot-reload",
@@ -73,3 +93,13 @@ required-features = ["hot-reload"]
 [[example]]
 name = "readme_hero"
 path = "../../examples/readme_hero.rs"
+
+[[example]]
+name = "voice_studio_demo"
+path = "../../examples/voice_studio_demo.rs"
+required-features = ["full-io"]
+
+[[example]]
+name = "universal_io_cockpit"
+path = "../../examples/universal_io_cockpit.rs"
+required-features = ["full-io"]

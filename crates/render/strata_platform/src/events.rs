@@ -201,6 +201,29 @@ pub enum PlatformEvent {
         y: f32,
     },
 
+    // Stylus / Pen Tablet (W3C Pointer Events Level 3 / Wayland tablet-v2 / GTK / NSEvent / WM_POINTER)
+    Stylus {
+        phase: StylusPhase,
+        pointer_id: u64,
+        tool: PointerKind,
+        x: f32,
+        y: f32,
+        /// Normalized tip pressure in `[0.0, 1.0]`.
+        pressure: f32,
+        /// Pen tilt along the X axis in degrees (`-90.0..=90.0`).
+        tilt_x: f32,
+        /// Pen tilt along the Y axis in degrees (`-90.0..=90.0`).
+        tilt_y: f32,
+        /// Clockwise barrel rotation in degrees (`0.0..=359.0`).
+        twist: f32,
+        /// Barrel tangential pressure / airbrush wheel in `[-1.0, 1.0]`.
+        tangential_pressure: f32,
+        /// `true` when the stylus is hovering in proximity without touching the surface.
+        hovering: bool,
+        /// Bitmask of pressed barrel / tip buttons.
+        buttons: u16,
+    },
+
     // File Drag-and-Drop
     FileDrop(Vec<PathBuf>),
 
@@ -210,6 +233,38 @@ pub enum PlatformEvent {
 
     // Single-Instance IPC
     SingleInstanceTriggered(Vec<String>),
+}
+
+/// Type of pointing device / stylus tool emitting pointer events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PointerKind {
+    Mouse,
+    Touch,
+    Pen,
+    Eraser,
+    Brush,
+    Airbrush,
+}
+
+impl PointerKind {
+    /// Returns the W3C PointerEvent `pointerType` string (`"mouse"`, `"touch"`, or `"pen"`).
+    pub const fn as_w3c_str(self) -> &'static str {
+        match self {
+            Self::Mouse => "mouse",
+            Self::Touch => "touch",
+            Self::Pen | Self::Eraser | Self::Brush | Self::Airbrush => "pen",
+        }
+    }
+}
+
+/// Lifecycle phase of a stylus / pen tablet interaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StylusPhase {
+    Down,
+    Move,
+    Up,
+    Hover,
+    Cancel,
 }
 
 /// Decodes a `file://` URI (or raw local filesystem path) with RFC 3986 percent-encoding into a `PathBuf`.

@@ -501,3 +501,109 @@ impl AmbientLightReading {
         }
     }
 }
+
+/// Optical / infrared proximity sensor reading (phone ear-detection / obstacle proximity).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ProximityReading {
+    pub available: bool,
+    pub is_near: bool,
+    pub distance_cm: f32,
+}
+
+/// Physical posture inferred from a foldable or laptop lid hinge angle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FoldablePosture {
+    Closed,
+    HalfOpen,
+    #[default]
+    Flat,
+    Tent,
+}
+
+/// Foldable display / laptop lid hinge angle reading in degrees (`0..=360`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HingeAngleReading {
+    pub available: bool,
+    pub angle_deg: f32,
+    pub posture: FoldablePosture,
+}
+
+impl Default for HingeAngleReading {
+    fn default() -> Self {
+        Self {
+            available: false,
+            angle_deg: 180.0,
+            posture: FoldablePosture::Flat,
+        }
+    }
+}
+
+impl HingeAngleReading {
+    pub fn from_degrees(angle_deg: f32) -> Self {
+        let clamped = angle_deg.clamp(0.0, 360.0);
+        let posture = if clamped < 25.0 {
+            FoldablePosture::Closed
+        } else if clamped < 155.0 {
+            FoldablePosture::HalfOpen
+        } else if clamped <= 215.0 {
+            FoldablePosture::Flat
+        } else {
+            FoldablePosture::Tent
+        };
+        Self {
+            available: true,
+            angle_deg: clamped,
+            posture,
+        }
+    }
+}
+
+/// Wireless radio RSSI and link-quality telemetry (Wi-Fi + Cellular).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RadioSignalReading {
+    pub available: bool,
+    pub wifi_interface: Option<String>,
+    /// Wi-Fi received signal strength indicator in dBm (e.g., `-45` strong, `-85` weak).
+    pub wifi_rssi_dbm: Option<i32>,
+    /// Normalized Wi-Fi link quality percentage in `[0.0, 100.0]`.
+    pub wifi_link_quality_pct: Option<f32>,
+    /// Cellular signal strength in dBm, if available.
+    pub cellular_rssi_dbm: Option<i32>,
+}
+
+/// Ambient Sound Pressure Level (SPL) reading bridged from live microphone audio metering.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct AmbientSplReading {
+    pub available: bool,
+    /// IEC 61672 A-weighted ambient sound pressure level (`dBA`).
+    pub spl_dba: f32,
+    /// `true` when ambient noise exceeds `75 dBA` (loud industrial / cockpit environment).
+    pub is_loud_environment: bool,
+}
+
+impl AmbientSplReading {
+    pub fn from_dba(spl_dba: f32) -> Self {
+        let val = spl_dba.max(0.0);
+        Self {
+            available: true,
+            spl_dba: val,
+            is_loud_environment: val >= 75.0,
+        }
+    }
+}
+
+/// Hardware step counter / pedometer reading.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PedometerReading {
+    pub available: bool,
+    pub steps: u64,
+    pub cadence_spm: f32,
+}
+
+/// Biometric heart-rate monitor reading (bridged from BLE HRS `0x180D` or wearable sensors).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct HeartRateReading {
+    pub available: bool,
+    pub bpm: u16,
+    pub sensor_contact: bool,
+}
