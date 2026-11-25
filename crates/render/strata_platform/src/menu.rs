@@ -112,6 +112,8 @@ impl MenuAccelerator {
             "[" | "BRACKETLEFT" => KeyCode::BracketLeft,
             "]" | "BRACKETRIGHT" => KeyCode::BracketRight,
             ";" | "SEMICOLON" => KeyCode::Semicolon,
+            "'" | "\"" | "QUOTE" | "APOSTROPHE" => KeyCode::Quote,
+            "\\" | "|" | "BACKSLASH" => KeyCode::Backslash,
             "`" | "BACKQUOTE" | "GRAVE" => KeyCode::Backquote,
             _ => return None,
         };
@@ -228,6 +230,8 @@ impl MenuAccelerator {
             KeyCode::BracketLeft => "[",
             KeyCode::BracketRight => "]",
             KeyCode::Semicolon => ";",
+            KeyCode::Quote => "'",
+            KeyCode::Backslash => "\\",
             KeyCode::Backquote => "`",
             KeyCode::Unknown => "?",
         };

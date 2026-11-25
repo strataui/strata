@@ -93,26 +93,84 @@ pub fn compute_min_max_sizes(node: &LayoutNode, parent_size: Option<f32>) -> Min
     compute_min_max_sizes_guarded(node, parent_size, 0)
 }
 
-/// Computes intrinsic min/max sizes with an active depth counter to prevent stack exhaustion on deep DOM trees.
+/// Computes intrinsic min/max sizes iteratively (`O(1)` call stack) with an active depth bound.
 pub fn compute_min_max_sizes_guarded(
-    node: &LayoutNode,
+    root: &LayoutNode,
     parent_size: Option<f32>,
-    depth: usize,
+    initial_depth: usize,
 ) -> MinMaxSizes {
-    if depth > crate::tree::MAX_LAYOUT_DEPTH {
+    if initial_depth > crate::tree::MAX_LAYOUT_DEPTH {
         return MinMaxSizes::zero();
     }
     let _prof = crate::prof::Scope::new(crate::prof::Slot::Intrinsic);
-    if let Some(hit) = node.intrinsic_cache.get(parent_size) {
+    if let Some(hit) = root.intrinsic_cache.get(parent_size) {
         return hit;
     }
-    if let Some(hit) = memo_lookup(node, parent_size) {
+    if let Some(hit) = memo_lookup(root, parent_size) {
         return hit;
     }
-    let result = compute_min_max_sizes_uncached(node, parent_size, depth);
-    node.intrinsic_cache.set(parent_size, result);
-    memo_store(node, parent_size, result);
-    result
+
+    let mut stack: Vec<(&LayoutNode, usize, bool)> = vec![(root, initial_depth, false)];
+
+    while let Some((node, depth, expanded)) = stack.pop() {
+        if depth > crate::tree::MAX_LAYOUT_DEPTH {
+            continue;
+        }
+        if node.intrinsic_cache.get(parent_size).is_some() || memo_lookup(node, parent_size).is_some()
+        {
+            continue;
+        }
+
+        if !expanded {
+            if let Some(fast) = try_compute_leaf_or_definite_min_max(node, parent_size) {
+                node.intrinsic_cache.set(parent_size, fast);
+                memo_store(node, parent_size, fast);
+                continue;
+            }
+            stack.push((node, depth, true));
+            let child_depth = if matches!(node.style.display, Display::Grid | Display::InlineGrid) {
+                depth + 2
+            } else {
+                depth + 1
+            };
+            if child_depth <= crate::tree::MAX_LAYOUT_DEPTH {
+                for child in node.children.iter().rev() {
+                    if child.style.display == Display::None
+                        || child.style.position == Position::Absolute
+                        || child.style.position == Position::Fixed
+                    {
+                        continue;
+                    }
+                    if child.intrinsic_cache.get(parent_size).is_none()
+                        && memo_lookup(child, parent_size).is_none()
+                    {
+                        stack.push((child, child_depth, false));
+                    }
+                }
+            }
+        } else {
+            let result = finish_node_min_max(node, parent_size, depth);
+            node.intrinsic_cache.set(parent_size, result);
+            memo_store(node, parent_size, result);
+        }
+    }
+
+    root.intrinsic_cache
+        .get(parent_size)
+        .or_else(|| memo_lookup(root, parent_size))
+        .unwrap_or_else(MinMaxSizes::zero)
+}
+
+#[inline]
+fn lookup_child_min_max(child: &LayoutNode, parent_size: Option<f32>, child_depth: usize) -> MinMaxSizes {
+    if child_depth > crate::tree::MAX_LAYOUT_DEPTH {
+        return MinMaxSizes::zero();
+    }
+    child
+        .intrinsic_cache
+        .get(parent_size)
+        .or_else(|| memo_lookup(child, parent_size))
+        .unwrap_or_else(MinMaxSizes::zero)
 }
 
 fn memo_key(node: &LayoutNode, parent_size: Option<f32>) -> (usize, u32) {
@@ -188,16 +246,38 @@ pub fn end_layout_session(is_root: bool) {
     SESSION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
 }
 
-fn compute_min_max_sizes_uncached(
+/// Fast path returning `Some` when a node's intrinsic sizes do not depend on child nodes.
+fn try_compute_leaf_or_definite_min_max(
+    node: &LayoutNode,
+    parent_size: Option<f32>,
+) -> Option<MinMaxSizes> {
+    let avail = parent_size.unwrap_or(0.0);
+
+    // 1. Definite non-percentage width on element containers
+    if node.text.is_none()
+        && !matches!(node.style.width, strata_style::types::Dimension::Percent(_))
+    {
+        if let Some(exact_w) = resolve_dimension(node.style.width, avail) {
+            let min_w = resolve_dimension(node.style.min_width, avail);
+            let max_w = resolve_dimension(node.style.max_width, avail);
+            return Some(MinMaxSizes::exact(exact_w).clamp(min_w, max_w));
+        }
+    }
+
+    if !node.children.is_empty() {
+        return None;
+    }
+
+    Some(finish_node_min_max(node, parent_size, 0))
+}
+
+fn finish_node_min_max(
     node: &LayoutNode,
     parent_size: Option<f32>,
     depth: usize,
 ) -> MinMaxSizes {
     let avail = parent_size.unwrap_or(0.0);
 
-    // 1. Definite non-percentage width on element containers:
-    // Only element containers without direct text content obey explicit CSS width in intrinsic sizing.
-    // Per W3C CSS Sizing Level 3 §5.1, percentage widths are treated as auto for intrinsic sizing.
     if node.text.is_none()
         && !matches!(node.style.width, strata_style::types::Dimension::Percent(_))
     {
@@ -252,14 +332,13 @@ fn compute_min_max_sizes_uncached(
         result.min_content = widest_unit;
     }
 
-    // 3. Children contribution
+    // 3. Children contribution (all children already memoized in post-order)
     if !node.children.is_empty() {
         match node.style.display {
             Display::Flex | Display::InlineFlex => {
                 if node.style.flex_direction == FlexDirection::Row
                     || node.style.flex_direction == FlexDirection::RowReverse
                 {
-                    // Flex Row: in-flow items add up along inline axis
                     let mut sum_min = 0.0f32;
                     let mut sum_max = 0.0f32;
                     let in_flow_children: Vec<_> = node
@@ -278,8 +357,7 @@ fn compute_min_max_sizes_uncached(
                     };
 
                     for child in in_flow_children {
-                        let child_sizes =
-                            compute_min_max_sizes_guarded(child, parent_size, depth + 1);
+                        let child_sizes = lookup_child_min_max(child, parent_size, depth + 1);
                         let child_margin = child.style.margin.left + child.style.margin.right;
                         sum_min += child_sizes.min_content + child_margin;
                         sum_max += child_sizes.max_content + child_margin;
@@ -288,7 +366,6 @@ fn compute_min_max_sizes_uncached(
                     result.min_content = result.min_content.max(sum_min + gaps);
                     result.max_content = result.max_content.max(sum_max + gaps);
                 } else {
-                    // Flex Column: in-flow items stack vertically, inline size is maximum of children
                     for child in &node.children {
                         if child.style.display == Display::None
                             || child.style.position == Position::Absolute
@@ -296,8 +373,7 @@ fn compute_min_max_sizes_uncached(
                         {
                             continue;
                         }
-                        let child_sizes =
-                            compute_min_max_sizes_guarded(child, parent_size, depth + 1);
+                        let child_sizes = lookup_child_min_max(child, parent_size, depth + 1);
                         let child_margin = child.style.margin.left + child.style.margin.right;
                         result.min_content = result
                             .min_content
@@ -309,14 +385,11 @@ fn compute_min_max_sizes_uncached(
                 }
             }
             Display::Grid | Display::InlineGrid => {
-                let grid_sizes = compute_grid_min_max_sizes(node, parent_size, depth + 1);
+                let grid_sizes = finish_grid_min_max_sizes(node, parent_size, depth + 1);
                 result.min_content = result.min_content.max(grid_sizes.min_content);
                 result.max_content = result.max_content.max(grid_sizes.max_content);
             }
             _ => {
-                // Standard Block & Inline Formatting Context Layout:
-                // Contiguous inline phrasing children accumulate horizontally along the same line,
-                // while block children stack vertically.
                 let mut inline_run_max = 0.0f32;
                 for child in &node.children {
                     if child.style.display == Display::None
@@ -325,7 +398,7 @@ fn compute_min_max_sizes_uncached(
                     {
                         continue;
                     }
-                    let child_sizes = compute_min_max_sizes_guarded(child, parent_size, depth + 1);
+                    let child_sizes = lookup_child_min_max(child, parent_size, depth + 1);
                     let child_margin = child.style.margin.left + child.style.margin.right;
                     result.min_content = result
                         .min_content
@@ -355,9 +428,8 @@ fn compute_min_max_sizes_uncached(
     result.clamp(min_w, max_w)
 }
 
-/// Recursively computes intrinsic min-content and max-content sizes for a grid container
-/// according to W3C CSS Grid Layout Level 2 §12.1.
-fn compute_grid_min_max_sizes(
+/// Computes intrinsic min-content and max-content sizes for a grid container from already-evaluated children.
+fn finish_grid_min_max_sizes(
     node: &LayoutNode,
     parent_size: Option<f32>,
     depth: usize,
@@ -407,7 +479,7 @@ fn compute_grid_min_max_sizes(
             let mut items_max = 0.0f32;
 
             for item in items {
-                let s = compute_min_max_sizes_guarded(item, parent_size, depth + 1);
+                let s = lookup_child_min_max(item, parent_size, depth + 1);
                 let m = item.style.margin.left + item.style.margin.right;
                 items_min = items_min.max(s.min_content + m);
                 items_max = items_max.max(s.max_content + m);
@@ -477,11 +549,10 @@ fn compute_grid_min_max_sizes(
 
         MinMaxSizes::new(sum_min + gaps, sum_max + gaps)
     } else {
-        // Auto / single-column fallback
         let mut max_min = 0.0f32;
         let mut max_max = 0.0f32;
         for child in in_flow_children {
-            let s = compute_min_max_sizes_guarded(child, parent_size, depth + 1);
+            let s = lookup_child_min_max(child, parent_size, depth + 1);
             let m = child.style.margin.left + child.style.margin.right;
             max_min = max_min.max(s.min_content + m);
             max_max = max_max.max(s.max_content + m);

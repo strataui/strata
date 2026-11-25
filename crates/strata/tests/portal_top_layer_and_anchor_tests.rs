@@ -313,7 +313,7 @@ fn create_dropdown_portal_match_width_and_css_anchor_positioning_work() {
     );
 
     let view = rsx! {
-        <div class="flex flex-col w-[400px] h-[300px] p-4 gap-4 bg-[#09090b]">
+        <div class="flex flex-col w-[400px] h-[300px] pt-12 px-4 pb-4 gap-4 bg-[#09090b]">
             <button id="select-trigger" class="w-[220px] h-[36px] bg-[#27272a]">
                 "Choose item"
             </button>

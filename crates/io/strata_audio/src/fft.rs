@@ -234,8 +234,7 @@ impl FftPlan {
         let n = self.size;
         debug_assert_eq!(buffer.len(), n);
 
-        for i in 0..n {
-            let j = self.bit_rev[i];
+        for (i, &j) in self.bit_rev.iter().enumerate().take(n) {
             if i < j {
                 buffer.swap(i, j);
             }

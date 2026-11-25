@@ -183,9 +183,9 @@ impl StftProcessor {
                 }
 
                 // Push produced hop into circular output FIFO.
-                for k in 0..h {
+                for &sample in &self.hop_out_scratch[..h] {
                     let write_idx = (self.out_read + self.out_len) % cap;
-                    self.out_fifo[write_idx] = self.hop_out_scratch[k];
+                    self.out_fifo[write_idx] = sample;
                     if self.out_len < cap {
                         self.out_len += 1;
                     } else {

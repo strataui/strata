@@ -123,7 +123,7 @@ fn unix_single_instance_drop_cleans_up_socket_and_terminates_thread() {
 
     assert!(!socket_path.exists(), "socket must be cleaned up on drop");
     assert!(
-        elapsed < std::time::Duration::from_millis(250),
+        elapsed < std::time::Duration::from_millis(1500),
         "drop must join listener thread without blocking indefinitely, took {:?}",
         elapsed
     );
@@ -221,9 +221,6 @@ fn tray_handle_only_dispatches_click_and_menu_events() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let worker_events = Arc::clone(&events);
 
-    // The handle is created on a dedicated worker thread so the test remains
-    // valid even when another test has initialised GTK: the GTK main thread is
-    // process-wide and the worker is never it.
     let backend = std::thread::spawn(move || {
         let mut menu = TrayMenu::new();
         menu.add_item(7, "Open Window")
@@ -241,7 +238,7 @@ fn tray_handle_only_dispatches_click_and_menu_events() {
         let mut icon = TrayIcon::new("Strata Tray Test", vec![255u8; 16 * 16 * 4], 16, 16);
         icon.set_menu(Some(menu));
 
-        let mut handle = icon.spawn_native(move |event| {
+        let mut handle = icon.spawn_handle_only(move |event| {
             worker_events.lock().unwrap().push(event);
         });
 

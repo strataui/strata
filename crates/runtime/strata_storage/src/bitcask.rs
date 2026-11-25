@@ -75,7 +75,9 @@ fn try_lock_exclusive(file: &File) -> io::Result<()> {
     const LOCKFILE_EXCLUSIVE_LOCK: u32 = 0x0000_0002;
     const LOCKFILE_FAIL_IMMEDIATELY: u32 = 0x0000_0001;
 
-    let mut overlapped = std::mem::MaybeUninit::<[u8; 32]>::zeroed();
+    #[repr(C)]
+    struct WinOverlapped([usize; 4]);
+    let mut overlapped = WinOverlapped([0; 4]);
     let res = unsafe {
         LockFileEx(
             file.as_raw_handle() as *mut _,
@@ -83,7 +85,7 @@ fn try_lock_exclusive(file: &File) -> io::Result<()> {
             0,
             1,
             0,
-            overlapped.as_mut_ptr() as *mut _,
+            (&mut overlapped as *mut WinOverlapped).cast(),
         )
     };
     if res == 0 {
@@ -468,7 +470,6 @@ impl StrataKV {
         drop(old_file);
 
         std::fs::rename(&compact_path, &self.wal_path)?;
-        let _ = std::fs::remove_file(&swap_path);
 
         let mut reloaded = OpenOptions::new()
             .read(true)
@@ -477,6 +478,8 @@ impl StrataKV {
         try_lock_exclusive(&reloaded)?;
         reloaded.seek(SeekFrom::End(0))?;
         self.wal_file = reloaded;
+        // Now the ephemeral swap_file handle has been dropped, so removal succeeds on Windows too.
+        let _ = std::fs::remove_file(&swap_path);
 
         self.key_dir = new_key_dir;
         Ok(())

@@ -330,7 +330,71 @@ pub fn clear_inline_descendant_line_boxes(node: &mut LayoutNode) {
     }
 }
 
-/// Recursively flattens inline phrasing children into an InlineItem stream bounded by MAX_LAYOUT_DEPTH.
+#[derive(Clone, Copy)]
+struct InheritedInlineStyle {
+    font_family: strata_primitives::AtomId,
+    background_color: Option<strata_style::types::Color>,
+    text_decoration: strata_style::types::TextDecoration,
+    href: Option<strata_primitives::AtomId>,
+}
+
+impl InheritedInlineStyle {
+    #[inline]
+    fn from_style(style: &strata_style::types::ComputedStyle) -> Self {
+        Self {
+            font_family: style.font_family,
+            background_color: if style.display == strata_style::types::Display::Inline {
+                style.background_color
+            } else {
+                None
+            },
+            text_decoration: style.text_decoration,
+            href: style.get_custom_property(strata_primitives::AtomId::HREF),
+        }
+    }
+
+    #[inline]
+    fn inherit_into(self, child: &strata_style::types::ComputedStyle) -> Self {
+        let font_family = if child.font_family == strata_primitives::AtomId::FONT_SANS
+            && self.font_family != strata_primitives::AtomId::FONT_SANS
+        {
+            self.font_family
+        } else {
+            child.font_family
+        };
+        let background_color = if child.display == strata_style::types::Display::Inline {
+            child.background_color.or(self.background_color)
+        } else {
+            None
+        };
+        let text_decoration = if child.text_decoration == strata_style::types::TextDecoration::None
+        {
+            self.text_decoration
+        } else {
+            child.text_decoration
+        };
+        let href = child
+            .get_custom_property(strata_primitives::AtomId::HREF)
+            .or(self.href);
+        Self {
+            font_family,
+            background_color,
+            text_decoration,
+            href,
+        }
+    }
+}
+
+struct InlineCollectFrame<'a> {
+    children: &'a [LayoutNode],
+    idx: usize,
+    inherited: Option<InheritedInlineStyle>,
+    top_idx: Option<usize>,
+    depth: usize,
+}
+
+/// Iteratively flattens inline phrasing children into an InlineItem stream (`O(1)` call stack,
+/// bounded by `MAX_LAYOUT_DEPTH`, zero `ComputedStyle::clone()` stack allocations).
 fn collect_inline_items_from_children(
     children: &[LayoutNode],
     parent_style: Option<&strata_style::types::ComputedStyle>,
@@ -339,98 +403,70 @@ fn collect_inline_items_from_children(
     content_width: f32,
     available_height: f32,
 ) {
-    collect_inline_items_from_children_guarded(
-        children,
-        parent_style,
-        top_level_idx,
-        items,
-        content_width,
-        available_height,
-        0,
-    );
-}
-
-fn collect_inline_items_from_children_guarded(
-    children: &[LayoutNode],
-    parent_style: Option<&strata_style::types::ComputedStyle>,
-    top_level_idx: Option<usize>,
-    items: &mut Vec<crate::typography::InlineItem>,
-    content_width: f32,
-    available_height: f32,
-    depth: usize,
-) {
-    if depth > crate::tree::MAX_LAYOUT_DEPTH {
-        return;
-    }
     let _prof = crate::prof::Scope::new(crate::prof::Slot::StyleClone);
-    for (idx, child) in children.iter().enumerate() {
+    let init_inherited = parent_style.map(InheritedInlineStyle::from_style);
+    let mut stack = vec![InlineCollectFrame {
+        children,
+        idx: 0,
+        inherited: init_inherited,
+        top_idx: top_level_idx,
+        depth: 0,
+    }];
+
+    while let Some(frame) = stack.last_mut() {
+        if frame.idx >= frame.children.len() {
+            stack.pop();
+            continue;
+        }
+        let child_idx = frame.idx;
+        let child = &frame.children[child_idx];
+        frame.idx += 1;
+
         if child.style.display == strata_style::types::Display::None {
             continue;
         }
-        let effective_top_idx = top_level_idx.unwrap_or(idx);
+        let effective_top_idx = frame.top_idx.unwrap_or(child_idx);
+        let cur_inherited = frame.inherited;
+        let cur_depth = frame.depth;
+
         if let Some(ref text) = child.text {
-            let mut computed_style = child.style.clone();
-            if let Some(p) = parent_style {
-                if computed_style.font_family == strata_primitives::AtomId::FONT_SANS
+            let mut s = inline_style_from_computed_style(&child.style);
+            if let Some(p) = cur_inherited {
+                if child.style.font_family == strata_primitives::AtomId::FONT_SANS
                     && p.font_family != strata_primitives::AtomId::FONT_SANS
                 {
-                    computed_style.font_family = p.font_family;
+                    s.font_family = p.font_family;
+                    s.is_monospace = crate::text::is_monospace_family(p.font_family);
                 }
-            }
-            let mut s = inline_style_from_computed_style(&computed_style);
-            if s.background_color.is_none() {
-                if let Some(p) = parent_style {
-                    if p.display == strata_style::types::Display::Inline {
-                        s.background_color = p.background_color;
-                    }
+                if s.background_color.is_none() {
+                    s.background_color = p.background_color;
                 }
-            }
-            if s.text_decoration == strata_style::types::TextDecoration::None {
-                if let Some(p) = parent_style {
-                    if p.text_decoration != strata_style::types::TextDecoration::None {
-                        s.text_decoration = p.text_decoration;
-                    }
+                if s.text_decoration == strata_style::types::TextDecoration::None
+                    && p.text_decoration != strata_style::types::TextDecoration::None
+                {
+                    s.text_decoration = p.text_decoration;
                 }
-            }
-            if s.href.is_none() {
-                if let Some(p) = parent_style {
-                    s.href = p
-                        .get_custom_property(strata_primitives::AtomId::HREF)
-                        .and_then(strata_primitives::atom::resolve);
+                if s.href.is_none() {
+                    s.href = p.href.and_then(strata_primitives::atom::resolve);
                 }
             }
             items.push(crate::typography::InlineItem::text(text.clone(), s));
         } else if child.style.display == strata_style::types::Display::Inline
             && !child.children.is_empty()
         {
-            let mut merged_style = child.style.clone();
-            if let Some(p) = parent_style {
-                if merged_style.background_color.is_none()
-                    && p.display == strata_style::types::Display::Inline
-                {
-                    merged_style.background_color = p.background_color;
-                }
-                if merged_style.text_decoration == strata_style::types::TextDecoration::None {
-                    merged_style.text_decoration = p.text_decoration;
-                }
-                if merged_style
-                    .get_custom_property(strata_primitives::AtomId::HREF)
-                    .is_none()
-                {
-                    if let Some(h) = p.get_custom_property(strata_primitives::AtomId::HREF) {
-                        merged_style.set_custom_property(strata_primitives::AtomId::HREF, h);
-                    }
-                }
+            if cur_depth < crate::tree::MAX_LAYOUT_DEPTH {
+                let merged = match cur_inherited {
+                    Some(p) => p.inherit_into(&child.style),
+                    None => InheritedInlineStyle::from_style(&child.style),
+                };
+                stack.push(InlineCollectFrame {
+                    children: child.children.as_slice(),
+                    idx: 0,
+                    inherited: Some(merged),
+                    top_idx: Some(effective_top_idx),
+                    depth: cur_depth + 1,
+                });
             }
-            collect_inline_items_from_children_guarded(
-                &child.children,
-                Some(&merged_style),
-                Some(effective_top_idx),
-                items,
-                content_width,
-                available_height,
-                depth + 1,
-            );
         } else {
             let mut w =
                 resolve_dimension_with_node(child.style.width, content_width, child).unwrap_or(0.0);
@@ -682,6 +718,169 @@ fn child_is_layout_boundary(node: &LayoutNode) -> bool {
 }
 
 /// Positions in-flow block children with active exclusion space tracking and depth guard.
+#[inline(never)]
+fn layout_ellipsis_text_leaf_children(node: &mut LayoutNode, content_width: f32) -> Option<f32> {
+    let text = node.text.clone()?;
+    let padding = node.style.padding;
+    let border = node.style.border_width;
+    let style = inline_style_from_computed_style(&node.style);
+    let items = vec![crate::typography::InlineItem::text(text, style)];
+    let opt = crate::typography::InlineLayoutOptions {
+        font_size: node.style.font_size,
+        line_height: Some(node.style.font_size * node.style.line_height),
+        max_width: Some(content_width),
+        white_space: match node.style.white_space {
+            strata_style::types::WhiteSpace::Normal => crate::typography::WhiteSpaceMode::Normal,
+            strata_style::types::WhiteSpace::NoWrap => crate::typography::WhiteSpaceMode::NoWrap,
+            strata_style::types::WhiteSpace::Pre => crate::typography::WhiteSpaceMode::Pre,
+            strata_style::types::WhiteSpace::PreWrap => crate::typography::WhiteSpaceMode::PreWrap,
+            strata_style::types::WhiteSpace::PreLine => crate::typography::WhiteSpaceMode::PreLine,
+        },
+        vertical_align: crate::typography::VerticalAlignment::Baseline,
+        is_monospace: crate::text::is_monospace_family(node.style.font_family),
+        exclusion_space: None,
+        bfc_offset_y: 0.0,
+    };
+    let ifc = crate::typography::InlineFormattingContext::new();
+    let mut res = ifc.layout_inline_stream(&items, &opt);
+    truncate_inline_overflow(node, &mut res, content_width);
+
+    let origin_x = node.geometry.border_box.x + border.left + padding.left;
+    let origin_y = node.geometry.border_box.y + border.top + padding.top;
+    let mut lines = res.lines;
+    for line in &mut lines {
+        line.bounds.x += origin_x;
+        line.bounds.y += origin_y;
+        for frag in &mut line.text_fragments {
+            frag.bounds.x += origin_x;
+            frag.bounds.y += origin_y;
+            frag.baseline_y += origin_y;
+        }
+        for atomic in &mut line.atomic_fragments {
+            atomic.bounds.x += origin_x;
+            atomic.bounds.y += origin_y;
+        }
+    }
+    let total_h = res.total_height;
+    node.inline_items = items;
+    node.line_boxes = lines;
+    Some(total_h + padding.top + padding.bottom + border.top + border.bottom)
+}
+
+#[inline(never)]
+fn finish_ifc_inline_layout(
+    node: &mut LayoutNode,
+    content_width: f32,
+    parent_exclusions: Option<&crate::exclusions::ExclusionSpace>,
+    bfc_offset_y: f32,
+) -> f32 {
+    let padding = node.style.padding;
+    let border = node.style.border_width;
+    let ifc = crate::typography::InlineFormattingContext::new();
+    let opt = crate::typography::InlineLayoutOptions {
+        font_size: node.style.font_size,
+        line_height: Some(node.style.font_size * node.style.line_height),
+        max_width: Some(content_width),
+        white_space: match node.style.white_space {
+            strata_style::types::WhiteSpace::Normal => crate::typography::WhiteSpaceMode::Normal,
+            strata_style::types::WhiteSpace::NoWrap => crate::typography::WhiteSpaceMode::NoWrap,
+            strata_style::types::WhiteSpace::Pre => crate::typography::WhiteSpaceMode::Pre,
+            strata_style::types::WhiteSpace::PreWrap => crate::typography::WhiteSpaceMode::PreWrap,
+            strata_style::types::WhiteSpace::PreLine => crate::typography::WhiteSpaceMode::PreLine,
+        },
+        vertical_align: match node.style.vertical_align {
+            strata_style::types::VerticalAlign::Baseline => {
+                crate::typography::VerticalAlignment::Baseline
+            }
+            strata_style::types::VerticalAlign::Top => crate::typography::VerticalAlignment::Top,
+            strata_style::types::VerticalAlign::Bottom => {
+                crate::typography::VerticalAlignment::Bottom
+            }
+            strata_style::types::VerticalAlign::Middle => {
+                crate::typography::VerticalAlignment::Middle
+            }
+            strata_style::types::VerticalAlign::Sub => crate::typography::VerticalAlignment::Sub,
+            strata_style::types::VerticalAlign::Super => {
+                crate::typography::VerticalAlignment::Super
+            }
+            strata_style::types::VerticalAlign::TextTop => {
+                crate::typography::VerticalAlignment::TextTop
+            }
+            strata_style::types::VerticalAlign::TextBottom => {
+                crate::typography::VerticalAlignment::TextBottom
+            }
+        },
+        is_monospace: crate::text::is_monospace_family(node.style.font_family),
+        exclusion_space: parent_exclusions,
+        bfc_offset_y: bfc_offset_y + padding.top + border.top,
+    };
+
+    let mut res = ifc.layout_inline_stream(&node.inline_items, &opt);
+    truncate_inline_overflow(node, &mut res, content_width);
+    let content_origin_x = node.geometry.border_box.x + border.left + padding.left;
+    let content_origin_y = node.geometry.border_box.y + border.top + padding.top;
+
+    let mut positioned_lines = res.lines;
+    for line in &mut positioned_lines {
+        let align_offset_x = match node.style.text_align {
+            strata_style::types::TextAlign::Center => {
+                ((content_width - line.bounds.width) / 2.0).max(0.0)
+            }
+            strata_style::types::TextAlign::Right => (content_width - line.bounds.width).max(0.0),
+            _ => 0.0,
+        };
+
+        let total_shift_x = content_origin_x + align_offset_x;
+        line.bounds.x += total_shift_x;
+        line.bounds.y += content_origin_y;
+        for frag in &mut line.text_fragments {
+            frag.bounds.x += total_shift_x;
+            frag.bounds.y += content_origin_y;
+            frag.baseline_y += content_origin_y;
+        }
+        for at in &mut line.atomic_fragments {
+            at.bounds.x += total_shift_x;
+            at.bounds.y += content_origin_y;
+            if at.node_index < node.children.len() {
+                let child = &mut node.children[at.node_index];
+                let dx = at.bounds.x - child.geometry.border_box.x;
+                let dy = at.bounds.y - child.geometry.border_box.y;
+                child.geometry.border_box.width = at.bounds.width;
+                child.geometry.border_box.height = at.bounds.height;
+                child.translate(dx, dy);
+
+                let target_bounds = child.geometry.border_box;
+                propagate_atomic_bounds_to_inline_descendants(child, target_bounds);
+            }
+        }
+    }
+
+    let total_h = res.total_height;
+    for child in &mut node.children {
+        if let Some(ref text) = child.text {
+            let mut found = false;
+            for line in &positioned_lines {
+                for frag in &line.text_fragments {
+                    if frag.text.contains(text.as_str()) || text.contains(frag.text.as_str()) {
+                        child.geometry.border_box = frag.bounds;
+                        found = true;
+                        break;
+                    }
+                }
+                if found {
+                    break;
+                }
+            }
+            if !found {
+                child.geometry.border_box.x = content_origin_x;
+                child.geometry.border_box.y = content_origin_y;
+            }
+        }
+    }
+    node.line_boxes = positioned_lines;
+    total_h + padding.top + padding.bottom + border.top + border.bottom
+}
+
 pub fn solve_block_children_with_exclusions_guarded(
     node: &mut LayoutNode,
     content_width: f32,
@@ -699,65 +898,12 @@ pub fn solve_block_children_with_exclusions_guarded(
         return padding.top + border.top + padding.bottom + border.bottom;
     }
 
-    // A text leaf that clips with `text-overflow: ellipsis` owns its own inline
-    // formatting context. Text leaves normally inherit line boxes from an
-    // ancestor IFC, but a text leaf that is itself a flex item (or otherwise
-    // formatted independently) has no ancestor IFC to truncate its glyphs.
     if node.children.is_empty()
         && node.inline_items.is_empty()
         && node.style.text_overflow == strata_style::types::TextOverflow::Ellipsis
     {
-        if let Some(text) = node.text.clone() {
-            let style = inline_style_from_computed_style(&node.style);
-            let items = vec![crate::typography::InlineItem::text(text, style)];
-            let opt = crate::typography::InlineLayoutOptions {
-                font_size: node.style.font_size,
-                line_height: Some(node.style.font_size * node.style.line_height),
-                max_width: Some(content_width),
-                white_space: match node.style.white_space {
-                    strata_style::types::WhiteSpace::Normal => {
-                        crate::typography::WhiteSpaceMode::Normal
-                    }
-                    strata_style::types::WhiteSpace::NoWrap => {
-                        crate::typography::WhiteSpaceMode::NoWrap
-                    }
-                    strata_style::types::WhiteSpace::Pre => crate::typography::WhiteSpaceMode::Pre,
-                    strata_style::types::WhiteSpace::PreWrap => {
-                        crate::typography::WhiteSpaceMode::PreWrap
-                    }
-                    strata_style::types::WhiteSpace::PreLine => {
-                        crate::typography::WhiteSpaceMode::PreLine
-                    }
-                },
-                vertical_align: crate::typography::VerticalAlignment::Baseline,
-                is_monospace: crate::text::is_monospace_family(node.style.font_family),
-                exclusion_space: None,
-                bfc_offset_y: 0.0,
-            };
-            let ifc = crate::typography::InlineFormattingContext::new();
-            let mut res = ifc.layout_inline_stream(&items, &opt);
-            truncate_inline_overflow(node, &mut res, content_width);
-
-            let origin_x = node.geometry.border_box.x + border.left + padding.left;
-            let origin_y = node.geometry.border_box.y + border.top + padding.top;
-            let mut lines = res.lines;
-            for line in &mut lines {
-                line.bounds.x += origin_x;
-                line.bounds.y += origin_y;
-                for frag in &mut line.text_fragments {
-                    frag.bounds.x += origin_x;
-                    frag.bounds.y += origin_y;
-                    frag.baseline_y += origin_y;
-                }
-                for atomic in &mut line.atomic_fragments {
-                    atomic.bounds.x += origin_x;
-                    atomic.bounds.y += origin_y;
-                }
-            }
-            let total_h = res.total_height;
-            node.inline_items = items;
-            node.line_boxes = lines;
-            return total_h + padding.top + padding.bottom + border.top + border.bottom;
+        if let Some(h) = layout_ellipsis_text_leaf_children(node, content_width) {
+            return h;
         }
     }
 
@@ -770,10 +916,6 @@ pub fn solve_block_children_with_exclusions_guarded(
         if has_implicit_inlines {
             let child_guard = guard.enter();
             for child in &mut node.children {
-                // Measure every phrasing child, including text leaves. Text
-                // leaves used to be skipped here because their glyph runs are
-                // absorbed into the parent inline formatting context, which
-                // left their physical `border_box` at 0x0.
                 if let Some(cg) = child_guard {
                     child.compute_layout_guarded(content_width, available_height, None, 0.0, cg);
                 } else {
@@ -792,125 +934,12 @@ pub fn solve_block_children_with_exclusions_guarded(
             );
             node.inline_items = items;
         }
-
-        let ifc = crate::typography::InlineFormattingContext::new();
-        let opt = crate::typography::InlineLayoutOptions {
-            font_size: node.style.font_size,
-            line_height: Some(node.style.font_size * node.style.line_height),
-            max_width: Some(content_width),
-            white_space: match node.style.white_space {
-                strata_style::types::WhiteSpace::Normal => {
-                    crate::typography::WhiteSpaceMode::Normal
-                }
-                strata_style::types::WhiteSpace::NoWrap => {
-                    crate::typography::WhiteSpaceMode::NoWrap
-                }
-                strata_style::types::WhiteSpace::Pre => crate::typography::WhiteSpaceMode::Pre,
-                strata_style::types::WhiteSpace::PreWrap => {
-                    crate::typography::WhiteSpaceMode::PreWrap
-                }
-                strata_style::types::WhiteSpace::PreLine => {
-                    crate::typography::WhiteSpaceMode::PreLine
-                }
-            },
-            vertical_align: match node.style.vertical_align {
-                strata_style::types::VerticalAlign::Baseline => {
-                    crate::typography::VerticalAlignment::Baseline
-                }
-                strata_style::types::VerticalAlign::Top => {
-                    crate::typography::VerticalAlignment::Top
-                }
-                strata_style::types::VerticalAlign::Bottom => {
-                    crate::typography::VerticalAlignment::Bottom
-                }
-                strata_style::types::VerticalAlign::Middle => {
-                    crate::typography::VerticalAlignment::Middle
-                }
-                strata_style::types::VerticalAlign::Sub => {
-                    crate::typography::VerticalAlignment::Sub
-                }
-                strata_style::types::VerticalAlign::Super => {
-                    crate::typography::VerticalAlignment::Super
-                }
-                strata_style::types::VerticalAlign::TextTop => {
-                    crate::typography::VerticalAlignment::TextTop
-                }
-                strata_style::types::VerticalAlign::TextBottom => {
-                    crate::typography::VerticalAlignment::TextBottom
-                }
-            },
-            is_monospace: crate::text::is_monospace_family(node.style.font_family),
-            exclusion_space: parent_exclusions.as_deref(),
-            bfc_offset_y: bfc_offset_y + padding.top + border.top,
-        };
-
-        let mut res = ifc.layout_inline_stream(&node.inline_items, &opt);
-        truncate_inline_overflow(node, &mut res, content_width);
-        let content_origin_x = node.geometry.border_box.x + border.left + padding.left;
-        let content_origin_y = node.geometry.border_box.y + border.top + padding.top;
-
-        let mut positioned_lines = res.lines;
-        for line in &mut positioned_lines {
-            let align_offset_x = match node.style.text_align {
-                strata_style::types::TextAlign::Center => {
-                    ((content_width - line.bounds.width) / 2.0).max(0.0)
-                }
-                strata_style::types::TextAlign::Right => {
-                    (content_width - line.bounds.width).max(0.0)
-                }
-                _ => 0.0,
-            };
-
-            let total_shift_x = content_origin_x + align_offset_x;
-            line.bounds.x += total_shift_x;
-            line.bounds.y += content_origin_y;
-            for frag in &mut line.text_fragments {
-                frag.bounds.x += total_shift_x;
-                frag.bounds.y += content_origin_y;
-                frag.baseline_y += content_origin_y;
-            }
-            for at in &mut line.atomic_fragments {
-                at.bounds.x += total_shift_x;
-                at.bounds.y += content_origin_y;
-                if at.node_index < node.children.len() {
-                    let child = &mut node.children[at.node_index];
-                    let dx = at.bounds.x - child.geometry.border_box.x;
-                    let dy = at.bounds.y - child.geometry.border_box.y;
-                    child.geometry.border_box.width = at.bounds.width;
-                    child.geometry.border_box.height = at.bounds.height;
-                    child.translate(dx, dy);
-
-                    // If this child is an inline container (like <a> or <span><a>), recursively size and position its inline descendants
-                    let target_bounds = child.geometry.border_box;
-                    propagate_atomic_bounds_to_inline_descendants(child, target_bounds);
-                }
-            }
-        }
-
-        let total_h = res.total_height;
-        for child in &mut node.children {
-            if let Some(ref text) = child.text {
-                let mut found = false;
-                for line in &positioned_lines {
-                    for frag in &line.text_fragments {
-                        if frag.text.contains(text.as_str()) || text.contains(frag.text.as_str()) {
-                            child.geometry.border_box = frag.bounds;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if found {
-                        break;
-                    }
-                }
-                if !found {
-                    child.geometry.border_box.x = content_origin_x;
-                    child.geometry.border_box.y = content_origin_y;
-                }
-            }
-        }
-        node.line_boxes = positioned_lines;
-        return total_h + padding.top + padding.bottom + border.top + border.bottom;
+        return finish_ifc_inline_layout(
+            node,
+            content_width,
+            parent_exclusions.as_deref(),
+            bfc_offset_y,
+        );
     }
 
     // W3C CSS 2.1 §9.4.1 Block Formatting Context (BFC) root determination:
@@ -1245,6 +1274,216 @@ pub fn solve_block_with_exclusions(
     );
 }
 
+#[cold]
+#[inline(never)]
+fn solve_block_depth_exhausted(
+    node: &mut LayoutNode,
+    available_width: f32,
+    available_height: f32,
+    guard: crate::tree::LayoutDepthGuard,
+) {
+    crate::tree::record_layout_overflow(guard.current_depth(), guard.max_depth());
+    let padding = node.style.padding;
+    let border = node.style.border_width;
+    let margin = node.style.margin;
+    let border_box_width =
+        match resolve_dimension_with_node(node.style.width, available_width, node) {
+            Some(w) => clamp_dimension_with_node(
+                w,
+                node.style.min_width,
+                node.style.max_width,
+                available_width,
+                node,
+            ),
+            None => (available_width - margin.left - margin.right).max(0.0),
+        };
+    let border_box_height = match resolve_dimension(node.style.height, available_height) {
+        Some(h) => clamp_dimension(
+            h,
+            node.style.min_height,
+            node.style.max_height,
+            available_height,
+        ),
+        None => 0.0,
+    };
+    let border_box = Rect::new(
+        node.geometry.border_box.x,
+        node.geometry.border_box.y,
+        border_box_width,
+        border_box_height,
+    );
+    node.geometry = LayoutGeometry::from_border_box(border_box, padding, border, margin);
+    node.geometry.snap_to_pixel();
+}
+
+#[cold]
+#[inline(never)]
+fn solve_block_content_visibility_hidden(
+    node: &mut LayoutNode,
+    available_width: f32,
+    available_height: f32,
+) {
+    let padding = node.style.padding;
+    let border = node.style.border_width;
+    let margin = node.style.margin;
+    let intrinsic_w = node
+        .style
+        .contain_intrinsic_width
+        .and_then(|dim| resolve_dimension_with_node(dim, available_width, node));
+    let intrinsic_h = node
+        .style
+        .contain_intrinsic_height
+        .and_then(|dim| resolve_dimension(dim, available_height))
+        .unwrap_or(0.0);
+    let border_box_width =
+        match resolve_dimension_with_node(node.style.width, available_width, node).or(intrinsic_w) {
+            Some(w) => clamp_dimension_with_node(
+                w,
+                node.style.min_width,
+                node.style.max_width,
+                available_width,
+                node,
+            ),
+            None => (available_width - margin.left - margin.right).max(0.0),
+        };
+    let border_box_height = match resolve_dimension(node.style.height, available_height) {
+        Some(h) => clamp_dimension(
+            h,
+            node.style.min_height,
+            node.style.max_height,
+            available_height,
+        ),
+        None => clamp_dimension(
+            intrinsic_h,
+            node.style.min_height,
+            node.style.max_height,
+            available_height,
+        ),
+    };
+    let border_box = Rect::new(
+        node.geometry.border_box.x,
+        node.geometry.border_box.y,
+        border_box_width,
+        border_box_height,
+    );
+    node.geometry = LayoutGeometry::from_border_box(border_box, padding, border, margin);
+    node.geometry.snap_to_pixel();
+}
+
+#[inline(never)]
+fn measure_block_leaf_inline_or_text(
+    node: &LayoutNode,
+    text_avail_w: f32,
+    parent_exclusions: Option<&crate::exclusions::ExclusionSpace>,
+    bfc_offset_y: f32,
+) -> (f32, f32) {
+    if node.children.is_empty() && !node.inline_items.is_empty() {
+        let ifc = crate::typography::InlineFormattingContext::new();
+        let opt = crate::typography::InlineLayoutOptions {
+            font_size: node.style.font_size,
+            line_height: Some(node.style.font_size * node.style.line_height),
+            max_width: Some(text_avail_w),
+            white_space: match node.style.white_space {
+                strata_style::types::WhiteSpace::Normal => {
+                    crate::typography::WhiteSpaceMode::Normal
+                }
+                strata_style::types::WhiteSpace::NoWrap => {
+                    crate::typography::WhiteSpaceMode::NoWrap
+                }
+                strata_style::types::WhiteSpace::Pre => crate::typography::WhiteSpaceMode::Pre,
+                strata_style::types::WhiteSpace::PreWrap => {
+                    crate::typography::WhiteSpaceMode::PreWrap
+                }
+                strata_style::types::WhiteSpace::PreLine => {
+                    crate::typography::WhiteSpaceMode::PreLine
+                }
+            },
+            vertical_align: crate::typography::VerticalAlignment::Baseline,
+            is_monospace: crate::text::is_monospace_family(node.style.font_family),
+            exclusion_space: parent_exclusions,
+            bfc_offset_y,
+        };
+        let res = ifc.layout_inline_stream(&node.inline_items, &opt);
+        (res.total_width, res.total_height)
+    } else if let Some(ref text) = node.text {
+        let is_mono = crate::text::is_monospace_family(node.style.font_family);
+        crate::text::measure_text_bounds_with_white_space(
+            text,
+            node.style.font_size,
+            node.style.line_height,
+            Some(text_avail_w),
+            is_mono,
+            node.style.white_space,
+        )
+    } else {
+        (0.0, 0.0)
+    }
+}
+
+#[inline(never)]
+fn finalize_block_geometry(node: &mut LayoutNode, border_box_width: f32, border_box_height: f32) {
+    let border_box = Rect::new(
+        node.geometry.border_box.x,
+        node.geometry.border_box.y,
+        border_box_width,
+        border_box_height,
+    );
+    node.geometry = LayoutGeometry::from_border_box(
+        border_box,
+        node.style.padding,
+        node.style.border_width,
+        node.style.margin,
+    );
+    node.geometry.snap_to_pixel();
+}
+
+#[inline(never)]
+fn publish_truncated_ellipsis_text_leaf(node: &mut LayoutNode, content_width: f32) {
+    let Some(ref text) = node.text else {
+        return;
+    };
+    let inline_style = inline_style_from_computed_style(&node.style);
+    let item = crate::typography::InlineItem::text(text.clone(), inline_style);
+    let ifc = crate::typography::InlineFormattingContext::new();
+    let opt = crate::typography::InlineLayoutOptions {
+        font_size: node.style.font_size,
+        line_height: Some(node.style.font_size * node.style.line_height),
+        max_width: Some(content_width),
+        white_space: match node.style.white_space {
+            strata_style::types::WhiteSpace::Normal => crate::typography::WhiteSpaceMode::Normal,
+            strata_style::types::WhiteSpace::NoWrap => crate::typography::WhiteSpaceMode::NoWrap,
+            strata_style::types::WhiteSpace::Pre => crate::typography::WhiteSpaceMode::Pre,
+            strata_style::types::WhiteSpace::PreWrap => crate::typography::WhiteSpaceMode::PreWrap,
+            strata_style::types::WhiteSpace::PreLine => crate::typography::WhiteSpaceMode::PreLine,
+        },
+        vertical_align: crate::typography::VerticalAlignment::Baseline,
+        is_monospace: crate::text::is_monospace_family(node.style.font_family),
+        exclusion_space: None,
+        bfc_offset_y: 0.0,
+    };
+    let mut res = ifc.layout_inline_stream(&[item], &opt);
+    truncate_inline_overflow(node, &mut res, content_width);
+    let origin_x = node.geometry.content_box.x;
+    let origin_y = node.geometry.content_box.y;
+    for line in &mut res.lines {
+        let align_offset_x = match node.style.text_align {
+            strata_style::types::TextAlign::Center => {
+                ((content_width - line.bounds.width) / 2.0).max(0.0)
+            }
+            strata_style::types::TextAlign::Right => (content_width - line.bounds.width).max(0.0),
+            _ => 0.0,
+        };
+        line.bounds.x += origin_x + align_offset_x;
+        line.bounds.y += origin_y;
+        for frag in &mut line.text_fragments {
+            frag.bounds.x += origin_x + align_offset_x;
+            frag.bounds.y += origin_y;
+            frag.baseline_y += origin_y;
+        }
+    }
+    node.line_boxes = res.lines;
+}
+
 /// Executes normal-flow block layout with an active depth guard to prevent stack overflow.
 pub fn solve_block_with_exclusions_guarded(
     node: &mut LayoutNode,
@@ -1254,91 +1493,20 @@ pub fn solve_block_with_exclusions_guarded(
     bfc_offset_y: f32,
     guard: crate::tree::LayoutDepthGuard,
 ) {
-    let padding = node.style.padding;
-    let border = node.style.border_width;
-    let margin = node.style.margin;
-
     if guard.is_exhausted() {
-        crate::tree::record_layout_overflow(guard.current_depth(), guard.max_depth());
-        let border_box_width =
-            match resolve_dimension_with_node(node.style.width, available_width, node) {
-                Some(w) => clamp_dimension_with_node(
-                    w,
-                    node.style.min_width,
-                    node.style.max_width,
-                    available_width,
-                    node,
-                ),
-                None => (available_width - margin.left - margin.right).max(0.0),
-            };
-        let border_box_height = match resolve_dimension(node.style.height, available_height) {
-            Some(h) => clamp_dimension(
-                h,
-                node.style.min_height,
-                node.style.max_height,
-                available_height,
-            ),
-            None => 0.0,
-        };
-        let border_box = Rect::new(
-            node.geometry.border_box.x,
-            node.geometry.border_box.y,
-            border_box_width,
-            border_box_height,
-        );
-        node.geometry = LayoutGeometry::from_border_box(border_box, padding, border, margin);
-        node.geometry.snap_to_pixel();
+        solve_block_depth_exhausted(node, available_width, available_height, guard);
         return;
     }
 
     // Content-Visibility: Hidden virtualization (W3C CSS Containment Level 2)
     if node.style.content_visibility == strata_style::types::ContentVisibility::Hidden {
-        let intrinsic_w = node
-            .style
-            .contain_intrinsic_width
-            .and_then(|dim| resolve_dimension_with_node(dim, available_width, node));
-        let intrinsic_h = node
-            .style
-            .contain_intrinsic_height
-            .and_then(|dim| resolve_dimension(dim, available_height))
-            .unwrap_or(0.0);
-        let border_box_width =
-            match resolve_dimension_with_node(node.style.width, available_width, node)
-                .or(intrinsic_w)
-            {
-                Some(w) => clamp_dimension_with_node(
-                    w,
-                    node.style.min_width,
-                    node.style.max_width,
-                    available_width,
-                    node,
-                ),
-                None => (available_width - margin.left - margin.right).max(0.0),
-            };
-        let border_box_height = match resolve_dimension(node.style.height, available_height) {
-            Some(h) => clamp_dimension(
-                h,
-                node.style.min_height,
-                node.style.max_height,
-                available_height,
-            ),
-            None => clamp_dimension(
-                intrinsic_h,
-                node.style.min_height,
-                node.style.max_height,
-                available_height,
-            ),
-        };
-        let border_box = Rect::new(
-            node.geometry.border_box.x,
-            node.geometry.border_box.y,
-            border_box_width,
-            border_box_height,
-        );
-        node.geometry = LayoutGeometry::from_border_box(border_box, padding, border, margin);
-        node.geometry.snap_to_pixel();
+        solve_block_content_visibility_hidden(node, available_width, available_height);
         return;
     }
+
+    let padding = node.style.padding;
+    let border = node.style.border_width;
+    let margin = node.style.margin;
 
     let inset_h = padding.left + padding.right + border.left + border.right;
     let avail_border_w = (available_width - margin.left - margin.right).max(0.0);
@@ -1383,43 +1551,14 @@ pub fn solve_block_with_exclusions_guarded(
         .transition_content_width()
         .map_or(base_text_avail_w, |tw| base_text_avail_w.max(tw));
 
-    let (text_w, text_h) = if node.children.is_empty() && !node.inline_items.is_empty() {
-        let ifc = crate::typography::InlineFormattingContext::new();
-        let opt = crate::typography::InlineLayoutOptions {
-            font_size: node.style.font_size,
-            line_height: Some(node.style.font_size * node.style.line_height),
-            max_width: Some(text_avail_w),
-            white_space: match node.style.white_space {
-                strata_style::types::WhiteSpace::Normal => {
-                    crate::typography::WhiteSpaceMode::Normal
-                }
-                strata_style::types::WhiteSpace::NoWrap => {
-                    crate::typography::WhiteSpaceMode::NoWrap
-                }
-                strata_style::types::WhiteSpace::Pre => crate::typography::WhiteSpaceMode::Pre,
-                strata_style::types::WhiteSpace::PreWrap => {
-                    crate::typography::WhiteSpaceMode::PreWrap
-                }
-                strata_style::types::WhiteSpace::PreLine => {
-                    crate::typography::WhiteSpaceMode::PreLine
-                }
-            },
-            vertical_align: crate::typography::VerticalAlignment::Baseline,
-            is_monospace: crate::text::is_monospace_family(node.style.font_family),
-            exclusion_space: parent_exclusions.as_deref(),
+    let (text_w, text_h) = if (node.children.is_empty() && !node.inline_items.is_empty())
+        || node.text.is_some()
+    {
+        measure_block_leaf_inline_or_text(
+            node,
+            text_avail_w,
+            parent_exclusions.as_deref(),
             bfc_offset_y,
-        };
-        let res = ifc.layout_inline_stream(&node.inline_items, &opt);
-        (res.total_width, res.total_height)
-    } else if let Some(ref text) = node.text {
-        let is_mono = crate::text::is_monospace_family(node.style.font_family);
-        crate::text::measure_text_bounds_with_white_space(
-            text,
-            node.style.font_size,
-            node.style.line_height,
-            Some(text_avail_w),
-            is_mono,
-            node.style.white_space,
         )
     } else {
         (0.0, 0.0)
@@ -1543,18 +1682,8 @@ pub fn solve_block_with_exclusions_guarded(
         }
     };
 
-    let border_box_height = resolved_height;
-
     // 4. Finalize concentric geometry boxes
-    let border_box = Rect::new(
-        node.geometry.border_box.x,
-        node.geometry.border_box.y,
-        border_box_width,
-        border_box_height,
-    );
-
-    node.geometry = LayoutGeometry::from_border_box(border_box, padding, border, node.style.margin);
-    node.geometry.snap_to_pixel();
+    finalize_block_geometry(node, border_box_width, resolved_height);
 
     // A text leaf that truncates must publish positioned line boxes so paint
     // renders the clipped ellipsis fragment instead of the full string.
@@ -1562,58 +1691,8 @@ pub fn solve_block_with_exclusions_guarded(
         && node.style.text_overflow == strata_style::types::TextOverflow::Ellipsis
         && node.style.overflow_x != strata_style::types::Overflow::Visible
         && content_width > 0.0
+        && node.text.is_some()
     {
-        if let Some(ref text) = node.text {
-            let inline_style = inline_style_from_computed_style(&node.style);
-            let item = crate::typography::InlineItem::text(text.clone(), inline_style);
-            let ifc = crate::typography::InlineFormattingContext::new();
-            let opt = crate::typography::InlineLayoutOptions {
-                font_size: node.style.font_size,
-                line_height: Some(node.style.font_size * node.style.line_height),
-                max_width: Some(content_width),
-                white_space: match node.style.white_space {
-                    strata_style::types::WhiteSpace::Normal => {
-                        crate::typography::WhiteSpaceMode::Normal
-                    }
-                    strata_style::types::WhiteSpace::NoWrap => {
-                        crate::typography::WhiteSpaceMode::NoWrap
-                    }
-                    strata_style::types::WhiteSpace::Pre => crate::typography::WhiteSpaceMode::Pre,
-                    strata_style::types::WhiteSpace::PreWrap => {
-                        crate::typography::WhiteSpaceMode::PreWrap
-                    }
-                    strata_style::types::WhiteSpace::PreLine => {
-                        crate::typography::WhiteSpaceMode::PreLine
-                    }
-                },
-                vertical_align: crate::typography::VerticalAlignment::Baseline,
-                is_monospace: crate::text::is_monospace_family(node.style.font_family),
-                exclusion_space: None,
-                bfc_offset_y: 0.0,
-            };
-            let mut res = ifc.layout_inline_stream(&[item], &opt);
-            truncate_inline_overflow(node, &mut res, content_width);
-            let origin_x = node.geometry.content_box.x;
-            let origin_y = node.geometry.content_box.y;
-            for line in &mut res.lines {
-                let align_offset_x = match node.style.text_align {
-                    strata_style::types::TextAlign::Center => {
-                        ((content_width - line.bounds.width) / 2.0).max(0.0)
-                    }
-                    strata_style::types::TextAlign::Right => {
-                        (content_width - line.bounds.width).max(0.0)
-                    }
-                    _ => 0.0,
-                };
-                line.bounds.x += origin_x + align_offset_x;
-                line.bounds.y += origin_y;
-                for frag in &mut line.text_fragments {
-                    frag.bounds.x += origin_x + align_offset_x;
-                    frag.bounds.y += origin_y;
-                    frag.baseline_y += origin_y;
-                }
-            }
-            node.line_boxes = res.lines;
-        }
+        publish_truncated_ellipsis_text_leaf(node, content_width);
     }
 }

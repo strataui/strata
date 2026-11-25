@@ -40,6 +40,7 @@ impl Default for View {
 }
 
 pub mod classes;
+pub mod clipboard;
 pub mod error_boundary;
 pub mod events;
 pub mod hooks;
@@ -51,6 +52,10 @@ pub mod text_input;
 
 pub use classes::{
     standard_class_index, ClassBitmask, ClassIter, ClassList, IntoClassList, STANDARD_CLASSES,
+};
+pub use clipboard::{
+    clear_system_clipboard_bridge, get_clipboard_text, register_system_clipboard_bridge,
+    set_clipboard_text,
 };
 pub use error_boundary::{ErrorBoundary, ErrorBoundaryBuilder, ErrorBoundaryInfo};
 pub use events::{Event, EventDispatcher, EventPhase, EventType};
@@ -145,11 +150,11 @@ impl IntoChildren<Vec<NodeBlueprint>> for Option<Vec<NodeBlueprint>> {
 
 impl IntoChildren<Vec<NodeBlueprint>> for NodeBlueprint {
     #[inline]
-    fn into_children(self) -> Vec<NodeBlueprint> {
-        match self {
+    fn into_children(mut self) -> Vec<NodeBlueprint> {
+        match &mut self {
             NodeBlueprint::Empty => Vec::new(),
-            NodeBlueprint::Fragment(children) => children,
-            other => vec![other],
+            NodeBlueprint::Fragment(children) => std::mem::take(children),
+            _ => vec![self],
         }
     }
 }
@@ -638,44 +643,46 @@ impl NodeBlueprint {
         }
     }
 
-    /// Recursively locates an element blueprint node by its EntityId.
+    /// Iteratively locates an element blueprint node by its EntityId (O(1) call stack).
     pub fn find_by_entity_id(&self, target_id: EntityId) -> Option<&NodeBlueprint> {
         if !target_id.is_valid() {
             return None;
         }
-        if self.entity_id() == Some(target_id) {
-            return Some(self);
-        }
-        match self {
-            Self::Element { children, .. } | Self::Fragment(children) => {
-                for child in children {
-                    if let Some(found) = child.find_by_entity_id(target_id) {
-                        return Some(found);
+        let mut stack = vec![self];
+        while let Some(node) = stack.pop() {
+            if node.entity_id() == Some(target_id) {
+                return Some(node);
+            }
+            match node {
+                Self::Element { children, .. } | Self::Fragment(children) => {
+                    for child in children.iter().rev() {
+                        stack.push(child);
                     }
                 }
+                _ => {}
             }
-            _ => {}
         }
         None
     }
 
-    /// Recursively locates a mutable element blueprint node by its EntityId.
+    /// Iteratively locates a mutable element blueprint node by its EntityId (O(1) call stack).
     pub fn find_by_entity_id_mut(&mut self, target_id: EntityId) -> Option<&mut NodeBlueprint> {
         if !target_id.is_valid() {
             return None;
         }
-        if self.entity_id() == Some(target_id) {
-            return Some(self);
-        }
-        match self {
-            Self::Element { children, .. } | Self::Fragment(children) => {
-                for child in children {
-                    if let Some(found) = child.find_by_entity_id_mut(target_id) {
-                        return Some(found);
+        let mut stack = vec![self];
+        while let Some(node) = stack.pop() {
+            if node.entity_id() == Some(target_id) {
+                return Some(node);
+            }
+            match node {
+                Self::Element { children, .. } | Self::Fragment(children) => {
+                    for child in children.iter_mut().rev() {
+                        stack.push(child);
                     }
                 }
+                _ => {}
             }
-            _ => {}
         }
         None
     }
@@ -699,101 +706,125 @@ impl NodeBlueprint {
         }
     }
 
-    /// Recursively locates an element blueprint node by its DOM node UID.
+    /// Iteratively locates an element blueprint node by its DOM node UID (O(1) call stack).
     pub fn find_by_dom_uid(&self, target_uid: u64) -> Option<&NodeBlueprint> {
-        if self.dom_uid() == Some(target_uid) {
-            return Some(self);
-        }
-        match self {
-            Self::Element { children, .. } | Self::Fragment(children) => {
-                for child in children {
-                    if let Some(found) = child.find_by_dom_uid(target_uid) {
-                        return Some(found);
+        let mut stack = vec![self];
+        while let Some(node) = stack.pop() {
+            if node.dom_uid() == Some(target_uid) {
+                return Some(node);
+            }
+            match node {
+                Self::Element { children, .. } | Self::Fragment(children) => {
+                    for child in children.iter().rev() {
+                        stack.push(child);
                     }
                 }
+                _ => {}
             }
-            _ => {}
         }
         None
     }
 
-    /// Recursively locates a mutable element blueprint node by its DOM node UID.
+    /// Iteratively locates a mutable element blueprint node by its DOM node UID (O(1) call stack).
     pub fn find_by_dom_uid_mut(&mut self, target_uid: u64) -> Option<&mut NodeBlueprint> {
-        if self.dom_uid() == Some(target_uid) {
-            return Some(self);
-        }
-        match self {
-            Self::Element { children, .. } | Self::Fragment(children) => {
-                for child in children {
-                    if let Some(found) = child.find_by_dom_uid_mut(target_uid) {
-                        return Some(found);
+        let mut stack = vec![self];
+        while let Some(node) = stack.pop() {
+            if node.dom_uid() == Some(target_uid) {
+                return Some(node);
+            }
+            match node {
+                Self::Element { children, .. } | Self::Fragment(children) => {
+                    for child in children.iter_mut().rev() {
+                        stack.push(child);
                     }
                 }
+                _ => {}
             }
-            _ => {}
         }
         None
     }
 
-    /// Recursively calculates the index path to the element blueprint node with matching DOM node UID.
+    /// Iteratively calculates the index path to the element blueprint node with matching DOM node UID (O(1) call stack).
     pub fn find_path_by_dom_uid(&self, target_uid: u64) -> Option<Vec<usize>> {
-        let mut path = Vec::new();
-        if self.find_path_by_dom_uid_internal(target_uid, &mut path) {
-            Some(path)
-        } else {
-            None
-        }
-    }
-
-    fn find_path_by_dom_uid_internal(&self, target_uid: u64, path: &mut Vec<usize>) -> bool {
         if self.dom_uid() == Some(target_uid) {
-            return true;
+            return Some(Vec::new());
         }
+        let mut path = Vec::new();
+        let mut stack: Vec<(&[NodeBlueprint], usize)> = Vec::new();
         match self {
-            Self::Element { children, .. } | Self::Fragment(children) => {
-                for (i, child) in children.iter().enumerate() {
-                    path.push(i);
-                    if child.find_path_by_dom_uid_internal(target_uid, path) {
-                        return true;
-                    }
+            Self::Element { children, .. } | Self::Fragment(children) if !children.is_empty() => {
+                stack.push((children.as_slice(), 0));
+            }
+            _ => return None,
+        }
+        while let Some((slice, idx)) = stack.last_mut() {
+            if *idx >= slice.len() {
+                stack.pop();
+                path.pop();
+                continue;
+            }
+            let current_idx = *idx;
+            let child = &slice[current_idx];
+            *idx += 1;
+            path.push(current_idx);
+            if child.dom_uid() == Some(target_uid) {
+                return Some(path);
+            }
+            match child {
+                Self::Element { children, .. } | Self::Fragment(children)
+                    if !children.is_empty() =>
+                {
+                    stack.push((children.as_slice(), 0));
+                }
+                _ => {
                     path.pop();
                 }
             }
-            _ => {}
         }
-        false
+        None
     }
 
-    /// Recursively calculates the index path to the element blueprint node with matching EntityId.
+    /// Iteratively calculates the index path to the element blueprint node with matching EntityId (O(1) call stack).
     pub fn find_path_by_entity_id(&self, target_id: EntityId) -> Option<Vec<usize>> {
         if !target_id.is_valid() {
             return None;
         }
-        let mut path = Vec::new();
-        if self.find_path_by_entity_id_internal(target_id, &mut path) {
-            Some(path)
-        } else {
-            None
-        }
-    }
-
-    fn find_path_by_entity_id_internal(&self, target_id: EntityId, path: &mut Vec<usize>) -> bool {
         if self.entity_id() == Some(target_id) {
-            return true;
+            return Some(Vec::new());
         }
+        let mut path = Vec::new();
+        let mut stack: Vec<(&[NodeBlueprint], usize)> = Vec::new();
         match self {
-            Self::Element { children, .. } | Self::Fragment(children) => {
-                for (i, child) in children.iter().enumerate() {
-                    path.push(i);
-                    if child.find_path_by_entity_id_internal(target_id, path) {
-                        return true;
-                    }
+            Self::Element { children, .. } | Self::Fragment(children) if !children.is_empty() => {
+                stack.push((children.as_slice(), 0));
+            }
+            _ => return None,
+        }
+        while let Some((slice, idx)) = stack.last_mut() {
+            if *idx >= slice.len() {
+                stack.pop();
+                path.pop();
+                continue;
+            }
+            let current_idx = *idx;
+            let child = &slice[current_idx];
+            *idx += 1;
+            path.push(current_idx);
+            if child.entity_id() == Some(target_id) {
+                return Some(path);
+            }
+            match child {
+                Self::Element { children, .. } | Self::Fragment(children)
+                    if !children.is_empty() =>
+                {
+                    stack.push((children.as_slice(), 0));
+                }
+                _ => {
                     path.pop();
                 }
             }
-            _ => {}
         }
-        false
+        None
     }
 
     /// Iteratively flattens nested Fragment nodes within Element children,
@@ -813,15 +844,15 @@ impl NodeBlueprint {
                     let old = std::mem::take(children);
                     let mut flat = Vec::with_capacity(old.len());
                     let mut splice_stack: Vec<NodeBlueprint> = old.into_iter().rev().collect();
-                    while let Some(item) = splice_stack.pop() {
-                        match item {
+                    while let Some(mut item) = splice_stack.pop() {
+                        match &mut item {
                             Self::Fragment(sub) => {
-                                for s in sub.into_iter().rev() {
+                                for s in std::mem::take(sub).into_iter().rev() {
                                     splice_stack.push(s);
                                 }
                             }
                             Self::Empty => {}
-                            other => flat.push(other),
+                            _ => flat.push(item),
                         }
                     }
                     *children = flat;
@@ -1203,6 +1234,33 @@ impl<T: std::fmt::Display + Clone + 'static> IntoNodeBlueprint for &reactive::Re
     }
 }
 
+impl Drop for NodeBlueprint {
+    fn drop(&mut self) {
+        let initial = match self {
+            Self::Element { children, .. } | Self::Fragment(children) if !children.is_empty() => {
+                std::mem::take(children)
+            }
+            _ => return,
+        };
+        drop_blueprint_children_iterative(initial);
+    }
+}
+
+#[inline(never)]
+fn drop_blueprint_children_iterative(mut stack: Vec<NodeBlueprint>) {
+    while let Some(mut node) = stack.pop() {
+        match &mut node {
+            NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children)
+                if !children.is_empty() =>
+            {
+                stack.append(children);
+            }
+            _ => {}
+        }
+        // `node` now has empty `children`, so its `Drop` exits immediately on the fast path.
+    }
+}
+
 #[cfg(test)]
 mod entity_tests {
     use super::*;
@@ -1262,5 +1320,39 @@ mod entity_tests {
         } else {
             panic!("Expected Element node");
         }
+    }
+
+    #[test]
+    fn test_10000_deep_node_blueprint_lookup_and_drop_on_1mb_stack() {
+        std::thread::Builder::new()
+            .name("dom-1mb-stack".to_string())
+            .stack_size(1024 * 1024)
+            .spawn(|| {
+                let target_id = EntityId::new(777_777);
+                let mut cur = NodeBlueprint::element_simple(Tag::Span, "leaf", vec![])
+                    .with_entity_id(target_id);
+                for _ in 0..10_000 {
+                    cur = NodeBlueprint::element_simple(Tag::Div, "wrap", vec![cur]);
+                }
+                assert!(cur.find_by_entity_id(target_id).is_some());
+                let path = cur
+                    .find_path_by_entity_id(target_id)
+                    .expect("deep path lookup must succeed");
+                assert_eq!(path.len(), 10_000);
+                drop(cur);
+            })
+            .expect("spawn 1MB thread")
+            .join()
+            .expect("10,000-deep NodeBlueprint lookup & drop must not overflow 1 MiB stack");
+    }
+
+    #[test]
+    fn test_dom_clipboard_fallback_roundtrip() {
+        clear_system_clipboard_bridge();
+        set_clipboard_text("strata clipboard payload");
+        assert_eq!(
+            get_clipboard_text().as_deref(),
+            Some("strata clipboard payload")
+        );
     }
 }

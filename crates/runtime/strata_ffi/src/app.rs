@@ -523,6 +523,8 @@ fn parse_key_code(name: &str) -> KeyCode {
         "[" | "BracketLeft" => KeyCode::BracketLeft,
         "]" | "BracketRight" => KeyCode::BracketRight,
         ";" | "Semicolon" => KeyCode::Semicolon,
+        "'" | "\"" | "Quote" | "Apostrophe" => KeyCode::Quote,
+        "\\" | "|" | "Backslash" => KeyCode::Backslash,
         "`" | "Backquote" => KeyCode::Backquote,
         _ => KeyCode::Unknown,
     }

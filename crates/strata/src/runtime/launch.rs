@@ -280,7 +280,7 @@ where
     let mut window = strata_platform::MockPlatformWindow::new(config.clone());
     let width = config.width as f32;
     let height = config.height as f32;
-    let mut runtime = AppRuntime::from_root(|| root_fn(), width, height, 1.0);
+    let mut runtime = AppRuntime::from_root(&mut root_fn, width, height, 1.0);
     runtime.apply_window_config(&config);
     let mut presenter =
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
@@ -327,7 +327,7 @@ where
                 let hot_view: Option<View> = None;
                 match hot_view {
                     Some(v) => runtime.update_view(v),
-                    None => runtime.update_root(|| root_fn()),
+                    None => runtime.update_root(&mut root_fn),
                 }
             }
             if exit {

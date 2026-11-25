@@ -3954,7 +3954,7 @@ where
             .map(|n| n.get())
             .unwrap_or(4)
             .clamp(2, 6);
-        let rows_per_chunk = ((nh as usize) + workers - 1) / workers;
+        let rows_per_chunk = (nh as usize).div_ceil(workers);
         let chunk_bytes = rows_per_chunk * (nw as usize) * 4;
         std::thread::scope(|s| {
             for (chunk_idx, chunk) in out.chunks_mut(chunk_bytes).enumerate() {
@@ -4916,6 +4916,7 @@ pub struct Wgpu3DRenderer {
     last_geometry_rev: u64,
     last_terrain_frame: Option<Arc<RetainedTerrainFrame>>,
     cached_fallback_frames: HashMap<(usize, u32, u32), (u64, Arc<RetainedTerrainFrame>)>,
+    is_software_adapter: bool,
 }
 
 /// Returns adapter-supported [`wgpu::Limits`] requesting up to [`MAX_ATLAS_LAYERS`] texture array layers.
@@ -5054,13 +5055,18 @@ impl Wgpu3DRenderer {
     /// Creates a headless `Wgpu3DRenderer` using any available hardware or software Vulkan/GL adapter.
     pub fn new_headless(color_format: wgpu::TextureFormat) -> Result<Self, String> {
         let instance = wgpu::Instance::default();
-        let (_adapter, device, queue) =
+        let (adapter, device, queue) =
             request_working_adapter_and_device(&instance, None, "strata_render_wgpu_device")?;
-        Ok(Self::from_device(
-            Arc::new(device),
-            Arc::new(queue),
-            color_format,
-        ))
+        let is_software = adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+        let mut renderer = Self::from_device(Arc::new(device), Arc::new(queue), color_format);
+        renderer.is_software_adapter = is_software;
+        Ok(renderer)
+    }
+
+    /// Returns `true` when this renderer was initialized on a CPU software rasterizer (WARP / Lavapipe).
+    #[inline]
+    pub fn is_software_adapter(&self) -> bool {
+        self.is_software_adapter
     }
 
     /// Creates a `Wgpu3DRenderer` bound to an existing `wgpu::Device` & `wgpu::Queue` (e.g., from a window surface).
@@ -6621,6 +6627,7 @@ impl Wgpu3DRenderer {
             last_geometry_rev: 0,
             last_terrain_frame: None,
             cached_fallback_frames: HashMap::new(),
+            is_software_adapter: false,
         }
     }
 

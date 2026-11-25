@@ -38,7 +38,7 @@ fn ScrollingTextareaSnippet() -> View {
     }
 }
 
-fn find_textarea_layout<'a>(runtime: &'a AppRuntime) -> &'a strata::layout::LayoutNode {
+fn find_textarea_layout(runtime: &AppRuntime) -> &strata::layout::LayoutNode {
     let mut counter = 0;
     AppRuntime::find_input_layout(
         &runtime.root_blueprint,
@@ -77,7 +77,9 @@ fn selection_rects(runtime: &AppRuntime) -> Vec<Rect> {
         .collect()
 }
 
-fn draw_text_commands(runtime: &AppRuntime) -> Vec<(String, f32, f32, Option<f32>, Option<f32>)> {
+type DrawTextSummary = (String, f32, f32, Option<f32>, Option<f32>);
+
+fn draw_text_commands(runtime: &AppRuntime) -> Vec<DrawTextSummary> {
     runtime
         .display_list
         .commands

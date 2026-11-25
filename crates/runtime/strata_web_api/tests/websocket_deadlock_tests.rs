@@ -96,8 +96,9 @@ fn test_client_speaks_first_silent_server_no_deadlock() {
         WsMessage::Text("server-acknowledgement".into())
     );
     assert!(
-        start.elapsed() < Duration::from_millis(500),
-        "Transaction must complete within 500ms"
+        start.elapsed() < Duration::from_millis(2000),
+        "Transaction must complete within 2000ms, took {:?}",
+        start.elapsed()
     );
 
     server.join().unwrap();

@@ -101,11 +101,21 @@ impl AppRuntime {
             let mut portals = Vec::new();
             let mut scan_path = Vec::new();
             Self::collect_top_layer_hover_portals(blueprint, layout, &mut scan_path, &mut portals);
+            let mut blocked_backdrops = false;
             for (p_bp, p_layout, mut p_path) in portals.into_iter().rev() {
+                let is_backdrop = Self::is_portal_backdrop_bp(p_bp);
+                if blocked_backdrops && is_backdrop {
+                    continue;
+                }
                 if let Some(hit) =
                     Self::hit_test_node_path_sc(p_bp, p_layout, px, py, &[], &mut p_path)
                 {
                     return Some(hit);
+                }
+                if !is_backdrop
+                    && Self::top_layer_portal_node_is_visual_content(p_bp, p_layout, px, py, 0)
+                {
+                    blocked_backdrops = true;
                 }
             }
         }
@@ -147,10 +157,6 @@ impl AppRuntime {
                 || matches!(
                     child_layout.style.display,
                     strata_style::types::Display::None
-                )
-                || matches!(
-                    child_layout.style.visibility,
-                    strata_style::types::Visibility::Hidden
                 )
             {
                 continue;
@@ -221,6 +227,105 @@ impl AppRuntime {
         }
     }
 
+    fn hit_test_direct_in_flow_node_path(
+        blueprint: &NodeBlueprint,
+        layout: &LayoutNode,
+        px: f32,
+        py: f32,
+        current_path: &mut Vec<usize>,
+    ) -> Option<Vec<usize>> {
+        let paired = Self::paired_blueprint_children(blueprint, layout);
+        if paired.is_empty() {
+            return None;
+        }
+
+        let parent_display = Some(layout.style.display);
+        let is_in_flow_non_sc = |c: &LayoutNode| {
+            !c.is_top_layer
+                && !matches!(c.style.display, strata_style::types::Display::None)
+                && !Self::establishes_stacking_context_in(c, parent_display, false)
+                && c.style.position == strata_style::types::Position::Static
+                && !((c.subtree_hit_flags
+                    & (strata_layout::tree::SUBTREE_META_VALID
+                        | strata_layout::tree::SUBTREE_HAS_TRANSFORM))
+                    == strata_layout::tree::SUBTREE_META_VALID
+                    && !c.subtree_bounds.contains_point(px, py))
+        };
+        let is_inline_level = |c: &LayoutNode| {
+            matches!(
+                c.style.display,
+                strata_style::types::Display::Inline
+                    | strata_style::types::Display::InlineBlock
+                    | strata_style::types::Display::InlineFlex
+                    | strata_style::types::Display::InlineGrid
+            )
+        };
+
+        // Layer 5: In-flow inline-level descendants (front-to-back)
+        for &(idx, child_bp, child_layout) in paired.iter().rev() {
+            if is_in_flow_non_sc(child_layout)
+                && child_layout.style.float == strata_style::types::Float::None
+                && is_inline_level(child_layout)
+            {
+                current_path.push(idx);
+                if let Some(res) = Self::hit_test_node_path_in_flow(
+                    child_bp,
+                    child_layout,
+                    px,
+                    py,
+                    &[],
+                    current_path,
+                ) {
+                    return Some(res);
+                }
+                current_path.pop();
+            }
+        }
+
+        // Layer 4: Non-positioned floats (front-to-back)
+        for &(idx, child_bp, child_layout) in paired.iter().rev() {
+            if is_in_flow_non_sc(child_layout)
+                && child_layout.style.float != strata_style::types::Float::None
+            {
+                current_path.push(idx);
+                if let Some(res) = Self::hit_test_node_path_in_flow(
+                    child_bp,
+                    child_layout,
+                    px,
+                    py,
+                    &[],
+                    current_path,
+                ) {
+                    return Some(res);
+                }
+                current_path.pop();
+            }
+        }
+
+        // Layer 3: In-flow block-level descendants (front-to-back)
+        for &(idx, child_bp, child_layout) in paired.iter().rev() {
+            if is_in_flow_non_sc(child_layout)
+                && child_layout.style.float == strata_style::types::Float::None
+                && !is_inline_level(child_layout)
+            {
+                current_path.push(idx);
+                if let Some(res) = Self::hit_test_node_path_in_flow(
+                    child_bp,
+                    child_layout,
+                    px,
+                    py,
+                    &[],
+                    current_path,
+                ) {
+                    return Some(res);
+                }
+                current_path.pop();
+            }
+        }
+
+        None
+    }
+
     fn hit_test_node_path_in_flow(
         blueprint: &NodeBlueprint,
         layout: &LayoutNode,
@@ -231,10 +336,6 @@ impl AppRuntime {
     ) -> Option<Vec<usize>> {
         if current_path.len() >= 256
             || matches!(layout.style.display, strata_style::types::Display::None)
-            || matches!(
-                layout.style.visibility,
-                strata_style::types::Visibility::Hidden
-            )
         {
             return None;
         }
@@ -258,37 +359,16 @@ impl AppRuntime {
             return None;
         }
 
-        let parent_display = Some(layout.style.display);
-        let paired = Self::paired_blueprint_children(blueprint, layout);
-        for &(idx, child_bp, child_layout) in paired.iter().rev() {
-            if child_layout.is_top_layer
-                || matches!(
-                    child_layout.style.display,
-                    strata_style::types::Display::None
-                )
-                || Self::establishes_stacking_context_in(child_layout, parent_display, false)
-                || child_layout.style.position != strata_style::types::Position::Static
-            {
-                continue;
-            }
-            if (child_layout.subtree_hit_flags
-                & (strata_layout::tree::SUBTREE_META_VALID
-                    | strata_layout::tree::SUBTREE_HAS_TRANSFORM))
-                == strata_layout::tree::SUBTREE_META_VALID
-                && !child_layout.subtree_bounds.contains_point(px, py)
-            {
-                continue;
-            }
-            current_path.push(idx);
-            if let Some(res) =
-                Self::hit_test_node_path_in_flow(child_bp, child_layout, px, py, &[], current_path)
-            {
-                return Some(res);
-            }
-            current_path.pop();
+        if let Some(res) =
+            Self::hit_test_direct_in_flow_node_path(blueprint, layout, px, py, current_path)
+        {
+            return Some(res);
         }
 
         if !matches!(
+            layout.style.visibility,
+            strata_style::types::Visibility::Hidden
+        ) && !matches!(
             layout.style.pointer_events,
             strata_style::types::PointerEvents::None
         ) {
@@ -316,10 +396,6 @@ impl AppRuntime {
     ) -> Option<Vec<usize>> {
         if current_path.len() >= 256
             || matches!(layout.style.display, strata_style::types::Display::None)
-            || matches!(
-                layout.style.visibility,
-                strata_style::types::Visibility::Hidden
-            )
         {
             return None;
         }
@@ -385,38 +461,12 @@ impl AppRuntime {
             }
         }
 
-        // Layers 5, 4, 3: direct static non-stacking-context children
+        // Layers 5, 4, 3: direct static non-stacking-context children (CSS 2.1 Appendix E order)
         if inherited_allows && own_allows {
-            let parent_display = Some(layout.style.display);
-            let paired = Self::paired_blueprint_children(blueprint, layout);
-            for &(idx, child_bp, child_layout) in paired.iter().rev() {
-                if child_layout.is_top_layer
-                    || matches!(
-                        child_layout.style.display,
-                        strata_style::types::Display::None
-                    )
-                    || Self::establishes_stacking_context_in(child_layout, parent_display, false)
-                    || child_layout.style.position != strata_style::types::Position::Static
-                    || ((child_layout.subtree_hit_flags
-                        & (strata_layout::tree::SUBTREE_META_VALID
-                            | strata_layout::tree::SUBTREE_HAS_TRANSFORM))
-                        == strata_layout::tree::SUBTREE_META_VALID
-                        && !child_layout.subtree_bounds.contains_point(px, py))
-                {
-                    continue;
-                }
-                current_path.push(idx);
-                if let Some(res) = Self::hit_test_node_path_in_flow(
-                    child_bp,
-                    child_layout,
-                    px,
-                    py,
-                    &[],
-                    current_path,
-                ) {
-                    return Some(res);
-                }
-                current_path.pop();
+            if let Some(res) =
+                Self::hit_test_direct_in_flow_node_path(blueprint, layout, px, py, current_path)
+            {
+                return Some(res);
             }
         }
 
@@ -432,6 +482,10 @@ impl AppRuntime {
 
         // Layer 1: stacking context root itself
         if inherited_allows
+            && !matches!(
+                layout.style.visibility,
+                strata_style::types::Visibility::Hidden
+            )
             && !matches!(
                 layout.style.pointer_events,
                 strata_style::types::PointerEvents::None
@@ -931,7 +985,7 @@ impl AppRuntime {
         let new_tree = Self::build_layout_tree_with_interaction(&self.root_blueprint, &ctx);
         let mut previous = std::mem::replace(&mut self.layout_root, new_tree);
         let transplanted = Self::transplant_layout_state(&mut previous, &mut self.layout_root);
-        let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
+        let now_ms = self.now_ms();
         self.sync_tree_animations(now_ms);
         let mut layout_node_ids = self.transition_manager.layout_affecting_node_ids();
         layout_node_ids.extend(self.animation_manager.layout_affecting_node_ids());
@@ -1278,7 +1332,7 @@ impl AppRuntime {
 
         // Sync paint-only transitions strictly on restyled subtrees so hover transitions
         // animate smoothly without full-tree rebuilds or disturbing unrelated active transitions.
-        let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
+        let now_ms = self.now_ms();
         let anims_active = self.had_active_animations || self.has_active_animations();
         for (path, has_trans) in &restyled_paths {
             if *has_trans {
@@ -1377,6 +1431,7 @@ impl AppRuntime {
         next.last_child_layout_content = previous.last_child_layout_content;
         next.children_layout_clean = previous.children_layout_clean;
         next.last_preserved_box = previous.last_preserved_box;
+        next.applied_relative_offset = previous.applied_relative_offset;
         next.subtree_hit_flags = previous.subtree_hit_flags;
         next.subtree_bounds = previous.subtree_bounds;
         for (prev_child, next_child) in previous.children.iter_mut().zip(next.children.iter_mut()) {
@@ -1606,7 +1661,7 @@ impl AppRuntime {
                     self.hover_tooltip_since = if self.is_mouse_down {
                         None
                     } else {
-                        Some(std::time::Instant::now())
+                        Some(self.now())
                     };
                     self.hover_tooltip_visible = false;
                     was_visible
@@ -1633,7 +1688,7 @@ impl AppRuntime {
                     self.hover_tooltip_since = if self.is_mouse_down {
                         None
                     } else {
-                        Some(std::time::Instant::now())
+                        Some(self.now())
                     };
                     self.hover_tooltip_visible = false;
                 }
@@ -1676,19 +1731,30 @@ impl AppRuntime {
         let (_, Some(since)) = (&self.hover_tooltip_text, self.hover_tooltip_since) else {
             return None;
         };
-        Some(self.hover_tooltip_delay.saturating_sub(since.elapsed()))
+        Some(
+            self.hover_tooltip_delay
+                .saturating_sub(self.elapsed_since(since)),
+        )
     }
 
-    /// Advances the native hover tooltip dwell timer. Returns `true` when the tooltip transitions
-    /// to visible and updates the display list.
+    /// Advances the native hover tooltip dwell timer at the current runtime clock.
+    /// Returns `true` when the tooltip transitions to visible and updates the display list.
+    #[inline]
     pub fn poll_hover_tooltip(&mut self) -> bool {
+        let now = self.now();
+        self.poll_hover_tooltip_at(now)
+    }
+
+    /// Advances the native hover tooltip dwell timer at an explicit monotonic `Instant`.
+    /// Returns `true` when the tooltip transitions to visible and updates the display list.
+    pub fn poll_hover_tooltip_at(&mut self, now: std::time::Instant) -> bool {
         if self.hover_tooltip_visible || self.is_mouse_down {
             return false;
         }
         let (Some(_), Some(since)) = (&self.hover_tooltip_text, self.hover_tooltip_since) else {
             return false;
         };
-        if since.elapsed() < self.hover_tooltip_delay {
+        if now.saturating_duration_since(since) < self.hover_tooltip_delay {
             return false;
         }
         self.hover_tooltip_visible = true;

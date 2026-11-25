@@ -177,7 +177,7 @@ impl AppRuntime {
                     target.font_family,
                 );
 
-                let now = std::time::Instant::now();
+                let now = self.now();
                 let click_count = if let Some((last_time, last_x, last_y, count)) =
                     self.last_click_info
                 {
@@ -389,10 +389,11 @@ impl AppRuntime {
             });
         }
 
-        if !pre_open_outside_ids.is_empty() && !inside_click_stopped {
-            if strata_dom::hooks::dispatch_click_outside_for_ids(&pre_open_outside_ids) {
-                dom_handled = true;
-            }
+        if !pre_open_outside_ids.is_empty()
+            && !inside_click_stopped
+            && strata_dom::hooks::dispatch_click_outside_for_ids(&pre_open_outside_ids)
+        {
+            dom_handled = true;
         }
 
         let focus_changed = if button == 0 {
@@ -935,16 +936,16 @@ impl AppRuntime {
             KeyCode::Space => " ".to_string(),
             KeyCode::Backspace => "Backspace".to_string(),
             KeyCode::Delete => "Delete".to_string(),
-            KeyCode::Digit0 => "0".to_string(),
-            KeyCode::Digit1 => "1".to_string(),
-            KeyCode::Digit2 => "2".to_string(),
-            KeyCode::Digit3 => "3".to_string(),
-            KeyCode::Digit4 => "4".to_string(),
-            KeyCode::Digit5 => "5".to_string(),
-            KeyCode::Digit6 => "6".to_string(),
-            KeyCode::Digit7 => "7".to_string(),
-            KeyCode::Digit8 => "8".to_string(),
-            KeyCode::Digit9 => "9".to_string(),
+            KeyCode::Digit0 => if shift { ")" } else { "0" }.to_string(),
+            KeyCode::Digit1 => if shift { "!" } else { "1" }.to_string(),
+            KeyCode::Digit2 => if shift { "@" } else { "2" }.to_string(),
+            KeyCode::Digit3 => if shift { "#" } else { "3" }.to_string(),
+            KeyCode::Digit4 => if shift { "$" } else { "4" }.to_string(),
+            KeyCode::Digit5 => if shift { "%" } else { "5" }.to_string(),
+            KeyCode::Digit6 => if shift { "^" } else { "6" }.to_string(),
+            KeyCode::Digit7 => if shift { "&" } else { "7" }.to_string(),
+            KeyCode::Digit8 => if shift { "*" } else { "8" }.to_string(),
+            KeyCode::Digit9 => if shift { "(" } else { "9" }.to_string(),
             KeyCode::Slash => if shift { "?" } else { "/" }.to_string(),
             KeyCode::Comma => if shift { "<" } else { "," }.to_string(),
             KeyCode::Period => if shift { ">" } else { "." }.to_string(),
@@ -953,6 +954,8 @@ impl AppRuntime {
             KeyCode::BracketLeft => if shift { "{" } else { "[" }.to_string(),
             KeyCode::BracketRight => if shift { "}" } else { "]" }.to_string(),
             KeyCode::Semicolon => if shift { ":" } else { ";" }.to_string(),
+            KeyCode::Quote => if shift { "\"" } else { "'" }.to_string(),
+            KeyCode::Backslash => if shift { "|" } else { "\\" }.to_string(),
             KeyCode::Backquote => if shift { "~" } else { "`" }.to_string(),
             other => {
                 let dbg = format!("{:?}", other);
@@ -983,46 +986,31 @@ impl AppRuntime {
         )
     }
 
-    fn dispatch_dom_key_event(
-        &self,
-        event_type: strata_dom::EventType,
-        key: strata_platform::KeyCode,
-        modifiers: strata_platform::Modifiers,
-    ) -> (bool, bool) {
-        let Some(ref path) = self.current_focus_path else {
-            return (false, false);
+    /// Dispatches a bubbling DOM event along the active focus path (or the focused `<input>`'s
+    /// path when `current_focus_path` is unset), returning `(handled, default_prevented, propagation_stopped)`.
+    fn dispatch_dom_event_along_focus_path(&self, ev: strata_dom::Event) -> (bool, bool, bool) {
+        let fallback_path;
+        let path: &[usize] = if let Some(ref p) = self.current_focus_path {
+            p.as_slice()
+        } else if let Some(ref active) = self.active_focus {
+            if let Some(p) = active
+                .entity_id
+                .and_then(|eid| self.layout_root.find_path_by_entity_id(eid))
+            {
+                fallback_path = p;
+                &fallback_path
+            } else {
+                return (false, false, false);
+            }
+        } else {
+            return (false, false, false);
         };
-        let mut chain: Vec<&NodeBlueprint> = Vec::with_capacity(path.len() + 1);
-        let mut cur = &self.root_blueprint;
-        chain.push(cur);
-        for &idx in path {
-            let mut flat = Vec::new();
-            match cur {
-                NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children) => {
-                    for c in children {
-                        Self::flatten_blueprints(c, &mut flat);
-                    }
-                }
-                _ => break,
-            }
-            if idx >= flat.len() {
-                break;
-            }
-            cur = flat[idx];
-            chain.push(cur);
-        }
 
-        let dom_key = Self::keycode_to_dom_key(key, modifiers.shift);
-        let mut ev = strata_dom::Event::new(event_type);
-        ev.key = dom_key;
-        ev.ctrl_key = modifiers.ctrl;
-        ev.shift_key = modifiers.shift;
-        ev.alt_key = modifiers.alt;
-        ev.meta_key = modifiers.meta;
-
+        let chain = Self::resolve_chain_for_path(&self.root_blueprint, &self.layout_root, path);
+        let event_type = ev.event_type;
         let mut handled = false;
         let mut default_prevented = false;
-        for bp in chain.into_iter().rev() {
+        for (bp, _) in chain.into_iter().rev() {
             if let NodeBlueprint::Element { attributes, .. } = bp {
                 for attr in attributes {
                     if let strata_dom::Attribute::EventListener { event, handler } = attr {
@@ -1036,14 +1024,30 @@ impl AppRuntime {
                                 default_prevented = true;
                             }
                             if stopped_cell.get() {
-                                return (true, true);
+                                return (true, default_prevented, true);
                             }
                         }
                     }
                 }
             }
         }
-        (handled, default_prevented)
+        (handled, default_prevented, false)
+    }
+
+    fn dispatch_dom_key_event(
+        &self,
+        event_type: strata_dom::EventType,
+        key: strata_platform::KeyCode,
+        modifiers: strata_platform::Modifiers,
+    ) -> (bool, bool, bool) {
+        let dom_key = Self::keycode_to_dom_key(key, modifiers.shift);
+        let mut ev = strata_dom::Event::new(event_type);
+        ev.key = dom_key;
+        ev.ctrl_key = modifiers.ctrl;
+        ev.shift_key = modifiers.shift;
+        ev.alt_key = modifiers.alt;
+        ev.meta_key = modifiers.meta;
+        self.dispatch_dom_event_along_focus_path(ev)
     }
 
     /// Dispatches keyboard events to the active focused input element, returning a fine-grained KeyDispatchResult.
@@ -1051,12 +1055,19 @@ impl AppRuntime {
         if self.active_focus.is_none() {
             match event {
                 PlatformEvent::KeyDown { key, modifiers } => {
-                    let (dom_handled, dom_suppressed) = self.dispatch_dom_key_event(
-                        strata_dom::EventType::KeyDown,
-                        *key,
-                        *modifiers,
-                    );
-                    if dom_suppressed {
+                    self.last_dom_keydown_consumed_char = None;
+                    let (dom_handled, dom_default_prevented, dom_stopped) = self
+                        .dispatch_dom_key_event(strata_dom::EventType::KeyDown, *key, *modifiers);
+                    if dom_handled && !modifiers.ctrl && !modifiers.alt && !modifiers.meta {
+                        let dom_key = Self::keycode_to_dom_key(*key, modifiers.shift);
+                        let mut chars = dom_key.chars();
+                        if let (Some(ch), None) = (chars.next(), chars.next()) {
+                            if !ch.is_control() {
+                                self.last_dom_keydown_consumed_char = Some((ch, self.now()));
+                            }
+                        }
+                    }
+                    if dom_default_prevented || dom_stopped {
                         return KeyDispatchResult::NeedsRebuild;
                     }
                     if Self::dispatch_global_shortcut_for_key(*key, *modifiers) || dom_handled {
@@ -1085,11 +1096,71 @@ impl AppRuntime {
                     }
                 }
                 PlatformEvent::KeyUp { key, modifiers } => {
+                    self.last_dom_keydown_consumed_char = None;
                     if self
                         .dispatch_dom_key_event(strata_dom::EventType::KeyUp, *key, *modifiers)
                         .0
                     {
                         return KeyDispatchResult::NeedsRebuild;
+                    }
+                }
+                PlatformEvent::ReceivedCharacter(ch) => {
+                    if !ch.is_control() && self.current_focus_path.is_some() {
+                        if let Some((prev, ts)) = self.last_dom_keydown_consumed_char.take() {
+                            if prev == *ch
+                                && self.elapsed_since(ts) < std::time::Duration::from_millis(50)
+                            {
+                                return KeyDispatchResult::Ignored;
+                            }
+                        }
+                        let text = ch.to_string();
+                        let mut key_ev = strata_dom::Event::new(strata_dom::EventType::KeyDown);
+                        key_ev.key = text.clone();
+                        key_ev.data = Some(text.clone());
+                        key_ev.input_type = "insertText".to_string();
+                        let (key_handled, _, _) =
+                            self.dispatch_dom_event_along_focus_path(key_ev);
+                        if key_handled {
+                            return KeyDispatchResult::NeedsRebuild;
+                        }
+                        let mut input_ev =
+                            strata_dom::Event::with_value(strata_dom::EventType::Input, text.clone());
+                        input_ev.data = Some(text);
+                        input_ev.input_type = "insertText".to_string();
+                        if self.dispatch_dom_event_along_focus_path(input_ev).0 {
+                            return KeyDispatchResult::NeedsRebuild;
+                        }
+                    }
+                }
+                PlatformEvent::ImeCommit(text) => {
+                    self.last_dom_keydown_consumed_char = None;
+                    if !text.is_empty() && self.current_focus_path.is_some() {
+                        let mut input_ev = strata_dom::Event::with_value(
+                            strata_dom::EventType::Input,
+                            text.clone(),
+                        );
+                        input_ev.data = Some(text.clone());
+                        input_ev.input_type = "insertCompositionText".to_string();
+                        if self.dispatch_dom_event_along_focus_path(input_ev).0 {
+                            return KeyDispatchResult::NeedsRebuild;
+                        }
+                        let mut any_handled = false;
+                        for ch in text.chars() {
+                            if ch.is_control() {
+                                continue;
+                            }
+                            let s = ch.to_string();
+                            let mut key_ev = strata_dom::Event::new(strata_dom::EventType::KeyDown);
+                            key_ev.key = s.clone();
+                            key_ev.data = Some(s);
+                            key_ev.input_type = "insertCompositionText".to_string();
+                            if self.dispatch_dom_event_along_focus_path(key_ev).0 {
+                                any_handled = true;
+                            }
+                        }
+                        if any_handled {
+                            return KeyDispatchResult::NeedsRebuild;
+                        }
                     }
                 }
                 _ => {}
@@ -1135,7 +1206,23 @@ impl AppRuntime {
                     KeyDispatchResult::Ignored
                 }
             }
+            PlatformEvent::KeyUp { key, modifiers } => {
+                if self
+                    .dispatch_dom_key_event(strata_dom::EventType::KeyUp, *key, *modifiers)
+                    .0
+                {
+                    KeyDispatchResult::NeedsRebuild
+                } else {
+                    KeyDispatchResult::Ignored
+                }
+            }
             PlatformEvent::KeyDown { key, modifiers } => {
+                let (dom_handled, dom_default_prevented, _) =
+                    self.dispatch_dom_key_event(strata_dom::EventType::KeyDown, *key, *modifiers);
+                if dom_default_prevented {
+                    return KeyDispatchResult::NeedsRebuild;
+                }
+
                 let mut text_changed = false;
                 let mut nav_or_sel = false;
                 let mut submit = false;
@@ -1170,6 +1257,8 @@ impl AppRuntime {
                                 }
                                 _ => KeyDispatchResult::NeedsRebuild,
                             };
+                        } else if dom_handled {
+                            return KeyDispatchResult::NeedsRebuild;
                         } else {
                             return KeyDispatchResult::Ignored;
                         }
@@ -1280,7 +1369,7 @@ impl AppRuntime {
                 }
 
                 if text_changed || nav_or_sel {
-                    self.caret_blink_epoch = std::time::Instant::now();
+                    self.caret_blink_epoch = self.now();
                 }
 
                 if text_changed {
@@ -1331,7 +1420,7 @@ impl AppRuntime {
                     return KeyDispatchResult::NeedsRebuild;
                 }
 
-                if Self::dispatch_global_shortcut_for_key(*key, *modifiers) {
+                if Self::dispatch_global_shortcut_for_key(*key, *modifiers) || dom_handled {
                     return KeyDispatchResult::NeedsRebuild;
                 }
 
@@ -1441,37 +1530,30 @@ impl AppRuntime {
     }
 
     /// Resolves the root-to-target `(NodeBlueprint, LayoutNode)` ancestor chain at `(px, py)`
-    /// for the front-most element registering a listener for `event_type`.
+    /// matching W3C DOM hit-testing: resolves the single front-most visual `pointer-events != none`
+    /// target first, then truncates to the deepest ancestor along that path registering `event_type`
+    /// (preserving target-relative `offset_x`/`offset_y` without ever piercing opaque higher-z overlays).
     pub(crate) fn hit_test_event_chain_at(
         &self,
         px: f32,
         py: f32,
         event_type: strata_dom::EventType,
     ) -> Option<Vec<(&NodeBlueprint, &LayoutNode)>> {
-        let (_, _, eid) = Self::hit_test_event_with_box_and_entity(
-            &self.root_blueprint,
-            &self.layout_root,
-            px,
-            py,
-            event_type,
-        )?;
-        let path = self.layout_root.find_path_by_entity_id(eid)?;
-        let mut chain = Vec::with_capacity(path.len() + 1);
-        let mut cur_bp = &self.root_blueprint;
-        let mut cur_layout = &self.layout_root;
-        chain.push((cur_bp, cur_layout));
-
-        for &idx in &path {
-            let paired = Self::paired_blueprint_children(cur_bp, cur_layout);
-            let Some((_, next_bp, next_layout)) =
-                paired.into_iter().find(|(child_idx, _, _)| *child_idx == idx)
-            else {
-                break;
-            };
-            cur_bp = next_bp;
-            cur_layout = next_layout;
-            chain.push((cur_bp, cur_layout));
-        }
+        let visual_path =
+            Self::hit_test_node_path(&self.root_blueprint, &self.layout_root, px, py)?;
+        let mut chain =
+            Self::resolve_chain_for_path(&self.root_blueprint, &self.layout_root, &visual_path);
+        let listener_idx = chain.iter().rposition(|(bp, _)| {
+            matches!(
+                bp,
+                NodeBlueprint::Element { attributes, .. }
+                    if attributes.iter().any(|a| matches!(
+                        a,
+                        strata_dom::Attribute::EventListener { event, .. } if *event == event_type
+                    ))
+            )
+        })?;
+        chain.truncate(listener_idx + 1);
         Some(chain)
     }
 
@@ -1488,43 +1570,6 @@ impl AppRuntime {
         configure: impl Fn(&mut strata_dom::Event),
     ) -> BubblingOutcome {
         let Some(chain) = self.hit_test_event_chain_at(px, py, event_type) else {
-            // Fallback when EntityIds are unassigned on synthetic test trees
-            if let Some((handler, target_box, eid)) = Self::hit_test_event_with_box_and_entity(
-                &self.root_blueprint,
-                &self.layout_root,
-                px,
-                py,
-                event_type,
-            ) {
-                let mut ev =
-                    self.create_mouse_event(event_type, px, py, button, detail, Some(target_box));
-                configure(&mut ev);
-                let prevented_cell = ev.default_prevented.clone();
-                let stopped_cell = ev.propagation_stopped.clone();
-                let capture_cell = ev.pointer_capture_requested.clone();
-                let warp_cell = ev.cursor_warp_requested.clone();
-                handler(ev);
-                let mut invoked_entities = Vec::new();
-                let mut chain_entities = Vec::new();
-                let target_entity = if eid.is_valid() {
-                    invoked_entities.push(eid);
-                    chain_entities.push(eid);
-                    Some(eid)
-                } else {
-                    None
-                };
-                return BubblingOutcome {
-                    handled: true,
-                    default_prevented: prevented_cell.get(),
-                    propagation_stopped: stopped_cell.get(),
-                    capture_requested: capture_cell.get(),
-                    capture_entity: target_entity,
-                    cursor_warp_requested: warp_cell.get(),
-                    target_entity,
-                    chain_entities,
-                    invoked_entities,
-                };
-            }
             return BubblingOutcome::default();
         };
         let Some((_, target_layout)) = chain.last() else {
@@ -1717,7 +1762,7 @@ impl AppRuntime {
             self.pending_window_drag = None;
             return false;
         }
-        let now = std::time::Instant::now();
+        let now = self.now();
         if let Some((t, lx, ly)) = self.last_drag_click.take() {
             if now.duration_since(t).as_millis() < 400
                 && (px - lx).abs() < 5.0
@@ -1773,12 +1818,10 @@ impl AppRuntime {
                     strata_dom::Attribute::Property { key, value } if key == "draggable" => {
                         explicit_draggable = Some(!value.eq_ignore_ascii_case("false"));
                     }
-                    strata_dom::Attribute::EventListener { event, .. }
-                        if matches!(
-                            event,
-                            strata_dom::EventType::DragStart | strata_dom::EventType::Drag
-                        ) =>
-                    {
+                    strata_dom::Attribute::EventListener {
+                        event: strata_dom::EventType::DragStart | strata_dom::EventType::Drag,
+                        ..
+                    } => {
                         has_drag_listener = true;
                     }
                     _ => {}

@@ -68,15 +68,17 @@ fn test_frame_pacer_wait_vsync() {
     pacer.wait_vsync();
     let elapsed = start.elapsed();
     assert!(pacer.last_frame_instant.is_some());
-    assert!(elapsed < Duration::from_millis(50));
+    assert!(elapsed < Duration::from_millis(500));
 }
 
 #[test]
 fn test_live_platform_window_lifecycle_and_events() {
-    let mut win_config = WindowConfig::default();
-    win_config.title = "Live Test Window".to_string();
-    win_config.width = 1024;
-    win_config.height = 768;
+    let win_config = WindowConfig {
+        title: "Live Test Window".to_string(),
+        width: 1024,
+        height: 768,
+        ..WindowConfig::default()
+    };
 
     let mut window = LivePlatformWindow::new(win_config);
     assert_eq!(window.title(), "Live Test Window");

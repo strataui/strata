@@ -233,6 +233,15 @@ impl TrayIcon {
     {
         NativeTrayHandle::new(self, std::sync::Arc::new(event_sink))
     }
+
+    /// Spawns a deterministic in-process tray controller (`backend_name() == "handle-only"`)
+    /// without attempting OS tray registration.
+    pub fn spawn_handle_only<F>(self, event_sink: F) -> NativeTrayHandle
+    where
+        F: Fn(crate::events::PlatformEvent) + Send + Sync + 'static,
+    {
+        NativeTrayHandle::new_handle_only(self, std::sync::Arc::new(event_sink))
+    }
 }
 
 /// Platform-agnostic system tray interaction event.
@@ -422,6 +431,21 @@ impl NativeTrayHandle {
             live,
             #[cfg(target_os = "macos")]
             live,
+        }
+    }
+
+    /// Creates a deterministic handle-only tray controller without attempting OS registration.
+    pub fn new_handle_only(icon: TrayIcon, event_sink: TrayEventSink) -> Self {
+        let shared = std::sync::Arc::new(SharedTrayState::new(event_sink, icon.menu.clone()));
+        Self {
+            icon,
+            shared,
+            #[cfg(target_os = "linux")]
+            live: None,
+            #[cfg(windows)]
+            live: None,
+            #[cfg(target_os = "macos")]
+            live: None,
         }
     }
 
@@ -1298,10 +1322,30 @@ mod macos_backend {
     use std::ffi::{c_char, c_void, CString};
     use std::sync::Arc;
 
+    #[link(name = "objc")]
     extern "C" {
         fn objc_getClass(name: *const c_char) -> *mut c_void;
         fn sel_registerName(name: *const c_char) -> *mut c_void;
         fn objc_msgSend();
+    }
+
+    #[link(name = "AppKit", kind = "framework")]
+    extern "C" {
+        static NSApp: *mut c_void;
+    }
+
+    unsafe fn is_appkit_main_thread_ready() -> bool {
+        if NSApp.is_null() {
+            return false;
+        }
+        let thread_cls = objc_getClass(b"NSThread\0".as_ptr() as *const c_char);
+        if thread_cls.is_null() {
+            return false;
+        }
+        let is_main_sel = sel_registerName(b"isMainThread\0".as_ptr() as *const c_char);
+        let msg_bool: unsafe extern "C" fn(*mut c_void, *mut c_void) -> i8 =
+            std::mem::transmute(objc_msgSend as *const ());
+        msg_bool(thread_cls, is_main_sel) != 0
     }
 
     pub struct LiveStatusItem {
@@ -1312,6 +1356,9 @@ mod macos_backend {
     impl LiveStatusItem {
         pub fn new(icon: &TrayIcon, shared: Arc<SharedTrayState>) -> Option<Self> {
             unsafe {
+                if !is_appkit_main_thread_ready() {
+                    return None;
+                }
                 let status_bar_cls = objc_getClass(b"NSStatusBar\0".as_ptr() as *const c_char);
                 if status_bar_cls.is_null() {
                     return None;

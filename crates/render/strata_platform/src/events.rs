@@ -97,6 +97,8 @@ pub enum KeyCode {
     BracketLeft,
     BracketRight,
     Semicolon,
+    Quote,
+    Backslash,
     Backquote,
     Unknown,
 }

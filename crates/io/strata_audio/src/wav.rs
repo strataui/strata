@@ -77,8 +77,8 @@ pub fn encode_wav_bytes(
         let mut writer = WavWriter::new(&mut cursor, channels as u16, buffer.sample_rate, format)?;
         let mut interleaved = Vec::with_capacity(frames * channels);
         for f in 0..frames {
-            for ch in 0..channels {
-                interleaved.push(buffer.channels[ch][f]);
+            for ch in &buffer.channels[..channels] {
+                interleaved.push(ch[f]);
             }
         }
         writer.write_interleaved_f32(&interleaved)?;

@@ -152,7 +152,6 @@ impl AppRuntime {
             &self.scroll_offsets,
             &self.scroll_offsets_by_id,
             &mut self.applied_scroll_offsets,
-            &mut self.active_scrollbars,
         );
         self.flush_pending_scroll_commands();
         self.sync_scroll_animations();
@@ -752,7 +751,6 @@ impl AppRuntime {
                     Self::get_layout_node_mut(&mut self.layout_root, &portal_path),
                 ) {
                     let mut pbuf = portal_path.clone();
-                    let mut dummy_bars = Vec::new();
                     Self::apply_scroll_walk(
                         bp,
                         target,
@@ -760,7 +758,6 @@ impl AppRuntime {
                         &self.scroll_offsets,
                         &self.scroll_offsets_by_id,
                         &mut self.applied_scroll_offsets,
-                        &mut dummy_bars,
                     );
                     target.refresh_subtree_hit_metadata();
                     active_box = target.geometry.border_box;
@@ -803,7 +800,6 @@ impl AppRuntime {
         scroll_offsets: &std::collections::HashMap<Vec<usize>, (f32, f32)>,
         scroll_offsets_by_id: &std::collections::HashMap<String, (f32, f32)>,
         applied_scroll_offsets: &mut std::collections::HashMap<Vec<usize>, (f32, f32)>,
-        active_scrollbars: &mut Vec<ActiveScrollbar>,
     ) {
         if matches!(layout.style.display, strata_style::types::Display::None) {
             return;
@@ -911,7 +907,6 @@ impl AppRuntime {
                         scroll_offsets,
                         scroll_offsets_by_id,
                         applied_scroll_offsets,
-                        active_scrollbars,
                     );
                     current_path.pop();
                 }
@@ -934,7 +929,6 @@ impl AppRuntime {
                         scroll_offsets,
                         scroll_offsets_by_id,
                         applied_scroll_offsets,
-                        active_scrollbars,
                     );
                     current_path.pop();
                 }
@@ -1223,7 +1217,7 @@ impl AppRuntime {
             let candidate_y = (cur_y + delta_y).clamp(0.0, bar.max_scroll_y);
             let dy = candidate_y - cur_y;
             if dy.abs() > 0.01 {
-                self.last_scroll_interaction = Some(std::time::Instant::now());
+                self.last_scroll_interaction = Some(self.now());
                 self.apply_scroll_delta_to_container(
                     &bar.path,
                     bar.is_id,
@@ -1370,7 +1364,7 @@ impl AppRuntime {
             let target_x = (cur_x + delta_x).clamp(0.0, max_scroll_x);
             let dx = target_x - applied_x;
             if dx.abs() > 0.01 {
-                self.last_scroll_interaction = Some(std::time::Instant::now());
+                self.last_scroll_interaction = Some(self.now());
                 let is_id = elem_id.is_some();
                 let id_str = elem_id.unwrap_or_default();
                 self.apply_scroll_xy_delta_to_container(
@@ -1490,7 +1484,7 @@ impl AppRuntime {
             return (wheel_handled, false);
         };
 
-        let now = std::time::Instant::now();
+        let now = self.now();
         self.last_scroll_interaction = Some(now);
 
         let cur_y = if bar.is_id {
@@ -1519,7 +1513,7 @@ impl AppRuntime {
                 let same_dir = remaining == 0.0 || (remaining > 0.0) == (delta_y > 0.0);
                 // Continuous touchpad / high-resolution streams emit <48px packets or arrive on a
                 // 2-18ms (60-500Hz) HID cadence; only discrete wheel flicks receive momentum.
-                let is_continuous_hid_cadence = dt_flick >= 0.002 && dt_flick < 0.018;
+                let is_continuous_hid_cadence = (0.002..0.018).contains(&dt_flick);
                 let is_discrete_flick =
                     same_dir && delta_y.abs() >= 48.0 && !is_continuous_hid_cadence;
                 let accel = if is_discrete_flick && dt_flick < 0.20 {
@@ -1649,7 +1643,7 @@ impl AppRuntime {
     /// Evaluates active smooth scroll animation at the current instant.
     #[inline]
     pub fn poll_smooth_scroll(&mut self) -> bool {
-        self.poll_smooth_scroll_at(std::time::Instant::now())
+        self.poll_smooth_scroll_at(self.now())
     }
 
     /// Scrolls the innermost scroll container under (px, py) to the very top.
@@ -1661,7 +1655,7 @@ impl AppRuntime {
             let cur_y = bar.scroll_y;
             let dy = 0.0 - cur_y;
             if dy.abs() > 0.01 {
-                self.last_scroll_interaction = Some(std::time::Instant::now());
+                self.last_scroll_interaction = Some(self.now());
                 self.apply_scroll_delta_to_container(
                     &bar.path,
                     bar.is_id,
@@ -1688,7 +1682,7 @@ impl AppRuntime {
                 let cur_y = bar.scroll_y;
                 let dy = bar.max_scroll_y - cur_y;
                 if dy.abs() > 0.01 {
-                    self.last_scroll_interaction = Some(std::time::Instant::now());
+                    self.last_scroll_interaction = Some(self.now());
                     self.apply_scroll_delta_to_container(
                         &bar.path,
                         bar.is_id,
@@ -1782,7 +1776,7 @@ impl AppRuntime {
                         strata_dom::hooks::set_live_scroll_offset(id, clamped_x, clamped_y);
                     }
                     if dx.abs() > 0.01 || dy.abs() > 0.01 {
-                        self.last_scroll_interaction = Some(std::time::Instant::now());
+                        self.last_scroll_interaction = Some(self.now());
                         self.apply_scroll_xy_delta_to_container(
                             &path,
                             is_id,
@@ -1916,7 +1910,7 @@ impl AppRuntime {
         let dy = new_y - cur_y;
         if dy.abs() > 0.01 {
             self.active_smooth_scroll = None;
-            self.last_scroll_interaction = Some(std::time::Instant::now());
+            self.last_scroll_interaction = Some(self.now());
             self.apply_scroll_delta_to_container(
                 &bar.path,
                 bar.is_id,

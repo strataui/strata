@@ -259,6 +259,8 @@ mod macos_backend {
     use super::*;
     use std::ffi::{c_char, c_void};
 
+    #[link(name = "objc")]
+    #[link(name = "AppKit", kind = "framework")]
     extern "C" {
         fn objc_getClass(name: *const c_char) -> *mut c_void;
         fn sel_registerName(name: *const c_char) -> *mut c_void;

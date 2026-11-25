@@ -32,7 +32,7 @@ fn main() {
     println!("Rendering Strata README Hero MetricCard...");
     let card = MetricCard("Active Users".to_string(), 12480, 14.2);
     let blueprint = card.into_node_blueprint();
-    match blueprint {
+    match &blueprint {
         NodeBlueprint::Element { tag, classes, .. } => {
             println!(
                 "Hero Component successfully rendered: tag={:?}, classes={:?}",

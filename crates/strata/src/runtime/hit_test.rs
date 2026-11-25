@@ -164,185 +164,30 @@ impl AppRuntime {
         }
     }
 
-    fn collect_hoisted_stacking_participants<'a>(
-        bp: &'a NodeBlueprint,
+    /// Resolves the root-to-target `(NodeBlueprint, LayoutNode)` ancestor chain along `path`,
+    /// using `paired_blueprint_children` so keyed `EntityId` reorders resolve identically to hit-testing.
+    pub(crate) fn resolve_chain_for_path<'a>(
+        blueprint: &'a NodeBlueprint,
         layout: &'a LayoutNode,
-        steps: &[HitClipStep],
-        negative_z: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode, Vec<HitClipStep>)>,
-        auto_or_zero_z: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode, bool, Vec<HitClipStep>)>,
-        positive_z: &mut Vec<(&'a NodeBlueprint, &'a LayoutNode, Vec<HitClipStep>)>,
-        depth: usize,
-    ) {
-        if depth >= 256 {
-            return;
-        }
-        let parent_display = Some(layout.style.display);
-        for (_idx, child_bp, child_layout) in Self::paired_blueprint_children(bp, layout) {
-            if child_layout.style.display == strata_style::types::Display::None
-                || child_layout.is_top_layer
-            {
-                continue;
-            }
-            if Self::establishes_stacking_context_in(child_layout, parent_display, false) {
-                let eff_steps = Self::effective_hit_clip_steps(child_layout, steps).to_vec();
-                let z = child_layout.style.z_index.unwrap_or(0);
-                if z < 0 {
-                    negative_z.push((child_bp, child_layout, eff_steps));
-                } else if z > 0 {
-                    positive_z.push((child_bp, child_layout, eff_steps));
-                } else {
-                    auto_or_zero_z.push((child_bp, child_layout, true, eff_steps));
-                }
-            } else {
-                let eff_for_child = Self::effective_hit_clip_steps(child_layout, steps);
-                if child_layout.style.position != strata_style::types::Position::Static {
-                    auto_or_zero_z.push((child_bp, child_layout, false, eff_for_child.to_vec()));
-                }
-                let mut child_steps = Vec::with_capacity(eff_for_child.len() + 1);
-                child_steps.extend_from_slice(eff_for_child);
-                let step = Self::hit_clip_step_for(child_layout);
-                if step.clip.is_some() || step.is_abs_cb || step.is_fixed_cb {
-                    child_steps.push(step);
-                }
-                Self::collect_hoisted_stacking_participants(
-                    child_bp,
-                    child_layout,
-                    &child_steps,
-                    negative_z,
-                    auto_or_zero_z,
-                    positive_z,
-                    depth + 1,
-                );
-            }
-        }
-    }
+        path: &[usize],
+    ) -> Vec<(&'a NodeBlueprint, &'a LayoutNode)> {
+        let mut chain = Vec::with_capacity(path.len() + 1);
+        let mut cur_bp = blueprint;
+        let mut cur_layout = layout;
+        chain.push((cur_bp, cur_layout));
 
-    fn hit_test_direct_in_flow_children<'a, T, F>(
-        bp: &'a NodeBlueprint,
-        layout: &'a LayoutNode,
-        px: f32,
-        py: f32,
-        depth: usize,
-        test_self: &mut F,
-    ) -> Option<T>
-    where
-        F: FnMut(&'a NodeBlueprint, &'a LayoutNode, f32, f32) -> Option<T>,
-    {
-        let paired = Self::paired_blueprint_children(bp, layout);
-        if paired.is_empty() {
-            return None;
+        for &idx in path {
+            let paired = Self::paired_blueprint_children(cur_bp, cur_layout);
+            let Some((_, next_bp, next_layout)) =
+                paired.into_iter().find(|(child_idx, _, _)| *child_idx == idx)
+            else {
+                break;
+            };
+            cur_bp = next_bp;
+            cur_layout = next_layout;
+            chain.push((cur_bp, cur_layout));
         }
-
-        let parent_display = Some(layout.style.display);
-        let is_in_flow_non_sc = |c: &LayoutNode| {
-            c.style.display != strata_style::types::Display::None
-                && !c.is_top_layer
-                && !Self::establishes_stacking_context_in(c, parent_display, false)
-                && c.style.position == strata_style::types::Position::Static
-        };
-        let is_inline_level = |c: &LayoutNode| {
-            matches!(
-                c.style.display,
-                strata_style::types::Display::Inline
-                    | strata_style::types::Display::InlineBlock
-                    | strata_style::types::Display::InlineFlex
-                    | strata_style::types::Display::InlineGrid
-            )
-        };
-
-        // Layer 5: In-flow inline-level descendants (front-to-back)
-        for &(_idx, child_bp, child_layout) in paired.iter().rev() {
-            if is_in_flow_non_sc(child_layout)
-                && child_layout.style.float == strata_style::types::Float::None
-                && is_inline_level(child_layout)
-            {
-                if let Some(hit) = Self::hit_test_in_flow_non_hoisted(
-                    child_bp,
-                    child_layout,
-                    px,
-                    py,
-                    &[],
-                    depth + 1,
-                    test_self,
-                ) {
-                    return Some(hit);
-                }
-            }
-        }
-
-        // Layer 4: Non-positioned floats (front-to-back)
-        for &(_idx, child_bp, child_layout) in paired.iter().rev() {
-            if is_in_flow_non_sc(child_layout)
-                && child_layout.style.float != strata_style::types::Float::None
-            {
-                if let Some(hit) = Self::hit_test_in_flow_non_hoisted(
-                    child_bp,
-                    child_layout,
-                    px,
-                    py,
-                    &[],
-                    depth + 1,
-                    test_self,
-                ) {
-                    return Some(hit);
-                }
-            }
-        }
-
-        // Layer 3: In-flow block-level descendants (front-to-back)
-        for &(_idx, child_bp, child_layout) in paired.iter().rev() {
-            if is_in_flow_non_sc(child_layout)
-                && child_layout.style.float == strata_style::types::Float::None
-                && !is_inline_level(child_layout)
-            {
-                if let Some(hit) = Self::hit_test_in_flow_non_hoisted(
-                    child_bp,
-                    child_layout,
-                    px,
-                    py,
-                    &[],
-                    depth + 1,
-                    test_self,
-                ) {
-                    return Some(hit);
-                }
-            }
-        }
-
-        None
-    }
-
-    fn hit_test_in_flow_non_hoisted<'a, T, F>(
-        bp: &'a NodeBlueprint,
-        layout: &'a LayoutNode,
-        px: f32,
-        py: f32,
-        inherited_steps: &[HitClipStep],
-        depth: usize,
-        test_self: &mut F,
-    ) -> Option<T>
-    where
-        F: FnMut(&'a NodeBlueprint, &'a LayoutNode, f32, f32) -> Option<T>,
-    {
-        if depth >= 256 || layout.style.display == strata_style::types::Display::None {
-            return None;
-        }
-        let eff_inherited = Self::effective_hit_clip_steps(layout, inherited_steps);
-        if !Self::hit_clip_steps_allow(eff_inherited, px, py) {
-            return None;
-        }
-        if (layout.style.overflow_x != strata_style::types::Overflow::Visible
-            || layout.style.overflow_y != strata_style::types::Overflow::Visible)
-            && !layout.geometry.border_box.contains_point(px, py)
-        {
-            return None;
-        }
-        if let Some(hit) =
-            Self::hit_test_direct_in_flow_children(bp, layout, px, py, depth, test_self)
-        {
-            return Some(hit);
-        }
-        test_self(bp, layout, px, py)
+        chain
     }
 
     pub(crate) fn is_portal_backdrop_bp(bp: &NodeBlueprint) -> bool {
@@ -426,153 +271,9 @@ impl AppRuntime {
         })
     }
 
-    fn hit_test_stacking_context_with<'a, T, F>(
-        bp: &'a NodeBlueprint,
-        layout: &'a LayoutNode,
-        px: f32,
-        py: f32,
-        inherited_steps: &[HitClipStep],
-        depth: usize,
-        test_self: &mut F,
-    ) -> Option<T>
-    where
-        F: FnMut(&'a NodeBlueprint, &'a LayoutNode, f32, f32) -> Option<T>,
-    {
-        if depth >= 256 || layout.style.display == strata_style::types::Display::None {
-            return None;
-        }
-
-        if depth == 0 {
-            let mut top_layer_portals = Vec::new();
-            Self::collect_top_layer_portals(bp, layout, &mut top_layer_portals, 0);
-            let mut blocked_backdrops = false;
-            for &(p_bp, p_layout) in top_layer_portals.iter().rev() {
-                let is_backdrop = Self::is_portal_backdrop_bp(p_bp);
-                if blocked_backdrops && is_backdrop {
-                    continue;
-                }
-                if let Some(hit) =
-                    Self::hit_test_stacking_context_with(p_bp, p_layout, px, py, &[], 1, test_self)
-                {
-                    return Some(hit);
-                }
-                if !is_backdrop
-                    && Self::top_layer_portal_node_is_visual_content(p_bp, p_layout, px, py, 0)
-                {
-                    blocked_backdrops = true;
-                }
-            }
-        }
-
-        let eff_inherited = Self::effective_hit_clip_steps(layout, inherited_steps);
-        let inherited_allows = Self::hit_clip_steps_allow(eff_inherited, px, py);
-
-        let (px, py) = Self::unproject_point(layout, px, py);
-
-        let own_clips = layout.style.overflow_x != strata_style::types::Overflow::Visible
-            || layout.style.overflow_y != strata_style::types::Overflow::Visible;
-        let own_allows = !own_clips || layout.geometry.border_box.contains_point(px, py);
-
-        let mut base_steps = Vec::with_capacity(eff_inherited.len() + 1);
-        base_steps.extend_from_slice(eff_inherited);
-        let own_step = Self::hit_clip_step_for(layout);
-        if own_step.clip.is_some() || own_step.is_abs_cb || own_step.is_fixed_cb {
-            base_steps.push(own_step);
-        }
-
-        let mut negative_z = Vec::new();
-        let mut auto_or_zero_z = Vec::new();
-        let mut positive_z = Vec::new();
-        Self::collect_hoisted_stacking_participants(
-            bp,
-            layout,
-            &base_steps,
-            &mut negative_z,
-            &mut auto_or_zero_z,
-            &mut positive_z,
-            depth + 1,
-        );
-
-        negative_z.sort_by_key(|(_, l, _)| l.style.z_index.unwrap_or(0));
-        positive_z.sort_by_key(|(_, l, _)| l.style.z_index.unwrap_or(0));
-
-        // Layer 7: Child stacking contexts with positive z-index (highest z-index first, reverse DOM on ties)
-        for (c_bp, c_layout, c_steps) in positive_z.iter().rev() {
-            if let Some(hit) = Self::hit_test_stacking_context_with(
-                c_bp,
-                c_layout,
-                px,
-                py,
-                c_steps,
-                depth + 1,
-                test_self,
-            ) {
-                return Some(hit);
-            }
-        }
-
-        // Layer 6: Positioned descendants with z-index: auto and child stacking contexts with z-index: 0
-        for (c_bp, c_layout, is_sc, c_steps) in auto_or_zero_z.iter().rev() {
-            let hit = if *is_sc {
-                Self::hit_test_stacking_context_with(
-                    c_bp,
-                    c_layout,
-                    px,
-                    py,
-                    c_steps,
-                    depth + 1,
-                    test_self,
-                )
-            } else {
-                Self::hit_test_in_flow_non_hoisted(
-                    c_bp,
-                    c_layout,
-                    px,
-                    py,
-                    c_steps,
-                    depth + 1,
-                    test_self,
-                )
-            };
-            if hit.is_some() {
-                return hit;
-            }
-        }
-
-        // Layers 5, 4, 3: In-flow inline, float, and block descendants
-        if inherited_allows && own_allows {
-            if let Some(hit) =
-                Self::hit_test_direct_in_flow_children(bp, layout, px, py, depth, test_self)
-            {
-                return Some(hit);
-            }
-        }
-
-        // Layer 2: Child stacking contexts with negative z-index (closest to 0 first, reverse DOM on ties)
-        for (c_bp, c_layout, c_steps) in negative_z.iter().rev() {
-            if let Some(hit) = Self::hit_test_stacking_context_with(
-                c_bp,
-                c_layout,
-                px,
-                py,
-                c_steps,
-                depth + 1,
-                test_self,
-            ) {
-                return Some(hit);
-            }
-        }
-
-        // Layer 1: Stacking context root element itself
-        if inherited_allows {
-            test_self(bp, layout, px, py)
-        } else {
-            None
-        }
-    }
-
-    /// Recursively hit tests a coordinate point against the blueprint and computed layout hierarchy,
-    /// returning the nearest listener registered for `event_type`, its element border box, and its `EntityId`.
+    /// Hit tests `(px, py)` matching W3C DOM semantics: first resolves the single front-most
+    /// visual `pointer-events != none` target path, then walks strictly up its DOM ancestor chain
+    /// to find the nearest listener registered for `event_type`, its border box, and its `EntityId`.
     pub fn hit_test_event_with_box_and_entity<'a>(
         blueprint: &'a NodeBlueprint,
         layout: &'a LayoutNode,
@@ -584,43 +285,8 @@ impl AppRuntime {
         &'a strata_layout::Rect,
         strata_primitives::EntityId,
     )> {
-        Self::hit_test_stacking_context_with(
-            blueprint,
-            layout,
-            px,
-            py,
-            &[],
-            0,
-            &mut |bp, node_layout, lx, ly| {
-                if matches!(
-                    node_layout.style.visibility,
-                    strata_style::types::Visibility::Hidden
-                ) || matches!(
-                    node_layout.style.pointer_events,
-                    strata_style::types::PointerEvents::None
-                ) {
-                    return None;
-                }
-                if let NodeBlueprint::Element { attributes, .. } = bp {
-                    if node_layout.geometry.border_box.contains_point(lx, ly) {
-                        for attr in attributes {
-                            if let strata_dom::Attribute::EventListener { event: ev, handler } =
-                                attr
-                            {
-                                if *ev == event_type {
-                                    return Some((
-                                        handler.clone(),
-                                        &node_layout.geometry.border_box,
-                                        node_layout.entity_id,
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-                None
-            },
-        )
+        let visual_path = Self::hit_test_node_path(blueprint, layout, px, py)?;
+        Self::find_event_at_or_above_path(blueprint, layout, &visual_path, event_type)
     }
 
     /// Recursively hit tests a coordinate point against the blueprint and computed layout hierarchy,
@@ -651,24 +317,8 @@ impl AppRuntime {
         &'a strata_layout::Rect,
         strata_primitives::EntityId,
     )> {
-        for len in (0..=path.len()).rev() {
-            let prefix = &path[..len];
-            let Some(bp) = Self::find_blueprint_at_path(blueprint, prefix) else {
-                continue;
-            };
-            let mut node_layout = layout;
-            let mut valid = true;
-            for &idx in prefix {
-                if let Some(child) = node_layout.children.get(idx) {
-                    node_layout = child;
-                } else {
-                    valid = false;
-                    break;
-                }
-            }
-            if !valid {
-                continue;
-            }
+        let chain = Self::resolve_chain_for_path(blueprint, layout, path);
+        for (bp, node_layout) in chain.into_iter().rev() {
             if let NodeBlueprint::Element { attributes, .. } = bp {
                 for attr in attributes {
                     if let strata_dom::Attribute::EventListener { event: ev, handler } = attr {
@@ -708,116 +358,101 @@ impl AppRuntime {
         Self::hit_test_event(blueprint, layout, px, py, strata_dom::EventType::Click)
     }
 
-    /// Recursively hit tests a coordinate point against the blueprint and computed layout hierarchy to determine cursor style.
+    /// Hit tests `(px, py)` against the front-most visual target and its DOM ancestors
+    /// to determine cursor style without piercing through opaque higher-z overlays.
     pub fn hit_test_cursor(
         blueprint: &NodeBlueprint,
         layout: &LayoutNode,
         px: f32,
         py: f32,
     ) -> strata_platform::window::CursorIcon {
-        Self::hit_test_stacking_context_with(
-            blueprint,
-            layout,
-            px,
-            py,
-            &[],
-            0,
-            &mut |bp, node_layout, lx, ly| {
-                if matches!(
-                    node_layout.style.visibility,
-                    strata_style::types::Visibility::Hidden
-                ) || matches!(
-                    node_layout.style.pointer_events,
-                    strata_style::types::PointerEvents::None
-                ) {
-                    return None;
-                }
-                if let NodeBlueprint::Element {
-                    tag,
-                    classes,
-                    attributes,
-                    ..
-                } = bp
-                {
-                    if node_layout.geometry.border_box.contains_point(lx, ly) {
-                        match node_layout.style.cursor {
-                            strata_style::types::Cursor::Pointer => {
-                                return Some(strata_platform::window::CursorIcon::Pointer)
-                            }
-                            strata_style::types::Cursor::Text => {
-                                return Some(strata_platform::window::CursorIcon::Text)
-                            }
-                            strata_style::types::Cursor::Crosshair => {
-                                return Some(strata_platform::window::CursorIcon::Crosshair)
-                            }
-                            strata_style::types::Cursor::Move => {
-                                return Some(strata_platform::window::CursorIcon::Move)
-                            }
-                            strata_style::types::Cursor::NotAllowed => {
-                                return Some(strata_platform::window::CursorIcon::NotAllowed)
-                            }
-                            strata_style::types::Cursor::Wait => {
-                                return Some(strata_platform::window::CursorIcon::Wait)
-                            }
-                            strata_style::types::Cursor::Grab => {
-                                return Some(strata_platform::window::CursorIcon::Grab)
-                            }
-                            strata_style::types::Cursor::Grabbing => {
-                                return Some(strata_platform::window::CursorIcon::Grabbing)
-                            }
-                            strata_style::types::Cursor::ColResize => {
-                                return Some(strata_platform::window::CursorIcon::ColResize)
-                            }
-                            strata_style::types::Cursor::RowResize => {
-                                return Some(strata_platform::window::CursorIcon::RowResize)
-                            }
-                            strata_style::types::Cursor::Help => {
-                                return Some(strata_platform::window::CursorIcon::Help)
-                            }
-                            strata_style::types::Cursor::None => {
-                                return Some(strata_platform::window::CursorIcon::None)
-                            }
-                            strata_style::types::Cursor::Default => {}
-                        }
-
-                        let has_pointer = matches!(tag, Tag::Button | Tag::A)
-                            || classes.iter().any(|c| {
-                                c.split_whitespace()
-                                    .any(|tok| tok == "cursor-pointer" || tok == "pointer")
-                            })
-                            || attributes.iter().any(|a| {
-                                matches!(
-                                    a,
-                                    strata_dom::Attribute::EventListener {
-                                        event: strata_dom::EventType::Click,
-                                        ..
-                                    }
-                                )
-                            });
-
-                        if has_pointer {
-                            return Some(strata_platform::window::CursorIcon::Pointer);
-                        }
-
-                        let has_text_cursor = matches!(tag, Tag::Input | Tag::Textarea)
-                            || classes.iter().any(|c| {
-                                c.split_whitespace()
-                                    .any(|tok| tok == "cursor-text" || tok == "select-text")
-                            });
-
-                        if has_text_cursor {
-                            return Some(strata_platform::window::CursorIcon::Text);
-                        }
+        let Some(visual_path) = Self::hit_test_node_path(blueprint, layout, px, py) else {
+            return strata_platform::window::CursorIcon::Default;
+        };
+        let chain = Self::resolve_chain_for_path(blueprint, layout, &visual_path);
+        for (bp, node_layout) in chain.into_iter().rev() {
+            if let NodeBlueprint::Element {
+                tag,
+                classes,
+                attributes,
+                ..
+            } = bp
+            {
+                match node_layout.style.cursor {
+                    strata_style::types::Cursor::Pointer => {
+                        return strata_platform::window::CursorIcon::Pointer
                     }
+                    strata_style::types::Cursor::Text => {
+                        return strata_platform::window::CursorIcon::Text
+                    }
+                    strata_style::types::Cursor::Crosshair => {
+                        return strata_platform::window::CursorIcon::Crosshair
+                    }
+                    strata_style::types::Cursor::Move => {
+                        return strata_platform::window::CursorIcon::Move
+                    }
+                    strata_style::types::Cursor::NotAllowed => {
+                        return strata_platform::window::CursorIcon::NotAllowed
+                    }
+                    strata_style::types::Cursor::Wait => {
+                        return strata_platform::window::CursorIcon::Wait
+                    }
+                    strata_style::types::Cursor::Grab => {
+                        return strata_platform::window::CursorIcon::Grab
+                    }
+                    strata_style::types::Cursor::Grabbing => {
+                        return strata_platform::window::CursorIcon::Grabbing
+                    }
+                    strata_style::types::Cursor::ColResize => {
+                        return strata_platform::window::CursorIcon::ColResize
+                    }
+                    strata_style::types::Cursor::RowResize => {
+                        return strata_platform::window::CursorIcon::RowResize
+                    }
+                    strata_style::types::Cursor::Help => {
+                        return strata_platform::window::CursorIcon::Help
+                    }
+                    strata_style::types::Cursor::None => {
+                        return strata_platform::window::CursorIcon::None
+                    }
+                    strata_style::types::Cursor::Default => {}
                 }
-                None
-            },
-        )
-        .unwrap_or(strata_platform::window::CursorIcon::Default)
+
+                let has_pointer = matches!(tag, Tag::Button | Tag::A)
+                    || classes.iter().any(|c| {
+                        c.split_whitespace()
+                            .any(|tok| tok == "cursor-pointer" || tok == "pointer")
+                    })
+                    || attributes.iter().any(|a| {
+                        matches!(
+                            a,
+                            strata_dom::Attribute::EventListener {
+                                event: strata_dom::EventType::Click,
+                                ..
+                            }
+                        )
+                    });
+
+                if has_pointer {
+                    return strata_platform::window::CursorIcon::Pointer;
+                }
+
+                let has_text_cursor = matches!(tag, Tag::Input | Tag::Textarea)
+                    || classes.iter().any(|c| {
+                        c.split_whitespace()
+                            .any(|tok| tok == "cursor-text" || tok == "select-text")
+                    });
+
+                if has_text_cursor {
+                    return strata_platform::window::CursorIcon::Text;
+                }
+            }
+        }
+        strata_platform::window::CursorIcon::Default
     }
 
-    /// Finds the value of the deepest element property `key` whose border box contains the point.
-    /// Elements are tested front-to-back according to CSS stacking contexts so overlays win over what they cover.
+    /// Finds the value of the nearest element property `key` along the front-most visual target
+    /// and its DOM ancestors at `(px, py)` without piercing through opaque higher-z overlays.
     pub fn hit_test_property(
         blueprint: &NodeBlueprint,
         layout: &LayoutNode,
@@ -825,36 +460,19 @@ impl AppRuntime {
         py: f32,
         key: &str,
     ) -> Option<String> {
-        Self::hit_test_stacking_context_with(
-            blueprint,
-            layout,
-            px,
-            py,
-            &[],
-            0,
-            &mut |bp, node_layout, lx, ly| {
-                if matches!(
-                    node_layout.style.visibility,
-                    strata_style::types::Visibility::Hidden
-                ) || matches!(
-                    node_layout.style.pointer_events,
-                    strata_style::types::PointerEvents::None
-                ) {
-                    return None;
-                }
-                if let NodeBlueprint::Element { attributes, .. } = bp {
-                    if node_layout.geometry.border_box.contains_point(lx, ly) {
-                        for attr in attributes {
-                            if let strata_dom::Attribute::Property { key: k, value } = attr {
-                                if k == key {
-                                    return Some(value.clone());
-                                }
-                            }
+        let visual_path = Self::hit_test_node_path(blueprint, layout, px, py)?;
+        let chain = Self::resolve_chain_for_path(blueprint, layout, &visual_path);
+        for (bp, _) in chain.into_iter().rev() {
+            if let NodeBlueprint::Element { attributes, .. } = bp {
+                for attr in attributes {
+                    if let strata_dom::Attribute::Property { key: k, value } = attr {
+                        if k == key {
+                            return Some(value.clone());
                         }
                     }
                 }
-                None
-            },
-        )
+            }
+        }
+        None
     }
 }

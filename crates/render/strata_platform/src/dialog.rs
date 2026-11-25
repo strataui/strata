@@ -940,10 +940,30 @@ mod macos_backend {
     use std::ffi::{c_char, c_void, CString};
     use std::path::PathBuf;
 
+    #[link(name = "objc")]
     extern "C" {
         fn objc_getClass(name: *const c_char) -> *mut c_void;
         fn sel_registerName(name: *const c_char) -> *mut c_void;
         fn objc_msgSend();
+    }
+
+    #[link(name = "AppKit", kind = "framework")]
+    extern "C" {
+        static NSApp: *mut c_void;
+    }
+
+    unsafe fn is_appkit_main_thread_ready() -> bool {
+        if NSApp.is_null() {
+            return false;
+        }
+        let thread_cls = objc_getClass(b"NSThread\0".as_ptr() as *const c_char);
+        if thread_cls.is_null() {
+            return false;
+        }
+        let is_main_sel = sel_registerName(b"isMainThread\0".as_ptr() as *const c_char);
+        let msg_bool: unsafe extern "C" fn(*mut c_void, *mut c_void) -> i8 =
+            std::mem::transmute(objc_msgSend as *const ());
+        msg_bool(thread_cls, is_main_sel) != 0
     }
 
     pub fn open_file(options: &OpenFileOptions) -> Option<PathBuf> {
@@ -957,6 +977,9 @@ mod macos_backend {
 
     fn run_open_panel(options: &OpenFileOptions, multiple: bool) -> Vec<PathBuf> {
         unsafe {
+            if !is_appkit_main_thread_ready() {
+                return Vec::new();
+            }
             let panel_cls = objc_getClass(b"NSOpenPanel\0".as_ptr() as *const c_char);
             if panel_cls.is_null() {
                 return Vec::new();
@@ -1010,6 +1033,9 @@ mod macos_backend {
 
     pub fn save_file(options: &SaveFileOptions) -> Option<PathBuf> {
         unsafe {
+            if !is_appkit_main_thread_ready() {
+                return None;
+            }
             let panel_cls = objc_getClass(b"NSSavePanel\0".as_ptr() as *const c_char);
             if panel_cls.is_null() {
                 return None;
@@ -1058,6 +1084,9 @@ mod macos_backend {
 
     pub fn pick_folder(options: &PickFolderOptions) -> Option<PathBuf> {
         unsafe {
+            if !is_appkit_main_thread_ready() {
+                return None;
+            }
             let panel_cls = objc_getClass(b"NSOpenPanel\0".as_ptr() as *const c_char);
             if panel_cls.is_null() {
                 return None;
@@ -1115,6 +1144,9 @@ mod macos_backend {
         buttons: MessageBoxButtons,
     ) -> MessageBoxResult {
         unsafe {
+            if !is_appkit_main_thread_ready() {
+                return MessageBoxResult::Ok;
+            }
             let alert_cls = objc_getClass(b"NSAlert\0".as_ptr() as *const c_char);
             if alert_cls.is_null() {
                 return MessageBoxResult::Ok;

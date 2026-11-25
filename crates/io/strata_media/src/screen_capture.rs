@@ -119,7 +119,7 @@ impl MockScreenCapture {
         let tile = 16usize;
         for y in 0..h {
             for x in 0..w {
-                let dark = ((x / tile) + (y / tile)) % 2 == 0;
+                let dark = ((x / tile) + (y / tile)).is_multiple_of(2);
                 let base = if dark { 24u8 } else { 42u8 };
                 let accent = ((seq as u8).wrapping_mul(17)) & 0x3F;
                 let d = (y * w + x) * 4;

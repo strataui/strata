@@ -16,6 +16,8 @@ use std::collections::VecDeque;
 use std::ffi::{c_char, c_void, CString};
 use std::time::Instant;
 
+#[link(name = "objc")]
+#[link(name = "AppKit", kind = "framework")]
 extern "C" {
     fn objc_getClass(name: *const c_char) -> *mut c_void;
     fn sel_registerName(name: *const c_char) -> *mut c_void;
@@ -390,7 +392,7 @@ impl MacOsWindow {
                 msg_update(app, update_windows_sel);
             }
         }
-        self.poll_events()
+        self.event_queue.drain(..).collect()
     }
 }
 
@@ -869,6 +871,8 @@ fn map_macos_key_code(code: u16) -> Option<KeyCode> {
         0x21 => Some(KeyCode::BracketLeft),
         0x1E => Some(KeyCode::BracketRight),
         0x29 => Some(KeyCode::Semicolon),
+        0x27 => Some(KeyCode::Quote),
+        0x2A => Some(KeyCode::Backslash),
         0x32 => Some(KeyCode::Backquote),
         _ => None,
     }

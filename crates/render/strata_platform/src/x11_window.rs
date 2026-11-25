@@ -1768,7 +1768,9 @@ pub fn map_x11_pure_keycode(keycode: u8) -> (KeyCode, Option<char>) {
         37 => (KeyCode::KeyK, Some('k')),
         38 => (KeyCode::KeyL, Some('l')),
         39 => (KeyCode::Semicolon, Some(';')),
+        40 => (KeyCode::Quote, Some('\'')),
         41 => (KeyCode::Backquote, Some('`')),
+        43 => (KeyCode::Backslash, Some('\\')),
         44 => (KeyCode::KeyZ, Some('z')),
         45 => (KeyCode::KeyX, Some('x')),
         46 => (KeyCode::KeyC, Some('c')),
@@ -1810,6 +1812,8 @@ pub fn map_x11_keysym(keysym: xlib::KeySym) -> KeyCode {
         0x005B | 0x007B => KeyCode::BracketLeft,
         0x005D | 0x007D => KeyCode::BracketRight,
         0x003B | 0x003A => KeyCode::Semicolon,
+        0x0027 | 0x0022 => KeyCode::Quote,
+        0x005C | 0x007C => KeyCode::Backslash,
         0x0060 | 0x007E => KeyCode::Backquote,
         0x0030..=0x0039 => match keysym - 0x0030 {
             0 => KeyCode::Digit0,

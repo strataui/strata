@@ -455,9 +455,9 @@ fn test_right_click_dispatches_onmousedown_and_onmouseup_with_button_and_size() 
     use std::rc::Rc;
     use strata_render::scene3d::{RetainedCameraUniforms, RetainedScene3D};
 
+    type PointerEventEntry = (&'static str, i16, f64, f64, f64, f64);
     let retained = RetainedScene3D::new(RetainedCameraUniforms::default());
-    let log: Rc<RefCell<Vec<(&'static str, i16, f64, f64, f64, f64)>>> =
-        Rc::new(RefCell::new(Vec::new()));
+    let log: Rc<RefCell<Vec<PointerEventEntry>>> = Rc::new(RefCell::new(Vec::new()));
     let log_down = log.clone();
     let log_up = log.clone();
 

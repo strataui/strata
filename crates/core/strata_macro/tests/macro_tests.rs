@@ -31,15 +31,15 @@ fn test_rsx_simple_elements() {
         </div>
     };
 
-    match node.root {
+    match &node.root {
         NodeBlueprint::Element {
             tag,
             classes,
             attributes,
             children,
         } => {
-            assert_eq!(tag, Tag::Div);
-            assert_eq!(classes, vec!["container".to_string()]);
+            assert_eq!(*tag, Tag::Div);
+            assert_eq!(*classes, vec!["container".to_string()]);
             assert!(attributes.iter().any(|a| matches!(a, Attribute::Property { key, value } if key == "id" && value == "main")));
             assert_eq!(children.len(), 1);
             match &children[0] {
@@ -68,9 +68,9 @@ fn test_rsx_void_tags_and_boolean_attributes() {
         </form>
     };
 
-    match node.root {
+    match &node.root {
         NodeBlueprint::Element { tag, children, .. } => {
-            assert_eq!(tag, Tag::Form);
+            assert_eq!(*tag, Tag::Form);
             assert_eq!(children.len(), 3);
         }
         _ => panic!("Expected element node"),
@@ -95,9 +95,9 @@ fn test_rsx_expression_interpolation() {
         </div>
     };
 
-    match node.root {
+    match &node.root {
         NodeBlueprint::Element { tag, children, .. } => {
-            assert_eq!(tag, Tag::Div);
+            assert_eq!(*tag, Tag::Div);
             assert!(children.len() >= 3);
         }
         _ => panic!("Expected element node"),
@@ -115,11 +115,11 @@ fn test_rsx_event_listeners() {
         </button>
     };
 
-    match node.root {
+    match &node.root {
         NodeBlueprint::Element {
             tag, attributes, ..
         } => {
-            assert_eq!(tag, Tag::Button);
+            assert_eq!(*tag, Tag::Button);
             let has_listener = attributes
                 .iter()
                 .any(|a| matches!(a, Attribute::EventListener { .. }));
@@ -141,7 +141,7 @@ fn test_rsx_snake_case_event_names_normalize() {
         </button>
     };
 
-    match node.root {
+    match &node.root {
         NodeBlueprint::Element { attributes, .. } => {
             let events: Vec<EventType> = attributes
                 .iter()
@@ -169,9 +169,9 @@ fn test_component_macro_and_builder_syntax() {
         </div>
     };
 
-    match rsx_view.root {
+    match &rsx_view.root {
         NodeBlueprint::Element { tag, children, .. } => {
-            assert_eq!(tag, Tag::Div);
+            assert_eq!(*tag, Tag::Div);
             assert_eq!(children.len(), 2);
         }
         _ => panic!("Expected element node"),
@@ -183,8 +183,8 @@ fn test_component_macro_and_builder_syntax() {
         .subtitle(None)
         .build();
 
-    match built_header.root {
-        NodeBlueprint::Element { tag, .. } => assert_eq!(tag, Tag::Header),
+    match &built_header.root {
+        NodeBlueprint::Element { tag, .. } => assert_eq!(*tag, Tag::Header),
         _ => panic!("Expected header element"),
     }
 
@@ -343,7 +343,7 @@ fn test_rsx_class_deduplication_and_compile_time_bitmasking() {
         <div class="p-4 flex bg-neutral-900 text-white rounded-lg shadow-md border border-neutral-800 m-2 cursor-pointer" />
     };
 
-    match view.root {
+    match &view.root {
         NodeBlueprint::Element { classes, .. } => {
             // Verify that it is a Masked variant with 10 classes encoded in the bitmask
             assert_eq!(classes.len(), 10);
@@ -378,7 +378,7 @@ fn test_rsx_class_deduplication_removes_redundant_tokens() {
         <div class="flex p-4 flex p-4 flex text-white text-white" />
     };
 
-    match view.root {
+    match &view.root {
         NodeBlueprint::Element { classes, .. } => {
             assert_eq!(classes.len(), 3);
             assert!(classes.contains("flex"));
@@ -461,9 +461,9 @@ fn test_rsx_path_qualified_components_and_portals() {
         </div>
     };
 
-    match view.root {
+    match &view.root {
         NodeBlueprint::Element { tag, children, .. } => {
-            assert_eq!(tag, Tag::Div);
+            assert_eq!(*tag, Tag::Div);
             assert_eq!(children.len(), 9);
 
             // First 4 children are path-qualified `<strata_dom::Portal>` / `<::strata_dom::Portal>` nodes
@@ -507,7 +507,7 @@ fn test_zero_prop_self_closing_component_with_optional_params() {
             <OptionalToastHost max_visible={5} />
         </div>
     };
-    match view.root {
+    match &view.root {
         NodeBlueprint::Element { children, .. } => {
             assert_eq!(children.len(), 2);
             match &children[0] {
@@ -746,7 +746,7 @@ fn test_generic_component_option_string_defaults_and_spread() {
     let v_el = rsx! {
         <div id="root" {..extra} data-c="3" />
     };
-    if let NodeBlueprint::Element { attributes, .. } = v_el.root {
+    if let NodeBlueprint::Element { attributes, .. } = &v_el.root {
         let pairs: Vec<(&str, &str)> = attributes
             .iter()
             .filter_map(|a| match a {
@@ -786,6 +786,7 @@ fn test_component_scoped_hooks_context_and_error_boundary() {
 
     let theme_ctx: Context<String> = create_context("light".to_string());
 
+    #[allow(clippy::too_many_arguments)]
     #[component]
     fn StatefulLeaf(
         dep_ver: i32,
@@ -852,6 +853,7 @@ fn test_component_scoped_hooks_context_and_error_boundary() {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[component]
     fn HostApp(
         show_second: bool,
@@ -989,10 +991,11 @@ fn test_component_scoped_hooks_context_and_error_boundary() {
     assert_eq!(use_context(&theme_ctx), "light");
 
     // ErrorBoundary: catches render panic, latches fallback, and recovers on reset()
+    type ResetHandle = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
     let should_panic = Rc::new(Cell::new(true));
-    let reset_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let reset_handle: ResetHandle = Rc::new(RefCell::new(None));
 
-    let render_boundary = |sp: &Rc<Cell<bool>>, rh: &Rc<RefCell<Option<Rc<dyn Fn()>>>>| {
+    let render_boundary = |sp: &Rc<Cell<bool>>, rh: &ResetHandle| {
         let sp = sp.clone();
         let rh = rh.clone();
         rsx! {
@@ -1030,6 +1033,7 @@ struct CustomPanelOptions {
     retries: u32,
 }
 
+#[allow(clippy::too_many_arguments)]
 #[component]
 fn NonOptionDefaultsPanel(
     title: String,
@@ -1075,7 +1079,7 @@ fn test_component_non_option_default_empty_values_and_prop_default_attrs() {
     // Omitting all String, &str, bool, numeric, Vec, ClassList, and #[prop(default*)] props must
     // NOT panic at runtime and must populate their empty/configured defaults cleanly.
     let v_empty = rsx! { <NonOptionDefaultsPanel /> };
-    if let NodeBlueprint::Element { attributes, .. } = v_empty.root {
+    if let NodeBlueprint::Element { attributes, .. } = &v_empty.root {
         let get_attr = |k: &str| -> Option<String> {
             attributes.iter().find_map(|a| match a {
                 Attribute::Property { key, value } if key == k => Some(value.clone()),
@@ -1117,7 +1121,7 @@ fn test_component_non_option_default_empty_values_and_prop_default_attrs() {
             <span>{"Child"}</span>
         </NonOptionDefaultsPanel>
     };
-    if let NodeBlueprint::Element { attributes, .. } = v_set.root {
+    if let NodeBlueprint::Element { attributes, .. } = &v_set.root {
         let get_attr = |k: &str| -> Option<String> {
             attributes.iter().find_map(|a| match a {
                 Attribute::Property { key, value } if key == k => Some(value.clone()),
@@ -1188,7 +1192,7 @@ fn test_component_typed_and_unit_onclick_callbacks() {
             onclick={move |ev: strata_dom::Event| clicked_x_cb.set(ev.client_x)}
         />
     };
-    if let NodeBlueprint::Element { attributes, .. } = view_typed.root {
+    if let NodeBlueprint::Element { attributes, .. } = &view_typed.root {
         let handler = attributes
             .iter()
             .find_map(|a| match a {
@@ -1199,8 +1203,10 @@ fn test_component_typed_and_unit_onclick_callbacks() {
                 _ => None,
             })
             .expect("Expected EventType::Click handler");
-        let mut ev = strata_dom::Event::default();
-        ev.client_x = 128.5;
+        let ev = strata_dom::Event {
+            client_x: 128.5,
+            ..strata_dom::Event::default()
+        };
         handler(ev);
         assert!((clicked_x.get() - 128.5).abs() < 1e-6);
     } else {
@@ -1220,7 +1226,7 @@ fn test_component_typed_and_unit_onclick_callbacks() {
             onclick={move |idx: usize| seen_idx_cb.set(idx)}
         />
     };
-    if let NodeBlueprint::Element { attributes, .. } = view_indexed.root {
+    if let NodeBlueprint::Element { attributes, .. } = &view_indexed.root {
         let handler = attributes
             .iter()
             .find_map(|a| match a {
@@ -1248,7 +1254,7 @@ fn test_component_typed_and_unit_onclick_callbacks() {
             <UnitActionButtonRequired onclick={move || req_cb.set(req_cb.get() + 1)} />
         </div>
     };
-    if let NodeBlueprint::Element { children, .. } = v_units.root {
+    if let NodeBlueprint::Element { children, .. } = &v_units.root {
         for child in children {
             if let NodeBlueprint::Element { attributes, .. } = child {
                 for a in attributes {
@@ -1304,7 +1310,7 @@ fn test_component_children_view_and_node_blueprint_support() {
             <span>{"Two"}</span>
         </ViewSlotCard>
     };
-    if let NodeBlueprint::Element { children, .. } = v_multi.root {
+    if let NodeBlueprint::Element { children, .. } = &v_multi.root {
         assert_eq!(children.len(), 2);
         if let NodeBlueprint::Element { children: body_children, .. } = &children[1] {
             assert_eq!(body_children.len(), 1);
@@ -1322,7 +1328,7 @@ fn test_component_children_view_and_node_blueprint_support() {
 
     // Omitted children on children: View defaults cleanly to NodeBlueprint::Empty
     let v_empty = rsx! { <ViewSlotCard title="Empty" /> };
-    if let NodeBlueprint::Element { children, .. } = v_empty.root {
+    if let NodeBlueprint::Element { children, .. } = &v_empty.root {
         if let NodeBlueprint::Element { children: body_children, .. } = &children[1] {
             assert!(matches!(body_children.as_slice(), [NodeBlueprint::Empty]));
         } else {
@@ -1334,7 +1340,7 @@ fn test_component_children_view_and_node_blueprint_support() {
 
     // children: Option<View> omitted vs provided
     let v_opt_none = rsx! { <OptViewSlotCard /> };
-    if let NodeBlueprint::Element { children, .. } = v_opt_none.root {
+    if let NodeBlueprint::Element { children, .. } = &v_opt_none.root {
         assert!(matches!(
             &children[0],
             NodeBlueprint::Element { tag: Tag::Span, .. }
@@ -1348,7 +1354,7 @@ fn test_component_children_view_and_node_blueprint_support() {
             <p>{"Provided"}</p>
         </OptViewSlotCard>
     };
-    if let NodeBlueprint::Element { children, .. } = v_opt_some.root {
+    if let NodeBlueprint::Element { children, .. } = &v_opt_some.root {
         assert!(matches!(
             &children[0],
             NodeBlueprint::Element { tag: Tag::P, .. }
@@ -1363,7 +1369,7 @@ fn test_component_children_view_and_node_blueprint_support() {
             <span>{"Leaf"}</span>
         </SingleNodeSlotCard>
     };
-    if let NodeBlueprint::Element { children, .. } = v_node_single.root {
+    if let NodeBlueprint::Element { children, .. } = &v_node_single.root {
         assert!(matches!(
             &children[0],
             NodeBlueprint::Element { tag: Tag::Span, .. }
@@ -1373,7 +1379,7 @@ fn test_component_children_view_and_node_blueprint_support() {
     }
 
     let v_node_empty = rsx! { <SingleNodeSlotCard /> };
-    if let NodeBlueprint::Element { children, .. } = v_node_empty.root {
+    if let NodeBlueprint::Element { children, .. } = &v_node_empty.root {
         assert!(matches!(&children[0], NodeBlueprint::Empty));
     } else {
         panic!("Expected Element");

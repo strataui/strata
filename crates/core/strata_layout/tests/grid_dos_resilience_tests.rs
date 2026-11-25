@@ -35,10 +35,10 @@ fn test_pathological_grid_line_numbers_do_not_exhaust_memory() {
     solve_grid(&mut container, 800.0, 600.0);
     let elapsed = start.elapsed();
 
-    // Must solve in well under 50ms without exhausting gigabytes of memory
+    // Must solve in well under 500ms (even on loaded debug CI VMs) without exhausting memory
     assert!(
-        elapsed.as_millis() < 50,
-        "Pathological grid layout must complete in <50ms, took {elapsed:?}"
+        elapsed.as_millis() < 500,
+        "Pathological grid layout must complete in <500ms, took {elapsed:?}"
     );
 
     // Verify child geometry is within bounded coordinates

@@ -383,9 +383,7 @@ impl EchoCanceller {
                 if m == constrain_partition || m_count <= 8 {
                     self.fft_buf_a.copy_from_slice(w_slice);
                     self.plan.inverse(&mut self.fft_buf_a);
-                    for i in b..n {
-                        self.fft_buf_a[i] = Complex::zero();
-                    }
+                    self.fft_buf_a[b..n].fill(Complex::zero());
                     self.plan.forward(&mut self.fft_buf_a);
                     w_slice.copy_from_slice(&self.fft_buf_a);
                 }

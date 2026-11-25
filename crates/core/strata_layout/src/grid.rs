@@ -48,6 +48,10 @@ pub fn solve_grid_with_subgrid_guarded(
     guard: crate::tree::LayoutDepthGuard,
 ) {
     let _prof = crate::prof::Scope::new(crate::prof::Slot::Grid);
+    if guard.is_exhausted() {
+        crate::tree::record_layout_overflow(guard.current_depth(), guard.max_depth());
+        return;
+    }
     let padding = container.style.padding;
     let border = container.style.border_width;
     let margin = container.style.margin;
@@ -702,6 +706,7 @@ pub fn solve_grid_with_subgrid_guarded(
                     child.style.border_width,
                     child.style.margin,
                 );
+                child.applied_relative_offset = (0.0, 0.0);
                 child.geometry.snap_to_pixel();
                 let sub_cols = if is_child_subgrid_cols {
                     let end = (item.col_start + item.col_span).min(col_sizes.len());
@@ -725,6 +730,7 @@ pub fn solve_grid_with_subgrid_guarded(
         if let Some(cg) = child_guard {
             child.geometry.border_box.x = 0.0;
             child.geometry.border_box.y = 0.0;
+            child.applied_relative_offset = (0.0, 0.0);
             child.compute_layout_guarded(span_width, span_height, None, 0.0, cg);
 
             let stretch_w = if child.style.width == strata_style::types::Dimension::Auto
@@ -779,6 +785,7 @@ pub fn solve_grid_with_subgrid_guarded(
                     child.style.border_width,
                     child.style.margin,
                 );
+                child.applied_relative_offset = (0.0, 0.0);
                 if !child.children.is_empty() {
                     child.layout_children_guarded(cg);
                 } else {

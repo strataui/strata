@@ -108,7 +108,7 @@ impl AppRuntime {
         let (mx, my) = self.last_mouse_pos;
         let is_recent_scroll = self
             .last_scroll_interaction
-            .is_some_and(|t| t.elapsed().as_millis() < 700);
+            .is_some_and(|t| self.elapsed_since(t).as_millis() < 700);
         let mut cached_hit: Option<Option<Vec<usize>>> = None;
         let mut overlays = Vec::with_capacity(self.active_scrollbars.len());
 
@@ -208,7 +208,7 @@ impl AppRuntime {
         let (mx, my) = self.last_mouse_pos;
         let is_recent_scroll = self
             .last_scroll_interaction
-            .is_some_and(|t| t.elapsed().as_millis() < 700);
+            .is_some_and(|t| self.elapsed_since(t).as_millis() < 700);
         let mut cached_hit: Option<Option<Vec<usize>>> = None;
 
         for bar in &self.active_scrollbars {
@@ -314,7 +314,7 @@ impl AppRuntime {
 
         if on_thumb {
             self.active_smooth_scroll = None;
-            self.last_scroll_interaction = Some(std::time::Instant::now());
+            self.last_scroll_interaction = Some(self.now());
             self.scrollbar_drag = Some(ScrollbarDrag {
                 is_id: bar.is_id,
                 id: bar.id,
@@ -329,7 +329,7 @@ impl AppRuntime {
             // Click landed on track gutter (above or below thumb):
             // Jump thumb center to clicked position and start dragging immediately.
             self.active_smooth_scroll = None;
-            self.last_scroll_interaction = Some(std::time::Instant::now());
+            self.last_scroll_interaction = Some(self.now());
             let click_travel = (py - bar.track_bounds.y - bar.thumb_bounds.height / 2.0)
                 .clamp(0.0, bar.available_travel);
             let target_scroll_y = if bar.available_travel > 0.0 {
@@ -386,7 +386,7 @@ impl AppRuntime {
             let cur_y = bar.scroll_y;
             let dy = new_scroll_y - cur_y;
             if dy.abs() > 0.01 {
-                self.last_scroll_interaction = Some(std::time::Instant::now());
+                self.last_scroll_interaction = Some(self.now());
                 self.apply_scroll_delta_to_container(
                     &drag.path,
                     drag.is_id,

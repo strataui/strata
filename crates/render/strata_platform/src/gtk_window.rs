@@ -2248,7 +2248,7 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                         logical.height() as f64 / pango::SCALE as f64
                     })
                     .filter(|h| h.is_finite() && *h > 0.5)
-                    .unwrap_or_else(|| (*font_size as f64) * 1.2);
+                    .unwrap_or((*font_size as f64) * 1.2);
                 let extra_spacing_px =
                     (target_line_step - natural_line_h_px).max(-natural_line_h_px * 0.35);
                 if extra_spacing_px.abs() > 0.01 {
@@ -5067,7 +5067,7 @@ mod gtk_gpu_x11 {
             // Across 5 line steps, (2.2 - 1.2) * 13px * 5 = +65px vertical delta.
             let delta = y_loose as isize - y_tight as isize;
             assert!(
-                delta >= 50 && delta <= 80,
+                (50..=80).contains(&delta),
                 "Pango DrawText must apply line_height spacing (y_tight={}, y_loose={}, delta={})",
                 y_tight,
                 y_loose,
@@ -5683,6 +5683,8 @@ fn map_key_name_to_keycode(key_name: &str) -> crate::events::KeyCode {
         "bracketleft" | "braceleft" => crate::events::KeyCode::BracketLeft,
         "bracketright" | "braceright" => crate::events::KeyCode::BracketRight,
         "semicolon" | "colon" => crate::events::KeyCode::Semicolon,
+        "apostrophe" | "quotedbl" => crate::events::KeyCode::Quote,
+        "backslash" | "bar" => crate::events::KeyCode::Backslash,
         "grave" | "asciitilde" => crate::events::KeyCode::Backquote,
         _ => crate::events::KeyCode::Unknown,
     }
@@ -5730,7 +5732,9 @@ fn map_evdev_hardware_keycode(hw_code: u16) -> crate::events::KeyCode {
         45 => crate::events::KeyCode::KeyK,
         46 => crate::events::KeyCode::KeyL,
         47 => crate::events::KeyCode::Semicolon,
+        48 => crate::events::KeyCode::Quote,
         49 => crate::events::KeyCode::Backquote,
+        51 => crate::events::KeyCode::Backslash,
         52 => crate::events::KeyCode::KeyZ,
         53 => crate::events::KeyCode::KeyX,
         54 => crate::events::KeyCode::KeyC,
@@ -7442,7 +7446,13 @@ mod frameless_resize_tests {
         assert_eq!(super::resolve_gtk_keycode("bracketleft", 34), KeyCode::BracketLeft);
         assert_eq!(super::resolve_gtk_keycode("bracketright", 35), KeyCode::BracketRight);
         assert_eq!(super::resolve_gtk_keycode("semicolon", 47), KeyCode::Semicolon);
+        assert_eq!(super::resolve_gtk_keycode("apostrophe", 48), KeyCode::Quote);
+        assert_eq!(super::resolve_gtk_keycode("quotedbl", 48), KeyCode::Quote);
+        assert_eq!(super::resolve_gtk_keycode("backslash", 51), KeyCode::Backslash);
+        assert_eq!(super::resolve_gtk_keycode("bar", 51), KeyCode::Backslash);
         assert_eq!(super::resolve_gtk_keycode("grave", 49), KeyCode::Backquote);
+        assert_eq!(super::resolve_gtk_keycode("unknown_sym", 48), KeyCode::Quote);
+        assert_eq!(super::resolve_gtk_keycode("unknown_sym", 51), KeyCode::Backslash);
         assert_eq!(super::resolve_gtk_keycode("unknown_sym", 61), KeyCode::Slash);
         assert_eq!(super::resolve_gtk_keycode("unknown_sym", 59), KeyCode::Comma);
         assert_eq!(super::resolve_gtk_keycode("unknown_sym", 20), KeyCode::Minus);

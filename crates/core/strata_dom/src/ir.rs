@@ -217,28 +217,37 @@ impl UiIrGraph {
         self.nodes.is_empty()
     }
 
-    /// Recomputes `subtree_span` for all nodes in post-order.
+    /// Recomputes `subtree_span` for all nodes in post-order using an explicit heap stack (O(1) call stack).
     /// Enables O(1) subtree skipping during generational memoization.
     pub fn recompute_subtree_spans(&mut self) {
-        if let Some(root) = self.root_id {
-            self.compute_span_recursive(root);
+        let Some(root) = self.root_id else {
+            return;
+        };
+        if root.is_null() {
+            return;
         }
-    }
-
-    fn compute_span_recursive(&mut self, node_id: NodeId) -> u32 {
-        if node_id.is_null() {
-            return 0;
+        let mut stack: Vec<(NodeId, bool)> = vec![(root, false)];
+        while let Some((node_id, expanded)) = stack.pop() {
+            if node_id.is_null() {
+                continue;
+            }
+            if !expanded {
+                stack.push((node_id, true));
+                let mut child = self.nodes[node_id.0 as usize].first_child;
+                while !child.is_null() {
+                    stack.push((child, false));
+                    child = self.nodes[child.0 as usize].next_sibling;
+                }
+            } else {
+                let mut span = 1u32;
+                let mut child = self.nodes[node_id.0 as usize].first_child;
+                while !child.is_null() {
+                    span = span.saturating_add(self.nodes[child.0 as usize].subtree_span);
+                    child = self.nodes[child.0 as usize].next_sibling;
+                }
+                self.nodes[node_id.0 as usize].subtree_span = span;
+            }
         }
-
-        let mut span = 1u32;
-        let mut child = self.nodes[node_id.0 as usize].first_child;
-        while !child.is_null() {
-            span += self.compute_span_recursive(child);
-            child = self.nodes[child.0 as usize].next_sibling;
-        }
-
-        self.nodes[node_id.0 as usize].subtree_span = span;
-        span
     }
 
     /// Iterates through the direct children of a given parent node.

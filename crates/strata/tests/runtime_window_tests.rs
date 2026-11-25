@@ -475,6 +475,7 @@ fn test_caret_blink_timing_and_mouse_move_isolation() {
     };
 
     let mut runtime = AppRuntime::new(root_view, 800.0, 600.0, 1.0);
+    runtime.freeze_clock_at_epoch();
 
     // 1. Focus input
     assert!(runtime.dispatch_pointer_down(50.0, 20.0));
@@ -483,7 +484,7 @@ fn test_caret_blink_timing_and_mouse_move_isolation() {
 
     // Record baseline blink epoch
     let baseline_epoch = runtime.caret_blink_epoch;
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    runtime.advance_clock(std::time::Duration::from_millis(10));
 
     // 2. Mouse move across the screen should NOT reset caret_blink_epoch
     let mouse_move_event = PlatformEvent::MouseMove { x: 300.0, y: 300.0 };
@@ -502,7 +503,7 @@ fn test_caret_blink_timing_and_mouse_move_isolation() {
         "Active character insertion must reset caret_blink_epoch to guarantee solid caret"
     );
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    runtime.advance_clock(std::time::Duration::from_millis(10));
 
     // 4. Moving mouse after typing still must NOT reset caret_blink_epoch
     assert!(!runtime.dispatch_pointer_move(400.0, 400.0));

@@ -390,3 +390,86 @@ fn test_absolute_auto_height_with_bottom_and_right_insets() {
     assert_eq!(root.children[0].children[0].geometry.border_box.y, 204.0);
     assert_eq!(root.children[0].children[1].geometry.border_box.y, 240.0);
 }
+
+#[test]
+fn test_nested_relative_insets_do_not_compound_across_positioned_ancestors() {
+    // 3 nested Position::Relative flex containers wrapping a Position::Relative inner slice
+    // with `top: -50px` — previously compounded -50px 4x to -200px!
+    let row0 = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        width: Dimension::Px(400.0),
+        height: Dimension::Px(22.0),
+        ..Default::default()
+    });
+    let row1 = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        width: Dimension::Px(400.0),
+        height: Dimension::Px(22.0),
+        ..Default::default()
+    });
+
+    let mut slice_style = ComputedStyle {
+        display: Display::Flex,
+        flex_direction: strata_style::types::FlexDirection::Column,
+        position: Position::Relative,
+        width: Dimension::Px(400.0),
+        height: Dimension::Auto,
+        ..Default::default()
+    };
+    slice_style.insets.top = Dimension::Px(-50.0);
+    slice_style.insets.left = Dimension::Px(12.0);
+    let slice = LayoutNode::with_children(slice_style, vec![row0, row1]);
+
+    let viewport = LayoutNode::with_children(
+        ComputedStyle {
+            display: Display::Block,
+            position: Position::Relative,
+            width: Dimension::Px(400.0),
+            height: Dimension::Px(240.0),
+            ..Default::default()
+        },
+        vec![slice],
+    );
+    let body = LayoutNode::with_children(
+        ComputedStyle {
+            display: Display::Flex,
+            flex_direction: strata_style::types::FlexDirection::Row,
+            position: Position::Relative,
+            width: Dimension::Px(400.0),
+            height: Dimension::Px(240.0),
+            ..Default::default()
+        },
+        vec![viewport],
+    );
+    let mut root = LayoutNode::with_children(
+        ComputedStyle {
+            display: Display::Flex,
+            flex_direction: strata_style::types::FlexDirection::Column,
+            position: Position::Relative,
+            width: Dimension::Px(400.0),
+            height: Dimension::Px(240.0),
+            ..Default::default()
+        },
+        vec![body],
+    );
+
+    root.compute_layout(400.0, 240.0);
+    let slice_box = root.children[0].children[0].children[0].geometry.border_box;
+    let row0_box = root.children[0].children[0].children[0].children[0]
+        .geometry
+        .border_box;
+    let row1_box = root.children[0].children[0].children[0].children[1]
+        .geometry
+        .border_box;
+
+    assert_eq!(slice_box.x, 12.0, "relative left must apply exactly once");
+    assert_eq!(slice_box.y, -50.0, "relative top must apply exactly once");
+    assert_eq!(row0_box.y, -50.0);
+    assert_eq!(row1_box.y, -28.0);
+
+    // Calling compute_layout a second time (cache hit path) must remain identically idempotent!
+    root.compute_layout(400.0, 240.0);
+    let slice_box_2 = root.children[0].children[0].children[0].geometry.border_box;
+    assert_eq!(slice_box_2.x, 12.0);
+    assert_eq!(slice_box_2.y, -50.0);
+}

@@ -15,16 +15,23 @@ impl AppRuntime {
     /// Resets the caret blink cycle so the insertion caret is immediately solid and visible.
     #[inline]
     pub fn reset_caret_blink(&mut self) {
-        self.caret_blink_epoch = std::time::Instant::now();
+        self.caret_blink_epoch = self.now();
         self.last_caret_blink_state = true;
     }
 
-    /// Polls caret blink cycle and returns true if blink state toggled (requiring a redraw).
+    /// Polls caret blink cycle at the current runtime clock and returns true if blink state toggled.
+    #[inline]
     pub fn poll_caret_blink(&mut self) -> bool {
+        let now = self.now();
+        self.poll_caret_blink_at(now)
+    }
+
+    /// Polls caret blink cycle at an explicit monotonic `Instant` and returns true if blink state toggled.
+    pub fn poll_caret_blink_at(&mut self, now: std::time::Instant) -> bool {
         if self.active_focus.is_none() {
             return false;
         }
-        let elapsed_ms = self.caret_blink_epoch.elapsed().as_millis();
+        let elapsed_ms = now.saturating_duration_since(self.caret_blink_epoch).as_millis();
         let is_blink_on = (elapsed_ms / 530).is_multiple_of(2);
         if is_blink_on != self.last_caret_blink_state {
             self.last_caret_blink_state = is_blink_on;
@@ -884,14 +891,14 @@ impl AppRuntime {
 
         if is_multiline {
             if let (Some(path), Some(max_scroll)) = (focus_path, multiline_max_scroll) {
-                if scroll_caret_into_view && (next_scroll_y - prev_scroll_y).abs() > 0.01 {
-                    if self
+                if scroll_caret_into_view
+                    && (next_scroll_y - prev_scroll_y).abs() > 0.01
+                    && self
                         .active_smooth_scroll
                         .as_ref()
                         .is_some_and(|t| t.container_path == path)
-                    {
-                        self.active_smooth_scroll = None;
-                    }
+                {
+                    self.active_smooth_scroll = None;
                 }
                 if let Some(ref id) = target_id {
                     if !id.is_empty() {
@@ -1192,7 +1199,7 @@ impl AppRuntime {
         }
 
         let has_sel = active.state.has_selection();
-        let elapsed_ms = self.caret_blink_epoch.elapsed().as_millis();
+        let elapsed_ms = self.elapsed_since(self.caret_blink_epoch).as_millis();
         let is_blink_on = (elapsed_ms / 530).is_multiple_of(2);
         let draw_caret = !has_sel && is_blink_on;
 

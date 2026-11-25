@@ -10,21 +10,23 @@ use strata_style::types::{
 
 #[test]
 fn test_padded_and_max_width_text_block_wraps_inside_available_width() {
-    let mut style = ComputedStyle::default();
-    style.display = Display::Block;
-    style.width = Dimension::Auto;
-    style.height = Dimension::Auto;
-    style.max_width = Dimension::Px(220.0);
-    style.padding = EdgeInsets {
-        left: 16.0,
-        right: 16.0,
-        top: 8.0,
-        bottom: 8.0,
+    let style = ComputedStyle {
+        display: Display::Block,
+        width: Dimension::Auto,
+        height: Dimension::Auto,
+        max_width: Dimension::Px(220.0),
+        padding: EdgeInsets {
+            left: 16.0,
+            right: 16.0,
+            top: 8.0,
+            bottom: 8.0,
+        },
+        border_width: EdgeInsets::all(2.0),
+        font_size: 14.0,
+        line_height: 1.4,
+        white_space: WhiteSpace::Normal,
+        ..ComputedStyle::default()
     };
-    style.border_width = EdgeInsets::all(2.0);
-    style.font_size = 14.0;
-    style.line_height = 1.4;
-    style.white_space = WhiteSpace::Normal;
 
     let mut node = LayoutNode::with_text(
         style,
@@ -52,34 +54,42 @@ fn test_padded_and_max_width_text_block_wraps_inside_available_width() {
 #[test]
 fn test_flex_row_redistributes_shrink_deficit_across_frozen_siblings_and_w_full_buttons() {
     // 1. Yellow banner / popover item: [fixed icon (24px), long description, fixed button (72px)] in 240px row
-    let mut row_style = ComputedStyle::default();
-    row_style.display = Display::Flex;
-    row_style.flex_direction = FlexDirection::Row;
-    row_style.width = Dimension::Px(240.0);
-    row_style.height = Dimension::Auto;
-    row_style.gap_col = 8.0;
+    let row_style = ComputedStyle {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Row,
+        width: Dimension::Px(240.0),
+        height: Dimension::Auto,
+        gap_col: 8.0,
+        ..ComputedStyle::default()
+    };
 
-    let mut icon_style = ComputedStyle::default();
-    icon_style.display = Display::Block;
-    icon_style.width = Dimension::Px(24.0);
-    icon_style.height = Dimension::Px(24.0);
-    icon_style.min_width = Dimension::Px(24.0);
+    let icon_style = ComputedStyle {
+        display: Display::Block,
+        width: Dimension::Px(24.0),
+        height: Dimension::Px(24.0),
+        min_width: Dimension::Px(24.0),
+        ..ComputedStyle::default()
+    };
 
-    let mut desc_style = ComputedStyle::default();
-    desc_style.display = Display::Block;
-    desc_style.flex_shrink = 1.0;
-    desc_style.font_size = 13.0;
-    desc_style.line_height = 1.3;
+    let desc_style = ComputedStyle {
+        display: Display::Block,
+        flex_shrink: 1.0,
+        font_size: 13.0,
+        line_height: 1.3,
+        ..ComputedStyle::default()
+    };
     let desc = LayoutNode::with_text(
         desc_style,
         "Team collaboration sync warning banner must wrap inside available row space".to_string(),
     );
 
-    let mut btn_style = ComputedStyle::default();
-    btn_style.display = Display::Block;
-    btn_style.width = Dimension::Px(72.0);
-    btn_style.height = Dimension::Px(28.0);
-    btn_style.min_width = Dimension::Px(72.0);
+    let btn_style = ComputedStyle {
+        display: Display::Block,
+        width: Dimension::Px(72.0),
+        height: Dimension::Px(28.0),
+        min_width: Dimension::Px(72.0),
+        ..ComputedStyle::default()
+    };
 
     let mut row = LayoutNode::with_children(
         row_style.clone(),
@@ -111,27 +121,35 @@ fn test_flex_row_redistributes_shrink_deficit_across_frozen_siblings_and_w_full_
     let mut card_row_style = row_style;
     card_row_style.width = Dimension::Px(220.0);
 
-    let mut full_btn_style = ComputedStyle::default();
-    full_btn_style.display = Display::InlineFlex;
-    full_btn_style.width = Dimension::Percent(100.0);
-    full_btn_style.height = Dimension::Px(36.0);
-    full_btn_style.padding = EdgeInsets::all(8.0);
-    let mut full_btn_label = ComputedStyle::default();
-    full_btn_label.display = Display::Inline;
-    full_btn_label.font_size = 13.0;
+    let full_btn_style = ComputedStyle {
+        display: Display::InlineFlex,
+        width: Dimension::Percent(100.0),
+        height: Dimension::Px(36.0),
+        padding: EdgeInsets::all(8.0),
+        ..ComputedStyle::default()
+    };
+    let full_btn_label = ComputedStyle {
+        display: Display::Inline,
+        font_size: 13.0,
+        ..ComputedStyle::default()
+    };
     let full_btn = LayoutNode::with_children(
         full_btn_style,
         vec![LayoutNode::with_text(full_btn_label, "Connect".to_string())],
     );
 
-    let mut sib_btn_style = ComputedStyle::default();
-    sib_btn_style.display = Display::InlineFlex;
-    sib_btn_style.width = Dimension::Px(80.0);
-    sib_btn_style.height = Dimension::Px(36.0);
-    sib_btn_style.overflow_x = Overflow::Visible;
-    let mut sib_label = ComputedStyle::default();
-    sib_label.display = Display::Inline;
-    sib_label.font_size = 13.0;
+    let sib_btn_style = ComputedStyle {
+        display: Display::InlineFlex,
+        width: Dimension::Px(80.0),
+        height: Dimension::Px(36.0),
+        overflow_x: Overflow::Visible,
+        ..ComputedStyle::default()
+    };
+    let sib_label = ComputedStyle {
+        display: Display::Inline,
+        font_size: 13.0,
+        ..ComputedStyle::default()
+    };
     let sib_btn = LayoutNode::with_children(
         sib_btn_style,
         vec![LayoutNode::with_text(sib_label, "SetupConfig".to_string())],

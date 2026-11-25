@@ -556,7 +556,7 @@ where
                     );
                 } else if let Some(ref mut f) = root_fn {
                     let _ = strata_dom::reactive::take_dirty_signals();
-                    runtime.update_root(|| f());
+                    runtime.update_root(f);
                     let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
                     let _ = window.present_surface(
                         &presenter.backing_buffer,
@@ -650,7 +650,7 @@ where
         config.title
     );
     let x11_window = strata_platform::x11_window::X11Window::new(config.clone())?;
-    let view = strata_dom::with_root_component_scope(|| root_fn());
+    let view = strata_dom::with_root_component_scope(&mut root_fn);
     let width = config.width as f32;
     let height = config.height as f32;
     let mut runtime = AppRuntime::new(view, width, height, 1.0);
@@ -695,7 +695,7 @@ where
         config.title
     );
     let wayland_window = strata_platform::WaylandWindow::new(config.clone())?;
-    let view = strata_dom::with_root_component_scope(|| root_fn());
+    let view = strata_dom::with_root_component_scope(&mut root_fn);
     let width = config.width as f32;
     let height = config.height as f32;
     let dpr = wayland_window.scale_factor();

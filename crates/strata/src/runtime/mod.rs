@@ -83,6 +83,9 @@ pub struct AppRuntime {
     pub current_hover_path: Option<Vec<usize>>,
     /// Hierarchical index path of the currently focused element node.
     pub current_focus_path: Option<Vec<usize>>,
+    /// Tracks the last printable character consumed by a DOM `KeyDown` listener on a non-`<input>`
+    /// focus target so an immediately following OS `ReceivedCharacter` duplicate is suppressed.
+    pub(crate) last_dom_keydown_consumed_char: Option<(char, std::time::Instant)>,
     /// Whether pointer primary button is currently held down.
     pub is_mouse_down: bool,
     /// Whether dark mode is active for theme-dependent utility styling.
@@ -123,6 +126,8 @@ pub struct AppRuntime {
     pub(crate) has_anchored_portals: bool,
     /// Continuous presentation epoch for animation and transition timing.
     pub runtime_start_epoch: std::time::Instant,
+    /// Optional deterministic virtual clock override (`None` in live production execution).
+    pub(crate) manual_clock: Option<std::time::Instant>,
     /// Coordinator for CSS transition properties across elements.
     pub transition_manager: strata_style::transition::TransitionManager,
     /// Coordinator for CSS keyframe animations across elements.
@@ -358,6 +363,8 @@ impl AppRuntime {
             &mut dynamic_text_bindings,
         );
 
+        edit::ensure_clipboard_bridge_registered();
+        let init_now = std::time::Instant::now();
         let mut runtime = Self {
             root_blueprint,
             ir_graph,
@@ -370,7 +377,7 @@ impl AppRuntime {
             frame_count: 0,
             active_focus: None,
             input_states: std::collections::HashMap::new(),
-            caret_blink_epoch: std::time::Instant::now(),
+            caret_blink_epoch: init_now,
             last_caret_blink_state: true,
             current_cursor: strata_platform::window::CursorIcon::Default,
             drag_selection_active: false,
@@ -379,6 +386,7 @@ impl AppRuntime {
             last_drag_click: None,
             current_hover_path: None,
             current_focus_path: None,
+            last_dom_keydown_consumed_char: None,
             is_mouse_down: false,
             is_dark_mode: false,
             last_mouse_pos: (0.0, 0.0),
@@ -398,7 +406,8 @@ impl AppRuntime {
             applied_scroll_offsets: std::collections::HashMap::new(),
             applied_portal_offsets: std::collections::HashMap::new(),
             has_anchored_portals: false,
-            runtime_start_epoch: std::time::Instant::now(),
+            runtime_start_epoch: init_now,
+            manual_clock: None,
             transition_manager: strata_style::transition::TransitionManager::new(),
             animation_manager: strata_style::animation::AnimationManager::new(),
             base_node_styles: std::collections::HashMap::new(),
@@ -444,7 +453,7 @@ impl AppRuntime {
             full_rebuilds_count: 1,
             reconciled_updates_count: 0,
             last_rebuild_reason: RebuildReason::InitialMount,
-            runtime_epoch: std::time::Instant::now(),
+            runtime_epoch: init_now,
             profile_history: FrameProfileHistory::default(),
             prev_layout_cls_rects: Vec::new(),
             active_dom_drag: None,
@@ -478,6 +487,57 @@ impl AppRuntime {
         runtime.update_accessibility_tree();
         runtime.compile_display_list();
         runtime
+    }
+
+    /// Returns the active runtime timestamp (`manual_clock` when frozen, otherwise `Instant::now()`).
+    #[inline(always)]
+    pub fn now(&self) -> std::time::Instant {
+        self.manual_clock.unwrap_or_else(std::time::Instant::now)
+    }
+
+    /// Returns milliseconds elapsed since `runtime_start_epoch` on the active runtime clock.
+    #[inline(always)]
+    pub fn now_ms(&self) -> f64 {
+        self.now()
+            .saturating_duration_since(self.runtime_start_epoch)
+            .as_secs_f64()
+            * 1000.0
+    }
+
+    /// Returns duration elapsed since `since` according to the active runtime clock.
+    #[inline(always)]
+    pub fn elapsed_since(&self, since: std::time::Instant) -> std::time::Duration {
+        self.now().saturating_duration_since(since)
+    }
+
+    /// Freezes the runtime clock at its current instant for deterministic testing and stepping.
+    pub fn freeze_clock(&mut self) -> std::time::Instant {
+        let now = self.now();
+        self.manual_clock = Some(now);
+        now
+    }
+
+    /// Freezes the runtime clock at `runtime_start_epoch` (`now_ms() == 0.0`).
+    pub fn freeze_clock_at_epoch(&mut self) -> std::time::Instant {
+        self.manual_clock = Some(self.runtime_start_epoch);
+        self.runtime_start_epoch
+    }
+
+    /// Sets the deterministic virtual clock to an explicit monotonic `Instant`.
+    pub fn set_clock(&mut self, instant: std::time::Instant) {
+        self.manual_clock = Some(instant);
+    }
+
+    /// Advances the virtual clock by `dt`, implicitly freezing from live time if currently unfrozen.
+    pub fn advance_clock(&mut self, dt: std::time::Duration) -> std::time::Instant {
+        let next = self.now() + dt;
+        self.manual_clock = Some(next);
+        next
+    }
+
+    /// Restores live wall-clock timing (`Instant::now()`).
+    pub fn use_live_clock(&mut self) {
+        self.manual_clock = None;
     }
 
     /// Applies runtime-relevant preferences from a [`WindowConfig`] (such as native hover
@@ -581,6 +641,7 @@ impl AppRuntime {
     pub fn set_focus_path(&mut self, path: Option<Vec<usize>>) -> bool {
         if self.current_focus_path != path {
             self.current_focus_path = path;
+            self.last_dom_keydown_consumed_char = None;
             self.rebuild_layout_tree();
             true
         } else {
@@ -1550,7 +1611,7 @@ impl AppRuntime {
             &mut path_buf,
             &mut self.dynamic_text_bindings,
         );
-        let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
+        let now_ms = self.now_ms();
         let sync_start = std::time::Instant::now();
         self.sync_tree_animations(now_ms);
         if self.had_active_animations || self.has_active_animations() {
@@ -2210,8 +2271,8 @@ impl AppRuntime {
             tiles_dirty,
             tiles_total,
             tile_cache_hit_pct,
-            reconciled_subtrees: self.last_reconcile_stats.reused_subtrees as u32,
-            rebuilt_nodes: self.last_reconcile_stats.rebuilt_nodes as u32,
+            reconciled_subtrees: self.last_reconcile_stats.reused_subtrees,
+            rebuilt_nodes: self.last_reconcile_stats.rebuilt_nodes,
             full_rebuilds: self.full_rebuilds_count,
             reconciled: self.last_update_reconciled,
             hover_fast_path_used: self.last_hover_fast_path_used,

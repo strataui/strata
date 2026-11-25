@@ -1184,6 +1184,8 @@ fn parse_key_code(s: &str) -> KeyCode {
         "[" | "bracketleft" => KeyCode::BracketLeft,
         "]" | "bracketright" => KeyCode::BracketRight,
         ";" | "semicolon" => KeyCode::Semicolon,
+        "'" | "\"" | "quote" | "apostrophe" => KeyCode::Quote,
+        "\\" | "|" | "backslash" => KeyCode::Backslash,
         "`" | "backquote" | "grave" => KeyCode::Backquote,
         _ => KeyCode::Space,
     }
@@ -1214,7 +1216,7 @@ pub fn default_dev_socket_path() -> PathBuf {
         }
         #[cfg(not(unix))]
         {
-            PathBuf::from("/tmp/strata-dev.sock")
+            std::env::temp_dir().join("strata-dev.sock")
         }
     }
 }

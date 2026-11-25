@@ -37,7 +37,7 @@ impl VideoFrame {
     pub fn blank(width: u32, height: u32) -> Self {
         let len = (width as usize).saturating_mul(height as usize).saturating_mul(4);
         let mut rgba = vec![0u8; len];
-        for px in rgba.chunks_exact_mut(4) {
+        for px in rgba.as_chunks_mut::<4>().0 {
             px[3] = 255;
         }
         Self {

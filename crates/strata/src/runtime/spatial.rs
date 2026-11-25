@@ -272,9 +272,10 @@ impl SpatialIndex {
             }
         }
 
-        if entity_id.is_valid() || !listeners.is_empty() {
-            let hittable = !matches!(layout.style.visibility, Visibility::Hidden)
-                && !matches!(layout.style.pointer_events, PointerEvents::None);
+        let hittable = !matches!(layout.style.visibility, Visibility::Hidden)
+            && !matches!(layout.style.pointer_events, PointerEvents::None);
+        let is_visual_element = matches!(blueprint, NodeBlueprint::Element { .. });
+        if entity_id.is_valid() || !listeners.is_empty() || (is_visual_element && hittable) {
             let entry = SpatialEntry {
                 entity_id,
                 bounds,
@@ -703,44 +704,65 @@ impl SpatialIndex {
         }
     }
 
-    /// Queries the front-most / deepest EntityId at point (px, py), honoring stacking `z_index` and paint order.
-    pub fn query_entity_at_point(&self, px: f32, py: f32) -> Option<EntityId> {
-        let mut best: Option<&SpatialEntry> = None;
+    /// Resolves the single front-most hittable entry containing `(px, py)`.
+    fn frontmost_hittable_entry(&self, px: f32, py: f32) -> Option<&SpatialEntry> {
+        let mut top: Option<&SpatialEntry> = None;
         for entry in self.entries.iter().rev() {
-            if entry.entity_id.is_valid() && entry.contains_clipped_point(px, py) {
-                match best {
-                    None => best = Some(entry),
+            if entry.contains_clipped_point(px, py) {
+                match top {
+                    None => top = Some(entry),
                     Some(cur) => {
                         if (entry.root_z_key, entry.order) > (cur.root_z_key, cur.order) {
-                            best = Some(entry);
+                            top = Some(entry);
                         }
                     }
                 }
+            }
+        }
+        top
+    }
+
+    /// Queries the front-most / deepest EntityId at point (px, py), honoring stacking `z_index`
+    /// and paint order without piercing through opaque higher-z overlays.
+    pub fn query_entity_at_point(&self, px: f32, py: f32) -> Option<EntityId> {
+        let top = self.frontmost_hittable_entry(px, py)?;
+        if top.entity_id.is_valid() {
+            return Some(top.entity_id);
+        }
+        let mut best: Option<&SpatialEntry> = None;
+        for entry in &self.entries {
+            if entry.entity_id.is_valid()
+                && entry.layout_path.len() <= top.layout_path.len()
+                && top.layout_path.starts_with(&entry.layout_path)
+                && best.is_none_or(|cur| entry.layout_path.len() >= cur.layout_path.len())
+            {
+                best = Some(entry);
             }
         }
         best.map(|e| e.entity_id)
     }
 
     /// Queries the front-most event listener registered for `event_type` at point (px, py),
-    /// honoring stacking `z_index` and paint order.
+    /// matching W3C DOM non-piercing hit-testing: resolves the single front-most visual target
+    /// first, then searches strictly along its DOM ancestor `layout_path`.
     pub fn query_event_at_point(
         &self,
         px: f32,
         py: f32,
         event_type: EventType,
     ) -> Option<(EntityId, Rc<dyn Fn(Event)>, Rect)> {
+        let top = self.frontmost_hittable_entry(px, py)?;
         let mut best: Option<(&SpatialEntry, &Rc<dyn Fn(Event)>)> = None;
-        for entry in self.entries.iter().rev() {
-            if entry.contains_clipped_point(px, py) {
+        for entry in &self.entries {
+            if entry.layout_path.len() <= top.layout_path.len()
+                && top.layout_path.starts_with(&entry.layout_path)
+            {
                 for (ev, handler) in &entry.event_listeners {
                     if *ev == event_type {
-                        match best {
-                            None => best = Some((entry, handler)),
-                            Some((cur, _)) => {
-                                if (entry.root_z_key, entry.order) > (cur.root_z_key, cur.order) {
-                                    best = Some((entry, handler));
-                                }
-                            }
+                        if best.is_none_or(|(cur, _)| {
+                            entry.layout_path.len() >= cur.layout_path.len()
+                        }) {
+                            best = Some((entry, handler));
                         }
                         break;
                     }

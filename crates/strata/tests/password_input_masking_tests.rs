@@ -17,7 +17,7 @@ fn collect_drawn_texts(rt: &AppRuntime) -> Vec<String> {
         .collect()
 }
 
-fn find_input_node<'a>(rt: &'a AppRuntime, idx: usize) -> &'a strata::layout::LayoutNode {
+fn find_input_node(rt: &AppRuntime, idx: usize) -> &strata::layout::LayoutNode {
     let mut counter = 0;
     AppRuntime::find_input_layout(&rt.root_blueprint, &rt.layout_root, idx, None, &mut counter)
         .expect("input layout node must exist")

@@ -881,6 +881,9 @@ pub struct LayoutNode {
     /// Last preserved box parameters `(x, y, border_w, border_h, resolve_positioned)` formatted by
     /// `layout_children_inner_guarded`, enabling O(1) skip + translate when unchanged.
     pub last_preserved_box: Option<(f32, f32, f32, f32, bool)>,
+    /// Cumulative `position: relative` `(dx, dy)` offset already translated onto this node's
+    /// geometry so nested positioning passes remain strictly idempotent.
+    pub applied_relative_offset: (f32, f32),
     /// Table border grid matrix for collapsed border rendering (CSS 2.1 §17.6.2).
     pub table_grid: Option<crate::table::TableBorderGrid>,
     /// Unique 64-bit entity identifier associating this layout node with its blueprint element.
@@ -926,6 +929,7 @@ impl LayoutNode {
             last_child_layout_content: None,
             children_layout_clean: false,
             last_preserved_box: None,
+            applied_relative_offset: (0.0, 0.0),
             table_grid: None,
             entity_id: strata_primitives::EntityId::NONE,
             active_transitions: false,
@@ -998,12 +1002,18 @@ impl LayoutNode {
         node
     }
 
-    /// Returns `true` if this node or any of its descendants currently has an active CSS transition.
+    /// Returns `true` if this node or any of its descendants currently has an active CSS transition (O(1) call stack).
     pub fn has_active_transitions(&self) -> bool {
-        if self.active_transitions {
-            return true;
+        let mut stack = vec![self];
+        while let Some(node) = stack.pop() {
+            if node.active_transitions {
+                return true;
+            }
+            for child in &node.children {
+                stack.push(child);
+            }
         }
-        self.children.iter().any(|c| c.has_active_transitions())
+        false
     }
 
     /// Inner content-box width override used during collapse/expand transitions so children
@@ -1051,23 +1061,24 @@ impl LayoutNode {
         self.entity_id = entity_id;
     }
 
-    /// Recursively locates a layout node by its EntityId.
+    /// Iteratively locates a layout node by its EntityId (O(1) call stack).
     pub fn find_by_entity_id(&self, target_id: strata_primitives::EntityId) -> Option<&LayoutNode> {
         if !target_id.is_valid() {
             return None;
         }
-        if self.entity_id == target_id {
-            return Some(self);
-        }
-        for child in &self.children {
-            if let Some(found) = child.find_by_entity_id(target_id) {
-                return Some(found);
+        let mut stack = vec![self];
+        while let Some(node) = stack.pop() {
+            if node.entity_id == target_id {
+                return Some(node);
+            }
+            for child in node.children.iter().rev() {
+                stack.push(child);
             }
         }
         None
     }
 
-    /// Recursively locates a mutable layout node by its EntityId.
+    /// Iteratively locates a mutable layout node by its EntityId (O(1) call stack).
     pub fn find_by_entity_id_mut(
         &mut self,
         target_id: strata_primitives::EntityId,
@@ -1075,12 +1086,13 @@ impl LayoutNode {
         if !target_id.is_valid() {
             return None;
         }
-        if self.entity_id == target_id {
-            return Some(self);
-        }
-        for child in &mut self.children {
-            if let Some(found) = child.find_by_entity_id_mut(target_id) {
-                return Some(found);
+        let mut stack = vec![self];
+        while let Some(node) = stack.pop() {
+            if node.entity_id == target_id {
+                return Some(node);
+            }
+            for child in node.children.iter_mut().rev() {
+                stack.push(child);
             }
         }
         None
@@ -1489,10 +1501,104 @@ impl LayoutNode {
         self.refresh_subtree_hit_metadata();
     }
 
-    /// Recomputes `subtree_hit_flags` and `subtree_bounds` bottom-up across the layout tree,
-    /// skipping clean subtrees whose `SUBTREE_META_VALID` flag is already up to date.
+    /// Recomputes `subtree_hit_flags` and `subtree_bounds` bottom-up across the layout tree
+    /// using an explicit heap stack (`O(1)` call stack, `#![forbid(unsafe_code)]`), skipping
+    /// clean subtrees whose `SUBTREE_META_VALID` flag is already up to date.
     pub fn refresh_subtree_hit_metadata(&mut self) {
-        self.refresh_subtree_hit_metadata_inner(None, true);
+        if !Self::node_needs_hit_metadata_refresh(self, None, true) {
+            return;
+        }
+        if matches!(self.style.display, strata_style::types::Display::None)
+            || self.children.is_empty()
+        {
+            Self::finalize_node_hit_metadata(self, None, true);
+            return;
+        }
+
+        struct MetaFrame {
+            node: LayoutNode,
+            parent_display: Option<strata_style::types::Display>,
+            remaining_rev: Vec<LayoutNode>,
+            processed: Vec<LayoutNode>,
+        }
+
+        let root_display = Some(self.style.display);
+        let mut root_remaining = std::mem::take(&mut self.children);
+        root_remaining.reverse();
+        let mut root_processed = Vec::with_capacity(root_remaining.len());
+        let mut stack: Vec<MetaFrame> = Vec::new();
+
+        loop {
+            if let Some(top) = stack.last_mut() {
+                if let Some(mut child) = top.remaining_rev.pop() {
+                    let parent_disp = Some(top.node.style.display);
+                    if !Self::node_needs_hit_metadata_refresh(&child, parent_disp, false) {
+                        top.processed.push(child);
+                    } else if matches!(child.style.display, strata_style::types::Display::None)
+                        || child.children.is_empty()
+                    {
+                        Self::finalize_node_hit_metadata(&mut child, parent_disp, false);
+                        top.processed.push(child);
+                    } else {
+                        let mut sub = std::mem::take(&mut child.children);
+                        sub.reverse();
+                        let cap = sub.len();
+                        stack.push(MetaFrame {
+                            node: child,
+                            parent_display: parent_disp,
+                            remaining_rev: sub,
+                            processed: Vec::with_capacity(cap),
+                        });
+                    }
+                } else {
+                    let mut frame = stack.pop().unwrap();
+                    frame.node.children = frame.processed;
+                    Self::finalize_node_hit_metadata(&mut frame.node, frame.parent_display, false);
+                    if let Some(parent) = stack.last_mut() {
+                        parent.processed.push(frame.node);
+                    } else {
+                        root_processed.push(frame.node);
+                    }
+                }
+            } else if let Some(mut child) = root_remaining.pop() {
+                if !Self::node_needs_hit_metadata_refresh(&child, root_display, false) {
+                    root_processed.push(child);
+                } else if matches!(child.style.display, strata_style::types::Display::None)
+                    || child.children.is_empty()
+                {
+                    Self::finalize_node_hit_metadata(&mut child, root_display, false);
+                    root_processed.push(child);
+                } else {
+                    let mut sub = std::mem::take(&mut child.children);
+                    sub.reverse();
+                    let cap = sub.len();
+                    stack.push(MetaFrame {
+                        node: child,
+                        parent_display: root_display,
+                        remaining_rev: sub,
+                        processed: Vec::with_capacity(cap),
+                    });
+                }
+            } else {
+                break;
+            }
+        }
+
+        self.children = root_processed;
+        Self::finalize_node_hit_metadata(self, None, true);
+    }
+
+    #[inline]
+    fn node_needs_hit_metadata_refresh(
+        node: &LayoutNode,
+        parent_display: Option<strata_style::types::Display>,
+        is_root: bool,
+    ) -> bool {
+        let self_hoisted = !is_root
+            && (node.style.position != strata_style::types::Position::Static
+                || node.establishes_stacking_context_in(parent_display, false));
+        !((node.subtree_hit_flags & SUBTREE_META_VALID) != 0
+            && (!self_hoisted || (node.subtree_hit_flags & SUBTREE_HAS_HOISTED) != 0))
     }
 
     #[inline]
@@ -1507,43 +1613,38 @@ impl LayoutNode {
                     || matches!(self.style.insets.top, Dimension::Percent(_))))
     }
 
-    fn refresh_subtree_hit_metadata_inner(
-        &mut self,
+    fn finalize_node_hit_metadata(
+        node: &mut LayoutNode,
         parent_display: Option<strata_style::types::Display>,
         is_root: bool,
     ) {
-        let self_hoisted = !is_root
-            && (self.style.position != strata_style::types::Position::Static
-                || self.establishes_stacking_context_in(parent_display, false));
-        if (self.subtree_hit_flags & SUBTREE_META_VALID) != 0
-            && (!self_hoisted || (self.subtree_hit_flags & SUBTREE_HAS_HOISTED) != 0)
-        {
+        if matches!(node.style.display, strata_style::types::Display::None) {
+            node.subtree_hit_flags = SUBTREE_META_VALID;
+            node.subtree_bounds = Rect::new(0.0, 0.0, 0.0, 0.0);
             return;
         }
 
-        if matches!(self.style.display, strata_style::types::Display::None) {
-            self.subtree_hit_flags = SUBTREE_META_VALID;
-            self.subtree_bounds = Rect::new(0.0, 0.0, 0.0, 0.0);
-            return;
-        }
+        let self_hoisted = !is_root
+            && (node.style.position != strata_style::types::Position::Static
+                || node.establishes_stacking_context_in(parent_display, false));
 
         let mut flags = SUBTREE_META_VALID;
-        if self.is_top_layer {
+        if node.is_top_layer {
             flags |= SUBTREE_HAS_TOP_LAYER;
         }
-        if self.style.has_transform() {
+        if node.style.has_transform() {
             flags |= SUBTREE_HAS_TRANSFORM;
         }
         if self_hoisted {
             flags |= SUBTREE_HAS_HOISTED;
         }
 
-        let own = self.geometry.border_box;
+        let own = node.geometry.border_box;
         let mut min_x = own.x;
         let mut min_y = own.y;
         let mut max_x = own.x + own.width.max(0.0);
         let mut max_y = own.y + own.height.max(0.0);
-        let mut has_bounds = own.width > 0.0 || own.height > 0.0 || self.children.is_empty();
+        let mut has_bounds = own.width > 0.0 || own.height > 0.0 || node.children.is_empty();
 
         let union_rect = |r: Rect,
                           min_x: &mut f32,
@@ -1567,7 +1668,7 @@ impl LayoutNode {
             }
         };
 
-        for line in &self.line_boxes {
+        for line in &node.line_boxes {
             if line.bounds.width > 0.0 || line.bounds.height > 0.0 {
                 union_rect(
                     line.bounds,
@@ -1580,9 +1681,8 @@ impl LayoutNode {
             }
         }
 
-        let self_display = Some(self.style.display);
-        for child in &mut self.children {
-            child.refresh_subtree_hit_metadata_inner(self_display, false);
+        let self_display = Some(node.style.display);
+        for child in &node.children {
             flags |= child.subtree_hit_flags & !SUBTREE_HAS_HEIGHT_DEP_DESCENDANT;
             if child.is_self_height_dependent()
                 || (!matches!(child.style.height, strata_style::types::Dimension::Px(_))
@@ -1598,7 +1698,10 @@ impl LayoutNode {
                 continue;
             }
             let cb = child.subtree_bounds;
-            if cb.width > 0.0 || cb.height > 0.0 || (child.children.is_empty() && (cb.x != 0.0 || cb.y != 0.0)) {
+            if cb.width > 0.0
+                || cb.height > 0.0
+                || (child.children.is_empty() && (cb.x != 0.0 || cb.y != 0.0))
+            {
                 union_rect(
                     cb,
                     &mut min_x,
@@ -1611,23 +1714,23 @@ impl LayoutNode {
         }
 
         if has_bounds {
-            if self.style.overflow_x != strata_style::types::Overflow::Visible {
+            if node.style.overflow_x != strata_style::types::Overflow::Visible {
                 let clip_x0 = own.x;
                 let clip_x1 = own.x + own.width.max(0.0);
                 min_x = min_x.max(clip_x0).min(clip_x1);
                 max_x = max_x.min(clip_x1).max(min_x);
             }
-            if self.style.overflow_y != strata_style::types::Overflow::Visible {
+            if node.style.overflow_y != strata_style::types::Overflow::Visible {
                 let clip_y0 = own.y;
                 let clip_y1 = own.y + own.height.max(0.0);
                 min_y = min_y.max(clip_y0).min(clip_y1);
                 max_y = max_y.min(clip_y1).max(min_y);
             }
-            self.subtree_bounds = Rect::new(min_x, min_y, max_x - min_x, max_y - min_y);
+            node.subtree_bounds = Rect::new(min_x, min_y, max_x - min_x, max_y - min_y);
         } else {
-            self.subtree_bounds = own;
+            node.subtree_bounds = own;
         }
-        self.subtree_hit_flags = flags;
+        node.subtree_hit_flags = flags;
     }
 
     #[inline]
@@ -1705,6 +1808,95 @@ impl LayoutNode {
         };
     }
 
+    #[cold]
+    #[inline(never)]
+    fn layout_overflow_fallback(
+        &mut self,
+        available_width: f32,
+        available_height: f32,
+        guard: LayoutDepthGuard,
+    ) {
+        record_layout_overflow(guard.current_depth(), guard.max_depth());
+        let padding = self.style.padding;
+        let border = self.style.border_width;
+        let margin = self.style.margin;
+
+        let w = crate::box_model::resolve_dimension_with_node(
+            self.style.width,
+            available_width,
+            self,
+        )
+        .unwrap_or(available_width)
+        .max(0.0);
+        let h = crate::box_model::resolve_dimension(self.style.height, available_height)
+            .unwrap_or_else(|| {
+                if self.text.is_some() {
+                    self.style.font_size * self.style.line_height
+                } else {
+                    0.0
+                }
+            })
+            .max(0.0);
+
+        self.geometry = LayoutGeometry::from_border_box(
+            crate::geometry::Rect::new(
+                self.geometry.border_box.x,
+                self.geometry.border_box.y,
+                w,
+                h,
+            ),
+            padding,
+            border,
+            margin,
+        );
+        self.geometry.snap_to_pixel();
+        self.layout_cache.is_valid = false;
+        self.children_layout_clean = false;
+        self.subtree_hit_flags &= !SUBTREE_META_VALID;
+    }
+
+    #[inline(never)]
+    fn translate_cached_subtree_hit(&mut self) {
+        let dx = self.geometry.border_box.x - self.layout_cache.origin_x;
+        let dy = self.geometry.border_box.y - self.layout_cache.origin_y;
+        if dx.abs() > 0.001 || dy.abs() > 0.001 {
+            self.geometry.padding_box.x += dx;
+            self.geometry.padding_box.y += dy;
+            self.geometry.content_box.x += dx;
+            self.geometry.content_box.y += dy;
+            self.geometry.margin_box.x += dx;
+            self.geometry.margin_box.y += dy;
+            self.subtree_bounds.x += dx;
+            self.subtree_bounds.y += dy;
+            if let Some(ref mut pb) = self.last_preserved_box {
+                pb.0 += dx;
+                pb.1 += dy;
+            }
+            if let Some(ref mut grid) = self.table_grid {
+                grid.translate(dx, dy);
+            }
+            for line in &mut self.line_boxes {
+                line.bounds.x += dx;
+                line.bounds.y += dy;
+                for frag in &mut line.text_fragments {
+                    frag.bounds.x += dx;
+                    frag.bounds.y += dy;
+                    frag.baseline_y += dy;
+                }
+                for at in &mut line.atomic_fragments {
+                    at.bounds.x += dx;
+                    at.bounds.y += dy;
+                }
+            }
+            for child in &mut self.children {
+                child.translate(dx, dy);
+            }
+            self.layout_cache.origin_x = self.geometry.border_box.x;
+            self.layout_cache.origin_y = self.geometry.border_box.y;
+        }
+        self.applied_relative_offset = (0.0, 0.0);
+    }
+
     /// Computes layout geometry passing an active exclusion space and depth guard.
     pub fn compute_layout_guarded(
         &mut self,
@@ -1730,6 +1922,7 @@ impl LayoutNode {
 
         if self.style.display == Display::None {
             self.geometry = LayoutGeometry::default();
+            self.applied_relative_offset = (0.0, 0.0);
             self.layout_cache.is_valid = false;
             self.children_layout_clean = false;
             self.subtree_hit_flags &= !SUBTREE_META_VALID;
@@ -1737,43 +1930,7 @@ impl LayoutNode {
         }
 
         if guard.is_exhausted() {
-            record_layout_overflow(guard.current_depth(), guard.max_depth());
-            let padding = self.style.padding;
-            let border = self.style.border_width;
-            let margin = self.style.margin;
-
-            let w = crate::box_model::resolve_dimension_with_node(
-                self.style.width,
-                available_width,
-                self,
-            )
-            .unwrap_or(available_width)
-            .max(0.0);
-            let h = crate::box_model::resolve_dimension(self.style.height, available_height)
-                .unwrap_or_else(|| {
-                    if self.text.is_some() {
-                        self.style.font_size * self.style.line_height
-                    } else {
-                        0.0
-                    }
-                })
-                .max(0.0);
-
-            self.geometry = LayoutGeometry::from_border_box(
-                crate::geometry::Rect::new(
-                    self.geometry.border_box.x,
-                    self.geometry.border_box.y,
-                    w,
-                    h,
-                ),
-                padding,
-                border,
-                margin,
-            );
-            self.geometry.snap_to_pixel();
-            self.layout_cache.is_valid = false;
-            self.children_layout_clean = false;
-            self.subtree_hit_flags &= !SUBTREE_META_VALID;
+            self.layout_overflow_fallback(available_width, available_height, guard);
             return;
         }
 
@@ -1792,46 +1949,11 @@ impl LayoutNode {
             && ((available_height - self.layout_cache.available_h).abs() < 0.01
                 || self.is_height_independent_for_cache())
         {
-            let dx = self.geometry.border_box.x - self.layout_cache.origin_x;
-            let dy = self.geometry.border_box.y - self.layout_cache.origin_y;
-            if dx.abs() > 0.001 || dy.abs() > 0.001 {
-                self.geometry.padding_box.x += dx;
-                self.geometry.padding_box.y += dy;
-                self.geometry.content_box.x += dx;
-                self.geometry.content_box.y += dy;
-                self.geometry.margin_box.x += dx;
-                self.geometry.margin_box.y += dy;
-                self.subtree_bounds.x += dx;
-                self.subtree_bounds.y += dy;
-                if let Some(ref mut pb) = self.last_preserved_box {
-                    pb.0 += dx;
-                    pb.1 += dy;
-                }
-                if let Some(ref mut grid) = self.table_grid {
-                    grid.translate(dx, dy);
-                }
-                for line in &mut self.line_boxes {
-                    line.bounds.x += dx;
-                    line.bounds.y += dy;
-                    for frag in &mut line.text_fragments {
-                        frag.bounds.x += dx;
-                        frag.bounds.y += dy;
-                        frag.baseline_y += dy;
-                    }
-                    for at in &mut line.atomic_fragments {
-                        at.bounds.x += dx;
-                        at.bounds.y += dy;
-                    }
-                }
-                for child in &mut self.children {
-                    child.translate(dx, dy);
-                }
-                self.layout_cache.origin_x = self.geometry.border_box.x;
-                self.layout_cache.origin_y = self.geometry.border_box.y;
-            }
+            self.translate_cached_subtree_hit();
             return;
         }
 
+        self.applied_relative_offset = (0.0, 0.0);
         self.subtree_hit_flags &= !SUBTREE_META_VALID;
 
         // Dispatch according to container display formatting context
@@ -1874,13 +1996,23 @@ impl LayoutNode {
             Display::None => unreachable!(),
         }
 
-        // Resolve relative and out-of-flow absolute/fixed positioned children
-        crate::positioning::solve_positioning_guarded(
-            self,
-            available_width,
-            available_height,
-            guard,
-        );
+        // Resolve relative and out-of-flow absolute/fixed positioned children.
+        // Skip redundant inner static-chain re-traversals when an ancestor root pass will walk them.
+        let needs_positioning_pass = guard.current_depth() == 0
+            || self.style.position != strata_style::types::Position::Static
+            || self.style.establishes_fixed_containing_block()
+            || self
+                .children
+                .iter()
+                .any(|c| c.style.position != strata_style::types::Position::Static);
+        if needs_positioning_pass {
+            crate::positioning::solve_positioning_guarded(
+                self,
+                available_width,
+                available_height,
+                guard,
+            );
+        }
 
         // Subpixel snapping and geometry sanitization
         self.geometry.snap_to_pixel();
@@ -2104,7 +2236,7 @@ impl LayoutNode {
         true
     }
 
-    /// Recursively calculates the index path to the layout node with matching EntityId.
+    /// Iteratively calculates the index path to the layout node with matching EntityId (`O(1)` call stack).
     pub fn find_path_by_entity_id(
         &self,
         target_id: strata_primitives::EntityId,
@@ -2112,30 +2244,33 @@ impl LayoutNode {
         if !target_id.is_valid() {
             return None;
         }
-        let mut path = Vec::new();
-        if self.find_path_by_entity_id_internal(target_id, &mut path) {
-            Some(path)
-        } else {
-            None
-        }
-    }
-
-    fn find_path_by_entity_id_internal(
-        &self,
-        target_id: strata_primitives::EntityId,
-        path: &mut Vec<usize>,
-    ) -> bool {
         if self.entity_id == target_id {
-            return true;
+            return Some(Vec::new());
         }
-        for (i, child) in self.children.iter().enumerate() {
-            path.push(i);
-            if child.find_path_by_entity_id_internal(target_id, path) {
-                return true;
+        let mut path = Vec::new();
+        let mut stack: Vec<(&LayoutNode, usize)> = vec![(self, 0)];
+        while let Some((node, next_idx)) = stack.last_mut() {
+            let idx = *next_idx;
+            if idx < node.children.len() {
+                *next_idx += 1;
+                let child = &node.children[idx];
+                path.push(idx);
+                if child.entity_id == target_id {
+                    return Some(path);
+                }
+                if !child.children.is_empty() {
+                    stack.push((child, 0));
+                } else {
+                    path.pop();
+                }
+            } else {
+                stack.pop();
+                if !stack.is_empty() {
+                    path.pop();
+                }
             }
-            path.pop();
         }
-        false
+        None
     }
 
     /// Invalidates layout cache on self and all ancestors leading down to `path`.
@@ -2204,16 +2339,24 @@ impl LayoutNode {
     }
 }
 
+#[inline(never)]
+fn drop_layout_children_iterative(mut stack: Vec<LayoutNode>) {
+    while let Some(mut node) = stack.pop() {
+        if !node.children.is_empty() {
+            let grandchildren = std::mem::take(&mut node.children);
+            stack.extend(grandchildren);
+        }
+    }
+}
+
 impl Drop for LayoutNode {
     fn drop(&mut self) {
+        if self.children.is_empty() {
+            return;
+        }
         // Drain descendants iteratively onto a heap stack to prevent recursion stack overflow
         // during deallocation of deeply nested trees (e.g. 10,000+ levels).
-        let mut stack = std::mem::take(&mut self.children);
-        while let Some(mut node) = stack.pop() {
-            if !node.children.is_empty() {
-                let grandchildren = std::mem::take(&mut node.children);
-                stack.extend(grandchildren);
-            }
-        }
+        let stack = std::mem::take(&mut self.children);
+        drop_layout_children_iterative(stack);
     }
 }

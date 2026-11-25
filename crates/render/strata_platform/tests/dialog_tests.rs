@@ -113,14 +113,14 @@ fn test_dialog_mock_responses() {
     set_dialog_mock_response(None);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn test_dialog_headless_fallback() {
     let _guard = DIALOG_TEST_LOCK.lock().unwrap();
     set_dialog_mock_response(None);
-    // In headless test environments without active GTK display, open_file returns None safely
-    let file = open_file(OpenFileOptions::new());
-    // Should not panic, returns None or OS selection
+    // In headless Linux test environments without active GTK display, open_file returns None safely.
     if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        let file = open_file(OpenFileOptions::new());
         assert_eq!(file, None);
     }
 }
@@ -196,6 +196,7 @@ fn test_dialog_async_apis_deliver_mock_and_headless_responses() {
 
     // 5. Headless / uninitialized GTK fallback invokes callback cleanly without blocking or panicking
     set_dialog_mock_response(None);
+    #[cfg(target_os = "linux")]
     if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
         let headless_res = Arc::new(Mutex::new(None));
         let headless_cb = Arc::clone(&headless_res);

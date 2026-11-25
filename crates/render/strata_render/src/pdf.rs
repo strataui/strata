@@ -407,7 +407,7 @@ fn emit_rounded_rect_path(out: &mut String, b: Rect, r: BorderRadius) {
         return;
     }
 
-    const K: f32 = 0.55228475;
+    const K: f32 = 0.552_284_8;
     let _ = writeln!(out, "{:.3} {:.3} m", x0 + tl, y_top);
     let _ = writeln!(out, "{:.3} {:.3} l", x1 - tr, y_top);
     if tr > 0.01 {

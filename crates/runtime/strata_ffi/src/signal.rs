@@ -121,7 +121,8 @@ pub unsafe extern "C" fn strata_signal_get_int(sig: *const StrataSignalHandle) -
     if sig.is_null() {
         return 0;
     }
-    (&(*sig).cell).atomic_i64.load(Ordering::SeqCst)
+    let cell = &(*sig).cell;
+    cell.atomic_i64.load(Ordering::SeqCst)
 }
 
 /// Updates an integer signal value, notifies C subscribers, and marks Strata reactive graphs dirty.
@@ -163,7 +164,8 @@ pub unsafe extern "C" fn strata_signal_subscribe_int(
         Some(c) => c,
         None => return 0,
     };
-    if let Ok(mut guard) = (&(*sig).cell).inner.write() {
+    let cell = &(*sig).cell;
+    if let Ok(mut guard) = cell.inner.write() {
         let id = guard.next_sub_id;
         guard.next_sub_id += 1;
         guard.subscriptions.push(Subscription {
@@ -186,7 +188,8 @@ pub unsafe extern "C" fn strata_signal_unsubscribe_int(
     if sig.is_null() {
         return -1;
     }
-    if let Ok(mut guard) = (&(*sig).cell).inner.write() {
+    let cell = &(*sig).cell;
+    if let Ok(mut guard) = cell.inner.write() {
         let initial_len = guard.subscriptions.len();
         guard.subscriptions.retain(|s| s.id != sub_id);
         if guard.subscriptions.len() < initial_len {
@@ -216,7 +219,8 @@ pub unsafe extern "C" fn strata_signal_get_f64(sig: *const StrataSignalHandle) -
     if sig.is_null() {
         return 0.0;
     }
-    if let Ok(guard) = (&(*sig).cell).inner.read() {
+    let cell = &(*sig).cell;
+    if let Ok(guard) = cell.inner.read() {
         match guard.typed_value {
             SignalValue::Float64(v) => v,
             SignalValue::Int64(v) => v as f64,
@@ -238,7 +242,8 @@ pub unsafe extern "C" fn strata_signal_set_f64(
             set_last_error("strata_signal_set_f64: signal pointer is NULL");
             return StrataStatus::NullPointer;
         }
-        if let Ok(mut guard) = (&(*sig).cell).inner.write() {
+        let cell = &(*sig).cell;
+        if let Ok(mut guard) = cell.inner.write() {
             let changed = !matches!(guard.typed_value, SignalValue::Float64(v) if v.to_bits() == value.to_bits());
             guard.typed_value = SignalValue::Float64(value);
             if changed {
@@ -270,7 +275,8 @@ pub unsafe extern "C" fn strata_signal_get_bool(sig: *const StrataSignalHandle) 
     if sig.is_null() {
         return false;
     }
-    if let Ok(guard) = (&(*sig).cell).inner.read() {
+    let cell = &(*sig).cell;
+    if let Ok(guard) = cell.inner.read() {
         match guard.typed_value {
             SignalValue::Bool(b) => b,
             SignalValue::Int64(v) => v != 0,
@@ -292,8 +298,9 @@ pub unsafe extern "C" fn strata_signal_set_bool(
             set_last_error("strata_signal_set_bool: signal pointer is NULL");
             return StrataStatus::NullPointer;
         }
-        (&(*sig).cell).atomic_i64.store(i64::from(value), Ordering::SeqCst);
-        if let Ok(mut guard) = (&(*sig).cell).inner.write() {
+        let cell = &(*sig).cell;
+        cell.atomic_i64.store(i64::from(value), Ordering::SeqCst);
+        if let Ok(mut guard) = cell.inner.write() {
             let changed = !matches!(guard.typed_value, SignalValue::Bool(b) if b == value);
             guard.typed_value = SignalValue::Bool(value);
             if changed {
@@ -348,7 +355,8 @@ pub unsafe extern "C" fn strata_signal_get_str(
             set_last_error("strata_signal_get_str: signal pointer is NULL");
             return StrataStatus::NullPointer;
         }
-        let text = (&(*sig).cell).format_text();
+        let cell = &(*sig).cell;
+        let text = cell.format_text();
         let bytes = text.as_bytes();
         let required = bytes.len() + 1;
 
@@ -396,7 +404,8 @@ pub unsafe extern "C" fn strata_signal_set_str(
                 return StrataStatus::InvalidUtf8;
             }
         };
-        if let Ok(mut guard) = (&(*sig).cell).inner.write() {
+        let cell = &(*sig).cell;
+        if let Ok(mut guard) = cell.inner.write() {
             let changed = !matches!(&guard.typed_value, SignalValue::Utf8String(old) if old == &new_str);
             guard.typed_value = SignalValue::Utf8String(new_str);
             if changed {

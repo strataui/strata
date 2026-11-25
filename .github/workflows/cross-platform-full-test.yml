@@ -4,6 +4,15 @@ name: Cross-Platform Full Coverage (Manual Only)
 # pull_request, or schedule unless explicitly requested.
 on:
   workflow_dispatch:
+    inputs:
+      target_os:
+        description: "Target OS runners to execute"
+        type: choice
+        default: both
+        options:
+          - both
+          - macos
+          - windows
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,6 +22,7 @@ env:
 jobs:
   full-test-macos:
     name: Full Coverage Test (macOS ARM64)
+    if: ${{ inputs.target_os == '' || inputs.target_os == 'both' || inputs.target_os == 'macos' }}
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -23,13 +33,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Test minimal headless profile (strata-ui --no-default-features)
-        run: cargo test -p strata-ui --no-default-features
+        run: cargo test -p strata-ui --no-default-features --no-fail-fast
 
       - name: Test full workspace (default features, all 22 publishable crates)
-        run: cargo test --workspace --exclude strata-parity-tauri
+        run: cargo test --workspace --exclude strata-parity-tauri --no-fail-fast
 
       - name: Test full workspace (--all-features, all 22 publishable crates)
-        run: cargo test --workspace --exclude strata-parity-tauri --all-features
+        run: cargo test --workspace --exclude strata-parity-tauri --all-features --no-fail-fast
 
       - name: Run showcase examples live (--features full-io)
         run: |
@@ -38,6 +48,7 @@ jobs:
 
   full-test-windows:
     name: Full Coverage Test (Windows x86_64)
+    if: ${{ inputs.target_os == '' || inputs.target_os == 'both' || inputs.target_os == 'windows' }}
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -48,13 +59,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Test minimal headless profile (strata-ui --no-default-features)
-        run: cargo test -p strata-ui --no-default-features
+        run: cargo test -p strata-ui --no-default-features --no-fail-fast
 
       - name: Test full workspace (default features, all 22 publishable crates)
-        run: cargo test --workspace --exclude strata-parity-tauri
+        run: cargo test --workspace --exclude strata-parity-tauri --no-fail-fast
 
       - name: Test full workspace (--all-features, all 22 publishable crates)
-        run: cargo test --workspace --exclude strata-parity-tauri --all-features
+        run: cargo test --workspace --exclude strata-parity-tauri --all-features --no-fail-fast
 
       - name: Run showcase examples live (--features full-io)
         shell: pwsh

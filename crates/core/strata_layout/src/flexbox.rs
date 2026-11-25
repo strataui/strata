@@ -35,23 +35,33 @@ struct FlexLine {
     max_baseline_ascent: f32,
 }
 
-/// Computes the first baseline offset from the top border box of a layout node.
+/// Computes the first baseline offset from the top border box of a layout node iteratively (O(1) call stack).
 fn compute_first_baseline(node: &LayoutNode) -> f32 {
-    if let Some(first_line) = node.line_boxes.first() {
-        return (first_line.bounds.y - node.geometry.border_box.y).max(0.0) + first_line.baseline;
-    }
-    if node.text.is_some() {
-        return node.style.padding.top + node.style.border_width.top + node.style.font_size * 0.8;
-    }
-    for child in &node.children {
-        if child.style.position == Position::Absolute || child.style.position == Position::Fixed {
-            continue;
+    let mut cur = node;
+    let mut acc_y = 0.0f32;
+    loop {
+        if let Some(first_line) = cur.line_boxes.first() {
+            return acc_y
+                + (first_line.bounds.y - cur.geometry.border_box.y).max(0.0)
+                + first_line.baseline;
         }
-        let child_baseline = compute_first_baseline(child);
-        let rel_y = (child.geometry.border_box.y - node.geometry.border_box.y).max(0.0);
-        return rel_y + child_baseline;
+        if cur.text.is_some() {
+            return acc_y
+                + cur.style.padding.top
+                + cur.style.border_width.top
+                + cur.style.font_size * 0.8;
+        }
+        let next = cur
+            .children
+            .iter()
+            .find(|c| c.style.position != Position::Absolute && c.style.position != Position::Fixed);
+        if let Some(child) = next {
+            acc_y += (child.geometry.border_box.y - cur.geometry.border_box.y).max(0.0);
+            cur = child;
+        } else {
+            return acc_y + cur.geometry.border_box.height;
+        }
     }
-    node.geometry.border_box.height
 }
 
 /// Computes the line cross size and maximum baseline ascent for a flex line.
@@ -173,6 +183,10 @@ pub fn solve_flexbox_with_definite_cross_guarded(
     guard: crate::tree::LayoutDepthGuard,
 ) {
     let _prof = crate::prof::Scope::new(crate::prof::Slot::Flex);
+    if guard.is_exhausted() {
+        crate::tree::record_layout_overflow(guard.current_depth(), guard.max_depth());
+        return;
+    }
     let padding = container.style.padding;
     let border = container.style.border_width;
     let margin = container.style.margin;
@@ -1491,6 +1505,7 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                     child.translate(dx, dy);
                 }
                 child.geometry = new_geom;
+                child.applied_relative_offset = (0.0, 0.0);
                 child.geometry.scroll_bounds = saved_scroll_bounds;
                 child.geometry.has_scroll = saved_has_scroll;
                 child.geometry.scroll_offset = saved_scroll_offset;
@@ -1502,6 +1517,7 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                     child.style.border_width,
                     child_margin,
                 );
+                child.applied_relative_offset = (0.0, 0.0);
                 child.geometry.snap_to_pixel();
                 if !child.children.is_empty() {
                     if let Some(cg) = guard.enter() {

@@ -49,11 +49,18 @@ fn test_directory_watcher_detects_src_and_ignores_target() {
     );
 
     // Modifying a real source file MUST be buffered during debounce and flushed once settled
-    thread::sleep(Duration::from_millis(20));
+    thread::sleep(Duration::from_millis(25));
     fs::write(&main_rs, "fn main() { println!(\"v2\"); }\n").unwrap();
-    let _ = watcher.poll_changes(); // captures edit timestamp
-    thread::sleep(Duration::from_millis(30));
-    let changed = watcher.poll_changes();
+    let deadline = std::time::Instant::now() + Duration::from_millis(500);
+    let mut changed = Vec::new();
+    while std::time::Instant::now() < deadline {
+        let batch = watcher.poll_changes();
+        if !batch.is_empty() {
+            changed = batch;
+            break;
+        }
+        thread::sleep(Duration::from_millis(15));
+    }
     assert!(
         changed.iter().any(|p| p == &main_rs),
         "Expected src/main.rs change to be detected after debounce, got: {:?}",

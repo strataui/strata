@@ -92,6 +92,9 @@ fn handle_client(
     port: u16,
     running: Arc<AtomicBool>,
 ) -> io::Result<()> {
+    // On macOS and Windows, streams accepted from a non-blocking TcpListener inherit
+    // non-blocking mode, causing immediate WouldBlock before any HTTP bytes arrive.
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_millis(500)))?;
     let mut header_buf = [0u8; 4096];
     let mut read_bytes = 0;

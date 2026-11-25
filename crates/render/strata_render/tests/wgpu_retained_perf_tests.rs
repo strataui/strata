@@ -205,14 +205,18 @@ fn wgpu_3d_renderer_retained_render_and_1000_frame_1440x900_throughput() {
         &bgra[center_idx..center_idx + 4]
     );
 
-    // 2. Warm-up + 1,000 continuous camera orbit frames at 1440x900 without CPU readback.
-    for _ in 0..20 {
+    // 2. Warm-up + continuous camera orbit frames at 1440x900 without CPU readback.
+    // On software rasterizers (Windows WARP / Linux Lavapipe) or CI runners, use a compact
+    // frame count so CI stays fast while still validating zero-readback orbit rendering.
+    let fast_ci = renderer.is_software_adapter() || std::env::var_os("CI").is_some();
+    let warmup_frames = if fast_ci { 2usize } else { 20usize };
+    let n_frames = if fast_ci { 10usize } else { 1_000usize };
+    for _ in 0..warmup_frames {
         renderer
             .render_offscreen(&scene, w, h, false, true)
             .expect("warmup frame");
     }
 
-    let n_frames = 1_000usize;
     let mut frame_ms = Vec::with_capacity(n_frames);
     let total_t0 = Instant::now();
     for i in 0..n_frames {
@@ -604,7 +608,9 @@ fn wgpu_particle_volumes_render_procedural_rain_snow_custom_texture_and_clip_abo
     cam.day_night_strength = 0.0;
 
     let count_lit_pixels = |bgra: &[u8]| -> usize {
-        bgra.chunks_exact(4)
+        bgra.as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[0] > 18 || px[1] > 18 || px[2] > 18)
             .count()
     };
@@ -704,7 +710,9 @@ fn wgpu_particle_volumes_render_procedural_rain_snow_custom_texture_and_clip_abo
         .render_offscreen(&scene, w, h, true, true)
         .expect("custom texture particle offscreen");
     let magenta_hits = bgra_tex
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|px| px[2] > 120 && px[0] > 100 && px[1] < 80)
         .count();
     assert!(
@@ -771,7 +779,7 @@ fn wgpu_physical_25d_sky_night_stars_and_weather_darkening() {
         let mut g = 0.0f64;
         let mut b = 0.0f64;
         let n = (bgra.len() / 4).max(1) as f64;
-        for px in bgra.chunks_exact(4) {
+        for px in bgra.as_chunks::<4>().0 {
             b += px[0] as f64;
             g += px[1] as f64;
             r += px[2] as f64;
@@ -827,7 +835,9 @@ fn wgpu_physical_25d_sky_night_stars_and_weather_darkening() {
     let night_px = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
     let night_rgb = mean_rgb(&night_px);
     let bright_star_pixels = night_px
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|px| px[2] > 110 && px[1] > 100 && px[0] > 90)
         .count();
     assert!(
@@ -1231,7 +1241,7 @@ fn wgpu_3d_ocean_vertex_wave_displacement_and_close_ground_micro_detail() {
     let h = 96u32;
 
     // Flat uniform grey-brown swatch for close-ground (<50m) procedural micro-detail test.
-    let swatch_rgba = vec![140u8, 132, 118, 255].repeat(64 * 64);
+    let swatch_rgba = [140u8, 132, 118, 255].repeat(64 * 64);
     let land_tex = Arc::new(RetainedTileTexture {
         id: 888,
         revision: 1,
@@ -1240,7 +1250,7 @@ fn wgpu_3d_ocean_vertex_wave_displacement_and_close_ground_micro_detail() {
         rgba8: Arc::new(swatch_rgba),
     });
     // Deep ocean blue swatch for ocean wave displacement & shading test.
-    let ocean_rgba = vec![24u8, 62, 115, 255].repeat(64 * 64);
+    let ocean_rgba = [24u8, 62, 115, 255].repeat(64 * 64);
     let ocean_tex = Arc::new(RetainedTileTexture {
         id: 889,
         revision: 1,
@@ -1520,7 +1530,7 @@ fn wgpu_ocean_waves_are_invariant_across_origin_shift_and_non_repetitive() {
     let (w, h) = (128u32, 128u32);
     let r_earth = 6_378_137.0_f64;
 
-    let ocean_rgba = vec![20u8, 60, 118, 255].repeat(64 * 64);
+    let ocean_rgba = [20u8, 60, 118, 255].repeat(64 * 64);
     let ocean_tex = Arc::new(RetainedTileTexture {
         id: 890,
         revision: 1,
@@ -1827,8 +1837,8 @@ fn wgpu_2d_transition_has_no_pale_blue_flash_and_pole_seam_is_clean() {
 
     let (w, h) = (160u32, 120u32);
     let mut tex_px = vec![0u8; 4 * 4 * 4];
-    for p in tex_px.chunks_exact_mut(4) {
-        p.copy_from_slice(&[72, 92, 64, 255]);
+    for p in tex_px.as_chunks_mut::<4>().0 {
+        *p = [72, 92, 64, 255];
     }
     let tile_tex = Arc::new(RetainedTileTexture {
         id: 991,

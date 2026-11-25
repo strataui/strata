@@ -146,6 +146,8 @@ fn parse_key_code(name: &str) -> Option<KeyCode> {
         "[" | "BRACKETLEFT" => Some(KeyCode::BracketLeft),
         "]" | "BRACKETRIGHT" => Some(KeyCode::BracketRight),
         ";" | "SEMICOLON" => Some(KeyCode::Semicolon),
+        "'" | "\"" | "QUOTE" | "APOSTROPHE" => Some(KeyCode::Quote),
+        "\\" | "|" | "BACKSLASH" => Some(KeyCode::Backslash),
         "`" | "BACKQUOTE" | "GRAVE" => Some(KeyCode::Backquote),
         _ => None,
     }

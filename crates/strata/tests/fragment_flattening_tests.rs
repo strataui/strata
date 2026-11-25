@@ -41,7 +41,7 @@ fn test_node_blueprint_fragment_flattening() {
 
     let flattened = parent_element.flatten_fragments();
 
-    if let NodeBlueprint::Element { children, .. } = flattened {
+    if let NodeBlueprint::Element { children, .. } = &flattened {
         assert_eq!(
             children.len(),
             3,

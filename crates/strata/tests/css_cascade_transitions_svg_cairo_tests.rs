@@ -303,6 +303,7 @@ fn StationaryHoverTransitionApp() -> View {
 #[test]
 fn test_stationary_hover_transition_tick_loop_advances_to_completion() {
     let mut runtime = AppRuntime::new(StationaryHoverTransitionApp(), 300.0, 200.0, 1.0);
+    runtime.freeze_clock_at_epoch();
 
     let start_c = Color::new(30, 41, 59, 255);
     let target_c = Color::new(56, 189, 248, 255);
@@ -325,8 +326,8 @@ fn test_stationary_hover_transition_tick_loop_advances_to_completion() {
         "LayoutNode::has_active_transitions must propagate true up to root"
     );
 
-    // Simulate stationary pointer: advance time ~120ms and fire AnimationTick without MouseMove
-    std::thread::sleep(Duration::from_millis(120));
+    // Simulate stationary pointer: advance virtual clock 120ms and fire AnimationTick without MouseMove
+    runtime.advance_clock(Duration::from_millis(120));
     assert!(
         runtime.step_event(&PlatformEvent::AnimationTick),
         "AnimationTick must request redraw while hover transition is interpolating"
@@ -345,7 +346,7 @@ fn test_stationary_hover_transition_tick_loop_advances_to_completion() {
     );
 
     // Advance past 500ms duration and verify completion + idle sleep
-    std::thread::sleep(Duration::from_millis(460));
+    runtime.advance_clock(Duration::from_millis(460));
     let _ = runtime.step_event(&PlatformEvent::AnimationTick);
 
     assert_eq!(
@@ -411,6 +412,7 @@ fn extract_svg_stroke_and_fill(
 #[test]
 fn test_svg_current_color_inherits_and_interpolates_with_parent_transition() {
     let mut runtime = AppRuntime::new(SvgCurrentColorButtonApp(), 300.0, 200.0, 1.0);
+    runtime.freeze_clock_at_epoch();
     let base_c = Color::new(148, 163, 184, 255);
     let hover_c = Color::new(56, 189, 248, 255);
 
@@ -429,8 +431,7 @@ fn test_svg_current_color_inherits_and_interpolates_with_parent_transition() {
 
     // Hover button and check mid-transition SVG colors
     assert!(runtime.update_hover(40.0, 24.0));
-    std::thread::sleep(Duration::from_millis(120));
-    assert!(runtime.poll_animations());
+    assert!(runtime.advance_animations(Duration::from_millis(120)));
     runtime.compile_display_list();
 
     let btn_mid_c = runtime.layout_root.children[0].style.color;
@@ -448,8 +449,7 @@ fn test_svg_current_color_inherits_and_interpolates_with_parent_transition() {
     assert!(btn_mid_c.b > base_c.b && btn_mid_c.b < hover_c.b);
 
     // Settle transition
-    std::thread::sleep(Duration::from_millis(460));
-    let _ = runtime.poll_animations();
+    let _ = runtime.advance_animations(Duration::from_millis(460));
     runtime.compile_display_list();
     let (s1, f1) = extract_svg_stroke_and_fill(&runtime.display_list);
     assert_eq!(s1, Some(hover_c));

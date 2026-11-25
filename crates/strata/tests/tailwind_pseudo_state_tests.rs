@@ -236,6 +236,7 @@ fn test_native_hover_tooltip_for_title_and_alt_attributes() {
     };
 
     // Hover button 1 (`title="Center on Target"`): armed, not immediately visible.
+    runtime.freeze_clock_at_epoch();
     runtime.step_event(&strata_platform::PlatformEvent::MouseMove { x: 50.0, y: 30.0 });
     assert_eq!(
         runtime.hover_tooltip_text.as_deref(),
@@ -245,7 +246,7 @@ fn test_native_hover_tooltip_for_title_and_alt_attributes() {
     assert!(!has_text(&runtime, "Center on Target"));
 
     // After dwell delay, AnimationTick reveals the tooltip in the display list.
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    runtime.advance_clock(std::time::Duration::from_millis(10));
     let woke = runtime.step_event(&strata_platform::PlatformEvent::AnimationTick);
     assert!(woke);
     assert!(runtime.hover_tooltip_visible);
@@ -272,7 +273,7 @@ fn test_native_hover_tooltip_for_title_and_alt_attributes() {
         runtime.hover_tooltip_text.as_deref(),
         Some("Toggle Terrain Wireframe")
     );
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    runtime.advance_clock(std::time::Duration::from_millis(10));
     assert!(runtime.step_event(&strata_platform::PlatformEvent::AnimationTick));
     assert!(runtime.hover_tooltip_visible);
     assert!(has_text(&runtime, "Toggle Terrain Wireframe"));

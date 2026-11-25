@@ -316,3 +316,223 @@ fn test_single_instance_lock_mutex_and_ipc_forwarding() {
         "Primary instance must receive forwarded arguments from secondary process"
     );
 }
+
+#[test]
+fn test_non_input_tabindex_received_character_shifted_digits_quote_backslash_and_dedup() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    let typed = Rc::new(RefCell::new(String::new()));
+    let ime_commits = Rc::new(RefCell::new(Vec::<String>::new()));
+
+    let typed_kd = Rc::clone(&typed);
+    let typed_in = Rc::clone(&typed);
+    let ime_in = Rc::clone(&ime_commits);
+
+    let view = View::new(NodeBlueprint::element(
+        Tag::Div,
+        "w-[400px] h-[200px] bg-[#09090b]",
+        vec![],
+        vec![NodeBlueprint::element(
+            Tag::Div,
+            "w-[360px] h-[160px]",
+            vec![
+                Attribute::property("id", "custom-code-editor"),
+                Attribute::property("tabindex", "0"),
+                Attribute::event_listener(EventType::KeyDown, move |e: Event| {
+                    if !e.ctrl_key && !e.meta_key && !e.alt_key && e.key.chars().count() == 1 {
+                        typed_kd.borrow_mut().push_str(&e.key);
+                    }
+                }),
+                Attribute::event_listener(EventType::Input, move |e: Event| {
+                    ime_in.borrow_mut().push(e.value.clone());
+                    typed_in.borrow_mut().push_str(&e.value);
+                }),
+            ],
+            vec![NodeBlueprint::text("Editor Body")],
+        )],
+    ));
+
+    let mut runtime = AppRuntime::new(view, 400.0, 200.0, 1.0);
+    runtime.freeze_clock_at_epoch();
+
+    // Click to focus the non-<input> tabindex="0" widget
+    runtime.dispatch_pointer_down(50.0, 50.0);
+    runtime.dispatch_pointer_up(50.0, 50.0);
+    assert!(runtime.active_focus.is_none());
+    assert!(runtime.current_focus_path.is_some());
+
+    // 1. Standalone ReceivedCharacter stream (e.g. MCP strata_keyboard_type("\"'\\()!"))
+    for ch in "\"'\\()!".chars() {
+        assert!(runtime.step_event(&PlatformEvent::ReceivedCharacter(ch)));
+    }
+    assert_eq!(typed.borrow().as_str(), "\"'\\()!");
+
+    // 2. Shifted digits Digit0..Digit9 produce ")!@#$%^&*("
+    typed.borrow_mut().clear();
+    let shift_mod = Modifiers {
+        shift: true,
+        ..Default::default()
+    };
+    for key in [
+        KeyCode::Digit0,
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
+    ] {
+        assert!(runtime.step_event(&PlatformEvent::KeyDown {
+            key,
+            modifiers: shift_mod,
+        }));
+    }
+    assert_eq!(typed.borrow().as_str(), ")!@#$%^&*(");
+
+    // 3. Quote and Backslash (unshifted & shifted)
+    typed.borrow_mut().clear();
+    assert!(runtime.step_event(&PlatformEvent::KeyDown {
+        key: KeyCode::Quote,
+        modifiers: Modifiers::default(),
+    }));
+    assert!(runtime.step_event(&PlatformEvent::KeyDown {
+        key: KeyCode::Quote,
+        modifiers: shift_mod,
+    }));
+    assert!(runtime.step_event(&PlatformEvent::KeyDown {
+        key: KeyCode::Backslash,
+        modifiers: Modifiers::default(),
+    }));
+    assert!(runtime.step_event(&PlatformEvent::KeyDown {
+        key: KeyCode::Backslash,
+        modifiers: shift_mod,
+    }));
+    assert_eq!(typed.borrow().as_str(), "'\"\\|");
+
+    // 4. Desktop KeyDown + immediate ReceivedCharacter pair MUST NOT double-type
+    typed.borrow_mut().clear();
+    assert!(runtime.step_event(&PlatformEvent::KeyDown {
+        key: KeyCode::KeyA,
+        modifiers: Modifiers::default(),
+    }));
+    runtime.advance_clock(Duration::from_millis(2));
+    assert!(
+        !runtime.step_event(&PlatformEvent::ReceivedCharacter('a')),
+        "Immediate OS ReceivedCharacter duplicate after KeyDown must be suppressed"
+    );
+    assert_eq!(typed.borrow().as_str(), "a");
+
+    // Repeated standalone ReceivedCharacter('b') MUST NOT be falsely suppressed
+    assert!(runtime.step_event(&PlatformEvent::ReceivedCharacter('b')));
+    assert!(runtime.step_event(&PlatformEvent::ReceivedCharacter('b')));
+    assert_eq!(typed.borrow().as_str(), "abb");
+
+    // 5. ImeCommit dispatches atomically via EventType::Input
+    typed.borrow_mut().clear();
+    assert!(runtime.step_event(&PlatformEvent::ImeCommit("日本語".to_string())));
+    assert_eq!(ime_commits.borrow().as_slice(), &["日本語".to_string()]);
+    assert_eq!(typed.borrow().as_str(), "日本語");
+}
+
+#[test]
+fn test_focused_input_bubbles_keydown_and_honors_prevent_default_and_stop_propagation() {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    let parent_keys = Rc::new(RefCell::new(Vec::<String>::new()));
+    let escaped = Rc::new(Cell::new(false));
+    let entered = Rc::new(Cell::new(false));
+    let blurred = Rc::new(Cell::new(false));
+
+    let pk = Rc::clone(&parent_keys);
+    let esc = Rc::clone(&escaped);
+    let ent = Rc::clone(&entered);
+    let bl = Rc::clone(&blurred);
+
+    let view = View::new(NodeBlueprint::element(
+        Tag::Div,
+        "w-[400px] h-[160px] p-4",
+        vec![Attribute::event_listener(EventType::KeyDown, move |e: Event| {
+            pk.borrow_mut().push(e.key);
+        })],
+        vec![NodeBlueprint::element(
+            Tag::Input,
+            "w-[240px] h-[36px]",
+            vec![
+                Attribute::property("id", "find-bar-input"),
+                Attribute::property("value", ""),
+                Attribute::event_listener(EventType::KeyDown, move |e: Event| match e.key.as_str() {
+                    "Escape" => {
+                        esc.set(true);
+                        e.prevent_default();
+                        e.stop_propagation();
+                    }
+                    "Enter" => {
+                        ent.set(true);
+                        e.prevent_default();
+                        e.stop_propagation();
+                    }
+                    _ => {
+                        // Prevent bubbling into outer editor, but allow native <input> editing!
+                        e.stop_propagation();
+                    }
+                }),
+                Attribute::event_listener(EventType::Blur, move |_e: Event| {
+                    bl.set(true);
+                }),
+            ],
+            vec![],
+        )],
+    ));
+
+    let mut runtime = AppRuntime::new(view, 400.0, 160.0, 1.0);
+    runtime.dispatch_pointer_down(40.0, 30.0);
+    runtime.dispatch_pointer_up(40.0, 30.0);
+    assert!(runtime.active_focus.is_some());
+
+    // Typing 'x' + 'y' and Backspace works natively while stop_propagation keeps parent quiet
+    runtime.step_event(&PlatformEvent::KeyDown {
+        key: KeyCode::KeyX,
+        modifiers: Modifiers::default(),
+    });
+    runtime.step_event(&PlatformEvent::ReceivedCharacter('x'));
+    runtime.step_event(&PlatformEvent::KeyDown {
+        key: KeyCode::KeyY,
+        modifiers: Modifiers::default(),
+    });
+    runtime.step_event(&PlatformEvent::ReceivedCharacter('y'));
+    runtime.step_event(&PlatformEvent::KeyDown {
+        key: KeyCode::Backspace,
+        modifiers: Modifiers::default(),
+    });
+    assert_eq!(
+        runtime.active_focus.as_ref().unwrap().state.text.get(),
+        "x",
+        "stop_propagation without prevent_default must preserve native <input> Backspace editing"
+    );
+    assert!(
+        parent_keys.borrow().is_empty(),
+        "stop_propagation on <input> KeyDown must block bubbling to outer container"
+    );
+
+    // Enter invokes <input> KeyDown and honors prevent_default
+    assert!(runtime.step_event(&PlatformEvent::KeyDown {
+        key: KeyCode::Enter,
+        modifiers: Modifiers::default(),
+    }));
+    assert!(entered.get());
+
+    // Escape invokes <input> KeyDown and prevent_default suppresses default <input> blur
+    assert!(runtime.step_event(&PlatformEvent::KeyDown {
+        key: KeyCode::Escape,
+        modifiers: Modifiers::default(),
+    }));
+    assert!(escaped.get());
+    assert!(!blurred.get());
+    assert!(parent_keys.borrow().is_empty());
+}

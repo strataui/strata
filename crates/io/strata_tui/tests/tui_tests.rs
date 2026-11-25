@@ -219,7 +219,7 @@ fn test_conditional_tui_components() {
     set_tui_target_active(true);
     assert!(is_tui_target());
     let res_tui = tui_fallback(gui_view, tui_view);
-    match res_tui.root {
+    match &res_tui.root {
         NodeBlueprint::Text(s) => assert_eq!(s, "Terminal Mode"),
         _ => panic!("Expected TUI text"),
     }

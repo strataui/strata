@@ -736,7 +736,7 @@ impl AppRuntime {
     pub fn start_view_transition(&mut self, duration_ms: f32) {
         let mut named = Vec::new();
         Self::collect_view_transition_elements(&self.layout_root, &mut named);
-        let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
+        let now_ms = self.now_ms();
         self.view_transition_manager
             .start_transition(&named, now_ms, duration_ms);
     }
@@ -769,9 +769,23 @@ impl AppRuntime {
             || self.view_transition_manager.has_active_transitions()
     }
 
-    /// Advances active animations and transitions by current clock time.
+    /// Advances active animations and transitions by current runtime clock time.
     /// Returns true if any animation stepped and a redraw is needed.
+    #[inline]
     pub fn poll_animations(&mut self) -> bool {
+        let now = self.now();
+        self.poll_animations_at(now)
+    }
+
+    /// Advances the virtual clock by `dt` and steps active animations/transitions at that instant.
+    pub fn advance_animations(&mut self, dt: std::time::Duration) -> bool {
+        let now = self.advance_clock(dt);
+        self.poll_animations_at(now)
+    }
+
+    /// Advances active animations and transitions at an explicit monotonic `Instant`.
+    /// Returns true if any animation stepped and a redraw is needed.
+    pub fn poll_animations_at(&mut self, now: std::time::Instant) -> bool {
         if !self.has_active_animations() {
             return false;
         }
@@ -785,7 +799,10 @@ impl AppRuntime {
             || self.transition_manager.has_layout_affecting_transitions()
             || self.animation_manager.has_layout_affecting_animations();
 
-        let now_ms = self.runtime_start_epoch.elapsed().as_secs_f64() * 1000.0;
+        let now_ms = now
+            .saturating_duration_since(self.runtime_start_epoch)
+            .as_secs_f64()
+            * 1000.0;
         let trans_events = self.transition_manager.advance(now_ms);
         let anim_events = self
             .animation_manager

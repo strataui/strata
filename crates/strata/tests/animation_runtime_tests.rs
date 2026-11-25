@@ -77,6 +77,7 @@ fn LifecycleEventsApp(start_fired: Rc<Cell<bool>>, iteration_fired: Rc<Cell<bool
 fn test_runtime_tailwind_animation_registration_and_stepping() {
     let view = SpinningIconApp();
     let mut runtime = AppRuntime::new(view, 400.0, 300.0, 1.0);
+    runtime.freeze_clock_at_epoch();
 
     // Initial state: animated child should have registered spin animation
     assert!(
@@ -90,15 +91,15 @@ fn test_runtime_tailwind_animation_registration_and_stepping() {
         "Spinning child must have transform property initialized"
     );
 
-    // Sleep a few milliseconds and poll
-    std::thread::sleep(Duration::from_millis(15));
-    let redraw_needed = runtime.poll_animations();
+    // Advance virtual clock deterministically and poll
+    let redraw_needed = runtime.advance_animations(Duration::from_millis(15));
     assert!(
         redraw_needed,
         "poll_animations must return true while keyframe animation is active"
     );
 
     // Platform event AnimationTick should return true
+    runtime.advance_clock(Duration::from_millis(16));
     let tick_dirty = runtime.step_event(&PlatformEvent::AnimationTick);
     assert!(
         tick_dirty,
@@ -135,6 +136,7 @@ fn test_runtime_auto_sleep_when_stationary() {
 fn test_runtime_css_transition_on_state_update() {
     let view1 = TransitionApp(false);
     let mut runtime = AppRuntime::new(view1, 400.0, 300.0, 1.0);
+    runtime.freeze_clock_at_epoch();
 
     // Initially static before state update
     assert!(
@@ -152,9 +154,8 @@ fn test_runtime_css_transition_on_state_update() {
         "Transition must be active after state update with changing style"
     );
 
-    // Advance clock
-    std::thread::sleep(Duration::from_millis(30));
-    let dirty = runtime.poll_animations();
+    // Advance clock deterministically
+    let dirty = runtime.advance_animations(Duration::from_millis(30));
     assert!(dirty, "Polling active transition must trigger redraw");
 
     let animated_box = &runtime.layout_root.children[0];
@@ -173,6 +174,7 @@ fn test_runtime_css_transition_on_state_update() {
 fn test_keyframe_animation_ticks_are_layout_free() {
     let view = SpinningIconApp();
     let mut runtime = AppRuntime::new(view, 400.0, 300.0, 1.0);
+    runtime.freeze_clock_at_epoch();
 
     assert!(
         runtime.has_active_animations(),
@@ -181,9 +183,8 @@ fn test_keyframe_animation_ticks_are_layout_free() {
 
     let baseline = runtime.layout_compute_count();
     for _ in 0..8 {
-        std::thread::sleep(Duration::from_millis(2));
         assert!(
-            runtime.poll_animations(),
+            runtime.advance_animations(Duration::from_millis(16)),
             "paint-only keyframe animation must request a redraw"
         );
     }
@@ -195,7 +196,7 @@ fn test_keyframe_animation_ticks_are_layout_free() {
 
     let baseline = runtime.layout_compute_count();
     for _ in 0..8 {
-        std::thread::sleep(Duration::from_millis(2));
+        runtime.advance_clock(Duration::from_millis(16));
         assert!(
             runtime.step_event(&PlatformEvent::AnimationTick),
             "AnimationTick must request a redraw while the spinner is active"
@@ -212,12 +213,12 @@ fn test_keyframe_animation_ticks_are_layout_free() {
 fn test_width_transition_still_recomputes_layout() {
     let view = TransitionApp(false);
     let mut runtime = AppRuntime::new(view, 400.0, 300.0, 1.0);
+    runtime.freeze_clock_at_epoch();
     runtime.update_view(TransitionApp(true));
 
     assert!(runtime.has_active_animations());
     let baseline = runtime.layout_compute_count();
-    std::thread::sleep(Duration::from_millis(20));
-    assert!(runtime.poll_animations());
+    assert!(runtime.advance_animations(Duration::from_millis(20)));
     assert!(
         runtime.layout_compute_count() > baseline,
         "width transitions participate in box layout and must recompute layout"
@@ -384,6 +385,7 @@ fn test_transition_width_to_zero_and_rem_reflows_flex_siblings_smoothly() {
     }
 
     let mut runtime = AppRuntime::new(DockApp(true), 480.0, 200.0, 1.0);
+    runtime.freeze_clock_at_epoch();
     let dock_open_w = runtime.layout_root.children[0].geometry.border_box.width;
     let main_open_x = runtime.layout_root.children[1].geometry.border_box.x;
     assert!((dock_open_w - 240.0).abs() < 1.0, "w-60 = 240px");
@@ -396,8 +398,7 @@ fn test_transition_width_to_zero_and_rem_reflows_flex_siblings_smoothly() {
         "transition-[width] must start a width transition from w-60 to w-0"
     );
 
-    std::thread::sleep(Duration::from_millis(120));
-    assert!(runtime.poll_animations());
+    assert!(runtime.advance_animations(Duration::from_millis(120)));
     let dock_mid_w = runtime.layout_root.children[0].geometry.border_box.width;
     let main_mid = runtime.layout_root.children[1].geometry.border_box;
     assert!(
@@ -411,8 +412,7 @@ fn test_transition_width_to_zero_and_rem_reflows_flex_siblings_smoothly() {
     );
 
     // Finish transition and verify sibling settles to full 480px width.
-    std::thread::sleep(Duration::from_millis(460));
-    let _ = runtime.poll_animations();
+    let _ = runtime.advance_animations(Duration::from_millis(460));
     let dock_end_w = runtime.layout_root.children[0].geometry.border_box.width;
     let main_end = runtime.layout_root.children[1].geometry.border_box;
     assert!(dock_end_w < 0.5, "settled dock width must reach 0, got {dock_end_w}");
@@ -459,6 +459,7 @@ fn test_collapsible_dock_transition_locks_inner_width_and_supports_auto_height()
     }
 
     let mut runtime = AppRuntime::new(CollapsiblePanels(true, true), 480.0, 360.0, 1.0);
+    runtime.freeze_clock_at_epoch();
     let side_open_w = runtime.layout_root.children[0].children[0].geometry.border_box.width;
     let inner_open_w = runtime.layout_root.children[0].children[0].children[0]
         .geometry
@@ -473,8 +474,7 @@ fn test_collapsible_dock_transition_locks_inner_width_and_supports_auto_height()
     runtime.update_view(CollapsiblePanels(false, false));
     assert!(runtime.has_active_animations());
 
-    std::thread::sleep(Duration::from_millis(85));
-    assert!(runtime.poll_animations());
+    assert!(runtime.advance_animations(Duration::from_millis(85)));
 
     let side_node = &runtime.layout_root.children[0].children[0];
     let side_w = side_node.geometry.border_box.width;
@@ -509,14 +509,12 @@ fn test_collapsible_dock_transition_locks_inner_width_and_supports_auto_height()
     )));
 
     // 2. Finish collapse, then toggle back open (h-0 -> h-auto) and verify smooth expansion!
-    std::thread::sleep(Duration::from_millis(280));
-    let _ = runtime.poll_animations();
+    let _ = runtime.advance_animations(Duration::from_millis(280));
     assert!(runtime.layout_root.children[1].geometry.border_box.height < 0.5);
 
     runtime.update_view(CollapsiblePanels(true, true));
     assert!(runtime.has_active_animations());
-    std::thread::sleep(Duration::from_millis(85));
-    assert!(runtime.poll_animations());
+    assert!(runtime.advance_animations(Duration::from_millis(85)));
     let bottom_reopen_h = runtime.layout_root.children[1].geometry.border_box.height;
     assert!(
         bottom_reopen_h > 2.0 && bottom_reopen_h < 95.0,
@@ -567,6 +565,7 @@ fn reconciled_update_view_during_active_theme_transition_preserves_target_base_s
     }
 
     let mut rt = AppRuntime::new(render_theme_app(false, 0), 640.0, 360.0, 1.0);
+    rt.freeze_clock_at_epoch();
     rt.tick_frame();
     {
         let rtl = find_by_id(&rt.layout_root, "action-btn").expect("#action-btn must exist");
@@ -574,16 +573,15 @@ fn reconciled_update_view_during_active_theme_transition_preserves_target_base_s
         assert_eq!(rtl.style.color, Color::rgb(229, 231, 235));
     }
 
-    // 1. Switch theme obsidian-dark -> daylight-light (starts 150ms transition on #action-btn).
+    // 1. Switch theme obsidian-dark -> daylight-light (starts 500ms transition on #action-btn).
     rt.update_view(render_theme_app(true, 0));
     assert!(
         rt.has_active_animations(),
-        "theme switch on transition-all duration-150 button must start an active transition"
+        "theme switch on transition-all duration-500 button must start an active transition"
     );
 
     // 2. At +20 ms, fire an unrelated reconciled update_view (e.g. status HUD 4Hz tick).
-    std::thread::sleep(Duration::from_millis(20));
-    let _ = rt.poll_animations();
+    let _ = rt.advance_animations(Duration::from_millis(20));
     rt.update_view(render_theme_app(true, 1));
     assert!(
         rt.last_update_reconciled(),
@@ -595,14 +593,12 @@ fn reconciled_update_view_during_active_theme_transition_preserves_target_base_s
     );
 
     // 3. Fire a second unrelated reconciled update_view at +40 ms as well.
-    std::thread::sleep(Duration::from_millis(20));
-    let _ = rt.poll_animations();
+    let _ = rt.advance_animations(Duration::from_millis(20));
     rt.update_view(render_theme_app(true, 2));
     assert!(rt.last_update_reconciled());
 
-    // 4. Wait past the 500 ms transition duration and poll animations to completion.
-    std::thread::sleep(Duration::from_millis(520));
-    let _ = rt.poll_animations();
+    // 4. Advance past the 500 ms transition duration and poll animations to completion.
+    let _ = rt.advance_animations(Duration::from_millis(520));
     assert!(
         !rt.has_active_animations(),
         "500ms theme transition must complete cleanly after 560ms total elapsed time"

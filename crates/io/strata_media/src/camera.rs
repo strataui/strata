@@ -297,8 +297,10 @@ impl CameraStream {
         }
 
         // Negotiate YUYV pixel format
-        let mut fmt = v4l2::V4l2Format::default();
-        fmt.buf_type = v4l2::V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        let mut fmt = v4l2::V4l2Format {
+            buf_type: v4l2::V4L2_BUF_TYPE_VIDEO_CAPTURE,
+            ..Default::default()
+        };
         fmt.pix.width = config.width.max(160);
         fmt.pix.height = config.height.max(120);
         fmt.pix.pixelformat = v4l2::V4L2_PIX_FMT_YUYV;
@@ -514,7 +516,7 @@ impl MockCameraSource {
             (192, 0, 0),     // Red
             (0, 0, 192),     // Blue
         ];
-        let scan_y = ((seq as usize * 3) % h.max(1)) as usize;
+        let scan_y = (seq as usize * 3) % h.max(1);
 
         for y in 0..h {
             let is_scan = y == scan_y || y + 1 == scan_y;

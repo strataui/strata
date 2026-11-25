@@ -22,7 +22,10 @@ fn test_app_runtime_render_to_framebuffer_and_export_png() {
     assert_eq!(fb.pixels.len(), 800 * 600 * 4);
 
     // 2. Headless PNG export
-    let tmp_path = std::env::temp_dir().join("strata_runtime_screenshot_test.png");
+    let tmp_path = std::env::temp_dir().join(format!(
+        "strata_runtime_screenshot_test_{}.png",
+        std::process::id()
+    ));
     let export_res = runtime.export_png(&tmp_path);
     assert!(
         export_res.is_ok(),

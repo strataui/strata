@@ -4,7 +4,20 @@ use super::*;
 
 thread_local! {
     static EDIT_COMMAND_QUEUE: std::cell::RefCell<Vec<EditCommand>> = const { std::cell::RefCell::new(Vec::new()) };
-    static FALLBACK_CLIPBOARD: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+static CLIPBOARD_BRIDGE_INIT: std::sync::Once = std::sync::Once::new();
+
+/// Ensures Strata's platform OS clipboard provider is bridged into `strata_dom::clipboard`
+/// so `<input>`, `<textarea>`, and external widgets like `strata-editor` share one clipboard.
+pub(crate) fn ensure_clipboard_bridge_registered() {
+    CLIPBOARD_BRIDGE_INIT.call_once(|| {
+        #[cfg(target_os = "linux")]
+        strata_dom::clipboard::register_system_clipboard_bridge(
+            strata_platform::gtk_get_clipboard_text,
+            strata_platform::gtk_set_clipboard_text,
+        );
+    });
 }
 
 /// Queues an editing command to be applied to the currently focused input.
@@ -20,6 +33,7 @@ pub fn drain_edit_commands_queue() -> Vec<EditCommand> {
 impl AppRuntime {
     /// Applies one editing command to the focused text input. Returns true when something changed.
     pub fn apply_edit_command(&mut self, cmd: EditCommand) -> bool {
+        ensure_clipboard_bridge_registered();
         let is_password = self
             .active_focus
             .as_ref()
@@ -39,42 +53,22 @@ impl AppRuntime {
                     .state
                     .selected_text()
                     .unwrap_or_else(|| active.state.text.get());
-                #[cfg(target_os = "linux")]
-                strata_platform::gtk_set_clipboard_text(&text);
-                FALLBACK_CLIPBOARD.with(|cb| *cb.borrow_mut() = text.clone());
-                let _ = text;
+                strata_dom::clipboard::set_clipboard_text(&text);
             }
             EditCommand::Cut => {
                 let text = active.state.selected_text();
                 if let Some(sel) = text {
-                    #[cfg(target_os = "linux")]
-                    strata_platform::gtk_set_clipboard_text(&sel);
-                    FALLBACK_CLIPBOARD.with(|cb| *cb.borrow_mut() = sel.clone());
-                    let _ = sel;
+                    strata_dom::clipboard::set_clipboard_text(&sel);
                     active.state.delete_selection();
                 } else {
                     let cur_text = active.state.text.get();
-                    #[cfg(target_os = "linux")]
-                    strata_platform::gtk_set_clipboard_text(&cur_text);
-                    FALLBACK_CLIPBOARD.with(|cb| *cb.borrow_mut() = cur_text.clone());
+                    strata_dom::clipboard::set_clipboard_text(&cur_text);
                     active.state.replace_all_text("");
                 }
                 text_changed = true;
             }
             EditCommand::Paste => {
-                #[cfg(target_os = "linux")]
-                let clip = strata_platform::gtk_get_clipboard_text();
-                #[cfg(not(target_os = "linux"))]
-                let clip: Option<String> = None;
-                let clip = clip.or_else(|| {
-                    let t = FALLBACK_CLIPBOARD.with(|cb| cb.borrow().clone());
-                    if t.is_empty() {
-                        None
-                    } else {
-                        Some(t)
-                    }
-                });
-                if let Some(clip_text) = clip {
+                if let Some(clip_text) = strata_dom::clipboard::get_clipboard_text() {
                     active.state.insert_text(&clip_text);
                     text_changed = true;
                 }
@@ -83,7 +77,7 @@ impl AppRuntime {
             EditCommand::Redo => text_changed = active.state.redo(),
         }
         let _ = &mut handled;
-        self.caret_blink_epoch = std::time::Instant::now();
+        self.caret_blink_epoch = self.manual_clock.unwrap_or_else(std::time::Instant::now);
         if text_changed {
             let val = active.state.text.get();
             if let Some(ref on_input) = active.on_input {

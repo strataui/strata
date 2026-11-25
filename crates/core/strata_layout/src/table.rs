@@ -216,6 +216,10 @@ pub fn solve_table_guarded(
     guard: crate::tree::LayoutDepthGuard,
 ) {
     let _prof = crate::prof::Scope::new(crate::prof::Slot::Table);
+    if guard.is_exhausted() {
+        crate::tree::record_layout_overflow(guard.current_depth(), guard.max_depth());
+        return;
+    }
     let padding = container.style.padding;
     let border = container.style.border_width;
     let margin = container.style.margin;

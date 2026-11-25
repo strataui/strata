@@ -40,15 +40,15 @@ fn test_window_config_with_vibrancy() {
 fn test_apply_vibrancy_invalid_handle_returns_error() {
     let err = apply_vibrancy(0, VibrancyConfig::default()).unwrap_err();
     assert_eq!(err, VibrancyError::InvalidWindowHandle);
+    let clear_err = clear_vibrancy(0).unwrap_err();
+    assert_eq!(clear_err, VibrancyError::InvalidWindowHandle);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn test_apply_and_clear_vibrancy_lifecycle() {
     let dummy_handle = 0x12345;
     let res = apply_vibrancy(dummy_handle, VibrancyConfig::new(VibrancyEffect::None));
-    // On Linux / mock handles, None returns Ok(())
-    if cfg!(target_os = "linux") {
-        assert!(res.is_ok());
-        assert!(clear_vibrancy(dummy_handle).is_ok());
-    }
+    assert!(res.is_ok());
+    assert!(clear_vibrancy(dummy_handle).is_ok());
 }

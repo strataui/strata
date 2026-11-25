@@ -7,24 +7,30 @@ use strata_style::types::{
 fn test_grid_definite_height_overflow_auto_sizes_rows_by_content_and_scrolls() {
     // Reproduces GraphsPanel: Display::Flex column with a flex-1 Display::Grid
     // overflow-y-auto containing more implicit rows than fit vertically.
-    let mut root_style = ComputedStyle::default();
-    root_style.display = Display::Flex;
-    root_style.flex_direction = FlexDirection::Column;
-    root_style.width = Dimension::Px(400.0);
-    root_style.height = Dimension::Px(300.0);
+    let root_style = ComputedStyle {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Column,
+        width: Dimension::Px(400.0),
+        height: Dimension::Px(300.0),
+        ..ComputedStyle::default()
+    };
 
-    let mut grid_style = ComputedStyle::default();
-    grid_style.display = Display::Grid;
-    grid_style.flex_grow = 1.0;
-    grid_style.grid_template_columns = vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0)];
-    grid_style.gap = 10.0;
-    grid_style.overflow_y = Overflow::Auto;
+    let grid_style = ComputedStyle {
+        display: Display::Grid,
+        flex_grow: 1.0,
+        grid_template_columns: vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0)],
+        gap: 10.0,
+        overflow_y: Overflow::Auto,
+        ..ComputedStyle::default()
+    };
 
     let mut items = Vec::new();
     for _ in 0..8 {
-        let mut s = ComputedStyle::default();
-        s.display = Display::Block;
-        s.height = Dimension::Px(120.0);
+        let s = ComputedStyle {
+            display: Display::Block,
+            height: Dimension::Px(120.0),
+            ..ComputedStyle::default()
+        };
         items.push(LayoutNode::new(s));
     }
 
@@ -56,23 +62,29 @@ fn test_grid_definite_height_overflow_auto_sizes_rows_by_content_and_scrolls() {
 #[test]
 fn test_grid_auto_height_respects_max_height_and_scrolls() {
     // Reproduces StudioHubModal: Auto-height Display::Grid with max-h-[240px] overflow-y-auto inside a Flex parent
-    let mut modal_style = ComputedStyle::default();
-    modal_style.display = Display::Flex;
-    modal_style.flex_direction = FlexDirection::Column;
-    modal_style.width = Dimension::Px(420.0);
+    let modal_style = ComputedStyle {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Column,
+        width: Dimension::Px(420.0),
+        ..ComputedStyle::default()
+    };
 
-    let mut grid_style = ComputedStyle::default();
-    grid_style.display = Display::Grid;
-    grid_style.grid_template_columns = vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0)];
-    grid_style.gap = 8.0;
-    grid_style.max_height = Dimension::Px(240.0);
-    grid_style.overflow_y = Overflow::Auto;
+    let grid_style = ComputedStyle {
+        display: Display::Grid,
+        grid_template_columns: vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0)],
+        gap: 8.0,
+        max_height: Dimension::Px(240.0),
+        overflow_y: Overflow::Auto,
+        ..ComputedStyle::default()
+    };
 
     let mut cards = Vec::new();
     for _ in 0..6 {
-        let mut s = ComputedStyle::default();
-        s.display = Display::Block;
-        s.height = Dimension::Px(130.0);
+        let s = ComputedStyle {
+            display: Display::Block,
+            height: Dimension::Px(130.0),
+            ..ComputedStyle::default()
+        };
         cards.push(LayoutNode::new(s));
     }
 
@@ -96,16 +108,20 @@ fn test_grid_auto_height_respects_max_height_and_scrolls() {
 
 #[test]
 fn test_grid_children_wrap_text_within_column_width_and_translate_line_boxes() {
-    let mut grid_style = ComputedStyle::default();
-    grid_style.display = Display::Grid;
-    grid_style.width = Dimension::Px(320.0);
-    grid_style.height = Dimension::Px(200.0);
-    grid_style.grid_template_columns = vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0)];
-    grid_style.gap = 20.0;
+    let grid_style = ComputedStyle {
+        display: Display::Grid,
+        width: Dimension::Px(320.0),
+        height: Dimension::Px(200.0),
+        grid_template_columns: vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0)],
+        gap: 20.0,
+        ..ComputedStyle::default()
+    };
 
-    let mut cell1_style = ComputedStyle::default();
-    cell1_style.display = Display::Block;
-    cell1_style.font_size = 14.0;
+    let cell1_style = ComputedStyle {
+        display: Display::Block,
+        font_size: 14.0,
+        ..ComputedStyle::default()
+    };
     let mut cell1 = LayoutNode::new(cell1_style.clone());
     cell1.inline_items = vec![strata_layout::typography::InlineItem::text(
         "Long descriptive label inside first column that must wrap instead of bleeding across",

@@ -59,6 +59,7 @@ fn get_registry() -> &'static Mutex<HashMap<isize, Arc<Mutex<Win32WindowState>>>
 /// Native Win32 window implementation.
 pub struct Win32Window {
     hwnd: HWND,
+    title: String,
     state: Arc<Mutex<Win32WindowState>>,
 }
 
@@ -166,6 +167,7 @@ impl Win32Window {
             };
             let scale_factor = if dpi > 0 { dpi as f32 / 96.0 } else { 1.0 };
 
+            let title = config.title.clone();
             let state = Arc::new(Mutex::new(Win32WindowState {
                 config: config.clone(),
                 scale_factor,
@@ -188,7 +190,7 @@ impl Win32Window {
 
             ShowWindow(hwnd, SW_SHOW);
 
-            Ok(Self { hwnd, state })
+            Ok(Self { hwnd, title, state })
         }
     }
 
@@ -262,7 +264,12 @@ impl Win32Window {
                 DispatchMessageW(&msg);
             }
         }
-        self.poll_events()
+        self.state
+            .lock()
+            .unwrap()
+            .event_queue
+            .drain(..)
+            .collect()
     }
 }
 
@@ -277,18 +284,13 @@ impl Drop for Win32Window {
 
 impl PlatformWindow for Win32Window {
     fn title(&self) -> &str {
-        let lock = self.state.lock().unwrap();
-        // Return title clone or reference from config
-        // Because of signature &str, we use config title
-        unsafe {
-            let ptr = &lock.config.title as *const String;
-            &*ptr
-        }
+        &self.title
     }
 
     fn set_title(&mut self, title: &str) {
+        self.title = title.to_string();
         let mut lock = self.state.lock().unwrap();
-        lock.config.title = title.to_string();
+        lock.config.title = self.title.clone();
         let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
         unsafe {
             SetWindowTextW(self.hwnd, wide.as_ptr());
@@ -918,6 +920,8 @@ fn map_virtual_key(vk: u32) -> Option<KeyCode> {
         0xDB => Some(KeyCode::BracketLeft),
         0xDD => Some(KeyCode::BracketRight),
         0xBA => Some(KeyCode::Semicolon),
+        0xDE => Some(KeyCode::Quote),
+        0xDC => Some(KeyCode::Backslash),
         0xC0 => Some(KeyCode::Backquote),
         _ => None,
     }

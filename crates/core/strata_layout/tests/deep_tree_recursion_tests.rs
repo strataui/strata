@@ -213,3 +213,24 @@ fn test_layout_overflow_callback_and_diagnostic_reporting() {
     assert_eq!(last_layout_overflow(), None);
     set_on_layout_overflow::<fn(usize, usize)>(None);
 }
+
+#[test]
+fn test_deep_trees_survive_windows_1mb_thread_stack() {
+    // Windows MSVC defaults thread stacks to 1 MiB (vs 8 MiB on Linux/macOS).
+    // Running all extreme deep-tree stress cases inside an explicit 1 MiB thread
+    // stack ensures Linux CI catches Windows stack-overflow regressions immediately.
+    std::thread::Builder::new()
+        .name("layout-windows-1mb-stack".to_string())
+        .stack_size(1024 * 1024)
+        .spawn(|| {
+            // 1. 10,000 nested blocks: layout, metadata refresh, translate, invalidate, drop
+            test_10000_nested_blocks_layout_and_deallocation();
+            // 2. 5,000 nested inline phrasing containers
+            test_5000_nested_inline_containers_phrasing_flattening();
+            // 3. 5,000 nested blocks intrinsic min/max sizing
+            test_5000_nested_blocks_intrinsic_min_max_sizes();
+        })
+        .expect("spawn 1 MiB stack thread")
+        .join()
+        .expect("Deep layout trees must complete cleanly within Windows' 1 MiB thread stack");
+}

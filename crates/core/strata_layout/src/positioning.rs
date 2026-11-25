@@ -263,9 +263,12 @@ pub fn solve_positioning_children_guarded(
                     dx -= right_px;
                 }
 
-                if dx != 0.0 || dy != 0.0 {
-                    child.translate(dx, dy);
+                let delta_x = dx - child.applied_relative_offset.0;
+                let delta_y = dy - child.applied_relative_offset.1;
+                if delta_x != 0.0 || delta_y != 0.0 {
+                    child.translate(delta_x, delta_y);
                 }
+                child.applied_relative_offset = (dx, dy);
 
                 // 2. Relative elements establish a containing block for absolute descendants
                 let child_vp = if child.style.establishes_fixed_containing_block() {

@@ -136,9 +136,7 @@ impl VoiceActivityDetector {
         for (i, sample) in frame.iter().copied().enumerate().take(copy_len) {
             self.spectrum[i] = Complex::new(sample * self.window[i], 0.0);
         }
-        for i in copy_len..n {
-            self.spectrum[i] = Complex::zero();
-        }
+        self.spectrum[copy_len..n].fill(Complex::zero());
         self.plan.forward(&mut self.spectrum);
 
         // 3. Speech-band energy & spectral flatness (geometric mean / arithmetic mean)
@@ -147,8 +145,8 @@ impl VoiceActivityDetector {
         let mut log_power_sum = 0.0f32;
         let norm = (n as f32) * (n as f32);
 
-        for k in self.bin_low..=self.bin_high {
-            let p = (self.spectrum[k].norm_sq() / norm).max(1e-12);
+        for bin in &self.spectrum[self.bin_low..=self.bin_high] {
+            let p = (bin.norm_sq() / norm).max(1e-12);
             band_power_sum += p;
             log_power_sum += p.ln();
         }

@@ -347,26 +347,6 @@ fn test_at_rules_charset_and_tachyons_parsing() {
         }
     }
 
-    if let Ok(vendor_css) = std::fs::read_to_string("/tmp/vendor.css") {
-        let vendor_sheet =
-            StyleSheet::parse_with_context(&vendor_css, &ctx).expect("Failed to parse vendor.css");
-        println!("Vendor sheet rules count: {}", vendor_sheet.rules.len());
-        let has_w_auto_l = vendor_sheet.rules.iter().any(|r| {
-            r.selectors
-                .iter()
-                .any(|s| format!("{:?}", s).contains("w-auto-l"))
-        });
-        let has_flex_row_l = vendor_sheet.rules.iter().any(|r| {
-            r.selectors
-                .iter()
-                .any(|s| format!("{:?}", s).contains("flex-row-l"))
-        });
-        println!(
-            "Vendor has w-auto-l: {}, flex-row-l: {}",
-            has_w_auto_l, has_flex_row_l
-        );
-    }
-
     assert!(
         sheet.rules.iter().any(|r| r
             .selectors

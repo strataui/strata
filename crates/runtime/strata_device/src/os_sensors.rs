@@ -165,8 +165,10 @@ fn probe_cached_ip_geolocation() -> Option<GeolocationInfo> {
 fn fetch_ip_geolocation_https() -> Option<GeolocationInfo> {
     const ENDPOINTS: &[&str] = &["https://ipwho.is/", "https://ipapi.co/json/"];
     for url in ENDPOINTS {
-        let mut init = strata_web_api::RequestInit::default();
-        init.timeout_ms = Some(1800);
+        let mut init = strata_web_api::RequestInit {
+            timeout_ms: Some(1800),
+            ..Default::default()
+        };
         init.headers.append("User-Agent", "strata-device/0.1");
         init.headers.append("Accept", "application/json");
         if let Ok(resp) = strata_web_api::fetch(url, Some(init)) {
@@ -492,7 +494,7 @@ fn extract_dbus_object_path(raw: &str) -> Option<String> {
     let start = raw.find('/')?;
     let rest = &raw[start..];
     let end = rest
-        .find(|c: char| matches!(c, '\'' | '"' | ')' | ',' | '>' | ' ' | '\n' | '\r'))
+        .find(['\'', '"', ')', ',', '>', ' ', '\n', '\r'])
         .unwrap_or(rest.len());
     let path = &rest[..end];
     if path.starts_with('/') {
