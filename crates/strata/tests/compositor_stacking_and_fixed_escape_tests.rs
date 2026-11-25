@@ -86,6 +86,7 @@ fn bug1_compositor_hoists_card1_z50_dropdown_above_card2_and_section2() {
         </div>
     };
 
+    #[allow(unused_mut)]
     let mut runtime = AppRuntime::new(view, 360.0, 300.0, 1.0);
 
     // Dropdown spans x = 360 - 8 - 200 = 152..352, y = 32..142.
@@ -161,6 +162,7 @@ fn bug2_overflow_does_not_create_stacking_context_and_flex_grid_z_index_matches_
         </div>
     };
 
+    #[allow(unused_mut)]
     let mut runtime = AppRuntime::new(view, 360.0, 300.0, 1.0);
 
     let root = &runtime.layout_root;
