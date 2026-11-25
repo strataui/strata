@@ -591,6 +591,8 @@ fn probe_macos_battery() -> Option<BatteryInfo> {
 #[cfg(target_os = "macos")]
 fn probe_macos_low_power_mode() -> bool {
     use std::ffi::c_void;
+    #[link(name = "objc")]
+    #[link(name = "Foundation", kind = "framework")]
     extern "C" {
         fn objc_getClass(name: *const std::os::raw::c_char) -> *mut c_void;
         fn sel_registerName(name: *const std::os::raw::c_char) -> *mut c_void;
@@ -624,6 +626,8 @@ fn probe_macos_low_power_mode() -> bool {
 #[cfg(target_os = "macos")]
 fn probe_macos_thermal() -> Option<ThermalState> {
     use std::ffi::c_void;
+    #[link(name = "objc")]
+    #[link(name = "Foundation", kind = "framework")]
     extern "C" {
         fn objc_getClass(name: *const std::os::raw::c_char) -> *mut c_void;
         fn sel_registerName(name: *const std::os::raw::c_char) -> *mut c_void;

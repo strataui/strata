@@ -13,3 +13,6 @@ documentation.workspace = true
 strata-dom = { workspace = true }
 strata-primitives = { workspace = true }
 strata-web-api = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"

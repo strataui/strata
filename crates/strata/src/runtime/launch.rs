@@ -207,6 +207,7 @@ where
 }
 
 #[inline]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn primary_refresh_interval() -> std::time::Duration {
     #[cfg(target_os = "linux")]
     {
@@ -218,6 +219,7 @@ pub(crate) fn primary_refresh_interval() -> std::time::Duration {
     }
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn compute_next_wakeup(
     rt: &AppRuntime,
     frame_hook_due_in: Option<std::time::Duration>,
