@@ -461,11 +461,16 @@ fn test_linux_iio_sysfs_parsers_and_nmea_file_probe() {
     ));
     let _ = fs::remove_dir_all(&tmp_root);
 
-    // Synthetic Linux IIO sysfs tree
-    let dev_mag = tmp_root.join("iio:device0");
-    let dev_imu = tmp_root.join("iio:device1");
-    let dev_baro = tmp_root.join("iio:device2");
-    let dev_als = tmp_root.join("iio:device3");
+    // Synthetic Linux IIO sysfs tree (`:` is illegal on Windows NTFS, so use `iio_device*` there)
+    let prefix = if cfg!(windows) {
+        "iio_device"
+    } else {
+        "iio:device"
+    };
+    let dev_mag = tmp_root.join(format!("{prefix}0"));
+    let dev_imu = tmp_root.join(format!("{prefix}1"));
+    let dev_baro = tmp_root.join(format!("{prefix}2"));
+    let dev_als = tmp_root.join(format!("{prefix}3"));
     fs::create_dir_all(&dev_mag).unwrap();
     fs::create_dir_all(&dev_imu).unwrap();
     fs::create_dir_all(&dev_baro).unwrap();

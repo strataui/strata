@@ -686,7 +686,7 @@ fn iter_iio_device_dirs(root: &Path) -> Vec<std::path::PathBuf> {
             p.is_dir()
                 && p.file_name()
                     .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("iio:device"))
+                    .is_some_and(|n| n.starts_with("iio:device") || n.starts_with("iio_device"))
         })
         .collect();
     dirs.sort();

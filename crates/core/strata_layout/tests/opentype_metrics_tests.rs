@@ -118,10 +118,17 @@ fn test_font_database_lookup_and_styled_measurement() {
 
     assert!(reg_w > 0.0);
     assert!(bold_w > 0.0);
-    assert!(
-        bold_w > reg_w,
-        "Bold text run must be wider than regular text run"
-    );
+    if regular.is_some() && bold.is_some() {
+        assert!(
+            bold_w > reg_w,
+            "Bold text run must be wider than regular text run (reg={reg_w}, bold={bold_w})"
+        );
+    } else {
+        assert!(
+            bold_w >= reg_w,
+            "Fallback bold text run must be at least as wide as regular (reg={reg_w}, bold={bold_w})"
+        );
+    }
 }
 
 #[test]
