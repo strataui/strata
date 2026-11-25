@@ -726,6 +726,22 @@ def normalize_cargo_toml_for_diff(raw_toml: bytes) -> dict[str, object]:
     return data
 
 
+def _resolve_local_repository(repo_root: Path, raw_toml: bytes) -> str:
+    try:
+        pkg = tomllib.loads(raw_toml.decode("utf-8")).get("package", {})
+        repo = pkg.get("repository")
+        if isinstance(repo, str):
+            return repo
+        if isinstance(repo, dict) and repo.get("workspace") is True:
+            ws = tomllib.loads((repo_root / "Cargo.toml").read_text(encoding="utf-8"))
+            ws_repo = ws.get("workspace", {}).get("package", {}).get("repository")
+            if isinstance(ws_repo, str):
+                return ws_repo
+    except Exception:
+        pass
+    return ""
+
+
 def has_crate_changed_since_publish(
     repo_root: Path,
     crate: WorkspaceCrate,
@@ -744,7 +760,10 @@ def has_crate_changed_since_publish(
         for path in sorted(set(remote_files) | set(local_files))
         if remote_files.get(path) != local_files.get(path)
     )
-    manifest_changed = (
+    remote_repo = _extract_archive_repository(raw_archive, crate.name, crate.version)
+    local_repo = _resolve_local_repository(repo_root, local_toml)
+    repo_changed = bool(remote_repo and local_repo and remote_repo.rstrip("/") != local_repo.rstrip("/"))
+    manifest_changed = repo_changed or (
         remote_orig is not None
         and normalize_cargo_toml_for_diff(remote_orig) != normalize_cargo_toml_for_diff(local_toml)
     )
