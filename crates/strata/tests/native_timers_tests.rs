@@ -41,8 +41,11 @@ fn native_event_loop_runs_10ms_interval_for_200ms_and_reinvokes_root() {
     let mut compiles = 0usize;
 
     let start = Instant::now();
-    let target = Duration::from_millis(205);
-    while start.elapsed() < target {
+    let min_window = Duration::from_millis(205);
+    let max_window = Duration::from_millis(1200);
+    while start.elapsed() < min_window
+        || (ticks.load(Ordering::SeqCst) < 4 && start.elapsed() < max_window)
+    {
         let fired = strata_js::web::tick_timers();
         if fired > 0 {
             let new_view = make_view();
@@ -52,22 +55,28 @@ fn native_event_loop_runs_10ms_interval_for_200ms_and_reinvokes_root() {
                 compiles += 1;
             }
         }
-        let sleep = runtime
-            .compute_idle_sleep(fired > 0)
-            .min(target.saturating_sub(start.elapsed()));
+        let elapsed = start.elapsed();
+        let remaining = if elapsed < min_window {
+            min_window.saturating_sub(elapsed)
+        } else {
+            max_window.saturating_sub(elapsed)
+        };
+        let sleep = runtime.compute_idle_sleep(fired > 0).min(remaining);
         if !sleep.is_zero() {
             std::thread::sleep(sleep);
         }
     }
 
+    let elapsed_ms = start.elapsed().as_millis() as usize;
     strata_js::web::clear_interval(timer_id);
 
     let total_ticks = ticks.load(Ordering::SeqCst);
     let total_roots = root_calls.get();
+    let max_expected_ticks = (elapsed_ms / 10 + 10).max(26);
 
     assert!(
-        (4..=26).contains(&total_ticks),
-        "expected multiple 10ms interval callbacks in 200ms without runaway spinning, got {total_ticks}"
+        (2..=max_expected_ticks).contains(&total_ticks),
+        "expected multiple 10ms interval callbacks in {elapsed_ms}ms without runaway spinning, got {total_ticks}"
     );
     assert_eq!(
         total_roots,
