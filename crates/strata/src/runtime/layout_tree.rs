@@ -501,7 +501,8 @@ impl AppRuntime {
         is_last_element_child: bool,
         group_state: (bool, bool, bool),
     ) -> LayoutNode {
-        if current_path.len() >= 256 {
+        let max_build_depth = if cfg!(debug_assertions) { 128 } else { 256 };
+        if current_path.len() >= max_build_depth {
             let style = match parent_style {
                 Some(p) => ComputedStyle::inherit_from(p),
                 None => ComputedStyle::default(),

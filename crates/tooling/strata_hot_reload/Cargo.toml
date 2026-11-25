@@ -4,13 +4,15 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "State-preserving native code hot-reloading orchestrator for Project Strata"
+description = "State-preserving native Hot Module Replacement (HMR) loader, file watcher, snapshot migration codec, and IPC orchestrator for Strata"
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
+documentation = "https://docs.rs/strata-hot-reload"
+keywords = ["hmr", "hot-reload", "gui", "strata", "dev-server"]
+categories = ["development-tools", "gui"]
 
 [dependencies]
 strata-dom = { workspace = true }
-strata-primitives = { workspace = true }
 libloading = "0.8"
-
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

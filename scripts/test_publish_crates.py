@@ -727,8 +727,65 @@ class PublishCratesTests(unittest.TestCase):
                 publish_crates._sha256_bytes(b"pub fn ok() {}\n"),
             )
 
+    def test_select_target_repos_topological_order_and_filtering(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            eco = Path(tmp)
+            for rel in ("mica", "strata", "components", "editor", "earth", "cli", "vscode/lsp"):
+                d = eco / rel
+                d.mkdir(parents=True, exist_ok=True)
+                (d / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+
+            args, _ = publish_crates.parse_args([])
+            selected = publish_crates.select_target_repos(args, eco)
+            self.assertEqual(
+                [label for label, _, _ in selected],
+                ["mica", "strata", "components", "editor", "earth", "cli", "vscode-lsp"],
+            )
+
+            args2, _ = publish_crates.parse_args(["--repos", "cli,mica,strata", "--skip-repos", "cli"])
+            selected2 = publish_crates.select_target_repos(args2, eco)
+            self.assertEqual([label for label, _, _ in selected2], ["mica", "strata"])
+
+            args3, _ = publish_crates.parse_args(["--repos", "nonexistent"])
+            with self.assertRaises(ValueError):
+                publish_crates.select_target_repos(args3, eco)
+
+    def test_sync_cross_repo_dependency_versions_updates_string_and_table_deps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "editor"
+            (repo / "src").mkdir(parents=True)
+            manifest = repo / "Cargo.toml"
+            manifest.write_text(
+                '[package]\nname = "strata-editor"\nversion = "0.1.0"\nedition = "2021"\n\n'
+                '[dependencies]\n'
+                'strata-ui = "0.1.4"\n'
+                'strata-dom = { version = "0.1.2", features = [] }\n'
+                'serde = "1.0"\n',
+                encoding="utf-8",
+            )
+            (repo / "src" / "lib.rs").write_text("pub fn ok() {}\n", encoding="utf-8")
+            crate = publish_crates.WorkspaceCrate("strata-editor", "0.1.0", manifest, repo, ())
+
+            with mock.patch.object(
+                publish_crates.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess(args=["cargo"], returncode=0, stdout="", stderr=""),
+            ):
+                touched = publish_crates.sync_cross_repo_dependency_versions(
+                    repo,
+                    [crate],
+                    {"strata-ui": "0.1.5", "strata-dom": "0.1.3", "strata-editor": "9.9.9"},
+                )
+
+            self.assertIn(manifest.resolve(), touched)
+            data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(data["dependencies"]["strata-ui"], "0.1.5")
+            self.assertEqual(data["dependencies"]["strata-dom"]["version"], "0.1.3")
+            self.assertEqual(data["dependencies"]["serde"], "1.0")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

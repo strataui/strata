@@ -741,6 +741,11 @@ impl<T: Clone + 'static> Signal<T> {
         self.value.borrow().clone()
     }
 
+    /// Updates the inner signal value without marking reactive subscribers dirty (used for HMR hydration).
+    pub fn set_untracked(&self, new_val: T) {
+        *self.value.borrow_mut() = new_val;
+    }
+
     pub fn set(&self, new_val: T) {
         *self.value.borrow_mut() = new_val;
         ReactiveRuntime::notify(self.id);
@@ -2121,3 +2126,230 @@ pub fn take_dirty_signal_names() -> Vec<String> {
 pub fn reactive_telemetry_snapshot() -> ReactiveTelemetrySnapshot {
     ReactiveRuntime::telemetry_snapshot()
 }
+
+// ---------------------------------------------------------------------------
+// State-Preserving Hot Module Replacement (HMR) Signal Codec & Registry
+// ---------------------------------------------------------------------------
+
+/// Zero-dependency binary codec allowing reactive signal values to survive
+/// dynamic `.so`/`.dylib`/`.dll` hot reloads cleanly across module epochs.
+pub trait HmrCodec: Sized {
+    /// Serializes this value into an opaque byte vector for HMR snapshotting.
+    fn encode_hmr(&self) -> Vec<u8>;
+    /// Restores a value from bytes captured before a hot reload.
+    fn decode_hmr(bytes: &[u8]) -> Option<Self>;
+}
+
+impl HmrCodec for bool {
+    fn encode_hmr(&self) -> Vec<u8> {
+        vec![if *self { 1 } else { 0 }]
+    }
+    fn decode_hmr(bytes: &[u8]) -> Option<Self> {
+        bytes.first().map(|&b| b != 0)
+    }
+}
+
+macro_rules! impl_hmr_numeric {
+    ($($ty:ty),*) => {
+        $(
+            impl HmrCodec for $ty {
+                fn encode_hmr(&self) -> Vec<u8> {
+                    self.to_le_bytes().to_vec()
+                }
+                fn decode_hmr(bytes: &[u8]) -> Option<Self> {
+                    let arr: [u8; std::mem::size_of::<$ty>()] = bytes.try_into().ok()?;
+                    Some(<$ty>::from_le_bytes(arr))
+                }
+            }
+        )*
+    };
+}
+
+impl_hmr_numeric!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize, f32, f64);
+
+impl HmrCodec for String {
+    fn encode_hmr(&self) -> Vec<u8> {
+        self.as_bytes().to_vec()
+    }
+    fn decode_hmr(bytes: &[u8]) -> Option<Self> {
+        String::from_utf8(bytes.to_vec()).ok()
+    }
+}
+
+impl<T: HmrCodec> HmrCodec for Option<T> {
+    fn encode_hmr(&self) -> Vec<u8> {
+        match self {
+            None => vec![0u8],
+            Some(v) => {
+                let inner = v.encode_hmr();
+                let mut out = Vec::with_capacity(1 + inner.len());
+                out.push(1u8);
+                out.extend_from_slice(&inner);
+                out
+            }
+        }
+    }
+    fn decode_hmr(bytes: &[u8]) -> Option<Self> {
+        let (&tag, rest) = bytes.split_first()?;
+        if tag == 0 {
+            Some(None)
+        } else {
+            Some(Some(T::decode_hmr(rest)?))
+        }
+    }
+}
+
+impl<T: HmrCodec> HmrCodec for Vec<T> {
+    fn encode_hmr(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(self.len() as u32).to_le_bytes());
+        for item in self {
+            let encoded = item.encode_hmr();
+            out.extend_from_slice(&(encoded.len() as u32).to_le_bytes());
+            out.extend_from_slice(&encoded);
+        }
+        out
+    }
+    fn decode_hmr(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < 4 {
+            return None;
+        }
+        let count = u32::from_le_bytes(bytes[0..4].try_into().ok()?) as usize;
+        let mut pos = 4usize;
+        let mut out = Vec::with_capacity(count.min(65_536));
+        for _ in 0..count {
+            if pos + 4 > bytes.len() {
+                return None;
+            }
+            let len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().ok()?) as usize;
+            pos += 4;
+            if pos + len > bytes.len() {
+                return None;
+            }
+            out.push(T::decode_hmr(&bytes[pos..pos + len])?);
+            pos += len;
+        }
+        Some(out)
+    }
+}
+
+struct HmrLiveSlot {
+    type_name: String,
+    export: Box<dyn Fn() -> Vec<u8>>,
+    import: Box<dyn Fn(&[u8]) -> bool>,
+}
+
+#[derive(Default)]
+struct HmrStateRegistry {
+    live_slots: BTreeMap<String, HmrLiveSlot>,
+    hydrated_blobs: BTreeMap<String, Vec<u8>>,
+}
+
+thread_local! {
+    static HMR_STATE_REGISTRY: RefCell<HmrStateRegistry> = RefCell::new(HmrStateRegistry::default());
+}
+
+/// Creates or reconnects a state-preserving HMR reactive signal keyed by `key`.
+///
+/// - During normal re-renders in the same binary epoch, behaves like [`use_persistent_signal`]
+///   and returns the existing [`Signal<T>`].
+/// - Across dynamic `.so`/`.dylib`/`.dll` hot reloads, automatically hydrates from any
+///   snapshot imported via [`import_hmr_signals`] and registers live export/import hooks
+///   so subsequent reloads preserve every mutation.
+pub fn use_hmr_signal<T: HmrCodec + Clone + 'static>(
+    key: impl Into<String>,
+    initial: T,
+) -> Signal<T> {
+    let key_str = key.into();
+    let hydrated_initial = HMR_STATE_REGISTRY.with(|reg| {
+        reg.borrow()
+            .hydrated_blobs
+            .get(&key_str)
+            .and_then(|bytes| T::decode_hmr(bytes))
+    });
+
+    let sig = use_persistent_signal(&key_str, move || hydrated_initial.unwrap_or(initial));
+
+    // If a fresh HMR snapshot blob was imported after this signal already existed, hydrate in-place.
+    let pending_blob = HMR_STATE_REGISTRY.with(|reg| reg.borrow_mut().hydrated_blobs.remove(&key_str));
+    if let Some(bytes) = pending_blob {
+        if let Some(val) = T::decode_hmr(&bytes) {
+            sig.set_untracked(val);
+        }
+    }
+
+    let sig_for_export = sig.clone();
+    let sig_for_import = sig.clone();
+    HMR_STATE_REGISTRY.with(|reg| {
+        reg.borrow_mut().live_slots.insert(
+            key_str,
+            HmrLiveSlot {
+                type_name: std::any::type_name::<T>().to_string(),
+                export: Box::new(move || sig_for_export.untracked_get().encode_hmr()),
+                import: Box::new(move |bytes: &[u8]| {
+                    if let Some(val) = T::decode_hmr(bytes) {
+                        sig_for_import.set(val);
+                        true
+                    } else {
+                        false
+                    }
+                }),
+            },
+        );
+    });
+
+    sig
+}
+
+/// Exports all registered HMR signals (plus any unconsumed hydrated blobs) as
+/// `(key, type_name, encoded_bytes)` tuples prior to unloading/reloading a dynamic module.
+pub fn export_hmr_signals() -> Vec<(String, String, Vec<u8>)> {
+    HMR_STATE_REGISTRY.with(|reg| {
+        let reg = reg.borrow();
+        let mut out = Vec::with_capacity(reg.live_slots.len() + reg.hydrated_blobs.len());
+        for (key, slot) in &reg.live_slots {
+            out.push((key.clone(), slot.type_name.clone(), (slot.export)()));
+        }
+        for (key, bytes) in &reg.hydrated_blobs {
+            if !reg.live_slots.contains_key(key) {
+                out.push((key.clone(), "raw".to_string(), bytes.clone()));
+            }
+        }
+        out
+    })
+}
+
+/// Imports HMR signal payloads captured before a hot reload.
+///
+/// Updates any currently mounted signals in-place immediately AND stages raw blobs
+/// for components mounted during the next render pass. Returns the number of entries applied/staged.
+pub fn import_hmr_signals(entries: &[(String, Vec<u8>)]) -> usize {
+    HMR_STATE_REGISTRY.with(|reg| {
+        let mut reg = reg.borrow_mut();
+        let mut count = 0usize;
+        for (key, bytes) in entries {
+            let mut applied_live = false;
+            if let Some(slot) = reg.live_slots.get(key) {
+                if (slot.import)(bytes) {
+                    applied_live = true;
+                    count += 1;
+                }
+            }
+            if !applied_live {
+                reg.hydrated_blobs.insert(key.clone(), bytes.clone());
+                count += 1;
+            }
+        }
+        count
+    })
+}
+
+/// Clears all HMR signal registry entries (useful for isolated unit/integration tests).
+pub fn clear_hmr_signals() {
+    HMR_STATE_REGISTRY.with(|reg| {
+        let mut reg = reg.borrow_mut();
+        reg.live_slots.clear();
+        reg.hydrated_blobs.clear();
+    });
+}
+

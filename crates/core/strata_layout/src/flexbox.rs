@@ -1066,11 +1066,8 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                     child.style.width = Dimension::Px(it.resolved_main);
                     child.style.min_width = Dimension::Auto;
                     child.style.max_width = Dimension::Auto;
-                    if child.text.is_some() {
-                        child.style.height = Dimension::Auto;
-                    }
                     let pin_hash = crate::tree::layout_style_pin_hash(&child.style);
-                    let (res_h, bl) = if let Some((_, mh, cached_bl)) =
+                    let (mut res_h, bl) = if let Some((_, mh, cached_bl)) =
                         child.lookup_measure_cache(it.resolved_main, target_avail_h, pin_hash)
                     {
                         (mh, cached_bl)
@@ -1095,14 +1092,37 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                         );
                         (mh, computed_bl)
                     };
+                    if res_h <= 0.0 && child.children.is_empty() {
+                        if let Some(ref text_str) = child.text {
+                            let content_w = (it.resolved_main
+                                - child.style.padding.left
+                                - child.style.padding.right
+                                - child.style.border_width.left
+                                - child.style.border_width.right)
+                                .max(0.0);
+                            let (_, text_h) = crate::text::measure_text_bounds_with_white_space(
+                                text_str,
+                                child.style.font_size,
+                                child.style.line_height,
+                                if content_w > 0.0 {
+                                    Some(content_w)
+                                } else {
+                                    None
+                                },
+                                crate::text::is_monospace_family(child.style.font_family),
+                                child.style.white_space,
+                            );
+                            res_h = text_h
+                                + child.style.padding.top
+                                + child.style.padding.bottom
+                                + child.style.border_width.top
+                                + child.style.border_width.bottom;
+                        }
+                    }
                     child.style.width = saved_w;
                     child.style.min_width = saved_min_w;
                     child.style.max_width = saved_max_w;
-                    if child.text.is_some() {
-                        child.style.height = Dimension::Px(res_h);
-                    } else {
-                        child.style.height = saved_h;
-                    }
+                    child.style.height = saved_h;
                     it.resolved_cross = res_h;
                     it.baseline_offset = bl;
                 } else {

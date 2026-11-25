@@ -34,107 +34,42 @@ strata-a11y = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Decoupled optional ecosystem crates
-strata-components = { workspace = true, optional = true }
-strata-icons = { workspace = true, optional = true }
+# Core optional engine capabilities
 strata-device = { workspace = true, optional = true }
 strata-parallel = { workspace = true, optional = true }
-strata-tui = { workspace = true, optional = true }
-strata-codegen-js = { workspace = true, optional = true }
 strata-devtools = { workspace = true, optional = true }
-strata-mobile-test = { workspace = true, optional = true }
-strata-sim = { workspace = true, optional = true }
-strata-audio = { workspace = true, optional = true }
-
-strata-crdt = { workspace = true, optional = true }
-strata-agent-ui = { workspace = true, optional = true }
-strata-i18n = { workspace = true, optional = true }
-strata-router = { workspace = true, optional = true }
-strata-form = { workspace = true, optional = true }
-strata-query = { workspace = true, optional = true }
-strata-virtual = { workspace = true, optional = true }
-strata-aria = { workspace = true, optional = true }
-strata-ui-store = { workspace = true, optional = true }
-strata-toast = { workspace = true, optional = true }
-strata-motion = { workspace = true, optional = true }
-strata-table = { workspace = true, optional = true }
-strata-charts = { workspace = true, optional = true }
-strata-editor = { workspace = true, optional = true }
+strata-hot-reload = { workspace = true, optional = true }
 
 [features]
 default = ["tailwind", "device"]
 tailwind = []
-ui = ["dep:strata-components"]
-icons = ["dep:strata-icons"]
-i18n = ["dep:strata-i18n"]
-router = ["dep:strata-router"]
-form = ["dep:strata-form"]
-query = ["dep:strata-query"]
-virtual = ["dep:strata-virtual"]
-aria = ["dep:strata-aria"]
-store = ["dep:strata-ui-store"]
-toast = ["dep:strata-toast"]
-motion = ["dep:strata-motion"]
-table = ["dep:strata-table"]
-charts = ["dep:strata-charts"]
-editor = ["dep:strata-editor"]
 device = ["dep:strata-device"]
 parallel = ["dep:strata-parallel"]
-tui = ["dep:strata-tui"]
-codegen-js = ["dep:strata-codegen-js"]
 devtools = ["dep:strata-devtools"]
+hot-reload = ["dep:strata-hot-reload"]
 profiling = []
-mobile-test = ["dep:strata-mobile-test"]
-sim = ["dep:strata-sim"]
 a11y = []
-audio = ["dep:strata-audio"]
-
-crdt = ["dep:strata-crdt"]
-agent-ui = ["dep:strata-agent-ui"]
 full = [
-    "ui",
-    "icons",
-    "i18n",
-    "router",
-    "form",
-    "query",
-    "virtual",
-    "aria",
-    "store",
-    "toast",
-    "motion",
-    "table",
-    "charts",
-    "editor",
+    "tailwind",
     "device",
     "parallel",
-    "tui",
-    "codegen-js",
     "devtools",
-    "mobile-test",
-    "sim",
+    "hot-reload",
     "a11y",
-    "audio",
-    "crdt",
-    "agent-ui",
 ]
 
 [dev-dependencies]
-strata-components = { workspace = true }
-strata-icons = { workspace = true }
 strata-device = { workspace = true }
-strata-web-reader = { workspace = true }
 strata-devtools = { workspace = true }
-strata-aria = { workspace = true }
-
-
 
 [[test]]
 name = "cdp_integration_tests"
 required-features = ["devtools"]
 
+[[test]]
+name = "hmr_runtime_tests"
+required-features = ["hot-reload"]
+
 [[example]]
 name = "readme_hero"
 path = "../../examples/readme_hero.rs"
-
-

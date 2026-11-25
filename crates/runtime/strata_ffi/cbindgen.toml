@@ -1,0 +1,18 @@
+language = "C"
+include_guard = "STRATA_FFI_H"
+pragma_once = true
+cpp_compat = true
+autogen_warning = "/* Strata Universal C99 FFI Header - matches strata-ffi ABI */"
+include_version = true
+tab_width = 4
+
+[export]
+include = [
+    "StrataStatus",
+    "StrataDomEvent",
+    "StrataFramebufferInfo",
+    "StrataWindowOptions",
+]
+
+[parse]
+parse_deps = false

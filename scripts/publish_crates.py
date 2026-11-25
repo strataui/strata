@@ -224,7 +224,7 @@ def list_dirty_repo_paths(repo_root: Path) -> set[Path]:
     if not res.stdout:
         return set()
 
-    resolved_root = repo_root.resolve()
+    resolved_root = _find_git_root(repo_root) or repo_root.resolve()
     dirty_paths: set[Path] = set()
     entries = res.stdout.split("\0")
     i = 0
@@ -813,24 +813,37 @@ def bump_manifest_version(manifest_path: Path, new_version: str) -> bool:
     return False
 
 
-def bump_workspace_dependency_versions(
-    workspace_toml: Path,
+def _update_dependency_section_versions(
+    manifest_path: Path,
+    section_name: str,
     version_by_crate_name: dict[str, str],
 ) -> bool:
-    """Update `version = "..."` entries in root `[workspace.dependencies]` for bumped crates."""
-    if not workspace_toml.is_file() or not version_by_crate_name:
+    """Update `dep = "X.Y.Z"` and `dep = { version = "X.Y.Z", ... }` entries in one TOML section."""
+    if not manifest_path.is_file() or not version_by_crate_name:
         return False
 
-    content = workspace_toml.read_text(encoding="utf-8")
+    content = manifest_path.read_text(encoding="utf-8")
     parsed = tomllib.loads(content)
-    ws_deps = parsed.get("workspace", {}).get("dependencies", {})
-    if not isinstance(ws_deps, dict):
+    section_obj: object = parsed
+    for part in section_name.split("."):
+        if isinstance(section_obj, dict):
+            section_obj = section_obj.get(part)
+        else:
+            section_obj = None
+            break
+    if not isinstance(section_obj, dict):
         return False
 
-    repo_root = workspace_toml.parent.resolve()
+    repo_root = manifest_path.parent.resolve()
     key_to_new_ver: dict[str, str] = {}
-    for dep_key, dep_val in ws_deps.items():
+    for dep_key, dep_val in section_obj.items():
+        if isinstance(dep_val, str):
+            if dep_key in version_by_crate_name:
+                key_to_new_ver[dep_key] = version_by_crate_name[dep_key]
+            continue
         if not isinstance(dep_val, dict):
+            continue
+        if dep_val.get("workspace") is True:
             continue
         pkg_name = dep_val.get("package") or dep_key
         if pkg_name in version_by_crate_name:
@@ -839,7 +852,11 @@ def bump_workspace_dependency_versions(
             dep_dir = (repo_root / dep_val["path"]).resolve()
             dep_manifest = dep_dir / "Cargo.toml"
             if dep_manifest.is_file():
-                dep_pkg = tomllib.loads(dep_manifest.read_text(encoding="utf-8")).get("package", {}).get("name")
+                dep_pkg = (
+                    tomllib.loads(dep_manifest.read_text(encoding="utf-8"))
+                    .get("package", {})
+                    .get("name")
+                )
                 if dep_pkg in version_by_crate_name:
                     key_to_new_ver[dep_key] = version_by_crate_name[dep_pkg]
 
@@ -847,7 +864,7 @@ def bump_workspace_dependency_versions(
         return False
 
     lines = content.splitlines(keepends=True)
-    bounds = _section_range(lines, "workspace.dependencies")
+    bounds = _section_range(lines, section_name)
     if bounds is None:
         return False
     start, end = bounds
@@ -866,7 +883,9 @@ def bump_workspace_dependency_versions(
         new_ver = key_to_new_ver[dep_key]
         eol = "\r\n" if raw_line.endswith("\r\n") else "\n"
         rhs = m.group(3)
-        if re.search(r'\bversion\s*=\s*"[^"]*"', rhs):
+        if re.match(r'^"[^"]*"(\s*(?:#.*)?)$', rhs):
+            new_rhs = re.sub(r'^"[^"]*"', f'"{new_ver}"', rhs, count=1)
+        elif re.search(r'\bversion\s*=\s*"[^"]*"', rhs):
             new_rhs = re.sub(r'(\bversion\s*=\s*)"[^"]*"', rf'\1"{new_ver}"', rhs, count=1)
         elif rhs.startswith("{"):
             new_rhs = re.sub(r"^\{", f'{{ version = "{new_ver}",', rhs, count=1)
@@ -877,15 +896,76 @@ def bump_workspace_dependency_versions(
 
     new_content = "".join(lines)
     reparsed = tomllib.loads(new_content)
-    ws_reparsed = reparsed.get("workspace", {}).get("dependencies", {})
-    for dep_key in updated_keys:
-        if ws_reparsed.get(dep_key, {}).get("version") != key_to_new_ver[dep_key]:
-            raise AssertionError(f"Failed verifying [workspace.dependencies].{dep_key} version update")
+    sec_reparsed: object = reparsed
+    for part in section_name.split("."):
+        sec_reparsed = sec_reparsed.get(part) if isinstance(sec_reparsed, dict) else None
+    if isinstance(sec_reparsed, dict):
+        for dep_key in updated_keys:
+            val = sec_reparsed.get(dep_key)
+            actual = val if isinstance(val, str) else (val.get("version") if isinstance(val, dict) else None)
+            if actual != key_to_new_ver[dep_key]:
+                raise AssertionError(f"Failed verifying [{section_name}].{dep_key} version update")
 
     if new_content != content:
-        workspace_toml.write_text(new_content, encoding="utf-8")
+        manifest_path.write_text(new_content, encoding="utf-8")
         return True
     return False
+
+
+def bump_workspace_dependency_versions(
+    workspace_toml: Path,
+    version_by_crate_name: dict[str, str],
+) -> bool:
+    """Update `version` entries in root `[workspace.dependencies]` for bumped crates."""
+    return _update_dependency_section_versions(workspace_toml, "workspace.dependencies", version_by_crate_name)
+
+
+def sync_cross_repo_dependency_versions(
+    repo_root: Path,
+    crates: list[WorkspaceCrate],
+    upstream_versions: dict[str, str],
+) -> set[Path]:
+    """Sync dependency version floors across `[workspace.dependencies]` and crate manifests from upstream repos."""
+    if not upstream_versions:
+        return set()
+    ws_names = {c.name for c in crates}
+    external_versions = {k: v for k, v in upstream_versions.items() if k not in ws_names}
+    if not external_versions:
+        return set()
+
+    touched: set[Path] = set()
+    ws_toml = (repo_root / "Cargo.toml").resolve()
+    if _update_dependency_section_versions(ws_toml, "workspace.dependencies", external_versions):
+        touched.add(ws_toml)
+    for crate in crates:
+        mp = crate.manifest_path.resolve()
+        changed = False
+        for sec in ("dependencies", "build-dependencies"):
+            if _update_dependency_section_versions(mp, sec, external_versions):
+                changed = True
+        if changed:
+            touched.add(mp)
+
+    if touched:
+        lock_res = subprocess.run(
+            ["cargo", "update", "--workspace", "--offline"],
+            cwd=str(repo_root),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if lock_res.returncode != 0:
+            lock_res = subprocess.run(
+                ["cargo", "update", "--workspace"],
+                cwd=str(repo_root),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        lock_file = (repo_root / "Cargo.lock").resolve()
+        if lock_res.returncode == 0 and lock_file.is_file():
+            touched.add(lock_file)
+    return touched
 
 
 def bump_explicit_internal_dependency_versions(
@@ -1397,6 +1477,7 @@ def publish_workspace(
     updated_only: bool = False,
     cache_dir: Path | None = None,
     ignore_paths_by_repo: dict[Path, set[Path]] | None = None,
+    upstream_versions: dict[str, str] | None = None,
 ) -> int:
     """Auto-bump changed clean crates (when enabled) and publish unpublished clean crates in `repo_root`.
 
@@ -1451,11 +1532,29 @@ def publish_workspace(
             print(f"[{label}] No publishable crates found.", flush=True)
         return 0
 
-    info_map = {c.name: fetch_crates_io_info(c.name, cache_dir=resolved_cache) for c in clean_crates}
+    def _record_ignored(paths: set[Path]) -> None:
+        if not paths or ignore_paths_by_repo is None:
+            return
+        ignore_paths_by_repo.setdefault(repo_root.resolve(), set()).update(paths)
+        git_root = _find_git_root(repo_root)
+        if git_root is not None:
+            ignore_paths_by_repo.setdefault(git_root, set()).update(paths)
+
     bumped_paths: set[Path] = set()
+    if auto_bump and upstream_versions and not dry_run:
+        synced_paths = sync_cross_repo_dependency_versions(repo_root, clean_crates, upstream_versions)
+        if synced_paths:
+            bumped_paths.update(synced_paths)
+            _record_ignored(synced_paths)
+            print(
+                f"[{label}] Synced cross-repo dependency versions across {len(synced_paths)} file(s).",
+                flush=True,
+            )
+
+    info_map = {c.name: fetch_crates_io_info(c.name, cache_dir=resolved_cache) for c in clean_crates}
 
     if auto_bump:
-        plans, bumped_paths = auto_bump_changed_crates(
+        plans, newly_bumped = auto_bump_changed_crates(
             label,
             repo_root,
             clean_crates,
@@ -1463,15 +1562,25 @@ def publish_workspace(
             resolved_cache,
             apply=not dry_run,
         )
-        if bumped_paths and ignore_paths_by_repo is not None:
-            ignore_paths_by_repo.setdefault(repo_root.resolve(), set()).update(bumped_paths)
+        bumped_paths.update(newly_bumped)
+        _record_ignored(newly_bumped)
         if bump_only:
+            if upstream_versions is not None:
+                for p in plans:
+                    upstream_versions[p.crate.name] = p.new_version
+                for c in clean_crates:
+                    upstream_versions.setdefault(c.name, c.version)
             return 0
         if plans and not dry_run:
             crates = collect_workspace_crates(repo_root)
             if single_package is not None:
                 crates = [c for c in crates if c.name == single_package]
             considered_names = {c.name for c in crates}
+
+    if upstream_versions is not None:
+        for c in crates:
+            if c.name not in dirty_report.all_dirty:
+                upstream_versions[c.name] = c.version
 
     if bump_only:
         return 0
@@ -1608,7 +1717,7 @@ def publish_workspace(
         purge_stale_package_verify_cache(
             repo_root,
             crate_names={c.name for c in crates},
-            name_prefixes=("strata-",),
+            name_prefixes=("strata-", "onyx-"),
         )
         rc, output = stream_command(cmd, repo_root)
         made_upload_progress = ("Uploaded " in output) or ("Published " in output)
@@ -1683,11 +1792,33 @@ def publish_workspace(
         return rc
 
 
+# Exact multi-repo topological publish order across the entire Strata ecosystem:
+#   Tier 0: mica (standalone JS engine — zero Strata deps)
+#   Tier 1: strata (lean core framework — 18 publishable crates)
+#   Tier 2: components, editor, earth, audio, tui, kit, mcp
+#   Tier 3: onyx, cli, vscode-lsp
+DEFAULT_REPOS: tuple[tuple[str, str, str | None], ...] = (
+    ("mica", "mica", None),
+    ("strata", "strata", None),
+    ("components", "components", None),
+    ("editor", "editor", None),
+    ("earth", "earth", "strata-earth"),
+    ("audio", "audio", None),
+    ("tui", "tui", None),
+    ("kit", "kit", None),
+    ("mcp", "mcp", None),
+    ("onyx", "onyx", None),
+    ("cli", "cli", None),
+    ("vscode-lsp", "vscode/lsp", None),
+)
+
+
 def parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     """Parse script control flags while forwarding unknown flags to `cargo publish`."""
     parser = argparse.ArgumentParser(
         description=(
-            "Auto-bump changed crates since their last publish and publish workspace crates to crates.io. "
+            "Auto-bump changed crates since their last publish and publish all Strata ecosystem "
+            "repositories to crates.io in strict topological order (Tier 0 -> Tier 3). "
             "Crates with uncommitted or untracked files (and crates that transitively depend on them) "
             "are skipped unless `--allow-dirty` is passed."
         ),
@@ -1708,6 +1839,21 @@ def parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
         help="Only publish crates that already exist on crates.io (skip brand-new 404 crates).",
     )
     parser.add_argument(
+        "--repos",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated subset of ecosystem repos to publish in topological order "
+            f"(available: {', '.join(label for label, _, _ in DEFAULT_REPOS)})."
+        ),
+    )
+    parser.add_argument(
+        "--skip-repos",
+        type=str,
+        default=None,
+        help="Comma-separated list of ecosystem repos to skip.",
+    )
+    parser.add_argument(
         "--skip-earth",
         "--no-earth",
         action="store_true",
@@ -1723,37 +1869,66 @@ def parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     return parser.parse_known_args(argv)
 
 
+def select_target_repos(
+    args: argparse.Namespace,
+    ecosystem_root: Path,
+) -> list[tuple[str, Path, str | None]]:
+    """Resolve the ordered list of existing ecosystem repositories selected by CLI flags."""
+    valid_labels = {label for label, _, _ in DEFAULT_REPOS}
+    only_set: set[str] | None = None
+    if args.repos:
+        only_set = {tok.strip() for tok in args.repos.split(",") if tok.strip()}
+        unknown = sorted(only_set - valid_labels)
+        if unknown:
+            raise ValueError(
+                f"Unknown repo(s) in --repos: {', '.join(unknown)}. "
+                f"Valid choices: {', '.join(label for label, _, _ in DEFAULT_REPOS)}"
+            )
+
+    skip_set: set[str] = set()
+    if args.skip_repos:
+        skip_set.update(tok.strip() for tok in args.skip_repos.split(",") if tok.strip())
+    if args.skip_earth:
+        skip_set.add("earth")
+
+    selected: list[tuple[str, Path, str | None]] = []
+    for label, rel_path, single_pkg in DEFAULT_REPOS:
+        if only_set is not None and label not in only_set:
+            continue
+        if label in skip_set:
+            continue
+        repo_path = (ecosystem_root / rel_path).resolve()
+        if (repo_path / "Cargo.toml").is_file():
+            selected.append((label, repo_path, single_pkg))
+    return selected
+
+
 def main(argv: list[str] | None = None) -> int:
     args, extra_args = parse_args(sys.argv[1:] if argv is None else argv)
     script_dir = Path(__file__).resolve().parent
     strata_root = script_dir.parent
-    earth_root = strata_root.parent / "earth"
+    ecosystem_root = strata_root.parent
+    try:
+        targets = select_target_repos(args, ecosystem_root)
+    except ValueError as err:
+        print(f"[error] {err}", file=sys.stderr, flush=True)
+        return 2
+
     bumped_paths_by_repo: dict[Path, set[Path]] = {}
+    upstream_versions: dict[str, str] = {}
 
-    rc = publish_workspace(
-        "strata",
-        strata_root,
-        extra_args,
-        auto_bump=not args.no_bump,
-        bump_only=args.bump_only,
-        updated_only=args.updated_only,
-        cache_dir=args.cache_dir,
-        ignore_paths_by_repo=bumped_paths_by_repo,
-    )
-    if rc != 0:
-        return rc
-
-    if not args.skip_earth and earth_root.is_dir():
+    for label, repo_root, single_pkg in targets:
         rc = publish_workspace(
-            "earth",
-            earth_root,
+            label,
+            repo_root,
             extra_args,
-            single_package="strata-earth",
+            single_package=single_pkg,
             auto_bump=not args.no_bump,
             bump_only=args.bump_only,
             updated_only=args.updated_only,
             cache_dir=args.cache_dir,
             ignore_paths_by_repo=bumped_paths_by_repo,
+            upstream_versions=upstream_versions,
         )
         if rc != 0:
             return rc

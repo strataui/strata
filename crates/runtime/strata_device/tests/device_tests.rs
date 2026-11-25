@@ -1,9 +1,12 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use strata_device::prelude::*;
+
+static DEVICE_MOCK_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn test_default_device_telemetry_snapshot() {
+    let _guard = DEVICE_MOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let controller = DeviceMockController::new();
     controller.reset_to_defaults();
 
@@ -33,6 +36,7 @@ fn test_default_device_telemetry_snapshot() {
 
 #[test]
 fn test_reactive_battery_updates_via_controller() {
+    let _guard = DEVICE_MOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let controller = DeviceMockController::new();
     controller.reset_to_defaults();
 
@@ -60,6 +64,7 @@ fn test_reactive_battery_updates_via_controller() {
 
 #[test]
 fn test_reactive_thermal_and_display_refresh() {
+    let _guard = DEVICE_MOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let controller = DeviceMockController::new();
     controller.reset_to_defaults();
 
@@ -92,6 +97,7 @@ fn test_reactive_thermal_and_display_refresh() {
 
 #[test]
 fn test_reactive_network_and_screen_geometry() {
+    let _guard = DEVICE_MOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let controller = DeviceMockController::new();
     controller.reset_to_defaults();
 
@@ -118,6 +124,7 @@ fn test_reactive_network_and_screen_geometry() {
 
 #[test]
 fn test_memory_pressure_eviction_registry() {
+    let _guard = DEVICE_MOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_memory_pressure_listeners();
 
     let warning_count = Arc::new(AtomicUsize::new(0));
@@ -153,7 +160,9 @@ fn test_memory_pressure_eviction_registry() {
 
 #[test]
 fn test_gpu_introspection_mutation() {
+    let _guard = DEVICE_MOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let controller = DeviceMockController::new();
+    controller.reset_to_defaults();
     assert_eq!(controller.gpu().backend, GpuBackend::Software);
 
     controller.set_gpu(GpuInfo {
@@ -348,6 +357,7 @@ fn test_macos_power_source_snapshot_decoding() {
 
 #[test]
 fn test_reactive_geolocation_and_hardware_sensor_hooks() {
+    let _guard = DEVICE_MOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let controller = DeviceMockController::new();
     controller.reset_to_defaults();
 

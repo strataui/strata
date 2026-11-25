@@ -7,7 +7,7 @@ fn test_version_string() {
     let ver_ptr = strata_version();
     assert!(!ver_ptr.is_null());
     let ver_str = unsafe { CStr::from_ptr(ver_ptr).to_str().unwrap() };
-    assert_eq!(ver_str, "0.1.0");
+    assert_eq!(ver_str, env!("CARGO_PKG_VERSION"));
 }
 
 #[test]
@@ -237,3 +237,195 @@ fn test_window_renders_complex_ui_pixels() {
         strata_app_destroy(app);
     }
 }
+
+extern "C" fn dom_click_cb(ev: *const StrataDomEvent, user_data: *mut c_void) {
+    unsafe {
+        assert!(!ev.is_null());
+        assert_eq!((*ev).event_kind, 1);
+        let sig = user_data as *mut StrataSignalHandle;
+        let next = strata_signal_get_int(sig) + 1;
+        strata_signal_set_int(sig, next);
+    }
+}
+
+#[test]
+fn test_c_dom_builders_signals_click_checked_rgba_and_png() {
+    unsafe {
+        let count_sig = strata_signal_create_int(5);
+        assert!(!count_sig.is_null());
+
+        let div_tag = CString::new("div").unwrap();
+        let btn_tag = CString::new("button").unwrap();
+        let root_cls = CString::new("w-[120px] h-[100px] bg-red-500 flex flex-col").unwrap();
+        let btn_cls = CString::new("w-[80px] h-[50px] bg-blue-500").unwrap();
+        let click_ev = CString::new("click").unwrap();
+        let id_k = CString::new("id").unwrap();
+        let id_v = CString::new("ffi-btn").unwrap();
+
+        let root = strata_node_element(div_tag.as_ptr());
+        assert_eq!(strata_node_set_class(root, root_cls.as_ptr()), StrataStatus::Ok);
+
+        let btn = strata_node_element(btn_tag.as_ptr());
+        assert_eq!(strata_node_set_attr(btn, id_k.as_ptr(), id_v.as_ptr()), StrataStatus::Ok);
+        assert_eq!(strata_node_set_class(btn, btn_cls.as_ptr()), StrataStatus::Ok);
+        assert_eq!(
+            strata_node_on_event(btn, click_ev.as_ptr(), Some(dom_click_cb), count_sig as *mut c_void),
+            StrataStatus::Ok
+        );
+
+        let dyn_txt = strata_node_dynamic_text_signal(count_sig);
+        assert!(!dyn_txt.is_null());
+        assert_eq!(strata_node_append_child(btn, dyn_txt), StrataStatus::Ok);
+        assert_eq!(strata_node_append_child(root, btn), StrataStatus::Ok);
+
+        let view = strata_view_from_root(root);
+        assert!(!view.is_null());
+
+        let rt = strata_runtime_create_from_view(view, 120.0, 100.0, 1.0);
+        assert!(!rt.is_null());
+
+        let mut dirty = false;
+        assert_eq!(strata_runtime_pointer_move(rt, 20.0, 20.0, &mut dirty), StrataStatus::Ok);
+        assert_eq!(strata_runtime_pointer_down(rt, 20.0, 20.0, 0, &mut dirty), StrataStatus::Ok);
+        assert_eq!(strata_runtime_pointer_up(rt, 20.0, 20.0, 0, &mut dirty), StrataStatus::Ok);
+        assert_eq!(strata_signal_get_int(count_sig), 6);
+
+        // Checked framebuffer info & BufferTooSmall safety check
+        let mut fb_info = StrataFramebufferInfo {
+            width: 0,
+            height: 0,
+            stride: 0,
+            byte_len: 0,
+        };
+        assert_eq!(strata_runtime_framebuffer_info(rt, &mut fb_info), StrataStatus::Ok);
+        assert_eq!(fb_info.width, 120);
+        assert_eq!(fb_info.height, 100);
+        assert_eq!(fb_info.byte_len, 120 * 100 * 4);
+
+        let mut too_small = [0u8; 8];
+        let mut required = 0usize;
+        assert_eq!(
+            strata_runtime_render_rgba(rt, too_small.as_mut_ptr(), too_small.len(), &mut required),
+            StrataStatus::BufferTooSmall
+        );
+        assert_eq!(required, fb_info.byte_len);
+        assert!(!CStr::from_ptr(strata_last_error()).to_str().unwrap().is_empty());
+
+        let mut pixels = vec![0u8; fb_info.byte_len];
+        let mut written = 0usize;
+        assert_eq!(
+            strata_runtime_render_rgba(rt, pixels.as_mut_ptr(), pixels.len(), &mut written),
+            StrataStatus::Ok
+        );
+        assert_eq!(written, fb_info.byte_len);
+        assert!(pixels.chunks(4).any(|p| p[2] > 180 && p[0] < 120));
+        assert!(pixels.chunks(4).any(|p| p[0] > 180 && p[2] < 120));
+
+        // PNG export verification
+        let png_path = std::env::temp_dir().join(format!("strata_ffi_test_{}.png", std::process::id()));
+        let png_c = CString::new(png_path.to_str().unwrap()).unwrap();
+        assert_eq!(strata_runtime_export_png(rt, png_c.as_ptr()), StrataStatus::Ok);
+        let png_bytes = std::fs::read(&png_path).unwrap();
+        assert_eq!(&png_bytes[0..8], b"\x89PNG\r\n\x1a\n");
+        let _ = std::fs::remove_file(&png_path);
+
+        // Resize + headless native window launch
+        assert_eq!(strata_runtime_resize(rt, 200.0, 140.0, 1.0), StrataStatus::Ok);
+        assert_eq!(strata_runtime_framebuffer_info(rt, &mut fb_info), StrataStatus::Ok);
+        assert_eq!(fb_info.width, 200);
+        assert_eq!(fb_info.height, 140);
+
+        strata_runtime_destroy(rt);
+
+        let win_title = CString::new("FFI Headless").unwrap();
+        let opts = StrataWindowOptions {
+            title: win_title.as_ptr(),
+            width: 160,
+            height: 120,
+            resizable: false,
+            headless: true,
+        };
+        assert_eq!(strata_launch_native_window(view, &opts), StrataStatus::Ok);
+        strata_signal_destroy(count_sig);
+    }
+}
+
+#[test]
+fn test_standards_compliant_css_serializer_no_debug_tokens() {
+    unsafe {
+        let classes = CString::new("flex flex-col w-64 h-32 p-4 bg-blue-500 rounded-md").unwrap();
+        let mut needed = 0usize;
+        assert_eq!(
+            strata_eval_tailwind_css_checked(classes.as_ptr(), std::ptr::null_mut(), 0, &mut needed),
+            StrataStatus::Ok
+        );
+        assert!(needed > 20);
+
+        let mut buf = vec![0 as c_char; needed];
+        let mut written = 0usize;
+        assert_eq!(
+            strata_eval_tailwind_css_checked(classes.as_ptr(), buf.as_mut_ptr(), buf.len(), &mut written),
+            StrataStatus::Ok
+        );
+        let css = CStr::from_ptr(buf.as_ptr()).to_str().unwrap();
+        assert!(css.contains("display: flex;"), "css was: {css}");
+        assert!(css.contains("flex-direction: column;"), "css was: {css}");
+        assert!(css.contains("width: 256px;"), "css was: {css}");
+        assert!(css.contains("height: 128px;"), "css was: {css}");
+        assert!(css.contains("background-color: rgba(59, 130, 246, 1);"), "css was: {css}");
+        assert!(!css.contains("Px("), "Must never leak Rust Debug syntax: {css}");
+    }
+}
+
+#[test]
+fn test_typed_f64_bool_str_signals_and_null_error_diagnostics() {
+    unsafe {
+        let f_sig = strata_signal_create_f64(3.25);
+        assert!((strata_signal_get_f64(f_sig) - 3.25).abs() < 1e-9);
+        assert_eq!(strata_signal_set_f64(f_sig, 8.5), StrataStatus::Ok);
+        assert!((strata_signal_get_f64(f_sig) - 8.5).abs() < 1e-9);
+        strata_signal_destroy(f_sig);
+
+        let b_sig = strata_signal_create_bool(true);
+        assert!(strata_signal_get_bool(b_sig));
+        assert_eq!(strata_signal_set_bool(b_sig, false), StrataStatus::Ok);
+        assert!(!strata_signal_get_bool(b_sig));
+        strata_signal_destroy(b_sig);
+
+        let init = CString::new("hello ffi").unwrap();
+        let s_sig = strata_signal_create_str(init.as_ptr());
+        let mut needed = 0usize;
+        assert_eq!(
+            strata_signal_get_str(s_sig, std::ptr::null_mut(), 0, &mut needed),
+            StrataStatus::Ok
+        );
+        assert_eq!(needed, "hello ffi".len() + 1);
+        let mut buf = vec![0 as c_char; needed];
+        let mut written = 0usize;
+        assert_eq!(
+            strata_signal_get_str(s_sig, buf.as_mut_ptr(), buf.len(), &mut written),
+            StrataStatus::Ok
+        );
+        assert_eq!(CStr::from_ptr(buf.as_ptr()).to_str().unwrap(), "hello ffi");
+
+        let updated = CString::new("updated text").unwrap();
+        assert_eq!(strata_signal_set_str(s_sig, updated.as_ptr()), StrataStatus::Ok);
+        let mut tiny = [0 as c_char; 4];
+        assert_eq!(
+            strata_signal_get_str(s_sig, tiny.as_mut_ptr(), tiny.len(), &mut needed),
+            StrataStatus::BufferTooSmall
+        );
+        assert_eq!(needed, "updated text".len() + 1);
+        strata_signal_destroy(s_sig);
+
+        // NULL pointer check populates strata_last_error() cleanly
+        assert_eq!(
+            strata_signal_set_f64(std::ptr::null_mut(), 1.0),
+            StrataStatus::NullPointer
+        );
+        assert!(CStr::from_ptr(strata_last_error()).to_str().unwrap().contains("NULL"));
+        strata_clear_last_error();
+        assert_eq!(CStr::from_ptr(strata_last_error()).to_str().unwrap(), "");
+    }
+}
+

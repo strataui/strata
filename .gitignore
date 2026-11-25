@@ -40,3 +40,6 @@ docs/.vitepress/cache/
 __pycache__/
 *.pyc
 
+
+# Local sibling-repo development patches (never commit)
+.cargo/config.toml

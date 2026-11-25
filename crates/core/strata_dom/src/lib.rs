@@ -64,13 +64,14 @@ pub use portal::{
     PortalBuilder,
 };
 pub use reactive::{
-    batch, clear_persistent_signals, create_context, create_signal, has_dirty_signals, mark_dirty,
-    peek_dirty_signal_names, provide_context, reactive_telemetry_snapshot, reset_component_hooks,
-    set_signal_name, signal_name, take_dirty_signal_names, take_dirty_signals, untrack,
-    use_callback, use_context, use_effect, use_effect_with_deps, use_id, use_memo,
-    use_memo_with_deps, use_persistent_signal, use_reducer, use_reducer_init, use_ref, use_signal,
-    use_state, with_component_key, with_root_component_scope, ComponentScopeGuard, Context, Effect,
-    EffectGuard, IntoEffectCleanup, IntoInitialState, Memo, ReactiveRuntime,
+    batch, clear_hmr_signals, clear_persistent_signals, create_context, create_signal,
+    export_hmr_signals, has_dirty_signals, import_hmr_signals, mark_dirty, peek_dirty_signal_names,
+    provide_context, reactive_telemetry_snapshot, reset_component_hooks, set_signal_name,
+    signal_name, take_dirty_signal_names, take_dirty_signals, untrack, use_callback, use_context,
+    use_effect, use_effect_with_deps, use_hmr_signal, use_id, use_memo, use_memo_with_deps,
+    use_persistent_signal, use_reducer, use_reducer_init, use_ref, use_signal, use_state,
+    with_component_key, with_root_component_scope, ComponentScopeGuard, Context, Effect,
+    EffectGuard, HmrCodec, IntoEffectCleanup, IntoInitialState, Memo, ReactiveRuntime,
     ReactiveTelemetrySnapshot, ReadSignal, Ref, ScopeId, SetSignal, Signal, SignalId,
     SignalTelemetryEntry, SubscriberId, WriteSignal,
 };
@@ -606,30 +607,34 @@ impl NodeBlueprint {
         }
     }
 
-    /// Recursively ensures all Element nodes in this blueprint tree have a valid EntityId.
+    /// Iteratively ensures all Element nodes in this blueprint tree have a valid EntityId
+    /// without consuming call-stack frames on deeply nested trees.
     pub fn ensure_entity_ids(&mut self) {
-        match self {
-            Self::Element {
-                attributes,
-                children,
-                ..
-            } => {
-                let has_id = attributes
-                    .iter()
-                    .any(|a| matches!(a, Attribute::Entity(id) if id.is_valid()));
-                if !has_id {
-                    attributes.push(Attribute::Entity(EntityId::next()));
+        let mut stack: Vec<&mut NodeBlueprint> = vec![self];
+        while let Some(node) = stack.pop() {
+            match node {
+                Self::Element {
+                    attributes,
+                    children,
+                    ..
+                } => {
+                    let has_id = attributes
+                        .iter()
+                        .any(|a| matches!(a, Attribute::Entity(id) if id.is_valid()));
+                    if !has_id {
+                        attributes.push(Attribute::Entity(EntityId::next()));
+                    }
+                    for child in children.iter_mut().rev() {
+                        stack.push(child);
+                    }
                 }
-                for child in children {
-                    child.ensure_entity_ids();
+                Self::Fragment(children) => {
+                    for child in children.iter_mut().rev() {
+                        stack.push(child);
+                    }
                 }
+                _ => {}
             }
-            Self::Fragment(children) => {
-                for child in children {
-                    child.ensure_entity_ids();
-                }
-            }
-            _ => {}
         }
     }
 
@@ -791,61 +796,61 @@ impl NodeBlueprint {
         false
     }
 
-    /// Recursively flattens nested Fragment nodes within Element children,
-    /// splicing fragment children directly into their parent elements.
-    pub fn flatten_fragments(self) -> Self {
-        match self {
-            Self::Element {
-                tag,
-                classes,
-                attributes,
-                children,
-            } => {
-                let mut flat_children = Vec::with_capacity(children.len());
-                for child in children {
-                    let flat_child = child.flatten_fragments();
-                    Self::splice_fragment_into(flat_child, &mut flat_children);
+    /// Iteratively flattens nested Fragment nodes within Element children,
+    /// splicing fragment children directly into their parent elements without deep recursion.
+    pub fn flatten_fragments(mut self) -> Self {
+        let mut stack: Vec<&mut NodeBlueprint> = vec![&mut self];
+        while let Some(node) = stack.pop() {
+            let children_opt = match node {
+                Self::Element { children, .. } | Self::Fragment(children) => Some(children),
+                _ => None,
+            };
+            if let Some(children) = children_opt {
+                let needs_flatten = children
+                    .iter()
+                    .any(|c| matches!(c, Self::Fragment(_) | Self::Empty));
+                if needs_flatten {
+                    let old = std::mem::take(children);
+                    let mut flat = Vec::with_capacity(old.len());
+                    let mut splice_stack: Vec<NodeBlueprint> = old.into_iter().rev().collect();
+                    while let Some(item) = splice_stack.pop() {
+                        match item {
+                            Self::Fragment(sub) => {
+                                for s in sub.into_iter().rev() {
+                                    splice_stack.push(s);
+                                }
+                            }
+                            Self::Empty => {}
+                            other => flat.push(other),
+                        }
+                    }
+                    *children = flat;
                 }
-                Self::Element {
-                    tag,
-                    classes,
-                    attributes,
-                    children: flat_children,
+                for child in children.iter_mut().rev() {
+                    stack.push(child);
                 }
             }
-            Self::Fragment(children) => {
-                let mut flat_children = Vec::with_capacity(children.len());
-                for child in children {
-                    let flat_child = child.flatten_fragments();
-                    Self::splice_fragment_into(flat_child, &mut flat_children);
-                }
-                Self::Fragment(flat_children)
-            }
-            other => other,
         }
+        self
     }
 
-    fn splice_fragment_into(node: Self, out: &mut Vec<Self>) {
-        match node {
-            Self::Fragment(children) => {
-                for child in children {
-                    Self::splice_fragment_into(child, out);
-                }
-            }
-            Self::Empty => {}
-            other => out.push(other),
+    fn append_ir_children(
+        graph: &mut UiIrGraph,
+        parent_id: NodeId,
+        children: &[NodeBlueprint],
+        depth: usize,
+    ) {
+        if depth >= 256 {
+            return;
         }
-    }
-
-    fn append_ir_children(graph: &mut UiIrGraph, parent_id: NodeId, children: &[NodeBlueprint]) {
         for child in children {
             match child {
                 NodeBlueprint::Fragment(subchildren) => {
-                    Self::append_ir_children(graph, parent_id, subchildren);
+                    Self::append_ir_children(graph, parent_id, subchildren, depth + 1);
                 }
                 NodeBlueprint::Empty => {}
                 _ => {
-                    let child_id = child.compile_to_ir(graph);
+                    let child_id = child.compile_to_ir_depth(graph, depth + 1);
                     if !child_id.is_null() {
                         graph.append_child(parent_id, child_id);
                     }
@@ -856,6 +861,13 @@ impl NodeBlueprint {
 
     /// Compiles this reactive blueprint tree into a contiguous 64-byte aligned `UiIrGraph`.
     pub fn compile_to_ir(&self, graph: &mut UiIrGraph) -> NodeId {
+        self.compile_to_ir_depth(graph, 0)
+    }
+
+    fn compile_to_ir_depth(&self, graph: &mut UiIrGraph, depth: usize) -> NodeId {
+        if depth >= 256 {
+            return NodeId::NULL;
+        }
         match self {
             Self::Element {
                 tag,
@@ -902,7 +914,7 @@ impl NodeBlueprint {
                     node.memo_hash = memo_hash;
                 }
 
-                Self::append_ir_children(graph, node_id, children);
+                Self::append_ir_children(graph, node_id, children, depth);
                 node_id
             }
             Self::Text(text) => {
@@ -934,7 +946,7 @@ impl NodeBlueprint {
                     node.flags = IrNodeFlags::IS_VISIBLE;
                 }
                 for child in children {
-                    let child_id = child.compile_to_ir(graph);
+                    let child_id = child.compile_to_ir_depth(graph, depth + 1);
                     if !child_id.is_null() {
                         graph.append_child(node_id, child_id);
                     }

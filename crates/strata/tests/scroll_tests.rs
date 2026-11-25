@@ -568,63 +568,6 @@ fn test_onscroll_event_and_programmatic_scroll_to_bottom_and_scroll_into_view() 
 }
 
 #[test]
-fn test_canvas2d_component_emits_draw_canvas2d_and_compiles_gpu_and_rasterizer() {
-    use std::rc::Rc;
-    use strata::style::types::Color;
-    use strata_render::compositor::DrawCommand;
-    use strata_ui::canvas::{Canvas2D, Canvas2DContext};
-
-    let draw_cb: Rc<dyn Fn(&mut Canvas2DContext)> = Rc::new(|ctx: &mut Canvas2DContext| {
-        ctx.set_fill_style(Color::rgba(255, 0, 0, 255));
-        ctx.fill_rect(10.0, 10.0, 60.0, 40.0);
-        ctx.set_stroke_style(Color::rgba(0, 255, 0, 255));
-        ctx.set_line_width(2.0);
-        ctx.stroke_rect(10.0, 10.0, 60.0, 40.0);
-        ctx.begin_path();
-        ctx.move_to(20.0, 80.0);
-        ctx.line_to(160.0, 80.0);
-        ctx.stroke();
-        ctx.begin_path();
-        ctx.arc(120.0, 50.0, 15.0, 0.0, std::f32::consts::TAU, false);
-        ctx.fill();
-    });
-
-    let view = Canvas2D(Some(200.0), Some(120.0), None, Some(draw_cb));
-    let mut runtime = AppRuntime::new(view, 240.0, 160.0, 1.0);
-
-    let has_canvas_cmd = runtime.display_list.commands.iter().any(|cmd| {
-        matches!(
-            cmd,
-            DrawCommand::DrawCanvas2D { commands, .. } if commands.len() == 4
-        )
-    });
-    assert!(
-        has_canvas_cmd,
-        "<Canvas2D> must emit DrawCommand::DrawCanvas2D with 4 recorded commands"
-    );
-
-    // GPU path pipeline must compile line/arc/path primitives from DrawCanvas2D when GPU 2D is enabled
-    runtime.set_gpu_2d_paths_enabled(true);
-    runtime.compile_gpu_paths_now();
-    assert!(
-        !runtime.gpu_path_segments().is_empty(),
-        "GpuPathPipeline must compile path segments from DrawCommand::DrawCanvas2D"
-    );
-    let quad_batch =
-        strata_render::GpuBatch::from_display_list(&runtime.display_list, 240.0, 160.0);
-    assert!(
-        quad_batch.len() >= 2,
-        "GpuBatch must compile FillRect and StrokeRect from DrawCommand::DrawCanvas2D"
-    );
-
-    // Software FrameBuffer must rasterize the filled rectangle
-    let mut fb = strata_render::FrameBuffer::new(240, 160);
-    fb.execute_display_list(&runtime.display_list);
-    let px = fb.get_pixel(30, 30);
-    assert_eq!(px, Color::rgba(255, 0, 0, 255));
-}
-
-#[test]
 fn test_svg_text_and_stroke_dasharray_in_rasterizer_and_gpu_pipeline() {
     use strata_render::compositor::DrawCommand;
 

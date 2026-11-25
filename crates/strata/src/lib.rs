@@ -37,79 +37,23 @@ pub use strata_style as style;
 pub use strata_vfs as fs;
 pub use strata_web_api as web_api;
 
-#[cfg(feature = "audio")]
-pub use strata_audio as audio;
-#[cfg(feature = "codegen-js")]
-pub use strata_codegen_js as codegen_js;
 #[cfg(feature = "device")]
 pub use strata_device as device;
 #[cfg(feature = "devtools")]
 pub use strata_devtools as devtools;
-#[cfg(feature = "icons")]
-pub use strata_icons as icons;
-#[cfg(feature = "mobile-test")]
-pub use strata_mobile_test as mobile_test;
+#[cfg(feature = "hot-reload")]
+pub use strata_hot_reload as hot_reload;
 #[cfg(feature = "parallel")]
 pub use strata_parallel as parallel;
-#[cfg(feature = "sim")]
-pub use strata_sim as sim;
-#[cfg(feature = "tui")]
-pub use strata_tui as tui;
-#[cfg(feature = "ui")]
-pub use strata_ui as ui;
 
-#[cfg(feature = "agent-ui")]
-pub use strata_agent_ui as agent_ui;
-#[cfg(feature = "aria")]
-pub use strata_aria as aria;
-#[cfg(feature = "charts")]
-pub use strata_charts as charts;
-#[cfg(feature = "crdt")]
-pub use strata_crdt as crdt;
-#[cfg(feature = "editor")]
-pub use strata_editor as editor;
-#[cfg(feature = "form")]
-pub use strata_form as form;
-#[cfg(feature = "i18n")]
-pub use strata_i18n as i18n;
-#[cfg(feature = "motion")]
-pub use strata_motion as motion;
-#[cfg(feature = "query")]
-pub use strata_query as query;
-#[cfg(feature = "router")]
-pub use strata_router as router;
-#[cfg(feature = "store")]
-pub use strata_store as store;
-#[cfg(feature = "table")]
-pub use strata_table as table;
-#[cfg(feature = "toast")]
-pub use strata_toast as toast;
-#[cfg(feature = "virtual")]
-pub use strata_virtual as virtualizer;
-
-pub mod benchmarks;
 pub mod low_level;
-#[cfg(unix)]
 pub mod mcp_bridge;
 pub mod runtime;
 pub mod view_transition;
-#[cfg(unix)]
-pub use mcp_bridge::{default_dev_socket_path, start_mcp_dev_listener};
-
-#[cfg(not(unix))]
-pub mod mcp_bridge {
-    use std::path::PathBuf;
-    pub fn default_dev_socket_path() -> PathBuf {
-        PathBuf::from("/tmp/strata-dev.sock")
-    }
-    pub fn start_mcp_dev_listener(_path: Option<PathBuf>) -> Result<(), std::io::Error> {
-        Ok(())
-    }
-}
-pub use benchmarks::{BenchmarkHarness, BenchmarkReport};
 pub use low_level::{LowLevelRenderer, OffscreenBuffer, RawSurfaceHandle};
-#[cfg(not(unix))]
 pub use mcp_bridge::{default_dev_socket_path, start_mcp_dev_listener};
+#[cfg(feature = "hot-reload")]
+pub use runtime::{HmrPatchOutcome, HmrRuntimeController};
 pub use runtime::{
     app, launch, launch_auto, launch_headless, launch_headless_pump, launch_window,
     launch_with_config, launch_with_events, launch_with_frame, queue_edit_command, AppFrameInfo,
@@ -141,23 +85,23 @@ pub use view_transition::{ViewTransitionManager, ViewTransitionSnapshot};
 pub mod prelude {
     pub use strata_dom;
     pub use strata_dom::{
-        clear_cursor_override, clear_persistent_signals, create_anchored_portal, create_context,
-        create_dropdown_portal, create_portal, current_cursor, dispatch_click_outside,
-        dispatch_global_keydown, get_scroll_offset, provide_context, reset_component_hooks,
-        scroll_into_view, scroll_to, scroll_to_bottom, scroll_to_top, set_current_cursor,
-        set_system_color_scheme, set_system_contrast, set_system_reduced_motion,
-        set_viewport_dimensions, use_active, use_callback, use_click_outside, use_clipboard,
-        use_color_scheme, use_context, use_contrast, use_cursor, use_effect, use_effect_with_deps,
-        use_focus, use_focus_within, use_hover, use_id, use_keyboard_shortcut, use_media_query,
-        use_memo, use_memo_with_deps, use_persistent_signal, use_press, use_reduced_motion,
-        use_reducer, use_reducer_init, use_ref, use_shortcut, use_signal, use_state,
-        with_component_key, with_root_component_scope, AnchorPlacement, Attribute,
-        ClickOutsideHandle, ClipboardHandle, ColorScheme, Context, ContrastPreference, CursorIcon,
-        Effect, EffectGuard, ErrorBoundary, ErrorBoundaryBuilder, ErrorBoundaryInfo, Event,
-        EventType, FocusHandlers, HoverHandlers, IntoChildren, IntoEffectCleanup,
-        IntoNodeBlueprint, KeyChord, Memo, NodeBlueprint, Portal, PortalBuilder, PressHandlers,
-        ProgrammaticScrollCommand, ReadSignal, Ref, SetSignal, ShortcutHandle, Signal, Tag, View,
-        WriteSignal,
+        clear_cursor_override, clear_hmr_signals, clear_persistent_signals, create_anchored_portal,
+        create_context, create_dropdown_portal, create_portal, current_cursor,
+        dispatch_click_outside, dispatch_global_keydown, export_hmr_signals, get_scroll_offset,
+        import_hmr_signals, provide_context, reset_component_hooks, scroll_into_view, scroll_to,
+        scroll_to_bottom, scroll_to_top, set_current_cursor, set_system_color_scheme,
+        set_system_contrast, set_system_reduced_motion, set_viewport_dimensions, use_active,
+        use_callback, use_click_outside, use_clipboard, use_color_scheme, use_context,
+        use_contrast, use_cursor, use_effect, use_effect_with_deps, use_focus, use_focus_within,
+        use_hmr_signal, use_hover, use_id, use_keyboard_shortcut, use_media_query, use_memo,
+        use_memo_with_deps, use_persistent_signal, use_press, use_reduced_motion, use_reducer,
+        use_reducer_init, use_ref, use_shortcut, use_signal, use_state, with_component_key,
+        with_root_component_scope, AnchorPlacement, Attribute, ClickOutsideHandle, ClipboardHandle,
+        ColorScheme, Context, ContrastPreference, CursorIcon, Effect, EffectGuard, ErrorBoundary,
+        ErrorBoundaryBuilder, ErrorBoundaryInfo, Event, EventType, FocusHandlers, HmrCodec,
+        HoverHandlers, IntoChildren, IntoEffectCleanup, IntoNodeBlueprint, KeyChord, Memo,
+        NodeBlueprint, Portal, PortalBuilder, PressHandlers, ProgrammaticScrollCommand, ReadSignal,
+        Ref, SetSignal, ShortcutHandle, Signal, Tag, View, WriteSignal,
     };
     pub use strata_js;
     pub use strata_js::{
@@ -184,81 +128,19 @@ pub mod prelude {
     pub use strata_vfs::prelude::*;
     pub use strata_web_api::prelude::*;
 
-    #[cfg(feature = "aria")]
-    pub use strata_aria::floating::Placement as AriaPlacement;
-    #[cfg(feature = "aria")]
-    pub use strata_aria::focus_trap::FocusTrap as AriaFocusTrap;
-    #[cfg(feature = "aria")]
-    pub use strata_aria::roving_tabindex::{Orientation as AriaOrientation, RovingTabIndex};
-    #[cfg(feature = "aria")]
-    pub use strata_aria::{
-        compute_position, use_accordion, use_dialog, use_tooltip, AccordionState, AccordionType,
-        Alignment, ComputePositionOptions, ComputePositionResult, DialogConfig, DialogState,
-        FloatRect, Side, TooltipConfig, TooltipState,
-    };
-    #[cfg(feature = "charts")]
-    pub use strata_charts::prelude::*;
-    #[cfg(feature = "codegen-js")]
-    pub use strata_codegen_js::prelude::*;
-    #[cfg(feature = "crdt")]
-    pub use strata_crdt::{
-        CrdtCounterStore, CrdtSignalStore, LamportClock, LwwRegister, OrSet, PnCounter,
-        ReplicatedSignal, RgaSequence, SyncMessage, VectorClock,
-    };
     #[cfg(feature = "device")]
     pub use strata_device::prelude::*;
     #[cfg(feature = "devtools")]
     pub use strata_devtools::*;
-    #[cfg(feature = "editor")]
-    pub use strata_editor::prelude::*;
-    #[cfg(feature = "form")]
-    pub use strata_form::field::FormField as FormFieldState;
-    #[cfg(feature = "form")]
-    pub use strata_form::{use_field_array, use_form, FieldArray, Form, ValidationRule};
-    #[cfg(feature = "i18n")]
-    pub use strata_i18n::prelude::*;
-    #[cfg(feature = "icons")]
-    pub use strata_icons::Icons;
-    #[cfg(feature = "mobile-test")]
-    pub use strata_mobile_test::*;
-    #[cfg(feature = "motion")]
-    pub use strata_motion::prelude::*;
+    #[cfg(feature = "hot-reload")]
+    pub use strata_hot_reload::prelude::*;
     #[cfg(feature = "parallel")]
-    pub use strata_parallel::prelude::*;
-    #[cfg(feature = "query")]
-    pub use strata_query::prelude::*;
-    #[cfg(feature = "router")]
-    pub use strata_router::prelude::*;
-    #[cfg(feature = "sim")]
-    pub use strata_sim as sim;
-    #[cfg(feature = "sim")]
-    pub use strata_sim::{
-        AppMetadata, DeviceFormFactor, DeviceManufacturer, DeviceOrientation, DevicePosture,
-        DeviceProfile, DynamicAlertKind, DynamicIslandOscillator, DynamicIslandState,
-        FoldableState, GeometrySolver, MobileSimulatorWorkspace, MultiAppSandbox, NavAction,
-        ScreenProfile, ThreeButtonNavBar, VirtualHalBus,
+    pub use strata_parallel::{
+        reset_thread_local_arena, translate_draw_command, with_thread_local_arena,
+        AdaptivePartitioner, ContainmentClassifier, DirtySignalQueue, DisplayListChunk,
+        LayoutConstraints, LayoutPartition, ParallelEngine, PartitionBoundary, PartitionId,
     };
-    #[cfg(feature = "store")]
-    pub use strata_store::prelude::*;
-    #[cfg(feature = "table")]
-    pub use strata_table::table::Table as DataTableState;
-    #[cfg(feature = "table")]
-    pub use strata_table::{use_table, ColumnDef, ColumnPin, SortDirection};
-    #[cfg(feature = "toast")]
-    pub use strata_toast::toast::ToastKind as SonnerToastKind;
-    #[cfg(feature = "toast")]
-    pub use strata_toast::{
-        compute_stack_layout, toast_dismiss, toast_error, toast_info, toast_success, toast_warning,
-        StackedToastVisual, ToastAction, ToastItem, ToastManager, ToastPosition,
-    };
-    #[cfg(feature = "tui")]
-    pub use strata_tui::prelude::*;
-    #[cfg(feature = "ui")]
-    pub use strata_ui::prelude::*;
-    #[cfg(feature = "virtual")]
-    pub use strata_virtual::prelude::*;
 
-    pub use crate::benchmarks::{BenchmarkHarness, BenchmarkReport};
     pub use crate::runtime::{
         app, launch, launch_auto, launch_headless, launch_headless_pump, launch_window,
         launch_with_config, launch_with_events, launch_with_frame, queue_edit_command,

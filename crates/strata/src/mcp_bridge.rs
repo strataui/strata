@@ -5,7 +5,10 @@
 //! cursor overlays, taking high-resolution screenshots, and safely batching UI actions.
 
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(not(unix))]
+use std::net::TcpListener;
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender};
@@ -121,16 +124,17 @@ fn verify_peer_credentials(stream: &UnixStream) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos", target_os = "ios"))))]
 fn verify_peer_credentials(_stream: &UnixStream) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-/// Spawns a background thread listening for MCP connections on a Unix domain socket.
+/// Spawns a background thread listening for MCP connections over Unix domain sockets (Unix)
+/// or localhost TCP (Windows, advertising `127.0.0.1:<port>` in `socket_path`).
 pub fn start_mcp_dev_listener(socket_path: Option<PathBuf>) -> Result<(), std::io::Error> {
     let path = socket_path.unwrap_or_else(default_dev_socket_path);
 
-    // Clean up stale socket if present
+    // Clean up stale socket/descriptor file if present
     if path.exists() {
         let _ = std::fs::remove_file(&path);
     }
@@ -152,23 +156,45 @@ pub fn start_mcp_dev_listener(socket_path: Option<PathBuf>) -> Result<(), std::i
         }
     }
 
-    let listener = UnixListener::bind(&path)?;
-
     #[cfg(unix)]
     {
+        let listener = UnixListener::bind(&path)?;
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+
+        std::thread::Builder::new()
+            .name("strata-mcp-ipc-listener".to_string())
+            .spawn(move || {
+                for stream in listener.incoming().flatten() {
+                    if verify_peer_credentials(&stream).is_ok() {
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+                        let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+                        if let Ok(reader_stream) = stream.try_clone() {
+                            handle_client_connection(BufReader::new(reader_stream), stream);
+                        }
+                    }
+                }
+            })?;
     }
 
-    std::thread::Builder::new()
-        .name("strata-mcp-ipc-listener".to_string())
-        .spawn(move || {
-            for stream in listener.incoming().flatten() {
-                if verify_peer_credentials(&stream).is_ok() {
-                    handle_client_connection(stream);
+    #[cfg(not(unix))]
+    {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let local_addr = listener.local_addr()?.to_string();
+        std::fs::write(&path, &local_addr)?;
+
+        std::thread::Builder::new()
+            .name("strata-mcp-ipc-listener".to_string())
+            .spawn(move || {
+                for stream in listener.incoming().flatten() {
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+                    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+                    if let Ok(reader_stream) = stream.try_clone() {
+                        handle_client_connection(BufReader::new(reader_stream), stream);
+                    }
                 }
-            }
-        })?;
+            })?;
+    }
 
     Ok(())
 }
@@ -267,15 +293,7 @@ fn execute_actions_nonblocking_on_ipc_thread(id: Value, actions: &[Value]) -> St
     .to_string()
 }
 
-fn handle_client_connection(mut stream: UnixStream) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
-
-    let mut reader = BufReader::new(match stream.try_clone() {
-        Ok(s) => s,
-        Err(_) => return,
-    });
-
+fn handle_client_connection<R: Read, W: Write>(mut reader: BufReader<R>, mut stream: W) {
     let mut line = String::new();
     while let Ok(n) = reader.read_line(&mut line) {
         if n == 0 {

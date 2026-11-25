@@ -12,6 +12,8 @@ use strata_style::types::{ComputedStyle, Dimension, Display, FlexDirection};
 
 pub mod app;
 pub mod edit;
+#[cfg(feature = "hot-reload")]
+pub mod hmr_bridge;
 pub mod launch;
 pub mod platforms;
 pub mod types;
@@ -38,6 +40,8 @@ pub mod test_support;
 pub use app::*;
 pub use dom_hydration::*;
 pub use edit::*;
+#[cfg(feature = "hot-reload")]
+pub use hmr_bridge::*;
 pub(crate) use image::*;
 pub use launch::*;
 pub use platforms::*;
@@ -285,6 +289,35 @@ impl AppRuntime {
 
     /// Creates and mounts a new application runtime from a root view.
     pub fn new(root_view: View, viewport_width: f32, viewport_height: f32, dpr: f32) -> Self {
+        static REGISTER_JS_FETCH: std::sync::Once = std::sync::Once::new();
+        REGISTER_JS_FETCH.call_once(|| {
+            strata_js::web::set_global_fetch_handler(std::sync::Arc::new(|req| {
+                let mut web_req = strata_web_api::fetch::RequestInit {
+                    method: req.method,
+                    ..Default::default()
+                };
+                for (k, v) in req.headers {
+                    web_req.headers.set(&k, &v);
+                }
+                if let Some(body) = req.body {
+                    web_req = web_req.body(body);
+                }
+                let resp = strata_web_api::fetch::fetch(&req.url, Some(web_req))
+                    .map_err(|e| e.to_string())?;
+                Ok(strata_js::web::FetchResponse {
+                    status: resp.status,
+                    status_text: resp.status_text.clone(),
+                    headers: resp
+                        .headers
+                        .all_entries()
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                    body: resp.bytes().to_vec(),
+                })
+            }));
+        });
+
         #[cfg(target_os = "linux")]
         strata_platform::init_pango_text_measurement();
 

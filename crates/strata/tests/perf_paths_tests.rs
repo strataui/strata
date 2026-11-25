@@ -6,7 +6,6 @@ use std::sync::Arc;
 use strata::prelude::*;
 use strata_platform::PlatformEvent;
 use strata_render::compositor::DrawCommand;
-use strata_ui::scene3d::SceneViewport;
 
 fn scene_arc() -> Arc<Scene3D> {
     let mut scene = Scene3D::new();
@@ -36,11 +35,17 @@ fn viewport_scenes(runtime: &AppRuntime) -> Vec<Arc<Scene3D>> {
 #[test]
 fn draw_viewport_3d_shares_the_scene_arc_across_compiles() {
     let shared = scene_arc();
-    let view = rsx! {
-        <div class="w-full h-full">
-            <SceneViewport scene={&shared} class="w-full h-full" />
-        </div>
-    };
+    let view = View::new(NodeBlueprint::element(
+        Tag::Div,
+        vec!["w-full h-full".to_string()],
+        vec![],
+        vec![NodeBlueprint::element(
+            Tag::Canvas,
+            vec!["w-full h-full".to_string()],
+            vec![Attribute::scene_payload(Arc::clone(&shared))],
+            vec![],
+        )],
+    ));
     let mut runtime = AppRuntime::new(view, 400.0, 300.0, 1.0);
     runtime.tick_frame();
     let first = viewport_scenes(&runtime);

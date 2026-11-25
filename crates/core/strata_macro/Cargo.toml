@@ -15,5 +15,5 @@ proc-macro = true
 [dependencies]
 
 [dev-dependencies]
-strata-dom = { path = "../strata_dom" }
-strata-js = { path = "../../runtime/strata_js" }
+strata-dom = { workspace = true }
+strata-js = { workspace = true }

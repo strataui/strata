@@ -422,6 +422,9 @@ where
     };
     let mut frames_presented: u64 = 1;
 
+    #[cfg(feature = "hot-reload")]
+    let mut hmr_ctrl = HmrRuntimeController::from_env(|| {});
+
     let mut running = true;
     while running {
         if let Some(max_f) = max_headless_frames {
@@ -432,6 +435,22 @@ where
         let events = window.poll_events();
         let mut needs_rebuild = false;
         let mut needs_redraw = false;
+
+        #[cfg(feature = "hot-reload")]
+        if let Some(ref mut hmr) = hmr_ctrl {
+            if let Some(outcome) = hmr.poll_and_apply(&mut runtime) {
+                if outcome.ok {
+                    needs_redraw = true;
+                }
+            }
+            if hmr.shutdown_requested() {
+                break;
+            }
+            if hmr.take_dirty_signals() {
+                needs_rebuild = true;
+                needs_redraw = true;
+            }
+        }
 
         for event in events {
             if let Some(ref mut h) = hooks {
@@ -520,23 +539,39 @@ where
                     presenter.width,
                     presenter.height,
                 );
-            } else if let Some(ref mut f) = root_fn {
-                let _ = strata_dom::reactive::take_dirty_signals();
-                runtime.update_root(|| f());
-                let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-                let _ = window.present_surface(
-                    &presenter.backing_buffer,
-                    presenter.width,
-                    presenter.height,
-                );
             } else {
-                runtime.mark_paint_dirty();
-                let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
-                let _ = window.present_surface(
-                    &presenter.backing_buffer,
-                    presenter.width,
-                    presenter.height,
-                );
+                #[cfg(feature = "hot-reload")]
+                let hot_view = hmr_ctrl.as_ref().and_then(|h| h.render_active_view());
+                #[cfg(not(feature = "hot-reload"))]
+                let hot_view: Option<View> = None;
+
+                if let Some(view) = hot_view {
+                    let _ = strata_dom::reactive::take_dirty_signals();
+                    runtime.update_view(view);
+                    let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
+                    let _ = window.present_surface(
+                        &presenter.backing_buffer,
+                        presenter.width,
+                        presenter.height,
+                    );
+                } else if let Some(ref mut f) = root_fn {
+                    let _ = strata_dom::reactive::take_dirty_signals();
+                    runtime.update_root(|| f());
+                    let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
+                    let _ = window.present_surface(
+                        &presenter.backing_buffer,
+                        presenter.width,
+                        presenter.height,
+                    );
+                } else {
+                    runtime.mark_paint_dirty();
+                    let _ = runtime.render_frame(&mut compositor, &mut presenter, true);
+                    let _ = window.present_surface(
+                        &presenter.backing_buffer,
+                        presenter.width,
+                        presenter.height,
+                    );
+                }
             }
         } else if needs_redraw || window.is_redraw_requested() {
             // A per-frame draw hook edits the display list, so it forces a fresh compile.

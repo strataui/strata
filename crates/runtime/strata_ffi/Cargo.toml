@@ -1,16 +1,19 @@
 [package]
 name = "strata-ffi"
 version.workspace = true
-edition = "2021"
-authors = ["larvance <64753457+larvance@users.noreply.github.com>"]
-description = "Universal C-compatible Foreign Function Interface (FFI) and embeddable dynamic library for Strata"
+edition.workspace = true
+authors.workspace = true
+description = "Universal C-compatible Foreign Function Interface (FFI) and embeddable dynamic/static library for Strata"
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
+documentation = "https://docs.rs/strata-ffi"
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
 
 [lib]
-crate-type = ["lib", "cdylib"]
+crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 strata-ui = { workspace = true }
@@ -18,3 +21,5 @@ strata-dom = { workspace = true }
 strata-style = { workspace = true }
 strata-layout = { workspace = true }
 strata-render = { workspace = true }
+strata-ui-platform = { workspace = true }
+strata-primitives = { workspace = true }

@@ -284,6 +284,9 @@ where
         SoftwareSurfacePresenter::new(config.width, config.height, SwapchainFormat::Bgra8Unorm);
     let mut compositor = SwapchainCompositor::new(config.width, config.height, 1.0);
 
+    #[cfg(feature = "hot-reload")]
+    let mut hmr_ctrl = HmrRuntimeController::from_env(|| {});
+
     let max_frames = std::env::var("STRATA_HEADLESS_EXIT_AFTER_FRAMES")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
@@ -292,6 +295,14 @@ where
     let mut frames_rendered = 0u64;
 
     while frames_rendered < max_frames {
+        #[cfg(feature = "hot-reload")]
+        if let Some(ref mut hmr) = hmr_ctrl {
+            let _ = hmr.poll_and_apply(&mut runtime);
+            if hmr.shutdown_requested() {
+                break;
+            }
+        }
+
         let _ = runtime.render_frame(&mut compositor, &mut presenter, frames_rendered == 0);
         let _ =
             window.present_surface(&presenter.backing_buffer, presenter.width, presenter.height);
@@ -300,13 +311,23 @@ where
         let events = window.poll_events();
         let mut should_exit = false;
         for ev in events {
-            let (_, _, exit) = platforms::dispatch_native_platform_event(
+            let (reb, _, exit) = platforms::dispatch_native_platform_event(
                 &ev,
                 &mut runtime,
                 &mut compositor,
                 &mut presenter,
                 &mut event_handler,
             );
+            if reb {
+                #[cfg(feature = "hot-reload")]
+                let hot_view = hmr_ctrl.as_ref().and_then(|h| h.render_active_view());
+                #[cfg(not(feature = "hot-reload"))]
+                let hot_view: Option<View> = None;
+                match hot_view {
+                    Some(v) => runtime.update_view(v),
+                    None => runtime.update_root(|| root_fn()),
+                }
+            }
             if exit {
                 should_exit = true;
                 break;
@@ -479,12 +500,21 @@ where
     initial_runtime.set_gpu_2d_paths_enabled(strata_platform::gtk_gpu_2d_enabled());
     let runtime = std::rc::Rc::new(std::cell::RefCell::new(initial_runtime));
 
+    #[cfg(feature = "hot-reload")]
+    let hmr_ctrl = std::rc::Rc::new(std::cell::RefCell::new(HmrRuntimeController::from_env(
+        || {
+            strata_platform::post_platform_event(strata_platform::PlatformEvent::RedrawRequested);
+        },
+    )));
+
     let transparent_bg = config.transparent
         || config.decoration == strata_platform::WindowDecoration::FramelessTransparent;
     let allow_maximize = config.resizable && !config.is_docked();
 
     let runtime_draw = runtime.clone();
     let root_fn_draw = root_fn_rc.clone();
+    #[cfg(feature = "hot-reload")]
+    let hmr_draw = hmr_ctrl.clone();
     let on_draw = move |width: f32, height: f32, cr: &strata_platform::cairo::Context| {
         let mut resize_fired = false;
         {
@@ -521,7 +551,14 @@ where
             let sig_dur = sig_start.elapsed();
             let mut rt = runtime_draw.borrow_mut();
             rt.record_signal_drain_time(sig_dur);
-            rt.update_root(|| (root_fn_draw.borrow_mut())());
+            #[cfg(feature = "hot-reload")]
+            let hot_view = hmr_draw.borrow().as_ref().and_then(|h| h.render_active_view());
+            #[cfg(not(feature = "hot-reload"))]
+            let hot_view: Option<View> = None;
+            match hot_view {
+                Some(v) => rt.update_view(v),
+                None => rt.update_root(|| (root_fn_draw.borrow_mut())()),
+            }
         }
         let mut rt = runtime_draw.borrow_mut();
         // Repaints with no state change (expose, focus) reuse the compiled list.
@@ -627,9 +664,31 @@ where
     let root_fn_event = root_fn_rc.clone();
     let event_handler_event = event_handler_rc.clone();
     let runtime_dirty = runtime.clone();
+    #[cfg(feature = "hot-reload")]
+    let hmr_event = hmr_ctrl.clone();
     let on_event_inner = move |event: &strata_platform::PlatformEvent| -> (bool, bool) {
         let mut needs_rebuild = false;
         let mut needs_redraw = false;
+        // Drain pending HMR commands before input dispatch so hot-swaps take effect immediately.
+        #[cfg(feature = "hot-reload")]
+        {
+            if let Some(ref mut hmr) = *hmr_event.borrow_mut() {
+                let mut rt = runtime_event.borrow_mut();
+                if let Some(outcome) = hmr.poll_and_apply(&mut rt) {
+                    if outcome.ok {
+                        needs_redraw = true;
+                    }
+                }
+                if hmr.shutdown_requested() {
+                    strata_platform::gtk_close();
+                    return (false, false);
+                }
+                if hmr.take_dirty_signals() {
+                    needs_rebuild = true;
+                    needs_redraw = true;
+                }
+            }
+        }
         // Drain pending MCP requests BEFORE starting `input_dispatch_us` timing so MCP
         // bridge/IPC overhead never pollutes frame input dispatch telemetry, while still
         // routing every synthetic MCP input event through the host application's event hook.
@@ -1067,8 +1126,14 @@ where
                 let _ = strata_dom::reactive::take_dirty_signals();
                 let sig_dur = sig_start.elapsed();
                 let view_start = std::time::Instant::now();
-                let new_view =
-                    strata_dom::with_root_component_scope(|| (root_fn_event.borrow_mut())());
+                #[cfg(feature = "hot-reload")]
+                let hot_view = hmr_event.borrow().as_ref().and_then(|h| h.render_active_view());
+                #[cfg(not(feature = "hot-reload"))]
+                let hot_view: Option<View> = None;
+                let new_view = match hot_view {
+                    Some(v) => v,
+                    None => strata_dom::with_root_component_scope(|| (root_fn_event.borrow_mut())()),
+                };
                 let view_dur = view_start.elapsed();
                 let mut rt = runtime_event.borrow_mut();
                 rt.record_signal_drain_time(sig_dur);
@@ -1245,7 +1310,17 @@ where
     );
     let runtime_wakeup = runtime.clone();
     let frame_hook_wakeup = frame_hook_state;
+    #[cfg(feature = "hot-reload")]
+    let hmr_wakeup = hmr_ctrl;
     let next_wakeup = move || -> Option<std::time::Duration> {
+        #[cfg(feature = "hot-reload")]
+        if hmr_wakeup
+            .borrow()
+            .as_ref()
+            .is_some_and(|h| h.has_dirty_signals())
+        {
+            return Some(std::time::Duration::ZERO);
+        }
         let hook_due = frame_hook_wakeup
             .borrow_mut()
             .as_mut()

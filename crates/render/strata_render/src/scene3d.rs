@@ -2957,7 +2957,7 @@ pub fn StandardMaterial(
 pub fn ShaderMaterial(
     glsl_fragment: Option<&'static str>,
     uniform_time: Option<f32>,
-    uniforms: Option<strata_js::JsValue>,
+    uniforms: Option<Vec<(String, f32)>>,
 ) -> View {
     let mut attrs = Vec::new();
     if let Some(g) = glsl_fragment {
@@ -2965,6 +2965,14 @@ pub fn ShaderMaterial(
     }
     if let Some(t) = uniform_time {
         attrs.push(Attribute::property("data-time", t.to_string()));
+    }
+    if let Some(u) = uniforms {
+        let encoded = u
+            .into_iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(";");
+        attrs.push(Attribute::property("data-uniforms", encoded));
     }
     View::new(NodeBlueprint::element(
         Tag::Custom("ShaderMaterial"),

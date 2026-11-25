@@ -15,7 +15,6 @@ strata-style = { workspace = true }
 strata-layout = { workspace = true }
 strata-dom = { workspace = true }
 strata-macro = { workspace = true }
-strata-js = { workspace = true }
 strata-gpu-path = { workspace = true }
 miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 wgpu = { version = "24.0", optional = true }

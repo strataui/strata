@@ -574,6 +574,7 @@ pub enum RebuildReason {
     FrameHookDirty,
     WindowResize,
     McpCommand(String),
+    HmrPatch(u64),
 }
 
 impl std::fmt::Display for RebuildReason {
@@ -592,6 +593,7 @@ impl std::fmt::Display for RebuildReason {
             Self::FrameHookDirty => write!(f, "FrameHookDirty"),
             Self::WindowResize => write!(f, "WindowResize"),
             Self::McpCommand(cmd) => write!(f, "McpCommand({cmd})"),
+            Self::HmrPatch(epoch) => write!(f, "HmrPatch(epoch={epoch})"),
         }
     }
 }
