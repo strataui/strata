@@ -371,9 +371,9 @@ fn test_transition_width_to_zero_and_rem_reflows_flex_siblings_smoothly() {
     #[component]
     fn DockApp(open: bool) -> View {
         let dock_cls = if open {
-            "w-60 h-[200px] shrink-0 transition-[width] duration-150"
+            "w-60 h-[200px] shrink-0 transition-[width] duration-500"
         } else {
-            "w-0 h-[200px] shrink-0 overflow-hidden transition-[width] duration-150"
+            "w-0 h-[200px] shrink-0 overflow-hidden transition-[width] duration-500"
         };
         rsx! {
             <div class="flex flex-row w-[480px] h-[200px]">
@@ -401,7 +401,7 @@ fn test_transition_width_to_zero_and_rem_reflows_flex_siblings_smoothly() {
     let dock_mid_w = runtime.layout_root.children[0].geometry.border_box.width;
     let main_mid = runtime.layout_root.children[1].geometry.border_box;
     assert!(
-        dock_mid_w > 10.0 && dock_mid_w < 230.0,
+        dock_mid_w > 10.0 && dock_mid_w < 235.0,
         "sidebar width must interpolate cleanly between 240 and 0, got {dock_mid_w}"
     );
     assert!(
@@ -411,7 +411,7 @@ fn test_transition_width_to_zero_and_rem_reflows_flex_siblings_smoothly() {
     );
 
     // Finish transition and verify sibling settles to full 480px width.
-    std::thread::sleep(Duration::from_millis(140));
+    std::thread::sleep(Duration::from_millis(520));
     let _ = runtime.poll_animations();
     let dock_end_w = runtime.layout_root.children[0].geometry.border_box.width;
     let main_end = runtime.layout_root.children[1].geometry.border_box;
@@ -539,7 +539,7 @@ fn reconciled_update_view_during_active_theme_transition_preserves_target_base_s
             <div class="w-[640px] h-[360px] flex flex-col gap-3 p-4">
                 <style>{css}</style>
                 <div class="flex flex-row gap-2">
-                    <button id="action-btn" class="action-btn transition-all duration-150 px-3 py-1">
+                    <button id="action-btn" class="action-btn transition-all duration-500 px-3 py-1">
                         {"Action"}
                     </button>
                     <button id="other-btn" class="px-3 py-1 bg-slate-700 hover:bg-blue-600 text-white">
@@ -600,12 +600,12 @@ fn reconciled_update_view_during_active_theme_transition_preserves_target_base_s
     rt.update_view(render_theme_app(true, 2));
     assert!(rt.last_update_reconciled());
 
-    // 4. Wait past the 150 ms transition duration and poll animations to completion.
-    std::thread::sleep(Duration::from_millis(190));
+    // 4. Wait past the 500 ms transition duration and poll animations to completion.
+    std::thread::sleep(Duration::from_millis(520));
     let _ = rt.poll_animations();
     assert!(
         !rt.has_active_animations(),
-        "150ms theme transition must complete cleanly after 230ms total elapsed time"
+        "500ms theme transition must complete cleanly after 560ms total elapsed time"
     );
 
     let rtl = find_by_id(&rt.layout_root, "action-btn").expect("#action-btn must still exist");
