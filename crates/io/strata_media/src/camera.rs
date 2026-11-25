@@ -197,6 +197,7 @@ mod v4l2 {
 
 /// Discovers physical camera devices attached to the host OS.
 pub fn list_cameras() -> Vec<CameraDeviceInfo> {
+    #[allow(unused_mut)]
     let mut devices = Vec::new();
     #[cfg(target_os = "linux")]
     {

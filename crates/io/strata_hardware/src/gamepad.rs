@@ -228,6 +228,7 @@ mod evdev {
 
 /// Polls all connected mock and physical OS gamepads/joysticks/HOTAS controllers.
 pub fn poll_gamepads() -> Vec<GamepadState> {
+    #[allow(unused_mut)]
     let mut result: Vec<GamepadState> = mock_gamepads()
         .lock()
         .map(|m| m.values().cloned().collect())

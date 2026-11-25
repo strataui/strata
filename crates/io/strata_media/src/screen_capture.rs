@@ -45,6 +45,7 @@ impl Default for ScreenCaptureConfig {
 
 /// Enumerates connected display monitors (reads `/sys/class/drm` on Linux; falls back cleanly).
 pub fn list_screen_sources() -> Vec<ScreenSourceInfo> {
+    #[allow(unused_mut)]
     let mut sources = Vec::new();
     #[cfg(target_os = "linux")]
     {

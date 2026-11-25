@@ -20,6 +20,7 @@
 use std::fs;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
 use strata_web_api::geolocation::{

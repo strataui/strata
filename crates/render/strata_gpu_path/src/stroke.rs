@@ -372,7 +372,7 @@ pub fn dash_quadratics_with_offset(
     let mut current_dash: Vec<QuadraticBezier> = Vec::new();
     let mut dash_idx = start_idx;
     let mut dash_remaining = start_rem;
-    let mut is_draw = dash_idx % 2 == 0;
+    let mut is_draw = dash_idx.is_multiple_of(2);
     let mut prev_end: Option<Point2D> = None;
 
     for q in quads {
@@ -383,7 +383,7 @@ pub fn dash_quadratics_with_offset(
                 }
                 dash_idx = start_idx;
                 dash_remaining = start_rem;
-                is_draw = dash_idx % 2 == 0;
+                is_draw = dash_idx.is_multiple_of(2);
             }
         }
         prev_end = Some(q.p2);
@@ -398,7 +398,7 @@ pub fn dash_quadratics_with_offset(
             if dash_remaining <= 1e-4 {
                 dash_idx = (dash_idx + 1) % pattern.len();
                 dash_remaining = pattern[dash_idx];
-                is_draw = dash_idx % 2 == 0;
+                is_draw = dash_idx.is_multiple_of(2);
                 if !is_draw && !current_dash.is_empty() {
                     out.push(std::mem::take(&mut current_dash));
                 }
@@ -421,7 +421,7 @@ pub fn dash_quadratics_with_offset(
                 }
                 dash_idx = (dash_idx + 1) % pattern.len();
                 dash_remaining = pattern[dash_idx];
-                is_draw = dash_idx % 2 == 0;
+                is_draw = dash_idx.is_multiple_of(2);
             }
         }
     }

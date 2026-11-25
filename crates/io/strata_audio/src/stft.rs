@@ -136,9 +136,9 @@ impl StftProcessor {
         self.plan.inverse(&mut self.spectrum);
 
         // Synthesis window + 50% overlap-add
-        for i in 0..h {
+        for (i, out) in output_hop.iter_mut().enumerate().take(h) {
             let synth_first = self.spectrum[i].re * self.window[i];
-            output_hop[i] = self.ola_tail[i] + synth_first;
+            *out = self.ola_tail[i] + synth_first;
             self.ola_tail[i] = self.spectrum[i + h].re * self.window[i + h];
         }
     }

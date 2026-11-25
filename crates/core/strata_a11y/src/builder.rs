@@ -220,7 +220,7 @@ impl A11yTreeBuilder {
                 // 3. Resolve Accessible Name:
                 //    non-empty `aria-label` -> non-empty `alt` -> non-empty child text -> non-empty `title`.
                 let non_empty = |opt: Option<String>| -> Option<String> {
-                    opt.and_then(|s| if s.trim().is_empty() { None } else { Some(s) })
+                    opt.filter(|s| !s.trim().is_empty())
                 };
                 let aria_label = non_empty(aria_label);
                 let alt_text = non_empty(alt_text);

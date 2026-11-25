@@ -294,6 +294,7 @@ const fn expected_data_bytes(status: u8) -> usize {
 
 /// Discovers native host MIDI 1.0 endpoints (Linux `/dev/snd/midi*` rawmidi; empty on headless CI).
 pub fn list_midi_ports() -> Vec<MidiPortInfo> {
+    #[allow(unused_mut)]
     let mut ports = Vec::new();
     #[cfg(target_os = "linux")]
     {

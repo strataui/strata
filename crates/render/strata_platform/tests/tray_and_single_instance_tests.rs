@@ -3,9 +3,11 @@
 
 use std::sync::{Arc, Mutex};
 use strata_platform::events::PlatformEvent;
+#[cfg(unix)]
 use strata_platform::single_instance::{SingleInstanceLock, SingleInstanceStatus};
 use strata_platform::tray::{TrayIcon, TrayMenu, TrayMenuItem};
 
+#[cfg(unix)]
 fn temp_runtime_dir(tag: &str) -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
 

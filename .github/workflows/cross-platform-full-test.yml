@@ -1,0 +1,61 @@
+name: Cross-Platform Full Coverage (Manual Only)
+
+# Strictly manual-only (`workflow_dispatch`): NEVER runs automatically on push,
+# pull_request, or schedule unless explicitly requested.
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  full-test-macos:
+    name: Full Coverage Test (macOS ARM64)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test minimal headless profile (strata-ui --no-default-features)
+        run: cargo test -p strata-ui --no-default-features
+
+      - name: Test full workspace (default features, all 22 publishable crates)
+        run: cargo test --workspace --exclude strata-parity-tauri
+
+      - name: Test full workspace (--all-features, all 22 publishable crates)
+        run: cargo test --workspace --exclude strata-parity-tauri --all-features
+
+      - name: Run showcase examples live (--features full-io)
+        run: |
+          cargo run -p strata-ui --example voice_studio_demo --features full-io
+          cargo run -p strata-ui --example universal_io_cockpit --features full-io
+
+  full-test-windows:
+    name: Full Coverage Test (Windows x86_64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test minimal headless profile (strata-ui --no-default-features)
+        run: cargo test -p strata-ui --no-default-features
+
+      - name: Test full workspace (default features, all 22 publishable crates)
+        run: cargo test --workspace --exclude strata-parity-tauri
+
+      - name: Test full workspace (--all-features, all 22 publishable crates)
+        run: cargo test --workspace --exclude strata-parity-tauri --all-features
+
+      - name: Run showcase examples live (--features full-io)
+        shell: pwsh
+        run: |
+          cargo run -p strata-ui --example voice_studio_demo --features full-io
+          cargo run -p strata-ui --example universal_io_cockpit --features full-io

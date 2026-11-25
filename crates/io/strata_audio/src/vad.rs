@@ -133,8 +133,8 @@ impl VoiceActivityDetector {
 
         // 2. Window & forward FFT (zero-padded or truncated to `fft_size`)
         let copy_len = frame.len().min(n);
-        for i in 0..copy_len {
-            self.spectrum[i] = Complex::new(frame[i] * self.window[i], 0.0);
+        for (i, sample) in frame.iter().copied().enumerate().take(copy_len) {
+            self.spectrum[i] = Complex::new(sample * self.window[i], 0.0);
         }
         for i in copy_len..n {
             self.spectrum[i] = Complex::zero();

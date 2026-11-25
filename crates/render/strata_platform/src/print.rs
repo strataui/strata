@@ -1,7 +1,9 @@
 //! Cross-platform native OS printer discovery and PDF print spooler dispatch
 //! (CUPS `lpstat`/`lp` on Linux & macOS, Win32 spooler hooks on Windows, and `MockPrintSpooler` for CI).
 
+#[cfg(unix)]
 use std::io::Write;
+#[cfg(unix)]
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -82,6 +84,7 @@ pub fn list_printers() -> Vec<PrinterInfo> {
         }];
     }
 
+    #[allow(unused_mut)]
     let mut printers = Vec::new();
     #[cfg(unix)]
     {

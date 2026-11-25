@@ -16,7 +16,8 @@ pub struct HidDeviceInfo {
 
 /// Discovers Raw HID endpoints on the host OS without `libudev`.
 pub fn list_hid_devices() -> Vec<HidDeviceInfo> {
-    let mut out = Vec::new();
+    #[allow(unused_mut)]
+    let mut out: Vec<HidDeviceInfo> = Vec::new();
     #[cfg(target_os = "linux")]
     {
         if let Ok(entries) = std::fs::read_dir("/sys/class/hidraw") {

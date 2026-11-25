@@ -302,11 +302,7 @@ impl<W: Write + Seek> WavWriter<W> {
     /// Returns total sample frames written so far.
     pub fn frames_written(&self) -> u64 {
         let stride = self.channels as u64 * self.format.bytes_per_sample() as u64;
-        if stride == 0 {
-            0
-        } else {
-            self.data_bytes_written / stride
-        }
+        self.data_bytes_written.checked_div(stride).unwrap_or(0)
     }
 
     /// Returns total recorded duration in seconds.

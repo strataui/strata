@@ -400,7 +400,7 @@ fn test_dynamics_agc_limiter_gate_deesser_eq_and_voice_pipeline() {
     let speech = synthesize_formant_speech(sr, 4800);
     let mut out = vec![0.0f32; 480];
     let mut stats = Default::default();
-    for chunk in speech.chunks_exact(480) {
+    for chunk in speech.as_chunks::<480>().0 {
         stats = pipe.process_frame(chunk, None, &mut out);
         assert!(out.iter().all(|s| s.is_finite()));
     }

@@ -1,9 +1,6 @@
 //! Integration tests for Operating System IME (Input Method Editor) and CJK text composition.
 
-use strata_platform::{
-    gtk_reset_ime, gtk_set_ime_cursor_location, gtk_set_ime_surrounding_text, MockPlatformWindow,
-    PlatformEvent, PlatformWindow, WindowConfig,
-};
+use strata_platform::{MockPlatformWindow, PlatformEvent, PlatformWindow, WindowConfig};
 
 #[test]
 fn test_ime_platform_event_variants() {
@@ -55,8 +52,12 @@ fn test_mock_platform_window_ime_lifecycle() {
     assert_eq!(win.ime_surrounding, None);
 }
 
+#[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 #[test]
 fn test_gtk_ime_api_safe_execution() {
+    use strata_platform::{
+        gtk_reset_ime, gtk_set_ime_cursor_location, gtk_set_ime_surrounding_text,
+    };
     // Calling GTK IME helpers safely even without an active GTK window
     gtk_set_ime_cursor_location(100, 200, 2, 16);
     gtk_set_ime_surrounding_text("Beijing Shanghai", 7);

@@ -1683,6 +1683,7 @@ impl LayoutNode {
 
     /// Stores a measurement probe result in slot `0` (Pass 1) or `1` (Pass 2).
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn store_measure_cache(
         &mut self,
         slot_idx: usize,

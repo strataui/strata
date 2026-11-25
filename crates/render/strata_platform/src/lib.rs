@@ -325,10 +325,12 @@ pub use surface::{
     FramePacer, PresentError, PresentMode, RefreshRate, SoftwareSurfacePresenter, SurfaceConfig,
     SurfaceHandle, SurfacePresenter, SwapchainCompositor, SwapchainFormat,
 };
+#[cfg(target_os = "linux")]
+pub use tray::DbusStatusNotifier;
 pub use tray::{
-    clear_delivered_notifications, get_delivered_notifications, DbusStatusNotifier,
-    DesktopNotification, NativeTrayHandle, TrayEvent, TrayEventChannel, TrayEventReceiver,
-    TrayEventSink, TrayIcon, TrayMenu, TrayMenuItem,
+    clear_delivered_notifications, get_delivered_notifications, DesktopNotification,
+    NativeTrayHandle, TrayEvent, TrayEventChannel, TrayEventReceiver, TrayEventSink, TrayIcon,
+    TrayMenu, TrayMenuItem,
 };
 pub use vibrancy::{apply_vibrancy, clear_vibrancy, VibrancyConfig, VibrancyEffect, VibrancyError};
 #[cfg(target_os = "linux")]

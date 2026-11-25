@@ -346,9 +346,9 @@ impl EchoCanceller {
         // 5. Update adaptive filter weights (frozen during double-talk or far-end silence)
         if far_block_power > 1e-7 && !is_dt {
             // Overlap-save zero-padded error vector: `[0..b, e[0..b]]`
-            for i in 0..b {
+            for (i, sample) in out_blk.iter().copied().enumerate().take(b) {
                 self.err_freq[i] = Complex::zero();
-                self.err_freq[b + i] = Complex::new(out_blk[i], 0.0);
+                self.err_freq[b + i] = Complex::new(sample, 0.0);
             }
             self.plan.forward(&mut self.err_freq);
 

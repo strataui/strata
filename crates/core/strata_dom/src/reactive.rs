@@ -2233,10 +2233,13 @@ impl<T: HmrCodec> HmrCodec for Vec<T> {
     }
 }
 
+type HmrExportFn = Box<dyn Fn() -> Vec<u8>>;
+type HmrImportFn = Box<dyn Fn(&[u8]) -> bool>;
+
 struct HmrLiveSlot {
     type_name: String,
-    export: Box<dyn Fn() -> Vec<u8>>,
-    import: Box<dyn Fn(&[u8]) -> bool>,
+    export: HmrExportFn,
+    import: HmrImportFn,
 }
 
 #[derive(Default)]

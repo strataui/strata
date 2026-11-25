@@ -291,7 +291,7 @@ impl NoiseSuppressor {
             // 2. MCRA adaptive noise floor tracking.
             // Fast bootstrap over the first 6 frames (~32-48 ms) locks onto ambient noise quickly.
             let alpha_s = 0.80f32;
-            let reset_min = f_idx > 0 && (f_idx % min_window_frames == 0);
+            let reset_min = f_idx > 0 && f_idx.is_multiple_of(min_window_frames);
             let mut total_sig_power = 0.0f32;
             let mut total_noise_power = 0.0f32;
             let mut hf_energy = 0.0f32;

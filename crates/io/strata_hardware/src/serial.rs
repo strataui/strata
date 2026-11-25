@@ -69,7 +69,8 @@ pub struct SerialPortInfo {
 
 /// Discovers physical UART and USB-serial ports on the host OS without `libudev`.
 pub fn list_serial_ports() -> Vec<SerialPortInfo> {
-    let mut ports = Vec::new();
+    #[allow(unused_mut)]
+    let mut ports: Vec<SerialPortInfo> = Vec::new();
     #[cfg(target_os = "linux")]
     {
         if let Ok(entries) = std::fs::read_dir("/dev") {

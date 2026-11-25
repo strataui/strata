@@ -444,11 +444,10 @@ pub fn parse_ip_geolocation_json(json_str: &str) -> Option<GeoCoordinates> {
         val.get("lon").and_then(json_to_f64),
     ) {
         (la, lo)
-    } else if let Some(loc) = val.get("loc").and_then(|v| v.as_str()) {
+    } else {
+        let loc = val.get("loc").and_then(|v| v.as_str())?;
         let (a, b) = loc.split_once(',')?;
         (a.trim().parse().ok()?, b.trim().parse().ok()?)
-    } else {
-        return None;
     };
 
     if !is_valid_lat_lon(lat, lon) || (lat.abs() < 1e-6 && lon.abs() < 1e-6) {

@@ -37,36 +37,6 @@ jobs:
       - name: Run test suite
         run: cargo test --workspace
 
-  check-windows:
-    name: Check (Windows x86_64)
-    runs-on: windows-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Check workspace
-        run: cargo check --workspace --all-targets
-
-  check-macos:
-    name: Check (macOS ARM64)
-    runs-on: macos-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Check workspace
-        run: cargo check --workspace --all-targets
-
   cross-check-mobile:
     name: Cross-Check (Android aarch64)
     runs-on: ubuntu-latest

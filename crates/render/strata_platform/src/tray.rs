@@ -304,6 +304,7 @@ impl TrayEventReceiver {
 }
 
 /// Pure-Rust Linux D-Bus StatusNotifierItem daemon registration.
+#[cfg(target_os = "linux")]
 pub struct DbusStatusNotifier {
     pub service_name: String,
     pub title: String,
@@ -311,6 +312,7 @@ pub struct DbusStatusNotifier {
     pub client: Option<crate::dbus::DbusClient>,
 }
 
+#[cfg(target_os = "linux")]
 impl DbusStatusNotifier {
     /// Creates and registers an authentic `org.kde.StatusNotifierItem` over session D-Bus.
     pub fn register(title: &str, icon_name: &str) -> Result<Self, String> {
@@ -1299,7 +1301,7 @@ mod macos_backend {
     extern "C" {
         fn objc_getClass(name: *const c_char) -> *mut c_void;
         fn sel_registerName(name: *const c_char) -> *mut c_void;
-        fn objc_msgSend(receiver: *mut c_void, op: *mut c_void, ...) -> *mut c_void;
+        fn objc_msgSend();
     }
 
     pub struct LiveStatusItem {

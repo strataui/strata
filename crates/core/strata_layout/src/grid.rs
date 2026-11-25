@@ -728,21 +728,11 @@ pub fn solve_grid_with_subgrid_guarded(
             child.compute_layout_guarded(span_width, span_height, None, 0.0, cg);
 
             let stretch_w = if child.style.width == strata_style::types::Dimension::Auto
-                && child.geometry.border_box.width > item_w + 0.5
-            {
-                clamp_dimension_with_node(
-                    item_w,
-                    child.style.min_width,
-                    child.style.max_width,
-                    span_width,
-                    child,
-                )
-            } else if child.style.width == strata_style::types::Dimension::Auto
-                && matches!(
-                    child.style.display,
-                    Display::Block | Display::Flex | Display::Grid | Display::Table
-                )
-                && child.geometry.border_box.width < item_w
+                && (child.geometry.border_box.width > item_w + 0.5
+                    || (matches!(
+                        child.style.display,
+                        Display::Block | Display::Flex | Display::Grid | Display::Table
+                    ) && child.geometry.border_box.width < item_w))
             {
                 clamp_dimension_with_node(
                     item_w,

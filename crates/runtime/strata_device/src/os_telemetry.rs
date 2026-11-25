@@ -5,7 +5,9 @@
 
 use crate::mock::{DeviceMockController, DeviceTelemetrySnapshot};
 use crate::types::*;
+#[cfg(target_os = "linux")]
 use std::fs;
+#[cfg(target_os = "linux")]
 use std::path::Path;
 
 /// Probes active hardware telemetry from the host operating system.

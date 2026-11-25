@@ -5,6 +5,7 @@
 use strata_platform::csd::{ControlPlacement, CsdController, CsdGeometry, CsdHitZone};
 use strata_platform::events::PlatformEvent;
 use strata_platform::raw_abi::cocoa::{CvReturn, CvTimeStamp, NsRect, K_CV_RETURN_SUCCESS};
+#[cfg(target_os = "linux")]
 use strata_platform::raw_abi::wayland::WaylandHeader;
 use strata_platform::raw_abi::win32::{Point, Rect};
 use strata_platform::tray::{

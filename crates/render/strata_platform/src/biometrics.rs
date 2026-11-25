@@ -93,10 +93,13 @@ pub fn probe_biometric_capability() -> BiometricCapability {
         };
     }
 
-    BiometricCapability {
-        available: false,
-        kind: BiometricKind::Unavailable,
-        backend: "Unavailable".into(),
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        BiometricCapability {
+            available: false,
+            kind: BiometricKind::Unavailable,
+            backend: "Unavailable".into(),
+        }
     }
 }
 
