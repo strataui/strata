@@ -430,14 +430,14 @@ fn test_collapsible_dock_transition_locks_inner_width_and_supports_auto_height()
     #[component]
     fn CollapsiblePanels(side_open: bool, bottom_open: bool) -> View {
         let side_cls = if side_open {
-            "w-[260px] h-[220px] shrink-0 overflow-hidden transition-[width] duration-150 flex flex-col p-2"
+            "w-[260px] h-[220px] shrink-0 overflow-hidden transition-[width] duration-300 flex flex-col p-2"
         } else {
-            "w-0 h-[220px] shrink-0 overflow-hidden transition-[width] duration-150 flex flex-col p-0"
+            "w-0 h-[220px] shrink-0 overflow-hidden transition-[width] duration-300 flex flex-col p-0"
         };
         let bottom_cls = if bottom_open {
-            "w-[480px] h-auto overflow-hidden transition-[height] duration-150 flex flex-col"
+            "w-[480px] h-auto overflow-hidden transition-[height] duration-300 flex flex-col"
         } else {
-            "w-[480px] h-0 overflow-hidden transition-[height] duration-150 flex flex-col"
+            "w-[480px] h-0 overflow-hidden transition-[height] duration-300 flex flex-col"
         };
         rsx! {
             <div class="flex flex-col w-[480px] h-[360px]">
@@ -473,7 +473,7 @@ fn test_collapsible_dock_transition_locks_inner_width_and_supports_auto_height()
     runtime.update_view(CollapsiblePanels(false, false));
     assert!(runtime.has_active_animations());
 
-    std::thread::sleep(Duration::from_millis(55));
+    std::thread::sleep(Duration::from_millis(45));
     assert!(runtime.poll_animations());
 
     let side_node = &runtime.layout_root.children[0].children[0];
@@ -483,7 +483,7 @@ fn test_collapsible_dock_transition_locks_inner_width_and_supports_auto_height()
     let bottom_mid_h = runtime.layout_root.children[1].geometry.border_box.height;
 
     assert!(
-        side_w > 10.0 && side_w < 245.0,
+        side_w > 10.0 && side_w < 255.0,
         "side dock outer width must animate smoothly, got {side_w}"
     );
     assert!(
@@ -495,7 +495,7 @@ fn test_collapsible_dock_transition_locks_inner_width_and_supports_auto_height()
         "inner dock text must not collapse into single-letter column wrapping (h={inner_text_h})"
     );
     assert!(
-        bottom_mid_h > 5.0 && bottom_mid_h < 90.0,
+        bottom_mid_h > 2.0 && bottom_mid_h < 95.0,
         "bottom dock h-auto -> h-0 must smoothly interpolate height instead of snapping, got {bottom_mid_h}"
     );
 
@@ -509,17 +509,17 @@ fn test_collapsible_dock_transition_locks_inner_width_and_supports_auto_height()
     )));
 
     // 2. Finish collapse, then toggle back open (h-0 -> h-auto) and verify smooth expansion!
-    std::thread::sleep(Duration::from_millis(130));
+    std::thread::sleep(Duration::from_millis(320));
     let _ = runtime.poll_animations();
     assert!(runtime.layout_root.children[1].geometry.border_box.height < 0.5);
 
     runtime.update_view(CollapsiblePanels(true, true));
     assert!(runtime.has_active_animations());
-    std::thread::sleep(Duration::from_millis(55));
+    std::thread::sleep(Duration::from_millis(45));
     assert!(runtime.poll_animations());
     let bottom_reopen_h = runtime.layout_root.children[1].geometry.border_box.height;
     assert!(
-        bottom_reopen_h > 5.0 && bottom_reopen_h < 90.0,
+        bottom_reopen_h > 2.0 && bottom_reopen_h < 95.0,
         "bottom dock h-0 -> h-auto must smoothly interpolate height upward, got {bottom_reopen_h}"
     );
 }

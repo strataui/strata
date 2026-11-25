@@ -14,6 +14,7 @@ jobs:
   full-test-macos:
     name: Full Coverage Test (macOS ARM64)
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -38,6 +39,7 @@ jobs:
   full-test-windows:
     name: Full Coverage Test (Windows x86_64)
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

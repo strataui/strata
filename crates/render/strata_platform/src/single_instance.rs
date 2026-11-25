@@ -410,10 +410,14 @@ impl Drop for SingleInstanceLock {
         #[cfg(windows)]
         {
             windows_ipc::unblock_server(&self.app_id);
-            windows_ipc::close(self.pipe_handle);
+            windows_ipc::cancel_io(self.pipe_handle);
         }
         if let Some(thread) = self.listener_thread.take() {
             let _ = thread.join();
+        }
+        #[cfg(windows)]
+        {
+            windows_ipc::close(self.pipe_handle);
         }
     }
 }
@@ -438,11 +442,14 @@ mod windows_ipc {
     const PIPE_TYPE_BYTE: u32 = 0x0000_0000;
     const PIPE_READMODE_BYTE: u32 = 0x0000_0000;
     const PIPE_WAIT: u32 = 0x0000_0000;
+    const PIPE_REJECT_REMOTE_CLIENTS: u32 = 0x0000_0008;
     const PIPE_UNLIMITED_INSTANCES: u32 = 255;
     const GENERIC_WRITE: u32 = 0x4000_0000;
     const OPEN_EXISTING: u32 = 3;
     const ERROR_PIPE_BUSY: u32 = 231;
     const ERROR_PIPE_CONNECTED: u32 = 535;
+    const TOKEN_QUERY: u32 = 0x0008;
+    const TOKEN_USER_INFO_CLASS: u32 = 1;
     const BUFFER_SIZE: u32 = 8192;
 
     #[link(name = "kernel32")]
@@ -482,6 +489,8 @@ mod windows_ipc {
             flags_and_attributes: u32,
             template_file: Handle,
         ) -> Handle;
+        fn CancelIoEx(file: Handle, overlapped: *mut c_void) -> i32;
+        fn GetCurrentProcess() -> Handle;
         fn CloseHandle(object: Handle) -> i32;
         fn GetLastError() -> u32;
         fn LocalFree(h_mem: *mut c_void) -> *mut c_void;
@@ -489,12 +498,93 @@ mod windows_ipc {
 
     #[link(name = "advapi32")]
     extern "system" {
+        fn OpenProcessToken(
+            process_handle: Handle,
+            desired_access: u32,
+            token_handle: *mut Handle,
+        ) -> i32;
+        fn GetTokenInformation(
+            token_handle: Handle,
+            token_information_class: u32,
+            token_information: *mut c_void,
+            token_information_length: u32,
+            return_length: *mut u32,
+        ) -> i32;
+        fn ConvertSidToStringSidW(sid: *mut c_void, string_sid: *mut *mut u16) -> i32;
         fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
             string_security_descriptor: *const u16,
             string_sd_revision: u32,
             security_descriptor: *mut *mut c_void,
             security_descriptor_size: *mut u32,
         ) -> i32;
+    }
+
+    #[repr(C)]
+    struct TokenUserHeader {
+        sid: *mut c_void,
+        attributes: u32,
+    }
+
+    /// Queries the current process user SID string (e.g. `S-1-5-21-...`) for strict per-user pipe DACL.
+    fn current_user_sid_string() -> Option<String> {
+        let mut token: Handle = std::ptr::null_mut();
+        let ok = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
+        if ok == 0 || token.is_null() {
+            return None;
+        }
+        let mut needed: u32 = 0;
+        unsafe {
+            GetTokenInformation(
+                token,
+                TOKEN_USER_INFO_CLASS,
+                std::ptr::null_mut(),
+                0,
+                &mut needed,
+            );
+        }
+        if needed == 0 {
+            unsafe {
+                CloseHandle(token);
+            }
+            return None;
+        }
+        let mut buf = vec![0u8; needed as usize];
+        let info_ok = unsafe {
+            GetTokenInformation(
+                token,
+                TOKEN_USER_INFO_CLASS,
+                buf.as_mut_ptr() as *mut c_void,
+                needed,
+                &mut needed,
+            )
+        };
+        unsafe {
+            CloseHandle(token);
+        }
+        if info_ok == 0 || buf.len() < std::mem::size_of::<TokenUserHeader>() {
+            return None;
+        }
+        let header = unsafe { &*(buf.as_ptr() as *const TokenUserHeader) };
+        if header.sid.is_null() {
+            return None;
+        }
+        let mut sid_wide: *mut u16 = std::ptr::null_mut();
+        let conv_ok = unsafe { ConvertSidToStringSidW(header.sid, &mut sid_wide) };
+        if conv_ok == 0 || sid_wide.is_null() {
+            return None;
+        }
+        let mut len = 0usize;
+        unsafe {
+            while *sid_wide.add(len) != 0 {
+                len += 1;
+            }
+        }
+        let slice = unsafe { std::slice::from_raw_parts(sid_wide, len) };
+        let result = String::from_utf16_lossy(slice);
+        unsafe {
+            LocalFree(sid_wide as *mut c_void);
+        }
+        Some(result)
     }
 
     fn pipe_name(app_id: &str) -> Vec<u16> {
@@ -569,39 +659,47 @@ mod windows_ipc {
     pub(super) fn create_server(app_id: &str) -> Option<usize> {
         let name = pipe_name(app_id);
 
-        // Enforce explicit Win32 DACL: Allow Generic All strictly to Principal Self (PS) / Owner
-        let sddl = "D:(A;;GA;;;PS)\0".encode_utf16().collect::<Vec<u16>>();
+        // Enforce explicit Win32 DACL granting Generic All strictly to the current user SID.
         let mut p_sd: *mut c_void = std::ptr::null_mut();
-        let mut sd_size = 0u32;
-        let has_sd = unsafe {
-            ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                sddl.as_ptr(),
-                1, // SDDL_REVISION_1
-                &mut p_sd,
-                &mut sd_size,
-            )
-        };
+        if let Some(user_sid) = current_user_sid_string() {
+            let sddl = format!("D:(A;;GA;;;{})\0", user_sid)
+                .encode_utf16()
+                .collect::<Vec<u16>>();
+            let mut sd_size = 0u32;
+            let has_sd = unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    sddl.as_ptr(),
+                    1, // SDDL_REVISION_1
+                    &mut p_sd,
+                    &mut sd_size,
+                )
+            };
+            if has_sd == 0 {
+                p_sd = std::ptr::null_mut();
+            }
+        }
 
         let mut sa = SecurityAttributes {
             n_length: std::mem::size_of::<SecurityAttributes>() as u32,
-            lp_security_descriptor: if has_sd != 0 {
-                p_sd
-            } else {
-                std::ptr::null_mut()
-            },
+            lp_security_descriptor: p_sd,
             b_inherit_handle: 0,
+        };
+        let sa_ptr = if p_sd.is_null() {
+            std::ptr::null_mut()
+        } else {
+            &mut sa as *mut _ as *mut c_void
         };
 
         let handle = unsafe {
             CreateNamedPipeW(
                 name.as_ptr(),
                 PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 PIPE_UNLIMITED_INSTANCES,
                 BUFFER_SIZE,
                 BUFFER_SIZE,
                 0,
-                &mut sa as *mut _ as *mut c_void,
+                sa_ptr,
             )
         };
 
@@ -615,6 +713,14 @@ mod windows_ipc {
             None
         } else {
             Some(handle as usize)
+        }
+    }
+
+    pub(super) fn cancel_io(handle: usize) {
+        if handle != 0 {
+            unsafe {
+                CancelIoEx(to_handle(handle), std::ptr::null_mut());
+            }
         }
     }
 
