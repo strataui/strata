@@ -88,7 +88,7 @@ fn test_font_database_lookup_and_styled_measurement() {
     let regular = db.query_font("dejavu sans", FontWeight::Normal, FontStyle::Normal);
     let bold = db.query_font("dejavu sans", FontWeight::Bold, FontStyle::Normal);
 
-    if let (Some(reg_f), Some(bold_f)) = (regular, bold) {
+    if let (Some(reg_f), Some(bold_f)) = (regular.as_ref(), bold.as_ref()) {
         assert_eq!(reg_f.weight_class, 400);
         assert_eq!(bold_f.weight_class, 700);
     }
