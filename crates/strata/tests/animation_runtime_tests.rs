@@ -396,7 +396,7 @@ fn test_transition_width_to_zero_and_rem_reflows_flex_siblings_smoothly() {
         "transition-[width] must start a width transition from w-60 to w-0"
     );
 
-    std::thread::sleep(Duration::from_millis(45));
+    std::thread::sleep(Duration::from_millis(120));
     assert!(runtime.poll_animations());
     let dock_mid_w = runtime.layout_root.children[0].geometry.border_box.width;
     let main_mid = runtime.layout_root.children[1].geometry.border_box;
@@ -411,7 +411,7 @@ fn test_transition_width_to_zero_and_rem_reflows_flex_siblings_smoothly() {
     );
 
     // Finish transition and verify sibling settles to full 480px width.
-    std::thread::sleep(Duration::from_millis(520));
+    std::thread::sleep(Duration::from_millis(460));
     let _ = runtime.poll_animations();
     let dock_end_w = runtime.layout_root.children[0].geometry.border_box.width;
     let main_end = runtime.layout_root.children[1].geometry.border_box;
@@ -473,7 +473,7 @@ fn test_collapsible_dock_transition_locks_inner_width_and_supports_auto_height()
     runtime.update_view(CollapsiblePanels(false, false));
     assert!(runtime.has_active_animations());
 
-    std::thread::sleep(Duration::from_millis(45));
+    std::thread::sleep(Duration::from_millis(85));
     assert!(runtime.poll_animations());
 
     let side_node = &runtime.layout_root.children[0].children[0];
@@ -509,13 +509,13 @@ fn test_collapsible_dock_transition_locks_inner_width_and_supports_auto_height()
     )));
 
     // 2. Finish collapse, then toggle back open (h-0 -> h-auto) and verify smooth expansion!
-    std::thread::sleep(Duration::from_millis(320));
+    std::thread::sleep(Duration::from_millis(280));
     let _ = runtime.poll_animations();
     assert!(runtime.layout_root.children[1].geometry.border_box.height < 0.5);
 
     runtime.update_view(CollapsiblePanels(true, true));
     assert!(runtime.has_active_animations());
-    std::thread::sleep(Duration::from_millis(45));
+    std::thread::sleep(Duration::from_millis(85));
     assert!(runtime.poll_animations());
     let bottom_reopen_h = runtime.layout_root.children[1].geometry.border_box.height;
     assert!(

@@ -293,7 +293,7 @@ fn test_mounted_style_element_cascade_and_ancestor_hover_descendant_selector() {
 fn StationaryHoverTransitionApp() -> View {
     rsx! {
         <div class="flex flex-col w-[300px] h-[200px]">
-            <button class="w-[140px] h-[44px] bg-[#1e293b] hover:bg-[#38bdf8] transition-colors duration-150">
+            <button class="w-[140px] h-[44px] bg-[#1e293b] hover:bg-[#38bdf8] transition-colors duration-500">
                 "Hover Me"
             </button>
         </div>
@@ -325,8 +325,8 @@ fn test_stationary_hover_transition_tick_loop_advances_to_completion() {
         "LayoutNode::has_active_transitions must propagate true up to root"
     );
 
-    // Simulate stationary pointer: advance time ~45ms and fire AnimationTick without MouseMove
-    std::thread::sleep(Duration::from_millis(45));
+    // Simulate stationary pointer: advance time ~120ms and fire AnimationTick without MouseMove
+    std::thread::sleep(Duration::from_millis(120));
     assert!(
         runtime.step_event(&PlatformEvent::AnimationTick),
         "AnimationTick must request redraw while hover transition is interpolating"
@@ -344,8 +344,8 @@ fn test_stationary_hover_transition_tick_loop_advances_to_completion() {
         target_c
     );
 
-    // Advance past 150ms duration and verify completion + idle sleep
-    std::thread::sleep(Duration::from_millis(140));
+    // Advance past 500ms duration and verify completion + idle sleep
+    std::thread::sleep(Duration::from_millis(460));
     let _ = runtime.step_event(&PlatformEvent::AnimationTick);
 
     assert_eq!(
@@ -371,7 +371,7 @@ fn test_stationary_hover_transition_tick_loop_advances_to_completion() {
 fn SvgCurrentColorButtonApp() -> View {
     rsx! {
         <div class="flex flex-col w-[300px] h-[200px]">
-            <button class="w-[120px] h-[48px] text-[#94a3b8] hover:text-[#38bdf8] transition-colors duration-150">
+            <button class="w-[120px] h-[48px] text-[#94a3b8] hover:text-[#38bdf8] transition-colors duration-500">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M5 12h14" />
                     <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />
@@ -429,7 +429,7 @@ fn test_svg_current_color_inherits_and_interpolates_with_parent_transition() {
 
     // Hover button and check mid-transition SVG colors
     assert!(runtime.update_hover(40.0, 24.0));
-    std::thread::sleep(Duration::from_millis(45));
+    std::thread::sleep(Duration::from_millis(120));
     assert!(runtime.poll_animations());
     runtime.compile_display_list();
 
@@ -448,7 +448,7 @@ fn test_svg_current_color_inherits_and_interpolates_with_parent_transition() {
     assert!(btn_mid_c.b > base_c.b && btn_mid_c.b < hover_c.b);
 
     // Settle transition
-    std::thread::sleep(Duration::from_millis(140));
+    std::thread::sleep(Duration::from_millis(460));
     let _ = runtime.poll_animations();
     runtime.compile_display_list();
     let (s1, f1) = extract_svg_stroke_and_fill(&runtime.display_list);
