@@ -146,30 +146,13 @@ fn test_massive_component_tree_scroll_performance() {
         num_scroll_ticks as f32 * 60.0
     );
 
-    // Verify Cairo rendering with frustum culling on scrolled 10,000-node DOM
-    let surface = strata_platform::cairo::ImageSurface::create(
-        strata_platform::cairo::Format::ARgb32,
-        1280,
-        800,
-    )
-    .unwrap();
-    let cr = strata_platform::cairo::Context::new(&surface).unwrap();
-
     let t_compile_start = Instant::now();
     runtime.compile_display_list();
     let compile_duration = t_compile_start.elapsed();
 
-    let t_cairo_start = Instant::now();
-    strata_platform::render_display_list_to_cairo(&cr, &runtime.display_list);
-    let cairo_render_duration = t_cairo_start.elapsed();
-
     println!(
         "Display list compilation (10,000+ nodes): {:?}",
         compile_duration
-    );
-    println!(
-        "Cairo rasterization with Frustum Culling:    {:?}",
-        cairo_render_duration
     );
     println!(
         "Compiled display list command count:        {}",
@@ -183,12 +166,33 @@ fn test_massive_component_tree_scroll_performance() {
         runtime.display_list.commands.len()
     );
 
-    // Culled Cairo rendering of the visible viewport must complete in under 50 ms in debug mode (< 4 ms in release mode)!
-    assert!(
-        cairo_render_duration.as_millis() < 50,
-        "Culled Cairo rendering must complete in < 50 ms in debug mode, took {:?}",
-        cairo_render_duration
-    );
+    // Verify Cairo rendering with frustum culling on scrolled 10,000-node DOM (Linux GTK/Cairo)
+    #[cfg(target_os = "linux")]
+    {
+        let surface = strata_platform::cairo::ImageSurface::create(
+            strata_platform::cairo::Format::ARgb32,
+            1280,
+            800,
+        )
+        .unwrap();
+        let cr = strata_platform::cairo::Context::new(&surface).unwrap();
+
+        let t_cairo_start = Instant::now();
+        strata_platform::render_display_list_to_cairo(&cr, &runtime.display_list);
+        let cairo_render_duration = t_cairo_start.elapsed();
+
+        println!(
+            "Cairo rasterization with Frustum Culling:    {:?}",
+            cairo_render_duration
+        );
+
+        // Culled Cairo rendering of the visible viewport must complete in under 50 ms in debug mode (< 4 ms in release mode)!
+        assert!(
+            cairo_render_duration.as_millis() < 50,
+            "Culled Cairo rendering must complete in < 50 ms in debug mode, took {:?}",
+            cairo_render_duration
+        );
+    }
 }
 
 #[test]
