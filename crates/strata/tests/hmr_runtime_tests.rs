@@ -52,14 +52,10 @@ fn test_hmr_runtime_controller_ipc_ping_and_missing_patch_preserves_runtime_stat
     clear_persistent_signals();
     clear_hmr_signals();
 
-    let sock = std::env::temp_dir().join(format!(
-        "strata_runtime_hmr_test_{}_{}.sock",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    #[cfg(unix)]
+    let sock = std::path::PathBuf::from("/tmp").join(format!("s_hmr_rt_{}.sock", std::process::id()));
+    #[cfg(not(unix))]
+    let sock = std::env::temp_dir().join(format!("s_hmr_rt_{}.sock", std::process::id()));
 
     let mut ctrl = HmrRuntimeController::bind(&sock, || {}).unwrap();
     let mut runtime = AppRuntime::from_root(

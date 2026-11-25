@@ -8,17 +8,15 @@ use strata_platform::single_instance::{SingleInstanceLock, SingleInstanceStatus}
 use strata_platform::tray::{TrayIcon, TrayMenu, TrayMenuItem};
 
 #[cfg(unix)]
-fn temp_runtime_dir(tag: &str) -> std::path::PathBuf {
+fn temp_runtime_dir(_tag: &str) -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "strata-single-instance-{}-{}-{}",
-        std::process::id(),
-        tag,
-        sequence
-    ))
+    // Use /tmp with a short prefix so Unix domain socket paths stay well below
+    // macOS's 104-byte sockaddr_un.sun_path (SUN_LEN) limit (std::env::temp_dir()
+    // on macOS expands to a ~49-byte /var/folders/.../T/ path).
+    std::path::PathBuf::from("/tmp").join(format!("si-{}-{}", std::process::id(), sequence))
 }
 
 #[cfg(unix)]

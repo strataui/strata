@@ -201,7 +201,8 @@ fn test_to_physical_path_never_panics_on_security_violation() {
     let valid_path = app_data().join("valid_subfile.txt");
     let resolved = strata_vfs::driver::to_physical_path(&valid_path);
     assert!(resolved.is_ok());
-    assert_eq!(resolved.unwrap(), test_dir.join("valid_subfile.txt"));
+    let expected_dir = std::fs::canonicalize(&test_dir).unwrap_or_else(|_| test_dir.clone());
+    assert_eq!(resolved.unwrap(), expected_dir.join("valid_subfile.txt"));
 
     #[cfg(unix)]
     {

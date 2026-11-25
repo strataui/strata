@@ -14,10 +14,10 @@ fn test_mcp_bridge_socket_security_permissions_and_peercred() {
         "Default socket path must be user-isolated: {default_str}"
     );
 
-    // Test with a private test directory
-    let test_dir = std::env::temp_dir().join(format!("strata_mcp_test_{}", std::process::id()));
+    // Test with a private test directory (use /tmp to stay well below macOS 104-byte SUN_LEN)
+    let test_dir = std::path::PathBuf::from("/tmp").join(format!("s_mcp_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&test_dir);
-    let socket_path = test_dir.join("mcp_test.sock");
+    let socket_path = test_dir.join("mcp.sock");
 
     start_mcp_dev_listener(Some(socket_path.clone())).expect("Failed to start MCP listener");
 

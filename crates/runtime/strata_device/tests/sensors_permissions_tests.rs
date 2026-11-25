@@ -23,7 +23,11 @@ fn mock_hr_provider() -> Option<u16> {
 fn test_iio_proximity_hinge_angle_pedometer_and_proc_net_wireless_parsers() {
     let dir = std::env::temp_dir().join("strata_device_phase8_iio_test");
     let _ = fs::remove_dir_all(&dir);
-    let dev0 = dir.join("iio:device0");
+    let dev0 = dir.join(if cfg!(windows) {
+        "iio_device0"
+    } else {
+        "iio:device0"
+    });
     fs::create_dir_all(&dev0).unwrap();
 
     fs::write(dev0.join("in_proximity_raw"), "3.2\n").unwrap();

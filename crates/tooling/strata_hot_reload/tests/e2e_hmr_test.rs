@@ -68,14 +68,10 @@ fn test_directory_watcher_detects_src_and_ignores_target() {
 
 #[test]
 fn test_hmr_ipc_server_client_roundtrip() {
-    let sock = std::env::temp_dir().join(format!(
-        "strata_hmr_ipc_test_{}_{}.sock",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    #[cfg(unix)]
+    let sock = std::path::PathBuf::from("/tmp").join(format!("s_hmr_ipc_{}.sock", std::process::id()));
+    #[cfg(not(unix))]
+    let sock = std::env::temp_dir().join(format!("s_hmr_ipc_{}.sock", std::process::id()));
     let notified = Arc::new(AtomicBool::new(false));
     let notified_cb = notified.clone();
 
