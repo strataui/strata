@@ -447,6 +447,7 @@ mod windows_ipc {
     const GENERIC_WRITE: u32 = 0x4000_0000;
     const OPEN_EXISTING: u32 = 3;
     const ERROR_PIPE_BUSY: u32 = 231;
+    const ERROR_NO_DATA: u32 = 232;
     const ERROR_PIPE_CONNECTED: u32 = 535;
     const TOKEN_QUERY: u32 = 0x0008;
     const TOKEN_USER_INFO_CLASS: u32 = 1;
@@ -480,6 +481,7 @@ mod windows_ipc {
             bytes_written: *mut u32,
             overlapped: *mut c_void,
         ) -> i32;
+        fn FlushFileBuffers(file: Handle) -> i32;
         fn CreateFileW(
             name: *const u16,
             desired_access: u32,
@@ -642,6 +644,11 @@ mod windows_ipc {
                         std::ptr::null_mut(),
                     )
                 };
+                if ok != 0 {
+                    unsafe {
+                        FlushFileBuffers(handle);
+                    }
+                }
                 unsafe {
                     CloseHandle(handle);
                 }
@@ -762,7 +769,7 @@ mod windows_ipc {
                     let connected = unsafe { ConnectNamedPipe(pipe, std::ptr::null_mut()) };
                     if connected == 0 {
                         let error = unsafe { GetLastError() };
-                        if error != ERROR_PIPE_CONNECTED {
+                        if error != ERROR_PIPE_CONNECTED && error != ERROR_NO_DATA {
                             break;
                         }
                     }
