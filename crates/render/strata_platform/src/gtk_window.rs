@@ -1414,7 +1414,9 @@ fn rasterize_scene_3d_to_cairo_surface(
     let mut surface =
         cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32).ok()?;
     #[cfg(feature = "wgpu-backend")]
-    if scene.retained_handle().is_some() || scene.retained_terrain().is_some() {
+    if !IS_CLOSING.with(|c| c.get())
+        && (scene.retained_handle().is_some() || scene.retained_terrain().is_some())
+    {
         if let Some(bgra) =
             crate::wgpu_surface::render_scene_3d_wgpu_bgra(scene, w as u32, h as u32)
         {
@@ -3331,13 +3333,12 @@ fn render_display_list_to_cairo_with_dirty_tiles(
                 if bounds.width > 0.0 && bounds.height > 0.0 =>
             {
                 if punch_viewport_hole {
+                    let x0 = (bounds.x as f64).floor();
+                    let y0 = (bounds.y as f64).floor();
+                    let x1 = ((bounds.x + bounds.width) as f64).round().max(x0);
+                    let y1 = ((bounds.y + bounds.height) as f64).round().max(y0);
                     let _ = cr.save();
-                    cr.rectangle(
-                        bounds.x as f64,
-                        bounds.y as f64,
-                        bounds.width as f64,
-                        bounds.height as f64,
-                    );
+                    cr.rectangle(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0));
                     cr.set_operator(cairo::Operator::Clear);
                     let _ = cr.fill();
                     let _ = cr.restore();
@@ -4153,6 +4154,7 @@ mod gtk_gpu_x11 {
                     );
                 }
                 DrawCommand::PopBackdropFilter => {}
+                DrawCommand::DrawTextFragments { fragments } if fragments.is_empty() => {}
                 _ => {
                     let cmd_h = hash_single_draw_command(cmd, cur_state);
                     let (mut bx1, mut by1, mut bx2, mut by2) = super::command_paint_rect(cmd)
@@ -4273,17 +4275,13 @@ mod gtk_gpu_x11 {
             screen,
         );
 
-        let swapchain_mode = match present_mode {
-            crate::surface::PresentMode::Fifo => crate::surface::PresentMode::Mailbox,
-            other => other,
-        };
         let presenter = unsafe {
             crate::wgpu_surface::WgpuWindowPresenter::from_raw_handles(
                 raw_window_handle::RawWindowHandle::Xlib(win_handle),
                 raw_window_handle::RawDisplayHandle::Xlib(disp_handle),
                 w,
                 h,
-                swapchain_mode,
+                present_mode,
             )
         };
         let presenter = match presenter {
@@ -4559,6 +4557,9 @@ mod gtk_gpu_x11 {
         transparent_bg: bool,
         cursor_overlay: Option<(&crate::McpCursorState, &crate::CursorTheme)>,
     ) -> crate::GpuPresentTimings {
+        if super::IS_CLOSING.with(|c| c.get()) {
+            return crate::GpuPresentTimings::default();
+        }
         let mut viewports: Vec<([f32; 4], Arc<Scene3D>)> = Vec::new();
         for cmd in list.commands() {
             if let DrawCommand::DrawViewport3D { bounds, scene } = cmd {
@@ -4646,19 +4647,36 @@ mod gtk_gpu_x11 {
                 }
             }
 
+            // Whenever any DrawViewport3D rect moves or resizes (for example when expanding
+            // or animating an adjacent split pane), force synchronous Cairo hole-punching +
+            // GPU overlay upload BEFORE presenting the new 3D viewport bounds so the 3D scene
+            // and 2D transparent hole never present one frame out of phase.
+            let viewports_bounds_changed = state.last_viewports.len() != viewports.len()
+                || state
+                    .last_viewports
+                    .iter()
+                    .zip(viewports.iter())
+                    .any(|((a, _), (b, _))| {
+                        (a[0] - b[0]).abs() > 0.01
+                            || (a[1] - b[1]).abs() > 0.01
+                            || (a[2] - b[2]).abs() > 0.01
+                            || (a[3] - b[3]).abs() > 0.01
+                    });
+            if viewports_bounds_changed {
+                state.last_tile_hashes.clear();
+            }
+
             let mut raster_2d = std::time::Duration::ZERO;
-            if overlay_dirty || !state.overlay_uploaded {
+            if overlay_dirty || viewports_bounds_changed || !state.overlay_uploaded {
                 let t_ov0 = std::time::Instant::now();
-                if rasterize_and_upload_overlay(
+                state.overlay_uploaded = rasterize_and_upload_overlay(
                     state,
                     list,
                     w,
                     h,
                     transparent_bg,
                     cursor_overlay,
-                ) {
-                    state.overlay_uploaded = true;
-                }
+                );
                 raster_2d = t_ov0.elapsed();
                 let t_ov = raster_2d.as_secs_f64() * 1000.0;
                 if super::gtk_perf_logging_enabled() && t_ov > 1.2 {
@@ -4691,6 +4709,9 @@ mod gtk_gpu_x11 {
     }
 
     pub(super) fn present_active_now_timed() -> crate::GpuPresentTimings {
+        if super::IS_CLOSING.with(|c| c.get()) {
+            return crate::GpuPresentTimings::default();
+        }
         GPU_SURFACE_STATE.with(|slot| {
             let mut cell = slot.borrow_mut();
             let Some(ref mut state) = *cell else {
@@ -4809,24 +4830,53 @@ mod gtk_gpu_x11 {
     }
 
     pub(super) fn is_active() -> bool {
-        GPU_SURFACE_STATE.with(|slot| slot.borrow().as_ref().is_some_and(|s| s.mapped))
+        GPU_SURFACE_STATE
+            .try_with(|slot| {
+                slot.try_borrow()
+                    .ok()
+                    .and_then(|s| s.as_ref().map(|st| st.mapped))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    }
+
+    pub(super) fn active_present_mode_is_vsync() -> Option<bool> {
+        GPU_SURFACE_STATE
+            .try_with(|slot| {
+                slot.try_borrow().ok().and_then(|s| {
+                    s.as_ref()
+                        .and_then(|st| st.presenter.active_wgpu_present_mode())
+                        .map(|mode| {
+                            matches!(
+                                mode,
+                                wgpu::PresentMode::Fifo | wgpu::PresentMode::FifoRelaxed
+                            )
+                        })
+                })
+            })
+            .ok()
+            .flatten()
     }
 
     pub(super) fn resize_active(w: u32, h: u32) {
-        GPU_SURFACE_STATE.with(|slot| {
-            if let Some(ref mut state) = *slot.borrow_mut() {
-                state.resize(w, h);
+        let _ = GPU_SURFACE_STATE.try_with(|slot| {
+            if let Ok(mut guard) = slot.try_borrow_mut() {
+                if let Some(ref mut state) = *guard {
+                    state.resize(w, h);
+                }
             }
         });
     }
 
     pub(super) fn destroy_active() {
-        GPU_SURFACE_INIT_FAILED.with(|f| f.set(false));
-        GPU_SURFACE_STATE.with(|slot| {
-            if let Some(state) = slot.borrow_mut().take() {
-                state.destroy();
-            }
-        });
+        let _ = GPU_SURFACE_INIT_FAILED.try_with(|f| f.set(false));
+        let state = GPU_SURFACE_STATE
+            .try_with(|slot| slot.try_borrow_mut().ok().and_then(|mut g| g.take()))
+            .ok()
+            .flatten();
+        if let Some(state) = state {
+            state.destroy();
+        }
     }
 
     #[cfg(test)]
@@ -5166,6 +5216,31 @@ pub fn gtk_gpu_surface_is_active() -> bool {
     }
 }
 
+/// Returns `Some(true)` if the active GTK GPU swapchain is running in a VSync-blocking present
+/// mode (`Fifo` / `FifoRelaxed`), `Some(false)` if running uncapped (`Immediate` / `Mailbox` /
+/// `AutoNoVsync`), or `None` if no live swapchain is active.
+pub fn gtk_active_present_mode_is_vsync() -> Option<bool> {
+    #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+    {
+        gtk_gpu_x11::active_present_mode_is_vsync()
+    }
+    #[cfg(not(all(feature = "wgpu-backend", feature = "xlib")))]
+    {
+        None
+    }
+}
+
+/// Explicitly destroys all thread-local GTK GPU swapchain and offscreen `wgpu` renderer state.
+///
+/// Idempotent and safe to call before `gtk::main_quit()` or process exit to prevent `wgpu`
+/// resources from being dropped during process TLS teardown (`__call_tls_dtors`).
+pub fn gtk_destroy_gpu_state() {
+    #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+    gtk_gpu_x11::destroy_active();
+    #[cfg(feature = "wgpu-backend")]
+    crate::wgpu_surface::clear_thread_wgpu_renderer();
+}
+
 /// Enables or disables direct GPU 2D swapchain presentation (`UnifiedGpuCollector` +
 /// `GpuStencilClipPipeline` + `Wgpu2DRenderer`) on the GTK live window surface.
 ///
@@ -5350,6 +5425,15 @@ fn step_window_drag_motion(
 
 thread_local! {
     static IS_CLOSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static LAST_SCROLL_POINTER_POS: std::cell::Cell<Option<(f32, f32)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Returns and clears the pointer `(x, y)` recorded directly from the active GTK scroll event,
+/// enabling `PlatformEvent::Scroll` consumers to update `last_mouse_pos` without dispatching a
+/// synthetic `PlatformEvent::MouseMove`.
+pub fn gtk_take_scroll_pointer_pos() -> Option<(f32, f32)> {
+    LAST_SCROLL_POINTER_POS.with(|p| p.take())
 }
 
 /// Returns true if the native GTK window is in the process of closing.
@@ -5360,13 +5444,13 @@ pub fn gtk_is_closing() -> bool {
 /// Closes the current native GTK desktop window immediately.
 pub fn gtk_close() {
     IS_CLOSING.with(|c| c.set(true));
-    CURRENT_GTK_WINDOW.with(|w| {
+    gtk_destroy_gpu_state();
+    let win = CURRENT_GTK_WINDOW.with(|w| w.borrow().clone());
+    if let Some(win) = win {
         use gtk::prelude::*;
-        if let Some(win) = w.borrow().as_ref() {
-            win.close();
-        }
-        gtk::main_quit();
-    });
+        win.close();
+    }
+    gtk::main_quit();
 }
 
 /// Reads current system clipboard text content via GTK.
@@ -5819,6 +5903,24 @@ pub(super) fn compute_gtk_scroll_deltas(
     Some((dx, dy))
 }
 
+/// Deduplicates colliding X11/XInput2 smooth and discrete scroll events emitted with the same
+/// non-zero GDK timestamp for a single wheel notch.
+#[inline]
+pub(super) fn should_dedup_discrete_scroll_event(
+    last_smooth_time: &mut Option<u32>,
+    is_smooth: bool,
+    timestamp: u32,
+) -> bool {
+    if is_smooth {
+        if timestamp != 0 {
+            *last_smooth_time = Some(timestamp);
+        }
+        false
+    } else {
+        timestamp != 0 && *last_smooth_time == Some(timestamp)
+    }
+}
+
 /// Returns the native refresh interval of the active window's monitor (or primary monitor) from GDK.
 ///
 /// Queries `gdk::Monitor::refresh_rate()` (reported in millihertz, e.g. `144_000` for 144 Hz,
@@ -6050,7 +6152,6 @@ where
             | gtk::gdk::EventMask::STRUCTURE_MASK
             | gtk::gdk::EventMask::ENTER_NOTIFY_MASK
             | gtk::gdk::EventMask::LEAVE_NOTIFY_MASK
-            | gtk::gdk::EventMask::SCROLL_MASK
             | gtk::gdk::EventMask::SMOOTH_SCROLL_MASK,
     );
     drawing_area.set_can_focus(true);
@@ -6082,8 +6183,7 @@ where
     let im_unrealize = im_context.clone();
     drawing_area.connect_unrealize(move |_widget| {
         use gtk::prelude::*;
-        #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
-        gtk_gpu_x11::destroy_active();
+        gtk_destroy_gpu_state();
         im_unrealize.set_client_window(None::<&gtk::gdk::Window>);
     });
 
@@ -6101,11 +6201,6 @@ where
         DRAG_STATE.with(|d| d.set(None));
         ime_composing_focus_out.set(false);
         im_focus_out.focus_out();
-        gtk::glib::Propagation::Proceed
-    });
-
-    drawing_area.connect_grab_broken_event(|_widget, _event| {
-        DRAG_STATE.with(|d| d.set(None));
         gtk::glib::Propagation::Proceed
     });
 
@@ -6130,6 +6225,11 @@ where
         std::cell::RefCell<dyn FnMut() -> Option<std::time::Duration>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(next_wakeup));
 
+    /// Maximum wakeup delay routed through `gdk::FrameClock` (`add_tick_callback`) so high-refresh
+    /// animation/render ticks lock to hardware VSync without 1 ms integer timer truncation jitter,
+    /// while longer idle delays (caret blink, tooltips, distant timers) sleep via one-shot timers.
+    const FRAME_CLOCK_SYNC_MAX_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
+
     fn arm_next_tick(
         da: gtk::DrawingArea,
         on_event: std::rc::Weak<
@@ -6139,6 +6239,11 @@ where
         tick_gen: std::rc::Rc<std::cell::Cell<u64>>,
         armed_deadline: std::rc::Rc<std::cell::Cell<Option<std::time::Instant>>>,
     ) {
+        if IS_CLOSING.with(|c| c.get()) {
+            armed_deadline.set(None);
+            tick_gen.set(tick_gen.get().wrapping_add(1));
+            return;
+        }
         let delay = (next_wakeup.borrow_mut())();
         let now = std::time::Instant::now();
         let (target_deadline, delay) = match compute_tick_rearm_decision(
@@ -6159,24 +6264,24 @@ where
         armed_deadline.set(Some(target_deadline));
         let armed_tick = armed_deadline.clone();
         let tick_gen_run = tick_gen.clone();
-        let run_tick = move || {
-            if IS_CLOSING.with(|c| c.get()) || tick_gen_run.get() != next_gen {
-                return;
-            }
-            armed_tick.set(None);
-            let Some(on_event_strong) = on_event.upgrade() else {
-                return;
-            };
-            let tick_ev = crate::events::PlatformEvent::AnimationTick;
-            let changed = (on_event_strong.borrow_mut())(&tick_ev);
-            if changed {
-                use gtk::prelude::WidgetExt;
-                da.queue_draw();
-            }
-            arm_next_tick(da, on_event, next_wakeup, tick_gen_run, armed_tick);
-        };
+
         if delay.is_zero() {
-            let mut run_opt = Some(run_tick);
+            let mut run_opt = Some(move || {
+                if IS_CLOSING.with(|c| c.get()) || tick_gen_run.get() != next_gen {
+                    return;
+                }
+                armed_tick.set(None);
+                let Some(on_event_strong) = on_event.upgrade() else {
+                    return;
+                };
+                let tick_ev = crate::events::PlatformEvent::AnimationTick;
+                let changed = (on_event_strong.borrow_mut())(&tick_ev);
+                if changed {
+                    use gtk::prelude::WidgetExt;
+                    da.queue_draw();
+                }
+                arm_next_tick(da, on_event, next_wakeup, tick_gen_run, armed_tick);
+            });
             // Must be strictly greater (lower priority) than GTK_PRIORITY_RESIZE (110)
             // and GDK_PRIORITY_REDRAW (120) so continuous 0ms wakeups cannot starve
             // initial/pending layout or connect_draw, while still beating DEFAULT_IDLE (200).
@@ -6191,11 +6296,74 @@ where
                 },
             );
         } else {
-            let rounded_ms = ((delay.as_micros() + 500) / 1000).max(1) as u64;
-            gtk::glib::timeout_add_local_once(
-                std::time::Duration::from_millis(rounded_ms),
-                run_tick,
-            );
+            use gtk::prelude::WidgetExt;
+            let use_frame_clock = delay <= FRAME_CLOCK_SYNC_MAX_DELAY
+                && da.is_realized()
+                && da.is_mapped()
+                && da.frame_clock().is_some();
+            if use_frame_clock {
+                let frame_clock_tol = (gtk_primary_refresh_interval() / 3)
+                    .min(std::time::Duration::from_micros(1_200));
+                let current_deadline = std::cell::Cell::new(target_deadline);
+                da.add_tick_callback(move |widget, _frame_clock| {
+                    if IS_CLOSING.with(|c| c.get()) || tick_gen_run.get() != next_gen {
+                        return gtk::glib::ControlFlow::Break;
+                    }
+                    let now = std::time::Instant::now();
+                    if now + frame_clock_tol < current_deadline.get() {
+                        return gtk::glib::ControlFlow::Continue;
+                    }
+                    armed_tick.set(None);
+                    let Some(on_event_strong) = on_event.upgrade() else {
+                        return gtk::glib::ControlFlow::Break;
+                    };
+                    let tick_ev = crate::events::PlatformEvent::AnimationTick;
+                    let changed = (on_event_strong.borrow_mut())(&tick_ev);
+                    if changed {
+                        widget.queue_draw();
+                    }
+                    if IS_CLOSING.with(|c| c.get()) || tick_gen_run.get() != next_gen {
+                        return gtk::glib::ControlFlow::Break;
+                    }
+                    let next_delay = (next_wakeup.borrow_mut())();
+                    if let Some(d) = next_delay {
+                        if !d.is_zero() && d <= FRAME_CLOCK_SYNC_MAX_DELAY {
+                            let next_target = std::time::Instant::now() + d;
+                            current_deadline.set(next_target);
+                            armed_tick.set(Some(next_target));
+                            return gtk::glib::ControlFlow::Continue;
+                        }
+                    }
+                    arm_next_tick(
+                        widget.clone(),
+                        on_event.clone(),
+                        next_wakeup.clone(),
+                        tick_gen_run.clone(),
+                        armed_tick.clone(),
+                    );
+                    gtk::glib::ControlFlow::Break
+                });
+            } else {
+                let rounded_ms = ((delay.as_micros() + 500) / 1000).max(1) as u64;
+                gtk::glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(rounded_ms),
+                    move || {
+                        if IS_CLOSING.with(|c| c.get()) || tick_gen_run.get() != next_gen {
+                            return;
+                        }
+                        armed_tick.set(None);
+                        let Some(on_event_strong) = on_event.upgrade() else {
+                            return;
+                        };
+                        let tick_ev = crate::events::PlatformEvent::AnimationTick;
+                        let changed = (on_event_strong.borrow_mut())(&tick_ev);
+                        if changed {
+                            da.queue_draw();
+                        }
+                        arm_next_tick(da, on_event, next_wakeup, tick_gen_run, armed_tick);
+                    },
+                );
+            }
         }
     }
 
@@ -6314,7 +6482,24 @@ where
     let frameless_resizable =
         resizable && config.decoration == crate::window::WindowDecoration::FramelessTransparent;
     let window_for_resize = window.clone();
+    let active_gtk_buttons = std::rc::Rc::new(std::cell::Cell::new(0u8));
+
+    let on_event_grab_broken = on_event_rc.clone();
+    let active_btns_grab_broken = active_gtk_buttons.clone();
+    drawing_area.connect_grab_broken_event(move |widget, _event| {
+        use gtk::prelude::WidgetExt;
+        DRAG_STATE.with(|d| d.set(None));
+        active_btns_grab_broken.set(0);
+        if let Ok(mut cb) = on_event_grab_broken.try_borrow_mut() {
+            if cb(&crate::events::PlatformEvent::PointerCancel) {
+                widget.queue_draw();
+            }
+        }
+        gtk::glib::Propagation::Proceed
+    });
+
     let on_event_mouse = on_event_rc.clone();
+    let active_btns_press = active_gtk_buttons.clone();
     drawing_area.connect_button_press_event(move |widget, event| {
         use gtk::prelude::GtkWindowExt;
         use gtk::prelude::WidgetExt;
@@ -6364,11 +6549,20 @@ where
                 y: y as f32,
             },
             gtk::gdk::EventType::TripleButtonPress => return gtk::glib::Propagation::Proceed,
-            _ => crate::events::PlatformEvent::MouseDown {
-                button: btn,
-                x: x as f32,
-                y: y as f32,
-            },
+            _ => {
+                let bit = match event.button() {
+                    1 => 1u8,
+                    2 => 2u8,
+                    3 => 4u8,
+                    _ => 0u8,
+                };
+                active_btns_press.set(active_btns_press.get() | bit);
+                crate::events::PlatformEvent::MouseDown {
+                    button: btn,
+                    x: x as f32,
+                    y: y as f32,
+                }
+            }
         };
 
         if (on_event_mouse.borrow_mut())(&plat_event) {
@@ -6380,9 +6574,17 @@ where
 
     // Mouse button release handler
     let on_event_release = on_event_rc.clone();
+    let active_btns_release = active_gtk_buttons.clone();
     drawing_area.connect_button_release_event(move |widget, event| {
         // Clear manual window drag state upon mouse release
         DRAG_STATE.with(|d| d.set(None));
+        let bit = match event.button() {
+            1 => 1u8,
+            2 => 2u8,
+            3 => 4u8,
+            _ => 0u8,
+        };
+        active_btns_release.set(active_btns_release.get() & !bit);
 
         let (x, y) = event.position();
         let state = event.state();
@@ -6417,6 +6619,7 @@ where
 
     // Pointer motion handler
     let on_event_motion = on_event_rc.clone();
+    let active_btns_motion = active_gtk_buttons.clone();
     drawing_area.connect_motion_notify_event(move |widget, event| {
         use gtk::prelude::WidgetExt;
         let (x, y) = event.position();
@@ -6431,6 +6634,43 @@ where
                 || state.contains(gtk::gdk::ModifierType::SUPER_MASK),
         };
         CURRENT_MODIFIERS.with(|m| m.set(modifiers));
+
+        // If the window manager or an external popup swallowed a button-release event,
+        // synthesize the missed MouseUp before dispatching MouseMove so drags never stick.
+        let held = active_btns_motion.get();
+        if held != 0 && !IS_CLOSING.with(|c| c.get()) {
+            let mut released_mask = 0u8;
+            let mut synth_buttons = [None; 3];
+            let mut synth_count = 0usize;
+            if (held & 1) != 0 && !state.contains(gtk::gdk::ModifierType::BUTTON1_MASK) {
+                released_mask |= 1;
+                synth_buttons[synth_count] = Some(crate::events::MouseButton::Left);
+                synth_count += 1;
+            }
+            if (held & 2) != 0 && !state.contains(gtk::gdk::ModifierType::BUTTON2_MASK) {
+                released_mask |= 2;
+                synth_buttons[synth_count] = Some(crate::events::MouseButton::Middle);
+                synth_count += 1;
+            }
+            if (held & 4) != 0 && !state.contains(gtk::gdk::ModifierType::BUTTON3_MASK) {
+                released_mask |= 4;
+                synth_buttons[synth_count] = Some(crate::events::MouseButton::Right);
+                synth_count += 1;
+            }
+            if released_mask != 0 {
+                active_btns_motion.set(held & !released_mask);
+                for btn in synth_buttons.into_iter().take(synth_count).flatten() {
+                    let up_event = crate::events::PlatformEvent::MouseUp {
+                        button: btn,
+                        x: x as f32,
+                        y: y as f32,
+                    };
+                    if (on_event_motion.borrow_mut())(&up_event) {
+                        widget.queue_draw();
+                    }
+                }
+            }
+        }
 
         // If manual window drag fallback is active, update window position only while left button is held
         if let Some((next_x, next_y)) = step_window_drag_motion(
@@ -6505,8 +6745,34 @@ where
     });
 
     let on_event_scroll = on_event_rc.clone();
+    let last_smooth_scroll_time = std::cell::Cell::new(None::<u32>);
     drawing_area.connect_scroll_event(move |widget, event| {
         use gtk::gdk::prelude::DeviceExt;
+        if IS_CLOSING.with(|c| c.get()) {
+            return gtk::glib::Propagation::Proceed;
+        }
+        let state = event.state();
+        let modifiers = crate::events::Modifiers {
+            shift: state.contains(gtk::gdk::ModifierType::SHIFT_MASK),
+            ctrl: state.contains(gtk::gdk::ModifierType::CONTROL_MASK),
+            alt: state.contains(gtk::gdk::ModifierType::MOD1_MASK),
+            meta: state.contains(gtk::gdk::ModifierType::META_MASK)
+                || state.contains(gtk::gdk::ModifierType::SUPER_MASK),
+        };
+        CURRENT_MODIFIERS.with(|m| m.set(modifiers));
+
+        let smooth_deltas = event.scroll_deltas();
+        let direction = event.direction();
+        let is_smooth =
+            smooth_deltas.is_some() || direction == gtk::gdk::ScrollDirection::Smooth;
+        let mut last_smooth = last_smooth_scroll_time.get();
+        let dedup_skip =
+            should_dedup_discrete_scroll_event(&mut last_smooth, is_smooth, event.time());
+        last_smooth_scroll_time.set(last_smooth);
+        if dedup_skip {
+            return gtk::glib::Propagation::Proceed;
+        }
+
         let is_continuous_device = event
             .source_device()
             .or_else(|| event.device())
@@ -6519,20 +6785,18 @@ where
                 )
             });
         let Some((dx, dy)) = compute_gtk_scroll_deltas(
-            event.scroll_deltas(),
-            event.direction(),
+            smooth_deltas,
+            direction,
             event.is_stop(),
             is_continuous_device,
         ) else {
             return gtk::glib::Propagation::Proceed;
         };
 
+        // Pass scroll pointer coordinates directly without firing a synthetic
+        // PlatformEvent::MouseMove (avoids mid-scroll hover recalculation & cursor stalls).
         let (x, y) = event.position();
-        let move_ev = crate::events::PlatformEvent::MouseMove {
-            x: x as f32,
-            y: y as f32,
-        };
-        let _ = (on_event_scroll.borrow_mut())(&move_ev);
+        LAST_SCROLL_POINTER_POS.with(|p| p.set(Some((x as f32, y as f32))));
 
         let scroll_ev = crate::events::PlatformEvent::Scroll {
             delta_x: dx,
@@ -6540,7 +6804,9 @@ where
             is_momentum: false,
         };
 
-        if (on_event_scroll.borrow_mut())(&scroll_ev) {
+        let redraw = (on_event_scroll.borrow_mut())(&scroll_ev);
+        LAST_SCROLL_POINTER_POS.with(|p| p.set(None));
+        if redraw {
             widget.queue_draw();
         }
 
@@ -6725,17 +6991,25 @@ where
     });
 
     let on_event_focus_in = on_event_rc.clone();
+    let da_focus_in = drawing_area.clone();
     window.connect_focus_in_event(move |_widget, _event| {
         if let Ok(mut cb) = on_event_focus_in.try_borrow_mut() {
-            let _ = cb(&crate::events::PlatformEvent::WindowFocused(true));
+            if cb(&crate::events::PlatformEvent::WindowFocused(true)) {
+                da_focus_in.queue_draw();
+            }
         }
         gtk::glib::Propagation::Proceed
     });
 
     let on_event_focus_out = on_event_rc.clone();
+    let da_focus_out = drawing_area.clone();
+    let active_btns_focus_out = active_gtk_buttons.clone();
     window.connect_focus_out_event(move |_widget, _event| {
+        active_btns_focus_out.set(0);
         if let Ok(mut cb) = on_event_focus_out.try_borrow_mut() {
-            let _ = cb(&crate::events::PlatformEvent::WindowFocused(false));
+            if cb(&crate::events::PlatformEvent::WindowFocused(false)) {
+                da_focus_out.queue_draw();
+            }
         }
         gtk::glib::Propagation::Proceed
     });
@@ -6782,28 +7056,44 @@ where
         }
     }
 
+    fn clear_session_tls() {
+        let _ = IS_CLOSING.try_with(|c| c.set(true));
+        // Destroy all thread-local GPU swapchain & offscreen wgpu renderer state while the
+        // main thread and GTK/X11 connection are still alive, never during `__call_tls_dtors`.
+        gtk_destroy_gpu_state();
+        let _ = IS_MAXIMIZED_TRACKER.try_with(|t| t.set(false));
+        let _ = IS_WINDOW_DOCKED.try_with(|d| d.set(false));
+        let _ = DRAG_STATE.try_with(|d| d.set(None));
+        let _ = LAST_SCROLL_POINTER_POS.try_with(|p| p.set(None));
+        let _old_win = CURRENT_GTK_WINDOW
+            .try_with(|w| w.try_borrow_mut().ok().and_then(|mut g| g.take()));
+        let _old_cb = EVENT_DISPATCH_CALLBACK
+            .try_with(|cb| cb.try_borrow_mut().ok().and_then(|mut g| g.take()));
+        let _old_da = DRAWING_AREA_HANDLE
+            .try_with(|da| da.try_borrow_mut().ok().and_then(|mut g| g.take()));
+        let _old_cur_da = CURRENT_DRAWING_AREA
+            .try_with(|da| da.try_borrow_mut().ok().and_then(|mut g| g.take()));
+        let _old_im = CURRENT_IM_CONTEXT
+            .try_with(|im| im.try_borrow_mut().ok().and_then(|mut g| g.take()));
+        let _old_vp3d = VIEWPORT_3D_CACHE
+            .try_with(|c| c.try_borrow_mut().ok().map(|mut g| std::mem::take(&mut *g)));
+    }
+
+    struct SessionCleanupGuard;
+    impl Drop for SessionCleanupGuard {
+        fn drop(&mut self) {
+            clear_session_tls();
+        }
+    }
+
     window.connect_delete_event(|_, _| {
-        IS_CLOSING.with(|c| c.set(true));
+        clear_session_tls();
         gtk::main_quit();
         gtk::glib::Propagation::Proceed
     });
 
     window.connect_destroy(|_| {
-        #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
-        gtk_gpu_x11::destroy_active();
-        IS_CLOSING.with(|c| c.set(true));
-        IS_MAXIMIZED_TRACKER.with(|t| t.set(false));
-        IS_WINDOW_DOCKED.with(|d| d.set(false));
-        DRAG_STATE.with(|d| d.set(None));
-        CURRENT_GTK_WINDOW.with(|w| {
-            *w.borrow_mut() = None;
-        });
-        EVENT_DISPATCH_CALLBACK.with(|cb| {
-            *cb.borrow_mut() = None;
-        });
-        DRAWING_AREA_HANDLE.with(|da| {
-            *da.borrow_mut() = None;
-        });
+        clear_session_tls();
         gtk::main_quit();
     });
 
@@ -6828,7 +7118,12 @@ where
         armed_deadline,
     );
 
+    let _session_cleanup_guard = SessionCleanupGuard;
     gtk::main();
+
+    // Guarantee GPU swapchain/surface and GTK TLS handles are destroyed while the
+    // runtime and TLS are still valid, never during process `__call_tls_dtors`.
+    drop(_session_cleanup_guard);
 
     Ok(())
 }
@@ -7707,6 +8002,61 @@ mod frameless_resize_tests {
             cols,
             rows
         ));
+    }
+
+    #[test]
+    fn test_gtk_scroll_dedup_suppresses_paired_discrete_event_at_same_timestamp() {
+        let mut last_smooth = None;
+        // Standalone discrete event passes through.
+        assert!(!super::should_dedup_discrete_scroll_event(
+            &mut last_smooth,
+            false,
+            1000
+        ));
+        // Smooth event records its timestamp and passes through.
+        assert!(!super::should_dedup_discrete_scroll_event(
+            &mut last_smooth,
+            true,
+            2000
+        ));
+        // Paired colliding discrete event with the exact same X11/XI2 timestamp is deduplicated.
+        assert!(super::should_dedup_discrete_scroll_event(
+            &mut last_smooth,
+            false,
+            2000
+        ));
+        // Subsequent discrete event at a new timestamp passes through.
+        assert!(!super::should_dedup_discrete_scroll_event(
+            &mut last_smooth,
+            false,
+            2016
+        ));
+        // Zero timestamp (synthetic/uncalibrated) never falsely deduplicates.
+        assert!(!super::should_dedup_discrete_scroll_event(
+            &mut last_smooth,
+            true,
+            0
+        ));
+        assert!(!super::should_dedup_discrete_scroll_event(
+            &mut last_smooth,
+            false,
+            0
+        ));
+    }
+
+    #[test]
+    fn test_gtk_take_scroll_pointer_pos_consumes_once() {
+        super::LAST_SCROLL_POINTER_POS.with(|p| p.set(Some((142.5, 288.0))));
+        assert_eq!(super::gtk_take_scroll_pointer_pos(), Some((142.5, 288.0)));
+        assert_eq!(super::gtk_take_scroll_pointer_pos(), None);
+    }
+
+    #[cfg(all(feature = "wgpu-backend", feature = "xlib"))]
+    #[test]
+    fn test_gtk_gpu_destroy_active_is_idempotent() {
+        super::gtk_gpu_x11::destroy_active();
+        super::gtk_gpu_x11::destroy_active();
+        assert!(!super::gtk_gpu_x11::is_active());
     }
 }
 

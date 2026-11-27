@@ -1135,6 +1135,7 @@ impl AppRuntime {
         let rebuild_start = std::time::Instant::now();
         let ctx = self.interaction_context();
         self.layout_root = Self::build_layout_tree_with_interaction(&self.root_blueprint, &ctx);
+        self.last_built_is_mouse_down = self.is_mouse_down;
         self.sync_active_input_layout();
         let now_ms = self.now_ms();
         self.sync_tree_animations(now_ms);

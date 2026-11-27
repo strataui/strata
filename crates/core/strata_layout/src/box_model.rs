@@ -33,6 +33,73 @@ pub fn collapse_margins(m1: f32, m2: f32) -> f32 {
     }
 }
 
+thread_local! {
+    static LAYOUT_VIEWPORT: std::cell::Cell<Option<(f32, f32)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Scoped RAII guard restoring the previous active layout viewport on drop.
+pub(crate) struct LayoutViewportGuard {
+    prev: Option<(f32, f32)>,
+}
+
+impl Drop for LayoutViewportGuard {
+    fn drop(&mut self) {
+        LAYOUT_VIEWPORT.with(|vp| vp.set(self.prev));
+    }
+}
+
+/// Sets the active viewport dimensions for `vw`, `vh`, and `calc()` viewport unit resolution
+/// across the current layout pass.
+pub(crate) fn push_layout_viewport(width: f32, height: f32) -> LayoutViewportGuard {
+    let prev = LAYOUT_VIEWPORT.with(|vp| {
+        let old = vp.get();
+        let w = if width.is_finite() && width > 0.0 {
+            width
+        } else {
+            0.0
+        };
+        let h = if height.is_finite() && height > 0.0 {
+            height
+        } else {
+            0.0
+        };
+        vp.set(Some((w, h)));
+        old
+    });
+    LayoutViewportGuard { prev }
+}
+
+/// Establishes active viewport dimensions only if no outer layout pass has already set them.
+pub(crate) fn push_layout_viewport_if_unset(width: f32, height: f32) -> LayoutViewportGuard {
+    let prev = LAYOUT_VIEWPORT.with(|vp| {
+        let old = vp.get();
+        if old.is_none() {
+            let w = if width.is_finite() && width > 0.0 {
+                width
+            } else {
+                0.0
+            };
+            let h = if height.is_finite() && height > 0.0 {
+                height
+            } else {
+                0.0
+            };
+            if w > 0.0 || h > 0.0 {
+                vp.set(Some((w, h)));
+            }
+        }
+        old
+    });
+    LayoutViewportGuard { prev }
+}
+
+/// Returns the active root layout viewport `(width, height)`, if a layout pass is in progress.
+#[inline]
+pub(crate) fn active_layout_viewport() -> Option<(f32, f32)> {
+    LAYOUT_VIEWPORT.with(|vp| vp.get())
+}
+
 /// Resolves a CSS `Dimension` into concrete pixels relative to an available length.
 pub fn resolve_dimension(dim: Dimension, available: f32) -> Option<f32> {
     const MAX_DIMENSION: f32 = 1e7;
@@ -66,7 +133,11 @@ pub fn resolve_dimension(dim: Dimension, available: f32) -> Option<f32> {
         }
         Dimension::Vw(vw) => {
             if vw.is_finite() {
-                let px = avail * (vw / 100.0);
+                let base = active_layout_viewport()
+                    .map(|(w, _)| w)
+                    .filter(|&w| w > 0.0)
+                    .unwrap_or(avail);
+                let px = base * (vw / 100.0);
                 if px.is_finite() {
                     Some(px.clamp(-MAX_DIMENSION, MAX_DIMENSION))
                 } else {
@@ -78,7 +149,11 @@ pub fn resolve_dimension(dim: Dimension, available: f32) -> Option<f32> {
         }
         Dimension::Vh(vh) => {
             if vh.is_finite() {
-                let px = avail * (vh / 100.0);
+                let base = active_layout_viewport()
+                    .map(|(_, h)| h)
+                    .filter(|&h| h > 0.0)
+                    .unwrap_or(avail);
+                let px = base * (vh / 100.0);
                 if px.is_finite() {
                     Some(px.clamp(-MAX_DIMENSION, MAX_DIMENSION))
                 } else {
@@ -103,12 +178,15 @@ pub fn resolve_dimension(dim: Dimension, available: f32) -> Option<f32> {
             }
         }
         Dimension::Calc(id) => strata_style::calc::get_calc(id).and_then(|expr| {
+            let (vp_w, vp_h) = active_layout_viewport()
+                .filter(|&(w, h)| w > 0.0 && h > 0.0)
+                .unwrap_or((1920.0, 1080.0));
             let ctx = strata_style::calc::CalcContext {
                 parent_size: avail,
                 root_font_size: 16.0,
                 current_font_size: 16.0,
-                viewport_width: 1920.0,
-                viewport_height: 1080.0,
+                viewport_width: vp_w,
+                viewport_height: vp_h,
             };
             let val = expr.eval(&ctx);
             if val.is_finite() {
@@ -121,6 +199,36 @@ pub fn resolve_dimension(dim: Dimension, available: f32) -> Option<f32> {
     }
 }
 
+/// Resolves a CSS `max-width` / `max-height` constraint.
+///
+/// Per W3C CSS 2.1 §10.7, a positive percentage `max-*` constraint evaluated against an
+/// indefinite / zero containing-block axis (`available <= 0.0`) behaves as `none` rather than
+/// collapsing shrink-to-fit content to `0.0`.
+#[inline]
+pub(crate) fn resolve_max_dimension(max: Dimension, available: f32) -> Option<f32> {
+    if matches!(max, Dimension::Percent(pct) if pct > 0.0)
+        && (!available.is_finite() || available <= 0.0)
+    {
+        return None;
+    }
+    resolve_dimension(max, available)
+}
+
+/// Resolves a CSS `max-width` / `max-height` constraint with node context for intrinsic keywords.
+#[inline]
+pub(crate) fn resolve_max_dimension_with_node(
+    max: Dimension,
+    available: f32,
+    node: &LayoutNode,
+) -> Option<f32> {
+    if matches!(max, Dimension::Percent(pct) if pct > 0.0)
+        && (!available.is_finite() || available <= 0.0)
+    {
+        return None;
+    }
+    resolve_dimension_with_node(max, available, node)
+}
+
 /// Clamps a computed size against `min` and `max` constraints.
 pub fn clamp_dimension(size: f32, min: Dimension, max: Dimension, available: f32) -> f32 {
     let mut clamped = if size.is_finite() {
@@ -131,7 +239,7 @@ pub fn clamp_dimension(size: f32, min: Dimension, max: Dimension, available: f32
     if let Some(min_px) = resolve_dimension(min, available) {
         clamped = clamped.max(min_px.max(0.0));
     }
-    if let Some(max_px) = resolve_dimension(max, available) {
+    if let Some(max_px) = resolve_max_dimension(max, available) {
         clamped = clamped.min(max_px.max(0.0));
     }
     clamped.clamp(0.0, 1e7)
@@ -203,7 +311,7 @@ pub fn clamp_dimension_with_node(
     if let Some(min_px) = resolve_dimension_with_node(min, available, node) {
         clamped = clamped.max(min_px.max(0.0));
     }
-    if let Some(max_px) = resolve_dimension_with_node(max, available, node) {
+    if let Some(max_px) = resolve_max_dimension_with_node(max, available, node) {
         clamped = clamped.min(max_px.max(0.0));
     }
     clamped.clamp(0.0, 1e7)
@@ -749,15 +857,23 @@ fn layout_ellipsis_text_leaf_children(node: &mut LayoutNode, content_width: f32)
     let origin_y = node.geometry.border_box.y + border.top + padding.top;
     let mut lines = res.lines;
     for line in &mut lines {
-        line.bounds.x += origin_x;
+        let align_offset_x = match node.style.text_align {
+            strata_style::types::TextAlign::Center => {
+                ((content_width - line.bounds.width) / 2.0).max(0.0)
+            }
+            strata_style::types::TextAlign::Right => (content_width - line.bounds.width).max(0.0),
+            _ => 0.0,
+        };
+        let total_shift_x = origin_x + align_offset_x;
+        line.bounds.x += total_shift_x;
         line.bounds.y += origin_y;
         for frag in &mut line.text_fragments {
-            frag.bounds.x += origin_x;
+            frag.bounds.x += total_shift_x;
             frag.bounds.y += origin_y;
             frag.baseline_y += origin_y;
         }
         for atomic in &mut line.atomic_fragments {
-            atomic.bounds.x += origin_x;
+            atomic.bounds.x += total_shift_x;
             atomic.bounds.y += origin_y;
         }
     }

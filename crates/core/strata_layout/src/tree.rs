@@ -87,6 +87,23 @@ pub struct ImageResource {
     pub height: u32,
 }
 
+#[inline]
+pub(crate) fn style_uses_viewport_units(style: &ComputedStyle) -> bool {
+    use strata_style::types::Dimension;
+    let is_vp = |d: Dimension| matches!(d, Dimension::Vw(_) | Dimension::Vh(_) | Dimension::Calc(_));
+    is_vp(style.width)
+        || is_vp(style.height)
+        || is_vp(style.min_width)
+        || is_vp(style.max_width)
+        || is_vp(style.min_height)
+        || is_vp(style.max_height)
+        || is_vp(style.flex_basis)
+        || is_vp(style.insets.top)
+        || is_vp(style.insets.bottom)
+        || is_vp(style.insets.left)
+        || is_vp(style.insets.right)
+}
+
 /// Computes a compact 64-bit hash of the sizing and overflow style fields that flexbox/grid
 /// passes temporarily override or that affect layout box measurement.
 #[inline]
@@ -126,6 +143,11 @@ pub(crate) fn layout_style_pin_hash(style: &ComputedStyle) -> u64 {
         | ((style.overflow_y as u64) << 8)
         | ((style.white_space as u64) << 4)
         | (style.text_overflow as u64));
+    if style_uses_viewport_units(style) {
+        if let Some((vp_w, vp_h)) = crate::box_model::active_layout_viewport() {
+            mix(((vp_w.to_bits() as u64) << 32) | (vp_h.to_bits() as u64));
+        }
+    }
     h
 }
 
@@ -853,6 +875,8 @@ pub const SUBTREE_META_VALID: u8 = 1 << 3;
 /// Cached summary bit indicating whether any descendant (up to an explicit pixel-height boundary)
 /// depends on parent height (`has_height_dependent_descendant`).
 pub const SUBTREE_HAS_HEIGHT_DEP_DESCENDANT: u8 = 1 << 4;
+/// Bitmask flag indicating this node or any descendant uses viewport-relative units (`vw`/`vh`/`calc`).
+pub const SUBTREE_HAS_VIEWPORT_UNITS: u8 = 1 << 5;
 
 /// A node participating in the layout tree.
 #[derive(Debug, Clone, PartialEq)]
@@ -1249,7 +1273,7 @@ impl LayoutNode {
         // O(1) clean subtree fast path: when neither `self` nor any descendant was invalidated
         // since the last layout and the preserved box + content dimensions match, simply translate
         // descendants if the box origin moved instead of re-solving the entire subtree.
-        if self.children_layout_clean {
+        if self.children_layout_clean && !style_uses_viewport_units(&self.style) {
             if let Some((prev_x, prev_y, prev_w, prev_h, prev_pos)) = self.last_preserved_box {
                 if prev_pos == resolve_positioned
                     && (prev_w - preserved_geom.border_box.width).abs() < 0.05
@@ -1474,6 +1498,8 @@ impl LayoutNode {
 
     /// Computes layout geometry for this node and all descendants given available bounds.
     pub fn compute_layout(&mut self, available_width: f32, available_height: f32) {
+        let _vp_guard =
+            crate::box_model::push_layout_viewport(available_width, available_height);
         let session_root = crate::intrinsic::begin_layout_session();
         let _guard = crate::prof::LayoutGuard::new();
         let guard = LayoutDepthGuard::root();
@@ -1490,6 +1516,8 @@ impl LayoutNode {
         exclusions: Option<&mut crate::exclusions::ExclusionSpace>,
         bfc_offset_y: f32,
     ) {
+        let _vp_guard =
+            crate::box_model::push_layout_viewport(available_width, available_height);
         let guard = LayoutDepthGuard::root();
         self.compute_layout_guarded(
             available_width,
@@ -1604,13 +1632,15 @@ impl LayoutNode {
     #[inline]
     fn is_self_height_dependent(&self) -> bool {
         use strata_style::types::{Dimension, Position};
-        matches!(self.style.height, Dimension::Percent(_))
-            || matches!(self.style.min_height, Dimension::Percent(_))
-            || matches!(self.style.max_height, Dimension::Percent(_))
-            || matches!(self.style.flex_basis, Dimension::Percent(_))
+        let is_h_dep =
+            |d: Dimension| matches!(d, Dimension::Percent(_) | Dimension::Vh(_) | Dimension::Calc(_));
+        is_h_dep(self.style.height)
+            || is_h_dep(self.style.min_height)
+            || is_h_dep(self.style.max_height)
+            || is_h_dep(self.style.flex_basis)
             || (matches!(self.style.position, Position::Absolute | Position::Fixed)
                 && (!matches!(self.style.insets.bottom, Dimension::Auto)
-                    || matches!(self.style.insets.top, Dimension::Percent(_))))
+                    || is_h_dep(self.style.insets.top)))
     }
 
     fn finalize_node_hit_metadata(
@@ -1637,6 +1667,9 @@ impl LayoutNode {
         }
         if self_hoisted {
             flags |= SUBTREE_HAS_HOISTED;
+        }
+        if style_uses_viewport_units(&node.style) {
+            flags |= SUBTREE_HAS_VIEWPORT_UNITS;
         }
 
         let own = node.geometry.border_box;
@@ -1735,27 +1768,26 @@ impl LayoutNode {
 
     #[inline]
     pub(crate) fn is_height_independent_for_cache(&self) -> bool {
-        self.style.height == strata_style::types::Dimension::Auto
-            && self.style.flex_basis == strata_style::types::Dimension::Auto
+        use strata_style::types::Dimension;
+        self.style.height == Dimension::Auto
+            && self.style.flex_basis == Dimension::Auto
             && self.style.flex_grow == 0.0
             && !matches!(
                 self.style.min_height,
-                strata_style::types::Dimension::Percent(_)
+                Dimension::Percent(_) | Dimension::Vh(_) | Dimension::Calc(_)
             )
             && !matches!(
                 self.style.max_height,
-                strata_style::types::Dimension::Percent(_)
+                Dimension::Percent(_) | Dimension::Vh(_) | Dimension::Calc(_)
             )
             && !(matches!(
                 self.style.position,
                 strata_style::types::Position::Absolute | strata_style::types::Position::Fixed
-            ) && (!matches!(
-                self.style.insets.bottom,
-                strata_style::types::Dimension::Auto
-            ) || matches!(
-                self.style.insets.top,
-                strata_style::types::Dimension::Percent(_)
-            )))
+            ) && (!matches!(self.style.insets.bottom, Dimension::Auto)
+                || matches!(
+                    self.style.insets.top,
+                    Dimension::Percent(_) | Dimension::Vh(_) | Dimension::Calc(_)
+                )))
             && !self.has_height_dependent_descendant_fast()
     }
 
@@ -2048,33 +2080,29 @@ impl LayoutNode {
     #[inline]
     fn has_height_dependent_descendant_fast(&self) -> bool {
         if (self.subtree_hit_flags & SUBTREE_META_VALID) != 0 {
-            return (self.subtree_hit_flags & SUBTREE_HAS_HEIGHT_DEP_DESCENDANT) != 0;
+            return (self.subtree_hit_flags
+                & (SUBTREE_HAS_HEIGHT_DEP_DESCENDANT | SUBTREE_HAS_VIEWPORT_UNITS))
+                != 0;
         }
         self.has_height_dependent_descendant()
     }
 
-    /// Returns true if any descendant (up to an explicit pixel-height boundary) depends on parent height.
+    /// Returns true if any descendant depends on parent height or viewport height.
     fn has_height_dependent_descendant(&self) -> bool {
-        use strata_style::types::{Dimension, Position};
-        let mut stack: Vec<&LayoutNode> = self.children.iter().collect();
-        while let Some(node) = stack.pop() {
-            if matches!(node.style.height, Dimension::Percent(_))
-                || matches!(node.style.min_height, Dimension::Percent(_))
-                || matches!(node.style.max_height, Dimension::Percent(_))
-                || matches!(node.style.flex_basis, Dimension::Percent(_))
-            {
+        use strata_style::types::Dimension;
+        let mut stack: Vec<(&LayoutNode, bool)> =
+            self.children.iter().map(|c| (c, false)).collect();
+        while let Some((node, behind_px_height)) = stack.pop() {
+            if style_uses_viewport_units(&node.style) {
                 return true;
             }
-            if matches!(node.style.position, Position::Absolute | Position::Fixed)
-                && (!matches!(node.style.insets.bottom, Dimension::Auto)
-                    || matches!(node.style.insets.top, Dimension::Percent(_)))
-            {
+            if !behind_px_height && node.is_self_height_dependent() {
                 return true;
             }
-            if !matches!(node.style.height, Dimension::Px(_)) {
-                for grand in &node.children {
-                    stack.push(grand);
-                }
+            let next_behind_px =
+                behind_px_height || matches!(node.style.height, Dimension::Px(_));
+            for grand in &node.children {
+                stack.push((grand, next_behind_px));
             }
         }
         false
@@ -2112,7 +2140,8 @@ impl LayoutNode {
     /// 1. Explicit CSS `contain: strict` or `contain: content`
     /// 2. Explicit CSS `contain: layout` combined with `contain: size` or definite pixel dimensions
     /// 3. CSS `content-visibility: auto` or `hidden` with definite pixel dimensions
-    /// 4. Out-of-flow positioned boxes with clipping and definite pixel dimensions
+    /// 4. Out-of-flow `position: fixed` boxes with definite pixel dimensions
+    /// 5. Out-of-flow `position: absolute` boxes with clipping and definite pixel dimensions
     pub fn is_layout_boundary(&self) -> bool {
         // 1. Explicit contain: strict or contain: content
         if self.style.contain == strata_style::types::Containment::STRICT
@@ -2138,11 +2167,17 @@ impl LayoutNode {
             return true;
         }
 
-        // 5. Out-of-flow positioned boxes with clipping and definite dimensions
-        if matches!(
-            self.style.position,
-            strata_style::types::Position::Absolute | strata_style::types::Position::Fixed
-        ) && self.has_definite_dimensions()
+        // 5. Out-of-flow `position: fixed` boxes with definite dimensions cannot affect
+        // ancestor or sibling geometry or scroll bounds even when overflow is visible.
+        if self.style.position == strata_style::types::Position::Fixed
+            && self.has_definite_dimensions()
+        {
+            return true;
+        }
+
+        // 6. Out-of-flow `position: absolute` boxes with clipping and definite dimensions
+        if self.style.position == strata_style::types::Position::Absolute
+            && self.has_definite_dimensions()
             && self.style.overflow_x != strata_style::types::Overflow::Visible
             && self.style.overflow_y != strata_style::types::Overflow::Visible
         {
@@ -2157,6 +2192,21 @@ impl LayoutNode {
     pub fn has_definite_dimensions(&self) -> bool {
         matches!(self.style.width, strata_style::types::Dimension::Px(_))
             && matches!(self.style.height, strata_style::types::Dimension::Px(_))
+    }
+
+    /// Returns true if this node can be relaid out in isolation without running a full root
+    /// layout pass.
+    ///
+    /// Includes all [`Self::is_layout_boundary`] containers plus any visible non-top-layer
+    /// `position: fixed` overlay (even with shrink-to-fit `auto` dimensions), since fixed
+    /// overlays are completely out of normal flow and excluded from ancestor scroll bounds.
+    #[inline]
+    pub fn is_isolated_relayout_root(&self) -> bool {
+        if self.style.display == strata_style::types::Display::None {
+            return false;
+        }
+        self.is_layout_boundary()
+            || (self.style.position == strata_style::types::Position::Fixed && !self.is_top_layer)
     }
 
     /// Recursively searches for the nearest ancestor layout boundary containing the given index path.
@@ -2182,6 +2232,208 @@ impl LayoutNode {
         best_boundary_len.map(|len| &path[..len])
     }
 
+    /// Searches along `path` for the nearest non-root isolated relayout boundary
+    /// ([`Self::is_isolated_relayout_root`]) containing `path`.
+    pub fn find_isolated_relayout_boundary_path<'a>(
+        &self,
+        path: &'a [usize],
+    ) -> Option<&'a [usize]> {
+        let mut best_boundary_len = None;
+        let mut curr = self;
+        for (i, &child_idx) in path.iter().enumerate() {
+            if child_idx >= curr.children.len() {
+                break;
+            }
+            curr = &curr.children[child_idx];
+            if curr.is_isolated_relayout_root() {
+                best_boundary_len = Some(i + 1);
+            }
+        }
+        best_boundary_len.map(|len| &path[..len])
+    }
+
+    /// Invalidates self caches strictly from `boundary_path` down to `descendant_path`,
+    /// preserving layout caches on the root and all ancestors above `boundary_path`.
+    pub fn invalidate_ancestors_within(
+        &mut self,
+        boundary_path: &[usize],
+        descendant_path: &[usize],
+    ) -> bool {
+        if boundary_path.is_empty() || !descendant_path.starts_with(boundary_path) {
+            return false;
+        }
+        let mut curr = self;
+        for &idx in boundary_path {
+            if idx >= curr.children.len() {
+                return false;
+            }
+            curr = &mut curr.children[idx];
+        }
+        curr.invalidate_self_caches();
+        curr.inline_items.clear();
+        curr.line_boxes.clear();
+        for &idx in &descendant_path[boundary_path.len()..] {
+            if idx >= curr.children.len() {
+                break;
+            }
+            curr = &mut curr.children[idx];
+            curr.invalidate_self_caches();
+            curr.inline_items.clear();
+            curr.line_boxes.clear();
+        }
+        true
+    }
+
+    /// Recomputes layout strictly for the isolated boundary at `boundary_path` without
+    /// invalidating or traversing root/sibling layout subtrees.
+    ///
+    /// For `position: fixed` overlays, solves the out-of-flow box directly against its
+    /// fixed containing block (`initial_viewport` or nearest `transform`/`filter` ancestor)
+    /// and resolves any nested positioned descendants. For containment boundaries, relayouts
+    /// children within the boundary's existing border box.
+    ///
+    /// Returns `true` when the isolated relayout succeeded, or `false` when the caller
+    /// should fall back to a full root `compute_layout` pass.
+    pub fn recompute_isolated_boundary_at_path(
+        &mut self,
+        boundary_path: &[usize],
+        viewport_width: f32,
+        viewport_height: f32,
+    ) -> bool {
+        use strata_style::types::{Dimension, Display, Position};
+
+        if boundary_path.is_empty() || viewport_width <= 0.0 || viewport_height <= 0.0 {
+            return false;
+        }
+
+        let initial_viewport = Rect::new(0.0, 0.0, viewport_width, viewport_height);
+        let mut fixed_vp = initial_viewport;
+        let mut abs_cb = self.geometry.padding_box;
+        let mut parent_display = self.style.display;
+
+        // Walk ancestors immutably to validate path and compute containing blocks.
+        {
+            let mut curr = &*self;
+            if curr.style.display == Display::None {
+                return false;
+            }
+            if curr.style.establishes_fixed_containing_block() {
+                fixed_vp = curr.geometry.padding_box;
+            }
+            for &idx in &boundary_path[..boundary_path.len() - 1] {
+                if idx >= curr.children.len() {
+                    return false;
+                }
+                curr = &curr.children[idx];
+                if curr.style.display == Display::None {
+                    return false;
+                }
+                parent_display = curr.style.display;
+                let establishes_fixed = curr.style.establishes_fixed_containing_block();
+                if establishes_fixed {
+                    fixed_vp = curr.geometry.padding_box;
+                }
+                if curr.style.position != Position::Static || establishes_fixed {
+                    abs_cb = curr.geometry.padding_box;
+                }
+            }
+            let last_idx = boundary_path[boundary_path.len() - 1];
+            let Some(target) = curr.children.get(last_idx) else {
+                return false;
+            };
+            if !target.is_isolated_relayout_root() {
+                return false;
+            }
+            if target.style.position == Position::Fixed
+                && matches!(parent_display, Display::Flex | Display::InlineFlex)
+            {
+                let h_auto = matches!(target.style.insets.left, Dimension::Auto)
+                    && matches!(target.style.insets.right, Dimension::Auto);
+                let v_auto = matches!(target.style.insets.top, Dimension::Auto)
+                    && matches!(target.style.insets.bottom, Dimension::Auto);
+                if h_auto || v_auto {
+                    // Static-position fixed children inside flex containers depend on
+                    // `apply_flex_static_positions(parent)`; fall back to full layout.
+                    return false;
+                }
+            }
+        }
+
+        let _vp_guard = crate::box_model::push_layout_viewport(viewport_width, viewport_height);
+
+        // Navigate mutably to the isolated boundary and relayout strictly within it.
+        {
+            let mut curr = &mut *self;
+            for &idx in boundary_path {
+                curr = &mut curr.children[idx];
+            }
+            let guard = LayoutDepthGuard::root();
+            if curr.style.position == Position::Fixed {
+                let effective_fixed_vp = if curr.is_top_layer {
+                    initial_viewport
+                } else {
+                    fixed_vp
+                };
+                crate::positioning::solve_out_of_flow_box_guarded(
+                    curr,
+                    effective_fixed_vp,
+                    effective_fixed_vp,
+                    true,
+                    guard,
+                );
+                if !curr.children.is_empty() {
+                    let child_vp = if curr.style.establishes_fixed_containing_block() {
+                        curr.geometry.padding_box
+                    } else {
+                        effective_fixed_vp
+                    };
+                    let child_cb = crate::positioning::ContainingBlock {
+                        padding_box: curr.geometry.padding_box,
+                        viewport: child_vp,
+                        initial_viewport,
+                        scroll_offset: (0.0, 0.0),
+                    };
+                    crate::positioning::solve_positioning_children_guarded(curr, child_cb, guard);
+                }
+            } else {
+                curr.layout_children();
+                if !curr.children.is_empty() {
+                    let establishes_fixed = curr.style.establishes_fixed_containing_block();
+                    let child_vp = if establishes_fixed {
+                        curr.geometry.padding_box
+                    } else {
+                        fixed_vp
+                    };
+                    let child_cb = crate::positioning::ContainingBlock {
+                        padding_box: if curr.style.position != Position::Static || establishes_fixed
+                        {
+                            curr.geometry.padding_box
+                        } else {
+                            abs_cb
+                        },
+                        viewport: child_vp,
+                        initial_viewport,
+                        scroll_offset: (0.0, 0.0),
+                    };
+                    crate::positioning::solve_positioning_children_guarded(curr, child_cb, guard);
+                }
+            }
+            curr.subtree_hit_flags &= !SUBTREE_META_VALID;
+        }
+
+        // Invalidate ONLY hit-metadata validity bit along the O(depth) ancestor chain so
+        // `refresh_subtree_hit_metadata` updates ancestor flags/bounds while skipping every
+        // clean sibling subtree in O(1) and keeping all ancestor `layout_cache` entries valid.
+        self.subtree_hit_flags &= !SUBTREE_META_VALID;
+        let mut anc = &mut *self;
+        for &idx in &boundary_path[..boundary_path.len() - 1] {
+            anc = &mut anc.children[idx];
+            anc.subtree_hit_flags &= !SUBTREE_META_VALID;
+        }
+        self.refresh_subtree_hit_metadata();
+        true
+    }
+
     /// Recomputes layout for the subtree rooted at `path` within its containing layout boundary.
     ///
     /// If an ancestor layout boundary exists along `path`, layout is recomputed ONLY for that
@@ -2189,6 +2441,10 @@ impl LayoutNode {
     /// Returns `true` if a layout boundary was found and laid out locally, or `false` if root
     /// layout recomputation is required.
     pub fn compute_subgrid_or_boundary_layout(&mut self, path: &[usize]) -> bool {
+        let _vp_guard = crate::box_model::push_layout_viewport_if_unset(
+            self.geometry.border_box.width,
+            self.geometry.border_box.height,
+        );
         let boundary_len = match self.find_layout_boundary_path(path) {
             Some(subpath) => subpath.len(),
             None => return false,

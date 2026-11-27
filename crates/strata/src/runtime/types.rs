@@ -8,6 +8,7 @@ pub struct InputHitTarget {
     pub entity_id: Option<strata_primitives::EntityId>,
     pub is_multiline: bool,
     pub current_value: String,
+    pub has_value_prop: bool,
     pub font_size: f32,
     pub line_height: f32,
     pub is_mono: bool,
@@ -99,6 +100,174 @@ pub struct SmoothScrollTracker {
     pub last_event_time: std::time::Instant,
     /// Critically damped angular frequency (rad/s).
     pub omega: f32,
+}
+
+/// Maximum pointer travel distance (in logical px) between `MouseDown` and `MouseUp`
+/// that still qualifies as a click rather than a drag gesture.
+pub(crate) const CLICK_DRAG_TOLERANCE_PX: f32 = 6.0;
+
+/// Stable identity anchor for an ancestor along a captured node's path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedAncestorAnchor {
+    /// Explicit non-empty `id="..."` attribute on this ancestor, if present.
+    pub element_id: Option<String>,
+    /// Explicit non-empty `key="..."` or `data-key="..."` attribute `(attr_name, value)` on this ancestor.
+    pub element_key: Option<(String, String)>,
+    /// Stable `data-strata-node-uid` attribute on this ancestor, if present.
+    pub dom_uid: Option<u64>,
+    /// Ancestor `EntityId` recorded at capture time (if valid).
+    pub entity_id: Option<strata_primitives::EntityId>,
+    /// Ancestor tag recorded at capture time.
+    pub tag: Option<strata_dom::Tag>,
+    /// Relative child-index path from this ancestor down to the captured descendant.
+    pub relative_tail: Vec<usize>,
+    /// Index of `relative_tail[0]` among siblings under this ancestor whose subtree has a
+    /// `MouseMove`/`PointerMove`/`MouseUp`/`PointerUp` listener (used to recover unkeyed
+    /// descendants when a non-listening sibling overlay is inserted/removed before them).
+    pub(crate) listener_rank: Option<usize>,
+    /// Total count of listener-bearing children under this ancestor at capture time.
+    pub(crate) total_listener_siblings: usize,
+}
+
+/// Active pointer capture or implicit drag target tracked with stable DOM identity so
+/// sibling insertions/removals, list reorders, or portal moves mid-gesture continue
+/// routing events to the captured element instead of drifting onto a shifted sibling index.
+#[derive(Clone)]
+pub struct PointerCaptureTarget {
+    /// Last known hierarchical layout tree path (fallback when no stable identity exists).
+    pub path: Vec<usize>,
+    /// `true` when requested via `ev.set_pointer_capture(...)`; `false` for implicit drag capture.
+    pub explicit: bool,
+    /// `EntityId` of the captured node at capture time (refreshed after view updates).
+    pub entity_id: Option<strata_primitives::EntityId>,
+    /// Explicit non-empty `id="..."` attribute on the captured node, if present.
+    pub element_id: Option<String>,
+    /// Explicit non-empty `key="..."` or `data-key="..."` attribute `(attr_name, value)` on the captured node.
+    pub element_key: Option<(String, String)>,
+    /// Stable `data-strata-node-uid` attribute on the captured node, if present.
+    pub dom_uid: Option<u64>,
+    /// Element tag of the captured node at capture time.
+    pub tag: Option<strata_dom::Tag>,
+    /// `true` when `element_key` was unique across the entire tree at capture time,
+    /// enabling unambiguous cross-portal / cross-container tracking.
+    pub key_was_unique_at_capture: bool,
+    /// Stable ancestor anchors ordered outermost-to-nearest for key disambiguation and
+    /// unkeyed-descendant recovery when a sibling shifts ahead of an identified ancestor.
+    pub ancestor_anchors: Vec<CapturedAncestorAnchor>,
+    /// Active pointer ID associated with this capture (`1` for mouse).
+    pub pointer_id: i32,
+    /// Mouse button index that initiated capture (`0` = Left, `1` = Middle, `2` = Right).
+    pub button: i16,
+    /// `true` when the captured node (or its chain) had a move/up listener at capture time.
+    pub(crate) had_move_or_up_listener: bool,
+    /// Retained `onlostpointercapture` callback from the capturing node so W3C `lostpointercapture`
+    /// still fires immediately if the capturing subtree unmounts mid-gesture.
+    pub(crate) lost_capture_handler: Option<std::rc::Rc<dyn Fn(strata_dom::Event)>>,
+}
+
+impl std::fmt::Debug for PointerCaptureTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PointerCaptureTarget")
+            .field("path", &self.path)
+            .field("explicit", &self.explicit)
+            .field("entity_id", &self.entity_id)
+            .field("element_id", &self.element_id)
+            .field("element_key", &self.element_key)
+            .field("dom_uid", &self.dom_uid)
+            .field("tag", &self.tag)
+            .field("key_was_unique_at_capture", &self.key_was_unique_at_capture)
+            .field("ancestor_anchors", &self.ancestor_anchors)
+            .field("pointer_id", &self.pointer_id)
+            .field("button", &self.button)
+            .field("had_move_or_up_listener", &self.had_move_or_up_listener)
+            .field("has_lost_capture_handler", &self.lost_capture_handler.is_some())
+            .finish()
+    }
+}
+
+impl PartialEq for PointerCaptureTarget {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.explicit == other.explicit
+            && self.entity_id == other.entity_id
+            && self.element_id == other.element_id
+            && self.element_key == other.element_key
+            && self.dom_uid == other.dom_uid
+            && self.tag == other.tag
+            && self.key_was_unique_at_capture == other.key_was_unique_at_capture
+            && self.ancestor_anchors == other.ancestor_anchors
+            && self.pointer_id == other.pointer_id
+            && self.button == other.button
+            && self.had_move_or_up_listener == other.had_move_or_up_listener
+    }
+}
+
+impl Eq for PointerCaptureTarget {}
+
+/// Result of resolving a [`PointerCaptureTarget`] against the live blueprint/layout tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CaptureResolution {
+    /// Resolved to a live element at `path`.
+    Resolved(Vec<usize>),
+    /// The captured node (or its explicitly identified ancestor) is no longer mounted.
+    Unmounted,
+}
+
+/// Registry of window/application-level pointer listeners owned by [`AppRuntime`].
+#[derive(Default)]
+pub(crate) struct WindowPointerListeners {
+    next_id: u64,
+    entries: Vec<(u64, std::rc::Rc<dyn Fn(strata_dom::Event)>)>,
+}
+
+impl WindowPointerListeners {
+    pub fn add<F: Fn(strata_dom::Event) + 'static>(&mut self, handler: F) -> u64 {
+        self.next_id += 1;
+        let id = self.next_id;
+        self.entries.push((id, std::rc::Rc::new(handler)));
+        id
+    }
+
+    pub fn remove(&mut self, id: u64) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|(entry_id, _)| *entry_id != id);
+        self.entries.len() != before
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn snapshot(&self) -> Vec<std::rc::Rc<dyn Fn(strata_dom::Event)>> {
+        self.entries.iter().map(|(_, cb)| std::rc::Rc::clone(cb)).collect()
+    }
+}
+
+impl std::fmt::Debug for WindowPointerListeners {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WindowPointerListeners")
+            .field("count", &self.entries.len())
+            .finish()
+    }
+}
+
+/// Pending mouse press candidate awaiting a matching `MouseUp` to dispatch `onclick` / `onauxclick`.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingMouseClick {
+    pub button: i16,
+    pub down_x: f32,
+    pub down_y: f32,
+    /// Deepest hit path under the pointer on `MouseDown`.
+    pub down_path: Option<Vec<usize>>,
+    /// `EntityId` of the deepest clickable ancestor (with a `Click`/`AuxClick` listener) on `MouseDown`.
+    pub clickable_entity: Option<strata_primitives::EntityId>,
+    /// Explicit `id="..."` of the deepest clickable ancestor on `MouseDown`, if present.
+    pub clickable_id: Option<String>,
+    /// Explicit `key="..."` or `data-key="..."` of the deepest clickable ancestor on `MouseDown`.
+    pub clickable_key: Option<(String, String)>,
+    /// Set to `true` once pointer travel exceeds drag tolerance or a drag gesture initiates.
+    pub dragged: bool,
 }
 
 /// Internal descriptor of a scrollable target container under the cursor.

@@ -1505,9 +1505,15 @@ impl AppRuntime {
         if self
             .active_smooth_scroll
             .as_ref()
-            .is_some_and(|t| t.container_path == bar.path)
+            .is_some_and(|t| Self::smooth_scroll_matches_bar(t, &bar))
         {
             if let Some(mut tracker) = self.active_smooth_scroll.take() {
+                // Refresh path & bounds in case sibling DOM insertions shifted indices mid-scroll.
+                tracker.container_path = bar.path.clone();
+                tracker.max_scroll_y = bar.max_scroll_y;
+                tracker.available_travel = bar.available_travel;
+                tracker.bounds_y = bar.bounds.y;
+
                 let dt_flick = now.duration_since(tracker.last_event_time).as_secs_f32();
                 let remaining = tracker.target_y - tracker.current_y;
                 let same_dir = remaining == 0.0 || (remaining > 0.0) == (delta_y > 0.0);
@@ -1554,32 +1560,96 @@ impl AppRuntime {
                 tracker.target_y = new_target;
                 tracker.start_time = now;
                 tracker.last_event_time = now;
-                tracker.max_scroll_y = bar.max_scroll_y;
-                tracker.available_travel = bar.available_travel;
-                tracker.bounds_y = bar.bounds.y;
                 self.active_smooth_scroll = Some(tracker);
                 return (wheel_handled, true);
             }
         }
 
         let new_target = (cur_y + delta_y).clamp(0.0, bar.max_scroll_y);
-        self.active_smooth_scroll = Some(SmoothScrollTracker {
-            container_path: bar.path,
-            container_id: bar.id,
-            is_id: bar.is_id,
-            max_scroll_y: bar.max_scroll_y,
-            available_travel: bar.available_travel,
-            bounds_y: bar.bounds.y,
-            current_y: cur_y,
-            target_y: new_target,
-            start_y: cur_y,
-            initial_velocity: 0.0,
-            start_time: now,
-            last_event_time: now,
-            omega: 18.0,
-        });
+        let total_delta = new_target - cur_y;
+        if total_delta.abs() <= 0.001 {
+            return (wheel_handled, false);
+        }
+
+        // Apply an immediate frame-0 displacement step so the first painted frame
+        // responds immediately instead of lagging by one ~16ms AnimationTick.
+        let omega = 18.0_f32;
+        let first_dy = if total_delta.abs() <= 0.5 {
+            total_delta
+        } else {
+            total_delta * 0.22
+        };
+        let first_y = (cur_y + first_dy).clamp(0.0, bar.max_scroll_y);
+        let applied_dy = first_y - cur_y;
+        if applied_dy.abs() > 0.001 {
+            self.apply_scroll_delta_to_container(
+                &bar.path,
+                bar.is_id,
+                &bar.id,
+                first_y,
+                applied_dy,
+                bar.max_scroll_y,
+                bar.available_travel,
+                bar.bounds.y,
+            );
+        }
+
+        let remaining = new_target - first_y;
+        if remaining.abs() > 0.25 {
+            // Seed monotonic initial velocity (< omega * remaining) so the spring
+            // eases smoothly without overshoot while keeping y(t=0) == first_y.
+            let initial_velocity = remaining * (omega * 0.35);
+            self.active_smooth_scroll = Some(SmoothScrollTracker {
+                container_path: bar.path,
+                container_id: bar.id,
+                is_id: bar.is_id,
+                max_scroll_y: bar.max_scroll_y,
+                available_travel: bar.available_travel,
+                bounds_y: bar.bounds.y,
+                current_y: first_y,
+                target_y: new_target,
+                start_y: first_y,
+                initial_velocity,
+                start_time: now,
+                last_event_time: now,
+                omega,
+            });
+        }
 
         (wheel_handled, true)
+    }
+
+    /// Matches an active smooth-scroll tracker against a live [`ActiveScrollbar`],
+    /// preferring stable `container_id` when present so sibling DOM insertions cannot
+    /// reset or hijack mid-scroll tracking.
+    #[inline]
+    pub(super) fn smooth_scroll_matches_bar(
+        tracker: &SmoothScrollTracker,
+        bar: &ActiveScrollbar,
+    ) -> bool {
+        if tracker.is_id && bar.is_id {
+            !tracker.container_id.is_empty() && tracker.container_id == bar.id
+        } else if !tracker.is_id && !bar.is_id {
+            tracker.container_path == bar.path
+        } else {
+            false
+        }
+    }
+
+    /// Matches an active scrollbar thumb drag against a live [`ActiveScrollbar`],
+    /// preferring stable `id` when present.
+    #[inline]
+    pub(super) fn scrollbar_drag_matches_bar(
+        drag: &ScrollbarDrag,
+        bar: &ActiveScrollbar,
+    ) -> bool {
+        if drag.is_id && bar.is_id {
+            !drag.id.is_empty() && drag.id == bar.id
+        } else if !drag.is_id && !bar.is_id {
+            drag.path == bar.path
+        } else {
+            false
+        }
     }
 
     /// Dispatches a smooth kinetic scroll impulse to the innermost scrollable container under (px, py).
@@ -1596,6 +1666,22 @@ impl AppRuntime {
         let Some(mut tracker) = self.active_smooth_scroll.take() else {
             return false;
         };
+
+        // Re-resolve the live scrollbar container so sibling DOM insertions/removals
+        // update `container_path` & bounds cleanly, and unmounted targets drop cleanly.
+        let Some(live_bar) = self
+            .active_scrollbars
+            .iter()
+            .find(|b| Self::smooth_scroll_matches_bar(&tracker, b))
+            .cloned()
+        else {
+            return false;
+        };
+        tracker.container_path = live_bar.path;
+        tracker.max_scroll_y = live_bar.max_scroll_y;
+        tracker.available_travel = live_bar.available_travel;
+        tracker.bounds_y = live_bar.bounds.y;
+        tracker.target_y = tracker.target_y.clamp(0.0, tracker.max_scroll_y);
 
         let t = now.duration_since(tracker.start_time).as_secs_f32();
         let omega = tracker.omega;

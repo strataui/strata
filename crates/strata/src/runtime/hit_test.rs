@@ -358,18 +358,47 @@ impl AppRuntime {
         Self::hit_test_event(blueprint, layout, px, py, strata_dom::EventType::Click)
     }
 
-    /// Hit tests `(px, py)` against the front-most visual target and its DOM ancestors
-    /// to determine cursor style without piercing through opaque higher-z overlays.
-    pub fn hit_test_cursor(
+    /// Maps a `strata_dom::hooks::CursorIcon` override into the platform `CursorIcon`.
+    #[inline]
+    pub fn map_dom_cursor_to_platform(
+        icon: strata_dom::hooks::CursorIcon,
+    ) -> strata_platform::window::CursorIcon {
+        use strata_dom::hooks::CursorIcon as DomCursor;
+        use strata_platform::window::CursorIcon as PlatCursor;
+        match icon {
+            DomCursor::Default => PlatCursor::Default,
+            DomCursor::Pointer => PlatCursor::Pointer,
+            DomCursor::Text => PlatCursor::Text,
+            DomCursor::Move => PlatCursor::Move,
+            DomCursor::NotAllowed => PlatCursor::NotAllowed,
+            DomCursor::Grab => PlatCursor::Grab,
+            DomCursor::Grabbing => PlatCursor::Grabbing,
+            DomCursor::Crosshair => PlatCursor::Crosshair,
+            DomCursor::ColResize => PlatCursor::ColResize,
+            DomCursor::RowResize => PlatCursor::RowResize,
+            DomCursor::NsResize | DomCursor::ResizeN => PlatCursor::ResizeN,
+            DomCursor::ResizeS => PlatCursor::ResizeS,
+            DomCursor::EwResize | DomCursor::ResizeE => PlatCursor::ResizeE,
+            DomCursor::ResizeW => PlatCursor::ResizeW,
+            DomCursor::NwseResize | DomCursor::ResizeNw => PlatCursor::ResizeNw,
+            DomCursor::ResizeSe => PlatCursor::ResizeSe,
+            DomCursor::NeswResize | DomCursor::ResizeNe => PlatCursor::ResizeNe,
+            DomCursor::ResizeSw => PlatCursor::ResizeSw,
+            DomCursor::Wait => PlatCursor::Wait,
+            DomCursor::Help => PlatCursor::Help,
+            DomCursor::None => PlatCursor::None,
+        }
+    }
+
+    /// Resolves the cursor icon along a specific DOM/layout path (walking from target up
+    /// through its ancestors). Used both for geometric hit-testing and for locking the cursor
+    /// to an active `pointer_capture_target` during fast drags.
+    pub fn resolve_cursor_for_path(
         blueprint: &NodeBlueprint,
         layout: &LayoutNode,
-        px: f32,
-        py: f32,
+        path: &[usize],
     ) -> strata_platform::window::CursorIcon {
-        let Some(visual_path) = Self::hit_test_node_path(blueprint, layout, px, py) else {
-            return strata_platform::window::CursorIcon::Default;
-        };
-        let chain = Self::resolve_chain_for_path(blueprint, layout, &visual_path);
+        let chain = Self::resolve_chain_for_path(blueprint, layout, path);
         for (bp, node_layout) in chain.into_iter().rev() {
             if let NodeBlueprint::Element {
                 tag,
@@ -408,6 +437,34 @@ impl AppRuntime {
                     }
                     strata_style::types::Cursor::RowResize => {
                         return strata_platform::window::CursorIcon::RowResize
+                    }
+                    strata_style::types::Cursor::NsResize
+                    | strata_style::types::Cursor::NResize => {
+                        return strata_platform::window::CursorIcon::ResizeN
+                    }
+                    strata_style::types::Cursor::SResize => {
+                        return strata_platform::window::CursorIcon::ResizeS
+                    }
+                    strata_style::types::Cursor::EwResize
+                    | strata_style::types::Cursor::EResize => {
+                        return strata_platform::window::CursorIcon::ResizeE
+                    }
+                    strata_style::types::Cursor::WResize => {
+                        return strata_platform::window::CursorIcon::ResizeW
+                    }
+                    strata_style::types::Cursor::NwseResize
+                    | strata_style::types::Cursor::NwResize => {
+                        return strata_platform::window::CursorIcon::ResizeNw
+                    }
+                    strata_style::types::Cursor::SeResize => {
+                        return strata_platform::window::CursorIcon::ResizeSe
+                    }
+                    strata_style::types::Cursor::NeswResize
+                    | strata_style::types::Cursor::NeResize => {
+                        return strata_platform::window::CursorIcon::ResizeNe
+                    }
+                    strata_style::types::Cursor::SwResize => {
+                        return strata_platform::window::CursorIcon::ResizeSw
                     }
                     strata_style::types::Cursor::Help => {
                         return strata_platform::window::CursorIcon::Help
@@ -449,6 +506,64 @@ impl AppRuntime {
             }
         }
         strata_platform::window::CursorIcon::Default
+    }
+
+    /// Hit tests `(px, py)` against the front-most visual target and its DOM ancestors
+    /// to determine cursor style without piercing through opaque higher-z overlays.
+    pub fn hit_test_cursor(
+        blueprint: &NodeBlueprint,
+        layout: &LayoutNode,
+        px: f32,
+        py: f32,
+    ) -> strata_platform::window::CursorIcon {
+        let Some(visual_path) = Self::hit_test_node_path(blueprint, layout, px, py) else {
+            return strata_platform::window::CursorIcon::Default;
+        };
+        Self::resolve_cursor_for_path(blueprint, layout, &visual_path)
+    }
+
+    /// Resolves the active platform cursor at `(x, y)` applying full interaction precedence:
+    /// 1. Explicit non-default programmatic cursor override from `strata_dom::current_cursor()`
+    ///    (`set_current_cursor` / `use_cursor`).
+    /// 2. Active `pointer_capture_target` cursor lock (resolved from the captured element and
+    ///    its ancestor chain so fast drags over neighboring widgets never flicker the cursor).
+    /// 3. Active scrollbar thumb drag or hovered scrollbar track (`CursorIcon::Default`).
+    /// 4. Passive geometric `hit_test_cursor` at `(x, y)`.
+    pub fn resolved_cursor_at(&self, x: f32, y: f32) -> strata_platform::window::CursorIcon {
+        let dom_override = strata_dom::hooks::current_cursor();
+        if dom_override != strata_dom::hooks::CursorIcon::Default {
+            return Self::map_dom_cursor_to_platform(dom_override);
+        }
+
+        if let Some(ref cap) = self.pointer_capture_target {
+            if let CaptureResolution::Resolved(cap_path) = self.resolve_pointer_capture(cap) {
+                return Self::resolve_cursor_for_path(
+                    &self.root_blueprint,
+                    &self.layout_root,
+                    &cap_path,
+                );
+            }
+        }
+
+        if self.scrollbar_drag.is_some() {
+            return strata_platform::window::CursorIcon::Default;
+        }
+
+        let mut cached_hit: Option<Option<Vec<usize>>> = None;
+        let is_over_scrollbar = self.active_scrollbars.iter().rev().any(|bar| {
+            bar.max_scroll_y > 1.0
+                && bar.clip_bounds.contains_point(x, y)
+                && (x >= bar.track_bounds.x
+                    && x <= bar.bounds.x + bar.bounds.width + 1.0
+                    && y >= bar.track_bounds.y
+                    && y <= bar.track_bounds.y + bar.track_bounds.height)
+                && self.scrollbar_owns_point(bar, x, y, &mut cached_hit)
+        });
+        if is_over_scrollbar {
+            strata_platform::window::CursorIcon::Default
+        } else {
+            Self::hit_test_cursor(&self.root_blueprint, &self.layout_root, x, y)
+        }
     }
 
     /// Finds the value of the nearest element property `key` along the front-most visual target

@@ -2122,9 +2122,10 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
             }
             let n_water = normalize(up_v - east_v * raw_slope.x - north_v * raw_slope.y);
 
-            // Physically based Fresnel sky reflection + deep pelagic water absorption.
+            // Physically based Fresnel sky reflection + grazing-scaled deep pelagic water absorption.
             let ndotv = max(dot(n_water, view_dir), 0.04);
             let f_schlick = 0.02 + 0.98 * pow(1.0 - ndotv, 5.0);
+            let grazing_t = smoothstep(0.92, 0.28, ndotv);
             var refl_dir = reflect(-view_dir, n_water);
             let refl_up = dot(refl_dir, local_up);
             if (refl_up < 0.045) {
@@ -2134,11 +2135,25 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
 
             let sun_elev = dot(local_up, sun_dir);
             let day_t = smoothstep(-0.08, 0.24, sun_elev);
-            let water_albedo = mix(
-                base.rgb * lit * (1.0 - wet_darken),
-                mix(vec3<f32>(0.014, 0.052, 0.095), vec3<f32>(0.028, 0.135, 0.205), shoal_boost) * max(lit, vec3<f32>(0.12)),
-                mix(0.28, 0.44, water_mask),
+            let base_water = base.rgb * lit * (1.0 - wet_darken);
+            let pelagic_col = mix(
+                vec3<f32>(0.024, 0.096, 0.185),
+                vec3<f32>(0.038, 0.168, 0.248),
+                shoal_boost,
+            ) * max(lit, vec3<f32>(0.10));
+            // Scale pelagic absorption with grazing angle so steep top-down zooms below 520 km
+            // preserve orbital ocean tone instead of darkening when Fresnel reflection is minimal.
+            let pelagic_weight = mix(0.08, mix(0.24, 0.40, water_mask), grazing_t);
+            let pelagic_blended = mix(base_water, pelagic_col, pelagic_weight);
+            let luma_w = vec3<f32>(0.2126, 0.7152, 0.0722);
+            let base_luma = dot(base_water, luma_w);
+            let blended_luma = dot(pelagic_blended, luma_w);
+            let steep_floor_scale = select(
+                1.0,
+                clamp(base_luma / max(blended_luma, 1e-4), 1.0, 1.35),
+                blended_luma < base_luma,
             );
+            let water_albedo = mix(pelagic_blended * steep_floor_scale, pelagic_blended, grazing_t);
 
             // Subsurface turquoise glow through sunlit wave crests & shallow coastal water.
             let sss = pow(clamp(wave_res.z * 0.72, 0.0, 1.0), 1.4) * smoothstep(-0.04, 0.30, sun_elev)
@@ -2183,7 +2198,8 @@ fn shade_terrain(in: TerrainVsOut, base: vec4<f32>) -> vec4<f32> {
             let foam_col = mix(vec3<f32>(0.16, 0.20, 0.28), foam_sun_tint, clamp(day_t * 0.9 + 0.12, 0.12, 1.0))
                          * mix(1.0, 0.68, weather_dark);
 
-            var ocean_rgb = mix(water_albedo + sss_col, sky_refl, clamp(f_schlick * 0.86 + 0.08, 0.0, 0.90))
+            let refl_w = clamp(f_schlick * 0.86 + mix(0.06, 0.10, grazing_t), 0.0, 0.90);
+            var ocean_rgb = mix(water_albedo + sss_col, sky_refl, refl_w)
                           + sun_glint + moon_glint;
             ocean_rgb = mix(ocean_rgb, foam_col, total_foam);
 
@@ -3302,33 +3318,271 @@ struct SlabEntry {
     last_used_frame: u64,
 }
 
-/// Free-list GPU vertex slab allocator holding tile-local RTC vertices across frames.
-struct GpuTileSlabAllocator {
-    buffer: wgpu::Buffer,
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SlabAllocPlan {
+    /// Satisfied in-place inside the existing buffer without reallocating.
+    InPlace { offset: u32 },
+    /// Replaced the backing buffer (either compacted at the same capacity or grown within `max_vertices`).
+    /// `copies` are coalesced `(src_vertex_offset, dst_vertex_offset, vertex_count)` spans.
+    Rebuild {
+        new_capacity: u32,
+        copies: Vec<(u32, u32, u32)>,
+        offset: u32,
+    },
+    /// Live current-frame tiles plus `needed` exceed the device's hard `max_vertices` ceiling.
+    Exhausted,
+}
+
+/// Pure free-list + contiguous LRU eviction + compaction planner for `GpuTileSlabAllocator`.
+struct SlabRegionIndex {
     capacity_vertices: u32,
+    max_vertices: u32,
     resident: HashMap<TileKeyId, SlabEntry>,
     free_blocks: Vec<(u32, u32)>, // (offset, len)
     bump_cursor: u32,
 }
 
+impl SlabRegionIndex {
+    fn new(initial_capacity_vertices: u32, max_vertices: u32) -> Self {
+        let max_v = max_vertices.max(1);
+        let cap = initial_capacity_vertices.max(65_536).min(max_v);
+        Self {
+            capacity_vertices: cap,
+            max_vertices: max_v,
+            resident: HashMap::new(),
+            free_blocks: Vec::new(),
+            bump_cursor: 0,
+        }
+    }
+
+    fn take_best_fit(&mut self, needed: u32) -> Option<u32> {
+        let (idx, (off, len)) = self
+            .free_blocks
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, (_, l))| *l >= needed)
+            .min_by_key(|(_, (_, l))| *l)?;
+        self.free_blocks.swap_remove(idx);
+        if len > needed {
+            self.free_blocks.push((off + needed, len - needed));
+        }
+        Some(off)
+    }
+
+    fn try_bump(&mut self, needed: u32) -> Option<u32> {
+        let end = self.bump_cursor.checked_add(needed)?;
+        if end <= self.capacity_vertices {
+            let off = self.bump_cursor;
+            self.bump_cursor = end;
+            Some(off)
+        } else {
+            None
+        }
+    }
+
+    fn reclaim_tail(&mut self) {
+        while let Some(&(o, l)) = self.free_blocks.last() {
+            if o.saturating_add(l) == self.bump_cursor {
+                self.bump_cursor = o;
+                self.free_blocks.pop();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn coalesce_free_blocks(&mut self) {
+        if self.free_blocks.is_empty() {
+            return;
+        }
+        if self.free_blocks.len() >= 2 {
+            self.free_blocks.sort_unstable_by_key(|(o, _)| *o);
+            let mut merged: Vec<(u32, u32)> = Vec::with_capacity(self.free_blocks.len());
+            for (o, l) in self.free_blocks.drain(..) {
+                if l == 0 {
+                    continue;
+                }
+                if let Some(last) = merged.last_mut() {
+                    if last.0.saturating_add(last.1) == o {
+                        last.1 = last.1.saturating_add(l);
+                        continue;
+                    }
+                }
+                merged.push((o, l));
+            }
+            self.free_blocks = merged;
+        }
+        self.reclaim_tail();
+    }
+
+    /// Inserts `(off, len)` into an already-sorted, coalesced `free_blocks` list, merges with
+    /// immediate neighbors, reclaims any trailing space into `bump_cursor`, and returns the
+    /// merged contiguous length of the affected free span.
+    fn insert_free_block_sorted(&mut self, off: u32, len: u32) -> u32 {
+        if len == 0 {
+            return 0;
+        }
+        let pos = self.free_blocks.partition_point(|&(o, _)| o < off);
+        let idx = if pos > 0
+            && self.free_blocks[pos - 1]
+                .0
+                .saturating_add(self.free_blocks[pos - 1].1)
+                == off
+        {
+            self.free_blocks[pos - 1].1 = self.free_blocks[pos - 1].1.saturating_add(len);
+            pos - 1
+        } else {
+            self.free_blocks.insert(pos, (off, len));
+            pos
+        };
+        if idx + 1 < self.free_blocks.len()
+            && self.free_blocks[idx]
+                .0
+                .saturating_add(self.free_blocks[idx].1)
+                == self.free_blocks[idx + 1].0
+        {
+            let next_len = self.free_blocks[idx + 1].1;
+            self.free_blocks[idx].1 = self.free_blocks[idx].1.saturating_add(next_len);
+            self.free_blocks.remove(idx + 1);
+        }
+        let merged_len = self.free_blocks[idx].1;
+        self.reclaim_tail();
+        merged_len
+    }
+
+    fn plan_alloc(&mut self, needed: u32, current_frame: u64) -> SlabAllocPlan {
+        if needed == 0 || needed > self.max_vertices {
+            return SlabAllocPlan::Exhausted;
+        }
+
+        // 1. Reuse best-fit free block.
+        if let Some(off) = self.take_best_fit(needed) {
+            return SlabAllocPlan::InPlace { offset: off };
+        }
+
+        // 2. Bump allocate if space remains in the current slab.
+        if let Some(off) = self.try_bump(needed) {
+            return SlabAllocPlan::InPlace { offset: off };
+        }
+
+        // 3. Coalesce existing free spans and evict stale LRU tiles until a contiguous
+        //    free block >= needed (or reclaimed tail space) actually exists.
+        self.coalesce_free_blocks();
+        if let Some(off) = self.take_best_fit(needed) {
+            return SlabAllocPlan::InPlace { offset: off };
+        }
+        if let Some(off) = self.try_bump(needed) {
+            return SlabAllocPlan::InPlace { offset: off };
+        }
+
+        let mut stale: Vec<(TileKeyId, SlabEntry)> = self
+            .resident
+            .iter()
+            .filter(|(_, e)| e.last_used_frame < current_frame)
+            .map(|(k, e)| (*k, *e))
+            .collect();
+        stale.sort_unstable_by_key(|(_, e)| (e.last_used_frame, e.offset));
+
+        for (k, e) in stale {
+            self.resident.remove(&k);
+            let merged_len = self.insert_free_block_sorted(e.offset, e.len);
+            if merged_len >= needed {
+                if let Some(off) = self.take_best_fit(needed) {
+                    return SlabAllocPlan::InPlace { offset: off };
+                }
+            }
+            if let Some(off) = self.try_bump(needed) {
+                return SlabAllocPlan::InPlace { offset: off };
+            }
+        }
+
+        // 4. All stale tiles are evicted; compact resident tiles (and grow only if needed and
+        //    strictly within `self.max_vertices` so we never exceed `max_storage_buffer_binding_size`).
+        let live_vertices: u64 = self.resident.values().map(|e| e.len as u64).sum();
+        let required_total = live_vertices.saturating_add(needed as u64);
+        if required_total > self.max_vertices as u64 {
+            return SlabAllocPlan::Exhausted;
+        }
+
+        let new_capacity = if required_total <= self.capacity_vertices as u64 {
+            // Fragmentation compaction within the existing slab capacity (zero growth).
+            self.capacity_vertices
+        } else {
+            let doubled = (self.capacity_vertices as u64).saturating_mul(2);
+            let padded = required_total.saturating_add(65_536);
+            doubled.max(padded).min(self.max_vertices as u64) as u32
+        };
+
+        let mut live_entries: Vec<(TileKeyId, u32, u32)> = self
+            .resident
+            .iter()
+            .map(|(k, e)| (*k, e.offset, e.len))
+            .collect();
+        live_entries.sort_unstable_by_key(|&(_, old_off, _)| old_off);
+
+        let mut copies: Vec<(u32, u32, u32)> = Vec::new();
+        let mut dst_cursor = 0u32;
+        for (key, old_off, len) in live_entries {
+            if let Some(entry) = self.resident.get_mut(&key) {
+                entry.offset = dst_cursor;
+            }
+            if len > 0 {
+                if let Some(last) = copies.last_mut() {
+                    if last.0.saturating_add(last.2) == old_off
+                        && last.1.saturating_add(last.2) == dst_cursor
+                    {
+                        last.2 = last.2.saturating_add(len);
+                    } else {
+                        copies.push((old_off, dst_cursor, len));
+                    }
+                } else {
+                    copies.push((old_off, dst_cursor, len));
+                }
+                dst_cursor = dst_cursor.saturating_add(len);
+            }
+        }
+
+        self.free_blocks.clear();
+        self.capacity_vertices = new_capacity;
+        let alloc_offset = dst_cursor;
+        self.bump_cursor = dst_cursor.saturating_add(needed);
+
+        SlabAllocPlan::Rebuild {
+            new_capacity,
+            copies,
+            offset: alloc_offset,
+        }
+    }
+}
+
+/// Free-list GPU vertex slab allocator holding tile-local RTC vertices across frames.
+struct GpuTileSlabAllocator {
+    buffer: wgpu::Buffer,
+    index: SlabRegionIndex,
+}
+
 impl GpuTileSlabAllocator {
+    fn max_vertices_for_device(device: &wgpu::Device) -> u32 {
+        let limits = device.limits();
+        let max_bytes =
+            (limits.max_storage_buffer_binding_size as u64).min(limits.max_buffer_size);
+        let vert_size = std::mem::size_of::<RteTileVertex>() as u64;
+        ((max_bytes / vert_size).min(u32::MAX as u64)).max(1) as u32
+    }
+
     fn new(device: &wgpu::Device, initial_capacity_vertices: u32) -> Self {
-        let cap = initial_capacity_vertices.max(65_536);
+        let max_vertices = Self::max_vertices_for_device(device);
+        let index = SlabRegionIndex::new(initial_capacity_vertices, max_vertices);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("strata_earth_tile_vertex_slab"),
-            size: (cap as u64) * (std::mem::size_of::<RteTileVertex>() as u64),
+            size: (index.capacity_vertices as u64) * (std::mem::size_of::<RteTileVertex>() as u64),
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST
                 | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        Self {
-            buffer,
-            capacity_vertices: cap,
-            resident: HashMap::new(),
-            free_blocks: Vec::new(),
-            bump_cursor: 0,
-        }
+        Self { buffer, index }
     }
 
     fn alloc_range(
@@ -3337,115 +3591,45 @@ impl GpuTileSlabAllocator {
         queue: &wgpu::Queue,
         needed: u32,
         current_frame: u64,
-    ) -> (u32, bool) {
-        // 1. Reuse best-fit free block.
-        if let Some((idx, (off, len))) = self
-            .free_blocks
-            .iter()
-            .copied()
-            .enumerate()
-            .filter(|(_, (_, l))| *l >= needed)
-            .min_by_key(|(_, (_, l))| *l)
-        {
-            self.free_blocks.swap_remove(idx);
-            if len > needed {
-                self.free_blocks.push((off + needed, len - needed));
-            }
-            return (off, false);
-        }
+    ) -> Option<(u32, bool)> {
+        let vert_size = std::mem::size_of::<RteTileVertex>() as u64;
+        debug_assert_eq!(vert_size % wgpu::COPY_BUFFER_ALIGNMENT, 0);
 
-        // 2. Bump allocate if space remains.
-        if self.bump_cursor + needed <= self.capacity_vertices {
-            let off = self.bump_cursor;
-            self.bump_cursor += needed;
-            return (off, false);
-        }
-
-        // 3. Evict LRU tiles not used this frame.
-        let mut stale: Vec<(TileKeyId, SlabEntry)> = self
-            .resident
-            .iter()
-            .filter(|(_, e)| e.last_used_frame < current_frame)
-            .map(|(k, e)| (*k, *e))
-            .collect();
-        stale.sort_by_key(|(_, e)| e.last_used_frame);
-
-        let mut reclaimed = 0u32;
-        for (k, e) in stale {
-            self.resident.remove(&k);
-            self.free_blocks.push((e.offset, e.len));
-            reclaimed += e.len;
-            if reclaimed >= needed {
-                break;
-            }
-        }
-        self.coalesce_free_blocks();
-
-        if let Some((idx, (off, len))) = self
-            .free_blocks
-            .iter()
-            .copied()
-            .enumerate()
-            .filter(|(_, (_, l))| *l >= needed)
-            .min_by_key(|(_, (_, l))| *l)
-        {
-            self.free_blocks.swap_remove(idx);
-            if len > needed {
-                self.free_blocks.push((off + needed, len - needed));
-            }
-            return (off, false);
-        }
-
-        // 4. Grow buffer if still tight.
-        let new_cap = (self.capacity_vertices * 2).max(self.bump_cursor + needed + 65_536);
-        let new_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("strata_earth_tile_vertex_slab_grown"),
-            size: (new_cap as u64) * (std::mem::size_of::<RteTileVertex>() as u64),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let copy_bytes = (self.bump_cursor as u64) * (std::mem::size_of::<RteTileVertex>() as u64);
-        if copy_bytes > 0 {
-            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("strata_earth_slab_grow_copy"),
-            });
-            enc.copy_buffer_to_buffer(&self.buffer, 0, &new_buf, 0, copy_bytes);
-            queue.submit(Some(enc.finish()));
-        }
-        self.buffer = new_buf;
-        self.capacity_vertices = new_cap;
-        let off = self.bump_cursor;
-        self.bump_cursor += needed;
-        (off, true)
-    }
-
-    fn coalesce_free_blocks(&mut self) {
-        if self.free_blocks.len() < 2 {
-            return;
-        }
-        self.free_blocks.sort_unstable_by_key(|(o, _)| *o);
-        let mut merged: Vec<(u32, u32)> = Vec::with_capacity(self.free_blocks.len());
-        for (o, l) in self.free_blocks.drain(..) {
-            if let Some(last) = merged.last_mut() {
-                if last.0 + last.1 == o {
-                    last.1 += l;
-                    continue;
+        match self.index.plan_alloc(needed, current_frame) {
+            SlabAllocPlan::InPlace { offset } => Some((offset, false)),
+            SlabAllocPlan::Rebuild {
+                new_capacity,
+                copies,
+                offset,
+            } => {
+                let new_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("strata_earth_tile_vertex_slab_grown"),
+                    size: (new_capacity as u64) * vert_size,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_DST
+                        | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                });
+                if !copies.is_empty() {
+                    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("strata_earth_slab_compact_copy"),
+                    });
+                    for (src_v, dst_v, count_v) in copies {
+                        enc.copy_buffer_to_buffer(
+                            &self.buffer,
+                            (src_v as u64) * vert_size,
+                            &new_buf,
+                            (dst_v as u64) * vert_size,
+                            (count_v as u64) * vert_size,
+                        );
+                    }
+                    queue.submit(Some(enc.finish()));
                 }
+                self.buffer = new_buf;
+                Some((offset, true))
             }
-            merged.push((o, l));
+            SlabAllocPlan::Exhausted => None,
         }
-        // Reclaim tail back into bump_cursor.
-        while let Some(&(o, l)) = merged.last() {
-            if o + l == self.bump_cursor {
-                self.bump_cursor = o;
-                merged.pop();
-            } else {
-                break;
-            }
-        }
-        self.free_blocks = merged;
     }
 
     fn upload_meshes(
@@ -3453,6 +3637,7 @@ impl GpuTileSlabAllocator {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         meshes: &[Arc<RetainedTileMesh>],
+        active_keys: impl IntoIterator<Item = TileKeyId>,
         frame_idx: u64,
         budget: usize,
     ) -> (bool, bool) {
@@ -3460,9 +3645,15 @@ impl GpuTileSlabAllocator {
         let mut deferred_any = false;
         let mut uploaded = 0usize;
 
-        // First mark already-resident entries for visible keys as fresh this frame so LRU never evicts a fallback.
+        // First mark already-resident entries for visible/fallback keys as fresh this frame so LRU
+        // never evicts an active tile or fallback while uploading new tiles.
+        for key in active_keys {
+            if let Some(entry) = self.index.resident.get_mut(&key) {
+                entry.last_used_frame = frame_idx;
+            }
+        }
         for mesh in meshes {
-            if let Some(entry) = self.resident.get_mut(&mesh.key) {
+            if let Some(entry) = self.index.resident.get_mut(&mesh.key) {
                 if entry.len == mesh.vertices.len() as u32
                     && entry.grid_res == mesh.grid_res
                     && entry.has_skirts == mesh.has_skirts
@@ -3477,7 +3668,7 @@ impl GpuTileSlabAllocator {
             if needed == 0 {
                 continue;
             }
-            if let Some(entry) = self.resident.get(&mesh.key) {
+            if let Some(entry) = self.index.resident.get(&mesh.key) {
                 if entry.revision == mesh.revision
                     && entry.len == needed
                     && entry.grid_res == mesh.grid_res
@@ -3490,12 +3681,15 @@ impl GpuTileSlabAllocator {
                 deferred_any = true;
                 continue;
             }
-            if let Some(old) = self.resident.remove(&mesh.key) {
-                self.free_blocks.push((old.offset, old.len));
-                self.coalesce_free_blocks();
+            if let Some(old) = self.index.resident.remove(&mesh.key) {
+                self.index.free_blocks.push((old.offset, old.len));
+                self.index.coalesce_free_blocks();
             }
-            let (off, grew) = self.alloc_range(device, queue, needed, frame_idx);
-            if grew {
+            let Some((off, rebuilt)) = self.alloc_range(device, queue, needed, frame_idx) else {
+                deferred_any = true;
+                continue;
+            };
+            if rebuilt {
                 bind_group_dirty = true;
             }
             let byte_offset = (off as u64) * (std::mem::size_of::<RteTileVertex>() as u64);
@@ -3504,7 +3698,7 @@ impl GpuTileSlabAllocator {
                 byte_offset,
                 bytemuck::cast_slice(&mesh.vertices),
             );
-            self.resident.insert(
+            self.index.resident.insert(
                 mesh.key,
                 SlabEntry {
                     revision: mesh.revision,
@@ -3521,7 +3715,7 @@ impl GpuTileSlabAllocator {
     }
 
     fn resident_slot(&self, key: TileKeyId, revision: u64) -> Option<(u32, u32, bool)> {
-        let entry = self.resident.get(&key)?;
+        let entry = self.index.resident.get(&key)?;
         let _ = revision;
         Some((entry.offset, entry.grid_res, entry.has_skirts))
     }
@@ -4919,14 +5113,31 @@ pub struct Wgpu3DRenderer {
     is_software_adapter: bool,
 }
 
-/// Returns adapter-supported [`wgpu::Limits`] requesting up to [`MAX_ATLAS_LAYERS`] texture array layers.
+/// Preferred upper cap for storage buffer bindings requested from adapters (512 MiB).
+const PREFERRED_MAX_STORAGE_BUFFER_BINDING_SIZE: u32 = 512 * 1024 * 1024;
+/// Preferred upper cap for GPU buffer allocations requested from adapters (512 MiB).
+const PREFERRED_MAX_BUFFER_SIZE: u64 = 512 * 1024 * 1024;
+
+/// Returns adapter-supported [`wgpu::Limits`] requesting up to [`MAX_ATLAS_LAYERS`] texture array
+/// layers and expanded storage/buffer size limits (up to 512 MiB when supported by the adapter).
 pub fn preferred_wgpu_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
+    let adapter_limits = adapter.limits();
     let mut limits = wgpu::Limits::default();
-    limits.max_texture_array_layers = adapter
-        .limits()
+    limits.max_texture_array_layers = adapter_limits
         .max_texture_array_layers
         .min(MAX_ATLAS_LAYERS)
-        .max(limits.max_texture_array_layers);
+        .max(limits.max_texture_array_layers)
+        .min(adapter_limits.max_texture_array_layers);
+    limits.max_storage_buffer_binding_size = adapter_limits
+        .max_storage_buffer_binding_size
+        .min(PREFERRED_MAX_STORAGE_BUFFER_BINDING_SIZE)
+        .max(limits.max_storage_buffer_binding_size)
+        .min(adapter_limits.max_storage_buffer_binding_size);
+    limits.max_buffer_size = adapter_limits
+        .max_buffer_size
+        .min(PREFERRED_MAX_BUFFER_SIZE)
+        .max(limits.max_buffer_size)
+        .min(adapter_limits.max_buffer_size);
     limits
 }
 
@@ -7617,6 +7828,7 @@ impl Wgpu3DRenderer {
                 &self.device,
                 &self.queue,
                 &frame.meshes,
+                frame.instances.iter().map(|inst| inst.key),
                 frame_idx,
                 mesh_budget,
             );
@@ -7671,6 +7883,15 @@ impl Wgpu3DRenderer {
                 ));
             }
             tagged_instances.sort_by_key(|(topo, _)| *topo);
+            let max_storage_bytes = (self.device.limits().max_storage_buffer_binding_size as u64)
+                .min(self.device.limits().max_buffer_size);
+            let max_instances = ((max_storage_bytes
+                / std::mem::size_of::<GpuTileInstance>() as u64)
+                .min(usize::MAX as u64) as usize)
+                .max(1);
+            if tagged_instances.len() > max_instances {
+                tagged_instances.truncate(max_instances);
+            }
             let mut instances_gpu: Vec<GpuTileInstance> =
                 Vec::with_capacity(tagged_instances.len());
             for (topo, gpu_inst) in tagged_instances {
@@ -7687,7 +7908,11 @@ impl Wgpu3DRenderer {
 
             let mut instance_resized = false;
             if instances_gpu.len() > self.instance_capacity {
-                let new_cap = instances_gpu.len().next_power_of_two().max(1024);
+                let new_cap = instances_gpu
+                    .len()
+                    .next_power_of_two()
+                    .max(1024)
+                    .min(max_instances);
                 self.instance_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("strata_3d_tile_instances_grown"),
                     size: (new_cap * std::mem::size_of::<GpuTileInstance>()) as u64,
@@ -9245,3 +9470,146 @@ fn mesh3d_to_rte(mesh: &Mesh3D) -> Option<(Vec<RteTileVertex>, Vec<u32>, [f32; 4
 // Keep unused collection imports suppressed cleanly if any.
 #[allow(dead_code)]
 fn _assert_collections_used(_: BTreeMap<u64, u64>, _: HashSet<u64>) {}
+
+#[cfg(test)]
+mod slab_tests {
+    use super::*;
+
+    fn tile_key(id: u32) -> TileKeyId {
+        TileKeyId {
+            level: 4,
+            col: id,
+            row: 0,
+            face: 0,
+        }
+    }
+
+    fn insert_resident(index: &mut SlabRegionIndex, id: u32, off: u32, len: u32, frame: u64) {
+        index.resident.insert(
+            tile_key(id),
+            SlabEntry {
+                revision: 1,
+                offset: off,
+                len,
+                grid_res: 16,
+                has_skirts: true,
+                last_used_frame: frame,
+            },
+        );
+    }
+
+    #[test]
+    fn test_slab_lru_evicts_until_contiguous_block_without_spurious_growth() {
+        // Capacity = 65_536 vertices; cap = 131_072 vertices.
+        // Fill the slab with interleaved stale (frame 1) and live (frame 2) tiles so
+        // the first two oldest stale tiles are NOT adjacent (reclaimed >= needed, yet
+        // no contiguous block of size 16_384 exists until additional stale tiles evict).
+        let mut idx = SlabRegionIndex::new(65_536, 131_072);
+        // Layout across [0 .. 65_536):
+        // [0..8192)     stale (f=1, id=1)
+        // [8192..16384) live  (f=2, id=2)
+        // [16384..24576) stale (f=1, id=3)
+        // [24576..32768) live  (f=2, id=4)
+        // [32768..40960) stale (f=1, id=5)
+        // [40960..49152) stale (f=1, id=6) <- adjacent to id=5! together = 16_384
+        // [49152..65536) live  (f=2, id=7)
+        insert_resident(&mut idx, 1, 0, 8_192, 1);
+        insert_resident(&mut idx, 2, 8_192, 8_192, 2);
+        insert_resident(&mut idx, 3, 16_384, 8_192, 1);
+        insert_resident(&mut idx, 4, 24_576, 8_192, 2);
+        insert_resident(&mut idx, 5, 32_768, 8_192, 1);
+        insert_resident(&mut idx, 6, 40_960, 8_192, 1);
+        insert_resident(&mut idx, 7, 49_152, 16_384, 2);
+        idx.bump_cursor = 65_536;
+
+        let plan = idx.plan_alloc(16_384, 2);
+        assert_eq!(
+            plan,
+            SlabAllocPlan::InPlace { offset: 32_768 },
+            "LRU must continue evicting until a real contiguous 16_384-vertex span exists rather than growing the slab"
+        );
+        assert_eq!(idx.capacity_vertices, 65_536);
+        assert!(idx.resident.contains_key(&tile_key(2)));
+        assert!(idx.resident.contains_key(&tile_key(4)));
+        assert!(idx.resident.contains_key(&tile_key(7)));
+    }
+
+    #[test]
+    fn test_slab_compacts_fragmented_live_tiles_without_exceeding_max_vertices() {
+        // Hard ceiling == 65_536 vertices (simulating device max_storage_buffer_binding_size).
+        let mut idx = SlabRegionIndex::new(65_536, 65_536);
+        // Alternating live (f=5) and stale (f=1) 8192-vertex tiles:
+        // Total live = 4 * 8192 = 32_768; total stale = 4 * 8192 = 32_768.
+        // After evicting all 4 stale tiles, every hole is only 8192 vertices wide!
+        // Requesting 20_000 vertices cannot fit in any single hole, yet 32_768 + 20_000 <= 65_536.
+        for i in 0..8u32 {
+            let frame = if i % 2 == 0 { 5 } else { 1 };
+            insert_resident(&mut idx, i, i * 8_192, 8_192, frame);
+        }
+        idx.bump_cursor = 65_536;
+
+        let plan = idx.plan_alloc(20_000, 5);
+        match plan {
+            SlabAllocPlan::Rebuild {
+                new_capacity,
+                copies,
+                offset,
+            } => {
+                assert_eq!(new_capacity, 65_536, "must compact within hard max_vertices ceiling");
+                assert_eq!(offset, 32_768);
+                assert_eq!(
+                    copies,
+                    vec![
+                        (0, 0, 8_192),
+                        (16_384, 8_192, 8_192),
+                        (32_768, 16_384, 8_192),
+                        (49_152, 24_576, 8_192),
+                    ]
+                );
+            }
+            other => panic!("expected compacted Rebuild, got {other:?}"),
+        }
+        assert_eq!(idx.resident.get(&tile_key(0)).unwrap().offset, 0);
+        assert_eq!(idx.resident.get(&tile_key(2)).unwrap().offset, 8_192);
+        assert_eq!(idx.resident.get(&tile_key(4)).unwrap().offset, 16_384);
+        assert_eq!(idx.resident.get(&tile_key(6)).unwrap().offset, 24_576);
+        assert_eq!(idx.bump_cursor, 52_768);
+        assert!(idx.free_blocks.is_empty());
+    }
+
+    #[test]
+    fn test_slab_growth_never_exceeds_storage_binding_limit_and_returns_exhausted_when_full() {
+        // Simulates default 128 MiB storage binding limit (4_194_304 vertices * 32 B).
+        let max_v = (134_217_728u64 / std::mem::size_of::<RteTileVertex>() as u64) as u32;
+        let mut idx = SlabRegionIndex::new(262_144, max_v);
+        // Simulate slab already grown to 3_000_000 live vertices on frame 10.
+        idx.capacity_vertices = 3_000_000;
+        insert_resident(&mut idx, 1, 0, 3_000_000, 10);
+        idx.bump_cursor = 3_000_000;
+
+        // Doubling 3_000_000 -> 6_000_000 would exceed max_v (4_194_304); must clamp strictly to max_v!
+        let plan = idx.plan_alloc(500_000, 10);
+        match plan {
+            SlabAllocPlan::Rebuild {
+                new_capacity,
+                offset,
+                ..
+            } => {
+                assert_eq!(new_capacity, max_v);
+                assert!(
+                    (new_capacity as u64) * (std::mem::size_of::<RteTileVertex>() as u64)
+                        <= 134_217_728,
+                    "grown slab byte size must never exceed max_storage_buffer_binding_size"
+                );
+                assert_eq!(offset, 3_000_000);
+            }
+            other => panic!("expected capped Rebuild, got {other:?}"),
+        }
+        insert_resident(&mut idx, 2, 3_000_000, 500_000, 10);
+
+        // Requesting another 1_000_000 vertices on the same frame exceeds max_v:
+        // must return Exhausted cleanly instead of overflowing the storage binding limit.
+        assert_eq!(idx.plan_alloc(1_000_000, 10), SlabAllocPlan::Exhausted);
+    }
+}
+

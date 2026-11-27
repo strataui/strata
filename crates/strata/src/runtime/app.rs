@@ -306,6 +306,8 @@ pub struct StrataAppBuilder {
     window_config: WindowConfig,
     dpr: f32,
     hooks: AppLifecycleHooks,
+    pointer_up_listeners: Vec<std::rc::Rc<dyn Fn(strata_dom::Event)>>,
+    pointer_cancel_listeners: Vec<std::rc::Rc<dyn Fn(strata_dom::Event)>>,
 }
 
 impl Default for StrataAppBuilder {
@@ -320,6 +322,8 @@ impl StrataAppBuilder {
             window_config: WindowConfig::default(),
             dpr: 1.0,
             hooks: AppLifecycleHooks::default(),
+            pointer_up_listeners: Vec::new(),
+            pointer_cancel_listeners: Vec::new(),
         }
     }
 
@@ -364,6 +368,20 @@ impl StrataAppBuilder {
         self
     }
 
+    /// Registers a window/application-level `pointerup` / `mouseup` listener guaranteed to fire
+    /// even if the capturing DOM element unmounted or moved across portals mid-gesture.
+    pub fn on_pointer_up<F: Fn(strata_dom::Event) + 'static>(mut self, cb: F) -> Self {
+        self.pointer_up_listeners.push(std::rc::Rc::new(cb));
+        self
+    }
+
+    /// Registers a window/application-level `pointercancel` listener guaranteed to fire whenever
+    /// an active pointer gesture is interrupted (e.g. window focus loss or touch/stylus cancel).
+    pub fn on_pointer_cancel<F: Fn(strata_dom::Event) + 'static>(mut self, cb: F) -> Self {
+        self.pointer_cancel_listeners.push(std::rc::Rc::new(cb));
+        self
+    }
+
     pub fn on_frame<F: FnMut(AppFrameInfo, &mut AppRuntime) + 'static>(mut self, cb: F) -> Self {
         self.hooks.on_frame = Some(Box::new(cb));
         self
@@ -384,6 +402,12 @@ impl StrataAppBuilder {
         let height = self.window_config.height as f32;
         let mut runtime = AppRuntime::from_root(root, width, height, self.dpr);
         runtime.apply_window_config(&self.window_config);
+        for cb in self.pointer_up_listeners {
+            runtime.on_pointer_up(move |ev| cb(ev));
+        }
+        for cb in self.pointer_cancel_listeners {
+            runtime.on_pointer_cancel(move |ev| cb(ev));
+        }
         let presenter = SoftwareSurfacePresenter::new(
             self.window_config.width,
             self.window_config.height,

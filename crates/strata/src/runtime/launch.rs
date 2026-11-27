@@ -498,6 +498,10 @@ where
         config.height as f32,
         1.0,
     );
+    if strata_dom::reactive::has_dirty_signals() {
+        let _ = strata_dom::reactive::take_dirty_signals();
+        initial_runtime.update_root(|| (root_fn_rc.borrow_mut())());
+    }
     initial_runtime.apply_window_config(&config);
     initial_runtime.set_gpu_2d_paths_enabled(strata_platform::gtk_gpu_2d_enabled());
     let runtime = std::rc::Rc::new(std::cell::RefCell::new(initial_runtime));
@@ -513,6 +517,8 @@ where
         || config.decoration == strata_platform::WindowDecoration::FramelessTransparent;
     let allow_maximize = config.resizable && !config.is_docked();
 
+    let last_presented_dl_gen = std::rc::Rc::new(std::cell::Cell::new(0u64));
+    let last_presented_dl_gen_draw = last_presented_dl_gen.clone();
     let runtime_draw = runtime.clone();
     let root_fn_draw = root_fn_rc.clone();
     #[cfg(feature = "hot-reload")]
@@ -574,11 +580,13 @@ where
                 }
             }
         }
+        let dl_gen = rt.display_list_generation();
+        let dl_changed = dl_recompiled || dl_gen != last_presented_dl_gen_draw.get();
         let mcp_overlay_active = rt
             .mcp_cursor
             .as_ref()
             .is_some_and(|c| c.fade_opacity > 0.001);
-        let overlay_dirty = dl_recompiled || resize_fired || mcp_overlay_active;
+        let overlay_dirty = dl_changed || resize_fired || mcp_overlay_active;
 
         let cursor_tuple = rt
             .mcp_cursor
@@ -606,6 +614,7 @@ where
         };
 
         if gpu_timings.presented {
+            last_presented_dl_gen_draw.set(dl_gen);
             rt.record_raster_time(gpu_timings.raster_2d);
             rt.record_wgpu_3d_submit_time(gpu_timings.wgpu_3d_submit);
             rt.record_present_time(gpu_timings.swapchain_present);
@@ -760,6 +769,9 @@ where
                 delta_x, delta_y, ..
             } = event
             {
+                if let Some(pos) = strata_platform::gtk_take_scroll_pointer_pos() {
+                    rt.last_mouse_pos = pos;
+                }
                 let (px, py) = rt.last_mouse_pos;
                 let signals_before = strata_dom::reactive::has_dirty_signals();
                 let (wheel_handled, scroll_changed) =
@@ -811,12 +823,16 @@ where
                     let interval = explicit_interval.unwrap_or_else(primary_refresh_interval);
                     let now = std::time::Instant::now();
                     let deadline = *next_deadline_opt.get_or_insert_with(|| *last_called + interval);
-                    let tolerance = std::time::Duration::from_micros(600).min(interval / 3);
+                    let tolerance = if explicit_interval.is_none() {
+                        std::time::Duration::from_micros(1_500).min(interval / 3)
+                    } else {
+                        std::time::Duration::from_micros(600).min(interval / 3)
+                    };
                     if now + tolerance >= deadline {
                         let elapsed = now.saturating_duration_since(*last_called);
                         *last_called = now;
                         let mut next_dl = deadline + interval;
-                        if next_dl <= now {
+                        if next_dl < now + (interval / 2) {
                             next_dl = now + interval;
                         }
                         *next_deadline_opt = Some(next_dl);
@@ -882,8 +898,10 @@ where
                 if *button == strata_platform::MouseButton::Left {
                     rt.is_mouse_down = true;
                     if rt.check_scrollbar_thumb_press(*x, *y) {
+                        rt.cancel_pending_click();
                         needs_redraw = true;
                     } else {
+                        rt.record_pending_click(btn_idx, *x, *y);
                         rt.begin_window_drag_candidate(*x, *y);
                         let action = rt.dispatch_pointer_down_action_with_button_and_modifiers(
                             *x,
@@ -900,9 +918,6 @@ where
                         } else if action.needs_redraw() && !retained_only {
                             needs_redraw = true;
                         }
-                        if rt.dispatch_mouse_click(*x, *y, btn_idx, 1) {
-                            needs_rebuild = true;
-                        }
                         if rt.drain_edit_commands() {
                             needs_rebuild = true;
                         }
@@ -911,6 +926,7 @@ where
                         }
                     }
                 } else if *button == strata_platform::MouseButton::Middle {
+                    rt.record_pending_click(btn_idx, *x, *y);
                     let action = rt.dispatch_pointer_down_action_with_button_and_modifiers(
                         *x,
                         *y,
@@ -925,9 +941,6 @@ where
                         needs_rebuild = true;
                     } else if action.needs_redraw() && !retained_only {
                         needs_redraw = true;
-                    }
-                    if rt.dispatch_mouse_click(*x, *y, btn_idx, 1) {
-                        needs_rebuild = true;
                     }
                 } else if *button == strata_platform::MouseButton::Right {
                     let action = rt.dispatch_pointer_down_action_with_button_and_modifiers(
@@ -960,6 +973,7 @@ where
                 if *button == strata_platform::MouseButton::Left {
                     rt.is_mouse_down = false;
                 }
+                let suppressed_by_drag = rt.is_pointer_drag_suppressing_click();
                 if rt.scrollbar_drag.is_some() {
                     rt.scrollbar_drag = None;
                     needs_redraw = true;
@@ -977,11 +991,21 @@ where
                 } else if action.needs_redraw() && !retained_only {
                     needs_redraw = true;
                 }
+                if *button != strata_platform::MouseButton::Right
+                    && rt.dispatch_click_on_mouse_up(btn_idx, *x, *y, suppressed_by_drag)
+                {
+                    needs_rebuild = true;
+                }
+                if rt.drain_edit_commands() {
+                    needs_rebuild = true;
+                }
                 if was_mouse_down && !needs_rebuild && rt.restyle_for_active_change() {
                     needs_redraw = true;
                 }
             }
             if let strata_platform::PlatformEvent::MouseMove { x, y } = event {
+                rt.last_mouse_pos = (*x, *y);
+                rt.mark_pending_click_dragged_if_moved(*x, *y);
                 if rt.scrollbar_drag.is_some() {
                     if rt.poll_scrollbar_drag(*x, *y) {
                         needs_redraw = true;
@@ -1011,7 +1035,11 @@ where
                     } else if action.needs_redraw() && !retained_only {
                         needs_redraw = true;
                     }
-                    if rt.update_hover(*x, *y) {
+                    let hover_changed = rt.update_hover(*x, *y);
+                    if strata_dom::reactive::has_dirty_signals() {
+                        needs_rebuild = true;
+                        needs_redraw = true;
+                    } else if hover_changed {
                         if rt.hover_is_paint_only() {
                             needs_redraw = true;
                         } else {
@@ -1024,15 +1052,77 @@ where
                 }
             }
             if matches!(event, strata_platform::PlatformEvent::CursorLeft) {
-                rt.is_mouse_down = false;
-                rt.current_cursor = strata_platform::window::CursorIcon::Default;
-                strata_platform::gtk_set_cursor(strata_platform::window::CursorIcon::Default);
-                if rt.clear_hover() {
+                if !rt.has_active_pointer_capture_or_drag() {
+                    rt.is_mouse_down = false;
+                }
+                rt.cancel_pending_click();
+                let dom_override = strata_dom::hooks::current_cursor();
+                let left_cur = if dom_override != strata_dom::hooks::CursorIcon::Default
+                    || rt.pointer_capture_target.is_some()
+                {
+                    super::platforms::resolved_cursor_at(
+                        &rt,
+                        rt.last_mouse_pos.0,
+                        rt.last_mouse_pos.1,
+                    )
+                } else {
+                    strata_platform::window::CursorIcon::Default
+                };
+                rt.current_cursor = left_cur;
+                strata_platform::gtk_set_cursor(left_cur);
+                let hover_cleared = rt.clear_hover();
+                if strata_dom::reactive::has_dirty_signals() {
+                    needs_rebuild = true;
+                    needs_redraw = true;
+                } else if hover_cleared {
                     if rt.hover_is_paint_only() {
                         needs_redraw = true;
                     } else {
                         needs_rebuild = true;
                     }
+                }
+            }
+            if matches!(event, strata_platform::PlatformEvent::WindowFocused(false)) {
+                let signals_before = strata_dom::reactive::has_dirty_signals();
+                let cancelled = rt.cancel_active_pointer_gesture("window_blur");
+                if !signals_before && strata_dom::reactive::has_dirty_signals() {
+                    needs_rebuild = true;
+                    needs_redraw = true;
+                } else if cancelled {
+                    needs_redraw = true;
+                }
+            }
+            if matches!(event, strata_platform::PlatformEvent::PointerCancel) {
+                let signals_before = strata_dom::reactive::has_dirty_signals();
+                let cancelled = rt.cancel_active_pointer_gesture("grab_broken");
+                if !signals_before && strata_dom::reactive::has_dirty_signals() {
+                    needs_rebuild = true;
+                    needs_redraw = true;
+                } else if cancelled {
+                    needs_redraw = true;
+                }
+            }
+            if let strata_platform::PlatformEvent::Touch {
+                touch_id,
+                phase: strata_platform::TouchPhase::Cancelled,
+                x,
+                y,
+            } = event
+            {
+                let signals_before = strata_dom::reactive::has_dirty_signals();
+                let cancelled = rt.dispatch_pointer_cancel_with_meta(
+                    *x,
+                    *y,
+                    *touch_id as i32,
+                    "touch",
+                    0,
+                    "touch_cancelled",
+                );
+                if !signals_before && strata_dom::reactive::has_dirty_signals() {
+                    needs_rebuild = true;
+                    needs_redraw = true;
+                } else if cancelled {
+                    needs_redraw = true;
                 }
             }
             if matches!(
@@ -1113,14 +1203,7 @@ where
                     rt.record_signal_drain_time(sig_dur);
                     rt.set_rebuild_reason(reason);
                 }
-                if !matches!(event, strata_platform::PlatformEvent::CursorLeft)
-                    && (matches!(
-                        event,
-                        strata_platform::PlatformEvent::MouseDown { .. }
-                            | strata_platform::PlatformEvent::MouseUp { .. }
-                            | strata_platform::PlatformEvent::MouseMove { .. }
-                    ) || runtime_event.borrow().current_hover_path.is_some())
-                {
+                if !matches!(event, strata_platform::PlatformEvent::CursorLeft) {
                     refresh_pointer_cursor(&mut runtime_event.borrow_mut());
                 }
                 (true, true)
@@ -1137,19 +1220,29 @@ where
                     None => strata_dom::with_root_component_scope(|| (root_fn_event.borrow_mut())()),
                 };
                 let view_dur = view_start.elapsed();
-                let mut rt = runtime_event.borrow_mut();
-                rt.record_signal_drain_time(sig_dur);
-                rt.record_view_render_time(view_dur);
-                rt.set_rebuild_reason(reason);
-                rt.update_view(new_view);
-                if !matches!(event, strata_platform::PlatformEvent::CursorLeft)
-                    && (matches!(
-                        event,
-                        strata_platform::PlatformEvent::MouseDown { .. }
-                            | strata_platform::PlatformEvent::MouseUp { .. }
-                            | strata_platform::PlatformEvent::MouseMove { .. }
-                    ) || rt.current_hover_path.is_some())
                 {
+                    let mut rt = runtime_event.borrow_mut();
+                    rt.record_signal_drain_time(sig_dur);
+                    rt.record_view_render_time(view_dur);
+                    rt.set_rebuild_reason(reason);
+                    rt.update_view(new_view);
+                }
+                if strata_dom::reactive::has_dirty_signals() {
+                    let _ = strata_dom::reactive::take_dirty_signals();
+                    #[cfg(feature = "hot-reload")]
+                    let follow_hot = hmr_event.borrow().as_ref().and_then(|h| h.render_active_view());
+                    #[cfg(not(feature = "hot-reload"))]
+                    let follow_hot: Option<View> = None;
+                    let follow_view = match follow_hot {
+                        Some(v) => v,
+                        None => strata_dom::with_root_component_scope(|| {
+                            (root_fn_event.borrow_mut())()
+                        }),
+                    };
+                    runtime_event.borrow_mut().update_view(follow_view);
+                }
+                let mut rt = runtime_event.borrow_mut();
+                if !matches!(event, strata_platform::PlatformEvent::CursorLeft) {
                     refresh_pointer_cursor(&mut rt);
                 }
                 (true, true)
@@ -1163,6 +1256,12 @@ where
                 event,
                 strata_platform::PlatformEvent::MouseDown { .. }
                     | strata_platform::PlatformEvent::MouseUp { .. }
+                    | strata_platform::PlatformEvent::WindowFocused(false)
+                    | strata_platform::PlatformEvent::PointerCancel
+                    | strata_platform::PlatformEvent::Touch {
+                        phase: strata_platform::TouchPhase::Cancelled,
+                        ..
+                    }
             ) {
                 refresh_pointer_cursor(&mut runtime_event.borrow_mut());
             }
@@ -1179,6 +1278,12 @@ where
                 event,
                 strata_platform::PlatformEvent::MouseDown { .. }
                     | strata_platform::PlatformEvent::MouseUp { .. }
+                    | strata_platform::PlatformEvent::WindowFocused(false)
+                    | strata_platform::PlatformEvent::PointerCancel
+                    | strata_platform::PlatformEvent::Touch {
+                        phase: strata_platform::TouchPhase::Cancelled,
+                        ..
+                    }
             ) {
                 refresh_pointer_cursor(&mut runtime_event.borrow_mut());
             }
@@ -1188,6 +1293,12 @@ where
                 event,
                 strata_platform::PlatformEvent::MouseDown { .. }
                     | strata_platform::PlatformEvent::MouseUp { .. }
+                    | strata_platform::PlatformEvent::WindowFocused(false)
+                    | strata_platform::PlatformEvent::PointerCancel
+                    | strata_platform::PlatformEvent::Touch {
+                        phase: strata_platform::TouchPhase::Cancelled,
+                        ..
+                    }
             ) {
                 refresh_pointer_cursor(&mut runtime_event.borrow_mut());
             }
@@ -1196,7 +1307,12 @@ where
     };
 
     let perf_launch = perf_logging_enabled();
+    let configured_vsync_blocking = matches!(
+        config.present_mode,
+        strata_platform::PresentMode::Fifo | strata_platform::PresentMode::FifoRelaxed
+    );
     let mut last_present_instant = std::time::Instant::now();
+    let last_presented_dl_gen_ev = last_presented_dl_gen.clone();
     // Only 2D/UI updates invalidate the compiled display list; 3D-only retained updates keep it cached.
     let on_event = move |event: &strata_platform::PlatformEvent| -> bool {
         let t_ev_start = if perf_launch {
@@ -1206,11 +1322,16 @@ where
         };
         let (redraw, paint_dirty) = on_event_inner(event);
         let t_after_inner = t_ev_start.map(|_| std::time::Instant::now());
-        if paint_dirty {
+        let dl_gen_advanced = {
+            let rt = runtime_dirty.borrow();
+            rt.display_list_generation() != last_presented_dl_gen_ev.get()
+        };
+        if paint_dirty || (redraw && dl_gen_advanced) {
             let mut rt = runtime_dirty.borrow_mut();
-            let rebuild_done = matches!(event, strata_platform::PlatformEvent::AnimationTick)
+            let rebuild_done = (matches!(event, strata_platform::PlatformEvent::AnimationTick)
+                || dl_gen_advanced)
                 && !rt.is_paint_dirty();
-            if !rebuild_done {
+            if paint_dirty && !rebuild_done {
                 rt.mark_paint_dirty();
             }
             if redraw && strata_platform::gtk_gpu_surface_is_active() {
@@ -1224,11 +1345,13 @@ where
                         }
                     }
                 }
+                let dl_gen = rt.display_list_generation();
+                let dl_changed = dl_recompiled || dl_gen != last_presented_dl_gen_ev.get();
                 let mcp_active = rt
                     .mcp_cursor
                     .as_ref()
                     .is_some_and(|c| c.fade_opacity > 0.001);
-                let overlay_dirty = dl_recompiled || rebuild_done || mcp_active;
+                let overlay_dirty = dl_changed || rebuild_done || mcp_active;
                 let (w, h) = (rt.viewport_width, rt.viewport_height);
                 let cursor_tuple = rt
                     .mcp_cursor
@@ -1249,6 +1372,7 @@ where
                     cursor_pair,
                 );
                 if gpu_timings.presented {
+                    last_presented_dl_gen_ev.set(dl_gen);
                     rt.record_raster_time(gpu_timings.raster_2d);
                     rt.record_wgpu_3d_submit_time(gpu_timings.wgpu_3d_submit);
                     rt.record_present_time(gpu_timings.swapchain_present);
@@ -1265,7 +1389,16 @@ where
                         last_present_instant = now;
                         let inner_ms = t1.duration_since(t0).as_secs_f64() * 1000.0;
                         let pres_ms = now.duration_since(t1).as_secs_f64() * 1000.0;
-                        if gap_ms > 10.5 || inner_ms > 3.5 || pres_ms > 5.0 {
+                        let target_frame_ms = primary_refresh_interval().as_secs_f64() * 1000.0;
+                        let vsync_blocking = strata_platform::gtk_active_present_mode_is_vsync()
+                            .unwrap_or(configured_vsync_blocking);
+                        if should_log_slow_frame(
+                            gap_ms,
+                            inner_ms,
+                            pres_ms,
+                            target_frame_ms,
+                            vsync_blocking,
+                        ) {
                             eprintln!(
                                 "[perf] slow_frame({:?}, ov={}) gap={:.2}ms inner={:.2}ms gpu_ov_pres={:.2}ms",
                                 event, overlay_dirty, gap_ms, inner_ms, pres_ms
@@ -1293,7 +1426,16 @@ where
                     last_present_instant = now;
                     let inner_ms = t1.duration_since(t0).as_secs_f64() * 1000.0;
                     let pres_ms = now.duration_since(t1).as_secs_f64() * 1000.0;
-                    if gap_ms > 10.5 || inner_ms > 3.5 || pres_ms > 5.0 {
+                    let target_frame_ms = primary_refresh_interval().as_secs_f64() * 1000.0;
+                    let vsync_blocking = strata_platform::gtk_active_present_mode_is_vsync()
+                        .unwrap_or(configured_vsync_blocking);
+                    if should_log_slow_frame(
+                        gap_ms,
+                        inner_ms,
+                        pres_ms,
+                        target_frame_ms,
+                        vsync_blocking,
+                    ) {
                         eprintln!(
                             "[perf] slow_frame({:?}, active_3d) gap={:.2}ms inner={:.2}ms pres={:.2}ms",
                             event, gap_ms, inner_ms, pres_ms
@@ -1339,9 +1481,31 @@ where
     strata_platform::launch_gtk_window_with_scheduler(&config, on_draw, on_event, next_wakeup)
 }
 
+/// Determines whether a frame should emit a `[perf] slow_frame` diagnostic line.
+///
+/// When blocking VSync (`Fifo` / `FifoRelaxed`) is active, `pres_ms` includes the normal
+/// VBlank wait (~`target_frame_ms`), so only genuine CPU spikes (`inner_ms > 3.5`) or missed
+/// refresh intervals (`gap_ms > 1.5 * target_frame_ms`) are flagged.
+#[allow(dead_code)]
+#[inline]
+pub(crate) fn should_log_slow_frame(
+    gap_ms: f64,
+    inner_ms: f64,
+    pres_ms: f64,
+    target_frame_ms: f64,
+    vsync_blocking: bool,
+) -> bool {
+    let target = target_frame_ms.max(1.0);
+    if vsync_blocking {
+        inner_ms > 3.5 || gap_ms > target * 1.5
+    } else {
+        gap_ms > (target * 1.5).max(10.5) || inner_ms > 3.5 || pres_ms > 5.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::compute_next_wakeup;
+    use super::{compute_next_wakeup, should_log_slow_frame};
     use std::time::Duration;
     use strata_dom::{mark_dirty, reactive::take_dirty_signals, reset_component_hooks, Signal};
     use strata_macro::rsx;
@@ -1387,5 +1551,36 @@ mod tests {
             Some(Duration::ZERO)
         );
         let _ = take_dirty_signals();
+    }
+
+    #[test]
+    fn slow_frame_gate_ignores_healthy_vsync_vblank_wait_and_flags_real_spikes() {
+        let target_144hz = 1000.0 / 144.0; // ~6.944 ms
+        // Healthy 144 Hz Fifo VSync frame: present blocks ~6.7 ms waiting for VBlank.
+        assert!(
+            !should_log_slow_frame(6.94, 0.22, 6.72, target_144hz, true),
+            "Healthy 144 Hz Fifo frame must not emit slow_frame warning"
+        );
+        // Healthy 60 Hz Fifo VSync frame: present blocks ~16.2 ms waiting for VBlank.
+        let target_60hz = 1000.0 / 60.0;
+        assert!(
+            !should_log_slow_frame(16.67, 0.40, 16.27, target_60hz, true),
+            "Healthy 60 Hz Fifo frame must not emit slow_frame warning"
+        );
+        // Genuine CPU spike on VSync frame must still be flagged.
+        assert!(
+            should_log_slow_frame(6.94, 4.10, 2.84, target_144hz, true),
+            "Slow inner CPU frame must still be flagged under VSync"
+        );
+        // Dropped VSync frame (> 1.5x refresh period) must still be flagged.
+        assert!(
+            should_log_slow_frame(13.9, 0.25, 6.8, target_144hz, true),
+            "Dropped VSync frame (>1.5x target) must be flagged"
+        );
+        // Non-blocking Immediate/Mailbox present stall (> 5 ms) must still be flagged.
+        assert!(
+            should_log_slow_frame(6.94, 0.25, 6.2, target_144hz, false),
+            "Blocking present stall under uncapped mode must be flagged"
+        );
     }
 }

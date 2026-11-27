@@ -82,18 +82,21 @@ pub fn solve_positioning_guarded(
     viewport_height: f32,
     guard: crate::tree::LayoutDepthGuard,
 ) {
+    let _vp_guard =
+        crate::box_model::push_layout_viewport_if_unset(viewport_width, viewport_height);
+    let (vp_w, vp_h) = crate::box_model::active_layout_viewport()
+        .filter(|&(w, h)| w > 0.0 && h > 0.0)
+        .unwrap_or((viewport_width, viewport_height));
+
     let padding_box = if container.geometry.padding_box.width > 0.0
         || container.geometry.padding_box.height > 0.0
     {
         container.geometry.padding_box
     } else {
-        Rect::new(0.0, 0.0, viewport_width, viewport_height)
+        Rect::new(0.0, 0.0, vp_w, vp_h)
     };
 
-    let initial_cb = ContainingBlock::new(
-        padding_box,
-        Rect::new(0.0, 0.0, viewport_width, viewport_height),
-    );
+    let initial_cb = ContainingBlock::new(padding_box, Rect::new(0.0, 0.0, vp_w, vp_h));
 
     solve_positioning_children_guarded(container, initial_cb, guard);
 }
@@ -406,10 +409,12 @@ pub fn solve_out_of_flow_box(
 pub fn solve_out_of_flow_box_guarded(
     child: &mut LayoutNode,
     cb_rect: Rect,
-    _viewport: Rect,
+    viewport: Rect,
     _is_fixed: bool,
     guard: crate::tree::LayoutDepthGuard,
 ) {
+    let _vp_guard =
+        crate::box_model::push_layout_viewport_if_unset(viewport.width, viewport.height);
     let left = resolve_dimension(child.style.insets.left, cb_rect.width);
     let right = resolve_dimension(child.style.insets.right, cb_rect.width);
     let top = resolve_dimension(child.style.insets.top, cb_rect.height);
@@ -629,6 +634,7 @@ pub fn solve_out_of_flow_box_guarded(
         child.translate(item_x, item_y);
     }
     child.geometry.snap_to_pixel();
+    child.update_scroll_metrics();
 }
 
 /// Solves sticky positioning by evaluating insets against scroll offset and clamping to parent bounds.

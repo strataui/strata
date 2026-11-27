@@ -172,6 +172,8 @@ pub enum PlatformEvent {
     },
     CursorEntered,
     CursorLeft,
+    /// Emitted when the OS or window manager breaks an active pointer grab or cancels a pointer gesture.
+    PointerCancel,
 
     // Keyboard
     KeyDown {

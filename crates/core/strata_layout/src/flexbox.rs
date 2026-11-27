@@ -2,6 +2,7 @@
 
 use crate::box_model::{
     clamp_dimension, clamp_dimension_with_node, resolve_dimension, resolve_dimension_with_node,
+    resolve_max_dimension, resolve_max_dimension_with_node,
 };
 use crate::geometry::{LayoutGeometry, Rect};
 use crate::tree::LayoutNode;
@@ -778,6 +779,13 @@ pub fn solve_flexbox_with_definite_cross_guarded(
         } else {
             resolve_dimension_with_node(container.style.min_height, available_height, container)
         };
+        let max_container_main = if is_row {
+            resolve_max_dimension_with_node(container.style.max_width, available_width, container)
+                .map(|w| (w - padding.left - padding.right - border.left - border.right).max(0.0))
+        } else {
+            resolve_max_dimension(container.style.max_height, available_height)
+                .map(|h| (h - padding.top - padding.bottom - border.top - border.bottom).max(0.0))
+        };
 
         let item_min_max = |ch: &LayoutNode, hyp_main: f32, is_scroll_main: bool| -> (f32, f32) {
             let min_main = if is_row {
@@ -807,7 +815,7 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                         .unwrap_or(f32::INFINITY);
                     let mut auto_min = content_size.min(specified_size);
                     if let Some(max_w) =
-                        resolve_dimension_with_node(ch.style.max_width, inner_width, ch)
+                        resolve_max_dimension_with_node(ch.style.max_width, inner_width, ch)
                     {
                         auto_min = auto_min.min(max_w);
                     }
@@ -834,10 +842,10 @@ pub fn solve_flexbox_with_definite_cross_guarded(
             };
 
             let max_main = if is_row {
-                resolve_dimension_with_node(ch.style.max_width, inner_width, ch)
+                resolve_max_dimension_with_node(ch.style.max_width, inner_width, ch)
                     .unwrap_or(f32::INFINITY)
             } else {
-                resolve_dimension(ch.style.max_height, target_avail_h).unwrap_or(f32::INFINITY)
+                resolve_max_dimension(ch.style.max_height, target_avail_h).unwrap_or(f32::INFINITY)
             };
 
             (min_main, max_main.max(min_main))
@@ -943,30 +951,23 @@ pub fn solve_flexbox_with_definite_cross_guarded(
             })
             .collect();
 
-        if is_main_definite {
-            let free_space = container_main - sum_hypothetical - total_gaps;
-
-            if free_space > 0.0 {
-                distribute_grow(&mut line.items, container_main, &bounds);
-            } else if free_space < 0.0 {
+        let distribute_shrink =
+            |items: &mut [FlexItemMeta], target_main: f32, bounds: &[(f32, f32)]| {
                 // W3C CSS Flexbox §9.7 iterative contraction via flex-shrink
-                let n = line.items.len();
-                let mut frozen: Vec<bool> = line
-                    .items
+                let n = items.len();
+                let mut frozen: Vec<bool> = items
                     .iter()
                     .map(|it| it.flex_shrink <= 0.0 || it.hypothetical_main <= 0.0)
                     .collect();
 
                 for _ in 0..=n {
-                    let used_frozen: f32 = line
-                        .items
+                    let used_frozen: f32 = items
                         .iter()
                         .zip(&frozen)
                         .filter(|(_, &f)| f)
                         .map(|(it, _)| it.resolved_main + it.margin_main_start + it.margin_main_end)
                         .sum();
-                    let used_unfrozen: f32 = line
-                        .items
+                    let used_unfrozen: f32 = items
                         .iter()
                         .zip(&frozen)
                         .filter(|(_, &f)| !f)
@@ -974,12 +975,11 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                             it.hypothetical_main + it.margin_main_start + it.margin_main_end
                         })
                         .sum();
-                    let rem_free = container_main - total_gaps - used_frozen - used_unfrozen;
+                    let rem_free = target_main - total_gaps - used_frozen - used_unfrozen;
                     if rem_free >= -0.001 {
                         break;
                     }
-                    let total_scaled_shrink: f32 = line
-                        .items
+                    let total_scaled_shrink: f32 = items
                         .iter()
                         .zip(&frozen)
                         .filter(|(_, &f)| !f)
@@ -994,12 +994,12 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                         if frozen[i] {
                             continue;
                         }
-                        let scaled = line.items[i].flex_shrink * line.items[i].hypothetical_main;
+                        let scaled = items[i].flex_shrink * items[i].hypothetical_main;
                         let reduction = (scaled / total_scaled_shrink) * abs_free;
-                        let cand = line.items[i].hypothetical_main - reduction;
+                        let cand = items[i].hypothetical_main - reduction;
                         let min_main = bounds[i].0;
                         if cand < min_main - 0.001 {
-                            line.items[i].resolved_main = min_main;
+                            items[i].resolved_main = min_main;
                             frozen[i] = true;
                             clamped_any = true;
                         }
@@ -1007,21 +1007,40 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                     if !clamped_any {
                         for i in 0..n {
                             if !frozen[i] {
-                                let scaled =
-                                    line.items[i].flex_shrink * line.items[i].hypothetical_main;
+                                let scaled = items[i].flex_shrink * items[i].hypothetical_main;
                                 let reduction = (scaled / total_scaled_shrink) * abs_free;
-                                line.items[i].resolved_main =
-                                    (line.items[i].hypothetical_main - reduction).max(bounds[i].0);
+                                items[i].resolved_main =
+                                    (items[i].hypothetical_main - reduction).max(bounds[i].0);
                             }
                         }
                         break;
                     }
                 }
-            }
-        } else if let Some(min_main) = min_container_main {
-            let free_space = min_main - sum_hypothetical - total_gaps;
+            };
+
+        if is_main_definite {
+            let free_space = container_main - sum_hypothetical - total_gaps;
+
             if free_space > 0.0 {
-                distribute_grow(&mut line.items, min_main, &bounds);
+                distribute_grow(&mut line.items, container_main, &bounds);
+            } else if free_space < 0.0 {
+                distribute_shrink(&mut line.items, container_main, &bounds);
+            }
+        } else {
+            let mut grew = false;
+            if let Some(min_main) = min_container_main {
+                let free_space = min_main - sum_hypothetical - total_gaps;
+                if free_space > 0.0 {
+                    distribute_grow(&mut line.items, min_main, &bounds);
+                    grew = true;
+                }
+            }
+            if !grew && !is_scroll_main {
+                if let Some(max_main) = max_container_main {
+                    if sum_hypothetical + total_gaps > max_main + 0.001 {
+                        distribute_shrink(&mut line.items, max_main, &bounds);
+                    }
+                }
             }
         }
 
@@ -1380,12 +1399,21 @@ pub fn solve_flexbox_with_definite_cross_guarded(
                             / 2.0
                     }
                     AlignItems::Stretch => {
+                        let text_leaf_align_stretch = !is_row
+                            && child.text.is_some()
+                            && matches!(
+                                child.style.text_align,
+                                strata_style::types::TextAlign::Center
+                                    | strata_style::types::TextAlign::Right
+                                    | strata_style::types::TextAlign::Justify
+                            );
                         let has_auto_cross = if is_row {
                             child.style.height == Dimension::Auto
                                 || matches!(child.style.height, Dimension::Percent(_))
                         } else {
                             child.style.width == Dimension::Auto
                                 || matches!(child.style.width, Dimension::Percent(_))
+                                || text_leaf_align_stretch
                         };
                         if has_auto_cross {
                             let stretched =

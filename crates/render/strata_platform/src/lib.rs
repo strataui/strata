@@ -164,22 +164,26 @@ impl CapturedSurfaceBuffer {
 
 #[cfg(all(target_os = "linux", feature = "gtk-compat"))]
 pub use gtk_window::{
-    cairo_rounded_rect, cairo_rounded_rect_radii, gtk_begin_window_drag, gtk_close,
-    gtk_current_modifiers, gtk_focus_window, gtk_get_clipboard_text, gtk_gpu_2d_enabled,
-    gtk_gpu_surface_is_active, gtk_is_closing, gtk_is_maximized, gtk_last_gpu_telemetry,
-    gtk_last_tile_cache_stats, gtk_minimize, gtk_present_active_gpu_surface_now,
-    gtk_present_active_gpu_surface_now_timed, gtk_primary_refresh_interval, gtk_reset_ime,
-    gtk_set_clipboard_text, gtk_set_cursor, gtk_set_gpu_2d_enabled, gtk_set_ime_cursor_location,
-    gtk_set_ime_surrounding_text, gtk_toggle_maximize, gtk_warp_cursor, init_pango_text_measurement,
-    launch_gtk_window, launch_gtk_window_with_config, launch_gtk_window_with_scheduler,
-    pango_font_metrics, pango_measure_styled_text, pango_measure_styled_text_family,
-    pango_measure_text, pango_measure_text_family, post_platform_event,
-    render_display_list_to_cairo, render_to_captured_buffer, render_to_png, render_to_png_bytes,
-    resolved_font_family, set_cursor_position, try_present_display_list_gpu,
+    cairo_rounded_rect, cairo_rounded_rect_radii, gtk_active_present_mode_is_vsync,
+    gtk_begin_window_drag, gtk_close, gtk_current_modifiers, gtk_destroy_gpu_state,
+    gtk_focus_window, gtk_get_clipboard_text, gtk_gpu_2d_enabled, gtk_gpu_surface_is_active,
+    gtk_is_closing, gtk_is_maximized, gtk_last_gpu_telemetry, gtk_last_tile_cache_stats,
+    gtk_minimize, gtk_present_active_gpu_surface_now, gtk_present_active_gpu_surface_now_timed,
+    gtk_primary_refresh_interval, gtk_reset_ime, gtk_set_clipboard_text, gtk_set_cursor,
+    gtk_set_gpu_2d_enabled, gtk_set_ime_cursor_location, gtk_set_ime_surrounding_text,
+    gtk_take_scroll_pointer_pos, gtk_toggle_maximize, gtk_warp_cursor,
+    init_pango_text_measurement, launch_gtk_window, launch_gtk_window_with_config,
+    launch_gtk_window_with_scheduler, pango_font_metrics, pango_measure_styled_text,
+    pango_measure_styled_text_family, pango_measure_text, pango_measure_text_family,
+    post_platform_event, render_display_list_to_cairo, render_to_captured_buffer, render_to_png,
+    render_to_png_bytes, resolved_font_family, set_cursor_position, try_present_display_list_gpu,
     try_present_display_list_gpu_timed, warp_cursor,
 };
 #[cfg(feature = "wgpu-backend")]
-pub use wgpu_surface::{render_scene_3d_wgpu_bgra, WgpuSwapchainPresenter, WgpuWindowPresenter};
+pub use wgpu_surface::{
+    clear_thread_wgpu_renderer, render_scene_3d_wgpu_bgra, WgpuSwapchainPresenter,
+    WgpuWindowPresenter,
+};
 pub use mcp_cursor::McpCursorState;
 /// Pure-Rust headless software rasterization into an owned RGBA pixel buffer.
 pub fn render_to_captured_buffer_pure(
@@ -278,6 +282,10 @@ pub fn gtk_begin_window_drag(_x: f32, _y: f32) {}
 #[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
 pub fn gtk_is_maximized() -> bool {
     false
+}
+#[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
+pub fn gtk_take_scroll_pointer_pos() -> Option<(f32, f32)> {
+    None
 }
 #[cfg(not(all(target_os = "linux", feature = "gtk-compat")))]
 pub fn gtk_set_gpu_2d_enabled(_enabled: bool) {}

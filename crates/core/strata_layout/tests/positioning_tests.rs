@@ -473,3 +473,381 @@ fn test_nested_relative_insets_do_not_compound_across_positioned_ancestors() {
     assert_eq!(slice_box_2.x, 12.0);
     assert_eq!(slice_box_2.y, -50.0);
 }
+
+#[test]
+fn test_absolute_overflow_y_auto_flex_column_with_vh_max_height_in_short_relative_parent() {
+    use strata_style::types::{FlexDirection, Overflow};
+
+    let make_row = |h: f32| {
+        LayoutNode::new(ComputedStyle {
+            display: Display::Block,
+            width: Dimension::Percent(100.0),
+            height: Dimension::Px(h),
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+    };
+
+    let build_tree = |row_count: usize| {
+        let rows: Vec<LayoutNode> = (0..row_count).map(|_| make_row(60.0)).collect();
+        let mut dd_style = ComputedStyle {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            position: Position::Absolute,
+            width: Dimension::Px(280.0),
+            height: Dimension::Auto,
+            max_height: Dimension::Vh(76.0),
+            overflow_y: Overflow::Auto,
+            ..Default::default()
+        };
+        dd_style.insets.top = Dimension::Percent(100.0);
+        dd_style.insets.right = Dimension::Px(0.0);
+        let dropdown = LayoutNode::with_children(dd_style, rows);
+        // Short relative anchor container (40px tall) inside a 1280x900 viewport.
+        let anchor = LayoutNode::with_children(
+            ComputedStyle {
+                display: Display::Flex,
+                position: Position::Relative,
+                width: Dimension::Px(280.0),
+                height: Dimension::Px(40.0),
+                ..Default::default()
+            },
+            vec![dropdown],
+        );
+        LayoutNode::with_children(
+            ComputedStyle {
+                display: Display::Block,
+                width: Dimension::Percent(100.0),
+                height: Dimension::Percent(100.0),
+                ..Default::default()
+            },
+            vec![anchor],
+        )
+    };
+
+    // 1. Intrinsic content shorter than 76vh (3 * 60 = 180px < 684px): must preserve 180px.
+    let mut short_root = build_tree(3);
+    short_root.compute_layout(1280.0, 900.0);
+    let short_dd = &short_root.children[0].children[0];
+    assert_eq!(
+        short_dd.geometry.border_box.height, 180.0,
+        "absolute flex-col overflow-y-auto max-h-[76vh] must preserve intrinsic content height"
+    );
+    assert_eq!(
+        short_dd.geometry.border_box.y, 40.0,
+        "top-full must still offset by 40px anchor"
+    );
+    assert_eq!(short_dd.geometry.max_scroll().y, 0.0);
+
+    // 2. Intrinsic content taller than 76vh (15 * 60 = 900px > 684px): clamps to 684px and scrolls.
+    let mut tall_root = build_tree(15);
+    tall_root.compute_layout(1280.0, 900.0);
+    let tall_dd = &tall_root.children[0].children[0];
+    assert!(
+        (tall_dd.geometry.border_box.height - 684.0).abs() <= 1.0,
+        "expected clamp to 76vh (684px), got {}",
+        tall_dd.geometry.border_box.height
+    );
+    assert!(
+        (tall_dd.geometry.scroll_bounds.height - 900.0).abs() <= 1.0,
+        "scroll_height should retain full 900px content, got {}",
+        tall_dd.geometry.scroll_bounds.height
+    );
+    assert!(
+        (tall_dd.geometry.max_scroll().y - 216.0).abs() <= 1.0,
+        "max_scroll_y should be 216px, got {}",
+        tall_dd.geometry.max_scroll().y
+    );
+
+    // 3. Resizing viewport height to 500px must invalidate cached vh clamp -> 76% of 500 = 380px.
+    tall_root.compute_layout(1280.0, 500.0);
+    let resized_dd = &tall_root.children[0].children[0];
+    assert!(
+        (resized_dd.geometry.border_box.height - 380.0).abs() <= 1.0,
+        "expected resized 76vh clamp (380px), got {}",
+        resized_dd.geometry.border_box.height
+    );
+}
+
+#[test]
+fn test_percentage_max_height_on_overflow_y_auto_preserves_intrinsic_and_clamps_definite_cb() {
+    use strata_style::types::{FlexDirection, Overflow};
+
+    let make_items = |count: usize| -> Vec<LayoutNode> {
+        (0..count)
+            .map(|_| {
+                LayoutNode::new(ComputedStyle {
+                    display: Display::Block,
+                    width: Dimension::Percent(100.0),
+                    height: Dimension::Px(50.0),
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                })
+            })
+            .collect()
+    };
+
+    // Case A: Definite 300px relative CB with absolute max-h-[80%] (240px clamp).
+    let dd_short = LayoutNode::with_children(
+        ComputedStyle {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            position: Position::Absolute,
+            width: Dimension::Px(220.0),
+            height: Dimension::Auto,
+            max_height: Dimension::Percent(80.0),
+            overflow_y: Overflow::Auto,
+            ..Default::default()
+        },
+        make_items(2), // 100px < 240px
+    );
+    let dd_tall = LayoutNode::with_children(
+        ComputedStyle {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            position: Position::Absolute,
+            width: Dimension::Px(220.0),
+            height: Dimension::Auto,
+            max_height: Dimension::Percent(80.0),
+            overflow_y: Overflow::Auto,
+            ..Default::default()
+        },
+        make_items(10), // 500px > 240px
+    );
+    let mut definite_parent = LayoutNode::with_children(
+        ComputedStyle {
+            display: Display::Block,
+            position: Position::Relative,
+            width: Dimension::Px(400.0),
+            height: Dimension::Px(300.0),
+            ..Default::default()
+        },
+        vec![dd_short, dd_tall],
+    );
+    definite_parent.compute_layout(800.0, 600.0);
+    assert_eq!(
+        definite_parent.children[0].geometry.border_box.height, 100.0,
+        "short content inside definite CB must keep 100px intrinsic height"
+    );
+    assert_eq!(
+        definite_parent.children[1].geometry.border_box.height, 240.0,
+        "tall content inside 300px CB with max-h-[80%] must clamp to 240px, not collapse to 0"
+    );
+    assert_eq!(definite_parent.children[1].geometry.scroll_bounds.height, 500.0);
+    assert_eq!(definite_parent.children[1].geometry.max_scroll().y, 260.0);
+
+    // Case B: Indefinite / zero-height relative wrapper (only absolute child) with max-h-[80%]:
+    // per CSS 2.1 §10.7, percentage max-height against indefinite CB behaves as none rather than 0.
+    let dd_indef = LayoutNode::with_children(
+        ComputedStyle {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            position: Position::Absolute,
+            width: Dimension::Px(220.0),
+            height: Dimension::Auto,
+            max_height: Dimension::Percent(80.0),
+            overflow_y: Overflow::Auto,
+            ..Default::default()
+        },
+        make_items(4), // 200px
+    );
+    let mut indef_parent = LayoutNode::with_children(
+        ComputedStyle {
+            display: Display::Block,
+            position: Position::Relative,
+            width: Dimension::Px(220.0),
+            height: Dimension::Auto,
+            ..Default::default()
+        },
+        vec![dd_indef],
+    );
+    indef_parent.compute_layout(800.0, 600.0);
+    assert_eq!(
+        indef_parent.children[0].geometry.border_box.height, 200.0,
+        "indefinite percentage max-height must preserve intrinsic 200px height instead of collapsing to 0"
+    );
+}
+
+#[test]
+fn test_absolute_flex_column_wrapper_with_vh_max_height_and_nested_scroll_body() {
+    use strata_style::types::{FlexDirection, Overflow};
+
+    let rows: Vec<LayoutNode> = (0..20)
+        .map(|_| {
+            LayoutNode::new(ComputedStyle {
+                display: Display::Block,
+                width: Dimension::Percent(100.0),
+                height: Dimension::Px(40.0),
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+        })
+        .collect();
+
+    // Pattern: absolute outer panel `flex flex-col max-h-[50vh] overflow-hidden` containing
+    // a fixed header + `flex-1 min-h-0 overflow-y-auto` scrollable list.
+    let header = LayoutNode::new(ComputedStyle {
+        display: Display::Block,
+        width: Dimension::Percent(100.0),
+        height: Dimension::Px(32.0),
+        flex_shrink: 0.0,
+        ..Default::default()
+    });
+    let scroll_body = LayoutNode::with_children(
+        ComputedStyle {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            width: Dimension::Percent(100.0),
+            flex_grow: 1.0,
+            flex_shrink: 1.0,
+            min_height: Dimension::Px(0.0),
+            overflow_y: Overflow::Auto,
+            ..Default::default()
+        },
+        rows,
+    );
+    let mut panel_style = ComputedStyle {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Column,
+        position: Position::Absolute,
+        width: Dimension::Px(260.0),
+        height: Dimension::Auto,
+        max_height: Dimension::Vh(50.0),
+        overflow_y: Overflow::Hidden,
+        ..Default::default()
+    };
+    panel_style.insets.top = Dimension::Percent(100.0);
+    let panel = LayoutNode::with_children(panel_style, vec![header, scroll_body]);
+    let anchor = LayoutNode::with_children(
+        ComputedStyle {
+            display: Display::Block,
+            position: Position::Relative,
+            width: Dimension::Px(260.0),
+            height: Dimension::Px(36.0),
+            ..Default::default()
+        },
+        vec![panel],
+    );
+    let mut root = LayoutNode::with_children(
+        ComputedStyle {
+            display: Display::Block,
+            width: Dimension::Percent(100.0),
+            height: Dimension::Percent(100.0),
+            ..Default::default()
+        },
+        vec![anchor],
+    );
+
+    root.compute_layout(1200.0, 800.0); // 50vh = 400px
+    let panel_node = &root.children[0].children[0];
+    let header_node = &panel_node.children[0];
+    let body_node = &panel_node.children[1];
+
+    assert_eq!(panel_node.geometry.border_box.height, 400.0);
+    assert_eq!(header_node.geometry.border_box.height, 32.0);
+    assert_eq!(body_node.geometry.border_box.height, 368.0);
+    assert_eq!(body_node.geometry.scroll_bounds.height, 800.0);
+    assert_eq!(body_node.geometry.max_scroll().y, 432.0);
+}
+
+#[test]
+fn test_isolated_fixed_overlay_relayout_preserves_root_and_sibling_caches() {
+    let make_hud_tree = |label_text: &str| {
+        let mut sibling_panel = LayoutNode::new(ComputedStyle {
+            display: Display::Block,
+            width: Dimension::Px(320.0),
+            height: Dimension::Px(600.0),
+            ..Default::default()
+        });
+        sibling_panel.children.push(LayoutNode::new(ComputedStyle {
+            display: Display::Block,
+            width: Dimension::Px(280.0),
+            height: Dimension::Px(40.0),
+            ..Default::default()
+        }));
+
+        let mut hud_style = ComputedStyle {
+            display: Display::Flex,
+            position: Position::Fixed,
+            width: Dimension::Auto,
+            height: Dimension::Auto,
+            ..Default::default()
+        };
+        hud_style.insets.right = Dimension::Px(16.0);
+        hud_style.insets.bottom = Dimension::Px(12.0);
+        hud_style.padding = strata_style::types::EdgeInsets::all(8.0);
+
+        let mut text_node = LayoutNode::new(ComputedStyle {
+            display: Display::Inline,
+            font_size: 13.0,
+            line_height: 1.4,
+            ..Default::default()
+        });
+        text_node.text = Some(label_text.to_string());
+
+        let hud = LayoutNode::with_children(hud_style, vec![text_node]);
+        LayoutNode::with_children(
+            ComputedStyle {
+                display: Display::Block,
+                width: Dimension::Px(1280.0),
+                height: Dimension::Px(720.0),
+                ..Default::default()
+            },
+            vec![sibling_panel, hud],
+        )
+    };
+
+    let mut root = make_hud_tree("ALT 100m");
+    root.compute_layout(1280.0, 720.0);
+
+    assert!(root.layout_cache.is_valid);
+    assert!(root.children[0].layout_cache.is_valid);
+    assert!(root.children[1].is_isolated_relayout_root());
+    assert_eq!(
+        root.find_isolated_relayout_boundary_path(&[1, 0]),
+        Some(&[1][..])
+    );
+
+    let initial_hud_box = root.children[1].geometry.border_box;
+    let initial_sibling_box = root.children[0].geometry.border_box;
+
+    // Mutate only the text inside the position: fixed HUD overlay and relayout in isolation.
+    let updated_label = "ALT 12450.75m | HDG 274.2 DEG";
+    root.children[1].children[0].text = Some(updated_label.to_string());
+    assert!(root.invalidate_ancestors_within(&[1], &[1, 0]));
+    assert!(
+        root.layout_cache.is_valid,
+        "Root layout cache must stay valid when invalidating inside an isolated fixed overlay"
+    );
+    assert!(
+        root.children[0].layout_cache.is_valid,
+        "Sibling layout cache must stay valid when invalidating inside an isolated fixed overlay"
+    );
+
+    assert!(root.recompute_isolated_boundary_at_path(&[1], 1280.0, 720.0));
+    assert!(root.layout_cache.is_valid);
+    assert!(root.children[0].layout_cache.is_valid);
+    assert_eq!(root.children[0].geometry.border_box, initial_sibling_box);
+
+    let isolated_hud_box = root.children[1].geometry.border_box;
+    assert!(
+        isolated_hud_box.width > initial_hud_box.width,
+        "Longer HUD text must widen the shrink-to-fit fixed overlay: {:?} vs {:?}",
+        isolated_hud_box,
+        initial_hud_box
+    );
+
+    // Compare against a fresh full root layout pass for exact geometric parity.
+    let mut reference = make_hud_tree(updated_label);
+    reference.compute_layout(1280.0, 720.0);
+    let ref_hud_box = reference.children[1].geometry.border_box;
+    assert!(
+        (isolated_hud_box.x - ref_hud_box.x).abs() < 0.01
+            && (isolated_hud_box.y - ref_hud_box.y).abs() < 0.01
+            && (isolated_hud_box.width - ref_hud_box.width).abs() < 0.01
+            && (isolated_hud_box.height - ref_hud_box.height).abs() < 0.01,
+        "Isolated fixed overlay relayout {:?} must match full compute_layout {:?}",
+        isolated_hud_box,
+        ref_hud_box
+    );
+}

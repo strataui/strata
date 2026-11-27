@@ -125,11 +125,11 @@ impl AppRuntime {
             let is_dragging = self
                 .scrollbar_drag
                 .as_ref()
-                .is_some_and(|d| d.path == bar.path);
+                .is_some_and(|d| Self::scrollbar_drag_matches_bar(d, bar));
             let is_kinetic = self
                 .active_smooth_scroll
                 .as_ref()
-                .is_some_and(|s| s.container_path == bar.path);
+                .is_some_and(|s| Self::smooth_scroll_matches_bar(s, bar));
             let is_hovered = Self::scrollbar_geom_contains_hover(bar, mx, my)
                 && self.scrollbar_owns_point(bar, mx, my, &mut cached_hit);
             let is_active = is_dragging || is_hovered || is_kinetic || is_recent_scroll;
@@ -226,11 +226,11 @@ impl AppRuntime {
             let is_dragging = self
                 .scrollbar_drag
                 .as_ref()
-                .is_some_and(|d| d.path == bar.path);
+                .is_some_and(|d| Self::scrollbar_drag_matches_bar(d, bar));
             let is_kinetic = self
                 .active_smooth_scroll
                 .as_ref()
-                .is_some_and(|s| s.container_path == bar.path);
+                .is_some_and(|s| Self::smooth_scroll_matches_bar(s, bar));
             let is_hovered = Self::scrollbar_geom_contains_hover(bar, mx, my)
                 && self.scrollbar_owns_point(bar, mx, my, &mut cached_hit);
             let is_active = is_dragging || is_hovered || is_kinetic || is_recent_scroll;
@@ -382,20 +382,36 @@ impl AppRuntime {
         let delta_scroll = (dy_pointer / drag.available_travel) * drag.max_scroll_y;
         let new_scroll_y = (drag.start_scroll_y + delta_scroll).clamp(0.0, drag.max_scroll_y);
 
-        if let Some(bar) = self.active_scrollbars.iter().find(|b| b.path == drag.path) {
-            let cur_y = bar.scroll_y;
-            let dy = new_scroll_y - cur_y;
+        if let Some((bar_path, cur_y, bounds_y, max_scroll_y, available_travel)) = self
+            .active_scrollbars
+            .iter()
+            .find(|b| Self::scrollbar_drag_matches_bar(&drag, b))
+            .map(|b| {
+                (
+                    b.path.clone(),
+                    b.scroll_y,
+                    b.bounds.y,
+                    b.max_scroll_y,
+                    b.available_travel,
+                )
+            })
+        {
+            if let Some(ref mut active_drag) = self.scrollbar_drag {
+                active_drag.path = bar_path.clone();
+            }
+            let clamped_scroll_y = new_scroll_y.clamp(0.0, max_scroll_y);
+            let dy = clamped_scroll_y - cur_y;
             if dy.abs() > 0.01 {
                 self.last_scroll_interaction = Some(self.now());
                 self.apply_scroll_delta_to_container(
-                    &drag.path,
+                    &bar_path,
                     drag.is_id,
                     &drag.id,
-                    new_scroll_y,
+                    clamped_scroll_y,
                     dy,
-                    drag.max_scroll_y,
-                    drag.available_travel,
-                    bar.bounds.y,
+                    max_scroll_y,
+                    available_travel,
+                    bounds_y,
                 );
                 return true;
             }

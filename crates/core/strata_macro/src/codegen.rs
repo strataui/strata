@@ -167,6 +167,8 @@ fn lower_element(el: &RsxElement, errors: &mut Vec<String>) -> String {
                 "onpointerdown" => "strata_dom::EventType::PointerDown".to_string(),
                 "onpointerup" => "strata_dom::EventType::PointerUp".to_string(),
                 "onpointermove" => "strata_dom::EventType::PointerMove".to_string(),
+                "onpointercancel" => "strata_dom::EventType::PointerCancel".to_string(),
+                "onlostpointercapture" => "strata_dom::EventType::LostPointerCapture".to_string(),
                 "onfocus" => "strata_dom::EventType::Focus".to_string(),
                 "onblur" => "strata_dom::EventType::Blur".to_string(),
                 "onwheel" => "strata_dom::EventType::Wheel".to_string(),

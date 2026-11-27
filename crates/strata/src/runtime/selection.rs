@@ -716,6 +716,78 @@ impl AppRuntime {
         }
     }
 
+    /// Reconciles controlled `value` prop updates from the latest blueprint into the currently
+    /// focused input's live `TextInputState`, clamping cursor/selection/scroll offsets whenever
+    /// the host updates the `value` prop (including programmatic `value=""` clears after submit)
+    /// while leaving uncontrolled static `value` props untouched.
+    ///
+    /// Returns `true` if the focused input's text buffer changed as a result of prop sync.
+    pub(crate) fn reconcile_active_input_from_blueprint(&mut self) -> bool {
+        let Some(ref active) = self.active_focus else {
+            self.active_input_last_prop_value = None;
+            return false;
+        };
+        let target_idx = active.input_index;
+        let target_id = active.input_id.clone();
+        let target_entity_id = active.entity_id;
+
+        let Some(target) = Self::find_input_target_for_focus(
+            &self.root_blueprint,
+            &self.layout_root,
+            target_idx,
+            target_id.as_deref(),
+            target_entity_id,
+        ) else {
+            return false;
+        };
+
+        let mut text_reconciled = false;
+        if let Some(ref mut active) = self.active_focus {
+            active.input_index = target.input_index;
+            if target.entity_id.is_some() {
+                active.entity_id = target.entity_id;
+            }
+            active.on_input = target.on_input;
+            active.on_change = target.on_change;
+            active.on_submit = target.on_submit;
+            active.on_blur = target.on_blur;
+
+            if target.has_value_prop {
+                match self.active_input_last_prop_value.as_ref() {
+                    Some(last_prop) if last_prop != &target.current_value => {
+                        let new_val = target.current_value;
+                        self.active_input_last_prop_value = Some(new_val.clone());
+                        if active.state.text.get() != new_val {
+                            let new_char_len = new_val.chars().count();
+                            active.state.text.set(new_val);
+                            let clamped_cursor = active.state.cursor_index.get().min(new_char_len);
+                            active.state.cursor_index.set(clamped_cursor);
+                            if let Some(anchor) = active.state.selection_anchor.get() {
+                                let clamped_anchor = anchor.min(new_char_len);
+                                if new_char_len == 0 || clamped_anchor == clamped_cursor {
+                                    active.state.selection_anchor.set(None);
+                                } else {
+                                    active.state.selection_anchor.set(Some(clamped_anchor));
+                                }
+                            }
+                            if new_char_len == 0 {
+                                active.state.scroll_x.set(0.0);
+                                active.state.scroll_y.set(0.0);
+                            }
+                            text_reconciled = true;
+                        }
+                    }
+                    Some(_) => {}
+                    None => {
+                        self.active_input_last_prop_value = Some(target.current_value);
+                    }
+                }
+            }
+        }
+
+        text_reconciled
+    }
+
     /// Synchronizes the active focused text input's live buffer, clamped scroll offset,
     /// and styling into the layout tree without snapping a multiline `<textarea>` back to
     /// the caret (preserving manual wheel/scrollbar scrolling across paints and view updates).
@@ -893,10 +965,16 @@ impl AppRuntime {
             if let (Some(path), Some(max_scroll)) = (focus_path, multiline_max_scroll) {
                 if scroll_caret_into_view
                     && (next_scroll_y - prev_scroll_y).abs() > 0.01
-                    && self
-                        .active_smooth_scroll
-                        .as_ref()
-                        .is_some_and(|t| t.container_path == path)
+                    && self.active_smooth_scroll.as_ref().is_some_and(|t| {
+                        if t.is_id {
+                            target_id
+                                .as_deref()
+                                .is_some_and(|id| !id.is_empty() && id == t.container_id)
+                                || t.container_path == path
+                        } else {
+                            t.container_path == path
+                        }
+                    })
                 {
                     self.active_smooth_scroll = None;
                 }

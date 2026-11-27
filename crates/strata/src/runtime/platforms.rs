@@ -7,21 +7,7 @@ pub(crate) fn resolved_cursor_at(
     x: f32,
     y: f32,
 ) -> strata_platform::window::CursorIcon {
-    let mut cached_hit: Option<Option<Vec<usize>>> = None;
-    let is_over_scrollbar = runtime.active_scrollbars.iter().rev().any(|bar| {
-        bar.max_scroll_y > 1.0
-            && bar.clip_bounds.contains_point(x, y)
-            && (x >= bar.track_bounds.x
-                && x <= bar.bounds.x + bar.bounds.width + 1.0
-                && y >= bar.track_bounds.y
-                && y <= bar.track_bounds.y + bar.track_bounds.height)
-            && runtime.scrollbar_owns_point(bar, x, y, &mut cached_hit)
-    });
-    if is_over_scrollbar {
-        strata_platform::window::CursorIcon::Default
-    } else {
-        AppRuntime::hit_test_cursor(&runtime.root_blueprint, &runtime.layout_root, x, y)
-    }
+    runtime.resolved_cursor_at(x, y)
 }
 
 #[inline]
@@ -172,8 +158,10 @@ where
             if *button == strata_platform::MouseButton::Left {
                 runtime.is_mouse_down = true;
                 if runtime.check_scrollbar_thumb_press(*x, *y) {
+                    runtime.cancel_pending_click();
                     needs_redraw = true;
                 } else {
+                    runtime.record_pending_click(btn_idx, *x, *y);
                     runtime.begin_window_drag_candidate(*x, *y);
                     let action = runtime.dispatch_pointer_down_action_with_button_and_modifiers(
                         *x,
@@ -186,9 +174,6 @@ where
                     } else if action.needs_redraw() {
                         needs_redraw = true;
                     }
-                    if runtime.dispatch_mouse_click(*x, *y, btn_idx, 1) {
-                        needs_rebuild = true;
-                    }
                     if runtime.drain_edit_commands() {
                         needs_rebuild = true;
                     }
@@ -197,6 +182,7 @@ where
                     }
                 }
             } else if *button == strata_platform::MouseButton::Middle {
+                runtime.record_pending_click(btn_idx, *x, *y);
                 let action = runtime.dispatch_pointer_down_action_with_button_and_modifiers(
                     *x,
                     *y,
@@ -207,9 +193,6 @@ where
                     needs_rebuild = true;
                 } else if action.needs_redraw() {
                     needs_redraw = true;
-                }
-                if runtime.dispatch_mouse_click(*x, *y, btn_idx, 1) {
-                    needs_rebuild = true;
                 }
             } else if *button == strata_platform::MouseButton::Right {
                 let action = runtime.dispatch_pointer_down_action_with_button_and_modifiers(
@@ -239,6 +222,7 @@ where
             if *button == strata_platform::MouseButton::Left {
                 runtime.is_mouse_down = false;
             }
+            let suppressed_by_drag = runtime.is_pointer_drag_suppressing_click();
             if runtime.scrollbar_drag.is_some() {
                 runtime.scrollbar_drag = None;
                 needs_redraw = true;
@@ -250,6 +234,14 @@ where
             } else if action.needs_redraw() {
                 needs_redraw = true;
             }
+            if *button != strata_platform::MouseButton::Right
+                && runtime.dispatch_click_on_mouse_up(btn_idx, *x, *y, suppressed_by_drag)
+            {
+                needs_rebuild = true;
+            }
+            if runtime.drain_edit_commands() {
+                needs_rebuild = true;
+            }
             if was_mouse_down && !needs_rebuild && runtime.restyle_for_active_change() {
                 needs_redraw = true;
             }
@@ -257,6 +249,7 @@ where
         }
         strata_platform::PlatformEvent::MouseMove { x, y } => {
             runtime.last_mouse_pos = (*x, *y);
+            runtime.mark_pending_click_dragged_if_moved(*x, *y);
             if runtime.scrollbar_drag.is_some() {
                 if runtime.poll_scrollbar_drag(*x, *y) {
                     needs_redraw = true;
@@ -288,14 +281,71 @@ where
             }
         }
         strata_platform::PlatformEvent::CursorLeft => {
-            runtime.is_mouse_down = false;
-            runtime.current_cursor = strata_platform::window::CursorIcon::Default;
+            if !runtime.has_active_pointer_capture_or_drag() {
+                runtime.is_mouse_down = false;
+            }
+            runtime.cancel_pending_click();
+            let dom_override = strata_dom::hooks::current_cursor();
+            runtime.current_cursor = if dom_override != strata_dom::hooks::CursorIcon::Default
+                || runtime.pointer_capture_target.is_some()
+            {
+                resolved_cursor_at(runtime, runtime.last_mouse_pos.0, runtime.last_mouse_pos.1)
+            } else {
+                strata_platform::window::CursorIcon::Default
+            };
             if runtime.clear_hover() {
                 if runtime.hover_is_paint_only() {
                     needs_redraw = true;
                 } else {
                     needs_rebuild = true;
                 }
+            }
+        }
+        strata_platform::PlatformEvent::WindowFocused(false) => {
+            let signals_before = strata_dom::reactive::has_dirty_signals();
+            let cancelled = runtime.cancel_active_pointer_gesture("window_blur");
+            runtime.current_cursor =
+                resolved_cursor_at(runtime, runtime.last_mouse_pos.0, runtime.last_mouse_pos.1);
+            if !signals_before && strata_dom::reactive::has_dirty_signals() {
+                needs_rebuild = true;
+                needs_redraw = true;
+            } else if cancelled {
+                needs_redraw = true;
+            }
+        }
+        strata_platform::PlatformEvent::PointerCancel => {
+            let signals_before = strata_dom::reactive::has_dirty_signals();
+            let cancelled = runtime.cancel_active_pointer_gesture("grab_broken");
+            runtime.current_cursor =
+                resolved_cursor_at(runtime, runtime.last_mouse_pos.0, runtime.last_mouse_pos.1);
+            if !signals_before && strata_dom::reactive::has_dirty_signals() {
+                needs_rebuild = true;
+                needs_redraw = true;
+            } else if cancelled {
+                needs_redraw = true;
+            }
+        }
+        strata_platform::PlatformEvent::Touch {
+            touch_id,
+            phase: strata_platform::TouchPhase::Cancelled,
+            x,
+            y,
+        } => {
+            let signals_before = strata_dom::reactive::has_dirty_signals();
+            let cancelled = runtime.dispatch_pointer_cancel_with_meta(
+                *x,
+                *y,
+                *touch_id as i32,
+                "touch",
+                0,
+                "touch_cancelled",
+            );
+            runtime.current_cursor = resolved_cursor_at(runtime, *x, *y);
+            if !signals_before && strata_dom::reactive::has_dirty_signals() {
+                needs_rebuild = true;
+                needs_redraw = true;
+            } else if cancelled {
+                needs_redraw = true;
             }
         }
         strata_platform::PlatformEvent::KeyDown { .. }
@@ -425,6 +475,7 @@ where
     #[cfg(feature = "hot-reload")]
     let mut hmr_ctrl = HmrRuntimeController::from_env(|| {});
 
+    let mut last_applied_cursor = runtime.current_cursor;
     let mut running = true;
     while running {
         if let Some(max_f) = max_headless_frames {
@@ -435,6 +486,7 @@ where
         let events = window.poll_events();
         let mut needs_rebuild = false;
         let mut needs_redraw = false;
+        let mut cursor_left_this_tick = false;
 
         #[cfg(feature = "hot-reload")]
         if let Some(ref mut hmr) = hmr_ctrl {
@@ -486,6 +538,14 @@ where
                         needs_rebuild = true;
                     }
                 }
+            }
+
+            match event {
+                strata_platform::PlatformEvent::CursorLeft => cursor_left_this_tick = true,
+                strata_platform::PlatformEvent::MouseMove { .. }
+                | strata_platform::PlatformEvent::MouseDown { .. }
+                | strata_platform::PlatformEvent::MouseUp { .. } => cursor_left_this_tick = false,
+                _ => {}
             }
 
             if let strata_platform::PlatformEvent::MouseMove { x, y } = event {
@@ -573,6 +633,16 @@ where
                     );
                 }
             }
+            if !cursor_left_this_tick
+                || strata_dom::hooks::current_cursor() != strata_dom::hooks::CursorIcon::Default
+                || runtime.pointer_capture_target.is_some()
+            {
+                runtime.current_cursor = resolved_cursor_at(
+                    &runtime,
+                    runtime.last_mouse_pos.0,
+                    runtime.last_mouse_pos.1,
+                );
+            }
         } else if needs_redraw || window.is_redraw_requested() {
             // A per-frame draw hook edits the display list, so it forces a fresh compile.
             let has_draw_hook = hooks.as_ref().is_some_and(|h| h.on_draw.is_some());
@@ -603,6 +673,11 @@ where
                     on_frame(info, &mut runtime);
                 }
             }
+        }
+
+        if runtime.current_cursor != last_applied_cursor {
+            window.set_cursor(runtime.current_cursor);
+            last_applied_cursor = runtime.current_cursor;
         }
 
         frames_presented += 1;

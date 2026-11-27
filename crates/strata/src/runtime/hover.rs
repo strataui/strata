@@ -771,6 +771,124 @@ impl AppRuntime {
         false
     }
 
+    /// Returns true if any element in `path_nodes` matches an `:active`-bearing compound selector in `stylesheets`.
+    pub(crate) fn path_nodes_match_stylesheet_active(
+        path_nodes: &[&NodeBlueprint],
+        stylesheets: &[std::sync::Arc<strata_style::StyleSheet>],
+    ) -> bool {
+        if stylesheets.is_empty() {
+            return false;
+        }
+        let compound_has_active = |comp: &strata_style::selector::CompoundSelector| {
+            comp.parts.iter().any(|p| match p {
+                strata_style::selector::SelectorPart::PseudoClass(name) => {
+                    let n = name.trim().to_ascii_lowercase();
+                    n == "active" || n.contains(":active")
+                }
+                _ => false,
+            })
+        };
+
+        let probe_state = strata_style::selector::PseudoState {
+            is_hovered: true,
+            is_active: true,
+            ..Default::default()
+        };
+        let probe_state_dark = strata_style::selector::PseudoState {
+            is_hovered: true,
+            is_active: true,
+            is_dark: true,
+            ..Default::default()
+        };
+
+        for bp in path_nodes {
+            if let NodeBlueprint::Element {
+                tag,
+                classes,
+                attributes,
+                ..
+            } = bp
+            {
+                if Self::is_style_tag(tag) {
+                    continue;
+                }
+                let tag_str = Self::tag_as_str(tag);
+                let (class_vec, id_val, attr_vec) =
+                    Self::extract_element_selector_meta(classes, attributes);
+                for sheet in stylesheets {
+                    for rule in &sheet.rules {
+                        for sel in &rule.selectors {
+                            if compound_has_active(&sel.target)
+                                && (sel.target.matches_with_context(
+                                    tag_str,
+                                    &class_vec,
+                                    id_val.as_deref(),
+                                    &attr_vec,
+                                    &probe_state,
+                                    &[],
+                                    Some(true),
+                                    Some(true),
+                                    &[],
+                                ) || sel.target.matches_with_context(
+                                    tag_str,
+                                    &class_vec,
+                                    id_val.as_deref(),
+                                    &attr_vec,
+                                    &probe_state_dark,
+                                    &[],
+                                    Some(true),
+                                    Some(true),
+                                    &[],
+                                ))
+                            {
+                                return true;
+                            }
+                            for (_, step_comp) in &sel.steps {
+                                if compound_has_active(step_comp)
+                                    && (step_comp.matches_with_context(
+                                        tag_str,
+                                        &class_vec,
+                                        id_val.as_deref(),
+                                        &attr_vec,
+                                        &probe_state,
+                                        &[],
+                                        Some(true),
+                                        Some(true),
+                                        &[],
+                                    ) || step_comp.matches_with_context(
+                                        tag_str,
+                                        &class_vec,
+                                        id_val.as_deref(),
+                                        &attr_vec,
+                                        &probe_state_dark,
+                                        &[],
+                                        Some(true),
+                                        Some(true),
+                                        &[],
+                                    ))
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Returns true if a single blueprint node declares any `active:` / `group-active:` utility classes.
+    pub(crate) fn node_has_active_classes(bp: &NodeBlueprint) -> bool {
+        if let NodeBlueprint::Element { classes, .. } = bp {
+            classes
+                .iter()
+                .any(|c| c.split_whitespace().any(|tok| tok.contains("active:")))
+        } else {
+            false
+        }
+    }
+
     /// Returns true when `node` carries the Tailwind `"group"` class and any descendant uses `group-hover:`.
     pub(crate) fn subtree_has_group_hover_effects(node: &NodeBlueprint) -> bool {
         fn check(bp: &NodeBlueprint) -> bool {
@@ -983,6 +1101,7 @@ impl AppRuntime {
         self.capture_previous_node_sizes();
         let ctx = self.interaction_context();
         let new_tree = Self::build_layout_tree_with_interaction(&self.root_blueprint, &ctx);
+        self.last_built_is_mouse_down = self.is_mouse_down;
         let mut previous = std::mem::replace(&mut self.layout_root, new_tree);
         let transplanted = Self::transplant_layout_state(&mut previous, &mut self.layout_root);
         let now_ms = self.now_ms();
@@ -1101,12 +1220,27 @@ impl AppRuntime {
         old_path: Option<&[usize]>,
         new_path: Option<&[usize]>,
     ) -> bool {
+        self.restyle_interaction_subtrees_fast(old_path, new_path, false)
+    }
+
+    pub(crate) fn restyle_interaction_subtrees_fast(
+        &mut self,
+        old_path: Option<&[usize]>,
+        new_path: Option<&[usize]>,
+        include_active: bool,
+    ) -> bool {
         if Self::node_has_hover_effects(&self.root_blueprint)
             || Self::single_node_matches_stylesheet_hover(
                 &self.root_blueprint,
                 &self.cached_stylesheets,
                 &self.stylesheet_index,
             )
+            || (include_active
+                && (Self::node_has_active_classes(&self.root_blueprint)
+                    || Self::path_nodes_match_stylesheet_active(
+                        &[&self.root_blueprint],
+                        &self.cached_stylesheets,
+                    )))
         {
             self.last_hover_fast_path_bailout = Some("RootHasHoverEffects".to_string());
             return false;
@@ -1136,6 +1270,7 @@ impl AppRuntime {
             bp_root: &NodeBlueprint,
             layout_root: &mut LayoutNode,
             target_path: &[usize],
+            include_active: bool,
             ctx: &InteractionContext,
             stylesheets: &[std::sync::Arc<strata_style::StyleSheet>],
             sheet_index: &StylesheetSelectorIndex,
@@ -1205,13 +1340,19 @@ impl AppRuntime {
                     return true;
                 }
 
-                let node_has_hover = AppRuntime::node_has_hover_effects(child_bp)
+                let node_has_effect = AppRuntime::node_has_hover_effects(child_bp)
                     || AppRuntime::single_node_matches_stylesheet_hover(
                         child_bp,
                         stylesheets,
                         sheet_index,
-                    );
-                if node_has_hover {
+                    )
+                    || (include_active
+                        && (AppRuntime::node_has_active_classes(child_bp)
+                            || AppRuntime::path_nodes_match_stylesheet_active(
+                                &[child_bp],
+                                stylesheets,
+                            )));
+                if node_has_effect {
                     let parent_style =
                         parent_base_style.unwrap_or_else(|| cur_layout.style.clone());
                     let child_layout = &mut cur_layout.children[idx];
@@ -1272,7 +1413,6 @@ impl AppRuntime {
                         *bailout = Some("TransplantMismatch".to_string());
                         return false;
                     }
-                    strata_layout::box_model::refresh_inline_fragment_styles(&mut rebuilt);
                     *child_layout = rebuilt;
                     restyled_paths.push((prefix.clone(), has_trans));
                     return true;
@@ -1300,6 +1440,7 @@ impl AppRuntime {
                 &self.root_blueprint,
                 &mut self.layout_root,
                 p,
+                include_active,
                 &ctx,
                 &self.cached_stylesheets,
                 &self.stylesheet_index,
@@ -1317,6 +1458,7 @@ impl AppRuntime {
                 &self.root_blueprint,
                 &mut self.layout_root,
                 p,
+                include_active,
                 &ctx,
                 &self.cached_stylesheets,
                 &self.stylesheet_index,
@@ -1330,8 +1472,9 @@ impl AppRuntime {
             }
         }
 
-        // Sync paint-only transitions strictly on restyled subtrees so hover transitions
-        // animate smoothly without full-tree rebuilds or disturbing unrelated active transitions.
+        // Sync paint-only transitions strictly on restyled subtrees BEFORE refreshing
+        // inline fragment styles so frame 0 paints the interpolated start color rather
+        // than flashing the final target text color.
         let now_ms = self.now_ms();
         let anims_active = self.had_active_animations || self.has_active_animations();
         for (path, has_trans) in &restyled_paths {
@@ -1341,32 +1484,31 @@ impl AppRuntime {
                 self.sync_subtree_base_styles(path);
             }
         }
+        for (path, _) in &restyled_paths {
+            if let Some(node) = Self::find_layout_node_mut(&mut self.layout_root, path) {
+                strata_layout::box_model::refresh_inline_fragment_styles(node);
+            }
+        }
 
+        self.last_built_is_mouse_down = self.is_mouse_down;
         self.last_hover_fast_path_bailout = None;
         self.sync_active_input_layout();
         self.compile_display_list();
         true
     }
 
-    /// Returns `true` when the currently hovered path (or any stylesheet rule)
-    /// can visually respond to `:active` state changes on `MouseDown` / `MouseUp`.
+    /// Returns `true` when the currently hovered path matches any `active:` utility class
+    /// or stylesheet `:active` rule that can visually respond to pointer press/release.
     pub(crate) fn path_has_active_styles(&self) -> bool {
         let Some(ref path) = self.current_hover_path else {
             return false;
         };
+        let mut path_nodes: Vec<&NodeBlueprint> = Vec::with_capacity(path.len() + 1);
         let mut cur_bp = &self.root_blueprint;
-        let has_active_class = |bp: &NodeBlueprint| -> bool {
-            if let NodeBlueprint::Element { classes, .. } = bp {
-                classes
-                    .iter()
-                    .any(|c| c.split_whitespace().any(|tok| tok.contains("active:")))
-            } else {
-                false
-            }
-        };
-        if has_active_class(cur_bp) {
+        if Self::node_has_active_classes(cur_bp) {
             return true;
         }
+        path_nodes.push(cur_bp);
         for &idx in path {
             let mut flat = Vec::new();
             match cur_bp {
@@ -1381,27 +1523,12 @@ impl AppRuntime {
                 break;
             }
             cur_bp = flat[idx];
-            if has_active_class(cur_bp) {
+            if Self::node_has_active_classes(cur_bp) {
                 return true;
             }
+            path_nodes.push(cur_bp);
         }
-        for sheet in &self.cached_stylesheets {
-            for rule in &sheet.rules {
-                for sel in &rule.selectors {
-                    let has_active_pseudo = sel.target.parts.iter().any(|p| {
-                        matches!(
-                            p,
-                            strata_style::selector::SelectorPart::PseudoClass(name)
-                                if name.eq_ignore_ascii_case("active")
-                        )
-                    });
-                    if has_active_pseudo {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+        Self::path_nodes_match_stylesheet_active(&path_nodes, &self.cached_stylesheets)
     }
 
     /// Re-applies `:active` styles only when the hovered path can visually react
@@ -1409,6 +1536,10 @@ impl AppRuntime {
     pub fn restyle_for_active_change(&mut self) -> bool {
         if !self.path_has_active_styles() {
             return false;
+        }
+        let hovered = self.current_hover_path.clone();
+        if self.restyle_interaction_subtrees_fast(None, hovered.as_deref(), true) {
+            return true;
         }
         self.restyle_for_hover_paint();
         true

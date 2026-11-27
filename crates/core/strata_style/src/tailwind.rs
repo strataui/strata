@@ -1011,6 +1011,54 @@ impl TailwindEngine {
                 style.cursor = Cursor::RowResize;
                 return;
             }
+            "cursor-ns-resize" => {
+                style.cursor = Cursor::NsResize;
+                return;
+            }
+            "cursor-ew-resize" => {
+                style.cursor = Cursor::EwResize;
+                return;
+            }
+            "cursor-nwse-resize" => {
+                style.cursor = Cursor::NwseResize;
+                return;
+            }
+            "cursor-nesw-resize" => {
+                style.cursor = Cursor::NeswResize;
+                return;
+            }
+            "cursor-n-resize" => {
+                style.cursor = Cursor::NResize;
+                return;
+            }
+            "cursor-s-resize" => {
+                style.cursor = Cursor::SResize;
+                return;
+            }
+            "cursor-e-resize" => {
+                style.cursor = Cursor::EResize;
+                return;
+            }
+            "cursor-w-resize" => {
+                style.cursor = Cursor::WResize;
+                return;
+            }
+            "cursor-ne-resize" => {
+                style.cursor = Cursor::NeResize;
+                return;
+            }
+            "cursor-nw-resize" => {
+                style.cursor = Cursor::NwResize;
+                return;
+            }
+            "cursor-se-resize" => {
+                style.cursor = Cursor::SeResize;
+                return;
+            }
+            "cursor-sw-resize" => {
+                style.cursor = Cursor::SwResize;
+                return;
+            }
             "cursor-crosshair" => {
                 style.cursor = Cursor::Crosshair;
                 return;
@@ -1036,6 +1084,13 @@ impl TailwindEngine {
                 return;
             }
             _ => {}
+        }
+
+        if let Some(raw_cursor) = class.strip_prefix("cursor-[").and_then(|s| s.strip_suffix(']')) {
+            if let Some(c) = crate::parser::parse_cursor(raw_cursor) {
+                style.cursor = c;
+                return;
+            }
         }
 
         // Caret Color (CSS caret-color)

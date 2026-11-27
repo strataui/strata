@@ -15,10 +15,889 @@ pub(crate) struct BubblingOutcome {
     pub invoked_entities: Vec<strata_primitives::EntityId>,
 }
 
+fn blueprint_nonempty_attr<'a>(bp: &'a NodeBlueprint, attr_name: &str) -> Option<&'a str> {
+    let NodeBlueprint::Element { attributes, .. } = bp else {
+        return None;
+    };
+    attributes.iter().find_map(|attr| match attr {
+        strata_dom::Attribute::Property { key, value }
+            if key == attr_name && !value.is_empty() =>
+        {
+            Some(value.as_str())
+        }
+        _ => None,
+    })
+}
+
+fn blueprint_explicit_key(bp: &NodeBlueprint) -> Option<(String, String)> {
+    if let Some(val) = blueprint_nonempty_attr(bp, "key") {
+        return Some(("key".to_string(), val.to_string()));
+    }
+    if let Some(val) = blueprint_nonempty_attr(bp, "data-key") {
+        return Some(("data-key".to_string(), val.to_string()));
+    }
+    None
+}
+
+fn blueprint_tag(bp: &NodeBlueprint) -> Option<strata_dom::Tag> {
+    match bp {
+        NodeBlueprint::Element { tag, .. } => Some(*tag),
+        _ => None,
+    }
+}
+
+fn anchor_has_explicit_identity(anchor: &CapturedAncestorAnchor) -> bool {
+    anchor.element_id.is_some() || anchor.dom_uid.is_some() || anchor.element_key.is_some()
+}
+
+fn anchor_matches_node(
+    anchor: &CapturedAncestorAnchor,
+    bp: &NodeBlueprint,
+    layout: &LayoutNode,
+) -> bool {
+    if let Some(ref target_id) = anchor.element_id {
+        if blueprint_nonempty_attr(bp, "id") == Some(target_id.as_str()) {
+            return true;
+        }
+    }
+    if let Some(target_uid) = anchor.dom_uid {
+        if bp.dom_uid() == Some(target_uid) {
+            return true;
+        }
+    }
+    if let Some((ref key_attr, ref key_val)) = anchor.element_key {
+        if blueprint_nonempty_attr(bp, key_attr) == Some(key_val.as_str())
+            && (anchor.tag.is_none() || blueprint_tag(bp) == anchor.tag)
+        {
+            return true;
+        }
+    }
+    if let Some(eid) = anchor.entity_id {
+        if layout.entity_id.is_valid() && layout.entity_id == eid {
+            return true;
+        }
+    }
+    false
+}
+
 impl AppRuntime {
     /// Returns the currently active platform mouse cursor icon.
     pub fn current_cursor(&self) -> strata_platform::window::CursorIcon {
         self.current_cursor
+    }
+
+    /// Registers a window/application-level `pointerup` / `mouseup` listener on this runtime.
+    ///
+    /// Guaranteed to fire on every pointer release even if the capturing DOM node unmounted,
+    /// shifted sibling indices, or moved across portals. Returns a listener ID that can be
+    /// passed to [`AppRuntime::remove_pointer_up_listener`].
+    pub fn on_pointer_up<F: Fn(strata_dom::Event) + 'static>(&mut self, handler: F) -> u64 {
+        self.window_pointer_up_listeners.add(handler)
+    }
+
+    /// Unregisters a window-level `pointerup` listener previously added with [`AppRuntime::on_pointer_up`].
+    pub fn remove_pointer_up_listener(&mut self, id: u64) -> bool {
+        self.window_pointer_up_listeners.remove(id)
+    }
+
+    /// Registers a window/application-level `pointercancel` listener on this runtime.
+    ///
+    /// Fires whenever an active pointer gesture is interrupted (for example on window blur /
+    /// focus loss, touch/stylus cancellation, or explicit [`AppRuntime::dispatch_pointer_cancel`]).
+    /// Returns a listener ID that can be passed to [`AppRuntime::remove_pointer_cancel_listener`].
+    pub fn on_pointer_cancel<F: Fn(strata_dom::Event) + 'static>(&mut self, handler: F) -> u64 {
+        self.window_pointer_cancel_listeners.add(handler)
+    }
+
+    /// Unregisters a window-level `pointercancel` listener previously added with [`AppRuntime::on_pointer_cancel`].
+    pub fn remove_pointer_cancel_listener(&mut self, id: u64) -> bool {
+        self.window_pointer_cancel_listeners.remove(id)
+    }
+
+    /// Returns `true` when an active pointer capture, scrollbar drag, native DOM drag, or
+    /// input selection drag is currently in progress.
+    #[inline]
+    pub fn has_active_pointer_capture_or_drag(&self) -> bool {
+        self.pointer_capture_target.is_some()
+            || self.scrollbar_drag.is_some()
+            || self.active_dom_drag.is_some()
+            || self.drag_selection_active
+            || self.pending_window_drag.is_some()
+    }
+
+    /// Iteratively collects all layout-indexed paths whose `(NodeBlueprint, LayoutNode)` satisfies `pred`.
+    pub(crate) fn collect_matching_layout_paths(
+        &self,
+        mut pred: impl FnMut(&NodeBlueprint, &LayoutNode) -> bool,
+    ) -> Vec<Vec<usize>> {
+        let mut out = Vec::new();
+        if pred(&self.root_blueprint, &self.layout_root) {
+            out.push(Vec::new());
+        }
+        let root_children = Self::paired_blueprint_children(&self.root_blueprint, &self.layout_root);
+        if root_children.is_empty() {
+            return out;
+        }
+        let mut path = Vec::new();
+        let mut stack: Vec<(Vec<(usize, &NodeBlueprint, &LayoutNode)>, usize)> =
+            vec![(root_children, 0)];
+        while let Some((children, next)) = stack.last_mut() {
+            if *next >= children.len() {
+                stack.pop();
+                path.pop();
+                continue;
+            }
+            let (child_idx, child_bp, child_layout) = children[*next];
+            *next += 1;
+            path.push(child_idx);
+            if pred(child_bp, child_layout) {
+                out.push(path.clone());
+            }
+            if !child_layout.children.is_empty() && stack.len() < 256 {
+                let grand = Self::paired_blueprint_children(child_bp, child_layout);
+                if !grand.is_empty() {
+                    stack.push((grand, 0));
+                    continue;
+                }
+            }
+            path.pop();
+        }
+        out
+    }
+
+    fn node_has_pointer_move_or_up_listener(bp: &NodeBlueprint) -> bool {
+        matches!(
+            bp,
+            NodeBlueprint::Element { attributes, .. }
+                if attributes.iter().any(|a| matches!(
+                    a,
+                    strata_dom::Attribute::EventListener {
+                        event: strata_dom::EventType::PointerMove
+                            | strata_dom::EventType::MouseMove
+                            | strata_dom::EventType::PointerUp
+                            | strata_dom::EventType::MouseUp,
+                        ..
+                    }
+                ))
+        )
+    }
+
+    fn subtree_has_pointer_move_or_up_listener(bp: &NodeBlueprint) -> bool {
+        let mut stack = vec![bp];
+        while let Some(node) = stack.pop() {
+            if Self::node_has_pointer_move_or_up_listener(node) {
+                return true;
+            }
+            match node {
+                NodeBlueprint::Element { children, .. } | NodeBlueprint::Fragment(children) => {
+                    for child in children.iter().rev() {
+                        stack.push(child);
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn compute_listener_rank(
+        anc_bp: &NodeBlueprint,
+        anc_layout: &LayoutNode,
+        child_idx: usize,
+    ) -> (Option<usize>, usize) {
+        let paired = Self::paired_blueprint_children(anc_bp, anc_layout);
+        let mut rank = None;
+        let mut total = 0usize;
+        for (idx, child_bp, _) in paired {
+            if Self::subtree_has_pointer_move_or_up_listener(child_bp) {
+                if idx == child_idx {
+                    rank = Some(total);
+                }
+                total += 1;
+            }
+        }
+        (rank, total)
+    }
+
+    fn candidate_matches_captured_signature(
+        &self,
+        path: &[usize],
+        cap: &PointerCaptureTarget,
+    ) -> bool {
+        let chain = Self::resolve_chain_for_path(&self.root_blueprint, &self.layout_root, path);
+        if chain.len() != path.len() + 1 {
+            return false;
+        }
+        let Some(&(target_bp, _)) = chain.last() else {
+            return false;
+        };
+        if let Some(expected_tag) = cap.tag {
+            if blueprint_tag(target_bp) != Some(expected_tag) {
+                return false;
+            }
+        }
+        if cap.had_move_or_up_listener
+            && !chain
+                .iter()
+                .any(|(bp, _)| Self::node_has_pointer_move_or_up_listener(bp))
+        {
+            return false;
+        }
+        true
+    }
+
+    fn resolve_tail_under_ancestor(
+        &self,
+        anc_path: &[usize],
+        anchor: &CapturedAncestorAnchor,
+        cap: &PointerCaptureTarget,
+    ) -> CaptureResolution {
+        let mut direct_path = anc_path.to_vec();
+        direct_path.extend_from_slice(&anchor.relative_tail);
+        if self.candidate_matches_captured_signature(&direct_path, cap) {
+            return CaptureResolution::Resolved(direct_path);
+        }
+
+        // If a non-listening sibling overlay (e.g. snap preview or drag ghost) was inserted or
+        // removed directly under this ancestor before an unkeyed captured child/subtree, recover
+        // the shifted sibling using its rank among listener-bearing children under this ancestor.
+        if let (Some(expected_rank), Some(first_tail_idx)) =
+            (anchor.listener_rank, anchor.relative_tail.first().copied())
+        {
+            let anc_chain =
+                Self::resolve_chain_for_path(&self.root_blueprint, &self.layout_root, anc_path);
+            if anc_chain.len() == anc_path.len() + 1 {
+                if let Some(&(anc_bp, anc_layout)) = anc_chain.last() {
+                    let paired = Self::paired_blueprint_children(anc_bp, anc_layout);
+                    let listener_children: Vec<usize> = paired
+                        .into_iter()
+                        .filter_map(|(idx, child_bp, _)| {
+                            Self::subtree_has_pointer_move_or_up_listener(child_bp).then_some(idx)
+                        })
+                        .collect();
+                    // Only shift when the count of listener-bearing siblings is preserved so an
+                    // unmounted captured sibling never jumps onto a different listener sibling.
+                    if listener_children.len() == anchor.total_listener_siblings {
+                        if let Some(&shifted_child_idx) = listener_children.get(expected_rank) {
+                            if shifted_child_idx != first_tail_idx {
+                                let mut shifted_path = anc_path.to_vec();
+                                shifted_path.push(shifted_child_idx);
+                                shifted_path.extend_from_slice(&anchor.relative_tail[1..]);
+                                if self.candidate_matches_captured_signature(&shifted_path, cap) {
+                                    return CaptureResolution::Resolved(shifted_path);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        CaptureResolution::Unmounted
+    }
+
+    /// Captures stable DOM identity metadata for a newly acquired pointer capture target.
+    pub(crate) fn build_pointer_capture_target(
+        &self,
+        target_path: Vec<usize>,
+        explicit: bool,
+        cap_eid: strata_primitives::EntityId,
+        button: i16,
+    ) -> PointerCaptureTarget {
+        let chain =
+            Self::resolve_chain_for_path(&self.root_blueprint, &self.layout_root, &target_path);
+        let (element_id, element_key, dom_uid, entity_id, tag) =
+            if let Some(&(bp, layout)) = chain.last() {
+                (
+                    blueprint_nonempty_attr(bp, "id").map(str::to_string),
+                    blueprint_explicit_key(bp),
+                    bp.dom_uid(),
+                    if layout.entity_id.is_valid() {
+                        Some(layout.entity_id)
+                    } else if cap_eid.is_valid() {
+                        Some(cap_eid)
+                    } else {
+                        None
+                    },
+                    blueprint_tag(bp),
+                )
+            } else {
+                (
+                    None,
+                    None,
+                    None,
+                    cap_eid.is_valid().then_some(cap_eid),
+                    None,
+                )
+            };
+
+        let had_move_or_up_listener = chain
+            .iter()
+            .any(|(bp, _)| Self::node_has_pointer_move_or_up_listener(bp));
+        let lost_capture_handler = Self::find_event_at_or_above_path(
+            &self.root_blueprint,
+            &self.layout_root,
+            &target_path,
+            strata_dom::EventType::LostPointerCapture,
+        )
+        .map(|(h, _, _)| h);
+
+        let key_was_unique_at_capture = if let Some((ref key_attr, ref key_val)) = element_key {
+            let matches = self.collect_matching_layout_paths(|bp, _| {
+                blueprint_nonempty_attr(bp, key_attr) == Some(key_val.as_str())
+                    && (tag.is_none() || blueprint_tag(bp) == tag)
+            });
+            matches.len() <= 1
+        } else {
+            false
+        };
+
+        let mut ancestor_anchors = Vec::new();
+        if chain.len() > 1 {
+            for (depth, &(anc_bp, anc_layout)) in chain[..chain.len() - 1].iter().enumerate() {
+                let anc_id = blueprint_nonempty_attr(anc_bp, "id").map(str::to_string);
+                let anc_key = blueprint_explicit_key(anc_bp);
+                let anc_uid = anc_bp.dom_uid();
+                let anc_eid = anc_layout.entity_id.is_valid().then_some(anc_layout.entity_id);
+                let relative_tail = target_path[depth..].to_vec();
+                let (listener_rank, total_listener_siblings) =
+                    if let Some(&first_child_idx) = relative_tail.first() {
+                        Self::compute_listener_rank(anc_bp, anc_layout, first_child_idx)
+                    } else {
+                        (None, 0)
+                    };
+                if anc_id.is_some()
+                    || anc_key.is_some()
+                    || anc_uid.is_some()
+                    || anc_eid.is_some()
+                    || listener_rank.is_some()
+                {
+                    ancestor_anchors.push(CapturedAncestorAnchor {
+                        element_id: anc_id,
+                        element_key: anc_key,
+                        dom_uid: anc_uid,
+                        entity_id: anc_eid,
+                        tag: blueprint_tag(anc_bp),
+                        relative_tail,
+                        listener_rank,
+                        total_listener_siblings,
+                    });
+                }
+            }
+        }
+
+        PointerCaptureTarget {
+            path: target_path,
+            explicit,
+            entity_id,
+            element_id,
+            element_key,
+            dom_uid,
+            tag,
+            key_was_unique_at_capture,
+            ancestor_anchors,
+            pointer_id: 1,
+            button,
+            had_move_or_up_listener,
+            lost_capture_handler,
+        }
+    }
+
+    fn score_candidate_path(
+        &self,
+        cand_path: &[usize],
+        expected_tag: Option<strata_dom::Tag>,
+        expected_ancestors: &[CapturedAncestorAnchor],
+        fallback_path: &[usize],
+    ) -> (usize, usize, usize) {
+        let chain =
+            Self::resolve_chain_for_path(&self.root_blueprint, &self.layout_root, cand_path);
+        let tag_bonus = usize::from(
+            expected_tag.is_some()
+                && chain
+                    .last()
+                    .and_then(|(bp, _)| blueprint_tag(bp))
+                    == expected_tag,
+        );
+        let cand_ancestors = &chain[..chain.len().saturating_sub(1)];
+        let mut explicit_anc_score = 0usize;
+        // Weight nearest explicit ancestor matches highest so duplicate keys in distinct subtrees disambiguate cleanly.
+        for (weight_idx, anchor) in expected_ancestors.iter().enumerate() {
+            if !anchor_has_explicit_identity(anchor) {
+                continue;
+            }
+            if cand_ancestors
+                .iter()
+                .any(|&(bp, layout)| anchor_matches_node(anchor, bp, layout))
+            {
+                explicit_anc_score += (weight_idx + 1) * 4;
+            }
+        }
+        let shared_prefix = cand_path
+            .iter()
+            .zip(fallback_path.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        (explicit_anc_score, tag_bonus, shared_prefix)
+    }
+
+    fn resolve_ancestor_anchor(
+        &self,
+        anchor: &CapturedAncestorAnchor,
+        outer_ancestors: &[CapturedAncestorAnchor],
+        fallback_path: &[usize],
+    ) -> Option<CaptureResolution> {
+        // 1. Surviving EntityId on this ancestor
+        if let Some(eid) = anchor.entity_id {
+            if let Some(path) = self.layout_root.find_path_by_entity_id(eid) {
+                if Self::resolve_chain_for_path(&self.root_blueprint, &self.layout_root, &path)
+                    .len()
+                    == path.len() + 1
+                {
+                    return Some(CaptureResolution::Resolved(path));
+                }
+            }
+        }
+        // 2. Explicit id
+        if let Some(ref anc_id) = anchor.element_id {
+            let candidates = self.collect_matching_layout_paths(|bp, _| {
+                blueprint_nonempty_attr(bp, "id") == Some(anc_id.as_str())
+            });
+            return Some(match candidates.len() {
+                0 => CaptureResolution::Unmounted,
+                1 => CaptureResolution::Resolved(candidates.into_iter().next().unwrap()),
+                _ => {
+                    let best = candidates
+                        .into_iter()
+                        .max_by_key(|p| {
+                            self.score_candidate_path(p, anchor.tag, outer_ancestors, fallback_path)
+                        })
+                        .unwrap();
+                    CaptureResolution::Resolved(best)
+                }
+            });
+        }
+        // 3. Explicit dom_uid
+        if let Some(uid) = anchor.dom_uid {
+            let candidates =
+                self.collect_matching_layout_paths(|bp, _| bp.dom_uid() == Some(uid));
+            return Some(
+                candidates
+                    .into_iter()
+                    .next()
+                    .map_or(CaptureResolution::Unmounted, CaptureResolution::Resolved),
+            );
+        }
+        // 4. Explicit key / data-key
+        if let Some((ref key_attr, ref key_val)) = anchor.element_key {
+            let candidates = self.collect_matching_layout_paths(|bp, _| {
+                blueprint_nonempty_attr(bp, key_attr) == Some(key_val.as_str())
+                    && (anchor.tag.is_none() || blueprint_tag(bp) == anchor.tag)
+            });
+            return Some(match candidates.len() {
+                0 => CaptureResolution::Unmounted,
+                1 => CaptureResolution::Resolved(candidates.into_iter().next().unwrap()),
+                _ => {
+                    let best = candidates
+                        .into_iter()
+                        .max_by_key(|p| {
+                            self.score_candidate_path(p, anchor.tag, outer_ancestors, fallback_path)
+                        })
+                        .unwrap();
+                    CaptureResolution::Resolved(best)
+                }
+            });
+        }
+        // No explicit identity and EntityId was replaced on rebuild -> keep searching outward
+        None
+    }
+
+    /// Resolves a [`PointerCaptureTarget`] to its current layout path using stable identity:
+    /// 1. Surviving `EntityId`
+    /// 2. Explicit `id="..."`
+    /// 3. Explicit `data-strata-node-uid`
+    /// 4. Explicit `key="..."` / `data-key="..."` (disambiguated by ancestor chain)
+    /// 5. Nearest stable ancestor anchor + relative child tail (with non-listening overlay shift recovery)
+    /// 6. Raw `path` / root listener-rank fallback ONLY when no stable identity was recorded
+    pub(crate) fn resolve_pointer_capture(
+        &self,
+        cap: &PointerCaptureTarget,
+    ) -> CaptureResolution {
+        // 1. Surviving EntityId
+        if let Some(eid) = cap.entity_id {
+            if let Some(path) = self.layout_root.find_path_by_entity_id(eid) {
+                if Self::resolve_chain_for_path(&self.root_blueprint, &self.layout_root, &path)
+                    .len()
+                    == path.len() + 1
+                {
+                    return CaptureResolution::Resolved(path);
+                }
+            }
+        }
+
+        // 2. Explicit id="..."
+        if let Some(ref target_id) = cap.element_id {
+            let candidates = self.collect_matching_layout_paths(|bp, _| {
+                blueprint_nonempty_attr(bp, "id") == Some(target_id.as_str())
+            });
+            return match candidates.len() {
+                0 => CaptureResolution::Unmounted,
+                1 => CaptureResolution::Resolved(candidates.into_iter().next().unwrap()),
+                _ => {
+                    let best = candidates
+                        .into_iter()
+                        .max_by_key(|p| {
+                            self.score_candidate_path(p, cap.tag, &cap.ancestor_anchors, &cap.path)
+                        })
+                        .unwrap();
+                    CaptureResolution::Resolved(best)
+                }
+            };
+        }
+
+        // 3. Explicit data-strata-node-uid
+        if let Some(uid) = cap.dom_uid {
+            let candidates =
+                self.collect_matching_layout_paths(|bp, _| bp.dom_uid() == Some(uid));
+            return candidates
+                .into_iter()
+                .next()
+                .map_or(CaptureResolution::Unmounted, CaptureResolution::Resolved);
+        }
+
+        // 4. Explicit key / data-key
+        if let Some((ref key_attr, ref key_val)) = cap.element_key {
+            let mut candidates = self.collect_matching_layout_paths(|bp, _| {
+                blueprint_nonempty_attr(bp, key_attr) == Some(key_val.as_str())
+                    && (cap.tag.is_none() || blueprint_tag(bp) == cap.tag)
+            });
+            if candidates.is_empty() && cap.tag.is_some() {
+                candidates = self.collect_matching_layout_paths(|bp, _| {
+                    blueprint_nonempty_attr(bp, key_attr) == Some(key_val.as_str())
+                });
+            }
+            if candidates.is_empty() {
+                return CaptureResolution::Unmounted;
+            }
+            if candidates.len() == 1 && cap.key_was_unique_at_capture {
+                return CaptureResolution::Resolved(candidates.into_iter().next().unwrap());
+            }
+            // Disambiguate duplicate keys (or verify non-unique key did not vanish from its still-mounted container)
+            let nearest_explicit_anc = cap
+                .ancestor_anchors
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, a)| anchor_has_explicit_identity(a));
+            let nearest_anc_still_mounted = nearest_explicit_anc.is_some_and(|(idx, anc)| {
+                matches!(
+                    self.resolve_ancestor_anchor(anc, &cap.ancestor_anchors[..idx], &cap.path),
+                    Some(CaptureResolution::Resolved(_))
+                )
+            });
+            let (best_path, best_score) = candidates
+                .into_iter()
+                .map(|p| {
+                    let s =
+                        self.score_candidate_path(&p, cap.tag, &cap.ancestor_anchors, &cap.path);
+                    (p, s)
+                })
+                .max_by_key(|(_, s)| *s)
+                .unwrap();
+            if !cap.key_was_unique_at_capture && nearest_anc_still_mounted && best_score.0 == 0 {
+                return CaptureResolution::Unmounted;
+            }
+            return CaptureResolution::Resolved(best_path);
+        }
+
+        // 5. Nearest stable ancestor anchor + relative tail (unkeyed descendant inside an identified ancestor)
+        for idx in (0..cap.ancestor_anchors.len()).rev() {
+            let anchor = &cap.ancestor_anchors[idx];
+            let Some(res) =
+                self.resolve_ancestor_anchor(anchor, &cap.ancestor_anchors[..idx], &cap.path)
+            else {
+                continue;
+            };
+            match res {
+                CaptureResolution::Unmounted => return CaptureResolution::Unmounted,
+                CaptureResolution::Resolved(anc_path) => {
+                    return self.resolve_tail_under_ancestor(&anc_path, anchor, cap);
+                }
+            }
+        }
+
+        // 6. Fallback to raw path (plus unkeyed root overlay shift recovery) only when no stable identity existed
+        if self.candidate_matches_captured_signature(&cap.path, cap) {
+            return CaptureResolution::Resolved(cap.path.clone());
+        }
+        if let Some(root_anchor) = cap.ancestor_anchors.first() {
+            if root_anchor.relative_tail == cap.path {
+                return self.resolve_tail_under_ancestor(&[], root_anchor, cap);
+            }
+        }
+        CaptureResolution::Unmounted
+    }
+
+    /// Reconciles active `pointer_capture_target` after `update_view` rebuilds or reconciles
+    /// the DOM/layout tree: refreshes `path`, `entity_id`, ancestor anchors, and handlers when
+    /// the target shifted siblings or moved across portals, or clears capture and delivers
+    /// W3C `lostpointercapture` immediately if an explicitly captured subtree unmounted.
+    pub(crate) fn reconcile_pointer_capture_after_view_update(&mut self) {
+        let Some(cap) = self.pointer_capture_target.clone() else {
+            return;
+        };
+        match self.resolve_pointer_capture(&cap) {
+            CaptureResolution::Resolved(resolved_path) => {
+                let refreshed_eid = Self::resolve_chain_for_path(
+                    &self.root_blueprint,
+                    &self.layout_root,
+                    &resolved_path,
+                )
+                .last()
+                .map(|(_, l)| l.entity_id)
+                .unwrap_or(strata_primitives::EntityId::NONE);
+                let mut refreshed = self.build_pointer_capture_target(
+                    resolved_path,
+                    cap.explicit,
+                    refreshed_eid,
+                    cap.button,
+                );
+                refreshed.pointer_id = cap.pointer_id;
+                if cap.element_key.is_some() {
+                    refreshed.key_was_unique_at_capture = cap.key_was_unique_at_capture;
+                }
+                self.pointer_capture_target = Some(refreshed);
+            }
+            CaptureResolution::Unmounted => {
+                let lost = self.pointer_capture_target.take();
+                if let Some(cap) = lost {
+                    if self.is_mouse_down || cap.explicit {
+                        self.capture_lost_while_mouse_down = true;
+                    }
+                    if cap.explicit {
+                        if let Some(handler) = cap.lost_capture_handler {
+                            let (px, py) = self.last_mouse_pos;
+                            let mut ev = self.create_mouse_event(
+                                strata_dom::EventType::LostPointerCapture,
+                                px,
+                                py,
+                                cap.button,
+                                0,
+                                None,
+                            );
+                            ev.pointer_id = cap.pointer_id;
+                            ev.data = Some("target_unmounted".to_string());
+                            handler(ev);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Dispatches `EventType::LostPointerCapture` at or above `path` if a listener exists.
+    pub(crate) fn dispatch_lost_pointer_capture_at_path(
+        &self,
+        path: &[usize],
+        px: f32,
+        py: f32,
+        button: i16,
+        pointer_id: i32,
+    ) -> bool {
+        if let Some((handler, target_box, _)) = Self::find_event_at_or_above_path(
+            &self.root_blueprint,
+            &self.layout_root,
+            path,
+            strata_dom::EventType::LostPointerCapture,
+        ) {
+            let target_box_copy = *target_box;
+            let mut ev = self.create_mouse_event(
+                strata_dom::EventType::LostPointerCapture,
+                px,
+                py,
+                button,
+                0,
+                Some(&target_box_copy),
+            );
+            ev.pointer_id = pointer_id;
+            handler(ev);
+            return true;
+        }
+        false
+    }
+
+    /// Invokes all registered runtime window-level and global `on_pointer_up` listeners.
+    /// Returns `true` if at least one listener was invoked.
+    pub(crate) fn dispatch_window_and_global_pointer_up(&self, event: &strata_dom::Event) -> bool {
+        let mut invoked = false;
+        if !self.window_pointer_up_listeners.is_empty() {
+            for cb in self.window_pointer_up_listeners.snapshot() {
+                cb(event.clone());
+                invoked = true;
+            }
+        }
+        if strata_dom::hooks::dispatch_global_pointer_up(event) {
+            invoked = true;
+        }
+        invoked
+    }
+
+    /// Invokes all registered runtime window-level and global `on_pointer_cancel` listeners.
+    /// Returns `true` if at least one listener was invoked.
+    pub(crate) fn dispatch_window_and_global_pointer_cancel(
+        &self,
+        event: &strata_dom::Event,
+    ) -> bool {
+        let mut invoked = false;
+        if !self.window_pointer_cancel_listeners.is_empty() {
+            for cb in self.window_pointer_cancel_listeners.snapshot() {
+                cb(event.clone());
+                invoked = true;
+            }
+        }
+        if strata_dom::hooks::dispatch_global_pointer_cancel(event) {
+            invoked = true;
+        }
+        invoked
+    }
+
+    /// Explicitly dispatches a `PointerCancel` event at `(px, py)`, releasing any active
+    /// pointer capture, drag state, and invoking element + window/global `on_pointer_cancel` hooks.
+    pub fn dispatch_pointer_cancel(&mut self, px: f32, py: f32) -> bool {
+        self.dispatch_pointer_cancel_with_meta(px, py, 1, "mouse", 0, "explicit_cancel")
+    }
+
+    /// Cancels any active pointer gesture (capture, press, DOM drag, scrollbar drag, or
+    /// text selection drag) on window focus loss or system interruption.
+    ///
+    /// Returns `false` immediately without firing listeners when no pointer gesture is active.
+    pub fn cancel_active_pointer_gesture(&mut self, reason: &str) -> bool {
+        let had_active = self.is_mouse_down
+            || self.has_active_pointer_capture_or_drag()
+            || self.capture_lost_while_mouse_down
+            || self.pending_click.is_some();
+        if !had_active {
+            return false;
+        }
+        let (px, py) = self.last_mouse_pos;
+        let (pointer_id, button) = self
+            .pointer_capture_target
+            .as_ref()
+            .map(|c| (c.pointer_id, c.button))
+            .unwrap_or((1, 0));
+        self.dispatch_pointer_cancel_with_meta(px, py, pointer_id, "mouse", button, reason)
+    }
+
+    /// Internal shared implementation for `PointerCancel` dispatch and capture/drag cleanup.
+    pub(crate) fn dispatch_pointer_cancel_with_meta(
+        &mut self,
+        px: f32,
+        py: f32,
+        pointer_id: i32,
+        pointer_type: &'static str,
+        button: i16,
+        reason: &str,
+    ) -> bool {
+        self.last_mouse_pos = (px, py);
+        let was_mouse_down = self.is_mouse_down;
+        let had_active_state = was_mouse_down
+            || self.has_active_pointer_capture_or_drag()
+            || self.capture_lost_while_mouse_down
+            || self.pending_click.is_some();
+
+        self.is_mouse_down = false;
+        self.capture_lost_while_mouse_down = false;
+        self.drag_selection_active = false;
+        self.scrollbar_drag = None;
+        self.pending_window_drag = None;
+        self.cancel_pending_click();
+        let capture = self.pointer_capture_target.take();
+        let active_drag = self.active_dom_drag.take();
+
+        let mut handled = false;
+        if let Some(ref cap) = capture {
+            if let CaptureResolution::Resolved(resolved_path) = self.resolve_pointer_capture(cap) {
+                let outcome = self.dispatch_bubbling_event_from_path(
+                    strata_dom::EventType::PointerCancel,
+                    &resolved_path,
+                    px,
+                    py,
+                    cap.button,
+                    0,
+                    |ev| {
+                        ev.pointer_id = cap.pointer_id;
+                        ev.pointer_type = pointer_type;
+                        ev.data = Some(reason.to_string());
+                    },
+                );
+                if outcome.handled {
+                    handled = true;
+                }
+                if cap.explicit
+                    && self.dispatch_lost_pointer_capture_at_path(
+                        &resolved_path,
+                        px,
+                        py,
+                        cap.button,
+                        cap.pointer_id,
+                    )
+                {
+                    handled = true;
+                }
+            }
+        } else {
+            let outcome = self.dispatch_bubbling_event_detailed_at(
+                strata_dom::EventType::PointerCancel,
+                px,
+                py,
+                button,
+                0,
+                |ev| {
+                    ev.pointer_id = pointer_id;
+                    ev.pointer_type = pointer_type;
+                    ev.data = Some(reason.to_string());
+                },
+            );
+            if outcome.handled {
+                handled = true;
+            }
+        }
+
+        if let Some(drag) = active_drag {
+            if drag.started {
+                let (invoked, _) = self.dispatch_drag_event_at_path(
+                    &drag.source_path,
+                    strata_dom::EventType::DragEnd,
+                    px,
+                    py,
+                    &drag.data_transfer,
+                );
+                if invoked {
+                    handled = true;
+                }
+            }
+        }
+
+        let mut cancel_ev = self.create_mouse_event(
+            strata_dom::EventType::PointerCancel,
+            px,
+            py,
+            button,
+            0,
+            None,
+        );
+        cancel_ev.pointer_id = pointer_id;
+        cancel_ev.pointer_type = pointer_type;
+        cancel_ev.data = Some(reason.to_string());
+        if self.dispatch_window_and_global_pointer_cancel(&cancel_ev) {
+            handled = true;
+        }
+
+        if was_mouse_down && self.restyle_for_active_change() {
+            handled = true;
+        }
+
+        handled || had_active_state
     }
 
     /// Dispatches pointer down at (px, py) coordinates with default modifiers.
@@ -234,7 +1113,11 @@ impl AppRuntime {
                     }
 
                     // Switching away from previous input: persist its undo/redo history in input_states
-                    self.input_states.insert(current_key, active.state.clone());
+                    self.input_states
+                        .insert(current_key.clone(), active.state.clone());
+                    if let Some(prev_prop) = self.active_input_last_prop_value.take() {
+                        self.input_last_prop_values.insert(current_key, prev_prop);
+                    }
                     if let Some(ref blur_cb) = active.on_blur {
                         blur_cb(strata_dom::Event::new(strata_dom::EventType::Blur));
                     }
@@ -244,31 +1127,49 @@ impl AppRuntime {
                 let state = self.input_states.remove(&target_key).unwrap_or_else(|| {
                     strata_dom::text_input::TextInputState::with_text(&target.current_value)
                 });
+                let prev_saved_prop = self.input_last_prop_values.remove(&target_key);
 
-                // Sync external value if state was empty
-                if state.text.get().is_empty() && !target.current_value.is_empty() {
+                // Reconcile external controlled `value` prop changes that occurred while blurred
+                // (including programmatic `value=""` clears), or initialize an empty state.
+                let prop_changed_while_blurred = target.has_value_prop
+                    && prev_saved_prop
+                        .as_ref()
+                        .is_some_and(|prev| prev != &target.current_value);
+                if prop_changed_while_blurred
+                    || (state.text.get().is_empty() && !target.current_value.is_empty())
+                {
+                    let new_char_len = target.current_value.chars().count();
                     state.text.set(target.current_value.clone());
+                    state
+                        .cursor_index
+                        .set(state.cursor_index.get().min(new_char_len));
+                    if new_char_len == 0 {
+                        state.selection_anchor.set(None);
+                        state.scroll_x.set(0.0);
+                        state.scroll_y.set(0.0);
+                    }
                 }
                 if target.is_multiline {
                     state.scroll_y.set(active_scroll_y);
                 }
 
+                let clamped_char_idx = char_idx.min(state.text.get().chars().count());
                 if click_count == 2 {
                     if is_password {
                         state.select_all();
                     } else {
-                        state.select_word_at_index(char_idx);
+                        state.select_word_at_index(clamped_char_idx);
                     }
                     self.drag_selection_active = false;
                 } else if click_count == 3 {
-                    state.select_line_at_index(char_idx);
+                    state.select_line_at_index(clamped_char_idx);
                     self.drag_selection_active = false;
                 } else if click_count >= 4 {
                     state.select_all();
                     self.drag_selection_active = false;
                 } else {
-                    state.cursor_index.set(char_idx);
-                    state.selection_anchor.set(Some(char_idx));
+                    state.cursor_index.set(clamped_char_idx);
+                    state.selection_anchor.set(Some(clamped_char_idx));
                     self.drag_selection_active = true;
                 }
                 state.is_focused.set(true);
@@ -277,6 +1178,11 @@ impl AppRuntime {
                     focus_cb(strata_dom::Event::new(strata_dom::EventType::Focus));
                 }
 
+                self.active_input_last_prop_value = if target.has_value_prop {
+                    Some(target.current_value)
+                } else {
+                    None
+                };
                 self.active_focus = Some(ActiveInput {
                     input_index: target.input_index,
                     input_id: target.input_id,
@@ -307,7 +1213,10 @@ impl AppRuntime {
                     .input_id
                     .clone()
                     .unwrap_or_else(|| format!("input:{}", active.input_index));
-                self.input_states.insert(key, active.state.clone());
+                self.input_states.insert(key.clone(), active.state.clone());
+                if let Some(prev_prop) = self.active_input_last_prop_value.take() {
+                    self.input_last_prop_values.insert(key, prev_prop);
+                }
                 self.drag_selection_active = false;
                 self.last_click_info = None;
                 if let Some(ref blur_cb) = active.on_blur {
@@ -324,14 +1233,35 @@ impl AppRuntime {
         let pre_open_outside_ids = strata_dom::hooks::snapshot_open_click_outside_ids();
         let mut inside_click_stopped = self.point_hits_non_backdrop_top_layer_portal(px, py);
         self.pointer_capture_target = None;
+        self.capture_lost_while_mouse_down = false;
+        let now_click = self.now();
+        let dom_click_detail =
+            if let Some((last_t, lx, ly, last_btn, last_cnt)) = self.last_dom_click {
+                if last_btn == button
+                    && now_click.duration_since(last_t).as_millis() <= 450
+                    && (px - lx).abs() <= 6.0
+                    && (py - ly).abs() <= 6.0
+                {
+                    if last_cnt >= 3 {
+                        1
+                    } else {
+                        last_cnt + 1
+                    }
+                } else {
+                    1
+                }
+            } else {
+                1
+            };
+        self.last_dom_click = Some((now_click, px, py, button, dom_click_detail));
         let mut dom_handled = false;
-        let mut captured_target: Option<(Vec<usize>, bool)> = None;
+        let mut captured_target: Option<PointerCaptureTarget> = None;
         let pd_outcome = self.dispatch_bubbling_event_detailed_at(
             strata_dom::EventType::PointerDown,
             px,
             py,
             button,
-            1,
+            dom_click_detail,
             |_| {},
         );
         if pd_outcome.handled {
@@ -342,9 +1272,23 @@ impl AppRuntime {
             if let Some(cap_eid) = pd_outcome.capture_entity.or(pd_outcome.target_entity) {
                 if let Some(target_path) = self.layout_root.find_path_by_entity_id(cap_eid) {
                     match pd_outcome.capture_requested {
-                        Some(true) => captured_target = Some((target_path, true)),
+                        Some(true) => {
+                            captured_target = Some(self.build_pointer_capture_target(
+                                target_path,
+                                true,
+                                cap_eid,
+                                button,
+                            ));
+                        }
                         Some(false) => {}
-                        None => captured_target = Some((target_path, false)),
+                        None => {
+                            captured_target = Some(self.build_pointer_capture_target(
+                                target_path,
+                                false,
+                                cap_eid,
+                                button,
+                            ));
+                        }
                     }
                 }
             }
@@ -354,7 +1298,7 @@ impl AppRuntime {
             px,
             py,
             button,
-            1,
+            dom_click_detail,
             |_| {},
         );
         if md_outcome.handled {
@@ -365,10 +1309,22 @@ impl AppRuntime {
             if let Some(cap_eid) = md_outcome.capture_entity.or(md_outcome.target_entity) {
                 if let Some(target_path) = self.layout_root.find_path_by_entity_id(cap_eid) {
                     match md_outcome.capture_requested {
-                        Some(true) => captured_target = Some((target_path, true)),
+                        Some(true) => {
+                            captured_target = Some(self.build_pointer_capture_target(
+                                target_path,
+                                true,
+                                cap_eid,
+                                button,
+                            ));
+                        }
                         Some(false) => captured_target = None,
                         None if captured_target.is_none() => {
-                            captured_target = Some((target_path, false));
+                            captured_target = Some(self.build_pointer_capture_target(
+                                target_path,
+                                false,
+                                cap_eid,
+                                button,
+                            ));
                         }
                         None => {}
                     }
@@ -486,13 +1442,65 @@ impl AppRuntime {
 
         let mut dom_handled = false;
         let mut requested_warp: Option<(f64, f64)> = None;
-        let capture = self.pointer_capture_target.clone();
+        let mut resolved_capture: Option<(Vec<usize>, bool, i16, i32)> =
+            if let Some(ref cap) = self.pointer_capture_target.clone() {
+                match self.resolve_pointer_capture(cap) {
+                    CaptureResolution::Resolved(resolved_path) => {
+                        if let Some(ref mut live_cap) = self.pointer_capture_target {
+                            if live_cap.path != resolved_path {
+                                live_cap.path = resolved_path.clone();
+                            }
+                            if let Some((_, l)) = Self::resolve_chain_for_path(
+                                &self.root_blueprint,
+                                &self.layout_root,
+                                &resolved_path,
+                            )
+                            .last()
+                            {
+                                if l.entity_id.is_valid() {
+                                    live_cap.entity_id = Some(l.entity_id);
+                                }
+                            }
+                        }
+                        Some((resolved_path, cap.explicit, cap.button, cap.pointer_id))
+                    }
+                    CaptureResolution::Unmounted => {
+                        let lost = self.pointer_capture_target.take();
+                        if let Some(lost_cap) = lost {
+                            if self.is_mouse_down || lost_cap.explicit {
+                                self.capture_lost_while_mouse_down = true;
+                            }
+                            if lost_cap.explicit {
+                                if let Some(handler) = lost_cap.lost_capture_handler {
+                                    let mut ev = self.create_mouse_event(
+                                        strata_dom::EventType::LostPointerCapture,
+                                        px,
+                                        py,
+                                        lost_cap.button,
+                                        0,
+                                        None,
+                                    );
+                                    ev.pointer_id = lost_cap.pointer_id;
+                                    ev.data = Some("target_unmounted".to_string());
+                                    handler(ev);
+                                    dom_handled = true;
+                                }
+                            }
+                        }
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+        let move_button: i16 = if self.is_mouse_down { 0 } else { -1 };
+        let mut released_capture_meta: Option<(Vec<usize>, i16, i32)> = None;
         for ev_type in [
             strata_dom::EventType::PointerMove,
             strata_dom::EventType::MouseMove,
         ] {
-            match capture {
-                Some((ref cap_path, true)) => {
+            match resolved_capture {
+                Some((ref cap_path, true, cap_btn, cap_pid)) => {
                     if let Some((handler, target_box, _)) = Self::find_event_at_or_above_path(
                         &self.root_blueprint,
                         &self.layout_root,
@@ -500,28 +1508,37 @@ impl AppRuntime {
                         ev_type,
                     ) {
                         let target_box_copy = *target_box;
-                        let mut ev =
-                            self.create_mouse_event(ev_type, px, py, 0, 0, Some(&target_box_copy));
+                        let mut ev = self.create_mouse_event(
+                            ev_type,
+                            px,
+                            py,
+                            move_button,
+                            0,
+                            Some(&target_box_copy),
+                        );
                         ev.movement_x = movement_x;
                         ev.movement_y = movement_y;
+                        ev.pointer_id = cap_pid;
                         let capture_req = ev.pointer_capture_requested.clone();
                         let warp_req = ev.cursor_warp_requested.clone();
                         handler(ev);
                         dom_handled = true;
                         if capture_req.get() == Some(false) {
                             self.pointer_capture_target = None;
+                            released_capture_meta = Some((cap_path.clone(), cap_btn, cap_pid));
+                            resolved_capture = None;
                         }
                         if let Some(pos) = warp_req.get() {
                             requested_warp = Some(pos);
                         }
                     }
                 }
-                Some((ref cap_path, false)) => {
+                Some((ref cap_path, false, _, cap_pid)) => {
                     let outcome = self.dispatch_bubbling_event_detailed_at(
                         ev_type,
                         px,
                         py,
-                        0,
+                        move_button,
                         0,
                         |ev| {
                             ev.movement_x = movement_x;
@@ -549,15 +1566,21 @@ impl AppRuntime {
                                 ev_type,
                                 px,
                                 py,
-                                0,
+                                move_button,
                                 0,
                                 Some(&target_box_copy),
                             );
                             ev.movement_x = movement_x;
                             ev.movement_y = movement_y;
+                            ev.pointer_id = cap_pid;
+                            let capture_req = ev.pointer_capture_requested.clone();
                             let warp_req = ev.cursor_warp_requested.clone();
                             handler(ev);
                             dom_handled = true;
+                            if capture_req.get() == Some(false) {
+                                self.pointer_capture_target = None;
+                                resolved_capture = None;
+                            }
                             if let Some(pos) = warp_req.get() {
                                 requested_warp = Some(pos);
                             }
@@ -569,7 +1592,7 @@ impl AppRuntime {
                         ev_type,
                         px,
                         py,
-                        0,
+                        move_button,
                         0,
                         |ev| {
                             ev.movement_x = movement_x;
@@ -585,6 +1608,9 @@ impl AppRuntime {
                 }
             }
         }
+        if let Some((ref cap_path, cap_btn, cap_pid)) = released_capture_meta {
+            let _ = self.dispatch_lost_pointer_capture_at_path(cap_path, px, py, cap_btn, cap_pid);
+        }
         if let Some((wx, wy)) = requested_warp {
             self.warp_cursor(wx as f32, wy as f32);
         }
@@ -595,6 +1621,7 @@ impl AppRuntime {
                 let (sx, sy) = drag.start_pos;
                 if (px - sx).abs() > 3.0 || (py - sy).abs() > 3.0 {
                     drag.started = true;
+                    self.cancel_pending_click();
                     let (invoked, prevented) = self.dispatch_drag_event_at_path(
                         &drag.source_path,
                         strata_dom::EventType::DragStart,
@@ -710,27 +1737,35 @@ impl AppRuntime {
             selection_ended = true;
         }
 
+        let lost_capture_during_press = std::mem::take(&mut self.capture_lost_while_mouse_down);
         let capture = self.pointer_capture_target.take();
+        let resolved_capture: Option<(Vec<usize>, bool, i32)> = capture.as_ref().and_then(|cap| {
+            match self.resolve_pointer_capture(cap) {
+                CaptureResolution::Resolved(path) => Some((path, cap.explicit, cap.pointer_id)),
+                CaptureResolution::Unmounted => None,
+            }
+        });
         let mut dom_handled = false;
         for ev_type in [
             strata_dom::EventType::PointerUp,
             strata_dom::EventType::MouseUp,
         ] {
-            match capture {
-                Some((ref cap_path, true)) => {
+            match resolved_capture {
+                Some((ref cap_path, true, cap_pid)) => {
                     if let Some((handler, target_box, _)) = Self::find_event_at_or_above_path(
                         &self.root_blueprint,
                         &self.layout_root,
                         cap_path,
                         ev_type,
                     ) {
-                        let ev =
+                        let mut ev =
                             self.create_mouse_event(ev_type, px, py, button, 1, Some(target_box));
+                        ev.pointer_id = cap_pid;
                         handler(ev);
                         dom_handled = true;
                     }
                 }
-                Some((ref cap_path, false)) => {
+                Some((ref cap_path, false, cap_pid)) => {
                     let outcome = self.dispatch_bubbling_event_detailed_at(
                         ev_type,
                         px,
@@ -752,7 +1787,7 @@ impl AppRuntime {
                             && outcome.chain_entities.contains(&cap_eid);
                         if !outcome.invoked_entities.contains(&cap_eid) && !suppressed_by_bubble_stop
                         {
-                            let ev = self.create_mouse_event(
+                            let mut ev = self.create_mouse_event(
                                 ev_type,
                                 px,
                                 py,
@@ -760,6 +1795,7 @@ impl AppRuntime {
                                 1,
                                 Some(target_box),
                             );
+                            ev.pointer_id = cap_pid;
                             handler(ev);
                             dom_handled = true;
                         }
@@ -777,6 +1813,29 @@ impl AppRuntime {
                     if outcome.handled {
                         dom_handled = true;
                     }
+                }
+            }
+        }
+
+        if let Some((ref cap_path, true, cap_pid)) = resolved_capture {
+            if self.dispatch_lost_pointer_capture_at_path(cap_path, px, py, button, cap_pid) {
+                dom_handled = true;
+            }
+        } else if let Some(ref cap) = capture {
+            if cap.explicit {
+                if let Some(ref handler) = cap.lost_capture_handler {
+                    let mut ev = self.create_mouse_event(
+                        strata_dom::EventType::LostPointerCapture,
+                        px,
+                        py,
+                        button,
+                        0,
+                        None,
+                    );
+                    ev.pointer_id = cap.pointer_id;
+                    ev.data = Some("target_unmounted".to_string());
+                    handler(ev);
+                    dom_handled = true;
                 }
             }
         }
@@ -839,6 +1898,32 @@ impl AppRuntime {
                         dom_handled = true;
                     }
                 }
+            }
+        }
+
+        // Document/window-level pointer-up hooks fire unconditionally even if the capturing
+        // element unmounted or moved across portals mid-gesture.
+        if !self.window_pointer_up_listeners.is_empty()
+            || strata_dom::hooks::has_global_pointer_up_listeners()
+        {
+            let mut up_ev = self.create_mouse_event(
+                strata_dom::EventType::PointerUp,
+                px,
+                py,
+                button,
+                1,
+                None,
+            );
+            if let Some(ref cap) = capture {
+                up_ev.pointer_id = cap.pointer_id;
+            }
+            let global_invoked = self.dispatch_window_and_global_pointer_up(&up_ev);
+            if global_invoked
+                && (capture.is_some()
+                    || lost_capture_during_press
+                    || strata_dom::reactive::has_dirty_signals())
+            {
+                dom_handled = true;
             }
         }
 
@@ -1414,6 +2499,14 @@ impl AppRuntime {
                     if !active.is_multiline {
                         active.state.scroll_x.set(0.0);
                     }
+                    let key = active
+                        .input_id
+                        .clone()
+                        .unwrap_or_else(|| format!("input:{}", active.input_index));
+                    self.input_states.insert(key.clone(), active.state.clone());
+                    if let Some(prev_prop) = self.active_input_last_prop_value.take() {
+                        self.input_last_prop_values.insert(key, prev_prop);
+                    }
                     if let Some(ref on_blur) = active.on_blur {
                         on_blur(strata_dom::Event::new(strata_dom::EventType::Blur));
                     }
@@ -1519,9 +2612,11 @@ impl AppRuntime {
             }
             false
         };
-        if let Some((ref cap_path, _)) = self.pointer_capture_target {
-            if path_is_canvas(cap_path) {
-                return true;
+        if let Some(ref cap) = self.pointer_capture_target {
+            if let CaptureResolution::Resolved(cap_path) = self.resolve_pointer_capture(cap) {
+                if path_is_canvas(&cap_path) {
+                    return true;
+                }
             }
         }
         Self::hit_test_node_path(&self.root_blueprint, &self.layout_root, px, py)
@@ -1557,11 +2652,11 @@ impl AppRuntime {
         Some(chain)
     }
 
-    /// Detailed outcome from a W3C bubbling DOM dispatch wave, preserving side-channel flags
-    /// (`pointer_capture_requested`, `cursor_warp_requested`, `stop_propagation`, `prevent_default`)
-    /// and invoked `EntityId`s for pointer-capture deduplication.
-    pub(crate) fn dispatch_bubbling_event_detailed_at(
+    /// Dispatches a bubbling DOM event wave across an already-resolved root-to-target chain.
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_bubbling_event_on_chain(
         &self,
+        chain: Vec<(&NodeBlueprint, &LayoutNode)>,
         event_type: strata_dom::EventType,
         px: f32,
         py: f32,
@@ -1569,9 +2664,6 @@ impl AppRuntime {
         detail: i32,
         configure: impl Fn(&mut strata_dom::Event),
     ) -> BubblingOutcome {
-        let Some(chain) = self.hit_test_event_chain_at(px, py, event_type) else {
-            return BubblingOutcome::default();
-        };
         let Some((_, target_layout)) = chain.last() else {
             return BubblingOutcome::default();
         };
@@ -1657,6 +2749,58 @@ impl AppRuntime {
         }
     }
 
+    /// Dispatches a bubbling DOM event starting at the deepest node along `path` registering `event_type`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn dispatch_bubbling_event_from_path(
+        &self,
+        event_type: strata_dom::EventType,
+        path: &[usize],
+        px: f32,
+        py: f32,
+        button: i16,
+        detail: i32,
+        configure: impl Fn(&mut strata_dom::Event),
+    ) -> BubblingOutcome {
+        let mut chain =
+            Self::resolve_chain_for_path(&self.root_blueprint, &self.layout_root, path);
+        let Some(listener_idx) = chain.iter().rposition(|(bp, _)| {
+            matches!(
+                bp,
+                NodeBlueprint::Element { attributes, .. }
+                    if attributes.iter().any(|a| matches!(
+                        a,
+                        strata_dom::Attribute::EventListener { event, .. } if *event == event_type
+                    ))
+            )
+        }) else {
+            return BubblingOutcome::default();
+        };
+        chain.truncate(listener_idx + 1);
+        self.dispatch_bubbling_event_on_chain(
+            chain, event_type, px, py, button, detail, configure,
+        )
+    }
+
+    /// Detailed outcome from a W3C bubbling DOM dispatch wave, preserving side-channel flags
+    /// (`pointer_capture_requested`, `cursor_warp_requested`, `stop_propagation`, `prevent_default`)
+    /// and invoked `EntityId`s for pointer-capture deduplication.
+    pub(crate) fn dispatch_bubbling_event_detailed_at(
+        &self,
+        event_type: strata_dom::EventType,
+        px: f32,
+        py: f32,
+        button: i16,
+        detail: i32,
+        configure: impl Fn(&mut strata_dom::Event),
+    ) -> BubblingOutcome {
+        let Some(chain) = self.hit_test_event_chain_at(px, py, event_type) else {
+            return BubblingOutcome::default();
+        };
+        self.dispatch_bubbling_event_on_chain(
+            chain, event_type, px, py, button, detail, configure,
+        )
+    }
+
     /// Dispatches a synthetic mouse/wheel event for `event_type` at `(px, py)` starting from
     /// the front-most matching listener element and bubbling up through its ancestors, honoring
     /// `ev.stop_propagation()` and `ev.prevent_default()`.
@@ -1673,6 +2817,201 @@ impl AppRuntime {
         let outcome =
             self.dispatch_bubbling_event_detailed_at(event_type, px, py, button, detail, configure);
         (outcome.handled, outcome.default_prevented)
+    }
+
+    /// Records the press target and coordinates on `MouseDown` so `onclick` / `onauxclick`
+    /// fires on `MouseUp` when the pointer releases on the same target (or shared clickable
+    /// ancestor) within drag tolerance.
+    pub(crate) fn record_pending_click(&mut self, button: i16, px: f32, py: f32) {
+        let down_path = Self::hit_test_node_path(&self.root_blueprint, &self.layout_root, px, py);
+        let (clickable_entity, clickable_id, clickable_key) = down_path
+            .as_ref()
+            .and_then(|path| {
+                let chain =
+                    Self::resolve_chain_for_path(&self.root_blueprint, &self.layout_root, path);
+                chain.iter().rev().find_map(|(bp, layout)| {
+                    let has_click = matches!(
+                        bp,
+                        NodeBlueprint::Element { attributes, .. }
+                            if attributes.iter().any(|a| matches!(
+                                a,
+                                strata_dom::Attribute::EventListener {
+                                    event: strata_dom::EventType::Click
+                                        | strata_dom::EventType::AuxClick,
+                                    ..
+                                }
+                            ))
+                    );
+                    if has_click {
+                        Some((
+                            layout.entity_id.is_valid().then_some(layout.entity_id),
+                            blueprint_nonempty_attr(bp, "id").map(str::to_string),
+                            blueprint_explicit_key(bp),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or((None, None, None));
+        self.pending_click = Some(PendingMouseClick {
+            button,
+            down_x: px,
+            down_y: py,
+            down_path,
+            clickable_entity,
+            clickable_id,
+            clickable_key,
+            dragged: false,
+        });
+    }
+
+    /// Marks the active click candidate as dragged if pointer travel exceeds click drag tolerance.
+    pub(crate) fn mark_pending_click_dragged_if_moved(&mut self, px: f32, py: f32) {
+        if let Some(ref mut pending) = self.pending_click {
+            if !pending.dragged
+                && (px - pending.down_x).hypot(py - pending.down_y) > CLICK_DRAG_TOLERANCE_PX
+            {
+                pending.dragged = true;
+            }
+        }
+    }
+
+    /// Cancels any pending click candidate (e.g. when a drag starts or the cursor leaves the window).
+    pub(crate) fn cancel_pending_click(&mut self) {
+        self.pending_click = None;
+    }
+
+    /// Returns `true` when an active drag gesture (scrollbar drag, DOM drag-and-drop, or
+    /// non-empty text selection drag) should suppress `onclick` on `MouseUp`.
+    pub(crate) fn is_pointer_drag_suppressing_click(&self) -> bool {
+        if self.scrollbar_drag.is_some() {
+            return true;
+        }
+        if self.active_dom_drag.as_ref().is_some_and(|d| d.started) {
+            return true;
+        }
+        if self.drag_selection_active
+            && self.active_focus.as_ref().is_some_and(|a| {
+                a.state
+                    .selection_anchor
+                    .get()
+                    .is_some_and(|anc| anc != a.state.cursor_index.get())
+            })
+        {
+            return true;
+        }
+        false
+    }
+
+    /// Completes a click on `MouseUp` if the matching `MouseDown` started and ended within
+    /// drag tolerance on the same target or a shared clickable ancestor.
+    pub(crate) fn dispatch_click_on_mouse_up(
+        &mut self,
+        button: i16,
+        px: f32,
+        py: f32,
+        suppressed_by_drag: bool,
+    ) -> bool {
+        let Some(pending) = self.pending_click.take() else {
+            return false;
+        };
+        if suppressed_by_drag
+            || pending.button != button
+            || pending.dragged
+            || (px - pending.down_x).hypot(py - pending.down_y) > CLICK_DRAG_TOLERANCE_PX
+        {
+            return false;
+        }
+        let Some(down_path) = pending.down_path else {
+            return false;
+        };
+        let Some(up_path) =
+            Self::hit_test_node_path(&self.root_blueprint, &self.layout_root, px, py)
+        else {
+            return false;
+        };
+
+        // W3C UI Events: click dispatches on the lowest common inclusive ancestor of
+        // the MouseDown and MouseUp targets (preventing click misfires when sliding from
+        // one sibling button onto another, while allowing child-to-child wobble inside a button).
+        let common_len = down_path
+            .iter()
+            .zip(up_path.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let mut dispatch_path = down_path[..common_len].to_vec();
+
+        // If an `onmousedown` rebuild shifted a sibling index before `MouseUp`, recover the
+        // clickable ancestor via its surviving `EntityId`, explicit `id`, or `key` when it
+        // still contains `up_path`.
+        let recovered_path = pending
+            .clickable_entity
+            .and_then(|eid| self.layout_root.find_path_by_entity_id(eid))
+            .or_else(|| {
+                pending.clickable_id.as_deref().and_then(|id| {
+                    self.collect_matching_layout_paths(|bp, _| {
+                        blueprint_nonempty_attr(bp, "id") == Some(id)
+                    })
+                    .into_iter()
+                    .find(|p| up_path.starts_with(p))
+                })
+            })
+            .or_else(|| {
+                pending
+                    .clickable_key
+                    .as_ref()
+                    .and_then(|(key_attr, key_val)| {
+                        self.collect_matching_layout_paths(|bp, _| {
+                            blueprint_nonempty_attr(bp, key_attr) == Some(key_val.as_str())
+                        })
+                        .into_iter()
+                        .find(|p| up_path.starts_with(p))
+                    })
+            });
+        if let Some(ent_path) = recovered_path {
+            if up_path.starts_with(&ent_path) && ent_path.len() > dispatch_path.len() {
+                dispatch_path = ent_path;
+            }
+        }
+
+        if button == 0 {
+            self.dispatch_bubbling_event_from_path(
+                strata_dom::EventType::Click,
+                &dispatch_path,
+                px,
+                py,
+                button,
+                1,
+                |_| {},
+            )
+            .handled
+        } else {
+            let aux_handled = self
+                .dispatch_bubbling_event_from_path(
+                    strata_dom::EventType::AuxClick,
+                    &dispatch_path,
+                    px,
+                    py,
+                    button,
+                    1,
+                    |_| {},
+                )
+                .handled;
+            if aux_handled {
+                return true;
+            }
+            self.dispatch_bubbling_event_from_path(
+                strata_dom::EventType::Click,
+                &dispatch_path,
+                px,
+                py,
+                button,
+                1,
+                |_| {},
+            )
+            .handled
+        }
     }
 
     /// Dispatches a pointer click event at (x, y) coordinates into the application blueprint tree.
@@ -1752,11 +3091,15 @@ impl AppRuntime {
             py,
             "data-app-region",
         );
-        let is_drag = region.as_deref() == Some("drag")
-            || self
-                .csd_controller
-                .hit_test(self.viewport_width, self.viewport_height, px, py)
-                == strata_platform::CsdHitZone::Titlebar;
+        let is_drag = match region.as_deref() {
+            Some("no-drag") => false,
+            Some("drag") => true,
+            _ => {
+                self.csd_controller
+                    .hit_test(self.viewport_width, self.viewport_height, px, py)
+                    == strata_platform::CsdHitZone::Titlebar
+            }
+        };
 
         if !is_drag {
             self.pending_window_drag = None;
@@ -1785,6 +3128,7 @@ impl AppRuntime {
             if (px - sx).abs() > 4.0 || (py - sy).abs() > 4.0 {
                 self.pending_window_drag = None;
                 self.last_drag_click = None;
+                self.cancel_pending_click();
                 #[cfg(target_os = "linux")]
                 {
                     let was_max = strata_platform::gtk_is_maximized();

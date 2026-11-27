@@ -1043,7 +1043,21 @@ def auto_bump_changed_crates(
     plans: list[BumpPlan] = []
     for crate in crates:
         info = info_map[crate.name]
-        if not info.is_strataui_repo or crate.version not in info.active_versions:
+        if not info.is_strataui_repo:
+            continue
+        if crate.version in info.all_versions and crate.version not in info.active_versions:
+            new_ver = bump_patch_version(crate.version, forbidden=info.all_versions)
+            plans.append(
+                BumpPlan(
+                    crate=crate,
+                    old_version=crate.version,
+                    new_version=new_ver,
+                    changed_files=("yanked on crates.io",),
+                    manifest_changed=False,
+                )
+            )
+            continue
+        if crate.version not in info.active_versions:
             continue
         changed, diff_files, manifest_changed = has_crate_changed_since_publish(repo_root, crate, cache_dir)
         if not changed:

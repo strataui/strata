@@ -1,6 +1,6 @@
 [package]
 name = "strata-ffi"
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 authors.workspace = true
 description = "Universal C-compatible Foreign Function Interface (FFI) and embeddable dynamic/static library for Strata"

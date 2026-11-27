@@ -1163,6 +1163,108 @@ fn background_floating_window_scrollbar_paints_and_hittests_below_foreground_win
     assert!(rt.scrollbar_drag.is_some());
 }
 
+#[test]
+fn test_smooth_scroll_frame_zero_immediate_step_and_stable_id_across_sibling_insert() {
+    let build = |show_banner: bool, show_scroller: bool| {
+        if !show_scroller {
+            return rsx! {
+                <div class="flex flex-col w-[600px] h-[400px]">
+                    <div class="h-[40px] w-full shrink-0" />
+                </div>
+            };
+        }
+        if show_banner {
+            rsx! {
+                <div class="flex flex-col w-[600px] h-[400px]">
+                    <div id="dynamic-banner" class="h-[40px] w-full shrink-0" />
+                    <div id="stable-scroller" class="flex flex-col flex-1 min-h-0 w-full overflow-y-auto">
+                        <div class="h-[2400px] w-full shrink-0" />
+                    </div>
+                </div>
+            }
+        } else {
+            rsx! {
+                <div class="flex flex-col w-[600px] h-[400px]">
+                    <div id="stable-scroller" class="flex flex-col flex-1 min-h-0 w-full overflow-y-auto">
+                        <div class="h-[2400px] w-full shrink-0" />
+                    </div>
+                </div>
+            }
+        }
+    };
+
+    let mut rt = AppRuntime::new(build(false, true), 600.0, 400.0, 1.0);
+    let t0 = std::time::Instant::now();
+
+    // 1. Frame-0 immediate displacement: the very first wheel impulse must scroll immediately
+    //    (non-zero scroll_y right away, without waiting ~16ms for AnimationTick).
+    assert!(rt.dispatch_smooth_scroll(200.0, 200.0, 0.0, 100.0));
+    let frame0_y = rt.scroll_offset_by_id("stable-scroller").1;
+    assert!(
+        frame0_y > 10.0 && frame0_y < 100.0,
+        "Frame 0 must apply an immediate initial displacement step instead of 0px lag, got {frame0_y}"
+    );
+    let initial_path = rt.active_scrollbars[0].path.clone();
+
+    if let Some(ref mut tr) = rt.active_smooth_scroll {
+        tr.start_time = t0;
+        tr.last_event_time = t0;
+    }
+
+    // 2. Insert a sibling banner above `#stable-scroller` mid-scroll, shifting its tree path!
+    rt.update_view(build(true, true));
+    let shifted_path = rt
+        .active_scrollbars
+        .iter()
+        .find(|b| b.id == "stable-scroller")
+        .expect("scroller must remain mounted")
+        .path
+        .clone();
+    assert_ne!(
+        initial_path, shifted_path,
+        "Inserting a sibling above the scroll container must shift its layout path"
+    );
+
+    // Next AnimationTick must continue scrolling `#stable-scroller` smoothly via stable ID
+    // and update the tracker's path instead of stalling or dropping the target.
+    assert!(rt.poll_smooth_scroll_at(t0 + std::time::Duration::from_millis(24)));
+    let after_shift_y = rt.scroll_offset_by_id("stable-scroller").1;
+    assert!(
+        after_shift_y > frame0_y + 5.0,
+        "Smooth scroll must continue advancing after sibling insertion shifts path (frame0={frame0_y}, after={after_shift_y})"
+    );
+    assert_eq!(
+        rt.active_smooth_scroll
+            .as_ref()
+            .expect("tracker must remain active mid-scroll")
+            .container_path,
+        shifted_path
+    );
+
+    // Consecutive wheel impulse after the path shift must accumulate onto the SAME tracker!
+    if let Some(ref mut tr) = rt.active_smooth_scroll {
+        tr.last_event_time = std::time::Instant::now() - std::time::Duration::from_millis(250);
+    }
+    assert!(rt.dispatch_smooth_scroll(200.0, 200.0, 0.0, 50.0));
+    let accumulated_target = rt
+        .active_smooth_scroll
+        .as_ref()
+        .expect("tracker must stay active")
+        .target_y;
+    assert!(
+        (accumulated_target - 150.0).abs() < 0.5,
+        "Subsequent wheel event after sibling insertion must accumulate target to 150px, got {accumulated_target}"
+    );
+
+    // 3. Unmounting `#stable-scroller` mid-scroll must cleanly drop the tracker on next poll.
+    rt.update_view(build(false, false));
+    assert!(!rt.poll_smooth_scroll_at(std::time::Instant::now() + std::time::Duration::from_millis(16)));
+    assert!(
+        rt.active_smooth_scroll.is_none(),
+        "Tracker must be pruned cleanly when its scroll container unmounts"
+    );
+}
+
 
 
 

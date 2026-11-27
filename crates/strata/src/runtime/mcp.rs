@@ -19,7 +19,7 @@ impl AppRuntime {
     /// Paint-only hover transitions and cursor-only motion return `(false, true)` so automation
     /// benchmarks exercise the real fast hover path instead of forcing full DOM rebuilds.
     pub fn mcp_move_pointer_outcome(&mut self, x: f32, y: f32, smooth: bool) -> (bool, bool) {
-        let cursor_icon = Self::hit_test_cursor(&self.root_blueprint, &self.layout_root, x, y);
+        let cursor_icon = self.resolved_cursor_at(x, y);
         let cursor = self.ensure_mcp_cursor();
         let cursor_moved = (cursor.target_x - x).abs() > 0.01
             || (cursor.target_y - y).abs() > 0.01
@@ -30,6 +30,7 @@ impl AppRuntime {
         cursor.cursor_icon = cursor_icon;
 
         self.last_mouse_pos = (x, y);
+        self.mark_pending_click_dragged_if_moved(x, y);
         let mut needs_rebuild = false;
         let mut needs_redraw = cursor_moved;
 
@@ -48,6 +49,21 @@ impl AppRuntime {
             } else {
                 needs_rebuild = true;
             }
+        }
+        let post_cursor_icon = self.resolved_cursor_at(x, y);
+        if self.current_cursor != post_cursor_icon {
+            self.current_cursor = post_cursor_icon;
+            needs_redraw = true;
+        }
+        if let Some(ref mut c) = self.mcp_cursor {
+            if c.cursor_icon != post_cursor_icon {
+                c.cursor_icon = post_cursor_icon;
+                needs_redraw = true;
+            }
+        }
+        if strata_dom::reactive::has_dirty_signals() {
+            needs_rebuild = true;
+            needs_redraw = true;
         }
         if needs_redraw {
             self.mark_paint_dirty();
@@ -98,10 +114,13 @@ impl AppRuntime {
         let signals_before = strata_dom::reactive::has_dirty_signals();
 
         if button == strata_platform::MouseButton::Left {
+            self.is_mouse_down = true;
             if self.check_scrollbar_thumb_press(px, py) {
+                self.cancel_pending_click();
                 self.mark_paint_dirty();
                 return (needs_rebuild, true);
             }
+            self.record_pending_click(btn_idx, px, py);
             self.begin_window_drag_candidate(px, py);
             if self.dispatch_pointer_down_with_modifiers(
                 px,
@@ -115,14 +134,22 @@ impl AppRuntime {
                     needs_rebuild = true;
                 }
             }
-            if self.dispatch_mouse_click(px, py, btn_idx, 1) {
-                needs_rebuild = true;
-            }
             if self.drain_edit_commands() {
                 needs_rebuild = true;
             }
+            if !needs_rebuild && self.restyle_for_active_change() {
+                needs_redraw = true;
+            }
         } else if button == strata_platform::MouseButton::Middle {
-            if self.dispatch_pointer_down(px, py) {
+            self.record_pending_click(btn_idx, px, py);
+            if self.dispatch_pointer_down_action_with_button_and_modifiers(
+                px,
+                py,
+                btn_idx,
+                strata_platform::Modifiers::default(),
+            )
+            .is_handled()
+            {
                 let retained_only = !signals_before
                     && !strata_dom::reactive::has_dirty_signals()
                     && self.target_is_retained_canvas3d(px, py);
@@ -130,11 +157,17 @@ impl AppRuntime {
                     needs_rebuild = true;
                 }
             }
-            if self.dispatch_mouse_click(px, py, btn_idx, 1) {
+        } else if button == strata_platform::MouseButton::Right {
+            let _ = self.dispatch_pointer_down_action_with_button_and_modifiers(
+                px,
+                py,
+                btn_idx,
+                strata_platform::Modifiers::default(),
+            );
+            if self.dispatch_context_menu(px, py) {
                 needs_rebuild = true;
             }
-        } else if button == strata_platform::MouseButton::Right {
-            if self.dispatch_context_menu(px, py) {
+            if strata_dom::reactive::has_dirty_signals() {
                 needs_rebuild = true;
             }
             if self.drain_edit_commands() {
@@ -148,7 +181,7 @@ impl AppRuntime {
         (needs_rebuild, needs_redraw)
     }
 
-    /// Emulates AI mouse button down event.
+    /// Emulates AI mouse button release up event, returning `(needs_rebuild, needs_redraw)`.
     pub fn mcp_mouse_down(
         &mut self,
         button: strata_platform::MouseButton,
@@ -162,7 +195,7 @@ impl AppRuntime {
     /// Emulates AI mouse button release up event, returning `(needs_rebuild, needs_redraw)`.
     pub fn mcp_mouse_up_outcome(
         &mut self,
-        _button: strata_platform::MouseButton,
+        button: strata_platform::MouseButton,
         x: Option<f32>,
         y: Option<f32>,
     ) -> (bool, bool) {
@@ -186,20 +219,40 @@ impl AppRuntime {
             needs_redraw = true;
         }
         cursor.set_down(false);
+        let btn_idx = button.to_button_index();
+        let was_mouse_down = self.is_mouse_down;
+        if button == strata_platform::MouseButton::Left {
+            self.is_mouse_down = false;
+        }
 
+        let suppressed_by_drag = self.is_pointer_drag_suppressing_click();
         if self.scrollbar_drag.is_some() {
             self.scrollbar_drag = None;
             needs_redraw = true;
         }
         self.pending_window_drag = None;
         let signals_before = strata_dom::reactive::has_dirty_signals();
-        if self.dispatch_pointer_up(px, py) {
+        let up_action = self.dispatch_pointer_up_action_with_button(px, py, btn_idx);
+        if up_action.needs_rebuild() {
             let retained_only = !signals_before
                 && !strata_dom::reactive::has_dirty_signals()
                 && self.target_is_retained_canvas3d(px, py);
             if !retained_only {
                 needs_rebuild = true;
             }
+        } else if up_action.needs_redraw() {
+            needs_redraw = true;
+        }
+        if button != strata_platform::MouseButton::Right
+            && self.dispatch_click_on_mouse_up(btn_idx, px, py, suppressed_by_drag)
+        {
+            needs_rebuild = true;
+        }
+        if self.drain_edit_commands() {
+            needs_rebuild = true;
+        }
+        if was_mouse_down && !needs_rebuild && self.restyle_for_active_change() {
+            needs_redraw = true;
         }
 
         if needs_redraw {

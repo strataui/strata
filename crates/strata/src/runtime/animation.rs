@@ -10,17 +10,27 @@ fn fnv1a_mix(mut hash: u64, bytes: &[u8]) -> u64 {
     hash
 }
 
-fn blueprint_has_explicit_identity(bp: Option<&NodeBlueprint>) -> bool {
+fn blueprint_explicit_identity_attrs(
+    bp: Option<&NodeBlueprint>,
+) -> Vec<(&str, &str)> {
     let Some(NodeBlueprint::Element { attributes, .. }) = bp else {
-        return false;
+        return Vec::new();
     };
-    attributes.iter().any(|attr| {
-        matches!(
-            attr,
-            strata_dom::Attribute::Property { key, .. }
-                if key == "id" || key == "key" || key == "data-key"
-        )
-    })
+    attributes
+        .iter()
+        .filter_map(|attr| match attr {
+            strata_dom::Attribute::Property { key, value }
+                if (key == "id" || key == "key" || key == "data-key") && !value.is_empty() =>
+            {
+                Some((key.as_str(), value.as_str()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn blueprint_has_explicit_identity(bp: Option<&NodeBlueprint>) -> bool {
+    !blueprint_explicit_identity_attrs(bp).is_empty()
 }
 
 fn blueprint_node_identity_hash(
@@ -28,25 +38,35 @@ fn blueprint_node_identity_hash(
     child_index: usize,
     bp: Option<&NodeBlueprint>,
 ) -> u64 {
-    let mut hash = fnv1a_mix(parent_hash, &child_index.to_le_bytes());
+    if let Some(NodeBlueprint::Element { tag, .. }) = bp {
+        let explicit_keys = blueprint_explicit_identity_attrs(bp);
+        if !explicit_keys.is_empty() {
+            // Elements with explicit `key`, `data-key`, or `id` derive transition identity
+            // strictly from `(parent_hash, tag, key_attrs)` — independent of `child_index` —
+            // so list insertions, removals, and reversals keep each item's own transitions
+            // instead of cross-animating onto neighboring elements.
+            let mut hash = fnv1a_mix(parent_hash, &[0x11]);
+            let mut tag_hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(tag, &mut tag_hasher);
+            hash = fnv1a_mix(hash, &std::hash::Hasher::finish(&tag_hasher).to_le_bytes());
+            for (key, value) in explicit_keys {
+                hash = fnv1a_mix(hash, key.as_bytes());
+                hash = fnv1a_mix(hash, &[0xff]);
+                hash = fnv1a_mix(hash, value.as_bytes());
+                hash = fnv1a_mix(hash, &[0xfe]);
+            }
+            return hash;
+        }
+    }
+
+    let mut hash = fnv1a_mix(parent_hash, &[0x10]);
+    hash = fnv1a_mix(hash, &child_index.to_le_bytes());
     match bp {
-        Some(NodeBlueprint::Element {
-            tag, attributes, ..
-        }) => {
+        Some(NodeBlueprint::Element { tag, .. }) => {
             hash = fnv1a_mix(hash, &[1]);
             let mut tag_hasher = std::collections::hash_map::DefaultHasher::new();
             std::hash::Hash::hash(tag, &mut tag_hasher);
             hash = fnv1a_mix(hash, &std::hash::Hasher::finish(&tag_hasher).to_le_bytes());
-            for attr in attributes {
-                if let strata_dom::Attribute::Property { key, value } = attr {
-                    if key == "id" || key == "key" || key == "data-key" {
-                        hash = fnv1a_mix(hash, key.as_bytes());
-                        hash = fnv1a_mix(hash, &[0xff]);
-                        hash = fnv1a_mix(hash, value.as_bytes());
-                        hash = fnv1a_mix(hash, &[0xfe]);
-                    }
-                }
-            }
         }
         Some(NodeBlueprint::Text(_)) => {
             hash = fnv1a_mix(hash, &[2]);
@@ -65,6 +85,19 @@ fn blueprint_node_identity_hash(
         }
     }
     hash
+}
+
+fn flattened_blueprint_children(bp: Option<&NodeBlueprint>) -> Vec<&NodeBlueprint> {
+    let mut flat = Vec::new();
+    match bp {
+        Some(NodeBlueprint::Element { children, .. }) | Some(NodeBlueprint::Fragment(children)) => {
+            for c in children {
+                AppRuntime::flatten_blueprints(c, &mut flat);
+            }
+        }
+        _ => {}
+    }
+    flat
 }
 
 impl AppRuntime {
@@ -126,15 +159,11 @@ impl AppRuntime {
                 }
             }
         }
-        let bp_children = match blueprint {
-            Some(NodeBlueprint::Element { children, .. }) => Some(children.as_slice()),
-            Some(NodeBlueprint::Fragment(children)) => Some(children.as_slice()),
-            _ => None,
-        };
+        let flat_children = flattened_blueprint_children(blueprint);
         for (idx, child) in node.children.iter().enumerate() {
             if Self::has_transition_to_auto_dim(
                 child,
-                bp_children.and_then(|c| c.get(idx)),
+                flat_children.get(idx).copied(),
                 node_id,
                 idx,
                 previous_styles,
@@ -162,15 +191,11 @@ impl AppRuntime {
                 ),
             );
         }
-        let bp_children = match blueprint {
-            Some(NodeBlueprint::Element { children, .. }) => Some(children.as_slice()),
-            Some(NodeBlueprint::Fragment(children)) => Some(children.as_slice()),
-            _ => None,
-        };
+        let flat_children = flattened_blueprint_children(blueprint);
         for (idx, child) in node.children.iter().enumerate() {
             Self::collect_measured_auto_sizes(
                 child,
-                bp_children.and_then(|c| c.get(idx)),
+                flat_children.get(idx).copied(),
                 node_id,
                 idx,
                 out,
@@ -183,6 +208,7 @@ impl AppRuntime {
         let mut new_base_styles = std::collections::HashMap::new();
         let mut new_node_paths = std::collections::HashMap::new();
         let mut new_path_node_ids = std::collections::HashMap::new();
+        let mut new_child_counts = std::collections::HashMap::new();
         let mut path_buf = Vec::new();
 
         let measured_auto_sizes = if Self::has_transition_to_auto_dim(
@@ -215,14 +241,17 @@ impl AppRuntime {
             Some(&self.root_blueprint),
             0xcbf29ce484222325u64,
             0,
+            false,
             &mut path_buf,
             now_ms,
             &self.previous_node_styles,
             &self.previous_node_sizes,
+            &self.previous_child_counts,
             measured_auto_sizes.as_ref(),
             &mut new_base_styles,
             &mut new_node_paths,
             &mut new_path_node_ids,
+            &mut new_child_counts,
             &mut self.transition_manager,
             &mut self.animation_manager,
             &mut trans_events,
@@ -231,6 +260,7 @@ impl AppRuntime {
 
         self.base_node_styles = new_base_styles;
         self.previous_node_styles = self.base_node_styles.clone();
+        self.previous_child_counts = new_child_counts;
         self.node_paths = new_node_paths;
         self.path_node_ids = new_path_node_ids;
 
@@ -260,41 +290,60 @@ impl AppRuntime {
         blueprint: Option<&NodeBlueprint>,
         parent_hash: u64,
         child_index: usize,
+        parent_child_count_changed: bool,
         path: &mut Vec<usize>,
         now_ms: f64,
         previous_styles: &std::collections::HashMap<u64, ComputedStyle>,
         previous_sizes: &std::collections::HashMap<u64, (f32, f32)>,
+        previous_child_counts: &std::collections::HashMap<u64, usize>,
         measured_auto_sizes: Option<&std::collections::HashMap<u64, (f32, f32)>>,
         new_base_styles: &mut std::collections::HashMap<u64, ComputedStyle>,
         new_node_paths: &mut std::collections::HashMap<u64, Vec<usize>>,
         new_path_node_ids: &mut std::collections::HashMap<Vec<usize>, u64>,
+        new_child_counts: &mut std::collections::HashMap<u64, usize>,
         transition_manager: &mut strata_style::transition::TransitionManager,
         animation_manager: &mut strata_style::animation::AnimationManager,
         trans_events: &mut Vec<strata_style::transition::TransitionLifecycleEvent>,
         anim_events: &mut Vec<strata_style::animation::AnimationLifecycleEvent>,
     ) {
+        let has_explicit_id = blueprint_has_explicit_identity(blueprint);
         let node_id = blueprint_node_identity_hash(parent_hash, child_index, blueprint);
         new_base_styles.insert(node_id, node.style.clone());
         new_node_paths.insert(node_id, path.clone());
         new_path_node_ids.insert(path.clone(), node_id);
+        new_child_counts.insert(node_id, node.children.len());
 
-        // Check for transitions if we have a previous style or @starting-style
-        let effective_old_style = match previous_styles.get(&node_id) {
-            Some(old) if old.display != strata_style::Display::None => {
-                if old.transitions.is_empty()
-                    && !node.style.transitions.is_empty()
-                    && !blueprint_has_explicit_identity(blueprint)
-                {
-                    node.style.starting_style.as_deref()
-                } else {
-                    Some(old)
+        let unkeyed_list_shifted = parent_child_count_changed && !has_explicit_id;
+        if unkeyed_list_shifted && transition_manager.has_node_transitions(node_id) {
+            trans_events.extend(transition_manager.cancel_node(node_id, now_ms));
+        }
+
+        // Check for transitions if we have a previous style or @starting-style.
+        // Suppress positional diffing for unkeyed siblings when the parent's child count
+        // changed (e.g. prepend/insert/remove in an unkeyed list) so neighboring elements
+        // do not cross-animate each other's styles.
+        let effective_old_style = if unkeyed_list_shifted {
+            node.style.starting_style.as_deref()
+        } else {
+            match previous_styles.get(&node_id) {
+                Some(old) if old.display != strata_style::Display::None => {
+                    if old.transitions.is_empty()
+                        && !node.style.transitions.is_empty()
+                        && !has_explicit_id
+                    {
+                        node.style.starting_style.as_deref()
+                    } else {
+                        Some(old)
+                    }
                 }
+                _ => node.style.starting_style.as_deref(),
             }
-            _ => node.style.starting_style.as_deref(),
         };
 
         if let Some(old_style) = effective_old_style {
-            if !node.style.transitions.is_empty() {
+            if !node.style.transitions.is_empty()
+                || transition_manager.has_node_transitions(node_id)
+            {
                 let mut resolved_old_buf: Option<ComputedStyle> = None;
                 let mut resolved_new_buf: Option<ComputedStyle> = None;
 
@@ -349,28 +398,30 @@ impl AppRuntime {
             anim_events.extend(animation_manager.update_styles(node_id, &node.style, now_ms));
         }
 
-        let bp_children = match blueprint {
-            Some(NodeBlueprint::Element { children, .. }) => Some(children.as_slice()),
-            Some(NodeBlueprint::Fragment(children)) => Some(children.as_slice()),
-            _ => None,
-        };
+        let own_child_count_changed = previous_child_counts
+            .get(&node_id)
+            .is_some_and(|&prev| prev != node.children.len());
+        let flat_children = flattened_blueprint_children(blueprint);
 
         for (idx, child) in node.children.iter().enumerate() {
             path.push(idx);
-            let child_bp = bp_children.and_then(|c| c.get(idx));
+            let child_bp = flat_children.get(idx).copied();
             Self::sync_tree_animations_rec(
                 child,
                 child_bp,
                 node_id,
                 idx,
+                own_child_count_changed,
                 path,
                 now_ms,
                 previous_styles,
                 previous_sizes,
+                previous_child_counts,
                 measured_auto_sizes,
                 new_base_styles,
                 new_node_paths,
                 new_path_node_ids,
+                new_child_counts,
                 transition_manager,
                 animation_manager,
                 trans_events,
@@ -398,6 +449,7 @@ impl AppRuntime {
             subtree_root,
             &mut path,
             now_ms,
+            None,
             &self.path_node_ids,
             &mut self.base_node_styles,
             &mut self.previous_node_styles,
@@ -420,6 +472,7 @@ impl AppRuntime {
         node: &mut LayoutNode,
         path: &mut Vec<usize>,
         now_ms: f64,
+        inherited_color_override: Option<(strata_style::types::Color, strata_style::types::Color)>,
         path_node_ids: &std::collections::HashMap<Vec<usize>, u64>,
         base_node_styles: &mut std::collections::HashMap<u64, ComputedStyle>,
         previous_node_styles: &mut std::collections::HashMap<u64, ComputedStyle>,
@@ -427,6 +480,7 @@ impl AppRuntime {
         animation_manager: &strata_style::animation::AnimationManager,
         trans_events: &mut Vec<strata_style::transition::TransitionLifecycleEvent>,
     ) {
+        let own_base_color = node.style.color;
         if let Some(&node_id) = path_node_ids.get(path) {
             let old_style = base_node_styles
                 .get(&node_id)
@@ -434,7 +488,9 @@ impl AppRuntime {
                 .cloned();
             let new_base = node.style.clone();
             if let Some(old) = old_style {
-                if !new_base.transitions.is_empty() {
+                if !new_base.transitions.is_empty()
+                    || transition_manager.has_node_transitions(node_id)
+                {
                     trans_events.extend(transition_manager.update_styles(
                         node_id,
                         &old,
@@ -442,19 +498,37 @@ impl AppRuntime {
                         now_ms,
                     ));
                 }
-                previous_node_styles.insert(node_id, old);
             }
+            // Keep `previous_node_styles` in lockstep with `base_node_styles` so a
+            // subsequent full `sync_tree_animations` (e.g. button click updating classes)
+            // diffs against the post-hover base style rather than the stale pre-hover style.
+            previous_node_styles.insert(node_id, new_base.clone());
             base_node_styles.insert(node_id, new_base);
+            if let Some((anc_base_color, anc_anim_color)) = inherited_color_override {
+                if own_base_color == anc_base_color {
+                    node.style.color = anc_anim_color;
+                }
+            }
             transition_manager.apply_to_style(node_id, &mut node.style);
             animation_manager.apply_to_style(node_id, &mut node.style);
             node.active_transitions = transition_manager.has_node_transitions(node_id);
+        } else if let Some((anc_base_color, anc_anim_color)) = inherited_color_override {
+            if own_base_color == anc_base_color {
+                node.style.color = anc_anim_color;
+            }
         }
+        let next_color_override = if node.style.color != own_base_color {
+            Some((own_base_color, node.style.color))
+        } else {
+            None
+        };
         for (idx, child) in node.children.iter_mut().enumerate() {
             path.push(idx);
             Self::sync_subtree_paint_transitions_rec(
                 child,
                 path,
                 now_ms,
+                next_color_override,
                 path_node_ids,
                 base_node_styles,
                 previous_node_styles,

@@ -81,10 +81,11 @@ pub use runtime::{HmrPatchOutcome, HmrRuntimeController};
 pub use runtime::{
     app, launch, launch_auto, launch_headless, launch_headless_pump, launch_window,
     launch_with_config, launch_with_events, launch_with_frame, queue_edit_command, AppFrameInfo,
-    AppLifecycleHooks, AppRuntime, DynamicTextBinding, EditCommand, FrameOutcome, FrameProfile,
-    FrameProfileRecord, KeyDispatchResult, MatchMode, NodeQuery, PerfPercentileStats,
-    PerfProfileSummary, PointerDownAction, PointerMoveAction, PointerUpAction, ProfilingAllocator,
-    RebuildReason, ReconcileStats, StrataApp, StrataAppBuilder,
+    AppLifecycleHooks, AppRuntime, CapturedAncestorAnchor, DynamicTextBinding, EditCommand,
+    FrameOutcome, FrameProfile, FrameProfileRecord, KeyDispatchResult, MatchMode, NodeQuery,
+    PerfPercentileStats, PerfProfileSummary, PointerCaptureTarget, PointerDownAction,
+    PointerMoveAction, PointerUpAction, ProfilingAllocator, RebuildReason, ReconcileStats,
+    StrataApp, StrataAppBuilder,
 };
 #[cfg(target_os = "linux")]
 pub use runtime::{
@@ -111,21 +112,24 @@ pub mod prelude {
     pub use strata_dom::{
         clear_cursor_override, clear_hmr_signals, clear_persistent_signals, create_anchored_portal,
         create_context, create_dropdown_portal, create_portal, current_cursor,
-        dispatch_click_outside, dispatch_global_keydown, export_hmr_signals, get_scroll_offset,
-        import_hmr_signals, provide_context, reset_component_hooks, scroll_into_view, scroll_to,
-        scroll_to_bottom, scroll_to_top, set_current_cursor, set_system_color_scheme,
-        set_system_contrast, set_system_reduced_motion, set_viewport_dimensions, use_active,
-        use_callback, use_click_outside, use_clipboard, use_color_scheme, use_context,
-        use_contrast, use_cursor, use_effect, use_effect_with_deps, use_focus, use_focus_within,
-        use_hmr_signal, use_hover, use_id, use_keyboard_shortcut, use_media_query, use_memo,
-        use_memo_with_deps, use_persistent_signal, use_press, use_reduced_motion, use_reducer,
-        use_reducer_init, use_ref, use_shortcut, use_signal, use_state, with_component_key,
-        with_root_component_scope, AnchorPlacement, Attribute, ClickOutsideHandle, ClipboardHandle,
-        ColorScheme, Context, ContrastPreference, CursorIcon, Effect, EffectGuard, ErrorBoundary,
-        ErrorBoundaryBuilder, ErrorBoundaryInfo, Event, EventType, FocusHandlers, HmrCodec,
-        HoverHandlers, IntoChildren, IntoEffectCleanup, IntoNodeBlueprint, KeyChord, Memo,
-        NodeBlueprint, Portal, PortalBuilder, PressHandlers, ProgrammaticScrollCommand, ReadSignal,
-        Ref, SetSignal, ShortcutHandle, Signal, Tag, View, WriteSignal,
+        dispatch_click_outside, dispatch_global_keydown, dispatch_global_pointer_cancel,
+        dispatch_global_pointer_up, export_hmr_signals, get_scroll_offset,
+        has_global_pointer_cancel_listeners, has_global_pointer_up_listeners, import_hmr_signals,
+        provide_context, reset_component_hooks, scroll_into_view, scroll_to, scroll_to_bottom,
+        scroll_to_top, set_current_cursor, set_system_color_scheme, set_system_contrast,
+        set_system_reduced_motion, set_viewport_dimensions, use_active, use_callback,
+        use_click_outside, use_clipboard, use_color_scheme, use_context, use_contrast, use_cursor,
+        use_effect, use_effect_with_deps, use_focus, use_focus_within, use_global_pointer_cancel,
+        use_global_pointer_up, use_hmr_signal, use_hover, use_id, use_keyboard_shortcut,
+        use_media_query, use_memo, use_memo_with_deps, use_persistent_signal, use_press,
+        use_reduced_motion, use_reducer, use_reducer_init, use_ref, use_shortcut, use_signal,
+        use_state, with_component_key, with_root_component_scope, AnchorPlacement, Attribute,
+        ClickOutsideHandle, ClipboardHandle, ColorScheme, Context, ContrastPreference, CursorIcon,
+        Effect, EffectGuard, ErrorBoundary, ErrorBoundaryBuilder, ErrorBoundaryInfo, Event,
+        EventType, FocusHandlers, GlobalPointerListenerHandle, HmrCodec, HoverHandlers,
+        IntoChildren, IntoEffectCleanup, IntoNodeBlueprint, KeyChord, Memo, NodeBlueprint, Portal,
+        PortalBuilder, PressHandlers, ProgrammaticScrollCommand, ReadSignal, Ref, SetSignal,
+        ShortcutHandle, Signal, Tag, View, WriteSignal,
     };
     pub use strata_js;
     pub use strata_js::{
@@ -168,9 +172,9 @@ pub mod prelude {
     pub use crate::runtime::{
         app, launch, launch_auto, launch_headless, launch_headless_pump, launch_window,
         launch_with_config, launch_with_events, launch_with_frame, queue_edit_command,
-        AppFrameInfo, AppLifecycleHooks, AppRuntime, DynamicTextBinding, EditCommand, FrameOutcome,
-        KeyDispatchResult, PointerDownAction, PointerMoveAction, PointerUpAction, StrataApp,
-        StrataAppBuilder,
+        AppFrameInfo, AppLifecycleHooks, AppRuntime, CapturedAncestorAnchor, DynamicTextBinding,
+        EditCommand, FrameOutcome, KeyDispatchResult, PointerCaptureTarget, PointerDownAction,
+        PointerMoveAction, PointerUpAction, StrataApp, StrataAppBuilder,
     };
     #[cfg(target_os = "linux")]
     pub use crate::runtime::{

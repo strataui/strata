@@ -494,6 +494,23 @@ impl ActiveTransition {
         events
     }
 
+    /// Samples the live interpolated value at timestamp `now_ms` without mutating lifecycle flags.
+    pub fn value_at(&self, now_ms: f64) -> AnimatableValue {
+        let elapsed_ms = (now_ms - self.start_time_ms) as f32;
+        if elapsed_ms < self.delay_ms {
+            return self.from_value.clone();
+        }
+        let active_ms = elapsed_ms - self.delay_ms;
+        let raw_progress = if self.duration_ms > 0.0 {
+            (active_ms / self.duration_ms).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let eased_progress = self.easing.evaluate(raw_progress);
+        self.from_value
+            .interpolate(&self.to_value, eased_progress, self.behavior)
+    }
+
     /// Checks if this transition has fully completed its duration and emitted its End event.
     pub fn is_finished(&self) -> bool {
         self.end_emitted
@@ -507,7 +524,9 @@ pub fn extract_animatable_value(
 ) -> Option<AnimatableValue> {
     match prop {
         TransitionProperty::Color => Some(AnimatableValue::Color(style.color)),
-        TransitionProperty::BackgroundColor => style.background_color.map(AnimatableValue::Color),
+        TransitionProperty::BackgroundColor => Some(AnimatableValue::Color(
+            style.background_color.unwrap_or(Color::TRANSPARENT),
+        )),
         TransitionProperty::Opacity => Some(AnimatableValue::Number(style.opacity)),
         TransitionProperty::Width => Some(AnimatableValue::Dimension(style.width)),
         TransitionProperty::Height => Some(AnimatableValue::Dimension(style.height)),
@@ -517,7 +536,9 @@ pub fn extract_animatable_value(
         TransitionProperty::MaxHeight => Some(AnimatableValue::Dimension(style.max_height)),
         TransitionProperty::Margin => Some(AnimatableValue::EdgeInsets(style.margin)),
         TransitionProperty::Padding => Some(AnimatableValue::EdgeInsets(style.padding)),
-        TransitionProperty::BorderColor => style.border_color.map(AnimatableValue::Color),
+        TransitionProperty::BorderColor => Some(AnimatableValue::Color(
+            style.border_color.unwrap_or(Color::TRANSPARENT),
+        )),
         TransitionProperty::BorderWidth => Some(AnimatableValue::EdgeInsets(style.border_width)),
         TransitionProperty::BorderRadius => {
             Some(AnimatableValue::BorderRadius(style.border_radius))
@@ -690,6 +711,18 @@ impl TransitionManager {
     ) -> Vec<TransitionLifecycleEvent> {
         let mut events = Vec::new();
         if new_style.transitions.is_empty() {
+            if let Some(prev_list) = self.node_transitions.remove(&node_id) {
+                for existing in prev_list {
+                    if !existing.end_emitted {
+                        events.push(TransitionLifecycleEvent::Cancel {
+                            node_id,
+                            property: existing.property.as_str().to_string(),
+                            elapsed_time_sec: ((now_ms - existing.start_time_ms) as f32).max(0.0)
+                                / 1000.0,
+                        });
+                    }
+                }
+            }
             return events;
         }
 
@@ -731,26 +764,55 @@ impl TransitionManager {
                 None => continue,
             };
 
-            // Check if the property target value actually changed
+            // Check if there is already an active transition for this property
+            let existing_idx = active_list.iter().position(|t| t.property == prop);
+
+            // Check if the property target value actually changed (taking any in-flight target into account)
             if old_val == new_val {
-                continue;
+                if let Some(idx) = existing_idx {
+                    if active_list[idx].to_value == new_val {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
             }
 
             let spec = match find_transition_spec(&new_style.transitions, &prop) {
                 Some(s) => s,
-                None => continue,
+                None => {
+                    if let Some(idx) = existing_idx {
+                        let removed = active_list.remove(idx);
+                        if !removed.end_emitted {
+                            events.push(TransitionLifecycleEvent::Cancel {
+                                node_id,
+                                property: prop.as_str().to_string(),
+                                elapsed_time_sec: ((now_ms - removed.start_time_ms) as f32)
+                                    .max(0.0)
+                                    / 1000.0,
+                            });
+                        }
+                    }
+                    continue;
+                }
             };
 
-            if spec.property == TransitionProperty::None {
+            if spec.property == TransitionProperty::None
+                || (spec.duration_ms <= 0.0 && spec.delay_ms <= 0.0)
+            {
+                if let Some(idx) = existing_idx {
+                    let removed = active_list.remove(idx);
+                    if !removed.end_emitted {
+                        events.push(TransitionLifecycleEvent::Cancel {
+                            node_id,
+                            property: prop.as_str().to_string(),
+                            elapsed_time_sec: ((now_ms - removed.start_time_ms) as f32).max(0.0)
+                                / 1000.0,
+                        });
+                    }
+                }
                 continue;
             }
-
-            if spec.duration_ms <= 0.0 && spec.delay_ms <= 0.0 {
-                continue;
-            }
-
-            // Check if there is already an active transition for this property
-            let existing_idx = active_list.iter().position(|t| t.property == prop);
 
             if let Some(idx) = existing_idx {
                 let existing = &mut active_list[idx];
@@ -759,6 +821,11 @@ impl TransitionManager {
                 if existing.to_value == new_val {
                     continue;
                 }
+
+                // Sample live interpolated value at `now_ms` BEFORE retargeting so mid-tick
+                // clicks/releases never snap backwards to the previous frame's value.
+                let from_val = existing.value_at(now_ms);
+                let is_reversal = existing.from_value == new_val;
 
                 // Interrupted transition cancellation event
                 if !existing.end_emitted {
@@ -770,9 +837,12 @@ impl TransitionManager {
                     });
                 }
 
-                // Smooth retargeting / reversal
-                let from_val = existing.current_value.clone();
-                let is_reversal = existing.from_value == new_val;
+                // If the live value already equals the new target (e.g. reversal at elapsed == 0),
+                // drop the active transition cleanly with zero flicker.
+                if from_val == new_val {
+                    active_list.remove(idx);
+                    continue;
+                }
 
                 let mut new_transition =
                     ActiveTransition::new(prop.clone(), spec, from_val, new_val, now_ms);
@@ -791,13 +861,19 @@ impl TransitionManager {
                 }
 
                 events.extend(new_transition.step(node_id, now_ms));
-                active_list[idx] = new_transition;
+                if new_transition.is_finished() {
+                    active_list.remove(idx);
+                } else {
+                    active_list[idx] = new_transition;
+                }
             } else {
                 // New transition starting from old_val
                 let mut new_transition =
                     ActiveTransition::new(prop.clone(), spec, old_val, new_val, now_ms);
                 events.extend(new_transition.step(node_id, now_ms));
-                active_list.push(new_transition);
+                if !new_transition.is_finished() {
+                    active_list.push(new_transition);
+                }
             }
         }
 
@@ -848,6 +924,24 @@ impl TransitionManager {
     /// Retains only active transitions whose `node_id` satisfies `keep`.
     pub fn retain_nodes<F: FnMut(&u64) -> bool>(&mut self, mut keep: F) {
         self.node_transitions.retain(|id, _| keep(id));
+    }
+
+    /// Cancels and removes all active transitions for `node_id`, emitting `Cancel` lifecycle events.
+    pub fn cancel_node(&mut self, node_id: u64, now_ms: f64) -> Vec<TransitionLifecycleEvent> {
+        let mut events = Vec::new();
+        if let Some(removed) = self.node_transitions.remove(&node_id) {
+            for existing in removed {
+                if !existing.end_emitted {
+                    events.push(TransitionLifecycleEvent::Cancel {
+                        node_id,
+                        property: existing.property.as_str().to_string(),
+                        elapsed_time_sec: ((now_ms - existing.start_time_ms) as f32).max(0.0)
+                            / 1000.0,
+                    });
+                }
+            }
+        }
+        events
     }
 
     /// Resolves `(expanded_width_px, expanded_height_px)` when `node_id` has an active

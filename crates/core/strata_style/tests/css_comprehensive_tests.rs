@@ -425,3 +425,46 @@ fn test_pointer_events_tailwind_and_inheritance() {
     assert_eq!(reset_initial.pointer_events, PointerEvents::Auto);
 }
 
+#[test]
+fn test_directional_resize_cursors_css_and_tailwind() {
+    use strata_style::parser::parse_cursor;
+    use strata_style::tailwind::TailwindEngine;
+
+    let cases = [
+        ("ns-resize", "cursor-ns-resize", Cursor::NsResize),
+        ("ew-resize", "cursor-ew-resize", Cursor::EwResize),
+        ("nwse-resize", "cursor-nwse-resize", Cursor::NwseResize),
+        ("nesw-resize", "cursor-nesw-resize", Cursor::NeswResize),
+        ("n-resize", "cursor-n-resize", Cursor::NResize),
+        ("s-resize", "cursor-s-resize", Cursor::SResize),
+        ("e-resize", "cursor-e-resize", Cursor::EResize),
+        ("w-resize", "cursor-w-resize", Cursor::WResize),
+        ("ne-resize", "cursor-ne-resize", Cursor::NeResize),
+        ("nw-resize", "cursor-nw-resize", Cursor::NwResize),
+        ("se-resize", "cursor-se-resize", Cursor::SeResize),
+        ("sw-resize", "cursor-sw-resize", Cursor::SwResize),
+    ];
+
+    let state = PseudoState::default();
+    for (css_val, tw_cls, expected) in cases {
+        assert_eq!(
+            parse_cursor(css_val),
+            Some(expected),
+            "parse_cursor({css_val:?}) failed"
+        );
+        let inline = format!("cursor: {css_val};");
+        let inline_style =
+            CascadeSolver::resolve("div", &[], None, Some(&inline), &[], None, &state);
+        assert_eq!(
+            inline_style.cursor, expected,
+            "inline style `{inline}` failed"
+        );
+
+        let tw_style = TailwindEngine::resolve_classes(tw_cls);
+        assert_eq!(tw_style.cursor, expected, "Tailwind `{tw_cls}` failed");
+    }
+
+    let arbitrary = TailwindEngine::resolve_classes("cursor-[nwse-resize]");
+    assert_eq!(arbitrary.cursor, Cursor::NwseResize);
+}
+

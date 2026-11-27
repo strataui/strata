@@ -1982,6 +1982,179 @@ fn wgpu_2d_transition_has_no_pale_blue_flash_and_pole_seam_is_clean() {
     );
 }
 
+#[test]
+fn wgpu_preferred_limits_raises_storage_binding_within_adapter_caps() {
+    let instance = wgpu::Instance::default();
+    let Some(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .or_else(|| {
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            compatible_surface: None,
+            force_fallback_adapter: true,
+        }))
+    }) else {
+        eprintln!("[skip preferred_wgpu_limits test] no wgpu adapter available");
+        return;
+    };
+
+    let adapter_limits = adapter.limits();
+    let limits = strata_render::gpu_wgpu::preferred_wgpu_limits(&adapter);
+
+    assert!(
+        limits.max_storage_buffer_binding_size <= adapter_limits.max_storage_buffer_binding_size,
+        "preferred max_storage_buffer_binding_size must never exceed adapter limits"
+    );
+    assert!(
+        limits.max_buffer_size <= adapter_limits.max_buffer_size,
+        "preferred max_buffer_size must never exceed adapter limits"
+    );
+    let expected_storage = adapter_limits
+        .max_storage_buffer_binding_size
+        .min(512 * 1024 * 1024);
+    assert_eq!(
+        limits.max_storage_buffer_binding_size, expected_storage,
+        "preferred_wgpu_limits should raise max_storage_buffer_binding_size up to min(adapter, 512 MiB)"
+    );
+    let expected_buf = adapter_limits.max_buffer_size.min(512 * 1024 * 1024);
+    assert_eq!(
+        limits.max_buffer_size, expected_buf,
+        "preferred_wgpu_limits should raise max_buffer_size up to min(adapter, 512 MiB)"
+    );
+}
+
+#[test]
+fn wgpu_steep_angle_ocean_zoom_preserves_luminance_without_darkening() {
+    let mut renderer = match Wgpu3DRenderer::new_headless(wgpu::TextureFormat::Bgra8UnormSrgb) {
+        Ok(r) => r,
+        Err(reason) => {
+            eprintln!("[skip wgpu_steep_angle_ocean_zoom test] {}", reason);
+            return;
+        }
+    };
+
+    let (w, h) = (128u32, 128u32);
+    // Sunlit open-ocean satellite swatch (mid-bright pelagic blue in sRGB).
+    let ocean_rgba = [36u8, 92, 152, 255].repeat(64 * 64);
+    let ocean_tex = Arc::new(RetainedTileTexture {
+        id: 1120,
+        revision: 1,
+        width: 64,
+        height: 64,
+        rgba8: Arc::new(ocean_rgba),
+    });
+
+    let grid = 17u32;
+    let span = 200.0f32;
+    let mut verts = Vec::with_capacity((grid * grid) as usize);
+    for r in 0..grid {
+        let v = r as f32 / (grid - 1) as f32;
+        for c in 0..grid {
+            let u = c as f32 / (grid - 1) as f32;
+            verts.push(RteTileVertex::new(
+                [(u - 0.5) * span, 0.0, (v - 0.5) * span],
+                [0.0, 1.0, 0.0],
+                [u, v],
+            ));
+        }
+    }
+    let key = TileKeyId::new(10, 512, 384, 0);
+    let mesh = Arc::new(RetainedTileMesh {
+        key,
+        revision: 1,
+        center_ecef: [0.0, 0.0, 0.0],
+        bounding_radius: span,
+        grid_res: grid,
+        has_skirts: false,
+        vertices: Arc::new(verts),
+    });
+
+    // Steep near-nadir view (ndotv ~ 0.96), sunlit overhead, representing top-down zoom below 520 km.
+    let mut cam = camera_uniforms([0.0, 140.0, 40.0], [0.0, 0.0, 0.0], w, h);
+    cam.sun_dir = [0.22, 0.88, 0.42];
+    cam.sun_color = [1.0, 0.98, 0.95];
+    cam.ambient_color = [0.25, 0.30, 0.38];
+    cam.day_night_strength = 0.0;
+    cam.local_25d_blend = 0.0;
+
+    let render_with_ocean_fade = |renderer: &mut Wgpu3DRenderer, alt_fade: f32| -> (f32, f32) {
+        use strata_render::scene3d::{RetainedOceanSurface, RetainedOceanWaveTrain};
+        let ocean = Arc::new(RetainedOceanSurface {
+            enabled: alt_fade > 0.0,
+            origin_ecef: [0.0, 0.0, 0.0],
+            basis_east: [1.0, 0.0, 0.0],
+            basis_north: [0.0, 0.0, -1.0],
+            basis_up: [0.0, 1.0, 0.0],
+            train_a: RetainedOceanWaveTrain {
+                dir_en: [0.8, 0.6],
+                wind_speed_mps: 6.0,
+                phase_time_s: 1.5,
+                weight: 1.0,
+            },
+            wave_strength: 0.8,
+            wave_scale: 1.0,
+            glint_intensity: 0.6,
+            opacity: 1.0,
+            alt_fade,
+            ..Default::default()
+        });
+        let frame = Arc::new(RetainedTerrainFrame {
+            camera: cam,
+            geometry_revision: 1,
+            meshes: vec![Arc::clone(&mesh)],
+            textures: vec![Arc::clone(&ocean_tex)],
+            instances: vec![RetainedTileInstance {
+                key,
+                mesh_revision: 1,
+                center_ecef: [0.0, 0.0, 0.0],
+                texture_id: Some(1120),
+                texture_revision: 1,
+                uv_rect: [0.0, 0.0, 1.0, 1.0],
+                tint: [1.0, 1.0, 1.0, 1.0],
+                unlit: false,
+                ..Default::default()
+            }],
+            ocean: Some(ocean),
+            ..Default::default()
+        });
+        let retained = RetainedScene3D::new(cam);
+        retained.update_terrain(frame);
+        let scene = Scene3D::new().with_retained_handle(retained);
+        let bgra = renderer.render_offscreen(&scene, w, h, true, true).unwrap();
+
+        let mut sum_luma = 0.0f32;
+        let mut sum_blue = 0.0f32;
+        let mut count = 0.0f32;
+        for y in (h / 3)..(2 * h / 3) {
+            for x in (w / 3)..(2 * w / 3) {
+                let idx = ((y * w + x) * 4) as usize;
+                let b = bgra[idx] as f32;
+                let g = bgra[idx + 1] as f32;
+                let r = bgra[idx + 2] as f32;
+                sum_luma += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                sum_blue += b;
+                count += 1.0;
+            }
+        }
+        (sum_luma / count, sum_blue / count)
+    };
+
+    let (luma_orbital, blue_orbital) = render_with_ocean_fade(&mut renderer, 0.0);
+    let (luma_zoomed, blue_zoomed) = render_with_ocean_fade(&mut renderer, 1.0);
+
+    assert!(
+        luma_zoomed >= luma_orbital * 0.94,
+        "steep top-down ocean zoom must not visibly darken ocean luminance (orbital={luma_orbital:.2}, zoomed={luma_zoomed:.2})"
+    );
+    assert!(
+        blue_zoomed >= blue_orbital * 0.94,
+        "steep top-down ocean zoom must preserve ocean blue tone (orbital_b={blue_orbital:.2}, zoomed_b={blue_zoomed:.2})"
+    );
+}
+
 
 
 

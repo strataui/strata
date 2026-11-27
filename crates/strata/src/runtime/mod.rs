@@ -56,6 +56,13 @@ pub use spatial::*;
 pub use test_support::{MatchMode, NodeQuery};
 pub use types::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconcileOutcome {
+    Unchanged,
+    MutatedInFlow,
+    MutatedIsolatedBoundary,
+}
+
 /// Live running application instance holding active state, layout tree, and display list.
 #[derive(Debug)]
 pub struct AppRuntime {
@@ -70,6 +77,13 @@ pub struct AppRuntime {
     pub frame_count: u64,
     pub active_focus: Option<ActiveInput>,
     pub input_states: std::collections::HashMap<String, strata_dom::text_input::TextInputState>,
+    /// Last controlled `value` prop observed on the currently focused input (used to reconcile
+    /// programmatic prop updates such as `value=""` clears while keeping focus).
+    pub(crate) active_input_last_prop_value: Option<String>,
+    /// Last controlled `value` prop observed per blurred input key.
+    pub(crate) input_last_prop_values: std::collections::HashMap<String, String>,
+    /// Number of layout passes satisfied strictly by isolated boundary relayout (e.g. fixed HUD overlays).
+    pub isolated_boundary_layouts: u64,
     pub caret_blink_epoch: std::time::Instant,
     pub last_caret_blink_state: bool,
     pub current_cursor: strata_platform::window::CursorIcon,
@@ -194,8 +208,8 @@ pub struct AppRuntime {
     /// Defaults to `strata_platform::gtk_gpu_2d_enabled()` so Cairo software 2D frames
     /// skip redundant path tessellation.
     pub(crate) gpu_2d_paths_enabled: bool,
-    /// Active pointer capture or drag target `(tree_path, explicit_capture)`.
-    pub pointer_capture_target: Option<(Vec<usize>, bool)>,
+    /// Active pointer capture or drag target with stable DOM identity (`EntityId`, `id`, `key`, and ancestor anchors).
+    pub pointer_capture_target: Option<PointerCaptureTarget>,
     /// True when the current `root_blueprint` contains any `EventType::Resize` listeners.
     pub(crate) has_resize_listeners: bool,
     /// Last observed `(width, height)` for elements with `onresize` listeners, keyed by node ID.
@@ -228,6 +242,22 @@ pub struct AppRuntime {
     pub(crate) prev_layout_cls_rects: Vec<(f32, f32, f32, f32)>,
     /// Active native DOM drag-and-drop operation (`ondragstart`, `ondragover`, `ondrop`, etc.).
     pub(crate) active_dom_drag: Option<ActiveDomDrag>,
+    /// Multi-click streak state `(timestamp, x, y, button, detail)` for DOM `PointerDown`/`MouseDown` events.
+    pub(crate) last_dom_click: Option<(std::time::Instant, f32, f32, i16, i32)>,
+    /// Previous frame's flattened child count per animation node ID for unkeyed list shift detection.
+    pub(crate) previous_child_counts: std::collections::HashMap<u64, usize>,
+    /// Pending pointer-down click candidate awaiting a matching `MouseUp` within drag tolerance.
+    pub(crate) pending_click: Option<PendingMouseClick>,
+    /// Value of `is_mouse_down` when `layout_root` was last built/restyled, so `:active` clears on `MouseUp` rebuilds.
+    pub(crate) last_built_is_mouse_down: bool,
+    /// Monotonically incremented each time `compile_display_list()` produces a new display list.
+    pub(crate) display_list_generation: u64,
+    /// Application/window-level `pointerup` / `mouseup` listeners guaranteed to fire even if the capturing node unmounts.
+    pub(crate) window_pointer_up_listeners: WindowPointerListeners,
+    /// Application/window-level `pointercancel` listeners guaranteed to fire on focus loss or gesture cancellation.
+    pub(crate) window_pointer_cancel_listeners: WindowPointerListeners,
+    /// Set when an active `pointer_capture_target` unmounts mid-press before `MouseUp` arrives.
+    pub(crate) capture_lost_while_mouse_down: bool,
 }
 
 /// Whether opt-in `[perf]` timing output is enabled through `STRATA_PERF_LOG`.
@@ -377,6 +407,9 @@ impl AppRuntime {
             frame_count: 0,
             active_focus: None,
             input_states: std::collections::HashMap::new(),
+            active_input_last_prop_value: None,
+            input_last_prop_values: std::collections::HashMap::new(),
+            isolated_boundary_layouts: 0,
             caret_blink_epoch: init_now,
             last_caret_blink_state: true,
             current_cursor: strata_platform::window::CursorIcon::Default,
@@ -457,6 +490,14 @@ impl AppRuntime {
             profile_history: FrameProfileHistory::default(),
             prev_layout_cls_rects: Vec::new(),
             active_dom_drag: None,
+            last_dom_click: None,
+            previous_child_counts: std::collections::HashMap::new(),
+            pending_click: None,
+            last_built_is_mouse_down: false,
+            display_list_generation: 0,
+            window_pointer_up_listeners: WindowPointerListeners::default(),
+            window_pointer_cancel_listeners: WindowPointerListeners::default(),
+            capture_lost_while_mouse_down: false,
         };
 
         runtime.has_resize_listeners =
@@ -614,6 +655,112 @@ impl AppRuntime {
         self.update_accessibility_tree();
         self.compile_display_list();
         &self.display_list
+    }
+
+    fn subtree_has_scrollable_or_portal(node: &LayoutNode) -> bool {
+        let mut stack = vec![node];
+        while let Some(curr) = stack.pop() {
+            if curr.is_top_layer
+                || matches!(
+                    curr.style.overflow_x,
+                    strata_style::types::Overflow::Scroll | strata_style::types::Overflow::Auto
+                )
+                || matches!(
+                    curr.style.overflow_y,
+                    strata_style::types::Overflow::Scroll | strata_style::types::Overflow::Auto
+                )
+            {
+                return true;
+            }
+            for child in &curr.children {
+                stack.push(child);
+            }
+        }
+        false
+    }
+
+    /// Recomputes layout strictly for isolated boundary subtrees (such as `position: fixed`
+    /// HUD overlays or `contain: strict` panels) without invalidating or running full root
+    /// layout across clean siblings.
+    ///
+    /// Returns `true` when all boundaries were relaid out cleanly in isolation, or `false`
+    /// when a fallback to full [`Self::tick_frame`] is required.
+    pub(crate) fn tick_isolated_boundaries(&mut self, boundaries: &[Vec<usize>]) -> bool {
+        if boundaries.is_empty() {
+            return false;
+        }
+
+        // Deduplicate and collapse nested boundaries to their outermost isolated root.
+        let mut sorted: Vec<&[usize]> = boundaries.iter().map(|p| p.as_slice()).collect();
+        sorted.sort_unstable();
+        let mut roots: Vec<&[usize]> = Vec::with_capacity(sorted.len());
+        for path in sorted {
+            if path.is_empty() {
+                return false;
+            }
+            if roots.last().is_some_and(|prev| path.starts_with(prev)) {
+                continue;
+            }
+            roots.push(path);
+        }
+
+        // Pre-validate every boundary so we never partially mutate before falling back.
+        for &bp_path in &roots {
+            if self
+                .applied_scroll_offsets
+                .keys()
+                .any(|p| p.starts_with(bp_path))
+                || self
+                    .applied_portal_offsets
+                    .keys()
+                    .any(|p| p.starts_with(bp_path))
+            {
+                return false;
+            }
+            let Some(node) = Self::get_layout_node(&self.layout_root, bp_path) else {
+                return false;
+            };
+            if !node.is_isolated_relayout_root() || Self::subtree_has_scrollable_or_portal(node) {
+                return false;
+            }
+        }
+
+        let compute_start = std::time::Instant::now();
+        for &bp_path in &roots {
+            if !self.layout_root.recompute_isolated_boundary_at_path(
+                bp_path,
+                self.viewport_width,
+                self.viewport_height,
+            ) {
+                return false;
+            }
+            if let (Some(bp), Some(layout_node)) = (
+                Self::find_blueprint_at_path(&self.root_blueprint, bp_path),
+                Self::get_layout_node_mut(&mut self.layout_root, bp_path),
+            ) {
+                Self::clamp_walk(bp, layout_node, self.viewport_width, self.viewport_height);
+            }
+        }
+
+        self.frame_count += 1;
+        self.layout_computations += 1;
+        self.isolated_boundary_layouts += 1;
+        Self::sync_layout_to_ir(&self.layout_root, &mut self.ir_graph);
+        self.frame_profile.layout += compute_start.elapsed();
+        if perf_logging_enabled() {
+            perf_log_ms(
+                "compute_layout_isolated_boundary",
+                compute_start,
+                format!("{} boundary subtree(s)", roots.len()),
+            );
+        }
+        self.sync_active_input_layout();
+        self.dispatch_resize_observers();
+        self.spatial_index
+            .rebuild(&self.root_blueprint, &self.layout_root);
+        self.update_accessibility_tree();
+        self.compile_display_list();
+        true
     }
 
     /// Returns the current interaction context.
@@ -852,56 +999,83 @@ impl AppRuntime {
             active_ids: &mut std::collections::HashSet<u64>,
             pending: &mut Vec<(std::rc::Rc<dyn Fn(strata_dom::Event)>, strata_layout::Rect)>,
         ) {
-            if let NodeBlueprint::Element {
-                attributes,
-                children,
-                ..
-            } = bp
-            {
-                let node_id = path_node_ids
-                    .get(path)
-                    .copied()
-                    .unwrap_or_else(|| path_to_node_id(path));
-                let mut resize_handlers = Vec::new();
-                for attr in attributes {
-                    if let strata_dom::Attribute::EventListener {
-                        event: strata_dom::EventType::Resize,
-                        handler,
-                    } = attr
-                    {
-                        resize_handlers.push(handler.clone());
+            match bp {
+                NodeBlueprint::Element {
+                    attributes,
+                    children,
+                    ..
+                } => {
+                    let node_id = path_node_ids
+                        .get(path)
+                        .copied()
+                        .unwrap_or_else(|| path_to_node_id(path));
+                    let mut resize_handlers = Vec::new();
+                    for attr in attributes {
+                        if let strata_dom::Attribute::EventListener {
+                            event: strata_dom::EventType::Resize,
+                            handler,
+                        } = attr
+                        {
+                            resize_handlers.push(handler.clone());
+                        }
                     }
-                }
-                if !resize_handlers.is_empty() {
-                    active_ids.insert(node_id);
-                    let w = layout.geometry.border_box.width;
-                    let h = layout.geometry.border_box.height;
-                    let changed = match observed.get(&node_id) {
-                        Some(&(pw, ph)) => (w - pw).abs() > 0.25 || (h - ph).abs() > 0.25,
-                        None => true,
-                    };
-                    if changed {
-                        observed.insert(node_id, (w, h));
-                        for handler in resize_handlers {
-                            pending.push((handler, layout.geometry.border_box));
+                    if !resize_handlers.is_empty() {
+                        active_ids.insert(node_id);
+                        let w = layout.geometry.border_box.width;
+                        let h = layout.geometry.border_box.height;
+                        let changed = match observed.get(&node_id) {
+                            Some(&(pw, ph)) => (w - pw).abs() > 0.25 || (h - ph).abs() > 0.25,
+                            None => true,
+                        };
+                        if changed {
+                            observed.insert(node_id, (w, h));
+                            for handler in resize_handlers {
+                                pending.push((handler, layout.geometry.border_box));
+                            }
+                        }
+                    }
+                    let mut flat = Vec::new();
+                    for c in children {
+                        AppRuntime::flatten_blueprints(c, &mut flat);
+                    }
+                    for (idx, child_layout) in layout.children.iter().enumerate() {
+                        if let Some(&child_bp) = flat.get(idx) {
+                            path.push(idx);
+                            collect_rec(
+                                child_bp,
+                                child_layout,
+                                path,
+                                path_node_ids,
+                                observed,
+                                active_ids,
+                                pending,
+                            );
+                            path.pop();
                         }
                     }
                 }
-                for (idx, child_layout) in layout.children.iter().enumerate() {
-                    if let Some(child_bp) = children.get(idx) {
-                        path.push(idx);
-                        collect_rec(
-                            child_bp,
-                            child_layout,
-                            path,
-                            path_node_ids,
-                            observed,
-                            active_ids,
-                            pending,
-                        );
-                        path.pop();
+                NodeBlueprint::Fragment(children) => {
+                    let mut flat = Vec::new();
+                    for c in children {
+                        AppRuntime::flatten_blueprints(c, &mut flat);
+                    }
+                    for (idx, child_layout) in layout.children.iter().enumerate() {
+                        if let Some(&child_bp) = flat.get(idx) {
+                            path.push(idx);
+                            collect_rec(
+                                child_bp,
+                                child_layout,
+                                path,
+                                path_node_ids,
+                                observed,
+                                active_ids,
+                                pending,
+                            );
+                            path.pop();
+                        }
                     }
                 }
+                _ => {}
             }
         }
 
@@ -1145,11 +1319,17 @@ impl AppRuntime {
     /// Incrementally reconciles `layout_node` in place against `old_bp` and `new_bp`.
     ///
     /// Supports static `<style>` sheets (`:root` variables, class/tag/combinator rules),
-    /// active `:focus`/`:hover` interaction paths, and `group-*` markers while keeping
+    /// active `:focus`/`:hover` interaction paths, `group-*` markers, and isolated relayout
+    /// boundaries (`position: fixed` overlays and CSS containment containers) while keeping
     /// unchanged subtrees O(1) zero-allocation.
-    /// Returns `None` if this node cannot be reconciled in place (caller should rebuild it),
-    /// `Some(true)` if any style or descendant changed (layout cache invalidated), or
-    /// `Some(false)` if this entire subtree is visually and structurally identical.
+    ///
+    /// Returns:
+    /// - `None` if this node cannot be reconciled in place (caller should rebuild it),
+    /// - `Some(ReconcileOutcome::Unchanged)` if the entire subtree is visually identical,
+    /// - `Some(ReconcileOutcome::MutatedIsolatedBoundary)` if all mutations were confined
+    ///   inside one or more isolated relayout roots appended to `isolated_boundaries` (ancestor
+    ///   layout caches are preserved intact!),
+    /// - `Some(ReconcileOutcome::MutatedInFlow)` if normal-flow layout caches must be invalidated.
     #[allow(clippy::too_many_arguments)]
     fn reconcile_layout_subtree<'a>(
         old_bp: &NodeBlueprint,
@@ -1159,6 +1339,7 @@ impl AppRuntime {
         parent_inherited_changed: bool,
         ancestor_selector_changed: bool,
         force_restyle_self: bool,
+        active_state_changed: bool,
         path_buf: &mut Vec<usize>,
         ancestor_stack: &mut Vec<(&'a NodeBlueprint, (bool, bool, bool))>,
         sibling_bps: &[NodeBlueprint],
@@ -1169,21 +1350,25 @@ impl AppRuntime {
         sheet_index: &StylesheetSelectorIndex,
         ctx: &crate::runtime::InteractionContext,
         stats: &mut ReconcileStats,
-    ) -> Option<bool> {
+        isolated_boundaries: &mut Vec<Vec<usize>>,
+    ) -> Option<ReconcileOutcome> {
+        let active_restyle_self =
+            active_state_changed && ctx.hovered_path.is_some_and(|h| h.starts_with(path_buf));
+        let force_restyle_self = force_restyle_self || active_restyle_self;
         match (old_bp, new_bp) {
             (NodeBlueprint::Text(t1), NodeBlueprint::Text(t2)) => {
                 if t1 == t2 && !parent_inherited_changed && !force_restyle_self {
                     stats.reused_subtrees += 1;
-                    Some(false)
+                    Some(ReconcileOutcome::Unchanged)
                 } else {
                     *layout_node = Self::build_text_leaf_layout_node(t2.clone(), parent_style);
                     stats.rebuilt_nodes += 1;
-                    Some(true)
+                    Some(ReconcileOutcome::MutatedInFlow)
                 }
             }
             (NodeBlueprint::Empty, NodeBlueprint::Empty) => {
                 stats.reused_subtrees += 1;
-                Some(false)
+                Some(ReconcileOutcome::Unchanged)
             }
             (
                 NodeBlueprint::Element { tag: t1, .. },
@@ -1193,7 +1378,7 @@ impl AppRuntime {
                     layout_node.entity_id = eid;
                 }
                 stats.reused_subtrees += 1;
-                Some(false)
+                Some(ReconcileOutcome::Unchanged)
             }
             (
                 NodeBlueprint::Element { tag: t1, .. },
@@ -1219,7 +1404,7 @@ impl AppRuntime {
                         layout_node.entity_id = eid;
                     }
                     stats.reused_subtrees += 1;
-                    Some(false)
+                    Some(ReconcileOutcome::Unchanged)
                 } else {
                     None
                 }
@@ -1243,6 +1428,10 @@ impl AppRuntime {
                 && Self::element_attr_value(a1, "key") == Self::element_attr_value(a2, "key")
                 && Self::element_attr_value(a1, "id") == Self::element_attr_value(a2, "id") =>
             {
+                let was_isolated_fixed = !path_buf.is_empty()
+                    && layout_node.style.position == strata_style::types::Position::Fixed
+                    && layout_node.style.display != strata_style::types::Display::None
+                    && !layout_node.is_top_layer;
                 let self_props_changed = cls1 != cls2 || !Self::attributes_visually_equal(a1, a2);
                 let single_text_changed = c1.len() == 1
                     && c2.len() == 1
@@ -1332,7 +1521,8 @@ impl AppRuntime {
 
                 let parent_style_for_children = layout_node.style.clone();
                 let child_count_changed = c1.len() != c2.len();
-                let mut children_changed = child_count_changed;
+                let mut children_mutated_in_flow = child_count_changed;
+                let mut children_mutated_isolated = false;
                 let common = c1.len().min(c2.len());
                 let last_elem_idx = if !stylesheets.is_empty()
                     && sheet_index.has_sibling_combinator_or_positional_rules
@@ -1368,6 +1558,7 @@ impl AppRuntime {
                         child_inherited_changed,
                         next_ancestor_selector_changed,
                         child_force_restyle,
+                        active_state_changed,
                         path_buf,
                         ancestor_stack,
                         c2,
@@ -1378,10 +1569,14 @@ impl AppRuntime {
                         sheet_index,
                         ctx,
                         stats,
+                        isolated_boundaries,
                     ) {
-                        Some(false) => {}
-                        Some(true) => {
-                            children_changed = true;
+                        Some(ReconcileOutcome::Unchanged) => {}
+                        Some(ReconcileOutcome::MutatedIsolatedBoundary) => {
+                            children_mutated_isolated = true;
+                        }
+                        Some(ReconcileOutcome::MutatedInFlow) => {
+                            children_mutated_in_flow = true;
                             if sheet_index.has_sibling_combinator_or_positional_rules {
                                 preceding_sibling_mutated = true;
                             }
@@ -1416,7 +1611,7 @@ impl AppRuntime {
                                 child_group_state,
                             );
                             stats.rebuilt_nodes += 1;
-                            children_changed = true;
+                            children_mutated_in_flow = true;
                             if sheet_index.has_sibling_combinator_or_positional_rules {
                                 preceding_sibling_mutated = true;
                             }
@@ -1466,14 +1661,33 @@ impl AppRuntime {
                 }
                 ancestor_stack.pop();
 
-                if self_rewritten || children_changed {
+                if self_rewritten || children_mutated_in_flow {
                     layout_node.inline_items.clear();
                     layout_node.line_boxes.clear();
                     layout_node.invalidate_self_caches();
-                    Some(true)
+
+                    let is_isolated_fixed_mutation = was_isolated_fixed
+                        && layout_node.is_isolated_relayout_root()
+                        && layout_node.style.position == strata_style::types::Position::Fixed
+                        && (!self_props_changed
+                            || !sheet_index.has_sibling_combinator_or_positional_rules);
+                    let is_isolated_containment_mutation = !path_buf.is_empty()
+                        && !self_rewritten
+                        && layout_node.is_layout_boundary()
+                        && !layout_node.is_top_layer;
+                    if is_isolated_fixed_mutation || is_isolated_containment_mutation {
+                        isolated_boundaries.push(path_buf.clone());
+                        Some(ReconcileOutcome::MutatedIsolatedBoundary)
+                    } else {
+                        Some(ReconcileOutcome::MutatedInFlow)
+                    }
+                } else if children_mutated_isolated {
+                    // Mutations happened strictly inside isolated descendant boundaries; keep
+                    // this ancestor's layout cache valid so clean siblings are never relaid out.
+                    Some(ReconcileOutcome::MutatedIsolatedBoundary)
                 } else {
                     stats.reused_subtrees += 1;
-                    Some(false)
+                    Some(ReconcileOutcome::Unchanged)
                 }
             }
             _ => None,
@@ -1493,10 +1707,11 @@ impl AppRuntime {
     /// Updates the application root view, incrementally reconciling unchanged subtrees
     /// and compiling a new display list.
     pub fn update_view(&mut self, new_view: View) {
-        self.unapply_scroll_offsets();
-        self.applied_scroll_offsets.clear();
-        self.applied_portal_offsets.clear();
-        if self.had_active_animations || self.has_active_animations() {
+        let animations_were_active = self.had_active_animations || self.has_active_animations();
+        if animations_were_active {
+            self.unapply_scroll_offsets();
+            self.applied_scroll_offsets.clear();
+            self.applied_portal_offsets.clear();
             self.restore_base_styles_to_layout_tree();
         }
         let mut next_blueprint = new_view.root.flatten_fragments();
@@ -1517,9 +1732,11 @@ impl AppRuntime {
         let build_start = std::time::Instant::now();
         let mut stats = ReconcileStats::default();
         let mut bailout_reason: Option<String> = None;
+        let mut isolated_boundaries: Vec<Vec<usize>> = Vec::new();
 
         let hovered_owned = self.current_hover_path.clone();
         let focused_owned = self.current_focus_path.clone();
+        let active_state_changed = self.is_mouse_down != self.last_built_is_mouse_down;
         let ctx = crate::runtime::InteractionContext {
             hovered_path: hovered_owned.as_deref(),
             focused_path: focused_owned.as_deref(),
@@ -1542,10 +1759,10 @@ impl AppRuntime {
             _ => true,
         };
 
-        let reconciled = if sheets_unchanged {
+        let reconcile_outcome = if sheets_unchanged {
             let mut path_buf = Vec::new();
             let mut ancestor_stack = Vec::new();
-            let ok = Self::reconcile_layout_subtree(
+            let outcome = Self::reconcile_layout_subtree(
                 &old_blueprint,
                 &self.root_blueprint,
                 &mut self.layout_root,
@@ -1553,6 +1770,7 @@ impl AppRuntime {
                 root_inherited_changed,
                 false,
                 false,
+                active_state_changed,
                 &mut path_buf,
                 &mut ancestor_stack,
                 &[],
@@ -1563,19 +1781,22 @@ impl AppRuntime {
                 &self.stylesheet_index,
                 &ctx,
                 &mut stats,
-            )
-            .is_some();
-            if !ok {
+                &mut isolated_boundaries,
+            );
+            if outcome.is_none() {
                 bailout_reason = Some("RootStructuralMismatch".to_string());
             }
-            ok
+            outcome
         } else {
             bailout_reason = Some("StylesheetsChanged".to_string());
-            false
+            None
         };
+        let reconciled = reconcile_outcome.is_some();
         self.cached_root_inherited_style = next_root_inherited;
 
         if !reconciled {
+            self.applied_scroll_offsets.clear();
+            self.applied_portal_offsets.clear();
             let ctx = self.interaction_context();
             self.layout_root = Self::build_layout_tree_with_interaction(&self.root_blueprint, &ctx);
             self.full_rebuilds_count += 1;
@@ -1585,6 +1806,7 @@ impl AppRuntime {
         } else {
             self.reconciled_updates_count += 1;
         }
+        self.last_built_is_mouse_down = self.is_mouse_down;
         self.last_update_reconciled = reconciled;
         self.last_reconcile_stats = stats;
         self.last_reconcile_bailout = bailout_reason;
@@ -1594,15 +1816,17 @@ impl AppRuntime {
                 "build_layout_tree_update",
                 build_start,
                 format!(
-                    "{} blueprint nodes -> {} layout nodes (reconciled={}, reused={}, rebuilt={})",
+                    "{} blueprint nodes -> {} layout nodes (reconciled={}, reused={}, rebuilt={}, isolated={})",
                     perf_count_blueprint_nodes(&self.root_blueprint),
                     perf_count_layout_nodes(&self.layout_root),
                     reconciled,
                     stats.reused_subtrees,
-                    stats.rebuilt_nodes
+                    stats.rebuilt_nodes,
+                    isolated_boundaries.len()
                 ),
             );
         }
+        let active_input_reconciled = self.reconcile_active_input_from_blueprint();
         self.sync_active_input_layout();
         self.dynamic_text_bindings.clear();
         let mut path_buf = Vec::new();
@@ -1620,7 +1844,32 @@ impl AppRuntime {
         if perf_logging_enabled() {
             perf_log_ms("sync_tree_animations", sync_start, "update_view");
         }
+        self.reconcile_pointer_capture_after_view_update();
         self.refresh_hover_tooltip_after_view_update();
+
+        let can_use_isolated_relayout = matches!(
+            reconcile_outcome,
+            Some(ReconcileOutcome::MutatedIsolatedBoundary)
+        ) && !isolated_boundaries.is_empty()
+            && !root_inherited_changed
+            && !active_state_changed
+            && !animations_were_active
+            && !self.had_active_animations
+            && !self.has_active_animations()
+            && !active_input_reconciled;
+
+        if can_use_isolated_relayout && self.tick_isolated_boundaries(&isolated_boundaries) {
+            return;
+        }
+
+        if matches!(
+            reconcile_outcome,
+            Some(ReconcileOutcome::MutatedIsolatedBoundary)
+        ) {
+            for bp_path in &isolated_boundaries {
+                self.layout_root.invalidate_ancestors(bp_path);
+            }
+        }
         self.tick_frame();
     }
 
@@ -1632,12 +1881,11 @@ impl AppRuntime {
             return false;
         }
 
-        let mut changed = false;
+        let mut mutated_paths: Vec<Vec<usize>> = Vec::new();
         for binding in &mut self.dynamic_text_bindings {
             let new_text = (binding.closure)();
             if new_text != binding.last_value {
                 binding.last_value = new_text.clone();
-                let mut node_updated = false;
                 if let Some(node) = Self::find_layout_node_mut(&mut self.layout_root, &binding.path)
                 {
                     let is_mono = strata_layout::is_monospace_family(node.style.font_family);
@@ -1656,21 +1904,40 @@ impl AppRuntime {
                     node.geometry.content_box.width = w;
                     node.geometry.content_box.height = h;
                     node.text = Some(new_text);
-                    node_updated = true;
-                    changed = true;
-                }
-                if node_updated {
-                    self.layout_root.invalidate_ancestors(&binding.path);
+                    mutated_paths.push(binding.path.clone());
                 }
             }
         }
 
-        if changed {
-            self.tick_frame();
-            true
-        } else {
-            false
+        if mutated_paths.is_empty() {
+            return false;
         }
+
+        let mut isolated_boundaries: Vec<Vec<usize>> = Vec::new();
+        let mut all_isolated = true;
+        for path in &mutated_paths {
+            if let Some(boundary) = self.layout_root.find_isolated_relayout_boundary_path(path) {
+                isolated_boundaries.push(boundary.to_vec());
+            } else {
+                all_isolated = false;
+                break;
+            }
+        }
+
+        if all_isolated && !isolated_boundaries.is_empty() {
+            for (path, boundary) in mutated_paths.iter().zip(isolated_boundaries.iter()) {
+                self.layout_root.invalidate_ancestors_within(boundary, path);
+            }
+            if self.tick_isolated_boundaries(&isolated_boundaries) {
+                return true;
+            }
+        }
+
+        for path in &mutated_paths {
+            self.layout_root.invalidate_ancestors(path);
+        }
+        self.tick_frame();
+        true
     }
 
     /// System cursor theme, loaded on first use. Reading cursor files from disk costs
@@ -1802,6 +2069,7 @@ impl AppRuntime {
         }
         self.frame_profile.compile += compile_start.elapsed();
         self.paint_dirty = false;
+        self.display_list_generation = self.display_list_generation.wrapping_add(1);
 
         static COMPILE_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let frame = COMPILE_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1819,6 +2087,12 @@ impl AppRuntime {
                 ),
             );
         }
+    }
+
+    /// Monotonically increasing counter bumped whenever [`Self::compile_display_list`] produces
+    /// a new display list (including during in-place relayouts such as split-pane drags).
+    pub fn display_list_generation(&self) -> u64 {
+        self.display_list_generation
     }
 
     /// Controls whether [`Self::compile_display_list`] tessellates 2D GPU path segments.
@@ -1882,7 +2156,39 @@ impl AppRuntime {
                 self.tick_frame();
                 true
             }
-            PlatformEvent::WindowFocused(_) => false,
+            PlatformEvent::WindowFocused(false) => {
+                let signals_before = strata_dom::reactive::has_dirty_signals();
+                let cancelled = self.cancel_active_pointer_gesture("window_blur");
+                let dynamic_updated = self.sync_dynamic_text();
+                let changed = if (!signals_before && strata_dom::reactive::has_dirty_signals())
+                    || dynamic_updated
+                {
+                    self.rebuild_layout_tree();
+                    true
+                } else {
+                    cancelled
+                };
+                self.current_cursor =
+                    self.resolved_cursor_at(self.last_mouse_pos.0, self.last_mouse_pos.1);
+                changed
+            }
+            PlatformEvent::PointerCancel => {
+                let signals_before = strata_dom::reactive::has_dirty_signals();
+                let cancelled = self.cancel_active_pointer_gesture("grab_broken");
+                let dynamic_updated = self.sync_dynamic_text();
+                let changed = if (!signals_before && strata_dom::reactive::has_dirty_signals())
+                    || dynamic_updated
+                {
+                    self.rebuild_layout_tree();
+                    true
+                } else {
+                    cancelled
+                };
+                self.current_cursor =
+                    self.resolved_cursor_at(self.last_mouse_pos.0, self.last_mouse_pos.1);
+                changed
+            }
+            PlatformEvent::WindowFocused(true) => false,
             PlatformEvent::WindowCloseRequested => false,
             PlatformEvent::Scroll {
                 delta_x, delta_y, ..
@@ -1910,10 +2216,38 @@ impl AppRuntime {
             }
             PlatformEvent::MouseMove { x, y } => {
                 self.last_mouse_pos = (*x, *y);
-                let cur = Self::hit_test_cursor(&self.root_blueprint, &self.layout_root, *x, *y);
-                self.current_cursor = cur;
+                self.mark_pending_click_dragged_if_moved(*x, *y);
                 let hover_changed = self.update_hover(*x, *y);
-                self.dispatch_pointer_move_action(*x, *y).needs_redraw() || hover_changed
+                let move_changed = self.dispatch_pointer_move_action(*x, *y).needs_redraw();
+                self.current_cursor = self.resolved_cursor_at(*x, *y);
+                move_changed || hover_changed
+            }
+            PlatformEvent::Touch {
+                touch_id,
+                phase: strata_platform::TouchPhase::Cancelled,
+                x,
+                y,
+            } => {
+                let signals_before = strata_dom::reactive::has_dirty_signals();
+                let cancelled = self.dispatch_pointer_cancel_with_meta(
+                    *x,
+                    *y,
+                    *touch_id as i32,
+                    "touch",
+                    0,
+                    "touch_cancelled",
+                );
+                let dynamic_updated = self.sync_dynamic_text();
+                let changed = if (!signals_before && strata_dom::reactive::has_dirty_signals())
+                    || dynamic_updated
+                {
+                    self.rebuild_layout_tree();
+                    true
+                } else {
+                    cancelled
+                };
+                self.current_cursor = self.resolved_cursor_at(*x, *y);
+                changed
             }
             PlatformEvent::Stylus {
                 phase,
@@ -1936,11 +2270,11 @@ impl AppRuntime {
                     strata_platform::StylusPhase::Move | strata_platform::StylusPhase::Hover => {
                         strata_dom::EventType::PointerMove
                     }
-                    strata_platform::StylusPhase::Up | strata_platform::StylusPhase::Cancel => {
-                        strata_dom::EventType::PointerUp
-                    }
+                    strata_platform::StylusPhase::Up => strata_dom::EventType::PointerUp,
+                    strata_platform::StylusPhase::Cancel => strata_dom::EventType::PointerCancel,
                 };
                 let effective_pressure = if *hovering { 0.0 } else { *pressure };
+                let signals_before = strata_dom::reactive::has_dirty_signals();
                 let outcome = self.dispatch_bubbling_event_detailed_at(
                     dom_ev_type,
                     *x,
@@ -1959,8 +2293,42 @@ impl AppRuntime {
                         ev.is_primary = true;
                     },
                 );
+                if matches!(phase, strata_platform::StylusPhase::Up) {
+                    let mut up_ev = self.create_mouse_event(
+                        strata_dom::EventType::PointerUp,
+                        *x,
+                        *y,
+                        0,
+                        1,
+                        None,
+                    );
+                    up_ev.pointer_id = *pointer_id as i32;
+                    up_ev.pointer_type = tool.as_w3c_str();
+                    up_ev.pressure = effective_pressure;
+                    up_ev.buttons = *buttons;
+                    let _ = self.dispatch_window_and_global_pointer_up(&up_ev);
+                } else if matches!(phase, strata_platform::StylusPhase::Cancel) {
+                    self.pointer_capture_target = None;
+                    let mut cancel_ev = self.create_mouse_event(
+                        strata_dom::EventType::PointerCancel,
+                        *x,
+                        *y,
+                        0,
+                        0,
+                        None,
+                    );
+                    cancel_ev.pointer_id = *pointer_id as i32;
+                    cancel_ev.pointer_type = tool.as_w3c_str();
+                    cancel_ev.pressure = effective_pressure;
+                    cancel_ev.buttons = *buttons;
+                    cancel_ev.data = Some("stylus_cancelled".to_string());
+                    let _ = self.dispatch_window_and_global_pointer_cancel(&cancel_ev);
+                }
                 let dynamic_updated = self.sync_dynamic_text();
-                if outcome.handled || dynamic_updated {
+                if outcome.handled
+                    || (!signals_before && strata_dom::reactive::has_dirty_signals())
+                    || dynamic_updated
+                {
                     self.rebuild_layout_tree();
                     true
                 } else {
@@ -1968,10 +2336,14 @@ impl AppRuntime {
                 }
             }
             PlatformEvent::MouseDown { button, x, y } => {
+                self.last_mouse_pos = (*x, *y);
                 let tooltip_dismissed = self.dismiss_hover_tooltip_and_repaint();
                 let btn_idx = button.to_button_index();
                 if *button == strata_platform::MouseButton::Left {
                     self.is_mouse_down = true;
+                }
+                if *button != strata_platform::MouseButton::Right {
+                    self.record_pending_click(btn_idx, *x, *y);
                 }
                 let action = self.dispatch_pointer_down_action_with_button_and_modifiers(
                     *x,
@@ -1979,38 +2351,60 @@ impl AppRuntime {
                     btn_idx,
                     Default::default(),
                 );
-                let click_invoked = if *button != strata_platform::MouseButton::Right {
-                    self.dispatch_mouse_click(*x, *y, btn_idx, 1)
-                } else {
+                let ctx_invoked = if *button == strata_platform::MouseButton::Right {
                     self.dispatch_context_menu(*x, *y)
+                } else {
+                    false
                 };
                 let dynamic_updated = self.sync_dynamic_text();
-                if action.needs_rebuild() || click_invoked || dynamic_updated {
+                let changed = if action.needs_rebuild() || ctx_invoked || dynamic_updated {
                     self.rebuild_layout_tree();
                     true
                 } else {
                     tooltip_dismissed || action.needs_redraw() || self.restyle_for_active_change()
-                }
+                };
+                self.current_cursor = self.resolved_cursor_at(*x, *y);
+                changed
             }
             PlatformEvent::MouseUp { button, x, y } => {
+                self.last_mouse_pos = (*x, *y);
                 let btn_idx = button.to_button_index();
                 let was_mouse_down = self.is_mouse_down;
                 if *button == strata_platform::MouseButton::Left {
                     self.is_mouse_down = false;
                 }
+                let suppressed_by_drag = self.is_pointer_drag_suppressing_click();
                 let action = self.dispatch_pointer_up_action_with_button(*x, *y, btn_idx);
-                if action.needs_rebuild() {
+                let click_invoked = if *button != strata_platform::MouseButton::Right {
+                    self.dispatch_click_on_mouse_up(btn_idx, *x, *y, suppressed_by_drag)
+                } else {
+                    false
+                };
+                let dynamic_updated = self.sync_dynamic_text();
+                let changed = if action.needs_rebuild() || click_invoked || dynamic_updated {
                     self.rebuild_layout_tree();
                     true
                 } else if was_mouse_down {
                     action.needs_redraw() || self.restyle_for_active_change()
                 } else {
                     action.needs_redraw()
-                }
+                };
+                self.current_cursor = self.resolved_cursor_at(*x, *y);
+                changed
             }
             PlatformEvent::CursorLeft => {
-                self.is_mouse_down = false;
-                self.current_cursor = strata_platform::window::CursorIcon::Default;
+                if !self.has_active_pointer_capture_or_drag() {
+                    self.is_mouse_down = false;
+                }
+                self.cancel_pending_click();
+                let dom_override = strata_dom::hooks::current_cursor();
+                self.current_cursor = if dom_override != strata_dom::hooks::CursorIcon::Default
+                    || self.pointer_capture_target.is_some()
+                {
+                    self.resolved_cursor_at(self.last_mouse_pos.0, self.last_mouse_pos.1)
+                } else {
+                    strata_platform::window::CursorIcon::Default
+                };
                 self.clear_hover()
             }
             PlatformEvent::KeyDown { .. }

@@ -44,10 +44,6 @@ pub fn select_wgpu_present_mode(
         PresentMode::Mailbox => {
             if has(wgpu::PresentMode::Mailbox) {
                 wgpu::PresentMode::Mailbox
-            } else if has(wgpu::PresentMode::Immediate) {
-                wgpu::PresentMode::Immediate
-            } else if has(wgpu::PresentMode::AutoNoVsync) {
-                wgpu::PresentMode::AutoNoVsync
             } else {
                 wgpu::PresentMode::Fifo
             }
@@ -122,19 +118,21 @@ struct DisplayOffscreenTarget {
 /// Hardware `wgpu` window surface presenter managing 3D rendering, hardware 2D/stencil-clip
 /// [`Wgpu2DRenderer`] batches, offscreen 3D scene caching, and cached 2D HUD compositing.
 pub struct WgpuWindowPresenter {
-    _instance: wgpu::Instance,
-    surface: Option<wgpu::Surface<'static>>,
-    surface_config: Option<wgpu::SurfaceConfiguration>,
-    renderer: Wgpu3DRenderer,
+    // Drop order matters for Vulkan/wgpu teardown: cached textures and device/queue renderers
+    // must drop before `surface`, and `_instance` must drop last.
+    ui_overlay: Option<CachedOverlayTexture>,
+    scene3d_cache: Option<CachedScene3DTarget>,
+    display_offscreen: Option<DisplayOffscreenTarget>,
     renderer_2d: Wgpu2DRenderer,
+    renderer: Wgpu3DRenderer,
     collector: UnifiedGpuCollector,
     last_batch_summary: GpuBatchSummary,
     present_mode: PresentMode,
-    ui_overlay: Option<CachedOverlayTexture>,
-    scene3d_cache: Option<CachedScene3DTarget>,
     scene3d_cache_hits: u64,
     scene3d_cache_misses: u64,
-    display_offscreen: Option<DisplayOffscreenTarget>,
+    surface_config: Option<wgpu::SurfaceConfiguration>,
+    surface: Option<wgpu::Surface<'static>>,
+    _instance: wgpu::Instance,
 }
 
 impl WgpuWindowPresenter {
@@ -1406,6 +1404,16 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+/// Explicitly drops any cached thread-local offscreen [`WgpuWindowPresenter`] so wgpu
+/// resources are released cleanly before process TLS destruction (`__call_tls_dtors`).
+pub fn clear_thread_wgpu_renderer() {
+    let _ = THREAD_WGPU_RENDERER.try_with(|slot| {
+        if let Ok(mut cell) = slot.try_borrow_mut() {
+            let _ = cell.take();
+        }
+    });
+}
+
 /// Renders `scene` into BGRA8 pixels on a cached thread-local `Wgpu3DRenderer`.
 ///
 /// Returns `None` if no wgpu adapter is available in the current environment so callers can
@@ -1423,4 +1431,65 @@ pub fn render_scene_3d_wgpu_bgra(scene: &Scene3D, width: u32, height: u32) -> Op
             .render_offscreen_bgra(scene, width.max(1), height.max(1), true)
             .ok()
     })
+}
+
+#[cfg(test)]
+mod present_mode_tests {
+    use super::*;
+
+    fn caps_with_modes(modes: Vec<wgpu::PresentMode>) -> wgpu::SurfaceCapabilities {
+        wgpu::SurfaceCapabilities {
+            formats: vec![wgpu::TextureFormat::Bgra8Unorm],
+            present_modes: modes,
+            alpha_modes: vec![wgpu::CompositeAlphaMode::Opaque],
+            usages: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        }
+    }
+
+    #[test]
+    fn test_fifo_and_mailbox_preserve_vsync_on_x11_without_mailbox() {
+        // Typical X11 Vulkan driver exposing only [Fifo, Immediate] (no Mailbox).
+        let caps = caps_with_modes(vec![wgpu::PresentMode::Fifo, wgpu::PresentMode::Immediate]);
+        assert_eq!(
+            select_wgpu_present_mode(PresentMode::Fifo, &caps),
+            wgpu::PresentMode::Fifo,
+            "explicit PresentMode::Fifo must never degrade to Immediate"
+        );
+        assert_eq!(
+            select_wgpu_present_mode(PresentMode::Mailbox, &caps),
+            wgpu::PresentMode::Fifo,
+            "PresentMode::Mailbox must fall back to tear-free Fifo when Mailbox is unsupported"
+        );
+        assert_eq!(
+            select_wgpu_present_mode(PresentMode::FifoRelaxed, &caps),
+            wgpu::PresentMode::Fifo
+        );
+        assert_eq!(
+            select_wgpu_present_mode(PresentMode::Immediate, &caps),
+            wgpu::PresentMode::Immediate
+        );
+    }
+
+    #[test]
+    fn test_mailbox_honored_when_supported_and_fifo_never_upgraded() {
+        let caps = caps_with_modes(vec![
+            wgpu::PresentMode::Fifo,
+            wgpu::PresentMode::Mailbox,
+            wgpu::PresentMode::Immediate,
+        ]);
+        assert_eq!(
+            select_wgpu_present_mode(PresentMode::Fifo, &caps),
+            wgpu::PresentMode::Fifo
+        );
+        assert_eq!(
+            select_wgpu_present_mode(PresentMode::Mailbox, &caps),
+            wgpu::PresentMode::Mailbox
+        );
+    }
+
+    #[test]
+    fn test_clear_thread_wgpu_renderer_is_idempotent() {
+        clear_thread_wgpu_renderer();
+        clear_thread_wgpu_renderer();
+    }
 }

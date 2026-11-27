@@ -21,6 +21,10 @@ pub enum EventType {
     PointerDown,
     PointerUp,
     PointerMove,
+    /// W3C `pointercancel`: fired when an active pointer gesture is interrupted (e.g. focus loss or OS cancel).
+    PointerCancel,
+    /// W3C `lostpointercapture`: fired on the element that previously held explicit pointer capture when released.
+    LostPointerCapture,
     KeyDown,
     KeyUp,
     Input,

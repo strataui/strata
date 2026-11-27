@@ -783,6 +783,49 @@ class PublishCratesTests(unittest.TestCase):
             self.assertEqual(data["dependencies"]["strata-dom"]["version"], "0.1.3")
             self.assertEqual(data["dependencies"]["serde"], "1.0")
 
+    def test_auto_bump_changed_crates_bumps_yanked_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "strata"
+            pkg_dir = repo / "crates" / "demo"
+            (pkg_dir / "src").mkdir(parents=True)
+            ws_toml = repo / "Cargo.toml"
+            ws_toml.write_text(
+                '[workspace]\nmembers = ["crates/demo"]\n\n'
+                '[workspace.dependencies]\n'
+                'strata-demo = { path = "crates/demo", version = "0.1.4" }\n',
+                encoding="utf-8",
+            )
+            manifest = pkg_dir / "Cargo.toml"
+            manifest.write_text(
+                '[package]\nname = "strata-demo"\nversion = "0.1.4"\nedition = "2021"\n',
+                encoding="utf-8",
+            )
+            (pkg_dir / "src" / "lib.rs").write_text("pub fn ok() {}\n", encoding="utf-8")
+            crate = publish_crates.WorkspaceCrate("strata-demo", "0.1.4", manifest, pkg_dir, ())
+            info_map = {
+                "strata-demo": publish_crates.CratesIoInfo(
+                    exists=True,
+                    is_strataui_repo=True,
+                    active_versions=frozenset(),
+                    all_versions=frozenset({"0.1.0", "0.1.4"}),
+                    latest_version=None,
+                )
+            }
+            with mock.patch.object(
+                publish_crates.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess(args=["cargo"], returncode=0, stdout="", stderr=""),
+            ):
+                plans, modified = publish_crates.auto_bump_changed_crates(
+                    "strata", repo, [crate], info_map, Path(tmp) / "cache", apply=True
+                )
+
+            self.assertEqual(len(plans), 1)
+            self.assertEqual(plans[0].old_version, "0.1.4")
+            self.assertEqual(plans[0].new_version, "0.1.5")
+            self.assertIn(manifest.resolve(), modified)
+            self.assertEqual(tomllib.loads(manifest.read_text(encoding="utf-8"))["package"]["version"], "0.1.5")
+
 
 if __name__ == "__main__":
     unittest.main()
